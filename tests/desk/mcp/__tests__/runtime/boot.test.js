@@ -5,6 +5,7 @@
 // every subprocess and network-shaped call, per `account.test.js`'s
 // `fakeGh` convention — nothing here reaches a real `gh`, `jq` or network.
 
+import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -1191,6 +1192,9 @@ test("detectAgentHost: names the covered host from its own variables, unknown ot
   assert.equal(detectAgentHost({ CODEX_HOME: "/x" }), "codex")
   assert.equal(detectAgentHost({ COPILOT_CLI: "1" }), "copilot")
   assert.equal(detectAgentHost({}), "unknown")
+  // A Copilot session started from a Claude Code shell inherits CLAUDECODE; Copilot's own session id wins.
+  assert.equal(detectAgentHost({ CLAUDECODE: "1", COPILOT_AGENT_SESSION_ID: "s" }), "copilot")
+  assert.equal(detectAgentHost({ CLAUDECODE: "1" }), "claude")
 })
 
 test("parseBootArgs: --task takes the next argument; a missing or blank value is no task", () => {
@@ -1354,6 +1358,11 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   assert.ok(result.instructions.some((line) => line.startsWith("If your host defers tools") && line.includes("ToolSearch `select:") && line.includes("mcp__plugin_desk_desk__task_update")))
   assert.ok(!result.instructions.some((line) => /Confirm this session can call/u.test(line)))
   assert.ok(result.instructions.some((line) => line.startsWith("No task was named")))
+  // Plain text names the printed section; the structured instructions keep the field names.
+  assert.ok(result.instructions.some((line) => /active_tasks, open_prs and repo_states/u.test(line)))
+  const printed = formatBootText(result)
+  assert.match(printed, /No task was named: report every task under "Active tasks" below/u)
+  assert.doesNotMatch(printed, /active_tasks, open_prs|repo_states/u)
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)
   assert.ok(!withAgents.instructions.some((line) => /AGENTS\.md/u.test(line)))

@@ -76,7 +76,7 @@ import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
+import { NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
 
 const parseFrontmatter = loadFrontmatterParser()
@@ -734,6 +734,8 @@ const HOST_ENV = Object.freeze({
 
 /** Which of the covered agent hosts this process runs under, from the variables each host sets; "unknown" otherwise. */
 export function detectAgentHost(env) {
+  // A Copilot session started from a Claude Code shell inherits CLAUDECODE, so the session id Copilot itself sets wins.
+  if (env.COPILOT_AGENT_SESSION_ID) return "copilot"
   const found = Object.entries(HOST_ENV).find(([, names]) => names.some((name) => Boolean(env[name])))
   return found === undefined ? "unknown" : found[0]
 }
@@ -857,7 +859,7 @@ function pushInstruction(entry, where) {
     if (entry.route === "fork") {
       const notActive = entry.account === active ? "" : ` Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), and write ${entry.account}, never ${active}, as the push account in any note.`
       const route = pushRoute(entry)
-      return `Push route for ${store} (${where}): ${route}${route.endsWith(".") ? " Account" : "; account"} ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on the task.`
+      return `Push route for ${store} (${where}): ${route}${route.endsWith(".") ? " Account" : "; account"} ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on this task; it is one line of your report, not the whole of it.`
     }
     if (entry.account !== active) {
       return `Push route for ${store} (${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task.`
@@ -947,10 +949,10 @@ function buildInstructions(ctx) {
     } else if (task?.status === "ambiguous") {
       out.push(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
     } else {
-      out.push("The name matches no open task: show the active_tasks status block and ask what to resume or start.")
+      out.push(UNMATCHED_TASK_INSTRUCTION)
     }
   } else {
-    out.push("No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new.")
+    out.push(NO_TASK_INSTRUCTION)
   }
   out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
   out.push("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.")

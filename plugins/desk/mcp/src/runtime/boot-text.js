@@ -212,6 +212,19 @@ function namedTaskLines(task) {
   return ["", "Named task: matches no open task"]
 }
 
+// Two instructions name the active-task list. The structured result (`--json`) names it by its field, `active_tasks`;
+// the plain-text boot prints it as the "Active tasks" section, and an agent reading plain text cannot map a field name
+// to a section (boot acceptance rounds F, H and J: "where were we?" reported one task). So the text boot says the section.
+export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new."
+export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" below, each with its status and its next step or blocker (and any open pull requests or repo state that matter), then ask which one to resume or whether to start new."
+export const UNMATCHED_TASK_INSTRUCTION = "The name matches no open task: show the active_tasks status block and ask what to resume or start."
+export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report every task under \"Active tasks\" below, each with its status and its next step or blocker, then ask what to resume or start."
+
+const PLAIN_TEXT_INSTRUCTIONS = new Map([
+  [NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT],
+  [UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT],
+])
+
 /**
  * The boot result as readable text: status, desk, numbered instructions, then data sections and the desk's
  * AGENTS.md. Every section is omitted when it has nothing to say, so a healthy boot stays short.
@@ -225,7 +238,7 @@ export function formatBootText(result) {
   if (result.host) lines.push(`Host: ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
   if (lines.at(-1) !== "") lines.push("")
   lines.push("Instructions, in order:")
-  ;(result.instructions ?? []).forEach((instruction, index) => lines.push(`${index + 1}. ${instruction}`))
+  ;(result.instructions ?? []).forEach((instruction, index) => lines.push(`${index + 1}. ${PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction}`))
   if (result.sync_summary) lines.push("", result.sync_summary)
   const tracks = result.active_tasks?.tracks
   if (Array.isArray(tracks)) {
