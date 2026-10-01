@@ -303,11 +303,11 @@ test("the Copilot run's HOME has no keychain link and no gh account list, and th
     createIsolatedHome({ homeDir: copilotHome, host: "copilot" })
     assert.equal(existsSync(path.join(copilotHome, "Library", "Keychains")), false)
     assert.equal(existsSync(path.join(copilotHome, ".config", "gh")), false)
-    assert.equal(existsSync(path.join(copilotHome, ".claude", "settings.json")), false)
+    assert.equal(existsSync(path.join(copilotHome, ".claude", "settings.json")), false) // the run never gets CLAUDE_CONFIG_DIR, so Claude Code's profile is under its HOME
     const claudeHome = path.join(dir, "k")
     createIsolatedHome({ homeDir: claudeHome, host: "claude", keychain: false, ghAccounts: false })
     assert.equal(existsSync(path.join(claudeHome, "Library", "Keychains")), false)
-    assert.equal(existsSync(path.join(claudeHome, ".claude", "settings.json")), true)
+    assert.equal(existsSync(path.join(claudeHome, ".claude", "settings.json")), true) // the run never gets CLAUDE_CONFIG_DIR, so Claude Code's profile is under its HOME
     // The shim: the real gh sees realEnv, not the run's redirected HOME.
     const realDir = path.join(dir, "real")
     mkdirSync(realDir)
