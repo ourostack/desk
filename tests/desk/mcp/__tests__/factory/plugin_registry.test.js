@@ -225,3 +225,28 @@ test("a re-derive of a marker without sources publishes desk:worker by name, and
   assert.ok(published.agents.some((agent) => agent.agent_type === "desk:worker"))
   assert.deepEqual(published.plugins.map((plugin) => plugin.name), ["desk"])
 }))
+
+test("when the end hook cannot be found the backfill finds no source and leaves the plugin hidden, without throwing", () => scratch(async (ctx) => {
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"]])
+  const plugins = [{ name: "desk", version: "3.2.0" }]
+  assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
+  // A throwing getter makes the root lookup itself fail; the helper still answers null.
+  const broken = new Proxy({ ...ctx.env }, { get(target, key) { if (key === "DESK_PLUGIN_ROOT") throw new Error("boom"); return target[key] } })
+  assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: broken }), null)
+  assert.deepEqual(backfillPluginSources("claude-code", plugins, { env: broken }), plugins)
+}))
+
+test("loadEndHook answers the module from the named root or its own, and null from a mirror with no hooks folder", () => scratch(async (ctx) => {
+  const source = "../../../../../plugins/desk/mcp/src/factory/end-hook.js"
+  const { loadEndHook } = await import(source)
+  assert.equal(typeof loadEndHook({}).metadata, "function")
+  assert.equal(typeof loadEndHook({ DESK_PLUGIN_ROOT: path.join(ctx.base, "nowhere") }).metadata, "function")
+  assert.equal(loadEndHook(null), null)
+  // The installed shape: the same file in a source mirror with no hooks/ beside it, and no root that has one.
+  const mirror = path.join(ctx.base, "mirror", "mcp", "src", "factory")
+  await fs.mkdir(mirror, { recursive: true })
+  await fs.copyFile(new URL(source, import.meta.url), path.join(mirror, "end-hook.js"))
+  const mirrored = await import(path.join(mirror, "end-hook.js"))
+  assert.equal(mirrored.loadEndHook({ DESK_PLUGIN_ROOT: path.join(ctx.base, "nowhere") }), null)
+  // And the registry's own answer for a mirror is covered above by the broken-environment case.
+}))

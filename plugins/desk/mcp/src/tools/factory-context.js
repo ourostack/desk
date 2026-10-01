@@ -14,30 +14,23 @@
 // fails is incomplete, which holds routing unless the desk declares its own
 // store.
 
-import { existsSync } from "node:fs"
-import { createRequire } from "node:module"
 import * as os from "node:os"
-import * as path from "node:path"
-import { fileURLToPath } from "node:url"
 
+import { loadEndHook, pluginRootFor } from "../factory/end-hook.js"
 import { readSmallText } from "../factory/marker.js"
 import { PATTERNS } from "../factory/schema.js"
 import { factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
-
-const OWN_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
-const require = createRequire(import.meta.url)
 
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
 /** `{ dirs, incomplete }`: the plugin folders installed beside Desk for this server's host; see the header. */
 export function factoryPluginScan(env) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
-  const pluginRoot = path.resolve(text(env.DESK_PLUGIN_ROOT) ?? claudeRoot ?? OWN_PLUGIN_ROOT)
-  // An installed server runs from a source mirror in the cache, where `hooks/` is not beside this file, so the end hook
-  // comes from the plugin root the launcher names; a checkout run without one uses its own.
-  const hook = [pluginRoot, OWN_PLUGIN_ROOT].map((root) => path.join(root, "hooks", "factory-end.cjs")).find((file) => existsSync(file))
+  const pluginRoot = pluginRootFor(env)
+  // An installed server runs from a source mirror, where `hooks/` is not beside this file; `loadEndHook` finds it.
+  const hook = loadEndHook(env)
   try {
-    const { metadata } = require(hook)
+    const { metadata } = hook
     const { dirs, incomplete } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
     return { dirs, incomplete }
   } catch {

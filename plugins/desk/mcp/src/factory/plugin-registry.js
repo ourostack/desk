@@ -1,13 +1,13 @@
 import { lstatSync, readdirSync } from "node:fs"
-import { createRequire } from "node:module"
 import { homedir } from "node:os"
 import * as path from "node:path"
+import { loadEndHook } from "./end-hook.js"
 import { readSmallText } from "./marker.js"
 import { PATTERNS } from "./schema.js"
 
 // The end hook finds each plugin's install source from the host's plugin registry. This reads the same registry
-// the same way by calling the hook's own lookups (both ship in the installed plugin), so the two cannot drift.
-const hook = createRequire(import.meta.url)("../../../hooks/factory-end.cjs")
+// the same way by calling the hook's own lookups, so the two cannot drift. The hook is loaded when a source is
+// looked up, from the plugin root the environment names (`end-hook.js`); without it no source is found.
 const never = () => false
 
 // Claude Code keeps every version it has installed at cache/<marketplace>/<plugin>/<version>/, so a version that was
@@ -24,7 +24,7 @@ function isRealDirectory(directory) {
   }
 }
 
-function claudeSources(name, version, { env, home }) {
+function claudeSources(hook, name, version, { env, home }) {
   if (!PATTERNS.pluginName.test(name) || !PATTERNS.semver.test(version)) return []
   const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude")
   const cache = path.join(configDir, "plugins", "cache")
@@ -38,7 +38,7 @@ function claudeSources(name, version, { env, home }) {
 // Each lookup answers ABSENT (nothing at the exact name and version), CONFLICT (something there whose source is not one
 // GitHub repository, or ambiguous) or the repository. A source is used only when nothing conflicts and every lookup
 // that found one names the same repository.
-function copilotSources(name, version, { env, home }) {
+function copilotSources(hook, name, version, { env, home }) {
   const copilotHome = env.COPILOT_HOME || path.join(home, ".copilot")
   const answers = [hook.copilotSources(copilotHome, readSmallText, PATTERNS, never, true)(name, version), hook.agencySources(home, readSmallText, PATTERNS, never, true)(name, version)]
   if (answers.includes(hook.CONFLICT)) return []
@@ -53,8 +53,10 @@ function copilotSources(name, version, { env, home }) {
  */
 export function registrySource(host, name, version, { env }) {
   try {
+    const hook = loadEndHook(env)
+    if (hook === null) return null
     const context = { env, home: env.HOME || homedir() }
-    const found = host === "claude-code" ? claudeSources(name, version, context) : host === "copilot-cli" ? copilotSources(name, version, context) : []
+    const found = host === "claude-code" ? claudeSources(hook, name, version, context) : host === "copilot-cli" ? copilotSources(hook, name, version, context) : []
     if (host === "claude-code") return found.length === 1 ? found[0] : null
     const known = new Set(found)
     return known.size === 1 ? [...known][0] : null
