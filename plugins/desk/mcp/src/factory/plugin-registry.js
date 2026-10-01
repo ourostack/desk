@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from "node:fs"
 import { createRequire } from "node:module"
 import { homedir } from "node:os"
 import * as path from "node:path"
@@ -7,24 +8,21 @@ import { PATTERNS } from "./schema.js"
 // The end hook finds each plugin's install source from the host's plugin registry. This reads the same registry
 // the same way by calling the hook's own lookups (both ship in the installed plugin), so the two cannot drift.
 const hook = createRequire(import.meta.url)("../../../hooks/factory-end.cjs")
-const MAX_REGISTRY_BYTES = 1024 * 1024
 const never = () => false
 
-const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
+// Claude Code keeps every version it has installed at cache/<marketplace>/<plugin>/<version>/, so a version that was
+// upgraded away is still there. The source is what the hook reports for a plugin installed from that marketplace.
+// Exactly one marketplace may hold the name and version; two make it ambiguous.
+const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/u
 
-// The source of each installed record at a name and exact version (null for a record whose source is unknown).
-// Claude Code: one entry per installed record whose key is `name@marketplace` and whose version matches.
 function claudeSources(name, version, { env, home }) {
+  if (!PATTERNS.pluginName.test(name) || !PATTERNS.semver.test(version)) return []
   const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude")
-  const installed = JSON.parse(readSmallText(path.join(configDir, "plugins", "installed_plugins.json"), MAX_REGISTRY_BYTES))
-  if (!isObject(installed.plugins)) throw new Error("registry_unreadable")
-  const marketplaceOf = hook.claudeSources(configDir, readSmallText, PATTERNS, never)
-  const found = []
-  for (const [key, records] of Object.entries(installed.plugins)) {
-    if (key.split("@")[0] !== name || !Array.isArray(records)) continue
-    for (const record of records) if (isObject(record) && record.version === version) found.push(marketplaceOf(key))
-  }
-  return found
+  const cache = path.join(configDir, "plugins", "cache")
+  const marketplaces = readdirSync(cache, { withFileTypes: true }).filter((entry) => entry.isDirectory() && SEGMENT.test(entry.name))
+  const holding = marketplaces.filter((entry) => existsSync(path.join(cache, entry.name, name, version)))
+  if (holding.length !== 1) return []
+  return [hook.claudeSources(configDir, readSmallText, PATTERNS, never)(`${name}@${holding[0].name}`)]
 }
 
 // Copilot CLI: a plain install records its marketplace in config.json; an Agency session copies from Agency's cache.

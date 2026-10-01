@@ -12,48 +12,47 @@ import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
 
 const hook = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/factory-end.cjs")
 
-// A Claude Code registry under <base>/cc: each entry is [key, version], all from one GitHub marketplace repository.
-async function claudeRegistry({ base, env }, entries, { repo = "ourostack/desk", listed = ["desk"] } = {}) {
+// A Claude Code plugin cache under <base>/cc/plugins/cache: each entry is [marketplace, plugin, version]. A marketplace is a GitHub marketplace (repo ourostack/desk, listing "listed" plugins) unless it is named in "nonGithub".
+async function claudeRegistry({ base, env }, entries, { listed = ["desk", "twice", "old"], nonGithub = [] } = {}) {
   const dir = path.join(base, "cc")
-  const market = path.join(base, "market")
   env.CLAUDE_CONFIG_DIR = dir
-  const plugins = {}
-  for (const [key, version] of entries) (plugins[key] ??= []).push({ version, installPath: path.join(base, "install", key, version) })
-  await json(path.join(dir, "plugins", "installed_plugins.json"), { version: 2, plugins })
-  await json(path.join(dir, "plugins", "known_marketplaces.json"), { ourostack: { source: { source: "github", repo }, installLocation: market }, other: { source: { source: "github", repo }, installLocation: market } })
-  await json(path.join(market, ".claude-plugin", "marketplace.json"), { plugins: listed.map((name) => ({ name, source: `./plugins/${name}` })) })
+  const known = {}
+  for (const [marketplace, plugin, version] of entries) {
+    await fs.mkdir(path.join(dir, "plugins", "cache", marketplace, plugin, version), { recursive: true })
+    const location = path.join(base, "market", marketplace)
+    known[marketplace] = { source: nonGithub.includes(marketplace) ? { source: "directory", path: location } : { source: "github", repo: "ourostack/desk" }, installLocation: location }
+    await json(path.join(location, ".claude-plugin", "marketplace.json"), { plugins: listed.map((name) => ({ name, source: `./plugins/${name}` })) })
+  }
+  await json(path.join(dir, "plugins", "known_marketplaces.json"), known)
 }
 
-test("a Claude Code plugin takes the source of the single installed entry with the same name and version", () => scratch(async (ctx) => {
-  await claudeRegistry(ctx, [["desk@ourostack", "3.2.0"], ["desk@ourostack", "3.1.0"]])
+test("a Claude Code plugin takes the source of the one marketplace whose cache holds its name and version, even when that version is no longer installed", () => scratch(async (ctx) => {
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"], ["ourostack", "old", "1.0.0"]])
   assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
-  assert.deepEqual(backfillPluginSources("claude-code", [{ name: "desk", version: "3.2.0" }], { env: ctx.env }), [{ name: "desk", version: "3.2.0", source: "ourostack/desk" }])
+  assert.deepEqual(backfillPluginSources("claude-code", [{ name: "old", version: "1.0.0" }], { env: ctx.env }), [{ name: "old", version: "1.0.0", source: "ourostack/desk" }])
 }))
 
-test("a version mismatch, two matches, an unlisted plugin and an unknown plugin leave the source absent", () => scratch(async (ctx) => {
-  await claudeRegistry(ctx, [["desk@ourostack", "3.2.0"], ["twice@ourostack", "1.0.0"], ["twice@other", "1.0.0"], ["unlisted@ourostack", "1.0.0"]], { listed: ["desk", "twice"] })
-  const plugins = [{ name: "desk", version: "3.3.0" }, { name: "twice", version: "1.0.0" }, { name: "unlisted", version: "1.0.0" }, { name: "absent", version: "1.0.0" }]
+test("a missing cache folder, a version held by two marketplaces, a non-GitHub marketplace and an unlisted plugin leave the source absent", () => scratch(async (ctx) => {
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"], ["ourostack", "twice", "1.0.0"], ["other", "twice", "1.0.0"], ["local", "old", "1.0.0"], ["ourostack", "unlisted", "1.0.0"]], { nonGithub: ["local"] })
+  const plugins = [{ name: "desk", version: "3.3.0" }, { name: "twice", version: "1.0.0" }, { name: "old", version: "1.0.0" }, { name: "unlisted", version: "1.0.0" }, { name: "absent", version: "1.0.0" }, { name: "../x", version: "1.0.0" }, { name: "desk", version: "../3" }]
   assert.deepEqual(backfillPluginSources("claude-code", plugins, { env: ctx.env }), plugins)
   for (const plugin of plugins) assert.equal(Object.hasOwn(backfillPluginSources("claude-code", [plugin], { env: ctx.env })[0], "source"), false)
 }))
 
-test("a missing registry, a corrupt registry and a registry without a plugins object leave the source absent", () => scratch(async (ctx) => {
+test("a missing cache, an unreadable known-marketplaces file and a stray file in the cache leave the source absent", () => scratch(async (ctx) => {
   const plugins = [{ name: "desk", version: "3.2.0" }]
   ctx.env.CLAUDE_CONFIG_DIR = path.join(ctx.base, "nowhere")
   assert.deepEqual(backfillPluginSources("claude-code", plugins, { env: ctx.env }), plugins)
-  const file = path.join(ctx.base, "cc", "plugins", "installed_plugins.json")
-  ctx.env.CLAUDE_CONFIG_DIR = path.join(ctx.base, "cc")
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, "{not json")
-  assert.deepEqual(backfillPluginSources("claude-code", plugins, { env: ctx.env }), plugins)
-  await json(file, { plugins: [] })
-  assert.deepEqual(backfillPluginSources("claude-code", plugins, { env: ctx.env }), plugins)
-  await json(file, { plugins: { "desk@ourostack": "not a list" } })
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"]])
+  await fs.writeFile(path.join(ctx.base, "cc", "plugins", "cache", "stray-file"), "x")
+  await fs.mkdir(path.join(ctx.base, "cc", "plugins", "cache", ".hidden", "desk", "3.2.0"), { recursive: true })
+  assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
+  await fs.writeFile(path.join(ctx.base, "cc", "plugins", "known_marketplaces.json"), "{not json")
   assert.deepEqual(backfillPluginSources("claude-code", plugins, { env: ctx.env }), plugins)
 }))
 
 test("a plugin that already has a source key, even null, is untouched", () => scratch(async (ctx) => {
-  await claudeRegistry(ctx, [["desk@ourostack", "3.2.0"]])
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"]])
   const plugins = [{ name: "desk", version: "3.2.0", source: null }, { name: "desk", version: "3.2.0", source: "acme/fork" }]
   const result = backfillPluginSources("claude-code", plugins, { env: ctx.env })
   assert.deepEqual(result, plugins)
@@ -61,7 +60,7 @@ test("a plugin that already has a source key, even null, is untouched", () => sc
 }))
 
 test("without HOME in the environment the registry is under the operating system's home directory", () => scratch(async (ctx) => {
-  await json(path.join(ctx.base, ".claude", "plugins", "installed_plugins.json"), { plugins: {} })
+  await fs.mkdir(path.join(ctx.base, ".claude", "plugins", "cache"), { recursive: true })
   const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
   process.env.HOME = ctx.base
   process.env.USERPROFILE = ctx.base
@@ -76,7 +75,6 @@ test("the Claude Code registry falls back to ~/.claude without an override, and 
   delete ctx.env.CLAUDE_CONFIG_DIR
   assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: ctx.env }), null)
   assert.equal(registrySource("codex-cli", "desk", "3.2.0", { env: ctx.env }), null)
-  assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: { HOME: ctx.base } }), null)
 }))
 
 async function copilotRegistry({ env }, installed, marketplaces) {
@@ -108,7 +106,8 @@ test("a Copilot CLI plugin copied from Agency's cache takes the cached entry's G
 }))
 
 test("the backfill reads the registry through the end hook's own lookups", () => scratch(async (ctx) => {
-  await claudeRegistry(ctx, [["desk@ourostack", "3.2.0"]])
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"]])
+  await json(path.join(ctx.base, "cc", "plugins", "installed_plugins.json"), { plugins: { "desk@ourostack": [{ version: "3.2.0", installPath: path.join(ctx.base, "cc", "plugins", "cache", "ourostack", "desk", "3.2.0") }] } })
   const { PATTERNS } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
   const { readSmallText } = await import("../../../../../plugins/desk/mcp/src/factory/marker.js")
   const metadata = hook.metadata({ host: "claude", pluginRoot: ctx.base, home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
@@ -118,7 +117,7 @@ test("the backfill reads the registry through the end hook's own lookups", () =>
 }))
 
 test("a re-derive of a marker without sources publishes desk:worker by name, and the marker file is not rewritten", () => scratch(async (ctx) => {
-  await claudeRegistry(ctx, [["desk@ourostack", "3.2.0"]])
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"]])
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0" }], end_reason: "complete", ended_at: "2026-09-26T08:01:00.000Z" }
   const sub = path.join(path.dirname(marker.log_path), ID, "subagents")
