@@ -394,10 +394,11 @@ export function breakOriginForFailure(deskRoot) {
  * per run -- it holds no operator content, only Desk's own installed code.
  * Everything else in the isolated HOME starts empty.
  */
-export function createIsolatedHome({ homeDir, sharedCacheDir }) {
+export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude", keychain = host !== "copilot", ghAccounts = host !== "copilot" }) {
   mkdirSync(homeDir, { recursive: true })
   mkdirSync(path.join(homeDir, "Library"), { recursive: true })
-  symlinkSync(path.join(REAL_HOME, "Library", "Keychains"), path.join(homeDir, "Library", "Keychains"))
+  // The login keychain is linked in only when the host cannot sign in without it (Claude Code, unless `CLAUDE_CODE_OAUTH_TOKEN` is set). Copilot signs in from an environment variable, and the `gh` shim reaches the operator's `gh` login through the real HOME (see `installGhShim` `realEnv`), so its run gets no link at all.
+  if (keychain) symlinkSync(path.join(REAL_HOME, "Library", "Keychains"), path.join(homeDir, "Library", "Keychains"))
   if (sharedCacheDir) {
     mkdirSync(sharedCacheDir, { recursive: true })
     symlinkSync(sharedCacheDir, path.join(homeDir, ".cache"))
@@ -411,7 +412,7 @@ export function createIsolatedHome({ homeDir, sharedCacheDir }) {
   // symlinked, so nothing this session does (e.g. `gh auth switch`) can
   // write back to the operator's real gh config.
   const realGhConfig = path.join(REAL_HOME, ".config", "gh")
-  if (existsSync(realGhConfig)) {
+  if (ghAccounts && existsSync(realGhConfig)) {
     const ghConfig = path.join(homeDir, ".config", "gh")
     mkdirSync(ghConfig, { recursive: true })
     for (const file of ["hosts.yml", "config.yml"]) {
@@ -423,6 +424,7 @@ export function createIsolatedHome({ homeDir, sharedCacheDir }) {
   // is no AI attribution anywhere). Left on, the harness's temporary home made Claude Code tell agents to add a
   // `Co-Authored-By` trailer, which contradicted the desk and confused them. `attribution` is the current key;
   // `includeCoAuthoredBy` is its deprecated predecessor, set too so an older Claude Code obeys the same setting.
+  if (host === "copilot") return homeDir // the Copilot profile and its attribution default are written by copilot.mjs `writeCopilotProfile`
   const claudeDir = path.join(homeDir, ".claude") // the run never gets CLAUDE_CONFIG_DIR (buildChildEnv), so Claude Code's profile is under this home
   mkdirSync(claudeDir, { recursive: true })
   writeFileSync(path.join(claudeDir, "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)

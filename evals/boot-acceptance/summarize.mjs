@@ -62,14 +62,22 @@ function tally(summaries) {
   return [...counts.values()].sort((a, b) => b.runs.length - a.runs.length)
 }
 
+/**
+ * The outcome as the table shows it. A pass on a host that could not run some checks says so ("pass (3 N/A)"): every check that could run passed, and the N/A ones were not judged, so it is not a pass of the whole suite. Claude runs have no N/A checks and read as before.
+ */
+export function outcomeText(s) {
+  const na = s.not_applicable_count ?? s.not_applicable?.length ?? 0
+  return na > 0 ? `${s.outcome} (${na} N/A)` : s.outcome
+}
+
 function outcomeTable(summaries) {
   const rows = summaries
     .slice()
-    .sort((a, b) => a.scenario.localeCompare(b.scenario) || a.run - b.run)
-    .map((s) => `| ${s.scenario} | ${s.run} | ${s.outcome} | ${s.tool_call_count} | ${s.wall_ms ?? "?"} | ${s.total_cost_usd ?? "?"} | ${(s.outcome_notes ?? []).join("; ")} |`)
+    .sort((a, b) => (a.host ?? "claude").localeCompare(b.host ?? "claude") || a.scenario.localeCompare(b.scenario) || a.run - b.run)
+    .map((s) => `| ${s.host ?? "claude"} | ${s.scenario} | ${s.run} | ${outcomeText(s)} | ${s.tool_call_count} | ${s.wall_ms ?? "?"} | ${s.total_cost_usd ?? "?"} | ${s.premium_requests ?? "-"} | ${(s.outcome_notes ?? []).filter((n) => !n.startsWith("N/A on ")).join("; ")} |`)
   return [
-    "| Scenario | Run | Outcome | Tool calls | Wall ms | Cost USD | Notes |",
-    "|---|---|---|---|---|---|---|",
+    "| Host | Scenario | Run | Outcome | Tool calls | Wall ms | Cost USD | Premium requests | Notes |",
+    "|---|---|---|---|---|---|---|---|---|",
     ...rows,
   ].join("\n")
 }
@@ -98,6 +106,8 @@ function main() {
   const lines = []
   lines.push("# Boot-acceptance summary\n")
   lines.push(`${summaries.length} runs.\n`)
+  const naTotal = summaries.reduce((n, s) => n + (s.not_applicable_count ?? 0), 0)
+  if (naTotal > 0) lines.push(`${summaries.filter((s) => (s.not_applicable_count ?? 0) > 0).length} runs have checks their host could not run (N/A); an outcome with N/A beside it is judged on the remaining checks only.\n`)
   lines.push("## Outcome table\n")
   lines.push(outcomeTable(summaries))
   lines.push("\n## Mechanical critique-theme tally (keyword pass; read the verbatim critiques below for the real clustering)\n")
@@ -115,4 +125,5 @@ function main() {
   console.log(`Wrote ${outPath}`)
 }
 
-main()
+import { fileURLToPath } from "node:url"
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main()

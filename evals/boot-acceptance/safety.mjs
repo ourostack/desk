@@ -149,6 +149,13 @@ export function redactTokens(text) {
   return String(text).replace(TOKEN_SHAPE, REDACTION_MARKER)
 }
 
+/** `text` with every token-shaped string and every exact value in `secrets` (a credential the run was given, whatever it looks like) replaced by the redaction marker. */
+export function redactSecrets(text, secrets = []) {
+  let out = redactTokens(text)
+  for (const secret of secrets) if (typeof secret === "string" && secret.length >= 8) out = out.split(secret).join(REDACTION_MARKER)
+  return out
+}
+
 /** How many token-shaped strings or redaction markers `text` holds: a leak that was seen, or one already redacted when the text was saved. */
 export function countTokenLeaks(text) {
   const t = String(text)
@@ -160,11 +167,13 @@ export function countTokenLeaks(text) {
 // ---------------------------------------------------------------------------
 
 /**
+ * `realEnv` (`{ set, unset }`, optional) changes the environment the shim gives the real `gh`: the harness uses it to run `gh` against the operator's real login while the agent's own HOME holds no keychain link and no `gh` account list, so a model that calls `gh` by path, or reads its HOME, finds no credential.
+ *
  * Writes `<shimDir>/gh`, a script that classifies its arguments with
  * `classifyGh`, runs the real `gh` for read-only calls and otherwise exits 97
  * after appending the attempt to `logFile`. `realGh` is the real binary.
  */
-export function installGhShim({ shimDir, realGh, logFile, bootScript = null }) {
+export function installGhShim({ shimDir, realGh, logFile, bootScript = null, realEnv = null }) {
   mkdirSync(shimDir, { recursive: true })
   const policy = new URL("./safety.mjs", import.meta.url).href
   // Who gets a raw token: only the plugin under test's own boot script (an exact realpath match, baked in at install time), found by the shim's parent process (`ps`), never by an environment variable the model's shell could also set. The boot script spawns `gh` with a piped stdout, so its token goes to the script and not into the transcript. Everyone else (the model's shell, a hook) gets the child's output captured and passed through `redactTokens`, with the exit code kept.
@@ -172,6 +181,12 @@ export function installGhShim({ shimDir, realGh, logFile, bootScript = null }) {
 import { classifyGh, isBootScriptCommand, processCommand, redactTokens } from ${JSON.stringify(policy)}
 import { spawnSync } from "node:child_process"
 import { appendFileSync } from "node:fs"
+const realEnv = ${JSON.stringify(realEnv)}
+const ghEnv = { ...process.env }
+if (realEnv) {
+  for (const name of realEnv.unset ?? []) delete ghEnv[name]
+  Object.assign(ghEnv, realEnv.set ?? {})
+}
 const args = process.argv.slice(2)
 const verdict = classifyGh(args)
 if (!verdict.allowed) {
@@ -180,10 +195,10 @@ if (!verdict.allowed) {
   process.exit(97)
 }
 if (isBootScriptCommand(processCommand(process.ppid), ${JSON.stringify(bootScript)})) {
-  const raw = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit" })
+  const raw = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit", env: ghEnv })
   process.exit(raw.status ?? 1)
 }
-const r = spawnSync(${JSON.stringify(realGh)}, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+const r = spawnSync(${JSON.stringify(realGh)}, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: ghEnv })
 process.stdout.write(redactTokens(r.stdout ?? ""))
 process.stderr.write(redactTokens(r.stderr ?? ""))
 process.exit(r.status ?? 1)
@@ -215,11 +230,14 @@ export function findRealGh(searchPath, skipDir = null) {
 // by the caller; HOME is always the run's temp HOME. Anthropic credentials
 // are passed only if the parent has them (on macOS login is normally the
 // keychain, reached through the HOME symlink).
-export const PASS_THROUGH = [
-  "PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TERM", "TZ", "USER", "LOGNAME", "SHELL", "TMPDIR",
+const BASE_PASS_THROUGH = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TERM", "TZ", "USER", "LOGNAME", "SHELL", "TMPDIR"]
+const CLAUDE_PASS_THROUGH = [
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
   "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_REGION", "AWS_PROFILE",
 ]
+export const PASS_THROUGH = [...BASE_PASS_THROUGH, ...CLAUDE_PASS_THROUGH]
+// The Copilot child gets none of the Anthropic or AWS credentials: its only credential is `extraEnv` (see copilot.mjs `resolveCopilotAuth`).
+export const COPILOT_PASS_THROUGH = BASE_PASS_THROUGH
 
 /** Writes the run's private global git config: no credential helper, and fetches and pushes to GitHub URLs rewritten to a dead local path, so a clone or fetch fails at once instead of downloading a real repository. */
 export function writeGitConfig(homeDir) {
@@ -237,10 +255,14 @@ export function writeGitConfig(homeDir) {
   return file
 }
 
-/** The allowlisted environment for the `claude` child. */
-export function buildChildEnv({ parentEnv, homeDir, shimDir, gitConfig, ghLog }) {
+/**
+ * The allowlisted environment for the host's child (`claude` by default). `host: "copilot"` passes no Anthropic or AWS variable and instead gets `extraEnv`: the
+ * explicit, named variables the host needs (its credential, its profile folder). Nothing else is inherited.
+ */
+export function buildChildEnv({ parentEnv, homeDir, shimDir, gitConfig, ghLog, host = "claude", extraEnv = {} }) {
   const env = {}
-  for (const name of PASS_THROUGH) if (parentEnv[name] !== undefined) env[name] = parentEnv[name]
+  for (const name of host === "copilot" ? COPILOT_PASS_THROUGH : PASS_THROUGH) if (parentEnv[name] !== undefined) env[name] = parentEnv[name]
+  Object.assign(env, extraEnv)
   env.PATH = [shimDir, parentEnv.PATH ?? "/usr/bin:/bin"].join(path.delimiter)
   env.HOME = homeDir
   env.XDG_CONFIG_HOME = path.join(homeDir, ".config")
