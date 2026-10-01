@@ -351,16 +351,19 @@ test("a current receipt still skips", () => scratch(async (ctx) => {
 const SIBLING_ID = "5b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60"
 const DEFAULT_ROUTING = { source: "default", store: STORE, warnings: [] }
 const DAY = 24 * 60 * 60 * 1000
+// Real-clock times: listMarkers prunes a marker whose updated_at is over 30 days old, so a fixed date would rot.
+const CODEX_AT = new Date(Date.now() - 2 * DAY).toISOString()
+const apart = (days) => new Date(Date.parse(CODEX_AT) + days * DAY).toISOString()
 
 async function codexMarker(ctx) {
   const log = path.join(ctx.base, ".codex", "sessions", "2026", "09", "26", "rollout-x.jsonl")
   await fs.mkdir(path.dirname(log), { recursive: true })
   await fs.writeFile(log, "{}\n")
-  return { schema_version: 1, host: "codex-cli", session_id: ID, log_path: log, cwd: ctx.desk, desk_root: ctx.desk, end_reason: "complete", ended_at: END, plugins: [], updated_at: END, routing: DEFAULT_ROUTING }
+  return { schema_version: 1, host: "codex-cli", session_id: ID, log_path: log, cwd: ctx.desk, desk_root: ctx.desk, end_reason: "complete", ended_at: CODEX_AT, plugins: [], updated_at: CODEX_AT, routing: DEFAULT_ROUTING }
 }
 
 async function sibling(ctx, overrides) {
-  const marker = { ...await session(ctx), session_id: SIBLING_ID, ended_at: END, updated_at: END, routing: DEFAULT_ROUTING, ...overrides }
+  const marker = { ...await session(ctx), session_id: SIBLING_ID, ended_at: CODEX_AT, updated_at: new Date().toISOString(), routing: DEFAULT_ROUTING, ...overrides }
   if (Object.hasOwn(overrides, "routing") && overrides.routing === undefined) delete marker.routing
   await writeMarker(ctx.env, marker)
   return marker
@@ -385,9 +388,10 @@ test("a Codex marker stays held for a distant, other-desk or overlay-routed sibl
   const { deriveMarker } = await runner()
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const marker = await codexMarker(ctx)
-  const at = Date.parse(END)
   const held = async (label) => assert.equal((await deriveMarker(ctx.env, marker, stub)).reason, "route_unverified", label)
-  await sibling(ctx, { ended_at: new Date(at + 31 * DAY).toISOString(), updated_at: new Date(at + 31 * DAY).toISOString() })
+  await sibling(ctx, { ended_at: apart(31) })
+  await held("more than 30 days after")
+  await sibling(ctx, { ended_at: apart(-31) })
   await held("more than 30 days apart")
   await sibling(ctx, { routing: { source: "overlay", store: "example/other", warnings: [] } })
   await held("overlay-routed sibling")
@@ -409,7 +413,7 @@ test("a qualifying Claude or Copilot sibling releases the Codex marker, includin
   assert.equal((await sweep(ctx.env)).route_unverified, 1)
   const link = path.join(ctx.base, "desk-link")
   await fs.symlink(ctx.desk, link)
-  await sibling(ctx, { desk_root: link, ended_at: new Date(Date.parse(END) - 29 * DAY).toISOString() })
+  await sibling(ctx, { desk_root: link, ended_at: apart(-29) })
   assert.deepEqual(await deriveMarker(ctx.env, marker, stub), { result: "source_unreadable", store: STORE })
   const summary = await sweep(ctx.env)
   assert.equal(summary.route_unverified, 0)
@@ -423,8 +427,8 @@ test("a Copilot sibling releases, and a missing desk path compares by resolved s
   await fs.mkdir(path.join(gone, "_meta"), { recursive: true })
   const marker = { ...await codexMarker(ctx), desk_root: gone, cwd: gone }
   await fs.rm(gone, { recursive: true })
-  await sibling(ctx, { host: "copilot-cli", desk_root: gone, ended_at: null, updated_at: END })
-  assert.equal((await deriveMarker(ctx.env, { ...marker, ended_at: null }, stub)).reason, undefined)
+  await sibling(ctx, { host: "copilot-cli", desk_root: gone, ended_at: null, updated_at: CODEX_AT })
+  assert.equal((await deriveMarker(ctx.env, { ...marker, ended_at: null, updated_at: CODEX_AT }, stub)).reason, undefined)
 }))
 
 test("a desk that declares its store routes Codex at once, and Claude and Copilot never hold", () => scratch(async (ctx) => {
@@ -437,4 +441,20 @@ test("a desk that declares its store routes Codex at once, and Claude and Copilo
   assert.deepEqual(await deriveMarker(ctx.env, marker, stub), { result: "source_unreadable", store: STORE }, "the desk's current declaration wins over a stale default snapshot")
   await fs.rm(path.join(ctx.desk, "_meta/factory.json"))
   assert.equal((await deriveMarker(ctx.env, await session(ctx))).result, "written")
+}))
+
+test("a sibling exactly 30 days from the Codex marker releases it, one millisecond more does not", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const marker = await codexMarker(ctx)
+  await sibling(ctx, { ended_at: new Date(Date.parse(CODEX_AT) - 30 * DAY - 1).toISOString() })
+  assert.equal((await deriveMarker(ctx.env, marker, stub)).reason, "route_unverified")
+  await sibling(ctx, { ended_at: apart(-30) })
+  assert.equal((await deriveMarker(ctx.env, marker, stub)).reason, undefined)
+}))
+
+test("a failing status write never stops a sweep", () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  await fs.mkdir(path.join(await factoryStateRoot(ctx.env), "status.json"), { recursive: true })
+  assert.equal((await sweep(ctx.env)).held, 0)
 }))
