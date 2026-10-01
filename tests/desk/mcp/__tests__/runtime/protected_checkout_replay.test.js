@@ -13,6 +13,7 @@ import { fallbackOperation, guardShellCommand, protectCheckout, redact } from ".
 import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { readInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
 import { expandBraces } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
+import { removeFixtureAfter } from "../_process_hygiene.js"
 
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const SECRET = "ghs_replaySecretValue0123456789"
@@ -21,7 +22,7 @@ const SECRET = "ghs_replaySecretValue0123456789"
 // protected linked worktree; and a plain clone with no protected worktree at all.
 async function fixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-replay-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   const home = path.join(root, "home")
   mkdirSync(home)
   writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n")

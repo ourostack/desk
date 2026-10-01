@@ -14,10 +14,11 @@ import {
   REPEAT_TIMEOUT_THRESHOLD, commandSignature, recordTimeout, repeatedTimeoutDeskProblem,
 } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 import { mkFakeRealRoot } from "../_fake_real_root.js"
+import { removeFixtureAfter } from "../_process_hygiene.js"
 
 function fixtureEnv(t) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-protected-checkout-repeat-"))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   return { root, env: { HOME: root } }
 }
 
@@ -66,7 +67,7 @@ test("under a node:test run, recordTimeout refuses a real (non-temp) state home 
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for the
   // developer's real home, so a write landing here would be exactly the incident the guard exists to stop.
   const fakeReal = mkFakeRealRoot("desk-protected-checkout-repeat-fake-real-")
-  t.after(() => rmSync(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, fakeReal)
   const env = { HOME: fakeReal }
   assert.equal(recordTimeout({ env, command: "git checkout main" }), 1, "still fails toward 1")
   assert.equal(recordTimeout({ env, command: "git checkout main" }), 1, "never persisted, so every call starts fresh")

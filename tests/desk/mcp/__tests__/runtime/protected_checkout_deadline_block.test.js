@@ -8,7 +8,7 @@
 // really spawns can reach no real gh credentials and no network.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { execFileSync, spawn, spawnSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -16,7 +16,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { REPEAT_TIMEOUT_THRESHOLD } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 import { protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
-import { killAndWait } from "../_kill_and_wait.js"
+import { removeFixtureAfter, slowGit, waitForNoProcessesUnder } from "../_process_hygiene.js"
 
 const require = createRequire(import.meta.url)
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
@@ -34,7 +34,7 @@ function fixtureEnv(t) {
 // 9 s deadline is the thing that answers, never the inspector itself.
 async function protectedRepoFixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-protected-checkout-deadline-repo-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   const home = path.join(root, "home")
   mkdirSync(home)
   writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n")
@@ -48,21 +48,6 @@ async function protectedRepoFixture(t) {
   git("branch", "topic")
   await protectCheckout({ root: prot, stateBranch: "main" })
   return { root, home, env, prot }
-}
-
-// Borrowed from protected_checkout_a3b_review.test.js's timeout2.mjs replay: every inspection
-// read of the protected checkout blocks on a FIFO included from its own configuration, so the
-// guard's inspection never finishes inside the hook's own deadline.
-function slowGit(t, prot, env, delayMs) {
-  const fifo = path.join(path.dirname(prot), "slow.cfg")
-  execFileSync("mkfifo", [fifo])
-  execFileSync("git", ["-C", prot, "config", "include.path", fifo], { env })
-  const writer = spawn(process.execPath, ["-e", `
-    const fs = require("node:fs")
-    const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-    for (;;) { const fd = fs.openSync(${JSON.stringify(fifo)}, "w"); sleep(${delayMs}); fs.closeSync(fd) }
-  `], { stdio: "ignore" })
-  t.after(() => killAndWait(writer))
 }
 
 test("commandTextFromRawInput reads tool_input.command from a Claude-shaped payload", () => {
@@ -183,4 +168,6 @@ test("the real hook process denies with the plain reason every time, and adds th
   assert.match(JSON.parse(last.stdout).hookSpecificOutput.permissionDecisionReason, /could not finish checking this command in time/u)
   assert.match(last.stderr, /^Desk problem: protected-checkout — the same command keeps timing out\n/u)
   assert.match(last.stderr, /file: filing in background/u)
+  // The hook exited at its own deadline while Git was still blocked on the FIFO; it must not leave that Git behind.
+  assert.deepEqual(await waitForNoProcessesUnder(f.root, 5000), [])
 })

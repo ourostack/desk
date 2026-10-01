@@ -15,6 +15,7 @@ import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-
 import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, WORKTREE_COMMAND } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
 import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
 import { expandBraces, inspectShell, shellScript } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
+import { removeFixtureAfter } from "../_process_hygiene.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -26,7 +27,7 @@ const pwsh = !spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).error
 // protected linked worktree of the ordinary clone holding an unsaved file.
 async function fixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-allowlist-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   const home = path.join(root, "home")
   mkdirSync(home)
   writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n")

@@ -7,10 +7,11 @@ import * as path from "node:path"
 import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectedCheckoutHook, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { inspectShell, tokenizeShell } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
 import { readInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
+import { removeFixtureAfter } from "../_process_hygiene.js"
 
 function fixture(t) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-"))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
   git("init", "-q")
   git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "initial")
@@ -244,14 +245,14 @@ test("a relative GIT_DIR/GIT_WORK_TREE resolves against the directory the Git ca
 test("GIT_DIR alone names the checkout, non-bare or bare", async (t) => {
   const { root } = fixture(t)
   const elsewhere = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-elsewhere-"))
-  t.after(() => rmSync(elsewhere, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, elsewhere)
 
   const nonBare = await guardShellCommand({ command: "git reset --hard", cwd: elsewhere, env: { ...process.env, GIT_DIR: path.join(root, ".git") } })
   assert.equal(nonBare.deny, true, "a plain .git GIT_DIR names its parent directory as the checkout")
   assert.match(nonBare.reason, /this would discard other sessions' uncommitted work/u)
 
   const bareRoot = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-bare-"))
-  t.after(() => rmSync(bareRoot, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, bareRoot)
   execFileSync("git", ["init", "-q", "--bare", bareRoot], { stdio: "ignore" })
   execFileSync("git", ["-C", bareRoot, "config", "desk.protected", "true"], { stdio: "ignore" })
   const bare = await guardShellCommand({ command: "git reset --hard", cwd: elsewhere, env: { ...process.env, GIT_DIR: bareRoot } })
@@ -267,7 +268,7 @@ test("GIT_DIR alone names the checkout, non-bare or bare", async (t) => {
 test("a loop that only changes GIT_DIR/GIT_WORK_TREE is checked once per distinct location, not merged into one cached answer", async (t) => {
   const { root: danger, guard } = fixture(t)
   const safe = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-safe-"))
-  t.after(() => rmSync(safe, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, safe)
   execFileSync("git", ["-C", safe, "init", "-q"], { stdio: "ignore" })
   execFileSync("git", ["-C", safe, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "initial"], { stdio: "ignore" })
 
