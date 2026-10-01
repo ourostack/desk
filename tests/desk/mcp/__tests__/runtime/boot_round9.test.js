@@ -11,7 +11,7 @@ import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/s
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { AGENTS_MD_CAP_BYTES, formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
-import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
+import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint, deferredToolsLoadHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 
 const jq = async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" })
 const gh = async (args) => {
@@ -74,9 +74,23 @@ test("boot carries AGENTS.md in its result, and nothing orders the agent to read
   assert.equal(throwing.agents_md, null)
 })
 
-test("the deferred-tools hint names ToolSearch select: with the exact Desk tools", () => {
-  assert.match(DEFERRED_TOOLS_LOAD_HINT, /^If your host defers tools.*\(Claude Code: ToolSearch `select:/su)
-  assert.match(DEFERRED_TOOLS_LOAD_HINT, /mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status/u)
+test("the deferred-tools hint names the exact Desk tools for the host it runs on", () => {
+  assert.match(deferredToolsLoadHint("claude"), /^If your host defers tools.*\(Claude Code: ToolSearch `select:/su)
+  assert.match(deferredToolsLoadHint("claude"), /mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status/u)
+  assert.doesNotMatch(deferredToolsLoadHint("claude"), /desk-task_update/u)
+  // Copilot CLI exposes the server `desk` and the tool as `desk-task_update` (round I event logs); it has no ToolSearch.
+  const copilot = deferredToolsLoadHint("copilot")
+  assert.match(copilot, /`desk-task_update`/u)
+  assert.match(copilot, /never through the shell/u)
+  assert.doesNotMatch(copilot, /ToolSearch|mcp__plugin_desk_desk__/u)
+  assert.ok(copilot.length < deferredToolsLoadHint("claude").length)
+  // Codex and an unknown host (and the hostless git hook) get both names.
+  for (const host of ["codex", "unknown", undefined]) {
+    assert.match(deferredToolsLoadHint(host), /ToolSearch `select:mcp__plugin_desk_desk__task_update/u)
+    assert.match(deferredToolsLoadHint(host), /`desk-<name>`, such as `desk-task_update`/u)
+  }
+  assert.equal(DEFERRED_TOOLS_LOAD_HINT, deferredToolsLoadHint("unknown"))
+  assert.equal(deferredToolsHint("copilot"), `${copilot} If a Desk tool is still absent after that, repair first (see the session-start skill) and never continue silently in local-only mode.`)
   assert.ok(DEFERRED_TOOLS_HINT.startsWith(DEFERRED_TOOLS_LOAD_HINT))
   assert.match(DEFERRED_TOOLS_HINT, /never continue silently in local-only mode/u)
 })

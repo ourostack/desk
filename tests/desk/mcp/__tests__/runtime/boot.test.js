@@ -1332,6 +1332,18 @@ function healthyBoot(root, extra = {}) {
   })
 }
 
+test("bootOnce: the tool-loading line names the tools the host really exposes (Copilot: desk-<name>, Claude Code: mcp__plugin_desk_desk__<name>)", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const lineFor = async (env) => (await healthyBoot(root, { env: { DESK: root, ...env } })).instructions.find((line) => /defers tools|named `desk-<name>`/u.test(line))
+  const copilot = await lineFor({ COPILOT_AGENT_SESSION_ID: "s" })
+  assert.match(copilot, /`desk-task_update`/u)
+  assert.doesNotMatch(copilot, /ToolSearch|mcp__plugin_desk_desk__/u)
+  const claude = await lineFor({ CLAUDECODE: "1" })
+  assert.match(claude, /ToolSearch `select:mcp__plugin_desk_desk__task_update/u)
+  assert.doesNotMatch(claude, /desk-task_update/u)
+})
+
 test("bootOnce: a healthy boot lists instructions (export line, MCP check, status block) and the covered hosts", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "open-task", VALID_CARD)

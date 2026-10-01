@@ -77,7 +77,7 @@ import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
-import { DEFERRED_TOOLS_HINT } from "../util/deferred-tools.js"
+import { deferredToolsHint } from "../util/deferred-tools.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -935,7 +935,7 @@ function buildInstructions(ctx) {
   // The named task's repos when the operator named one, every active task's otherwise.
   const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
   out.push(...pushLines(pushAccounts, namedTask))
-  out.push(DEFERRED_TOOLS_HINT)
+  out.push(deferredToolsHint(agentHost))
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
       out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
