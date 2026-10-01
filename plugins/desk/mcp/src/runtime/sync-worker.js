@@ -273,6 +273,10 @@ function pushWithRetry(root, spawnGit) {
 // state guard refusing a real, non-temp state home -- costs the next reader a recorded status, never a crash. A
 // caller (`runPushWorker`, `finalUnpushedCheck`) that has already computed its own answer from Git still returns
 // that answer; only the recording is best-effort.
+//
+// The read-merge-write is not locked: the file is replaced atomically (a temp file, then a rename), so a reader never
+// sees a half-written record, but two writers racing (a push worker and a boot sync) are last-writer-wins and one
+// patch can be lost. That is accepted: every field here is a hint that the next sync or push rewrites.
 function updateSyncStatus(root, env, patch) {
   const file = syncStatusPath({ root, env })
   try {
@@ -289,6 +293,24 @@ function updateSyncStatus(root, env, patch) {
   writeFileSync(temporary, `${JSON.stringify(next)}\n`, { mode: 0o600 })
   renameSync(temporary, file)
   return next
+}
+
+/**
+ * Records how the last desk sync (`syncWorkspace`'s pull) ended, for `desk_status`'s one health word: a failed pull
+ * changes no ahead/behind count, so without this record `desk_status` reads "in sync" beside a boot that said
+ * `degraded`. A synced outcome clears the record; so does a later successful push. Best effort, never throws.
+ */
+export function recordPullOutcome({ root, env, result }) {
+  try {
+    const failed = result?.state === "unresolved"
+    updateSyncStatus(root, env, {
+      last_pull: failed
+        ? { state: "unresolved", reason: result.reason ?? null, cause: result.cause ?? null, at: new Date().toISOString() }
+        : null,
+    })
+  } catch {
+    // The record is a convenience for the next reader, never a reason to fail a sync.
+  }
 }
 
 /** `desk_status`'s own read of the worker's last recorded outcome, or `null` when nothing has run yet. Never throws. */
@@ -400,7 +422,10 @@ export async function runPushWorker({
       const counts = aheadBehindCounts({ root, spawnGit })
       if (counts === null || counts.ahead <= 0) {
         const patch = { blocked: false, reason: null, paths: [] }
-        if (pushed) patch.last_push_at = new Date().toISOString()
+        if (pushed) {
+          patch.last_push_at = new Date().toISOString()
+          patch.last_pull = null
+        }
         updateSyncStatus(root, env, patch)
         return { result: "ok" }
       }

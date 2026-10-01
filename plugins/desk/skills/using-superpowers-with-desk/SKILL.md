@@ -30,7 +30,15 @@ Nothing else enters here. Pick the entry from what the task already holds, top r
 | An approved plan (an existing plan file to pass as `--plan-path`), and a subagent tool is available, and the human did not choose inline execution | `superpowers:subagent-driven-development` |
 | An approved plan, and there is no subagent tool or the human chose inline execution: the same ready set runs in this session | `superpowers:executing-plans` |
 
-`superpowers:executing-plans` executes a plan, so it is never the entry for a task with no plan: a task card is not a plan, and "the card is clear enough" does not skip planning, it only means the plan can be short. Select `writing-plans` (or `brainstorming` when the design itself is unapproved) first, then re-enter the plan row. A resume that has already reconciled its writer and source re-enters at its recorded step; a genuinely new outcome or material design change re-enters at selection. Everything after the handover belongs to the selected Superpowers skill.
+`superpowers:executing-plans` executes a plan, so it is never the entry for a task with no plan: a task card is not a plan. A recorded next step that is one small, clear change needs no plan document (next section); anything larger gets a short plan first: select `writing-plans` (or `brainstorming` when the design itself is unapproved), then re-enter the plan row. A resume that has already reconciled its writer and source re-enters at its recorded step; a genuinely new outcome or material design change re-enters at selection. Everything after the handover belongs to the selected Superpowers skill.
+
+## Resuming a named task, and where a plan lives
+
+"Resume `<task>`" continues the card's recorded next step; it does not start new planning. When that step is one small, clear change (one file or one test), the step on the card is the plan: do the work test-first in the card's repo and record progress with `task_update` (`note`, and `next_step` when the next action changes). No plan document is written and no planning skill runs.
+
+When a plan is genuinely needed (several tasks, several owners, a risky or unclear design), it is written inside the task's own iteration folder in the desk, `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/planning.md` (`directory-structure` has the layout; a cross-repo plan goes in `<track>/_planning/`), and that file is the `--plan-path`. A plan never goes into the operator's code repository (no `docs/superpowers/plans/` there) and never into the desk root, whatever a provider skill's default save location says. Choose the execution method (subagent-driven or inline) yourself from the table above; it is an engineering call, not a question for the operator.
+
+Superpowers' `writing-plans` is a skill that writes a plan file. It is not the host's Plan mode, which Desk never enters; selecting `writing-plans` neither requires nor implies Plan mode.
 
 ## Authority carried into the provider
 

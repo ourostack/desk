@@ -18,12 +18,12 @@ emit() {
 }
 
 if [ ! -r "$FOUNDATION_SKILL" ]; then
-  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. Invoke desk:session-start before other work; it remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
+  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this."
   exit 0
 fi
 
 foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
-  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. Invoke desk:session-start before other work; it remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
+  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this."
   exit 0
 }
 
@@ -32,7 +32,7 @@ foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
 # honours the Claude project folder when it is a desk, the saved binding, $DESK
 # and the home fallbacks, names where the root came from, and always exits 0.
 # With --boot-checks it runs the boot-check registry (hooks/boot-checks.cjs),
-# which adds one "Desk boot:" line only when a check has something to say, and
+# which adds one "Desk boot pre-checks:" line only when a check has something to say, and
 # then starts factory delivery (hooks/factory-start.cjs) detached with ignored
 # stdio, after that output is built.
 direction=""
@@ -40,7 +40,7 @@ if command -v node >/dev/null 2>&1; then
   direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line --boot-checks 2>/dev/null)
 fi
 if [ -z "$direction" ]; then
-  direction="Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this."
+  direction="Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this."
 fi
 
 # The foundation points at the RFC through this line: the installed copy, which

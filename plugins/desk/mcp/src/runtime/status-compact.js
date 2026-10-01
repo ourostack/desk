@@ -7,6 +7,9 @@
 // moves `state`: a degraded index only means search reads the files directly. Boot does not check the index at all
 // (slow, network-bound), so "boot ready, desk_status ready, search degraded" is one consistent picture, not a contradiction.
 
+import { shellQuote } from "../util/shell-quote.js"
+import { healthWord, syncDegradation } from "./health.js"
+
 const DETAIL_POINTER =
   "Call desk_status with { detail: true } for the full payload (index, snapshots, vector packs, admission internals), or desk_doctor for diagnostics and repairs."
 
@@ -23,13 +26,15 @@ function line(value) {
   return String(value)
 }
 
-function whyNotReady(payload) {
+function whyNotReady(payload, syncProblem, ready) {
   const reasons = []
   const add = (value) => {
     if (value === undefined || value === null || value === "") return
     const text = line(value)
     if (!reasons.includes(text)) reasons.push(text)
   }
+  add(syncProblem)
+  if (ready) return reasons
   add(payload.admission?.summary)
   add(payload.summary)
   for (const blocker of Array.isArray(payload.admission?.blockers) ? payload.admission.blockers : []) add(blocker)
@@ -42,6 +47,7 @@ function whyNotReady(payload) {
 function syncLine(sync) {
   if (typeof sync === "string") return sync
   if (sync === null || typeof sync !== "object") return null
+  if (syncDegradation(sync.last_pull) !== null) return `last pull failed${sync.last_pull.cause ? ` (${sync.last_pull.cause})` : ""}: not known to be in sync`
   if (sync.blocked === true) return `blocked${sync.reason ? ` (${sync.reason})` : ""}`
   if (sync.behind > 0) return `${sync.behind} commit(s) behind origin`
   if (sync.ahead > 0) return `${sync.ahead} commit(s) ahead of origin, not pushed yet`
@@ -66,14 +72,17 @@ const DIAGNOSTIC_KEYS = ["mode", "reason", "reason_detail", "binding_path", "pat
 
 /** The compact answer for a full desk_status payload (already merged with the admission fields). */
 export function compactStatus(payload) {
-  const state = stateWord(payload)
+  const syncProblem = syncDegradation(payload.sync?.last_pull)
+  const base = stateWord(payload)
+  // A desk that is otherwise ready is degraded by a failed sync, exactly as the boot script reports it.
+  const state = base === "ready" ? healthWord(syncProblem === null ? [] : [syncProblem]) : base
   const search = payload.readiness?.state ?? "not_checked"
   const compact = {
     state,
-    summary: state === "ready" ? "Desk is ready." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready."),
-    degraded: state === "ready" ? [] : whyNotReady(payload),
+    summary: state === "ready" ? "Desk is ready." : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
+    degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
-    ...(state === "ready" || !payload.fix ? {} : { fix: payload.fix }),
+    ...(state === "ready" ? {} : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
     ...(typeof payload.onboarding_skill === "string" ? { onboarding_skill: payload.onboarding_skill } : {}),
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),

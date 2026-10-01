@@ -1,5 +1,5 @@
 // Redaction for text Desk shows at session start: the `Desk startup:` and
-// `Desk boot:` lines both startup hooks inject, and the active-task listing
+// `Desk boot pre-checks:` lines both startup hooks inject, and the active-task listing
 // desk:session-start renders. A folder name can carry a secret's value (a
 // task folder named after a prompt that held a password, for example), and
 // these surfaces reach the transcript and the chat without anyone choosing to

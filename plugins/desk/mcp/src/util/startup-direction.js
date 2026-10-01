@@ -9,6 +9,7 @@
 // desk_status reports the one actually bound.
 
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import {
   DESK_ROOT_NOT_FOUND,
@@ -21,14 +22,30 @@ import {
 } from "./paths.js"
 import { redactCredentialLikeText } from "./redact.js"
 
+// The boot script, by its absolute path: this module lives at `<plugin>/mcp/src/util`, so the hooks (which load it from
+// the plugin they run from) hand the agent a command that works from any folder, with nothing to derive.
+const BOOT_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "session-boot.js")
+
+/** The boot command exactly as an agent runs it; a path with a space is quoted. */
+export function bootCommand(script = BOOT_SCRIPT) {
+  return `node ${/\s/u.test(script) ? `"${script}"` : script}`
+}
+
 // A child agent with a bounded brief (dispatched with a scoped outcome, authority and return contract) is not the
 // root operator's session, even when it receives this same startup text; it stands down from this imperative and
 // follows its brief, the same way Superpowers' own entry skill stands its subagents down (equivalent to
 // `using-superpowers`'s `<SUBAGENT-STOP>`). Folded into `START` so every branch below carries it exactly once.
-const START = "Invoke desk:session-start now for the authoritative workspace scan before other work. A child agent with a bounded brief follows the brief instead and skips this."
+//
+// Boot acceptance round A: an agent answered "say hi" from this line alone and never ran the boot, because the line
+// reads like a finished status. So it says in its own words that the boot has not run, gives the exact command, and
+// calls the `Desk boot pre-checks:` line (when present) a pre-check, not the boot, without spelling its prefix so a hook with no such line never mentions one.
+export function startDirection(command = bootCommand()) {
+  return `The boot has not run yet: this line and any pre-check line after it are a pointer and a few quick checks, not a scan of the workspace. Run \`${command}\` now, before other work (add \`--task "<what the operator named>"\` when their first message names a task), then do what its \`instructions\` say; \`desk:session-start\` explains the result. A child agent with a bounded brief follows the brief instead and skips this.`
+}
+const START = startDirection()
 
 export const DESK_SETUP_DIRECTION =
-  "Desk startup: no desk is bound yet, so Desk is in setup mode. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, desk:session-start remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
+  "Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, run the boot script (" + bootCommand() + ") for the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
 
 function sourceLabel(source) {
   if (source === "host-project") return "this session's project folder is a desk"

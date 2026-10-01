@@ -257,6 +257,7 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
 
   const startedAt = Date.now()
   const { ctx, critique, critiqueSkipped, turns } = await runTurns({ claude: runClaude, prompt: scenario.prompt, critiquePrompt: CRITIQUE_PROMPT, flags, cwd: deskRoot, env, timeoutMs: args.timeoutMin * 60 * 1000 })
+  ctx.deskRoot = deskRoot
   const wallMs = Date.now() - startedAt
   const [first] = turns
 

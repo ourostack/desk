@@ -86,7 +86,7 @@ test("git push to any GitHub URL fails at once against the run's git config, whi
     for (const url of ["https://github.com/example/none.git", "git@github.com:example/none.git", "ssh://git@github.com/example/none.git", "https://user@github.com/example/none.git".replace("user@", "")]) {
       const r = git(repo, "push", url, "main")
       assert.notEqual(r.status, 0, url)
-      assert.match(r.stderr, /boot-acceptance-github-push-blocked|does not appear to be a git repository|not found|No such/i, url)
+      assert.match(r.stderr, /offline-remotes|does not appear to be a git repository|not found|No such/i, url)
     }
   } finally { done() }
 })

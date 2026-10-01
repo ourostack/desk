@@ -148,7 +148,7 @@ function checkStartupHooks(skill) {
       const line = startupLine(context);
       assert.match(line, new RegExp(`\\$DESK is ${escapeRegExp(fallback)} \\(a home-folder fallback\\)`, "u"), `${host} must say the root came from a home-folder fallback`);
       assert.match(line, /desk_status reports the root Desk actually bound/u, `${host} must defer to desk_status for the bound root`);
-      assert.match(line, /desk:session-start.*authoritative workspace scan/u);
+      assert.match(line, /The boot has not run yet:.*Run `node \S*session-boot\.js`/u);
     }
 
     // Overlay case on Claude: the Desk server also receives CLAUDE_PROJECT_DIR, so the crew-shaped project folder is
@@ -190,7 +190,7 @@ function checkStartupHooks(skill) {
 
     // When the hook cannot run Desk's resolver, both hosts say so and still carry the RFC line. On Windows the
     // Claude plugin root uses backslashes, so the RFC path keeps that separator.
-    const couldNot = /^Desk startup: Desk could not resolve its root in this hook\. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound\. A child agent with a bounded brief follows the brief instead and skips this\.$/u;
+    const couldNot = /^Desk startup: Desk could not resolve its root in this hook\. The boot has not run: run node "?\S*session-boot\.js"? now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound\. A child agent with a bounded brief follows the brief instead and skips this\.$/u;
     const bare = path.join(codeRepo, "bare-plugin");
     fs.mkdirSync(path.join(bare, "skills", "using-desk"), { recursive: true });
     fs.copyFileSync(skillPath, path.join(bare, "skills", "using-desk", "SKILL.md"));

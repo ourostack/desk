@@ -5,31 +5,26 @@ description: Session-start. Invoke as the FIRST thing in every agent session. Ru
 
 # Session start
 
-One command does the mechanical startup. This skill is the authoritative owner of migration ordering, workspace sync, task discovery and resumption routing, and the script is its authoritative scan: the startup hook never duplicates it. Run it, act on its `instructions`, and keep the judgment rules below.
+One command does the mechanical startup. It is the authoritative scan; the startup hook only points at it. Run it, do what its `instructions` say, in order, and keep the judgment rules below. The `instructions` already cover the desk's `AGENTS.md`, the desk's absolute path, prerequisites, sync, task cards, push routes, the Desk MCP check, resuming a named task and the factory question, so nothing here repeats them.
 
 ## Run it
 
 ```bash
-node <Desk plugin folder>/mcp/scripts/session-boot.js
-node <Desk plugin folder>/mcp/scripts/session-boot.js --task "<what the operator named>"
+node <absolute plugin folder>/mcp/scripts/session-boot.js
+node <absolute plugin folder>/mcp/scripts/session-boot.js --task "<what the operator named>"
 ```
 
-`<Desk plugin folder>` is two levels above this skill's folder: `$CLAUDE_PLUGIN_ROOT` under Claude Code, the plugin folder the activation names under Copilot CLI and Codex. The script covers all three hosts and prints them in `covers_hosts`. Use the second form when the operator's first message already names the task to resume (a title, slug, `track/slug` or handle); the script resolves it and its `instructions` say whether to hand off to `session-resumption` or ask which one. Run it before anything else touches the desk. It prints one JSON line and always exits 0, and `boot_complete: true` means it finished, not that everything is healthy.
+The `Desk startup:` line in your context gives the exact command with the absolute path: use it as written. If that line is not in your context, the host shows this skill's base directory when it loads the skill, and the script is at `<that directory>/../../mcp/scripts/session-boot.js` (under Claude Code, `$CLAUDE_PLUGIN_ROOT/mcp/scripts/session-boot.js`); print the resolved absolute path before running it. The `Desk startup:` and `Desk boot pre-checks:` lines are pointers and quick checks, never the boot: until the script has run, say nothing about the desk's state. Use the second form when the operator's first message names the task to resume (a title, slug, `track/slug` or handle). It prints one JSON line and always exits 0; `boot_complete: true` means it finished, not that everything is healthy.
 
 If it cannot run at all (no Node on PATH, a permissions problem), run `gh --version`, `jq --version` and `gh auth status` by hand, read the desk's `AGENTS.md`, and record the failure as friction.
 
-## Act on the result
+## Reading the result
 
-- Do what `instructions` says, in order. They are the one list of next steps, plain sentences naming the exact file, command, task or repo; nothing else repeats them. `degraded` says why startup is not healthy and `pending` lists checks the time budget did not let finish (carry them, never block on them).
-- `status` is one word. `ready` means go on. `degraded` means work through every `degraded` line first: it is like a compile error, and a missing `gh`, an old `gh` or stale auth is a hard stop, never a cue to work offline. The operator may override a broken prerequisite only after you name the specific risk. `setup_required` means no desk is bound: this is a first run, not an outage. Follow the instruction (`desk:first-run-bootstrap` Entrance A by default, or the path `desk_status` names in `onboarding_skill`, such as an overlay's `crew:join-crew`) and stop session-start there.
-- The desk's absolute path is `root.path`, and the instructions repeat it. Use that path directly in every command and tool call: an `export DESK=...` does not survive an agent's separate shell calls, so never rely on `$DESK` being set. Where a skill writes `$DESK`, it means that path.
-- A desk the saved binding names that is missing is never replaced by another desk: restore it, or rebind through `first-run-bootstrap` with the operator's agreement.
-- Read the desk's `AGENTS.md` (in `root.path`) when the instructions say to. Its rules bind the whole session.
-- A desk that holds task cards but lacks the V2 foundations is a V1 workspace: see Step 2 below. If it has a `desks/` folder or a roster in `_meta/desks.md`, it is a crew workspace (`details.md`, "Crew workspace").
-- Another enabled plugin may ship migrations of its own; hand those to `session-start-migrations`.
-- `desk_status` answers compactly: `state` is one word, the same set as the boot `status` (`ready`, `degraded`, `admitting`, `setup_required`), and it alone says whether Desk works; `degraded` and `fix` say why and what to do when it is not `ready`. `search` is a separate word about the search index only (`ready`, `converging`, `degraded`, `unavailable`, `not_checked`): with `state: ready`, a degraded `search` means search reads the files directly, not an outage, and boot does not check the index at all, so a boot `ready` beside a degraded `search` is consistent. Mention it in one line only when the work needs search. Call `desk_status` with `{ detail: true }` only when you need the full payload (index, snapshots, vector packs, admission internals).
-- `active_tasks`, `open_prs`, `repo_states`, `card_validation` and `push_accounts` are the data for the status block; a push route that is not a plain direct push by gh's active account (a fork, a different account, or no account) also arrives as an instruction naming the repo, account and route, and binds every push in the session. When `active_tasks` is missing or `null`, say the listing is unavailable and why in one line; do not fall back to globbing the desk. A redacted name stays redacted: see `details.md`, "Redacted names".
-- The script runs the sync itself, never streaming git's own diffstat to this session's output, so a folder another machine created with a secret's value in its name can't land here before the `active_tasks` listing hides it. To see what changed, use that listing, never `git log --stat` or `git diff --stat` on the desk.
+- `status` is one word: `ready`, `degraded` or `setup_required`. `degraded` lists why in `degraded` (work through every line first, like a compile error); `pending` lists checks the time budget did not finish (carry them, never block on them). `setup_required` means no desk is bound, so this is a first run, not an outage: follow the instruction (`desk:first-run-bootstrap` Entrance A by default, or the path `desk_status` names in `onboarding_skill`, such as an overlay's `crew:join-crew`) and stop here.
+- `desk_status` answers compactly with the same words in `state`, and its `search` is a separate word about the index only: with `state: ready`, a degraded `search` means search reads the files directly. Pass `{ detail: true }` only when you need the full payload.
+- `active_tasks`, `open_prs`, `repo_states`, `card_validation` and `push_accounts` are the data for the status block. When `active_tasks` is `null`, say the listing is unavailable and why in one line; never glob the desk instead. A redacted name stays redacted (`details.md`, "Redacted names").
+- The script syncs without streaming git's diffstat, so a folder another machine created with a secret in its name cannot land here before the listing hides it. To see what changed, use the listing, never `git log --stat` or `git diff --stat` on the desk.
+- A desk the saved binding names that is missing is never replaced by another desk. A desk with task cards but no V2 foundations is a V1 workspace (Step 2 below); one with a `desks/` folder or `_meta/desks.md` is a crew workspace (`details.md`). Another plugin's migrations go to `session-start-migrations`.
 
 ## Step 2 — Workspace sync
 
@@ -37,22 +32,20 @@ The boot script already synced the workspace, so there is no sync command to run
 
 ### Existing-workspace V1 upgrade branch
 
-If `$DESK/` already exists and still shows V1 evidence (durable desk state such as task cards or the `_meta/`, `_archive/` or `artifacts/` folders, but not the V2 startup foundations and the activation-owned worker surface), do not continue into ordinary resumption. Hand off to `first-run-bootstrap` Entrance B, which upgrades the same workspace in place and never clones or creates a parallel Desk. Once `first-run-bootstrap` has completed that upgrade, later runs skip this branch.
+If the desk already exists and still shows V1 evidence (durable desk state such as task cards or the `_meta/`, `_archive/` or `artifacts/` folders, but not the V2 startup foundations and the activation-owned worker surface), do not continue into ordinary resumption. Hand off to `first-run-bootstrap` Entrance B, which upgrades the same workspace in place and never clones or creates a parallel Desk. Once `first-run-bootstrap` has completed that upgrade, later runs skip this branch.
 
 ## Judgment rules
 
-**Desk MCP availability checkpoint.** The script reports the desk workspace; it cannot tell whether this running session can call Desk's MCP tools. Check that `desk_status` is callable at session start and again after any context-compaction resume. If it is absent, repair first without asking, and never continue silently in local-only mode: see `details.md`, "Desk MCP availability and repair". A healthy `desk_status` adds one `Desk MCP: available` line to the first reply only when something else is being said.
+**First reply.** Say only what the operator needs: the open work and the one question (resume which, or start new), plus any `degraded`, `pending` or blocked item that changes what they would do. Do not print the host, user or path line, a list of checks that passed, or the raw JSON. A healthy boot with nothing to flag needs no health report; a named task skips the status block and goes straight to its resume reply.
 
-**First reply.** Say only what the operator needs: the open work and the one question (resume which, or start new), plus any `degraded`, `pending` or blocked item that changes what they would do. Do not print the host, user or path line, a list of checks that passed, or the raw JSON. A healthy boot with nothing to flag needs no health report. A named task skips the status block and goes straight to the resume hand-off, with any problem folded into that reply.
-
-**Decide, don't ask.** Fix what you can fix yourself (a card's frontmatter, a repair, a tidy-up) and say so in one line. Bring the operator only a true human gate: an account or credential they must act in, a decision that is theirs, an irreversible action. The factory consent question is not one of the things to lead with: it never comes before the work the operator asked for, and never instead of it. Do the work, then raise it at most once as one short line at the end of the reply. The script emits no consent instruction in a noninteractive session (`claude -p`, a scheduled run, CI); if you are in one anyway, do not ask and do not record anything.
+**Decide, don't ask.** Fix what you can fix yourself (a card's frontmatter, a repair, a tidy-up) and say so in one line. Bring the operator only a true human gate: an account or credential they must act in, a decision that is theirs, an irreversible action. The factory consent question never comes before the work the operator asked for.
 
 **Resume.** Hand a chosen task to `session-resumption`; its state machine lives in `task-lifecycle`. To start new work, follow `dual-input`. For the fuller dashboard, invoke `status`.
 
-**More detail, only when it applies** (all in `details.md`): a V1 workspace upgrade, a crew workspace with `_meta/desks.md`, the friction backlog, the workspace MCP link, the Factory boot-line clauses, and the routing prompts for `curator` and `pr-feedback-on-own-pr`.
+**More detail, only when it applies** (all in `details.md`): the Desk MCP repair path, a crew workspace, the friction backlog, the workspace MCP link, the factory label clauses, and the routing prompts for `curator` and `pr-feedback-on-own-pr`.
 
-**Startup hook lines.** The hook may add `Desk migrations:` and `Desk boot:` lines. The script already runs Desk's own migrations and reports what is pending in `instructions`, so a `Desk migrations:` line is covered by them. A `Desk boot: workspace-tidy budget exceeded; deferred` line needs no action: the check retries at the next session start, and the line spells out an optional command to run it sooner in the background.
+**Startup hook lines.** A `Desk boot pre-checks: workspace-tidy budget exceeded; deferred` line needs no action: the check retries at the next session start. A `Desk migrations:` line is covered by the script's own migration instructions.
 
 ## Never skip
 
-Every session runs the script, reads the desk's `AGENTS.md`, and confirms the Desk MCP. Auto-mode is license for action, not for skipping a safety check. A session doing work unrelated to the desk should not use the desk root as its working directory; a stray file dropped there is how scratch has ended up committed to a desk.
+Every session runs the script and does what its instructions say. Auto-mode is license for action, not for skipping a safety check. A session doing work unrelated to the desk should not use the desk root as its working directory; a stray file dropped there is how scratch has ended up committed to a desk.

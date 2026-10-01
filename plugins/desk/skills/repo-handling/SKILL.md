@@ -157,12 +157,12 @@ Which one?
 
 ### Option 2: Clone for me
 
-1. Obtain the clone URL (from the task card, the hosting platform UI, or operator input).
+1. Obtain the clone URL: the repo's `url` on the task card first (boot's missing-clone instruction already gives the exact `git clone <url> <path>` when it is there), then the hosting platform UI, then the operator. When the operator supplies it, save it on the card as the repo's `url` through `task_update` so the next session clones without asking.
 2. Clone to the machine's preferred root (default `~/code/`, or `defaults.clone_root` from `.machine-local.yml` if set):
    ```bash
    git clone <clone-url> ~/code/<repo-name>
    ```
-3. Update task card: `local_path: "~/code/<repo-name>"`, `mode: local`.
+3. Update task card (through `task_update`, like every card write): `local_path: "~/code/<repo-name>"`, `mode: local`.
 4. Warn the operator: this can take a long time for large repos.
 
 ---

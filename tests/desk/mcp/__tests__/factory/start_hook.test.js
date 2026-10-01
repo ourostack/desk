@@ -49,7 +49,7 @@ test("no line from any check means no output at all; lines join into exactly one
   assert.equal(silent, "")
   assert.deepEqual(order, ["a", "b"])
   const spoken = await runBootChecks({ ...quiet, checks: [check("a", async () => ({ line: "first\nhalf" })), check("b", () => undefined), check("c", async () => ({ line: "second" }))] })
-  assert.equal(spoken, "Desk boot: first half; second")
+  assert.equal(spoken, "Desk boot pre-checks: first half; second")
   assert.equal(spoken.split("\n").length, 1)
 })
 
@@ -71,7 +71,7 @@ test("repairs start detached after every check has run, and a repair that cannot
       check("e", async () => ({ repair: "node x" })),
     ],
   })
-  assert.equal(line, "Desk boot: b")
+  assert.equal(line, "Desk boot pre-checks: b")
   assert.deepEqual(events, [["check", "a"], ["check", "b"], ["check", "c"], ["repair", ["fails"]], ["repair", ["node", "x.js"]]])
 })
 
@@ -91,7 +91,7 @@ test("a check that overruns its budget is skipped silently, but a check that thr
     ],
   })
   assert.equal(line, [
-    "Desk boot: Desk problem: broken — the check failed internally at startup",
+    "Desk boot pre-checks: Desk problem: broken — the check failed internally at startup",
     "  broke: boom",
     '  means: Desk\'s "broken" boot check could not report its status this session',
     "  fix: not fixable automatically -- the check itself needs investigation",
@@ -124,7 +124,7 @@ test("checks that block synchronously past their budgets are skipped with their 
       check("c", () => { block(140); return { line: "c" } }, 260),
     ],
   })
-  assert.equal(line, "Desk boot: b", "a overran its own budget; c overran the 10 ms the total had left after a's real 250 ms")
+  assert.equal(line, "Desk boot pre-checks: b", "a overran its own budget; c overran the 10 ms the total had left after a's real 250 ms")
   assert.deepEqual(repairs, [["node", "b.js"]], "an overrunning check's repair never starts")
   const byId = Object.fromEntries(recorded.map((entry) => [entry.id, entry]))
   assert.equal(byId.a.reason, "budget")
@@ -145,7 +145,7 @@ test("the real elapsed time of each check is charged, so a total spent by blocki
     record: async (_env, skipped) => { recorded.push(...skipped) },
     checks: [check("first", () => { block(60); return { line: "first" } }, 80), check("second", () => { block(60); return { line: "second" } }, 80), check("third", () => { ran = true; return { line: "third" } }, 80)],
   })
-  assert.equal(line, "Desk boot: first")
+  assert.equal(line, "Desk boot pre-checks: first")
   assert.equal(recorded[0].id, "second")
   assert.equal(recorded[0].reason, "budget")
   assert.deepEqual(recorded.slice(1).map(({ id, reason }) => ({ id, reason })), [{ id: "third", reason: "total_budget" }])
@@ -256,17 +256,17 @@ test("the labels check names how many finished tasks have no waste labels and st
   await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
   await requestEvaluation(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", deskRoot: desk })
   await fs.writeFile(path.join(await factoryStateRoot(env), "evaluate-requests", "notes.txt"), "x")
-  assert.equal(await run(), "Desk boot: Factory: 2 finished tasks have no waste labels yet; run the evaluator for them in the background")
+  assert.equal(await run(), "Desk boot pre-checks: Factory: 2 finished tasks have no waste labels yet; run the evaluator for them in the background")
   assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", path.join(PLUGIN, "mcp", "scripts", "factory.js"), "evaluate", "--pending"]], "evaluate --pending starts through the compatible-Node launcher")
   // Labels quarantined with their facts are reported, and a job whose every session is held back is not counted as waiting.
   const root = await factoryStateRoot(env)
   await indexJob(env, "5e6f708192a3b4c5d6e7f8091a2b3c4d", "claude-code-00000001-0000-4000-8000-000000000001.json")
   await quarantine(env, STORE, "labels/5e6f708192a3b4c5d6e7f8091a2b3c4d/00000001-0000-4000-8000-000000000001.json", "facts_quarantined", { facts: "claude-code-00000001-0000-4000-8000-000000000001.json" })
-  assert.equal(await run(), "Desk boot: Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background; Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background; Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
   // Quarantined labels alone are reported without a repair.
   await fs.rm(path.join(root, "evaluate-requests", "9f2c4b1a7d3e5f60718293a4b5c6d7e8.json"))
   repairs.length = 0
-  assert.equal(await run(), "Desk boot: Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
   assert.deepEqual(repairs, [])
   // A declined store keeps the check silent.
   await setConsent(env, { store: STORE, contribute: false, account: "contributor" })
@@ -281,7 +281,7 @@ test("the desk-health check reports a degraded last start and otherwise asks for
   const stateDir = resolveDeskStateDir({ env })
   const real = await fs.realpath(desk)
   writeLastStart({ stateDir, root: real, snapshot: { state: "degraded:state_branch_detached", code: "state_branch_detached", repair: null, fix: null } })
-  assert.equal(await run({ host: "claude", env }), "Desk boot: Desk: degraded (desk checkout detached; writes paused); run desk_doctor")
+  assert.equal(await run({ host: "claude", env }), "Desk boot pre-checks: Desk: degraded (desk checkout detached; writes paused); run desk_doctor")
   writeLastStart({ stateDir, root: real, snapshot: { state: "ready", code: null, repair: null, fix: null } })
   const repairs = []
   assert.equal(await run({ host: "claude", env, launchRepair: async (command) => repairs.push(command) }), "")
@@ -291,7 +291,7 @@ test("the desk-health check reports a degraded last start and otherwise asks for
   await fs.mkdir(path.join(crew, "desks"), { recursive: true })
   execFileSync("git", ["init", "-q", "-b", "main", crew])
   writeLastStart({ stateDir, root: crew, snapshot: { state: "degraded:crew_state_not_main", code: "crew_state_not_main", repair: null, fix: null } })
-  assert.equal(await run({ host: "copilot", env, sessionFolder: crew }), "Desk boot: Desk: degraded (crew_state_not_main; writes paused); run desk_status for the fix", "the session's own desk comes first on Copilot")
+  assert.equal(await run({ host: "copilot", env, sessionFolder: crew }), "Desk boot pre-checks: Desk: degraded (crew_state_not_main; writes paused); run desk_status for the fix", "the session's own desk comes first on Copilot")
 }))
 
 test("the fast-forward repair entry point runs the detached fast-forward and reports as JSON", () => scratch(async ({ env, base }) => {
@@ -332,7 +332,7 @@ test("the andon check names each contributing store's open andon issues in one l
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await setConsent(env, { store: "acme/work", contribute: true, account: "worker" })
   await writeStatus(env, { andon: { [STORE]: { checked_at: "2026-09-27T12:00:00.000Z", issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: "2026-09-27T12:00:00.000Z", issues: [] } } })
-  assert.equal(await run(), "Desk boot: Factory: 1 open andon issue in ourostack/factory (#41); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)")
+  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 open andon issue in ourostack/factory (#41); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)")
   assert.deepEqual(repairs, [])
 }))
 
@@ -399,14 +399,14 @@ for (const host of ["claude", "copilot"]) {
     if (host === "copilot" || hasJq) assert.equal(quietRun.stdout, envelope(host, context), "silent boot checks leave the output byte-identical")
     const parsed = JSON.parse(quietRun.stdout)
     assert.equal(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, context)
-    assert.doesNotMatch(quietRun.stdout, /Desk boot:/u)
+    assert.doesNotMatch(quietRun.stdout, /Desk boot pre-checks:/u)
 
     const speaking = await preloadFor(base, { lines: ["one", "two"], calls })
     const spokenRun = runHook(host, { ...hookEnv, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${speaking}`.trim() }, desk)
     assert.equal(spokenRun.status, 0, spokenRun.stderr)
     const spoken = JSON.parse(spokenRun.stdout)
-    assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, `${context}\n\nDesk boot: one; two`)
-    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, `${context}\n\nDesk boot: one; two`))
+    assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, `${context}\n\nDesk boot pre-checks: one; two`)
+    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, `${context}\n\nDesk boot pre-checks: one; two`))
     assert.equal(readFileSync(calls, "utf8"), "started\nstarted\n", "each start launches factory delivery once, after its output is built")
   }))
 }
@@ -420,7 +420,7 @@ test("the real hooks with a bound desk and no decision add no factory boot line 
     assert.equal(result.status, 0, result.stderr)
     const parsed = JSON.parse(result.stdout)
     const context = parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext
-    const bootLines = context.split("\n").filter((line) => line.startsWith("Desk boot:"))
+    const bootLines = context.split("\n").filter((line) => line.startsWith("Desk boot pre-checks:"))
     assert.deepEqual(bootLines.filter((line) => /Factory:/u.test(line)), [], `${host}: ${context}`)
     assert.doesNotMatch(context, /Factory: this desk/u)
   }
@@ -436,9 +436,9 @@ test("the Claude resolver appends the boot line only when there is one and start
   assert.deepEqual(events, ["migrations", "checks", "factory", "write"], "the migration check starts before the boot checks and runs alongside them")
   assert.doesNotMatch(output, /\n\n$/u)
   assert.doesNotMatch(output, /Desk boot|Desk migrations/u)
-  const speaking = async () => ({ default: { migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "Desk boot: x", startFactory: async () => {} } })
+  const speaking = async () => ({ default: { migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "Desk boot pre-checks: x", startFactory: async () => {} } })
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: speaking })
-  assert.match(output, /\n\nDesk boot: x\n\nDesk migrations: y$/u)
+  assert.match(output, /\n\nDesk boot pre-checks: x\n\nDesk migrations: y$/u)
   const migrationsOnly = async () => ({ default: { migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "", startFactory: async () => {} } })
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: migrationsOnly })
   assert.match(output, /[^\n]\n\nDesk migrations: y$/u)

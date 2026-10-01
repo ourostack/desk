@@ -32,6 +32,7 @@ import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
+import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
@@ -252,7 +253,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "evidence", "repos_removed_reason"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 const asList = (value) => (Array.isArray(value) ? value : [])
@@ -554,6 +555,14 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
  *
  * Returns: { status: "updated", path, commit? }
  */
+// `note` and `next_step` are checked before any write: an empty one would record progress that says nothing.
+function requiredText(value, field) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`task_update: \`${field}\` must be a non-empty string`)
+  }
+  return value
+}
+
 export async function task_update({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, body_append } = values
@@ -566,6 +575,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   // Checked before anything is read or written: a string spread into the
   // card would write one key per character.
   const frontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
+  const nextStep = values.next_step === undefined ? undefined : requiredText(values.next_step, "next_step")
+  const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
     tool: "task_update",
     field: "evidence",
@@ -630,6 +641,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   }
 
   let newBody = existing.content
+  if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
+  if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
   if (typeof body_append === "string" && body_append.length > 0) {
     const sep = newBody.endsWith("\n\n") || newBody.length === 0 ? "" : "\n\n"
     newBody = `${newBody}${sep}${body_append}`

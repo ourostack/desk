@@ -11,19 +11,26 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
-  isTaskCardPath,
+  classifyCard,
+  isReadableCard,
   statusChange,
   statusOf,
-  taskStatusGuardHook,
+  taskStatusGuardHook as guardWithContext,
 } from "../../../../../plugins/desk/mcp/src/runtime/task-status-guard.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "task-status-guard.cjs")
+
+// A desk-shaped folder: the guard only guards cards of the bound desk.
+const DESK = realpathSync(mkdtempSync(path.join(tmpdir(), "guard-desk-")))
+mkdirSync(path.join(DESK, "_meta"), { recursive: true })
+mkdirSync(path.join(DESK, "_archive"), { recursive: true })
+const taskStatusGuardHook = (input, host, read) => guardWithContext(input, host, read, { root: DESK })
 
 function writeInput({ toolName, toolInput }) {
   return { hook_event_name: "PreToolUse", tool_name: toolName, tool_input: toolInput, session_id: "fixture-session" }
@@ -40,27 +47,16 @@ function assertAllowed(result) {
   assert.deepEqual(result, {})
 }
 
-test("isTaskCardPath matches only a file_path whose final segment is exactly task.md", () => {
-  assert.equal(isTaskCardPath("task.md"), true)
-  assert.equal(isTaskCardPath("/repo/track/my-task/task.md"), true)
-  assert.equal(isTaskCardPath("track\\my-task\\task.md"), true, "backslash-separated (Windows-shaped) paths still match")
-  assert.equal(isTaskCardPath("/repo/track/my-task/nottask.md"), false)
-  assert.equal(isTaskCardPath("/repo/track/my-task/task.md.bak"), false)
-  assert.equal(isTaskCardPath("/repo/track.md/other.md"), false)
-  assert.equal(isTaskCardPath(""), false)
-  assert.equal(isTaskCardPath(undefined), false)
-  assert.equal(isTaskCardPath(42), false)
-})
-
 function withCard(text, run) {
-  const dir = mkdtempSync(path.join(tmpdir(), "guard-card-"))
+  const dir = mkdtempSync(path.join(DESK, "scratch-"))
   try {
-    const file = path.join(dir, "greenhouse", "watering-api", "task.md")
+    const file = path.join(DESK, "greenhouse", "watering-api", "task.md")
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, text)
     return run(file)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+    rmSync(path.join(DESK, "greenhouse"), { recursive: true, force: true })
   }
 }
 
@@ -145,7 +141,7 @@ test("statusChange falls back to the status lines inside the edit strings when t
 
 test("denies a Claude Code Write that would create a task card with status: done", () => {
   const result = taskStatusGuardHook(
-    writeInput({ toolName: "Write", toolInput: { file_path: "/repo/track/my-task/task.md", content: "---\nstatus: done\n---\n" } }),
+    writeInput({ toolName: "Write", toolInput: { file_path: path.join(DESK, "track", "my-task", "task.md"), content: "---\nstatus: done\n---\n" } }),
     "claude",
   )
   assertDenied(result)
@@ -163,7 +159,7 @@ test("denies a direct Edit of a real task card from processing to validating, an
     assert.match(reason, /task_update/u)
     assert.match(reason, /track: "greenhouse", slug: "watering-api", frontmatter: \{ status: "validating" \}/u)
     assert.doesNotMatch(reason, /evidence/u, "evidence is only asked for on a move to done")
-    assert.match(reason, /body or other fields directly is fine/u)
+    assert.match(reason, /note: "<one line of what actually happened>"/u)
   })
 })
 
@@ -188,17 +184,9 @@ test("a removed status line is denied with a placeholder for the new status", ()
   })
 })
 
-test("the deny reason falls back to placeholders for a path without track and slug segments", () => {
-  const result = taskStatusGuardHook(
-    writeInput({ toolName: "Write", toolInput: { file_path: "task.md", content: "---\nstatus: done\n---\n" } }),
-    "claude",
-  )
-  assert.match(result.hookSpecificOutput.permissionDecisionReason, /track: "<track>", slug: "<slug>"/u)
-})
-
 test("denies a Claude Code Edit whose new_string sets status: done", () => {
   const result = taskStatusGuardHook(
-    writeInput({ toolName: "Edit", toolInput: { file_path: "/repo/track/my-task/task.md", old_string: "status: processing", new_string: "status: done" } }),
+    writeInput({ toolName: "Edit", toolInput: { file_path: path.join(DESK, "track", "my-task", "task.md"), old_string: "status: processing", new_string: "status: done" } }),
     "claude",
   )
   assertDenied(result)
@@ -209,7 +197,7 @@ test("denies a Claude Code MultiEdit whose edits array includes a status change,
     writeInput({
       toolName: "MultiEdit",
       toolInput: {
-        file_path: "/repo/track/my-task/task.md",
+        file_path: path.join(DESK, "track", "my-task", "task.md"),
         edits: [
           { old_string: "old next step", new_string: "new next step" },
           { old_string: "status: processing", new_string: "status: done" },
@@ -221,12 +209,49 @@ test("denies a Claude Code MultiEdit whose edits array includes a status change,
   assertDenied(result)
 })
 
-test("allows a Claude Code MultiEdit to a task card whose edits never touch the status line", () => {
+test("denies every direct edit of a real task card, body edits included, and names the task_update call for each need", () => {
+  withCard(CARD, (file) => {
+    const claim = "Push routing confirmed; scenario is handled."
+    const calls = [
+      { toolName: "Edit", toolInput: { file_path: file, old_string: "Next: write the test.", new_string: claim } },
+      { toolName: "MultiEdit", toolInput: { file_path: file, edits: [{ old_string: "Next: write the test.", new_string: claim }] } },
+      { toolName: "Write", toolInput: { file_path: file, content: `${CARD}\n${claim}\n` } },
+      { toolName: "Edit", toolInput: { file_path: file, old_string: "not in the card", new_string: claim } },
+    ]
+    for (const call of calls) {
+      const reason = taskStatusGuardHook(writeInput(call), "claude").hookSpecificOutput.permissionDecisionReason
+      assert.match(reason, /Desk denies a direct edit of an existing task card/u)
+      assert.match(reason, /track: "greenhouse", slug: "watering-api", note: "/u)
+      assert.match(reason, /next_step: "/u)
+      assert.match(reason, /frontmatter: \{ \.\.\. \}/u)
+      assert.match(reason, /body_append: "/u)
+      assert.doesNotMatch(reason, /changes the card's `status:`/u)
+    }
+  })
+})
+
+test("a status change on a real card adds the status call to the same message", () => {
+  withCard(CARD, (file) => {
+    const reason = taskStatusGuardHook(
+      writeInput({ toolName: "Edit", toolInput: { file_path: file, old_string: "status: processing", new_string: "status: done" } }),
+      "claude",
+    ).hookSpecificOutput.permissionDecisionReason
+    assert.match(reason, /changes the card's `status:`/u)
+    assert.match(reason, /evidence: \{ kind, ref \}/u)
+  })
+})
+
+test("a path with no card yet is task_create's: a Write or an Edit there that leaves status alone passes", () => {
+  assertAllowed(taskStatusGuardHook(writeInput({ toolName: "Write", toolInput: { file_path: path.join(DESK, "track", "new-task", "task.md"), content: "---\nstatus: drafting\n---\n" } }), "claude"))
+  assertAllowed(taskStatusGuardHook(writeInput({ toolName: "Edit", toolInput: { file_path: path.join(DESK, "track", "new-task", "task.md"), old_string: "a", new_string: "b" } }), "claude"))
+})
+
+test("allows a Claude Code MultiEdit to a task card whose edits never touch the status line, when the card does not exist yet", () => {
   const result = taskStatusGuardHook(
     writeInput({
       toolName: "MultiEdit",
       toolInput: {
-        file_path: "/repo/track/my-task/task.md",
+        file_path: path.join(DESK, "track", "my-task", "task.md"),
         edits: [
           { old_string: "owner: a", new_string: "owner: b" },
           { old_string: "old next step", new_string: "new next step" },
@@ -238,9 +263,9 @@ test("allows a Claude Code MultiEdit to a task card whose edits never touch the 
   assertAllowed(result)
 })
 
-test("allows a Write/Edit to a task card that touches a different field, leaving status alone", () => {
+test("allows a Write/Edit to a path with no card that touches a different field, leaving status alone", () => {
   const result = taskStatusGuardHook(
-    writeInput({ toolName: "Edit", toolInput: { file_path: "/repo/track/my-task/task.md", old_string: "old next step", new_string: "new next step" } }),
+    writeInput({ toolName: "Edit", toolInput: { file_path: path.join(DESK, "track", "my-task", "task.md"), old_string: "old next step", new_string: "new next step" } }),
     "claude",
   )
   assertAllowed(result)
@@ -263,7 +288,7 @@ test("allows a status: done write for a tool this guard does not cover", () => {
 })
 
 test("tolerates a JSON-string-encoded tool_input the same way, and allows through malformed JSON rather than throwing", () => {
-  const encoded = writeInput({ toolName: "Write", toolInput: JSON.stringify({ file_path: "/repo/track/my-task/task.md", content: "status: done" }) })
+  const encoded = writeInput({ toolName: "Write", toolInput: JSON.stringify({ file_path: path.join(DESK, "track", "my-task", "task.md"), content: "status: done" }) })
   assertDenied(taskStatusGuardHook(encoded, "claude"))
 
   const broken = writeInput({ toolName: "Write", toolInput: "not json" })
@@ -288,7 +313,7 @@ test("allows through a call missing file_path entirely", () => {
 
 test("recognizes toolName/toolArgs as well as tool_name/tool_input, the same alias pair ask-gate.js reads", () => {
   const result = taskStatusGuardHook(
-    { hook_event_name: "PreToolUse", toolName: "Write", toolArgs: { file_path: "/repo/track/my-task/task.md", content: "status: done" } },
+    { hook_event_name: "PreToolUse", toolName: "Write", toolArgs: { file_path: path.join(DESK, "track", "my-task", "task.md"), content: "status: done" } },
     "claude",
   )
   assertDenied(result)
@@ -297,7 +322,7 @@ test("recognizes toolName/toolArgs as well as tool_name/tool_input, the same ali
 test("allows every call for any host but claude, even one that would otherwise be denied", () => {
   for (const host of [undefined, "copilot", "codex", "some-future-host"]) {
     const result = taskStatusGuardHook(
-      writeInput({ toolName: "Write", toolInput: { file_path: "/repo/track/my-task/task.md", content: "status: done" } }),
+      writeInput({ toolName: "Write", toolInput: { file_path: path.join(DESK, "track", "my-task", "task.md"), content: "status: done" } }),
       host,
     )
     assertAllowed(result)
@@ -311,7 +336,7 @@ function runHookOverStdio(input, env = process.env) {
 
 test("the .cjs entry point wraps the deny decision in Claude's hookSpecificOutput shape over real stdin/stdout, and fails open on malformed input", () => {
   const { result, output } = runHookOverStdio(
-    writeInput({ toolName: "Write", toolInput: { file_path: "/repo/track/my-task/task.md", content: "status: done" } }),
+    { ...writeInput({ toolName: "Write", toolInput: { file_path: path.join(DESK, "track", "my-task", "task.md"), content: "status: done" } }), cwd: DESK },
   )
   assert.equal(result.status, 0)
   assertDenied(output)
@@ -323,4 +348,172 @@ test("the .cjs entry point wraps the deny decision in Claude's hookSpecificOutpu
   // Malformed stdin must not exit 2 (the only PreToolUse code that blocks): it must fail open.
   const broken = spawnSync(process.execPath, [hook, "claude"], { input: "not json", env: process.env, encoding: "utf8" })
   assert.notEqual(broken.status, 2)
+})
+
+// ---- Which files count (review of #123) ----
+
+const GUARD_ARGS = (file, extra = {}) => writeInput({ toolName: "Edit", toolInput: { file_path: file, old_string: "Next: write the test.", new_string: "Next: ship.", ...extra } })
+const denies = (result) => result.hookSpecificOutput?.permissionDecision === "deny"
+
+test("a task.md outside a desk is never the guard's business, even with a done status in it", () => {
+  const outside = mkdtempSync(path.join(tmpdir(), "guard-outside-"))
+  try {
+    const file = path.join(outside, "app", "feature", "task.md")
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, CARD)
+    assertAllowed(taskStatusGuardHook(GUARD_ARGS(file), "claude"))
+    assertAllowed(taskStatusGuardHook(writeInput({ toolName: "Write", toolInput: { file_path: file, content: "---\nstatus: done\n---\n" } }), "claude"))
+  } finally {
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test("a live card is track/slug/task.md under the root: other depths and underscore folders are not cards", () => {
+  withCard(CARD, () => {
+    const at = (...parts) => path.join(DESK, ...parts)
+    assert.equal(classifyCard(at("greenhouse", "watering-api", "task.md"), { root: DESK, cwd: DESK, home: DESK }).kind, "live")
+    assert.equal(classifyCard(at("greenhouse", "watering-api", "TASK.md"), { root: DESK, cwd: DESK, home: DESK }).kind, "live")
+    assert.equal(classifyCard(at("desks", "work", "greenhouse", "watering-api", "task.md"), { root: DESK, cwd: DESK, home: DESK }).kind, "live")
+    assert.equal(classifyCard(at("greenhouse", "_archive", "old-api", "task.md"), { root: DESK, cwd: DESK, home: DESK }).kind, "archived")
+    assert.equal(classifyCard(at("task.md"), { root: DESK, cwd: DESK, home: DESK }), null)
+    assert.equal(classifyCard(at("greenhouse", "task.md"), { root: DESK, cwd: DESK, home: DESK }), null)
+    assert.equal(classifyCard(at("_meta", "notes", "task.md"), { root: DESK, cwd: DESK, home: DESK }), null)
+    assert.equal(classifyCard(at("greenhouse", "watering-api", "deep", "task.md"), { root: DESK, cwd: DESK, home: DESK }), null)
+    assert.equal(classifyCard(at("greenhouse", "watering-api", "notes.md"), { root: DESK, cwd: DESK, home: DESK }), null)
+    assert.equal(classifyCard("", { root: DESK, cwd: DESK, home: DESK }), null)
+    assert.equal(classifyCard(42, { root: DESK, cwd: DESK, home: DESK }), null)
+  })
+})
+
+test("the path is trimmed, ~ expanded and resolved against the session folder", () => {
+  withCard(CARD, (file) => {
+    assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(`  ${file}\n`), "claude")), true, "trimmed")
+    const viaHome = guardWithContext(GUARD_ARGS("~/greenhouse/watering-api/task.md"), "claude", undefined, { root: DESK, home: DESK })
+    assert.equal(denies(viaHome), true, "~/ expands to the home folder")
+    const viaBareHome = classifyCard("~", { root: DESK, cwd: DESK, home: DESK })
+    assert.equal(viaBareHome, null)
+    const relative = guardWithContext({ ...GUARD_ARGS("greenhouse/watering-api/task.md"), cwd: DESK }, "claude", undefined, { root: DESK })
+    assert.equal(denies(relative), true, "a relative path resolves against the session cwd")
+    const noCwd = guardWithContext({ ...GUARD_ARGS("greenhouse/watering-api/task.md"), cwd: "" }, "claude", undefined, { root: DESK })
+    assert.deepEqual(noCwd, {}, "an empty cwd falls back to the process folder, which is not the desk")
+  })
+})
+
+test("a symlink to a card, a case-different name and a symlinked folder cannot hide it", () => {
+  withCard(CARD, (file) => {
+    const link = path.join(DESK, "alias-task.md")
+    symlinkSync(file, link)
+    const folderLink = path.join(DESK, "shortcut")
+    symlinkSync(path.join(DESK, "greenhouse"), folderLink)
+    try {
+      assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(link), "claude")), true, "file symlink")
+      assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(path.join(folderLink, "watering-api", "task.md")), "claude")), true, "folder symlink")
+      // Another spelling reaches the card only on a case-insensitive disk; on a case-sensitive one it names nothing.
+      const caseInsensitive = existsSync(path.join(DESK, "Greenhouse"))
+      assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(path.join(DESK, "Greenhouse", "Watering-API", "TASK.md")), "claude")), caseInsensitive, "other case")
+      assert.equal(classifyCard(path.join(DESK, "Greenhouse", "Watering-API", "TASK.md"), { root: DESK, cwd: DESK, home: DESK }).kind, "live", "names are compared case-insensitively")
+    } finally {
+      rmSync(link, { force: true })
+      rmSync(folderLink, { force: true })
+    }
+  })
+})
+
+test("a hard-link alias of a live card is matched by inode", () => {
+  withCard(CARD, (file) => {
+    const outside = mkdtempSync(path.join(tmpdir(), "guard-hardlink-"))
+    const alias = path.join(outside, "notes.md")
+    try {
+      try {
+        linkSync(file, alias)
+      } catch {
+        return // hard links across devices are not available here
+      }
+      const found = classifyCard(alias, { root: DESK, cwd: DESK, home: DESK })
+      assert.deepEqual(found.segments, ["greenhouse", "watering-api", "task.md"])
+      assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(alias), "claude")), true)
+      const lone = path.join(outside, "lone.md")
+      writeFileSync(lone, CARD)
+      assert.equal(classifyCard(lone, { root: DESK, cwd: DESK, home: DESK }), null, "a file with a single link is just a file")
+      assert.equal(classifyCard(path.join(outside, "missing.md"), { root: DESK, cwd: DESK, home: DESK }), null)
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+test("an archived card keeps the status-only guard", () => {
+  const dir = path.join(DESK, "greenhouse", "_archive", "old-api")
+  mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, "task.md")
+  writeFileSync(file, CARD)
+  try {
+    assertAllowed(taskStatusGuardHook(GUARD_ARGS(file), "claude"))
+    const result = taskStatusGuardHook(writeInput({ toolName: "Edit", toolInput: { file_path: file, old_string: "status: processing", new_string: "status: done" } }), "claude")
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /track: "greenhouse", slug: "old-api"/u)
+  } finally {
+    rmSync(path.join(DESK, "greenhouse"), { recursive: true, force: true })
+  }
+})
+
+test("a card whose frontmatter does not parse may be repaired by hand, and the deny message says so", () => {
+  for (const broken of ["no frontmatter at all\n", "---\ntitle: [unclosed\nstatus: processing\n---\nNext: write the test.\n", "---\n---\nNext: write the test.\n", "---\n- a\n- b\n---\nNext: write the test.\n"]) {
+    withCard(broken, (file) => assertAllowed(taskStatusGuardHook(GUARD_ARGS(file), "claude")))
+  }
+  withCard(CARD, (file) => {
+    const reason = taskStatusGuardHook(GUARD_ARGS(file), "claude").hookSpecificOutput.permissionDecisionReason
+    assert.match(reason, /frontmatter is corrupted so that it no longer parses, a direct edit is allowed/u)
+  })
+  assert.equal(isReadableCard(CARD), true)
+  assert.equal(isReadableCard("---\ntitle: [unclosed\n---\n"), false)
+})
+
+test("without a bound root the nearest ancestor with the desk marker stands in, and a folder without one guards nothing", () => {
+  withCard(CARD, (file) => {
+    assert.equal(denies(guardWithContext(GUARD_ARGS(file), "claude", undefined, { root: null })), true)
+    assert.equal(classifyCard(file, { root: null, cwd: DESK, home: DESK }).kind, "live")
+  })
+  const bare = realpathSync(mkdtempSync(path.join(tmpdir(), "guard-bare-")))
+  try {
+    const file = path.join(bare, "app", "feature", "task.md")
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, CARD)
+    assertAllowed(guardWithContext(GUARD_ARGS(file), "claude", undefined, { root: null }))
+  } finally {
+    rmSync(bare, { recursive: true, force: true })
+  }
+})
+
+test("the bound root comes from the session: a project folder that is a desk, and a card outside it is allowed", () => {
+  withCard(CARD, (file) => {
+    const bound = guardWithContext({ ...GUARD_ARGS(file), cwd: DESK }, "claude", undefined, { env: { HOME: tmpdir() } })
+    assert.equal(denies(bound), true)
+  })
+  const other = realpathSync(mkdtempSync(path.join(tmpdir(), "guard-other-desk-")))
+  try {
+    mkdirSync(path.join(other, "_meta"))
+    mkdirSync(path.join(other, "_archive"))
+    const file = path.join(other, "track", "slug", "task.md")
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, CARD)
+    assertAllowed(guardWithContext(GUARD_ARGS(file), "claude", undefined, { root: DESK }))
+  } finally {
+    rmSync(other, { recursive: true, force: true })
+  }
+})
+
+test("odd roots are handled: the desk folder itself, a filesystem root and a root that cannot be listed", () => {
+  assert.equal(classifyCard(DESK, { root: DESK, cwd: DESK, home: DESK }), null, "the root itself is not a card")
+  assert.equal(classifyCard("/some/other/task.md", { root: "/", cwd: "/", home: "/" }).kind, "live", "a root that ends in a separator")
+  const outside = mkdtempSync(path.join(tmpdir(), "guard-noroot-"))
+  try {
+    const first = path.join(outside, "a.md")
+    writeFileSync(first, CARD)
+    linkSync(first, path.join(outside, "b.md"))
+    assert.equal(classifyCard(first, { root: path.join(outside, "missing-desk"), cwd: outside, home: outside }), null, "a root that does not exist lists nothing")
+  } catch (error) {
+    if (error.code !== "EPERM" && error.code !== "EXDEV") throw error
+  } finally {
+    rmSync(outside, { recursive: true, force: true })
+  }
 })

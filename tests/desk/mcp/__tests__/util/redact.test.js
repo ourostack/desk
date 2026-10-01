@@ -58,7 +58,7 @@ test("redactCredentialLikeText judges a whole path segment, spaces included (rev
     `Desk startup: $DESK is /tmp/x/${REDACTED_SEGMENT}/y (env).`,
   )
   assert.equal(redactCredentialLikeText("C:\\w\\set pw hunter2"), `C:\\w\\${REDACTED_SEGMENT}`)
-  assert.equal(redactCredentialLikeText("Desk boot: /w/set pw hunter2: branch retained"), `Desk boot: /w/${REDACTED_SEGMENT}: branch retained`)
+  assert.equal(redactCredentialLikeText("Desk boot pre-checks: /w/set pw hunter2: branch retained"), `Desk boot pre-checks: /w/${REDACTED_SEGMENT}: branch retained`)
   // A segment's own surrounding spaces and a closing full stop stay outside the marker.
   assert.equal(redactCredentialLikeText("left /w/ set pw hunter2 ."), `left /w/ ${REDACTED_SEGMENT} .`)
   // A word that is credential-like on its own is replaced alone, and the sentence's full stop is kept.
@@ -93,7 +93,7 @@ test("the Desk boot line redacts every check's credential-like segments", async 
   })
   assert.equal(
     line,
-    `Desk boot: Desk: degraded (desk checkout on ${REDACTED_SEGMENT}; writes paused); run desk_doctor; workspace-tidy Last repair: Tidied 0 stale worktrees; 1 left; /w/${REDACTED_SEGMENT}: branch retained; worktree /w/${REDACTED_SEGMENT}`,
+    `Desk boot pre-checks: Desk: degraded (desk checkout on ${REDACTED_SEGMENT}; writes paused); run desk_doctor; workspace-tidy Last repair: Tidied 0 stale worktrees; 1 left; /w/${REDACTED_SEGMENT}: branch retained; worktree /w/${REDACTED_SEGMENT}`,
   )
 })
 

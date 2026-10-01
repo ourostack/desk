@@ -67,8 +67,10 @@ import {
   resolveDeskRootWithSource,
 } from "../util/paths.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
+import { shellQuote, shellQuotePath } from "../util/shell-quote.js"
 import { readSmallText } from "../factory/marker.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
+import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 
@@ -335,6 +337,7 @@ export function cardProblems(data, { nested = true } = {}) {
         for (const field of ["name", "local_path", "mode"]) {
           if (typeof entry[field] !== "string") problems.push(`repos[${index}].${field} is missing or not a string`)
         }
+        if (entry.url !== undefined && typeof entry.url !== "string") problems.push(`repos[${index}].url is not a string`)
         if (typeof entry.mode === "string" && entry.mode !== "local" && entry.mode !== "remote") {
           problems.push(`repos[${index}].mode is "${entry.mode}", not "local" or "remote"`)
         }
@@ -446,6 +449,17 @@ function resolveLocalStore(localPath, { spawnGit, homeDir, deskRoot, timeoutMs }
   const normalized = normalizeRemote(url)
   const match = /^https:\/\/github\.com\/(.+)$/u.exec(normalized)
   return match !== null && PATTERNS.prRepo.test(match[1]) ? match[1] : null
+}
+
+// Only a URL git would clone as a remote: https://, ssh:// or scp-style git@host:path, with nothing a shell or git
+// option parser could read as anything else. Credentials embedded in the URL are dropped first.
+const CLONE_URL = /^(?:https:\/\/[\w.-]+(?::\d+)?\/[\w.~%+@:/-]+|ssh:\/\/(?:[\w.-]+@)?[\w.-]+(?::\d+)?\/[\w.~%+@:/-]+|git@[\w.-]+:[\w.~%+/-]+)$/u
+
+/** A repo entry's `url` (where to clone it from) as a safe clone URL, or null when it has none or it is not one. */
+function cloneUrl(value) {
+  if (typeof value !== "string") return null
+  const text = value.trim().replace(/^(https:\/\/)[^/@\s]*@/u, "$1")
+  return CLONE_URL.test(text) ? redactCredentialLikeText(text) : null
 }
 
 function repoLabel(card, repo) {
@@ -612,7 +626,7 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
       const fetched = spawnGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
       const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
       if (!status || status.status !== 0 || typeof status.stdout !== "string") {
-        states.push({ ...label, local_path: repo.local_path, present: false })
+        states.push({ ...label, local_path: repo.local_path, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
         continue
       }
       const lines = status.stdout.split("\n").filter((line) => line !== "")
@@ -759,19 +773,19 @@ function syncInstruction(sync, root) {
   const where = sync.remote ? `origin ${sync.remote}` : "origin"
   const why = sync.error ? ` (${sync.error})` : ""
   if (sync.cause === "unreachable") {
-    return `The desk could not sync: ${where} is unreachable${why}. Work continues on local state; say so in one line, and retry sync (\`git -C ${root.path} pull --rebase --autostash\`) before pushing anything. \`git status\` will read clean, because nothing is conflicted: that does not mean the desk is in sync.`
+    return `The desk could not sync: ${where} is unreachable${why}. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything. \`git status\` will read clean, because nothing is conflicted: that does not mean the desk is in sync.`
   }
   if (sync.cause === "auth_failed") {
     return `The desk could not sync: ${where} refused this host's credentials${why}. Work continues on local state; say so in one line, check \`gh auth status\` (sign in again with \`gh auth login\` if it is stale), then retry sync before pushing anything. \`git status\` will read clean: that does not mean the desk is in sync.`
   }
   if (sync.cause === "deadline" && sync.reason !== "sync_deadline_exceeded") {
-    return `A git call timed out while syncing the desk${where === "origin" ? "" : ` with ${where}`}: the remote is slow or unreachable. Work continues on local state; say so in one line, and retry sync (\`git -C ${root.path} pull --rebase --autostash\`) before pushing anything.`
+    return `A git call timed out while syncing the desk${where === "origin" ? "" : ` with ${where}`}: the remote is slow or unreachable. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
   }
   if (sync.cause === "deadline") {
-    return `The desk sync ran out of time before it finished. Work continues on local state; say so in one line and retry sync (\`git -C ${root.path} pull --rebase --autostash\`) before pushing anything.`
+    return `The desk sync ran out of time before it finished. Work continues on local state; say so in one line and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
   }
   if (sync.cause === "diverged") {
-    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Run \`git -C ${root.path} status\` and \`git -C ${root.path} log --oneline --left-right @{u}...HEAD\`, reconcile with a rebase, and do not push until they agree.`
+    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Run \`git -C ${shellQuote(root.path)} status\` and \`git -C ${shellQuote(root.path)} log --oneline --left-right @{u}...HEAD\`, reconcile with a rebase, and do not push until they agree.`
   }
   const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
   return `The desk's git sync is unresolved${paths}: run \`git status\` in ${root.path} and resolve what it shows before changing anything there.`
@@ -828,6 +842,21 @@ function pushLines(pushAccounts, namedTask) {
   return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: check \`push_accounts\` in the boot result before pushing anywhere.`]
 }
 
+// What to do about a recorded local clone that is not on this machine: the exact clone command when the card carries
+// the repo's `url` (or its name is owner/repo), otherwise exactly what to ask the operator (boot acceptance round A:
+// "no remote" left the agent guessing between inventing a repo and asking an open question).
+function missingCloneInstruction(missing) {
+  const where = shellQuotePath(missing.local_path)
+  const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}`
+  if (typeof missing.url === "string") {
+    return `${lead}: clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url), then do the work that needs it.`
+  }
+  if (typeof missing.repo === "string" && /^[\w.-]+\/[\w.-]+$/u.test(missing.repo)) {
+    return `${lead}: clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`, then do the work that needs it.`
+  }
+  return `${lead}, and the card records no usable clone url for it. Do not invent the repo or any progress in it. Ask the operator one question: "Where is ${missing.repo} cloned, or what URL should I clone it from?" Then clone it to ${missing.local_path} (or record the path they give) and save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask.`
+}
+
 function buildInstructions(ctx) {
   const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
   const out = []
@@ -856,7 +885,7 @@ function buildInstructions(ctx) {
     if (task?.status === "resolved") {
       out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
       for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
-        out.push(`The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}: clone it there (\`gh repo clone <owner>/${missing.repo} ${missing.local_path}\` when the name is owner/repo), or ask the operator where it lives, before doing work that needs it.`)
+        out.push(missingCloneInstruction(missing))
       }
       if (task.host_line_changed) out.push(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
     } else if (task?.status === "ambiguous") {
@@ -971,10 +1000,8 @@ export async function bootOnce({
   } catch (error) {
     degraded.push(`sync: ${error.message}`)
   }
-  if (sync?.state === "unresolved") {
-    const detail = [sync.reason, sync.cause].filter((value) => typeof value === "string" && value !== "")
-    degraded.push(`sync: unresolved${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`)
-  }
+  const syncProblem = syncDegradation(sync)
+  if (syncProblem !== null) degraded.push(syncProblem)
 
   let tasks = null
   try {
@@ -1054,7 +1081,7 @@ export async function bootOnce({
     }
   }
 
-  const status = degraded.length > 0 ? "degraded" : "ready"
+  const status = healthWord(degraded)
   const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
   return {
     boot_complete: true,

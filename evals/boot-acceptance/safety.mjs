@@ -223,10 +223,10 @@ export const PASS_THROUGH = [
 
 /** Writes the run's private global git config: no credential helper, and pushes to GitHub URLs rewritten to a dead local path. */
 export function writeGitConfig(homeDir) {
-  const dead = "file:///nonexistent/boot-acceptance-github-push-blocked/"
+  const dead = "file:///nonexistent/offline-remotes/"
   const prefixes = ["https://github.com/", "http://github.com/", "git://github.com/", "git@github.com:", "ssh://git@github.com/"]
   const body = [
-    "[user]", "\tname = Boot Acceptance Fixture", "\temail = fixture@boot-acceptance.local",
+    "[user]", "\tname = Desk Operator", "\temail = operator@example.com",
     "[commit]", "\tgpgsign = false",
     `[url "${dead}"]`, ...prefixes.map((p) => `\tpushInsteadOf = ${p}`),
   ].join("\n") + "\n"

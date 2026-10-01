@@ -33,7 +33,7 @@ export const TOOL_DESCRIPTIONS = {
   task_create:
     "Create a new task.md under <root>/<track>/<slug>/ with schema_version:1 frontmatter. `slug` must be an outcome name — 2-6 lowercase kebab-case words, not prompt-like or credential-like; rejected names explain what to fix without echoing the rejected name back.",
   task_update:
-    "Merge frontmatter or append to the body of an existing task.md; preserves schema_version + created.",
+    "The only way to change an existing task.md (a direct Write/Edit of one is denied). Merge `frontmatter` (status, repos, iterations), record progress with `note` (a dated line under `## Progress log`), replace the recorded `**Next step:**` with `next_step`, or `body_append` markdown; preserves schema_version + created. A move to `done` needs `evidence`.",
   task_archive:
     "Move <root>/<track>/<slug>/ to <root>/<track>/_archive/<slug>/, marking status=done if non-terminal. Idempotent.",
   task_move:

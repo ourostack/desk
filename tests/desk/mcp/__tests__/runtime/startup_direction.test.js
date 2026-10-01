@@ -7,9 +7,12 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import {
+  DESK_SETUP_DIRECTION,
+  bootCommand,
   copilotStartupDirection,
   deskStartupDirection,
   resolveStartupRoot,
+  startDirection,
 } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
@@ -47,7 +50,7 @@ test("the startup line names the bound root and where it came from", () => {
   ]) {
     const line = deskStartupDirection({ root: "/desks/one", source })
     assert.ok(line.startsWith(`Desk startup: $DESK is /desks/one (${label}). `), `${source}: ${line}`)
-    assert.match(line, /Invoke desk:session-start now for the authoritative workspace scan before other work/u)
+    assert.match(line, /The boot has not run yet: .* not a scan of the workspace\. Run `node \S*session-boot\.js` now, before other work/u)
     assert.match(line, /An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound/u)
   }
   // The session folder agreeing with the bound root is the same single-root case.
@@ -60,7 +63,7 @@ test("the startup line names the bound root and where it came from", () => {
 test("the startup line routes to setup only when no desk is found", () => {
   for (const bound of [null, undefined, { root: null }]) {
     const line = deskStartupDirection(bound)
-    assert.match(line, /^Desk startup: no desk is bound yet, so Desk is in setup mode\./u)
+    assert.match(line, /^Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run\./u)
     assert.match(line, /desk:first-run-bootstrap by default/u)
     assert.match(line, /crew:join-crew/u)
     assert.match(line, /Do not offer to continue without Desk/u)
@@ -106,7 +109,7 @@ test("when the session folder is a desk the server will not bind, the line names
   const line = deskStartupDirection({ root: "/home/me/desk", source: "home_fallback" }, { sessionDesk: "/work/crew" })
   assert.match(line, /^Desk startup: this session's folder \/work\/crew is a desk, but Desk without an overlay binds \/home\/me\/desk \(a home-folder fallback\); an overlay that launches Desk in this folder binds \/work\/crew instead\./u)
   assert.match(line, /desk_status reports the root Desk actually bound, and it wins\./u)
-  assert.match(line, /Invoke desk:session-start now for the authoritative workspace scan before other work/u)
+  assert.match(line, /The boot has not run yet: .* not a scan of the workspace\. Run `node \S*session-boot\.js` now, before other work/u)
   assert.doesNotMatch(line, /\$DESK is/u)
 
   const unbound = deskStartupDirection({ root: null }, { sessionDesk: "/work/crew" })
@@ -197,14 +200,31 @@ test("Desk running from an Agency session that loads the ms-desk overlay still n
     const withOverlay = await load("agency-plugin-Zx9.p101", ["ms-desk"])
     assert.equal(
       withOverlay.copilotStartupDirection({ env, homeDir: home }),
-      deskStartupDirection({ root: path.join(home, "ms-desk"), source: "overlay_home_fallback" }),
+      withOverlay.deskStartupDirection({ root: path.join(home, "ms-desk"), source: "overlay_home_fallback" }),
     )
+    assert.ok(withOverlay.bootCommand().includes(path.join("agency-plugin-Zx9.p101", "desk", "mcp", "scripts", "session-boot.js")), "each copy names its own boot script")
     const plain = await load("agency-plugin-Yw8.p102", [])
     assert.equal(
       plain.copilotStartupDirection({ env, homeDir: home }),
-      deskStartupDirection({ root: path.join(home, "desk"), source: "home_fallback" }),
+      plain.deskStartupDirection({ root: path.join(home, "desk"), source: "home_fallback" }),
     )
   } finally {
     rmSync(scratch, { recursive: true, force: true })
   }
+})
+
+test("the startup line gives the boot command by absolute path, says the boot has not run, and quotes a path with a space", () => {
+  const line = deskStartupDirection({ root: "/desks/one", source: "env:DESK" })
+  const command = bootCommand()
+  assert.ok(path.isAbsolute(command.replace(/^node /u, "")), command)
+  assert.ok(command.endsWith(path.join("mcp", "scripts", "session-boot.js")) || command.endsWith(`${path.join("mcp", "scripts", "session-boot.js")}"`))
+  assert.ok(line.includes(`Run \`${command}\` now`))
+  assert.match(line, /--task "<what the operator named>"/u)
+  assert.match(line, /A child agent with a bounded brief follows the brief instead/u)
+  assert.equal(bootCommand("/a b/session-boot.js"), 'node "/a b/session-boot.js"')
+  assert.equal(bootCommand("/a/session-boot.js"), "node /a/session-boot.js")
+  assert.match(startDirection("node x"), /Run `node x` now/u)
+  assert.match(DESK_SETUP_DIRECTION, /the boot has not run/u)
+  assert.ok(DESK_SETUP_DIRECTION.includes(command))
+  assert.doesNotMatch(line, /Desk boot pre-checks:/u, "a hook with no pre-check line never mentions one")
 })

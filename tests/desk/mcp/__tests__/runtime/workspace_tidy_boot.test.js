@@ -64,10 +64,10 @@ test("boot check queues a detached repair, returns without waiting, and records 
   // Session start must not wait on the repair. Ordering above is the property; this ceiling only catches a hang. It is far above the slowest coverage-shard time seen (about 900 ms), so a slow runner cannot trip it.
   assert.ok(elapsed < 10_000, `the boot check took ${Math.round(elapsed)} ms`)
   if (held) await boot.launchRepair(held.root, held.env)
-  assert.match(line, /^Desk boot: workspace-tidy/)
+  assert.match(line, /^Desk boot pre-checks: workspace-tidy/)
   assert.match(line, /deferred/)
   assert.equal(line.split("\n").length, 1)
-  if (line.startsWith("Desk boot: workspace-tidy budget exceeded")) {
+  if (line.startsWith("Desk boot pre-checks: workspace-tidy budget exceeded")) {
     // A loaded machine can spend the whole budget before the launch, and then nothing is queued until the next session start. Queue the repair the way that next start does, without the budget, so the leftovers are still recorded.
     t.diagnostic("the whole-check budget ran out before the launch; the repair was queued by a second boot check")
     assert.match(await readBootDetails({ host: "copilot", env: f.env, sessionFolder: f.desk }), /deferred \(/)
@@ -115,7 +115,7 @@ test("boot failure degrades in one bounded line and never blocks session start",
   const bad = path.join(f.root, "bad.json")
   await fs.writeFile(bad, "{")
   const line = await tidy({ host: "claude", env: { ...f.env, DESK_ACTIVATION_CONFIG: bad } })
-  assert.match(line, /^Desk boot:/)
+  assert.match(line, /^Desk boot pre-checks:/)
   assert.match(line, /binding|configuration/)
   assert.ok(line.length <= 512)
 })
@@ -133,7 +133,7 @@ test("both actual startup hooks include exactly one boot line without changing t
       : execFileSync("bash", [path.join(plugin, "hooks", "session-start.sh")], { env, encoding: "utf8" })
     const parsed = JSON.parse(result)
     const context = parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext
-    assert.equal((context.match(/Desk boot:/gu) ?? []).length, 1)
+    assert.equal((context.match(/Desk boot pre-checks:/gu) ?? []).length, 1)
     assert.match(context, /Desk startup:/)
   }
   // Let the exact fixture-only repairs finish before the fixture owner removes the root.
@@ -153,7 +153,7 @@ test("the complete boot check has a deadline even when launching repair stalls",
   // copy-pasteable repair command an agent can run sooner, rather than leaving "the repair" unnamed.
   assert.match(line, /no agent action needed/)
   assert.match(line, /deferred to the next session start automatically/)
-  assert.equal(line, `Desk boot: workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${hookPath.pathname} --repair <desk_status root>`)
+  assert.equal(line, `Desk boot pre-checks: workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${hookPath.pathname} --repair <desk_status root>`)
 
   // Mocked time: the check ends exactly at the budget it was given, not at the 500 ms default, once the launch has begun and stalled.
   t.mock.timers.enable({ apis: ["setTimeout"] })
@@ -214,7 +214,7 @@ process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.strin
   const [code] = await once(child, "close")
   assert.equal(code, 0)
   const parsed = JSON.parse(output)
-  assert.match(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, /Desk boot:.*deferred/)
+  assert.match(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, /Desk boot pre-checks:.*deferred/)
   const timing = JSON.parse(await fs.readFile(proof, "utf8"))
   assert.equal(timing.children.length, 1)
   assert.ok(timing.children.every((entry) => entry.closed), "every exact owned child closed")
@@ -243,7 +243,7 @@ test("boot reports absent bindings, malformed reports and repair launch failures
   assert.match(await tidy(), /no bound desk/)
   // A binding whose folder is gone is unavailable, not absent: the line agrees with the startup line above it.
   const gone = path.join(await mkTempRoot("desk-boot-gone-"), "gone-desk")
-  assert.equal(await tidy({ host: "copilot", env: { DESK: gone } }), "Desk boot: workspace-tidy skipped; the bound desk is unavailable; see desk_status.")
+  assert.equal(await tidy({ host: "copilot", env: { DESK: gone } }), "Desk boot pre-checks: workspace-tidy skipped; the bound desk is unavailable; see desk_status.")
   const f = await fixture()
   const common = git(f.desk, "rev-parse", "--absolute-git-dir")
   const file = boot.reportPath(f.desk, common)
@@ -276,7 +276,7 @@ test("the boot path does no Node search: it starts the repair launcher in the ho
   t.after(() => { resolver.compatibleNode = original })
   const launched = []
   const line = await bootLine({ host: "claude", env: { ...f.env, DESK: alias }, launch: async (...args) => { launched.push(args) } })
-  assert.equal(line, "Desk boot: workspace-tidy deferred (0 listed)")
+  assert.equal(line, "Desk boot pre-checks: workspace-tidy deferred (0 listed)")
   assert.equal(searches, 0)
   assert.deepEqual(launched.map(([root]) => root), [alias], "the launcher gets the binding's own spelling")
 
@@ -303,7 +303,7 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
   assert.deepEqual(probeBudgets, [3000], "nothing waits on the launcher, so it may probe for longer than the hook could")
   assert.deepEqual(repaired, [])
   assert.equal(JSON.parse(await fs.readFile(`${file}.node.json`, "utf8")).range, ">=20.0.0")
-  assert.equal(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), "Desk boot: workspace-tidy last repair not started: it needs Node >=20.0.0 and none was found; deferred (0 listed)")
+  assert.equal(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), "Desk boot pre-checks: workspace-tidy last repair not started: it needs Node >=20.0.0 and none was found; deferred (0 listed)")
 
   // This Node fits: the repair runs here, and the stale no-Node status goes.
   assert.deepEqual(await boot.startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }), repair }), { repaired: f.desk })
@@ -387,7 +387,7 @@ test("a Copilot session folder that is a symlink alias of the bound desk is not 
   await fs.symlink(f.desk, alias)
   const launched = []
   const line = await bootLine({ host: "copilot", env: f.env, sessionFolder: alias, launch: async (...args) => { launched.push(args) } })
-  assert.equal(line, "Desk boot: workspace-tidy deferred (0 listed)")
+  assert.equal(line, "Desk boot pre-checks: workspace-tidy deferred (0 listed)")
   assert.equal(launched.length, 1)
 })
 
