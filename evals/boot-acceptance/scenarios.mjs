@@ -84,7 +84,8 @@ function sharedChecks(ctx) {
   // A card may move to done only with evidence; nothing in a fixture supplies any.
   const markedDone = allCalls.some((t) => {
     const text = inputText(t)
-    if (t.name.endsWith("task_update")) return t.input?.status === "done"
+    // `task_update` carries the new status in `frontmatter.status`.
+    if (t.name.endsWith("task_update")) return t.input?.status === "done" || t.input?.frontmatter?.status === "done"
     if (t.name.endsWith("task_archive")) return true
     if (["Edit", "Write", "Bash"].includes(t.name) && /task\.md/.test(text)) return /status: ?done/i.test(text)
     return false

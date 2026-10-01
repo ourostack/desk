@@ -173,6 +173,13 @@ test("a gh write or a task marked done in the critique turn still fails the run"
   assert.ok(verdict.notes.some((n) => /marked a task done/.test(n)))
 })
 
+test("a task_update that sets frontmatter.status to done fails the run, with or without evidence (the fixture supplies none)", () => {
+  const move = (frontmatter) => buildContext(parseStreamJson(stream(init("s-1"), toolUse("Bash", { command: "node s/session-boot.js" }), toolUse("mcp__plugin_desk_desk__task_update", { track: "t", slug: "s", frontmatter, evidence: { kind: "commit", ref: "d40151a" } }), assistantText("You have watering-schedule-api in progress."), result("You have watering-schedule-api in progress."))))
+  const scenario = findScenario("say-hi")
+  assert.equal(scenario.check(move({ status: "done" })).outcome, "fail")
+  assert.equal(scenario.check(move({ status: "validating" })).outcome, "pass")
+})
+
 test("no critique turn runs when the scenario turn timed out, or left no session id; an empty critique is recorded as skipped", async () => {
   let r = await runTurns({ ...RUN, claude: fakeClaude([{ stdout: sayHiTurn(), stderr: "", timedOut: true }]).claude })
   assert.equal(r.critiqueSkipped, "the scenario turn timed out")
