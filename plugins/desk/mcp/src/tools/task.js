@@ -32,7 +32,7 @@ import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
-import { appendProgressNote, replaceNextStep } from "./task-body.js"
+import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
@@ -642,7 +642,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
 
   let newBody = existing.content
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
-  if (note !== undefined) newBody = appendProgressNote(newBody, note, merged.updated.slice(0, 10))
+  if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
   if (typeof body_append === "string" && body_append.length > 0) {
     const sep = newBody.endsWith("\n\n") || newBody.length === 0 ? "" : "\n\n"
     newBody = `${newBody}${sep}${body_append}`

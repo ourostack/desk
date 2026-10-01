@@ -11,7 +11,7 @@ import { addMissingCloneTask, materializeFixture, materializeGreenhouseClone } f
 import { pushesToNonLocalRemote } from "./scenarios.mjs"
 
 test("only a push to a non-local remote counts: the desk's own origin is normal", () => {
-  for (const command of ["git push origin main", "git push", "git -C /desk push -u origin main", "git add -A && git commit -m x && git push origin main", "git push --force-with-lease origin main", "echo git push is mentioned"]) {
+  for (const command of ["git push origin main", "git push", "git -C /w/fixture/desk push -u origin main", "git add -A && git commit -m x && git push origin main", "git push --force-with-lease origin main", "echo git push is mentioned"]) {
     assert.equal(pushesToNonLocalRemote(command), false, command)
   }
   for (const command of [
@@ -25,6 +25,29 @@ test("only a push to a non-local remote counts: the desk's own origin is normal"
     assert.equal(pushesToNonLocalRemote(command), true, command)
   }
   assert.equal(pushesToNonLocalRemote(undefined), false)
+})
+
+test("a bare push is judged by the folder it runs in: the desk's origin is local, a project clone's origin is not", () => {
+  const deskRoot = "/work/run/fixture/desk"
+  const local = ["git push", "git -C /work/run/fixture/desk push", "cd /work/run/fixture/desk && git push origin main", "cd /work/run/fixture/desk; cd greenhouse-ops && git push", "cd /elsewhere && cd /work/run/fixture/desk && git push", "git -C '/work/run/fixture/desk' push origin"]
+  for (const command of local) assert.equal(pushesToNonLocalRemote(command, { deskRoot }), false, command)
+  const remote = ["git -C /home/op/code/greenhouse-relay push", "cd /home/op/code/greenhouse-relay && git push origin relay-heartbeat-15s", "cd ~/code/relay && git push", "git -C /home/op/relay push origin main"]
+  for (const command of remote) assert.equal(pushesToNonLocalRemote(command, { deskRoot }), true, command)
+  assert.equal(pushesToNonLocalRemote("cd /desk-elsewhere && git push", { deskRoot: "/desk" }), true, "a sibling folder is not the desk")
+  assert.equal(pushesToNonLocalRemote("cd /desk/tracks && git push", { deskRoot: "/desk" }), false)
+  assert.equal(pushesToNonLocalRemote("cd /desk && git push"), true, "without a desk root, a folder not shaped like the fixture is not the desk")
+})
+
+test("a Completed work section written with MultiEdit is flagged like Edit and Write", async () => {
+  const { SCENARIOS } = await import("./scenarios.mjs")
+  const scenario = SCENARIOS.find((candidate) => candidate.id === "resume-named-task")
+  const call = (name, input) => ({ name, input })
+  const context = (toolCalls) => ({ toolCalls, critiqueToolCalls: [], tokenLeaks: 0, finalResultText: "ok", assistantTexts: ["ok"], sessionId: "s" })
+  const notesFor = (toolCalls) => scenario.check(context(toolCalls)).notes.join("\n")
+  const edits = [{ old_string: "a", new_string: "## Completed work\n- all of it" }]
+  assert.match(notesFor([call("MultiEdit", { file_path: "/d/t/s/task.md", edits })]), /Completed work/u)
+  assert.match(notesFor([call("Edit", { file_path: "/d/t/s/task.md", new_string: "## Completed work" })]), /Completed work/u)
+  assert.doesNotMatch(notesFor([call("MultiEdit", { file_path: "/d/t/s/notes.md", edits })]), /WARNING: wrote a "Completed work"/u)
 })
 
 function walk(dir, out = []) {

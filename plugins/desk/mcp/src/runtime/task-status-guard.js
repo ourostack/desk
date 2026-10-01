@@ -31,10 +31,23 @@
 //
 // Scope. This module only recognizes Claude Code's own `PreToolUse` wire shape and its `Write`/`Edit`/`MultiEdit`
 // tool-input shapes (`file_path`, `content`, `old_string`, `new_string`, `replace_all`, and MultiEdit's
-// `edits: [{ old_string, new_string }, ...]` -- the same fields `runtime/ask-gate.js` already reads). It denies every
-// such call whose target is an existing `task.md`; a Write to a path with no card yet passes unless it would create a
-// card already `done`. It cannot see a shell command that writes the file (`sed -i`, a heredoc): that is the reach
-// of any tool-call hook, and the commit-time evidence check in `task_update` remains the real gate for `done`.
+// `edits: [{ old_string, new_string }, ...]` -- the same fields `runtime/ask-gate.js` already reads).
+//
+// Which files count (review of #123). The path is expanded (`~`), trimmed, resolved against the session folder and
+// realpath'd (the file, or its parent when the file does not exist yet), so a symlink or `TASK.md` on a
+// case-insensitive disk cannot hide a card; names are compared case-insensitively; and an existing file with other
+// hard links is also matched by inode against the desk's live cards. The desk is the bound root
+// (`resolveHookDeskRoot`: the project folder when it is a desk, the saved binding, `$DESK`, the home fallbacks);
+// when no root can be determined, the nearest ancestor folder that `isDeskWorkspace` recognizes (`_meta/` plus
+// `_archive/` or `desks/`) stands in for it. Within it:
+//   - a LIVE card is `<root>/<track>/<slug>/task.md` (or the same under `desks/<alias>/`): every Write, Edit or
+//     MultiEdit of an existing one is denied, unless its frontmatter no longer parses, because a corrupted card
+//     must stay repairable by hand;
+//   - an ARCHIVED card (`.../_archive/<slug>/task.md`) stays on the earlier status-only guard;
+//   - a path with no card yet is `task_create`'s, so only a card born `done` is denied;
+//   - any other `task.md`, in particular one outside a desk, is none of this hook's business.
+// It cannot see a shell command that writes the file (`sed -i`, a heredoc): that is the reach of any tool-call hook,
+// and the evidence check inside `task_update` remains the real gate for `done`.
 //
 // What Copilot and Codex would need (not done here): their own
 // `PreToolUse` tool-name and tool-input field mapping, the way
@@ -46,13 +59,13 @@
 // evidence exists, the same restriction `ask-gate.js` already documents
 // and applies to itself.
 //
-// This hook matches on path shape (`.../task.md`) alone -- the same
-// trade-off `ask-gate.js`'s own activation-path match makes -- so it
-// cannot distinguish a real desk's task card from a fixture or scratch
-// file that happens to share the basename; denying a legitimate edit to
-// such a file is a minor cost next to letting the actual bypass through.
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
 
-import { readFileSync } from "node:fs"
+import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
+import { loadFrontmatterParser } from "../desk/organization.js"
+import { isDeskWorkspace } from "../util/paths.js"
 
 const TASK_CARD_BASENAME = "task.md"
 
@@ -62,11 +75,111 @@ const TASK_CARD_BASENAME = "task.md"
 const ANY_STATUS_LINE = /(^|\r?\n)status:[ \t]*["']?([^"'\r\n]*?)["']?[ \t]*(?=\r?\n|$)/u
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---/u
 
-/** True for a `file_path` whose final path segment is exactly `task.md`. */
-function isTaskCardPath(filePath) {
-  if (typeof filePath !== "string" || filePath === "") return false
-  const normalized = filePath.replace(/\\/gu, "/")
-  return normalized === TASK_CARD_BASENAME || normalized.endsWith(`/${TASK_CARD_BASENAME}`)
+const lower = (text) => text.toLowerCase()
+const parseFrontmatter = loadFrontmatterParser()
+
+/** `file_path` made absolute: trimmed, `~` expanded, relative paths resolved against `cwd`. */
+function absolutePath(filePath, { cwd, home }) {
+  const text = filePath.trim()
+  const expanded = text === "~" ? home : text.startsWith("~/") || text.startsWith("~\\") ? path.join(home, text.slice(2)) : text
+  return path.resolve(cwd, expanded)
+}
+
+/** The real path of the file, or of its parent plus the name when the file does not exist yet. */
+function realTarget(absolute) {
+  try {
+    return realpathSync.native(absolute)
+  } catch {
+    try {
+      return path.join(realpathSync.native(path.dirname(absolute)), path.basename(absolute))
+    } catch {
+      return absolute
+    }
+  }
+}
+
+/** The path under `root` as segments, or null when it is not under it (compared case-insensitively). */
+function segmentsUnder(root, real) {
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep
+  if (!lower(real).startsWith(lower(prefix))) return null
+  return real.slice(prefix.length).split(path.sep).filter((part) => part !== "")
+}
+
+/** `live` / `archived` / null for segments below the desk root; a live card is track/slug/task.md, optionally under desks/<alias>. */
+function cardKind(segments) {
+  if (segments === null || lower(segments.at(-1)) !== TASK_CARD_BASENAME) return null
+  const inner = segments[0] === "desks" ? segments.slice(2) : segments
+  if (inner.length === 3 && !inner[0].startsWith("_")) return "live"
+  if (inner.length === 4 && !inner[0].startsWith("_") && lower(inner[1]) === "_archive") return "archived"
+  return null
+}
+
+/** The nearest ancestor of the file that is a desk workspace, standing in for an undetermined bound root. */
+function discoverRoot(real) {
+  let dir = path.dirname(real)
+  for (let depth = 0; depth < 7 && dir !== path.dirname(dir); depth += 1) {
+    dir = path.dirname(dir)
+    if (isDeskWorkspace(dir)) return dir
+  }
+  return null
+}
+
+/** The `[track, slug, task.md]` of the live card an existing file with other hard links shares an inode with, or null. */
+function liveCardByInode(root, real) {
+  let target
+  try {
+    target = statSync(real)
+  } catch {
+    return null
+  }
+  if (target.nlink < 2) return null
+  const names = (dir) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith("_")).map((entry) => path.join(dir, entry.name))
+    } catch {
+      return []
+    }
+  }
+  for (const track of names(root)) {
+    for (const slug of names(track)) {
+      try {
+        const card = statSync(path.join(slug, TASK_CARD_BASENAME))
+        if (card.ino === target.ino && card.dev === target.dev) return [path.basename(track), path.basename(slug), TASK_CARD_BASENAME]
+      } catch {
+        // No card in this folder.
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Classifies a `file_path`: `{ kind: "live" | "archived", absolute, segments }` for a task card of the bound desk
+ * (see the module comment), or null for anything else.
+ */
+function classifyCard(filePath, { root, cwd, home }) {
+  if (typeof filePath !== "string" || filePath.trim() === "") return null
+  const absolute = absolutePath(filePath, { cwd, home })
+  const real = realTarget(absolute)
+  let deskRoot = root === null ? discoverRoot(real) : realTarget(root)
+  if (deskRoot === null) return null
+  deskRoot = realTarget(deskRoot)
+  const segments = segmentsUnder(deskRoot, real)
+  const kind = cardKind(segments)
+  if (kind !== null) return { kind, absolute, segments }
+  const aliased = liveCardByInode(deskRoot, real)
+  return aliased === null ? null : { kind: "live", absolute, segments: aliased }
+}
+
+/** True when the card text has a frontmatter block that parses to a mapping; a card that does not stays hand-repairable. */
+function isReadableCard(text) {
+  if (!FRONTMATTER.test(text)) return false
+  try {
+    const data = parseFrontmatter(text).data
+    return data !== null && typeof data === "object" && !Array.isArray(data) && Object.keys(data).length > 0
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -138,13 +251,12 @@ function statusChange(toolName, args, read = readCard) {
   return null
 }
 
-function taskCoordinates(filePath) {
-  const parts = filePath.replace(/\\/gu, "/").split("/").filter((part) => part !== "")
-  return { track: parts.at(-3) ?? "<track>", slug: parts.at(-2) ?? "<slug>" }
+function taskCoordinates({ kind, segments }) {
+  return { track: segments.at(kind === "archived" ? -4 : -3), slug: segments.at(-2) }
 }
 
-function denyReason(filePath, change) {
-  const { track, slug } = taskCoordinates(filePath)
+function denyReason(card, change) {
+  const { track, slug } = taskCoordinates(card)
   const target = `{ track: "${track}", slug: "${slug}"`
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
   const statusPart = change === null
@@ -159,18 +271,20 @@ function denyReason(filePath, change) {
     ` To record progress: \`task_update\` with ${target}, note: "<one line of what actually happened>" } (a dated line under \`## Progress log\`). ` +
     `To change what is next: ${target}, next_step: "<the next action>" }. ` +
     `Other fields (repos, iterations, a repo's url): ${target}, frontmatter: { ... } }; more text: ${target}, body_append: "<markdown>" }. ` +
-    "A note is only a note: a task is finished by its pull request or check, and a card that says otherwise without one is not true."
+    "If the card's frontmatter is corrupted so that it no longer parses, a direct edit is allowed so it can be repaired; this card parses, so it is not that case." +
+    " A note is only a note: a task is finished by its pull request or check, and a card that says otherwise without one is not true."
   )
 }
 
 /**
  * `input` is the hook's JSON stdin (Claude Code's `PreToolUse` payload).
  * Returns Claude Code's `PreToolUse` deny shape when this call would edit an
- * existing task card (or create one already `done`), or `{}` to let
- * the call through untouched. Only `host === "claude"` is recognized today
+ * existing live task card of the bound desk, change an archived card's
+ * status, or create a card already `done`, or `{}` to let the call through
+ * untouched. `context` is a test seam: `{ root, env, home }`. Only `host === "claude"` is recognized today
  * (see the module doc comment for what Copilot/Codex would need).
  */
-export function taskStatusGuardHook(input, host, read = readCard) {
+export function taskStatusGuardHook(input, host, read = readCard, context = {}) {
   if (host !== "claude") return {}
   const toolName = String(input?.tool_name ?? input?.toolName ?? "")
   if (toolName !== "Write" && toolName !== "Edit" && toolName !== "MultiEdit") return {}
@@ -184,12 +298,27 @@ export function taskStatusGuardHook(input, host, read = readCard) {
     }
   }
   if (!args || typeof args !== "object") return {}
-  if (!isTaskCardPath(args.file_path)) return {}
-  const change = statusChange(toolName, args, read)
-  // An existing card is never edited directly; a path with no card yet is `task_create`'s, so only a `done` birth is denied.
-  if (change === null && read(args.file_path) === null) return {}
+  const cwd = typeof input?.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd()
+  const root = context.root === undefined ? boundRoot(context.env ?? process.env, cwd) : context.root
+  const card = classifyCard(args.file_path, { root, cwd, home: context.home ?? os.homedir() })
+  if (card === null) return {}
 
-  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(args.file_path, change) } }
+  const target = { ...args, file_path: card.absolute }
+  const change = statusChange(toolName, target, read)
+  const existing = read(card.absolute)
+  // A path with no card yet is `task_create`'s, and an archived card keeps the status-only guard.
+  if (card.kind === "archived" || existing === null) {
+    if (change === null) return {}
+  } else if (!isReadableCard(existing)) {
+    return {}
+  }
+
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, change) } }
 }
 
-export { isTaskCardPath, statusOf, statusChange }
+/** The desk root this session binds, or null when it cannot be determined (the marker fallback then applies). */
+function boundRoot(env, cwd) {
+  return resolveHookDeskRoot({ env, cwd }).root
+}
+
+export { classifyCard, isReadableCard, statusOf, statusChange }

@@ -7,9 +7,9 @@ const path = require("node:path");
 
 const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
+const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
-const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
 
 // Copilot passes the session's working folder as `cwd` in the hook input. Read

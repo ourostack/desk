@@ -273,6 +273,10 @@ function pushWithRetry(root, spawnGit) {
 // state guard refusing a real, non-temp state home -- costs the next reader a recorded status, never a crash. A
 // caller (`runPushWorker`, `finalUnpushedCheck`) that has already computed its own answer from Git still returns
 // that answer; only the recording is best-effort.
+//
+// The read-merge-write is not locked: the file is replaced atomically (a temp file, then a rename), so a reader never
+// sees a half-written record, but two writers racing (a push worker and a boot sync) are last-writer-wins and one
+// patch can be lost. That is accepted: every field here is a hint that the next sync or push rewrites.
 function updateSyncStatus(root, env, patch) {
   const file = syncStatusPath({ root, env })
   try {

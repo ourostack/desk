@@ -3,11 +3,11 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, writeFileSync } from "node:fs"
+import { promises as fs, utimesSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
-import { healthWord, syncDegradation } from "../../../../../plugins/desk/mcp/src/runtime/health.js"
+import { healthWord, pullStillFailing, syncDegradation } from "../../../../../plugins/desk/mcp/src/runtime/health.js"
 import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
 import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { readSyncStatus, recordPullOutcome, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
@@ -132,4 +132,39 @@ test("desk_status reports no failed pull when nothing was recorded or the record
   recordPullOutcome({ root, env, result: { state: "synced" } })
   assert.equal(readSyncStatus({ root, env }).last_pull, null)
   assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false)
+})
+
+const NOW = Date.parse("2026-09-30T12:00:00Z")
+const failedAt = (iso) => ({ state: "unresolved", reason: "r", cause: "unreachable", at: iso })
+
+test("a failed pull stops counting once a later push or fetch proves the remote reachable, and after 24 hours", () => {
+  const lastPull = failedAt("2026-09-30T10:00:00Z")
+  assert.equal(pullStillFailing({ lastPull, now: NOW }), true)
+  assert.equal(pullStillFailing({ lastPull, lastPushAt: "2026-09-30T09:00:00Z", fetchedAt: Date.parse("2026-09-30T09:59:00Z"), now: NOW }), true, "earlier ones do not clear it")
+  assert.equal(pullStillFailing({ lastPull, lastPushAt: "2026-09-30T11:00:00Z", now: NOW }), false)
+  assert.equal(pullStillFailing({ lastPull, fetchedAt: Date.parse("2026-09-30T11:00:00Z"), now: NOW }), false)
+  assert.equal(pullStillFailing({ lastPull, lastPushAt: "not a date", now: NOW }), true)
+  assert.equal(pullStillFailing({ lastPull: failedAt("2026-09-29T11:00:00Z"), now: NOW }), false, "older than 24 hours")
+  assert.equal(pullStillFailing({ lastPull: failedAt("garbage"), now: NOW }), false)
+  assert.equal(pullStillFailing({ lastPull: { state: "synced" }, now: NOW }), false)
+  assert.equal(pullStillFailing({ lastPull: null }), false)
+  assert.equal(pullStillFailing({ lastPull: failedAt(new Date().toISOString()) }), true, "now defaults to the clock")
+})
+
+test("desk_status drops a failed pull that a later fetch or push has superseded", async () => {
+  const { origin, root } = await mkDeskWithOrigin()
+  git(root, ["remote", "set-url", "origin", path.join(origin, "gone")])
+  await syncWorkspace({ root, env, fileProblem: () => ({ file: "none" }) })
+  assert.equal((await desk_status({ deskRoot: root, env })).sync.last_pull.state, "unresolved", "no fetch since: still failing")
+  git(root, ["remote", "set-url", "origin", origin])
+  git(root, ["fetch", "-q", "origin"])
+  const fetchHead = path.join(git(root, ["rev-parse", "--absolute-git-dir"]).trim(), "FETCH_HEAD")
+  const later = new Date(Date.now() + 60_000)
+  utimesSync(fetchHead, later, later)
+  assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false, "a later fetch cleared it")
+})
+
+test("the sync fix quotes a desk path with a space", () => {
+  const compact = compactStatus({ ...ready, root: { path: "/my desk" }, sync: { last_pull: lastPull } })
+  assert.match(compact.fix, /git -C '\/my desk' pull --rebase --autostash/u)
 })

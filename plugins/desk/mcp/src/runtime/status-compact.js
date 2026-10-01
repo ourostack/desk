@@ -7,6 +7,7 @@
 // moves `state`: a degraded index only means search reads the files directly. Boot does not check the index at all
 // (slow, network-bound), so "boot ready, desk_status ready, search degraded" is one consistent picture, not a contradiction.
 
+import { shellQuote } from "../util/shell-quote.js"
 import { healthWord, syncDegradation } from "./health.js"
 
 const DETAIL_POINTER =
@@ -81,7 +82,7 @@ export function compactStatus(payload) {
     summary: state === "ready" ? "Desk is ready." : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
     degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
-    ...(state === "ready" ? {} : base === "ready" ? { fix: `Retry the sync: git -C ${payload.root?.path ?? "<desk>"} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
+    ...(state === "ready" ? {} : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
     ...(typeof payload.onboarding_skill === "string" ? { onboarding_skill: payload.onboarding_skill } : {}),
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),

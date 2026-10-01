@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs"
-import { spawnSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
@@ -12,6 +12,7 @@ import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
 import { hookRegistrationDeskProblem } from "../runtime/host-enforcement-registration.js"
+import { pullStillFailing } from "../runtime/health.js"
 import { aheadBehindCounts, hasRemoteConfigured, readSyncStatus } from "../runtime/sync-worker.js"
 
 const OWN_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
@@ -74,11 +75,23 @@ async function hostEnforcementStatus({ env }) {
  * itself (`runtime/sync-worker.js`) and the SessionEnd safety net
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
+// When the desk's last fetch finished (FETCH_HEAD's modified time), or null: a later fetch proves the remote was reachable.
+function lastFetchMs(deskRoot) {
+  try {
+    const gitDir = execFileSync("git", ["-C", deskRoot, "rev-parse", "--absolute-git-dir"], { encoding: "utf8", timeout: 5000 }).trim()
+    return statSync(path.join(gitDir, "FETCH_HEAD")).mtimeMs
+  } catch {
+    return null
+  }
+}
+
 function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
   if (!hasRemoteConfigured(deskRoot, spawnGit)) return "no remote configured"
   const recorded = readSyncStatus({ root: deskRoot, env })
   // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
-  const lastPull = recorded?.last_pull?.state === "unresolved" ? { last_pull: recorded.last_pull } : {}
+  const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: lastFetchMs(deskRoot) })
+    ? { last_pull: recorded.last_pull }
+    : {}
   if (recorded?.blocked) {
     return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], ...lastPull }
   }

@@ -198,10 +198,14 @@ repos:
 
 ## Current work
 
-Preparing a relay-config change against \`anthropics/claude-code\`.
+Preparing a relay-config change against \`anthropics/claude-code\`: the branch
+\`relay-heartbeat-15s\` carries one commit that changes the relay heartbeat
+interval from 30s to 15s in \`relay/config.toml\`. That branch lives in my
+checkout on the other laptop and is not on this machine.
 
-**Next step:** open the PR and confirm it can be pushed under the configured
-GitHub account.
+**Next step:** push \`relay-heartbeat-15s\` and open a pull request from it into
+\`main\` of \`anthropics/claude-code\`. First confirm which GitHub account and
+route (direct or a fork) can deliver it from here, and tell me.
 `
 
 // A second in-progress task whose recorded local clone deliberately does not

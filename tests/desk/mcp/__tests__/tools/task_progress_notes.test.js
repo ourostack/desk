@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { appendProgressNote, replaceNextStep } from "../../../../../plugins/desk/mcp/src/tools/task-body.js"
+import { appendProgressNote, localDate, replaceNextStep } from "../../../../../plugins/desk/mcp/src/tools/task-body.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
@@ -72,4 +72,42 @@ test("the task_update schema declares note and next_step", () => {
   const properties = TOOL_INPUT_SCHEMAS.task_update.properties
   assert.match(properties.note.description, /Progress log/u)
   assert.match(properties.next_step.description, /Next step/u)
+})
+
+test("a marker or heading quoted inside a fenced code block is not the card's own", () => {
+  const body = "```md\n**Next step:** quoted\n## Progress log\n```\n\n**Next step:** real\n\n~~~\n## Progress log\n~~~\n"
+  assert.equal(replaceNextStep(body, "new"), "```md\n**Next step:** quoted\n## Progress log\n```\n\n**Next step:** new\n\n~~~\n## Progress log\n~~~\n")
+  const noReal = "```\n**Next step:** quoted\n```\n"
+  assert.equal(replaceNextStep(noReal, "new"), "```\n**Next step:** quoted\n```\n\n**Next step:** new\n")
+  const fenced = "```\n## Progress log\n- x\n```\n"
+  assert.equal(appendProgressNote(fenced, "n", "d"), "```\n## Progress log\n- x\n```\n\n## Progress log\n\n- d: n\n")
+  const real = "## Progress log\n\n```\n## Other\n```\n- a\n## Next\n"
+  assert.equal(appendProgressNote(real, "n", "d"), "## Progress log\n\n```\n## Other\n```\n- a\n- d: n\n## Next\n")
+  const longer = "````\n```\n## Progress log\n````\n"
+  assert.equal(appendProgressNote(longer, "n", "d").endsWith("## Progress log\n\n- d: n\n"), true)
+})
+
+test("the next-step paragraph ends at a blank line, a list item, a heading or a fence", () => {
+  assert.equal(replaceNextStep("**Next step:** a\n- item\nmore\n", "b"), "**Next step:** b\n- item\nmore\n")
+  assert.equal(replaceNextStep("**Next step:** a\n1. one\n", "b"), "**Next step:** b\n1. one\n")
+  assert.equal(replaceNextStep("**Next step:** a\ncont\n```\ncode\n```\n", "b"), "**Next step:** b\n```\ncode\n```\n")
+})
+
+test("duplicate next-step markers: the first outside a fence is replaced and the later ones go", () => {
+  const body = "Intro\n\n**Next step:** one\n\n**Next step:** two\nstill two\n\nTail\n\n**Next step:** three"
+  assert.equal(replaceNextStep(body, "new"), "Intro\n\n**Next step:** new\n\nTail\n")
+  assert.equal(replaceNextStep("**Next step:** a\n**Next step:** b\n", "n"), "**Next step:** n\n")
+})
+
+test("CRLF cards stay CRLF", () => {
+  assert.equal(replaceNextStep("A\r\n\r\n**Next step:** x\r\ny\r\n\r\nB\r\n", "n"), "A\r\n\r\n**Next step:** n\r\n\r\nB\r\n")
+  assert.equal(replaceNextStep("A\r\n", "n"), "A\r\n\r\n**Next step:** n\r\n")
+  assert.equal(appendProgressNote("A\r\n\r\n## Progress log\r\n\r\n- a\r\n", "n", "d"), "A\r\n\r\n## Progress log\r\n\r\n- a\r\n- d: n\r\n")
+  assert.equal(appendProgressNote("A\r\n", "n", "d"), "A\r\n\r\n## Progress log\r\n\r\n- d: n\r\n")
+})
+
+test("a note is dated in the operator's local time zone", () => {
+  assert.equal(localDate(new Date(2026, 8, 30, 23, 30)), "2026-09-30")
+  assert.equal(localDate(new Date(2026, 0, 5, 0, 5)), "2026-01-05")
+  assert.match(localDate(), /^\d{4}-\d{2}-\d{2}$/u)
 })
