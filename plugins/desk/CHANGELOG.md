@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.167 — 2026-10-01
+
+The line that tells an agent how to find Desk's tools now names the tools for the host it runs on. On Copilot CLI the tools are `desk-<name>` (for example `desk-task_update`), called as tools and never through the shell; on Claude Code they are `mcp__plugin_desk_desk__<name>`, loaded with ToolSearch. Boot and the task-card guard's denial pick the line by host, and Codex, an unknown host and the git pre-commit hook get both names. Before, every host was told only the Claude Code names, and a Copilot agent in boot acceptance round I could not find `desk-task_update` and left its card unupdated.
+
+The boot acceptance gate report now counts a Copilot `preToolUse` denial, which Copilot logs as `{ "<tool call id>": "Denied by preToolUse hook: ..." }`, in `pre_tool_use_denials`; it had counted only the `permissionDecision` shape, so runs with real denials reported 0.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.166 — 2026-10-01
 
 Copilot's first-prompt boot pointer now reaches the model on the first prompt. Copilot runs the `userPromptSubmitted` hook for a new session's first prompt before it runs `sessionStart`, so the pointer, which waited for the session record that `sessionStart` writes, was never delivered there and only fired on a resumed turn. It now claims once per session id in its own file, created exclusively so a concurrent record write cannot drop it, and only when the session folder resolves to a usable desk the way `sessionStart` resolves it, so a folder that is no desk gets no pointer. `sessionStart` with `source: "resume"` clears the claim, so a resumed session is directed again on its next prompt.
