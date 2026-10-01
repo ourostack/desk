@@ -46,6 +46,11 @@
 //     are `null` and its `transitions` empty, else `inconsistent` names the
 //     job (fix round 3). The store's CI then does not have to trust the
 //     flush's answer about the desk.
+//   - A job's optional `segments` (the controller's spans of the session,
+//     in milliseconds from its start) and a PR's optional `at_ms` never run
+//     past `session.duration_ms`, else `range`. A file marked
+//     `{job_offsets, desk_public}` carries no `segments` either: with a
+//     public desk's commit history, they would date the session.
 //   - `jobs[].session_offset_ms` and every `offset_ms` are safe integers
 //     (signed: a session may begin before its task card exists) or `null`,
 //     and at most `PUBLISHED_LIMITS.maxOffsetMs` (ten years) either way. The
@@ -71,6 +76,7 @@ import {
   booleanField,
   checkAgentReferences,
   checkBasis,
+  checkSessionBounds,
   customField,
   enumField,
   isPlainObject,
@@ -356,14 +362,17 @@ export function validatePublished(value) {
     value.jobs.forEach((job, index) => {
       if (!isPlainObject(job)) return
       const timed = job.session_offset_ms !== null
+        || Object.hasOwn(job, "segments")
         || (Array.isArray(job.transitions) && job.transitions.length > 0)
         || (isPlainObject(job.observed) && job.observed.offset_ms !== null)
       if (timed) addError(errors, "inconsistent", `jobs.${index}`)
     })
   }
 
-  // No interval may run past the session's end. Checked only when the
-  // duration itself is sound, so one bad duration is one error.
+  // No interval, job segment or PR time may run past the session's end.
+  // Checked only when the duration itself is sound, so one bad duration is
+  // one error.
+  checkSessionBounds(value, results, errors, results.session?.duration_ms === true ? value.session.duration_ms : null)
   if (results.session?.duration_ms === true && results.intervals) {
     value.intervals.forEach((item, index) => {
       if (results.intervals[index]?.end_ms === true && item.end_ms > value.session.duration_ms) {

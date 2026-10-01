@@ -348,7 +348,7 @@ test("binding events: Desk task tools with track and slug, and only successful f
       { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/old.md`, agent: 0 },
       { at: at(37.2), path: `/tmp/${SENTINEL}/desk/eng/m3-3/sub.md`, agent: 2 },
     ])
-    assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "m3-3" }], "only the prompt with a Desk-Task line binds a worker; the nested spawn has none")
+    assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "m3-3", start: "2026-09-25T08:00:31.000Z", end: "2026-09-25T08:00:40.000Z" }], "only the prompt with a Desk-Task line binds a worker; the nested spawn has none")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

@@ -21,7 +21,7 @@ async function sourceStamp(file) {
 }
 
 /** Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. */
-export const BINDING_VERSION = 3
+export const BINDING_VERSION = 4
 
 const sameSource = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ino === b.ino && a.dev === b.dev
 
@@ -181,7 +181,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
     const { jobs } = bindSession({
-      events: derived.events, agents: derived.facts.agents, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
+      events: derived.events, agents: derived.facts.agents, session: derived.facts.session, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs

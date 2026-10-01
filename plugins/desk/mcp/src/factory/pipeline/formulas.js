@@ -254,13 +254,18 @@ export function splitSessions(timeline) {
 
 // The source sessions in which one of the job's workers also belongs to
 // another job. That worker's time is counted for each job that owns it, so
-// the job's time is partial; splitting it is left to a later milestone. A
-// legacy binding lists no workers and never counts as sharing.
+// the job's time is partial. A legacy binding lists no workers and never
+// counts as sharing. A job with `segments` holds only its own spans of the
+// controller's (worker 0's) time, so the controller makes it shared only
+// through a span marked `shared`; its other workers count as before.
 export function sharedSessions(timeline) {
   return new Set(timeline.source_sessions.filter((session) => {
     const own = bindingOf(session, timeline.job)
     if (!Object.hasOwn(own, "agents")) return false
-    return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => own.agents.includes(agent)))
+    const segmented = Object.hasOwn(own, "segments")
+    if (segmented && own.segments.some((segment) => segment.shared === true)) return true
+    const workers = segmented ? own.agents.filter((agent) => agent !== 0) : own.agents
+    return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => workers.includes(agent)))
   }))
 }
 
@@ -287,11 +292,33 @@ function jobCounted(timeline, split) {
     : session)
 }
 
+// Whether a segment holds the instant `at` (milliseconds from session start).
+// Segments are half-open, so a boundary belongs to the later segment; the
+// session's own last instant belongs to the segment that ends there.
+function holds(segment, at, durationMs) {
+  return (segment.start_ms <= at && at < segment.end_ms) || (at === durationMs && segment.end_ms === durationMs)
+}
+
+// The job binding a controller (worker 0) PR's time decides: the one job
+// whose unshared segment holds the PR's `at_ms`. `undefined` when the time
+// decides nothing: the PR is another worker's or has no time, or the instant
+// falls in a shared span or in no job's segment.
+function segmentOwner(session, pr) {
+  if (pr.agent !== 0 || !Object.hasOwn(pr, "at_ms")) return undefined
+  const holders = session.jobs.filter((binding) => Object.hasOwn(binding, "segments")
+    && binding.segments.some((segment) => holds(segment, pr.at_ms, session.session.duration_ms)))
+  if (holders.length !== 1) return undefined
+  const shared = holders[0].segments.some((segment) => segment.shared === true && holds(segment, pr.at_ms, session.session.duration_ms))
+  return shared ? undefined : holders[0]
+}
+
 // A binding without `agents` is the legacy session-level binding and keeps
-// every reference of the session. Otherwise a pull request is credited to the
-// worker that opened it, and only when no other job of the session lists that
-// worker. A pull request with no worker, or one whose worker several jobs
-// share, goes to the job only when the session binds no other job.
+// every reference of the session. A controller PR whose time falls in one
+// job's own segment goes to that job (`segmentOwner`). Otherwise a pull
+// request is credited to the worker that opened it, and only when no other
+// job of the session lists that worker. A pull request with no worker, or
+// one whose worker several jobs share, goes to the job only when the session
+// binds no other job.
 function ownsPullRequest(session, binding, pr) {
   if (!Object.hasOwn(binding, "agents")) return true
   if (!Object.hasOwn(pr, "agent")) return session.jobs.length === 1
@@ -313,8 +340,10 @@ function uniqueReferences(timeline) {
     const binding = bindingOf(session, timeline.job)
     let held = false
     for (const pr of session.refs.prs) {
-      if (ownsPullRequest(session, binding, pr)) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
-      else held = true
+      // A PR its time gives to another job is that job's, not one held back from this one.
+      const owner = Object.hasOwn(binding, "agents") ? segmentOwner(session, pr) : undefined
+      if (owner === undefined ? ownsPullRequest(session, binding, pr) : owner === binding) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
+      else if (owner === undefined) held = true
     }
     if (ownsCommits(session, binding)) {
       for (const commit of session.refs.commits) commits.set(`${commit.repo}@${commit.sha}`, commit)

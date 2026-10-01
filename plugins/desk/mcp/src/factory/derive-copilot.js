@@ -361,6 +361,8 @@ function createSessionFold() {
     if (pending === undefined) return
     pendingSubagents.delete(toolCallId)
     addTimed({ kind: "subagent", agent: pending.agent }, pending.start, at, "tool_durations")
+    // The brief, if any, is timed by the spawning call's span.
+    if (pending.spawn !== null && pending.start !== null && at !== null) Object.assign(pending.spawn, { start: pending.start, end: at })
   }
 
   function openRetry(data, at) {
@@ -499,8 +501,9 @@ function createSessionFold() {
       agents.push(agent)
       subagentByCall.set(toolCallId, n)
       const task = pendingTools.get(toolCallId)?.spawnTask ?? null
-      if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug })
-      pendingSubagents.set(toolCallId, { start: at, agent: parent })
+      const spawn = task === null ? null : { agent: n, track: task.track, slug: task.slug }
+      if (spawn !== null) spawnTasks.push(spawn)
+      pendingSubagents.set(toolCallId, { start: at, agent: parent, spawn })
     },
     "subagent.completed": endSubagent,
     "subagent.failed": endSubagent,

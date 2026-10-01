@@ -10,14 +10,37 @@ export function comparePrRefs(a, b) {
 }
 
 // Claude Code writes a `pr-link` line into the root transcript for every PR of the session, including the ones a subagent created. A `gitOperation.pr` with action `created` is the creating call; any other action (merged, ready, closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of the same kind the lowest worker wins.
-export function dedupePrRefs(refs) {
+//
+// A ref's `at` (the tool result's time) becomes `at_ms`, milliseconds from `session.startedAt`, kept only when it falls inside the session (`startedAt` to `derivedThrough`); among refs of the same kind and worker the earliest wins. Without a session, or a time, the ref has no `at_ms`.
+export function dedupePrRefs(refs, session = {}) {
+  const startedMs = timeMs(session.startedAt)
+  const endMs = timeMs(session.derivedThrough)
+  const atMs = (ref) => {
+    const at = timeMs(ref.at)
+    return at === null || startedMs === null || endMs === null || at < startedMs || at > endMs ? null : at - startedMs
+  }
   const seen = new Map()
   for (const ref of refs) {
     const key = `${ref.repo}#${ref.number}`
     const held = seen.get(key)
-    if (held === undefined || (ref.created && !held.created) || (ref.created === held.created && ref.agent < held.agent)) seen.set(key, ref)
+    const timed = { ...ref, at_ms: atMs(ref) }
+    if (held === undefined || outranks(timed, held)) seen.set(key, timed)
   }
-  return [...seen.values()].map(({ repo, number, agent }) => ({ repo, number, agent })).sort(comparePrRefs)
+  return [...seen.values()].map(({ repo, number, agent, at_ms: at }) => ({ repo, number, agent, ...(at === null ? {} : { at_ms: at }) })).sort(comparePrRefs)
+}
+
+// A creating ref beats a sighting, then the lower worker, then a known time beats none and the earlier time wins.
+function outranks(ref, held) {
+  if (ref.created !== held.created) return ref.created
+  if (ref.agent !== held.agent) return ref.agent < held.agent
+  if (held.at_ms === null) return ref.at_ms !== null
+  return ref.at_ms !== null && ref.at_ms < held.at_ms
+}
+
+function timeMs(value) {
+  if (typeof value !== "string") return null
+  const ms = Date.parse(value)
+  return Number.isSafeInteger(ms) ? ms : null
 }
 
 export function compareByStart(a, b) {

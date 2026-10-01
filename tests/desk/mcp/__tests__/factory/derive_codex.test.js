@@ -176,11 +176,12 @@ test("binding events: file write, shell commit, spawn task and the PR worker", a
   const { facts, events } = await deriveFixtureRoot()
   assert.deepEqual(events.fileWrites.map(({ path: file, agent }) => ({ file, agent })), [{ file: `/tmp/${SENTINEL}/personal-desk/desk-plugin/some-task/task.md`, agent: 0 }])
   assert.deepEqual(events.shellGitCommits.map(({ cwd, agent }) => ({ cwd, agent })), [{ cwd: `/tmp/${SENTINEL}/repo`, agent: 0 }])
-  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "desk-plugin", slug: "some-task" }])
+  // Each brief is timed by the child's own span, the parent's subagent interval.
+  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "desk-plugin", slug: "some-task", start: "2026-09-25T08:01:10.000Z", end: "2026-09-25T08:01:32.000Z" }])
   assert.deepEqual(events.deskToolCalls, [])
   assert.deepEqual(events.commitShas, [])
   assert.deepEqual(events.nativeCommitShas, [])
-  assert.deepEqual(facts.refs.prs, [{ repo: "example-org/example-repo", number: 42, agent: 0 }])
+  assert.deepEqual(facts.refs.prs, [{ repo: "example-org/example-repo", number: 42, agent: 0, at_ms: 9000 }])
   assert.ok(PR_URL.includes("/pull/42"))
 })
 
@@ -359,7 +360,10 @@ test("spawn calls and child metas give parents, agent types, requested models an
   assert.deepEqual(agentOf(facts, 2), { n: 2, parent: 0, model: "unknown", agent_type: "explorer" }, "the agent_type alias, and no model with no turn_context")
   assert.deepEqual(agentOf(facts, 3), { n: 3, parent: 0, model: "unknown", agent_type: "custom-role" }, "the role named inside source.subagent.thread_spawn")
   assert.deepEqual(agentOf(facts, 4), { n: 4, parent: 0, model: ROOT_MODEL, requested_model: CHILD_MODEL }, "no invalid agent type; the first turn model is the request")
-  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "trk", slug: "slug-a" }, { agent: 2, track: "trk", slug: "slug-b" }])
+  assert.deepEqual(events.spawnTasks, [
+    { agent: 1, track: "trk", slug: "slug-a", start: "2026-09-25T08:00:02.000Z", end: "2026-09-25T08:00:21.000Z" },
+    { agent: 2, track: "trk", slug: "slug-b", start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:21.000Z" },
+  ])
   assert.equal(facts.counts.tool_calls.agent, 4)
   assert.equal(facts.intervals.some((interval) => interval.kind === "tool" && interval.tool === "agent"), false)
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
@@ -387,7 +391,10 @@ test("the Desk-Task fallback looks at the first three user messages, not just th
   put(home, B, at(20), [meta({ id: B, parent: ROOT, startIso: at(20) }), user(1, "injected AGENTS.md context", at(20)), user(2, "Desk-Task: trk/second", at(20))])
   put(home, C, at(21), [meta({ id: C, parent: ROOT, startIso: at(21) }), user(1, "a", at(21)), user(2, "b", at(21)), user(3, "Desk-Task: trk/third", at(21))])
   const { events } = await deriveRoot(home, [meta()])
-  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "trk", slug: "second" }, { agent: 2, track: "trk", slug: "third" }])
+  assert.deepEqual(events.spawnTasks, [
+    { agent: 1, track: "trk", slug: "second", start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:20.000Z" },
+    { agent: 2, track: "trk", slug: "third", start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:21.000Z" },
+  ])
 }))
 
 test("a child's requested model is the spawn call's model argument when valid, else its first turn model", () => withHome(async (home) => {
@@ -499,7 +506,7 @@ test("shell outcomes, retries, commits, MCP names, patches and PRs", () => withH
     { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, agent: 0, ok: false },
     { at: at(37), name: "mcp__desk__task_archive", track: "trk", slug: "three", person: null, status: null, agent: 0, ok: true },
   ])
-  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 7, agent: 0 }])
+  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 7, agent: 0, at_ms: 52000 }])
   assert.equal(facts.counts.tool_calls.desk, 4)
   assert.equal(facts.counts.tool_calls.mcp, 2)
   assert.ok(unavailable(facts, "tool_durations", "log_truncated"), "the call with no id can never finish")
@@ -666,7 +673,7 @@ test("a command still running is credited nothing, and a PR needs a recognised e
   assert.deepEqual(events.shellGitCommits, [])
   assert.deepEqual(events.fileWrites, [])
   assert.deepEqual(events.deskToolCalls.map((entry) => entry.ok), [false])
-  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 3, agent: 0 }], "an unrecognised layout is not a creation; exit code 0 is")
+  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 3, agent: 0, at_ms: 10000 }], "an unrecognised layout is not a creation; exit code 0 is")
   assert.equal(facts.counts.tool_calls.shell, 5, "the calls themselves still count")
 }))
 

@@ -31,6 +31,18 @@ function intervalOnJobClock(session, interval, offset) {
   return placed
 }
 
+// A job with `segments` holds only those spans of the controller's (worker
+// 0's) time: each of its intervals is cut to them. Every other worker's
+// intervals, and every interval of a job without segments, are kept whole.
+function jobParts(interval, binding) {
+  if (interval.agent !== 0 || !Object.hasOwn(binding, "segments")) return [interval]
+  return binding.segments.flatMap((segment) => {
+    const start = Math.max(interval.start_ms, segment.start_ms)
+    const end = Math.min(interval.end_ms, segment.end_ms)
+    return start < end ? [{ ...interval, start_ms: start, end_ms: end }] : []
+  })
+}
+
 export function buildJobTimeline(job, inputSessions) {
   const sessions = inputSessions
     .map(normalizePublished)
@@ -56,6 +68,7 @@ export function buildJobTimeline(job, inputSessions) {
     ? []
     : session.intervals
       .filter((interval) => !Object.hasOwn(binding, "agents") || binding.agents.includes(interval.agent))
+      .flatMap((interval) => jobParts(interval, binding))
       .map((interval) => intervalOnJobClock(session, interval, binding.session_offset_ms)))
   intervals.sort((left, right) => compareValues(
     left.start_ms - right.start_ms,

@@ -196,7 +196,8 @@ function publicRepos(visibility) {
   }
 }
 
-function publishRefs(refs, askPublic) {
+// `timedPrs`: whether a controller PR keeps its `at_ms` (see `toPublished`).
+function publishRefs(refs, askPublic, timedPrs) {
   const isPublic = (repo) => repo !== null && !DATE_SHAPE.test(repo) && askPublic(repo)
   const dropped = { prs: refs.unresolved.prs, commits: refs.unresolved.commits }
   // Keeps each public reference once (by `keyOf`) and counts the others.
@@ -212,7 +213,12 @@ function publishRefs(refs, askPublic) {
     }
     return kept
   }
-  const prs = keep(refs.prs, "prs", (pr) => `${pr.repo}#${pr.number}`, (pr) => ({ repo: pr.repo, number: pr.number, ...(Object.hasOwn(pr, "agent") ? { agent: pr.agent } : {}) }))
+  const prs = keep(refs.prs, "prs", (pr) => `${pr.repo}#${pr.number}`, (pr) => ({
+    repo: pr.repo,
+    number: pr.number,
+    ...(Object.hasOwn(pr, "agent") ? { agent: pr.agent } : {}),
+    ...(timedPrs && pr.agent === 0 && Object.hasOwn(pr, "at_ms") ? { at_ms: pr.at_ms } : {}),
+  }))
   const commits = keep(refs.commits, "commits", (commit) => commit.sha, (commit) => ({ repo: commit.repo, sha: commit.sha }))
   return { prs, commits, dropped }
 }
@@ -342,7 +348,10 @@ function publishJob(job, startedMs, flag) {
   }
   if (lost) flag("job_offsets", "source_unreadable")
 
-  return { job: job.job, basis: [...job.basis], session_offset_ms: sessionOffset, transitions, observed, ...agentsOf(job) }
+  return {
+    job: job.job, basis: [...job.basis], session_offset_ms: sessionOffset, transitions, observed, ...agentsOf(job),
+    ...(Object.hasOwn(job, "segments") ? { segments: job.segments.map((segment) => ({ ...segment })) } : {}),
+  }
 }
 
 /**
@@ -387,7 +396,9 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
 
   const intervals = publishIntervals(local.intervals, startedMs, durationMs, flag)
   const isPublic = publicRepos(visibility)
-  const refs = publishRefs(local.refs, isPublic)
+  // Job segments and controller PR times are job timing: a desk that withholds its timing publishes neither.
+  // Elsewhere a PR's `at_ms` is published only where it decides a PR's job: a controller (worker 0) PR in a session whose jobs carry segments.
+  const refs = publishRefs(local.refs, isPublic, deskPrivate && local.jobs.some((job) => Object.hasOwn(job, "segments")))
   const plugins = publishPlugins(local.plugins, isPublic, storeVisibility)
   const dropped = { ...refs.dropped, plugins: plugins.hidden }
   const jobs = deskPrivate

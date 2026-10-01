@@ -282,6 +282,7 @@ function createAgentProcessor({ agentIndex }) {
   const lastFinishedByKind = new Map() // kind -> { end, outcome, retried }
   const issuedIds = new Set()
   const spawnTaskById = new Map() // spawn tool_use id -> { track, slug } from its prompt
+  const spawnSpanById = new Map() // spawn tool_use id -> { start, end } of the spawning call
   let firstPromptSeen = false
   let firstPromptTask = null
 
@@ -341,6 +342,7 @@ function createAgentProcessor({ agentIndex }) {
 
     if (pending.isSubagentCall) {
       intervals.push({ kind: "subagent", agent: agentIndex, start: pending.start, end: ts })
+      spawnSpanById.set(id, { start: pending.start, end: ts })
     } else {
       intervals.push({ kind: "tool", agent: agentIndex, tool: pending.kind, outcome, start: pending.start, end: ts })
     }
@@ -351,7 +353,7 @@ function createAgentProcessor({ agentIndex }) {
     const gitPr = toolUseResult?.gitOperation?.pr
     if (gitPr) {
       const repo = repoFromPrUrl(gitPr.url)
-      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number, agent: agentIndex, created: gitPr.action === "created" })
+      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number, agent: agentIndex, created: gitPr.action === "created", at: ts })
     }
 
     if (pending.name === "Bash") {
@@ -507,7 +509,7 @@ function createAgentProcessor({ agentIndex }) {
       } else if (line.type === "system" && line.subtype === "compact_boundary") {
         compactions += 1
       } else if (line.type === "pr-link") {
-        if (isValidPrRef(line.prRepository, line.prNumber)) prRefs.push({ repo: line.prRepository, number: line.prNumber, agent: agentIndex, created: false })
+        if (isValidPrRef(line.prRepository, line.prNumber)) prRefs.push({ repo: line.prRepository, number: line.prNumber, agent: agentIndex, created: false, at: ts })
       } else if (line.type === "file-history-delta") {
         if (ts !== null && typeof line.trackingPath === "string") fileWrites.push({ at: ts, path: line.trackingPath, agent: agentIndex })
       } else if (line.type === "user") {
@@ -541,6 +543,7 @@ function createAgentProcessor({ agentIndex }) {
         shellGitCommits,
         issuedIds,
         spawnTaskById,
+        spawnSpanById,
         firstPromptTask,
         hadUnresolvedCall,
         invalidModelSeen,
@@ -666,7 +669,9 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   for (let index = 1; index < agents.length; index += 1) {
     const owner = spawnOwners[index]
     const task = (owner === -1 ? null : agentResults[owner].spawnTaskById.get(spawnIds[index]) ?? null) ?? agentResults[index].firstPromptTask
-    if (task !== null) spawnTasks.push({ agent: index, track: task.track, slug: task.slug })
+    // The spawning call's own span times the brief on its parent's clock.
+    const span = owner === -1 ? undefined : agentResults[owner].spawnSpanById.get(spawnIds[index])
+    if (task !== null) spawnTasks.push({ agent: index, track: task.track, slug: task.slug, ...(span === undefined ? {} : span) })
   }
 
   const mergedUsage = new Map()
@@ -711,7 +716,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     agents,
     intervals: agentResults.flatMap((result) => result.intervals),
     models,
-    prs: dedupePrRefs(agentResults.flatMap((result) => result.prRefs)),
+    prs: dedupePrRefs(agentResults.flatMap((result) => result.prRefs), { startedAt, derivedThrough }),
   }, unavailable)
 
   const facts = {

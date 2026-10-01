@@ -416,9 +416,9 @@ test("unavailable gets tool_durations when an orphan tool_use exists, keyed to w
 test("pr-link and gitOperation.pr refs are deduplicated and sorted by repo then number; a non-GitHub URL is dropped", async () => {
   const { facts } = await deriveFull()
   assert.deepEqual(facts.refs.prs, [
-    { repo: "another-org/repo", number: 3, agent: 0 },
-    { repo: "ourostack/desk", number: 7, agent: 0 },
-    { repo: "ourostack/desk", number: 42, agent: 0 },
+    { repo: "another-org/repo", number: 3, agent: 0, at_ms: 37000 },
+    { repo: "ourostack/desk", number: 7, agent: 0, at_ms: 36000 },
+    { repo: "ourostack/desk", number: 42, agent: 0, at_ms: 18000 },
   ])
   assert.deepEqual(facts.refs.commits, [])
 })
@@ -810,7 +810,8 @@ test("every binding event carries the worker that produced it", async () => {
 test("a spawn prompt's Desk-Task line becomes events.spawnTasks for the spawned child, and nothing else of the prompt leaves", async () => {
   const { facts, events } = await deriveFull()
   assert.equal(SPAWN_DESK_TASK_LINE, "Desk-Task: desk-plugin/some-task")
-  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "desk-plugin", slug: "some-task" }])
+  // Timed by the root's spawning call.
+  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "desk-plugin", slug: "some-task", start: "2026-09-25T08:00:52.000Z", end: "2026-09-25T08:00:53.000Z" }])
   assert.equal(JSON.stringify(events.spawnTasks).includes(SENTINEL), false)
   assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
   assert.equal("spawnTasks" in facts, false)
@@ -908,7 +909,8 @@ test("a PR is credited to the worker whose call created it, not to the root that
     { repo: "o/r", number: 1, agent: 1 },
     { repo: "o/r", number: 2, agent: 1 },
     { repo: "o/r", number: 3, agent: 2 },
-    { repo: "o/r", number: 4, agent: 0 },
+    // The root's pr-link is timed; the children's creations come after the root's last line, past the session, so they carry no time.
+    { repo: "o/r", number: 4, agent: 0, at_ms: 4000 },
   ])
   assert.equal(validateLocalFacts(facts).ok, true)
 })

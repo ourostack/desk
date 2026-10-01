@@ -405,7 +405,7 @@ function createThreadProcessor({ agentIndex, meta }) {
     // A creation needs a recognised exit code of 0: a failed `gh pr create` can still print an existing PR URL.
     if (pending.isPrCreate && code === 0) {
       const ref = prRef(text, agentIndex)
-      if (ref !== null) prRefs.push(ref)
+      if (ref !== null) prRefs.push({ ...ref, at: ts })
     }
     for (const cwd of pending.cwds) shellGitCommits.push({ start: pending.start, end: ts, cwd, agent: agentIndex })
     for (const file of pending.paths) fileWrites.push({ at: pending.start, path: file, agent: agentIndex })
@@ -607,7 +607,8 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
       const agentType = result.meta.agentType ?? spawn?.agentType ?? null
       if (agentType !== null) agent.agent_type = agentType
       const task = spawn?.task ?? result.firstPromptTask
-      if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug })
+      // The child's own span is the spawning call's subagent interval on its parent's clock.
+      if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug, start: result.earliest, end: result.latest })
       intervals.push({ kind: "subagent", agent: parent, start: result.earliest, end: result.latest })
     }
     withRequestedModel(agent, spawnModel ?? result.firstModel)
@@ -648,7 +649,7 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
     agents,
     intervals,
     models,
-    prs: dedupePrRefs(results.flatMap((result) => result.prRefs)),
+    prs: dedupePrRefs(results.flatMap((result) => result.prRefs), { startedAt: rootResult.earliest, derivedThrough: rootResult.latest }),
   }, unavailable)
 
   const facts = {
