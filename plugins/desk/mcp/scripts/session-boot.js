@@ -13,7 +13,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { ensureBootDependencies } from "../src/runtime/boot-dependencies.js"
 
-ensureBootDependencies({ mcpRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..") })
+ensureBootDependencies({ mcpRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), env: process.env })
 const { runBootCli } = await import("../src/runtime/boot.js")
 
 process.exitCode = await runBootCli({ argv: process.argv.slice(2) })

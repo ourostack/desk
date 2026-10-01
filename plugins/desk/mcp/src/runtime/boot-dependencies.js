@@ -31,13 +31,13 @@ function readJson(file) {
  */
 export function ensureBootDependencies({
   mcpRoot,
-  env = process.env,
+  env,
   platform = process.platform,
   arch = process.arch,
   nodeAbi = process.versions.modules,
   restore = restoreRuntimeDependencies,
   requireFrom = (file) => createRequire(file),
-} = {}) {
+}) {
   try {
     requireFrom(path.join(mcpRoot, "package.json")).resolve("gray-matter")
     return { source: "installed" }
