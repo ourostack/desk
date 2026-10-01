@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.169 — 2026-10-01
+
+On Copilot, Desk's browser MCP server is now named `desk-web` instead of `web`. Copilot sends each MCP tool to the model under the server's name as a namespace, and OpenAI-backed models reserve the `web` namespace, so every request failed with `400 Invalid Value: 'tools'. Function 'web.web-browser_click' is not allowed in reserved namespace 'web'`. Claude Code keeps the `web` name, and its `mcp__plugin_desk_web__*` tool names are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.168 — 2026-10-01
 
 ### Boot: "where were we?" now reports every active task
