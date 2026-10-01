@@ -6,7 +6,7 @@
       "args": ["${COPILOT_PLUGIN_ROOT}/mcp/bootstrap.cjs"],
       "env": {}
     },
-    "web": {
+    "desk-web": {
       "type": "stdio",
       "command": "node",
       "args": ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"],
