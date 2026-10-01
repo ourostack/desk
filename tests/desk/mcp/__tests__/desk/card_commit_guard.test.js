@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -14,6 +14,7 @@ import {
   hookScript,
   installCardGuard,
   isLiveCardPath,
+  uninstallCardGuard,
 } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { commitPaths } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
@@ -264,17 +265,187 @@ test("a hook that was there before is kept as pre-commit.desk-chained and runs a
   }
 })
 
-test("a second foreign hook while the chained slot is taken is a failure that names the problem", () => {
+test("a foreign tool that rewrites pre-commit later (husky regeneration) replaces the stale chained hook, keeps a backup and the guard goes back in front", () => {
+  const root = makeDesk()
+  try {
+    const hooks = path.join(root, ".git", "hooks")
+    mkdirSync(hooks, { recursive: true })
+    writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\necho first\nexit 0\n", { mode: 0o755 })
+    assert.equal(installCardGuard(root).state, "installed")
+    writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\necho second\nexit 0\n", { mode: 0o755 })
+    const result = installCardGuard(root)
+    assert.equal(result.state, "installed")
+    assert.equal(result.chained, true)
+    assert.equal(readFileSync(path.join(hooks, "pre-commit"), "utf8"), hookScript())
+    assert.match(readFileSync(path.join(hooks, CHAINED_NAME), "utf8"), /second/)
+    const backups = readdirSync(hooks).filter((name) => name.startsWith(`${CHAINED_NAME}.bak-`))
+    assert.equal(backups.length, 1)
+    assert.match(readFileSync(path.join(hooks, backups[0]), "utf8"), /first/)
+    writeFileSync(cardPath(root), CARD.replace("processing", "validating"))
+    assert.notEqual(commitAll(root).status, 0)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("the pre-commit framework moving Desk's hook to pre-commit.legacy does not loop: the install leaves it, and a commit terminates", () => {
   const root = makeDesk()
   try {
     const hooks = path.join(root, ".git", "hooks")
     mkdirSync(hooks, { recursive: true })
     writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
-    writeFileSync(path.join(hooks, CHAINED_NAME), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+    installCardGuard(root)
+    // `pre-commit install` moves the hook it finds to pre-commit.legacy and writes its own, which runs the legacy hook first.
+    renameSync(path.join(hooks, "pre-commit"), path.join(hooks, "pre-commit.legacy"))
+    const log = path.join(root, "..", `fw-${path.basename(root)}.log`)
+    writeFileSync(path.join(hooks, "pre-commit"), `#!/bin/sh\necho framework >> "${log}"\nlegacy="$(dirname "$0")/pre-commit.legacy"\n[ -x "$legacy" ] && { "$legacy" "$@" || exit $?; }\nexit 0\n`, { mode: 0o755 })
+    assert.deepEqual(installCardGuard(root), { state: "current", path: path.join(hooks, "pre-commit.legacy"), via: "legacy" })
+    writeFileSync(path.join(root, "README.md"), "changed\n")
+    assert.equal(commitAll(root).status, 0)
+    writeFileSync(cardPath(root), CARD.replace("processing", "validating"))
+    assert.notEqual(commitAll(root).status, 0, "the guard still refuses through the framework")
+    // The worst case: the framework hook sits at pre-commit.desk-chained under Desk's hook, which runs it, which runs Desk's hook again.
+    writeFileSync(path.join(hooks, CHAINED_NAME), readFileSync(path.join(hooks, "pre-commit"), "utf8").replace("pre-commit.legacy", "pre-commit"), { mode: 0o755 })
+    writeFileSync(path.join(hooks, "pre-commit"), hookScript(), { mode: 0o755 })
+    writeFileSync(cardPath(root), CARD)
+    writeFileSync(path.join(root, "README.md"), "changed twice\n")
+    assert.equal(commitAll(root).status, 0, "re-entry exits 0 rather than looping")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a chained file that carries the Desk marker is never run", () => {
+  const root = makeDesk()
+  try {
+    const hooks = path.join(root, ".git", "hooks")
+    mkdirSync(hooks, { recursive: true })
+    installCardGuard(root)
+    const log = path.join(root, "..", `marker-${path.basename(root)}.log`)
+    writeFileSync(path.join(hooks, CHAINED_NAME), `#!/bin/sh\n${HOOK_MARKER} v1\necho ran >> "${log}"\nexit 1\n`, { mode: 0o755 })
+    writeFileSync(path.join(root, "README.md"), "changed\n")
+    assert.equal(commitAll(root).status, 0)
+    assert.equal(existsSync(log), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a merge, cherry-pick or revert in progress passes: resolving a card conflict is a git operation", () => {
+  const root = makeDesk()
+  try {
+    installCardGuard(root)
+    sh(root, ["checkout", "-q", "-b", "other"])
+    writeFileSync(cardPath(root), CARD.replace("processing", "validating"))
+    assert.equal(commitAll(root, "other side", { [TOOL_COMMIT_ENV]: "1" }).status, 0)
+    sh(root, ["checkout", "-q", "main"])
+    writeFileSync(cardPath(root), CARD.replace("processing", "done"))
+    assert.equal(commitAll(root, "main side", { [TOOL_COMMIT_ENV]: "1" }).status, 0)
+    assert.notEqual(sh(root, ["merge", "other", "-m", "merge"]).status, 0, "the merge conflicts on the card")
+    writeFileSync(cardPath(root), CARD)
+    assert.equal(sh(root, ["add", "-A"]).status, 0)
+    assert.equal(sh(root, ["commit", "-q", "-m", "resolve"]).status, 0, "no marker needed to resolve")
+    // A plain card edit after the merge is refused again.
+    writeFileSync(cardPath(root), CARD.replace("processing", "blocked"))
+    assert.notEqual(commitAll(root).status, 0)
+    // Cherry-pick of the same conflicting change.
+    sh(root, ["reset", "-q", "--hard"])
+    const picked = sh(root, ["cherry-pick", "other"])
+    if (picked.status !== 0) {
+      writeFileSync(cardPath(root), CARD)
+      assert.equal(sh(root, ["add", "-A"]).status, 0)
+      assert.equal(sh(root, ["-c", "core.editor=true", "cherry-pick", "--continue"]).status, 0)
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a card whose staged frontmatter does not parse can be repaired by hand; the refusal message names the escape hatch", () => {
+  const root = makeDesk()
+  try {
+    installCardGuard(root)
+    writeFileSync(cardPath(root), "title: x\nstatus: processing\nno fence\n")
+    assert.equal(commitAll(root, "corrupt", { [TOOL_COMMIT_ENV]: "1" }).status, 0)
+    writeFileSync(cardPath(root), "---\ntitle: [unclosed\n")
+    assert.equal(commitAll(root, "still corrupt").status, 0, "an unclosed fence is unreadable, so it passes")
+    writeFileSync(cardPath(root), "---\r\ntitle: x\r\nstatus: processing\r\n---\r\nbody\r\n")
+    const refused = commitAll(root, "crlf card")
+    assert.notEqual(refused.status, 0, "a CRLF card that parses is still refused")
+    assert.match(refused.stderr, /DESK_TOOL_COMMIT=1 git commit/)
+    assert.match(refused.stderr, /task_update cannot parse/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a core.hooksPath that holds tracked files is left alone with a remedy; uninstall restores a chained hook", () => {
+  const root = makeDesk()
+  try {
+    assert.equal(sh(root, ["config", "core.hooksPath", ".githooks"]).status, 0)
+    mkdirSync(path.join(root, ".githooks"), { recursive: true })
+    writeFileSync(path.join(root, ".githooks", "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+    assert.equal(sh(root, ["add", "-A"]).status, 0)
+    assert.equal(sh(root, ["commit", "-q", "-m", "hooks", "--no-verify"]).status, 0)
     const result = installCardGuard(root)
-    assert.equal(result.state, "failed")
-    assert.match(result.reason, /pre-commit\.desk-chained/)
-    assert.equal(readFileSync(path.join(hooks, "pre-commit"), "utf8"), "#!/bin/sh\nexit 0\n", "nothing was overwritten")
+    assert.equal(result.state, "tracked")
+    assert.match(result.remedy, /DESK_TOOL_COMMIT/)
+    assert.equal(readFileSync(path.join(root, ".githooks", "pre-commit"), "utf8"), "#!/bin/sh\nexit 0\n")
+    assert.equal(sh(root, ["status", "--porcelain"]).stdout, "")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("uninstallCardGuard removes Desk's hook and puts a chained hook back; absent and failed states", () => {
+  const root = makeDesk()
+  try {
+    const hooks = path.join(root, ".git", "hooks")
+    mkdirSync(hooks, { recursive: true })
+    assert.equal(uninstallCardGuard(root).state, "absent")
+    writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+    assert.equal(uninstallCardGuard(root).state, "absent", "a foreign hook is not Desk's to remove")
+    installCardGuard(root)
+    assert.equal(uninstallCardGuard(root).state, "removed")
+    assert.equal(readFileSync(path.join(hooks, "pre-commit"), "utf8"), "#!/bin/sh\nexit 0\n")
+    assert.equal(existsSync(path.join(hooks, CHAINED_NAME)), false)
+    installCardGuard(root)
+    rmSync(path.join(hooks, CHAINED_NAME), { force: true })
+    assert.equal(uninstallCardGuard(root).state, "removed")
+    assert.equal(existsSync(path.join(hooks, "pre-commit")), false)
+    const plain = realpathSync(mkdtempSync(path.join(tmpdir(), "card-guard-plain-")))
+    try {
+      assert.equal(uninstallCardGuard(plain).state, "absent")
+    } finally {
+      rmSync(plain, { recursive: true, force: true })
+    }
+    assert.equal(uninstallCardGuard(root, { spawnGit: () => { throw new Error("boom") } }).state, "failed")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("the hook text uses LF endings, and an installed copy with CRLF endings is rewritten", () => {
+  const root = makeDesk()
+  try {
+    assert.equal(hookScript().includes("\r"), false)
+    installCardGuard(root)
+    const file = path.join(root, ".git", "hooks", "pre-commit")
+    writeFileSync(file, hookScript().replace(/\n/gu, "\r\n"), { mode: 0o755 })
+    assert.equal(installCardGuard(root).state, "updated")
+    assert.equal(readFileSync(file, "utf8"), hookScript())
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a path with spaces or non-ASCII characters in a card folder is guarded", () => {
+  const root = makeDesk()
+  try {
+    installCardGuard(root)
+    mkdirSync(path.join(root, "caf\u00e9 track", "my-task"), { recursive: true })
+    writeFileSync(path.join(root, "caf\u00e9 track", "my-task", "task.md"), CARD)
+    assert.notEqual(commitAll(root).status, 0)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

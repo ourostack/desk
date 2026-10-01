@@ -265,3 +265,91 @@ test("a desk with no desks/ folder still finds the card a script builds in piece
     rmSync(plain, { recursive: true, force: true })
   }
 })
+
+// Round 12 fix round: script writes count only when the card is the write target; PowerShell only for the cmdlet's file operand.
+const SCRIPT_PASSES = [
+  [`node -e "require('fs').writeFileSync('/tmp/copy.md', require('fs').readFileSync('${CARD_REL}', 'utf8'))"`, "node reads the card, writes elsewhere"],
+  [`python3 -c "open('/tmp/out.md','w').write(open('${CARD_REL}').read())"`, "python reads the card by a default-mode open"],
+  [`python3 -c "import pathlib; pathlib.Path('/tmp/o.md').write_text(pathlib.Path('${CARD_REL}').read_text())"`, "python Path read, write elsewhere"],
+  [`node -e "const p='${CARD_REL}'; const t=require('fs').readFileSync(p,'utf8'); require('fs').writeFileSync('/tmp/x', t)"`, "variable holds the card but is only read"],
+  [`python3 -c "import shutil; shutil.copy('${CARD_REL}', '/tmp/backup.md')"`, "shutil.copy with the card as the source"],
+  [`node -e "require('fs').copyFileSync('${CARD_REL}', '/tmp/b.md')"`, "copyFile with the card as the source"],
+  [`grep -c done ${CARD_REL}; node -e "require('fs').writeFileSync('/tmp/n', '1')"`, "an unrelated write elsewhere in the command"],
+  [`pwsh -Command "Set-Content -Path other.md -Value (Get-Content ${CARD_REL})"`, "PowerShell reads the card in a sub-expression"],
+  [`pwsh -Command "Set-Content other.md (Get-Content ${CARD_REL})"`, "positional second operand inside parentheses"],
+  [`pwsh -Command "Get-Content ${CARD_REL} | Set-Content /tmp/copy.md"`, "PowerShell pipeline reads the card"],
+  [`pwsh -Command "Copy-Item ${CARD_REL} /tmp/copy.md"`, "Copy-Item with the card as the source"],
+  [`pwsh -Command "$t = [IO.File]::ReadAllText('${CARD_REL}'); [IO.File]::WriteAllText('/tmp/o.md', $t)"`, ".NET read, write elsewhere"],
+]
+for (const [command, label] of SCRIPT_PASSES) test(`passes: ${label}`, () => allowed(command))
+
+const SCRIPT_DENIES = [
+  [`pwsh -Command "Set-Content -Path ${CARD_REL} -Value x"`, "Set-Content -Path"],
+  [`pwsh -Command "Set-Content -LiteralPath ${CARD_REL} -Value x"`, "Set-Content -LiteralPath"],
+  [`pwsh -Command "Out-File -FilePath ${CARD_REL}"`, "Out-File -FilePath"],
+  [`pwsh -Command "'x' | Out-File ${CARD_REL}"`, "Out-File positional"],
+  [`pwsh -Command "Add-Content ${CARD_REL} 'more'"`, "Add-Content positional"],
+  [`pwsh -Command "Copy-Item /tmp/new.md -Destination ${CARD_REL}"`, "Copy-Item -Destination"],
+  [`pwsh -Command "Copy-Item /tmp/new.md ${CARD_REL}"`, "Copy-Item positional destination"],
+  [`pwsh -Command "Move-Item /tmp/new.md ${CARD_REL}"`, "Move-Item positional destination"],
+  [`pwsh -Command "[IO.File]::WriteAllText('${CARD_REL}', 'x')"`, "[IO.File]::WriteAllText"],
+  [`pwsh -Command "[System.IO.File]::WriteAllLines('${CARD_REL}', @('x'))"`, "[System.IO.File]::WriteAllLines"],
+  [`pwsh -Command "[IO.File]::AppendAllText('${CARD_REL}', 'x')"`, "[IO.File]::AppendAllText"],
+  [`python3 -c "open('${CARD_REL}','w').write('x')"`, "python open for writing"],
+  [`python3 -c "open('${CARD_REL}', mode='a').write('x')"`, "python open for appending by keyword"],
+  [`python3 -c "import pathlib; pathlib.Path('${CARD_REL}').write_text('x')"`, "python Path.write_text"],
+  [`python3 -c "import shutil; shutil.copy('/tmp/new.md', '${CARD_REL}')"`, "shutil.copy onto the card"],
+  [`python3 -c "p='${CARD_REL}'; open(p,'w').write('x')"`, "python variable holds the card"],
+  [`node -e "const p='${CARD_REL}'; require('fs').writeFileSync(p, 'x')"`, "node variable holds the card"],
+  [`node -e "require('fs').copyFileSync('/tmp/n.md', '${CARD_REL}')"`, "copyFile onto the card"],
+  [`node -e "require('fs').renameSync('/tmp/n.md', '${CARD_REL}')"`, "rename onto the card"],
+  [`node -e "const fs=require('fs'),path=require('path'); fs.writeFileSync(path.join('greenhouse-ops','watering-schedule-api','task.md'), 'x')"`, "path built in pieces inside the write call"],
+  [`ruby -e "File.write('${CARD_REL}', 'x')"`, "ruby File.write"],
+]
+for (const [command, label] of SCRIPT_DENIES) test(`denies: ${label}`, () => denied(command))
+
+test("git checkout of a card passes only while the card is conflicted in a merge", () => {
+  const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "guard-shell-merge-")))
+  try {
+    const sh = (args) => spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e.co", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e.co" } })
+    sh(["init", "-q", "-b", "main"])
+    mkdirSync(path.join(repo, "_meta"))
+    mkdirSync(path.join(repo, "_archive"))
+    mkdirSync(path.join(repo, "garden", "weeding"), { recursive: true })
+    writeFileSync(path.join(repo, "_meta", "k.md"), "x\n")
+    const card = path.join(repo, "garden", "weeding", "task.md")
+    writeFileSync(card, CARD)
+    sh(["add", "-A"])
+    sh(["commit", "-q", "-m", "seed"])
+    sh(["checkout", "-q", "-b", "other"])
+    writeFileSync(card, `${CARD}\nother side\n`)
+    sh(["commit", "-q", "-am", "other"])
+    sh(["checkout", "-q", "main"])
+    writeFileSync(card, `${CARD}\nmain side\n`)
+    sh(["commit", "-q", "-am", "main"])
+    const rel = "garden/weeding/task.md"
+    denied(`git checkout --ours ${rel}`, { cwd: repo, root: repo })
+    assert.notEqual(sh(["merge", "other"]).status, 0)
+    allowed(`git checkout --ours ${rel}`, { cwd: repo, root: repo })
+    allowed(`git checkout --theirs -- ${rel}`, { cwd: repo, root: repo })
+    allowed(`git checkout other -- ${rel}`, { cwd: repo, root: repo })
+    denied(`echo x > ${rel}`, { cwd: repo, root: repo })
+  } finally {
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
+test("script reading edge cases: escapes in a quoted target, an unterminated call, a missing argument, a receiver alias, a PowerShell parameter after a sub-expression", () => {
+  denied(`node -e "fs.writeFileSync('it\\\\'s/../${CARD_REL}', 'x')"`)
+  denied(`node -e "fs.writeFileSync('${CARD_REL}', 'y'"`)
+  allowed(`node -e "fs.renameSync()"; grep x ${CARD_REL}`)
+  denied(`python3 -c "import pathlib; p = pathlib.Path('${CARD_REL}'); p.write_text('x')"`)
+  denied(`python3 -c "import pathlib; p = pathlib.Path('${CARD_REL}'); p.open('w').write('x')"`)
+  allowed(`python3 -c "import pathlib; p = pathlib.Path('${CARD_REL}'); print(p.read_text())"`)
+  denied(`pwsh -Command "Set-Content -Value (Get-Content a.md) -Path ${CARD_REL}"`)
+  const resolve = () => null
+  assert.deepEqual(shellCardWrites("echo task.md", { resolve, slugCards: () => [] }), [])
+  const card = { absolute: "/d/t/s/task.md" }
+  const checkout = shellCardWrites("git checkout --ours t/s/task.md", { resolve: () => card, slugCards: () => [] })
+  assert.deepEqual(checkout.map((write) => write.via), ["git checkout or restore"], "with no conflicted() given, a checkout is a write")
+})

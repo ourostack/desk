@@ -1049,6 +1049,8 @@ export async function bootOnce({
   try {
     const guard = cardGuardFn(root.path, { spawnGit })
     if (guard.state === "failed") degraded.push(`card guard: ${guard.reason}`)
+    // A tracked hooks folder is the team's choice, not a fault: one note with the manual remedy, nothing degraded.
+    if (guard.state === "tracked") pending.push(`card guard not installed: ${guard.reason}; ${guard.remedy}`)
   } catch (error) {
     degraded.push(`card guard: ${error.message}`)
   }

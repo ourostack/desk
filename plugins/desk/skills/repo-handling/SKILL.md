@@ -77,7 +77,7 @@ If the committed task card's `local_path` is an absolute path (`C:\src\...`, `Q:
 
 **When you encounter one during a session**:
 1. Surface it to the operator: "`task.md` has `local_path: <absolute-path>` — that's specific to one machine and breaks cross-machine portability. Want me to move it to `.machine-local.yml` on this machine and revert `task.md` to tilde form?"
-2. On yes: write the absolute path to `.machine-local.yml` for this repo, update `task.md` back to `~/code/<repo-name>` tilde form, commit both changes in the desk workspace with a message like `fix(portability): revert task.md local_path to tilde form; absolute path kept in .machine-local.yml for this machine`.
+2. On yes: write the absolute path to `.machine-local.yml` for this repo, put the card's `local_path` back to `~/code/<repo-name>` tilde form with `task_update` (`frontmatter: { repos: [...] }` with the whole corrected list, and a `note` such as `reverted local_path to tilde form; absolute path kept in .machine-local.yml for this machine`). `task_update` writes the card and commits it itself; never hand-edit `task.md` and `git commit` it, because the desk's pre-commit hook refuses a hand commit of a card.
 3. Push.
 
 The rule: **committed `local_path` is always tilde form. Absolute paths go in `.machine-local.yml`.** No exceptions.

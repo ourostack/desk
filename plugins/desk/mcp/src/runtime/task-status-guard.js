@@ -62,6 +62,7 @@
 // evidence exists, the same restriction `ask-gate.js` already documents
 // and applies to itself.
 //
+import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -360,6 +361,12 @@ function liveCardsOf(root, home, read) {
   return found
 }
 
+/** Whether git lists `file` as unmerged (a merge, cherry-pick or revert stopped on it): the one state where a checkout of a card is conflict resolution. */
+function cardIsConflicted(file) {
+  const result = spawnSync("git", ["-C", path.dirname(file), "ls-files", "-u", "--", path.basename(file)], { encoding: "utf8", timeout: 3000 })
+  return result.status === 0 && result.stdout.trim() !== ""
+}
+
 /**
  * The deny for a `Bash` or `PowerShell` command that writes a live card of the bound desk (see `shell-card-writes.js` for the forms it reads and what
  * it cannot see), or `{}`. The words are resolved against the session folder, the desk and any folder the command moves into.
@@ -371,7 +378,8 @@ function shellDecision(command, { root, cwd, home, read }) {
     return liveCardNamed(word, bases, { root, home, read })
   }
   const vars = root === null ? { HOME: home } : { DESK: root, HOME: home }
-  const writes = shellCardWrites(command, { resolve, vars, slugCards: () => liveCardsOf(root, home, read) })
+  const conflicted = (card) => cardIsConflicted(card.absolute)
+  const writes = shellCardWrites(command, { resolve, vars, conflicted, slugCards: () => liveCardsOf(root, home, read) })
   if (writes.length === 0) return {}
   const [{ card, via }] = writes
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, null, via) } }

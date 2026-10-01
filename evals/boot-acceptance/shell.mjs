@@ -297,6 +297,7 @@ function positional(args, valueOptions = []) {
 
 const CLONE_VALUE_OPTIONS = ["-b", "--branch", "--depth", "-o", "--origin", "--reference", "--reference-if-able", "--separate-git-dir", "-c", "--config", "--filter", "-j", "--jobs", "--template", "-u", "--upload-pack", "--server-option", "--shallow-since", "--shallow-exclude", "--bundle-uri"]
 const INIT_VALUE_OPTIONS = ["-b", "--initial-branch", "--template", "--separate-git-dir", "--object-format", "--shared"]
+const COMMIT_VALUE_OPTIONS = ["-m", "--message", "-F", "--file", "-C", "--reuse-message", "-c", "--reedit-message", "--author", "--date", "-t", "--template", "--cleanup", "--fixup", "--squash"]
 const WORKTREE_VALUE_OPTIONS = ["-b", "-B", "--reason"]
 
 /** A path with `~`, `$HOME` and `${HOME}` expanded and relative paths made absolute from `cwd`; null when it uses another variable or has no base. */
@@ -432,6 +433,7 @@ export const SCRIPT_WRITE_PATTERNS = [
   /\b(?:shutil\s*\.\s*(?:move|copy|copy2|copyfile)|os\s*\.\s*(?:replace|rename))\s*\(/u,
   /\b(?:File|IO)\s*\.\s*(?:write|binwrite)\s*\(/u,
   /\b(?:Set-Content|Add-Content|Out-File|Tee-Object|Move-Item|Copy-Item)\b/iu,
+  /\bFile\s*\]\s*::\s*(?:WriteAll\w+|AppendAll\w+|Copy|Move|Replace)\s*\(/iu,
 ]
 
 const CARD_WORD = /[^\s"'`=:<>|;&(),{}]*task\.md(?![\w.-])/giu
@@ -511,9 +513,16 @@ export function cardCommits(command, { cwd, home, deskRoot }) {
     const git = gitParts(words)
     if (git === null) continue
     const where = git.directory === undefined ? directory : resolveShellPath(git.directory, { cwd: directory, home })
-    const names = git.args.filter((arg) => !arg.startsWith("-")).some((arg) => isLiveCardFile(resolveShellPath(arg, { cwd: where, home }) ?? "", deskRoot))
-    if (git.subcommand === "add" && names) staged = true
-    if (git.subcommand === "commit" && (names || staged)) found.push({ via: names ? "git commit naming a card" : "git add of a card, then git commit" })
+    const isCard = (arg) => isLiveCardFile(resolveShellPath(arg, { cwd: where, home }) ?? "", deskRoot)
+    if (git.subcommand === "add" && git.args.filter((arg) => !arg.startsWith("-")).some(isCard)) staged = true
+    if (git.subcommand === "commit") {
+      // Explicit pathspecs (after `--`, or a bare word that is not an option's value) commit only those paths, so a staged card is left out of the commit.
+      const dashes = git.args.indexOf("--")
+      const pathspecs = dashes === -1 ? positional(git.args, COMMIT_VALUE_OPTIONS) : [...positional(git.args.slice(0, dashes), COMMIT_VALUE_OPTIONS), ...git.args.slice(dashes + 1)]
+      const names = pathspecs.some(isCard)
+      const limited = pathspecs.length > 0
+      if (names || (staged && !limited)) found.push({ via: names ? "git commit naming a card" : "git add of a card, then git commit" })
+    }
   }
   return found
 }
@@ -526,6 +535,16 @@ export function cardCommits(command, { cwd, home, deskRoot }) {
 export function gitClones(command, { cwd, home }) {
   const found = []
   for (const { words, directory } of inFolders(command, { cwd, home })) {
+    if (words[0] === "gh" && words[1] === "repo" && words[2] === "clone") {
+      // `gh repo clone <repo> [<directory>] [-- <git clone flags>]`
+      const dashes = words.indexOf("--")
+      const ghArgs = words.slice(3, dashes === -1 ? undefined : dashes).filter((word) => !word.startsWith("-"))
+      if (ghArgs.length === 0) continue
+      const folder = ghArgs[1] ?? path.posix.basename(ghArgs[0]).replace(/\.git$/u, "")
+      const gitFlags = dashes === -1 ? [] : words.slice(dashes + 1)
+      found.push({ source: ghArgs[0], dest: resolveShellPath(folder, { cwd: directory, home }), bare: gitFlags.includes("--bare") || gitFlags.includes("--mirror") })
+      continue
+    }
     const git = gitParts(words)
     if (git === null || git.subcommand !== "clone") continue
     const where = git.directory === undefined ? directory : resolveShellPath(git.directory, { cwd: directory, home })
@@ -541,7 +560,7 @@ const LOCAL_REMOTE = /^(?:\/|\.{1,2}\/|~|file:)/u
 
 /**
  * What in `command` makes a stand-in for a remote: `git init --bare`, `git clone --bare|--mirror`, and `git remote add|set-url <name> <local path>` for any
- * remote that is not `origin` (a fork or an upstream that points at a folder). Each as `{ via, target }`.
+ * remote that is not `origin` (a fork or an upstream that points at a folder), and `git remote set-url origin <local path>` that is not the fixture's `origin.git`. Each as `{ via, target }`.
  */
 export function simulatedRemotes(command) {
   const found = []
@@ -550,7 +569,10 @@ export function simulatedRemotes(command) {
     else if (subcommand === "clone" && (args.includes("--bare") || args.includes("--mirror"))) found.push({ via: "git clone --bare", target: positional(args, CLONE_VALUE_OPTIONS)[0] ?? "" })
     else if (subcommand === "remote" && (args[0] === "add" || args[0] === "set-url")) {
       const [name, target] = positional(args.slice(1), ["-t", "-m", "--tags", "--no-tags"])
-      if (name !== undefined && name !== "origin" && target !== undefined && LOCAL_REMOTE.test(target)) found.push({ via: `git remote ${args[0]} ${name}`, target })
+      if (name === undefined || target === undefined || !LOCAL_REMOTE.test(target)) continue
+      // `add origin <path>` is how a fixture sets up its own origin; `set-url` of any remote, origin included, to a folder repoints it at a stand-in, except back to the fixture's `origin.git`.
+      const standIn = name !== "origin" || (args[0] === "set-url" && !/(?:^|\/)origin\.git\/?$/u.test(target))
+      if (standIn) found.push({ via: `git remote ${args[0]} ${name}`, target })
     }
   }
   return found

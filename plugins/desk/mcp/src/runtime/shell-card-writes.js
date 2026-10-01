@@ -7,12 +7,19 @@
 //     a redirect onto it (`> path`, `>> path`, `>| path`, `2> path`), `tee` / `sponge` / `truncate` / `dd of=` naming it, an in-place editor (`sed -i`,
 //     `perl -i`, `ruby -i`, `yq -i`, `--in-place`) naming it, `mv` / `cp` / `install` / `rsync` / `ln` whose LAST operand it is, and `git checkout` or `git restore`
 //     naming it;
-//   - script forms, judged on the whole command: a script that writes a file by API (`writeFile`, `writeFileSync`, `appendFile`, `createWriteStream`,
+//   - script forms, judged on the call: a script that writes a file by API (`writeFile`, `writeFileSync`, `appendFile`, `createWriteStream`,
 //     `copyFile`, `renameSync`, Python `open(..., 'w'|'a'|'x'|'r+')`, `write_text`, `write_bytes`, `shutil.move|copy*`, `os.replace|rename`, Ruby
 //     `File.write` / `IO.write`, PowerShell `Set-Content` / `Add-Content` / `Out-File`), because the path is often held in a variable the script
 //     writes through, as in the round E command.
-// A path built in pieces (`path.join(desk, 'track', 'slug', 'task.md')`) names no card by itself; a command that has a bare `task.md`, a script write form
-// and the slug of a live card as a whole word is read as writing that card (`slugCards`).
+// A script form counts only when the card is the WRITE TARGET of the call: the destination argument of `writeFileSync`, `copyFile`, `rename`, `open(.., 'w')`,
+// `Path(..).write_text`, `[IO.File]::WriteAllText` and the like, either written inline or held in a variable the script assigns from a string that names the
+// card. A script that only reads the card (`open('task.md').read()`, `readFileSync`) or writes somewhere else does not trip it. PowerShell cmdlets
+// (`Set-Content`, `Out-File`, `Move-Item`, ...) are judged on the operand: the card must be the `-Path`, `-LiteralPath`, `-FilePath` or `-Destination` operand (or
+// the positional target) outside any parenthesised sub-expression, so `Set-Content other.md (Get-Content task.md)` passes.
+// A path built in pieces (`path.join(desk, 'track', 'slug', 'task.md')`) names no card by itself; a write target that has a bare `task.md` and a command that has
+// the slug of a live card as a whole word is read as writing that card (`slugCards`).
+// While a card is conflicted (`conflicted(card)`, from `git ls-files -u`), `git checkout --ours|--theirs <card>` and `git checkout <ref> -- <card>` pass: resolving a
+// merge is a git operation.
 // Reads pass: `cat`, `grep`, `head`, `tail`, `less`, `git diff`, `git log`, `git show`, `sed -n`, `cp <card> elsewhere`, `mv <card> elsewhere` and a
 // redirect that has the card on its left (`cat task.md > /tmp/x`) are not write forms.
 //
@@ -33,8 +40,6 @@ const GIT_RESTORE_BEFORE = /\bgit\b[^]*\b(?:checkout|restore)\b/u
 // `git restore --staged <path>` only unstages it (the hook's own message tells an agent to do that); with `--worktree` it rewrites the file too.
 const UNSTAGE_ONLY = /\s(?:--staged|-S)(?=\s)/u
 const ALSO_WORKTREE = /\s(?:--worktree|-W)(?=\s)/u
-// A card word that is the argument of a read call is a read of the card, whatever else the script writes.
-const READ_CALL_BEFORE = /\b(?:readFileSync|readFile|createReadStream|statSync|existsSync|read_text|read_bytes)\s*\(\s*["']?$/u
 
 // The script write forms, tested on the whole command (the boot-acceptance harness keeps an identical list; a test compares them).
 export const SCRIPT_WRITE_PATTERNS = [
@@ -45,7 +50,32 @@ export const SCRIPT_WRITE_PATTERNS = [
   /\b(?:shutil\s*\.\s*(?:move|copy|copy2|copyfile)|os\s*\.\s*(?:replace|rename))\s*\(/u,
   /\b(?:File|IO)\s*\.\s*(?:write|binwrite)\s*\(/u,
   /\b(?:Set-Content|Add-Content|Out-File|Tee-Object|Move-Item|Copy-Item)\b/iu,
+  /\bFile\s*\]\s*::\s*(?:WriteAll\w+|AppendAll\w+|Copy|Move|Replace)\s*\(/iu,
 ]
+
+// What each script write call writes to: the arguments (0-based) that name the file it changes. `modeArg` marks `open(path, mode)`, which writes only
+// when the mode string has a write flag.
+const CALLS = [
+  { re: /\b(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|truncate|truncateSync)\s*\(/gu, args: [0] },
+  { re: /\b(?:copyFile|copyFileSync)\s*\(/gu, args: [1] },
+  { re: /\b(?:renameSync|os\s*\.\s*(?:replace|rename)|fs\s*\.\s*(?:promises\s*\.\s*)?rename)\s*\(/gu, args: [0, 1] },
+  { re: /\bshutil\s*\.\s*(?:copy|copy2|copyfile)\s*\(/gu, args: [1] },
+  { re: /\bshutil\s*\.\s*move\s*\(/gu, args: [0, 1] },
+  { re: /\b(?:File|IO)\s*\.\s*(?:write|binwrite)\s*\(/gu, args: [0] },
+  { re: /\bFile\s*\]\s*::\s*(?:WriteAll\w+|AppendAll\w+)\s*\(/giu, args: [0] },
+  { re: /\bFile\s*\]\s*::\s*Copy\s*\(/giu, args: [1] },
+  { re: /\bFile\s*\]\s*::\s*(?:Move|Replace)\s*\(/giu, args: [0, 1] },
+  { re: /\b(?:open|openSync)\s*\(/gu, args: [0], modeArg: 1 },
+  // `Path(<card>).write_text(...)`: the receiver is the target, checked after the call's arguments.
+  { re: /\bPath\s*\(/gu, args: [0], suffix: /^\s*\.\s*(?:write_text|write_bytes)\s*\(|^\s*\.\s*open\s*\(\s*["'][^"']*[wax+]/u },
+]
+const WRITE_MODE = /^\s*(?:mode\s*=\s*)?["'][^"']*[wax+][^"']*["']/u
+
+// PowerShell cmdlets that change the file they are given, and which operand that is.
+const PS_CMDLET = /\b(?:Set-Content|Add-Content|Out-File|Tee-Object|Clear-Content|Move-Item|Copy-Item|Rename-Item|New-Item)\b/iu
+const PS_TARGET_PARAM = /-(?:Path|LiteralPath|FilePath|Destination|PSPath)(?::|\s+)["']?$/iu
+const PS_FIRST_POSITIONAL = /\b(?:Set-Content|Add-Content|Out-File|Tee-Object|Clear-Content|Move-Item|Rename-Item|New-Item)(?:\s+-(?:Force|Append|NoNewline|NoClobber|Confirm|WhatIf))*\s+["']?$/iu
+const PS_SECOND_POSITIONAL = /\b(?:Move-Item|Copy-Item)(?:\s+-(?:Force|Confirm|WhatIf))*\s+(?:"[^"]*"|'[^']*'|[^\s"'(-][^\s"']*)\s+["']?$/iu
 
 function segmentBefore(command, index) {
   let start = index
@@ -70,10 +100,91 @@ function shellForm(command, index, length) {
   if (IN_PLACE_BEFORE.test(before)) return "an in-place edit"
   if (GIT_RESTORE_BEFORE.test(before) && (!UNSTAGE_ONLY.test(before) || ALSO_WORKTREE.test(before))) return "git checkout or restore"
   if (COPY_BEFORE.test(before) && /^["']?\s*$/u.test(after)) return "a move or copy onto it"
+  if (powershellTarget(before)) return "a PowerShell write cmdlet"
   return null
 }
 
-const scriptForm = (command) => SCRIPT_WRITE_PATTERNS.some((pattern) => pattern.test(command))
+/** Whether the card word that ends `before` is the file operand of a PowerShell write cmdlet, outside any parenthesised sub-expression. */
+function powershellTarget(before) {
+  if (!PS_CMDLET.test(before)) return false
+  let depth = 0
+  for (const char of before) {
+    if (char === "(") depth += 1
+    else if (char === ")") depth -= 1
+  }
+  if (depth > 0) return false
+  return PS_TARGET_PARAM.test(before) || PS_FIRST_POSITIONAL.test(before) || PS_SECOND_POSITIONAL.test(before)
+}
+
+/** The arguments of the call whose `(` is at `open`, as source text, and the index after its `)`. Quotes and nested brackets are respected. */
+function callArguments(text, open) {
+  const args = []
+  let depth = 0
+  let quote = null
+  let start = open + 1
+  const limit = Math.min(text.length, open + 4000)
+  for (let index = open; index < limit; index += 1) {
+    const char = text[index]
+    if (quote !== null) {
+      if (char === "\\") index += 1
+      else if (char === quote) quote = null
+      continue
+    }
+    if (char === '"' || char === "'" || char === "`") quote = char
+    else if (char === "(" || char === "[" || char === "{") depth += 1
+    else if (char === ")" || char === "]" || char === "}") {
+      depth -= 1
+      if (depth === 0) {
+        args.push(text.slice(start, index))
+        return { args, end: index + 1 }
+      }
+    } else if (char === "," && depth === 1) {
+      args.push(text.slice(start, index))
+      start = index + 1
+    }
+  }
+  args.push(text.slice(start, limit))
+  return { args, end: limit }
+}
+
+/** Variables a script assigns from a string that names a card: `{ name -> right-hand side }`. */
+function aliases(text) {
+  const found = new Map()
+  for (const match of text.matchAll(/(?<![\w.$])\$?([A-Za-z_][\w]*)\s*=\s*([^;\n=][^;\n]*task\.md[^;\n]*)/giu)) found.set(match[1], match[2])
+  return found
+}
+
+/** The `[{ word, bare }]` card words a write target names: inline, or through a variable assigned from a string that names the card. */
+function targetWords(argument, table, seen = new Set()) {
+  const out = []
+  for (const match of argument.matchAll(CARD_WORD)) out.push({ word: match[0] })
+  for (const identifier of argument.matchAll(/(?<![\w.$"'])\$?([A-Za-z_]\w*)(?![\w"'(])/gu)) {
+    const rhs = table.get(identifier[1])
+    if (rhs === undefined || seen.has(identifier[1])) continue
+    seen.add(identifier[1])
+    out.push(...targetWords(rhs, table, seen))
+  }
+  return out
+}
+
+/** The write targets of a script, as `[{ word }]`: every card word (or `task.md` built in pieces) in the destination argument of a write call. */
+function scriptTargets(text) {
+  const table = aliases(text)
+  const out = []
+  for (const call of CALLS) {
+    for (const match of text.matchAll(call.re)) {
+      const { args, end } = callArguments(text, match.index + match[0].length - 1)
+      if (call.modeArg !== undefined && !WRITE_MODE.test(args[call.modeArg] ?? "")) continue
+      if (call.suffix !== undefined && !call.suffix.test(text.slice(end))) continue
+      for (const index of call.args) out.push(...targetWords(args[index] ?? "", table))
+    }
+  }
+  for (const [name] of table) {
+    // `target.write_text(...)` / `target.open('w')` on a variable that holds the card.
+    if (new RegExp(`(?<![\\w.$])${name}(?=\\s*\\.\\s*(?:write_text|write_bytes|open\\s*\\(\\s*["'][^"']*[wax+]))`, "u").test(text)) out.push(...targetWords(table.get(name), table))
+  }
+  return out
+}
 
 /** The folders a command moves into before it runs the rest (`cd dir`, `pushd dir`, `git -C dir`), as written. */
 function directories(command) {
@@ -87,28 +198,29 @@ function directories(command) {
  * a word names (resolved against each of `directories`, the session folder, the desk and any folder the command moves into) or null; `slugCards` is
  * a function returning the `{ card, slug }` of the desk's live cards, used for a path built in pieces. `vars` are the strings `$DESK` and `${DESK}` expand to.
  */
-export function shellCardWrites(command, { resolve, slugCards, vars = {} }) {
+export function shellCardWrites(command, { resolve, slugCards, vars = {}, conflicted = () => false }) {
   let text = String(command ?? "")
   if (!/task\.md/iu.test(text)) return []
   for (const [name, value] of Object.entries(vars)) text = text.replace(new RegExp(`\\$\\{${name}\\}|\\$${name}(?![A-Za-z0-9_])`, "gu"), () => value)
   const dirs = directories(text)
-  const script = scriptForm(text)
   const found = new Map()
   const note = (card, via) => {
     if (!found.has(card.absolute)) found.set(card.absolute, { card, via })
   }
-  let bare = false
   for (const match of text.matchAll(CARD_WORD)) {
     const card = resolve(match[0], dirs)
-    if (card === null) {
-      bare ||= /^(?:\.[\\/])?task\.md$/iu.test(match[0])
-      continue
-    }
-    const readOnly = READ_CALL_BEFORE.test(text.slice(Math.max(0, match.index - 40), match.index))
-    const via = shellForm(text, match.index, match[0].length) ?? (script && !readOnly ? "a script that writes files" : null)
+    if (card === null) continue
+    const via = shellForm(text, match.index, match[0].length)
+    if (via === "git checkout or restore" && conflicted(card)) continue
     if (via !== null) note(card, via)
   }
-  if (bare && script) {
+  let bare = false
+  for (const { word } of scriptTargets(text)) {
+    const card = resolve(word, dirs)
+    if (card === null) bare ||= /^(?:\.[\\/])?task\.md$/iu.test(word)
+    else note(card, "a script that writes files")
+  }
+  if (bare) {
     for (const { card, slug } of slugCards()) {
       if (slug.length >= 4 && new RegExp(`(?<![\\w-])${slug.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?![\\w-])`, "u").test(text)) note(card, "a script that writes files")
     }

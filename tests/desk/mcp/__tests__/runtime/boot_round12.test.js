@@ -76,3 +76,12 @@ test("a hook that cannot be installed, or a throwing install, shows as one degra
   const fine = await boot(root, { cardGuardFn: () => ({ state: "current" }) })
   assert.equal(fine.degraded.some((line) => line.startsWith("card guard")), false)
 })
+
+test("a tracked core.hooksPath is not a fault: boot leaves it alone and reports one non-degraded note with the manual remedy", async () => {
+  const root = await desk()
+  const note = { state: "tracked", reason: "core.hooksPath (.githooks) holds tracked files, so Desk left it alone", remedy: "add the check by hand" }
+  const result = await boot(root, { cardGuardFn: () => note })
+  assert.equal(result.degraded.some((line) => line.startsWith("card guard")), false)
+  assert.ok(result.pending.some((line) => line.startsWith("card guard not installed") && line.includes("add the check by hand")))
+  assert.equal(result.status, (await boot(root, { cardGuardFn: () => ({ state: "current" }) })).status, "the note does not change the boot status")
+})

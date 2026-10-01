@@ -251,3 +251,37 @@ test("a reply that opens with a check mark or bullet before Done is a done claim
   for (const sentence of ["✓ **Done:** Wired the 30% threshold.", "✅ Done. Wired it.", "• Completed: wired it.", "- **Done:** wired it", "✔ Finished."]) assert.equal(taskDoneClaims(sentence).length, 1, sentence)
   for (const sentence of ["✓ Wired the threshold.", "- Done in 3 steps would be fine, not now.".replace("Done in", "Next in"), "✓ Tests pass."]) assert.equal(taskDoneClaims(sentence).length, 0, sentence)
 })
+
+test("fix round: a hand commit with explicit non-card pathspecs leaves a staged card out; one that names the card still counts", () => {
+  const kinds = (command) => cardCommits(command, where).map((commit) => commit.via)
+  assert.deepEqual(kinds(`git add ${CARD} && git commit -m "x" -- README.md`), [])
+  assert.deepEqual(kinds(`git add ${CARD} && git commit -m "x" README.md`), [])
+  assert.deepEqual(kinds(`git add ${CARD} && git commit -m "task.md notes"`), ["git add of a card, then git commit"])
+  assert.deepEqual(kinds(`git add ${CARD} && git commit -m "x" -- README.md ${CARD}`), ["git commit naming a card"])
+  assert.deepEqual(kinds(`git commit -m "x" ${CARD}`), ["git commit naming a card"])
+  assert.deepEqual(kinds(`git commit -m "${CARD}"`), [], "an option's value is no pathspec")
+})
+
+test("fix round: git remote set-url to a folder is a stand-in remote, for origin too, except back to the fixture's origin.git", () => {
+  const via = (command) => simulatedRemotes(command).map((remote) => remote.via)
+  assert.deepEqual(via("git remote set-url origin /tmp/fake.git"), ["git remote set-url origin"])
+  assert.deepEqual(via("git remote set-url --push origin ../fake"), ["git remote set-url origin"])
+  assert.deepEqual(via(`git remote set-url origin ${ORIGIN}`), [])
+  assert.deepEqual(via("git remote set-url origin https://github.com/a/b.git"), [])
+})
+
+test("fix round: gh repo clone is a clone, with its destination and bare flags", () => {
+  const clones = (command) => gitClones(command, { cwd: DESK, home: HOME }).map((clone) => [clone.source, clone.dest, clone.bare])
+  assert.deepEqual(clones("gh repo clone anthropics/claude-code"), [["anthropics/claude-code", `${DESK}/claude-code`, false]])
+  assert.deepEqual(clones("gh repo clone anthropics/claude-code ~/code/cc -- --bare"), [["anthropics/claude-code", `${HOME}/code/cc`, true]])
+  assert.deepEqual(clones("gh repo clone"), [])
+  assert.deepEqual(clones("gh repo view x/y"), [])
+})
+
+test("fix round: a clone backs only a claim that names the repository it cloned", () => {
+  const work = bash(`git clone ${HOME}/code/greenhouse-irrigation ~/code/greenhouse-irrigation`, "Cloning into 'greenhouse-irrigation'...\ndone\n")
+  assert.deepEqual(reply("I've cloned the repo.", [work]), [])
+  assert.deepEqual(reply("I've cloned `greenhouse-irrigation` to ~/code.", [work]), [])
+  assert.deepEqual(reply("I have cloned anthropics/claude-code.", [work]), ["the reply"], "another repository's name is not backed by this clone")
+  assert.deepEqual(reply("Cloned anthropics/claude-code to ~/code/claude-code.", [work]), ["the reply"])
+})

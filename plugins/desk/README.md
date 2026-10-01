@@ -136,6 +136,12 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - checkpoint-type annotations on each transition (GATE / CHECKPOINT / AUTO / CONFIRM / NOTIFY)
 - session start / resumption / archival workflow
 
+### the card guard
+Desk installs a git `pre-commit` hook in the desk (marker line `# desk-card-commit-guard`) that refuses a hand `git commit` adding or modifying a live task card; cards are written with `task_update`, `task_create`, `task_move` and `task_archive`, which commit for you. It passes while a merge, cherry-pick or revert is in progress and for a card whose frontmatter does not parse. A human, or someone repairing a card `task_update` cannot parse, commits with `DESK_TOOL_COMMIT=1 git commit ...`. A hook that was already there is kept as `pre-commit.desk-chained` and runs after the check; a `core.hooksPath` that holds tracked files is never modified (boot says so and gives the manual remedy).
+
+#### Removing the card guard
+Run `node -e 'import("<desk plugin>/mcp/src/desk/card-commit-guard.js").then(m=>console.log(m.uninstallCardGuard(process.argv[1])))' <desk root>`, or delete `.git/hooks/pre-commit` (or the hook in your `core.hooksPath`) and rename `pre-commit.desk-chained`, if present, back to `pre-commit`. Boot installs the hook again on the next session start, so to keep it off, set `core.hooksPath` to a folder Desk should leave alone (tracked) or remove the plugin.
+
 ### dispatch
 - `work-orchestration` invokes `desk:using-superpowers-with-desk`; Superpowers is the sole engineering method, while Desk preserves state and authority
 - non-coding workflow paths supported (execution + completion alternatives for non-code work)

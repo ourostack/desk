@@ -75,7 +75,7 @@ Steps, in order:
    Then git add the record and commit with git commit -- <tidy paths> <the record> and nothing else, so any other staged work stays staged exactly as it was and is never committed with the tidy; never unstage anyone else's work. Put DESK_TOOL_COMMIT=1 in front of that git commit: it tells the desk's pre-commit hook, which refuses a hand commit that edits a task card, that Desk's own tidy is committing the cards it moved. The message lists every move and rename by its new name. Then push.
 
 Then send the Announce line below with this tidy's own counts, anything left alone, and the commit link.
-If the human objects, run git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- <this session's own desk>/_meta/organization.json, and commit both together, so the desk is back as it was and the tidy does not run again.
+If the human objects, run git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- <this session's own desk>/_meta/organization.json, and commit both together, so the desk is back as it was and the tidy does not run again. Put DESK_TOOL_COMMIT=1 in front of that git commit too, because the revert restores task cards and the desk's pre-commit hook refuses a hand commit of one.
 STEPS
 ```
 
