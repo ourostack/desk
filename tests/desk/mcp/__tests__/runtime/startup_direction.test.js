@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import {
   DESK_SETUP_DIRECTION,
   bootCommand,
+  copilotPromptPointer,
   copilotStartupDirection,
   deskStartupDirection,
   promptBootDirection,
@@ -123,6 +124,28 @@ test("Copilot resolves the root with the session folder as the project folder, e
     assert.match(copilot({ DESK_ACTIVATION_CONFIG: malformed }, codeRepo), /root configuration could not be read/u)
     // No session folder at all behaves like an ordinary folder.
     assert.equal(copilot({}, undefined), deskStartupDirection({ root: fallback, source: "home_fallback" }))
+  })
+})
+
+test("the Copilot first-prompt pointer is given only where the root resolves to a usable desk, the way the startup line resolves it", () => {
+  withSandbox(({ env, fallback, crew, codeRepo, malformed, home }) => {
+    const pointer = (extra, sessionFolder) => copilotPromptPointer({ env: { ...env, ...extra }, sessionFolder, homeDir: env.HOME })
+    // A desk folder, and an ordinary folder that falls back to the home desk, resolve.
+    assert.equal(pointer({}, crew), promptBootDirection())
+    assert.equal(pointer({}, codeRepo), promptBootDirection())
+    // No desk anywhere (the fallback is gone and nothing is bound) is setup mode: nothing to point at.
+    rmSync(fallback, { recursive: true })
+    assert.equal(pointer({}, codeRepo), null)
+    assert.equal(pointer({}, undefined), null)
+    assert.equal(pointer({}, crew), promptBootDirection())
+    // A saved binding to a desk makes any folder resolve; one to a desk that has gone, or one that cannot be read, gives no pointer.
+    const binding = path.join(home, "binding.json")
+    writeFileSync(binding, JSON.stringify({ schema_version: 1, desk: { root: crew } }))
+    assert.equal(pointer({ DESK_ACTIVATION_CONFIG: binding }, codeRepo), promptBootDirection())
+    const moved = path.join(home, "moved.json")
+    writeFileSync(moved, JSON.stringify({ schema_version: 1, desk: { root: path.join(home, "moved") } }))
+    assert.equal(pointer({ DESK_ACTIVATION_CONFIG: moved }, codeRepo), null)
+    assert.equal(pointer({ DESK_ACTIVATION_CONFIG: malformed }, codeRepo), null)
   })
 })
 
