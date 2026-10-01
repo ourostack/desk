@@ -212,15 +212,15 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
 // remote refused, a remote that could not be reached, or something else. Session start used to call
 // every failure a conflict, so an unreachable origin sent agents to a `git status` that read clean.
 const CONFLICT_TEXT = /CONFLICT|could not apply|Cannot rebase|would be overwritten|overwritten by/iu
-const AUTH_TEXT = /Authentication failed|could not read Username|could not read Password|Permission denied \(publickey|Invalid username or password|Repository not found|returned error: 40[13]|HTTP 40[13]|terminal prompts disabled/iu
-const UNREACHABLE_TEXT = /Could not resolve host|unable to access|Could not read from remote|Connection (?:refused|timed out|reset)|Network is unreachable|No route to host|Failed to connect|unable to connect|Operation timed out|timed out|Temporary failure in name resolution|ssh: connect to host/iu
+const AUTH_TEXT = /Authentication failed|could not read Username|could not read Password|Permission denied \(publickey|Invalid username or password|Host key verification failed|Repository not found|returned error: 40[13]|HTTP 40[13]|terminal prompts disabled/iu
+const UNREACHABLE_TEXT = /Could not resolve host|unable to access '(?:https?|git|ssh):\/\/|Could not read from remote|Connection (?:refused|timed out|reset)|Network is unreachable|No route to host|Failed to connect|unable to connect|Operation timed out|timed out|Temporary failure in name resolution|ssh: connect to host/iu
 const DIVERGED_TEXT = /diverg|not possible to fast-forward|Need to specify how to reconcile/iu
 
 export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = false, deadline = false } = {}) {
-  if (deadline) return "deadline"
+  if (deadline || timedOut) return "deadline"
   if (conflicted.length > 0 || CONFLICT_TEXT.test(stderr)) return "conflict"
   if (AUTH_TEXT.test(stderr)) return "auth_failed"
-  if (timedOut || UNREACHABLE_TEXT.test(stderr)) return "unreachable"
+  if (UNREACHABLE_TEXT.test(stderr)) return "unreachable"
   if (DIVERGED_TEXT.test(stderr)) return "diverged"
   return "other"
 }

@@ -195,9 +195,12 @@ function readinessWord({ state, convergence }) {
   return "converging"
 }
 
+const LEXICAL_MEANING = "Lexical search and the index are current; semantic (embedding) search is not fully available, for example because the embedding probe failed. Tools work; semantic ranking may be missing."
+
 function presentReadiness(readiness) {
   const word = readinessWord(readiness)
-  return { state: word, meaning: READINESS_MEANING[word], detail: { controller_state: readiness.state, convergence: readiness.convergence } }
+  const meaning = word === "ready" && readiness.state === "LEXICAL_READY" ? LEXICAL_MEANING : READINESS_MEANING[word]
+  return { state: word, meaning, detail: { controller_state: readiness.state, convergence: readiness.convergence } }
 }
 
 async function controllerReadiness(admission) {

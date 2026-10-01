@@ -66,6 +66,10 @@ for (const [cause, sync, expected, degraded] of [
     [/could not sync: origin refused this host's credentials\. Work continues/u], "pull_rebase_failed, auth_failed"],
   ["deadline", { state: "unresolved", reason: "sync_deadline_exceeded", cause: "deadline", remote: null, error: "", conflicted: [] },
     [/sync ran out of time/u, /retry sync/u], "sync_deadline_exceeded, deadline"],
+  ["a per-call timeout", { state: "unresolved", reason: "pull_rebase_failed", cause: "deadline", remote: "https://github.com/o/desk.git", error: "", conflicted: [] },
+    [/A git call timed out while syncing the desk with origin https:\/\/github\.com\/o\/desk\.git/u, /retry sync/u], "pull_rebase_failed, deadline"],
+  ["a per-call timeout without a remote", { state: "unresolved", reason: "pull_rebase_failed", cause: "deadline", remote: null, error: "", conflicted: [] },
+    [/A git call timed out while syncing the desk: the remote is slow/u], "pull_rebase_failed, deadline"],
   ["diverged", { state: "unresolved", reason: "pull_rebase_failed", cause: "diverged", remote: "git@github.com:o/desk.git", error: "fatal: Need to specify how to reconcile divergent branches.", conflicted: [] },
     [/has diverged from origin git@github\.com:o\/desk\.git/u, /log --oneline --left-right @\{u\}\.\.\.HEAD/u, /do not push until they agree/u], "pull_rebase_failed, diverged"],
   ["conflict", { state: "unresolved", reason: "pull_rebase_failed", cause: "conflict", remote: "x", error: "CONFLICT", conflicted: ["seed.md", "a/b.md"] },
@@ -77,7 +81,7 @@ for (const [cause, sync, expected, degraded] of [
     const result = await boot(await mkDesk(), { sync })
     assert.equal(result.status, "degraded")
     assert.ok(result.degraded.includes(`sync: unresolved (${degraded})`), result.degraded.join("|"))
-    const line = result.instructions.find((entry) => entry.startsWith("The desk"))
+    const line = result.instructions.find((entry) => /^(The desk|A git call)/u.test(entry))
     for (const pattern of expected) {
       assert.match(line, pattern)
       assert.match(result.actions.join("\n"), pattern)
@@ -160,4 +164,37 @@ test("bootOnce: a repo that is not on GitHub and a pending account lookup add no
   const result = await boot(root)
   assert.equal(result.push_accounts[0].result, "not_a_github_repo")
   assert.ok(!result.instructions.some((line) => /Push (route|access)/u.test(line)))
+})
+
+test("bootOnce: a repo shared by many tasks is one grouped line, and the total is capped, in instructions and actions", async () => {
+  const gh = fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } })
+  const cards = {}
+  for (let index = 0; index < 30; index += 1) cards[`a-shared-${index}`] = CARD("acme/widgets", `Shared ${index}`)
+  for (let index = 0; index < 7; index += 1) cards[`own-${index}`] = CARD(`acme/repo${index}`, `Own ${index}`)
+  const result = await boot(await mkDesk(cards), { gh })
+  for (const list of [result.instructions, result.actions]) {
+    const lines = list.filter((line) => /^Push route for|^\.\.\.and \d+ more repos/u.test(line))
+    assert.equal(lines.length, 6, "five route lines plus one summary")
+    const shared = lines.find((line) => line.includes("acme/widgets"))
+    assert.match(shared, /^Push route for acme\/widgets \(tasks example-track\/a-shared-\d+, example-track\/a-shared-\d+, example-track\/a-shared-\d+ and 27 more\)/u)
+    assert.match(lines[5], /^\.\.\.and 3 more repos with push-route notes/u)
+  }
+})
+
+test("bootOnce: a named task narrows the actions as well as the instructions", async () => {
+  const gh = fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } })
+  const root = await mkDesk({ one: CARD("acme/widgets", "Widgets"), two: CARD("acme/gadgets", "Gadgets") })
+  const named = await boot(root, { gh, taskQuery: "gadgets" })
+  const lines = named.actions.filter((line) => line.startsWith("Push route for"))
+  assert.equal(lines.length, 1)
+  assert.match(lines[0], /acme\/gadgets/u)
+})
+
+test("bootOnce: one task listing the same store twice is named once", async () => {
+  const gh = fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } })
+  const card = CARD("acme/widgets") + "\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"
+  const result = await boot(await mkDesk({ one: card }), { gh })
+  const lines = result.instructions.filter((line) => line.startsWith("Push route for"))
+  assert.equal(lines.length, 1)
+  assert.match(lines[0], /\(task example-track\/one\)/u)
 })

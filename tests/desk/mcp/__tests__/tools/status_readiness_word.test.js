@@ -65,3 +65,12 @@ test("the degraded meaning tells agents the top-level state decides whether Desk
   assert.match(readiness.meaning, /top-level `state`/u)
   assert.match(readiness.meaning, /search falls back to direct reads/u)
 })
+
+test("LEXICAL_READY's meaning does not claim full convergence, while READY's does", async () => {
+  const lexical = await readinessFor({ status: async () => ({ state: "LEXICAL_READY", convergence: ok }) })
+  assert.equal(lexical.state, "ready")
+  assert.match(lexical.meaning, /semantic \(embedding\) search is not fully available/u)
+  assert.doesNotMatch(lexical.meaning, /has converged/u)
+  const full = await readinessFor({ status: async () => ({ state: "READY", convergence: ok }) })
+  assert.match(full.meaning, /has converged/u)
+})

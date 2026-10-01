@@ -850,7 +850,7 @@ test("bootOnce: a repo no signed-in account can push degrades status and tells t
   })
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.some((line) => line.includes("acme/widgets")))
-  const action = result.actions.find((line) => line.includes("cannot be pushed"))
+  const action = result.actions.find((line) => line.startsWith("Do not push acme/widgets"))
   assert.ok(action && action.includes("track-a/push-task"))
 })
 

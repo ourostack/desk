@@ -86,8 +86,11 @@ test("a genuine conflict keeps the conflict cause, the conflicted paths and the 
 for (const [name, failure, cause, tell] of [
   ["rejected credentials", { status: 128, stderr: "remote: Invalid username or password.\nfatal: Authentication failed for 'https://user:secret-token@github.com/o/r.git/'\n" }, "auth_failed", /refused this host's credentials/u],
   ["an SSH key the host refuses", { status: 128, stderr: "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n" }, "auth_failed", /refused this host's credentials/u],
-  ["a network timeout reported by spawnSync", { status: null, error: { code: "ETIMEDOUT" }, stderr: "" }, "unreachable", /could not be reached/u],
-  ["a killed git process", { status: null, signal: "SIGTERM", stderr: "" }, "unreachable", /could not be reached/u],
+  ["a network timeout reported by spawnSync", { status: null, error: { code: "ETIMEDOUT" }, stderr: "" }, "deadline", /ran out of time/u],
+  ["a killed git process", { status: null, signal: "SIGTERM", stderr: "" }, "deadline", /ran out of time/u],
+  ["an unknown SSH host key", { status: 128, stderr: "Host key verification failed.\nfatal: Could not read from remote repository.\n" }, "auth_failed", /refused this host's credentials/u],
+  ["a local permission error", { status: 128, stderr: "fatal: unable to access '/home/u/.config/git/config': Permission denied\n" }, "other", /`git status`/u],
+  ["an HTTPS URL that cannot be reached", { status: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': Failed to connect to github.com port 443\n" }, "unreachable", /could not be reached/u],
   ["a DNS failure", { status: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com\n" }, "unreachable", /could not be reached/u],
   ["a diverged history", { status: 1, stderr: "hint: You have divergent branches\nfatal: Need to specify how to reconcile divergent branches.\n" }, "diverged", /`git status`/u],
   ["an unknown failure", { status: 1, stderr: "something new and strange\n" }, "other", /`git status`/u],
@@ -138,5 +141,5 @@ test("classifyPullFailure tolerates no arguments at all", () => {
   assert.equal(classifyPullFailure(), "other")
   assert.equal(classifyPullFailure({ conflicted: ["a.md"] }), "conflict")
   assert.equal(classifyPullFailure({ deadline: true, stderr: "CONFLICT" }), "deadline")
-  assert.equal(classifyPullFailure({ timedOut: true }), "unreachable")
+  assert.equal(classifyPullFailure({ timedOut: true }), "deadline")
 })

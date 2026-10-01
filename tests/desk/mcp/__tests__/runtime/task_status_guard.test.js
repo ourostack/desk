@@ -111,6 +111,20 @@ test("statusChange on Edit and MultiEdit applies the edits to the card on disk, 
   })
 })
 
+test("a nested status: under repos is not the card's status, in either direction", () => {
+  const nested = "---\ntitle: x\nstatus: processing\nrepos:\n  - name: a/b\n    status: stale\n---\n"
+  assert.equal(statusOf(nested), "processing")
+  assert.equal(statusOf("---\ntitle: x\nrepos:\n  - name: a/b\n    status: stale\n---\n"), null, "only a nested status means no card status")
+  assert.equal(statusOf("  status: indented fragment"), null)
+  withCard(nested, (file) => {
+    assert.equal(statusChange("Edit", { file_path: file, old_string: "    status: stale", new_string: "    status: fresh" }), null, "editing a nested status is not a status change")
+    assert.deepEqual(statusChange("Edit", { file_path: file, old_string: "status: processing", new_string: "status: done" }), { from: "processing", to: "done" })
+  })
+  withCard("---\ntitle: x\nrepos:\n  - name: a/b\n    status: stale\n---\n", (file) => {
+    assert.deepEqual(statusChange("Edit", { file_path: file, old_string: "title: x", new_string: "title: x\nstatus: done" }), { from: null, to: "done" }, "adding a top-level status beside a nested one is still a change")
+  })
+})
+
 test("statusChange falls back to the status lines inside the edit strings when the card cannot be read or an edit does not apply", () => {
   const missing = path.join(tmpdir(), "no-such-dir-guard", "track", "slug", "task.md")
   assert.deepEqual(statusChange("Edit", { file_path: missing, old_string: "status: drafting", new_string: "status: processing" }), { from: "drafting", to: "processing" })

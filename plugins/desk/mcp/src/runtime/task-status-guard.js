@@ -62,10 +62,10 @@ import { readFileSync } from "node:fs"
 
 const TASK_CARD_BASENAME = "task.md"
 
-// Matches a frontmatter-shaped `status:` line, quoted or not, anywhere in the given text. It does
+// Matches an unindented, top-level `status:` line (a nested `status:` under `repos:` is indented and never matches), quoted or not, anywhere in the given text. It does
 // not require YAML frontmatter delimiters around it: `content` (Write) and `new_string` (Edit)
 // may hold only a fragment of the file, not the whole document.
-const ANY_STATUS_LINE = /(^|\r?\n)[ \t]*status:[ \t]*["']?([^"'\r\n]*?)["']?[ \t]*(?=\r?\n|$)/u
+const ANY_STATUS_LINE = /(^|\r?\n)status:[ \t]*["']?([^"'\r\n]*?)["']?[ \t]*(?=\r?\n|$)/u
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---/u
 
 /** True for a `file_path` whose final path segment is exactly `task.md`. */
