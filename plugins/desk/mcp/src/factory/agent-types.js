@@ -16,14 +16,14 @@ export const CUSTOM_AGENT_TYPE = "custom"
  * The built-in agent types per host. Claude Code: the types its own Agent tool
  * ships. Copilot CLI: empty until Task 3 adds the names the Copilot source
  * defines (this repo's Copilot fixtures carry only sentinel agent names).
- * Codex CLI: empty until Task 4 fills it from the Codex source.
+ * Codex CLI: the built-in roles in codex-rs/core/src/agent/role.rs (`awaiter` is commented out there).
  */
 export const BUILTIN_AGENT_TYPES = Object.freeze({
   "claude-code": Object.freeze([
     "general-purpose", "Explore", "Plan", "statusline-setup", "claude-code-guide", "output-style-setup",
   ]),
   "copilot-cli": Object.freeze([]),
-  "codex-cli": Object.freeze([]),
+  "codex-cli": Object.freeze(["default", "explorer", "worker"]),
 })
 
 /**

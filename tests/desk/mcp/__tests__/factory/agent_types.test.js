@@ -106,6 +106,12 @@ test("the built-in allowlist is one frozen object keyed by host", () => {
   assert.deepEqual(BUILTIN_AGENT_TYPES["claude-code"], ["general-purpose", "Explore", "Plan", "statusline-setup", "claude-code-guide", "output-style-setup"])
 })
 
+test("the Codex allowlist is the built-in roles in codex-rs/core/src/agent/role.rs", () => {
+  assert.deepEqual(BUILTIN_AGENT_TYPES["codex-cli"], ["default", "explorer", "worker"])
+  for (const type of BUILTIN_AGENT_TYPES["codex-cli"]) assert.equal(publishedAgentType("codex-cli", type, []), type)
+  assert.equal(publishedAgentType("codex-cli", "awaiter", []), "custom", "awaiter is commented out of the built-in list")
+})
+
 test("publishedAgentType keeps built-ins, keeps a public plugin's type and maps everything else to custom", () => {
   for (const type of BUILTIN_AGENT_TYPES["claude-code"]) assert.equal(publishedAgentType("claude-code", type, []), type)
   assert.equal(publishedAgentType("claude-code", "desk:worker", ["desk"]), "desk:worker")

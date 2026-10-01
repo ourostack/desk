@@ -6,6 +6,9 @@ import { normalizeTimestamp } from "./time.js"
 const MAX_LINE_BYTES = 1024 * 1024
 const COPILOT_ACTIVITY = new Set(["session.start", "session.resume", "assistant.turn_start", "user.message"])
 const CLAUDE_ACTIVITY = new Set(["session.resume", "user", "assistant"])
+// A Codex rollout line is `{timestamp, type, payload}`; later model or tool records mean the thread went on.
+const CODEX_ACTIVITY = new Set(["turn_context", "response_item"])
+const ACTIVITY_BY_HOST = { "claude-code": CLAUDE_ACTIVITY, "copilot-cli": COPILOT_ACTIVITY, "codex-cli": CODEX_ACTIVITY }
 
 function invalidatesEnd(text, marker) {
   if (text.trim() === "") return false
@@ -14,7 +17,7 @@ function invalidatesEnd(text, marker) {
   if (!isPlainObject(event)) return true
   if (event.agentId != null || event.isSidechain === true) return false
   if (event.sessionId !== undefined && event.sessionId !== marker.session_id) return false
-  const activity = marker.host === "copilot-cli" ? COPILOT_ACTIVITY : CLAUDE_ACTIVITY
+  const activity = ACTIVITY_BY_HOST[marker.host]
   if (!activity.has(event.type)) return false
   const at = normalizeTimestamp(event.timestamp)
   return at === null || at > marker.ended_at

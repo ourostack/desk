@@ -55,8 +55,23 @@ for (const [name, expected] of COPILOT_CASES) {
   })
 }
 
+const CODEX_CASES = [
+  ["exec_command", "shell"], ["local_shell_call", "shell"],
+  ["apply_patch", "edit"],
+  ["spawn_agent", "agent"],
+  ["mcp__desk__task_create", "desk"], ["mcp__plugin_desk_desk__desk_status", "desk"],
+  ["mcp__other__tool", "mcp"],
+  ["wait_agent", "other"], ["view_image", "other"],
+]
+
+for (const [name, expected] of CODEX_CASES) {
+  test(`codex-cli toolKind(${name}) -> ${expected}`, () => {
+    assert.equal(toolKind({ host: "codex-cli", name }), expected)
+  })
+}
+
 test("every mapped bucket is a member of ENUMS.toolKind", () => {
-  const all = [...CLAUDE_CASES, ...COPILOT_CASES].map(([, kind]) => kind)
+  const all = [...CLAUDE_CASES, ...COPILOT_CASES, ...CODEX_CASES].map(([, kind]) => kind)
   for (const kind of all) assert.ok(ENUMS.toolKind.includes(kind), kind)
 })
 

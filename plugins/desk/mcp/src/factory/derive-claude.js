@@ -673,8 +673,9 @@ function applyLimits({ agents, intervals, models, prs }, unavailable, limits = L
 // Exposed only for direct unit tests: the two sort comparators (a real
 // session's own ordering can't reliably force a sort comparator through
 // every comparison direction) and `applyLimits`, whose caps are far too
-// large to reach from a fixture.
-export const __internals__ = { compareByStart, comparePrRefs, applyLimits, dedupePrRefs }
+// large to reach from a fixture. The Codex deriver reuses `applyLimits`,
+// `dedupePrRefs`, `sanitizePlugins` and `addUnavailable` from here.
+export const __internals__ = { compareByStart, comparePrRefs, applyLimits, dedupePrRefs, sanitizePlugins, addUnavailable }
 
 // ---------------------------------------------------------------------------
 // Entry point.
