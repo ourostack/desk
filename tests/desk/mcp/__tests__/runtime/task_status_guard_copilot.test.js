@@ -38,6 +38,19 @@ test("a direct edit of a live card is denied, and the reason names task_update",
   assert.match(status, /evidence/u, "a move to done names the evidence it needs")
 })
 
+test("the Copilot deny names the Copilot tool (desk-task_update), not Claude Code's ToolSearch, and is no longer than the Claude Code deny", () => {
+  const edit = { path: CARD_PATH, old_str: "Next: write the test.", new_str: "Next: celebrate." }
+  const reason = denied(guard(pre("edit", edit)))
+  assert.match(reason, /`desk-task_update`/u)
+  assert.doesNotMatch(reason, /ToolSearch|mcp__plugin_desk_desk__/u)
+  const shell = denied(guard(pre("bash", `sed -i 's/processing/done/' ${CARD_PATH}`)))
+  assert.match(shell, /`desk-task_update`/u)
+  const claude = taskStatusGuardHook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: CARD_PATH, old_string: "Next: write the test.", new_string: "Next: celebrate." }, cwd: DESK }, "claude", undefined, { root: DESK }).hookSpecificOutput.permissionDecisionReason
+  assert.match(claude, /ToolSearch/u)
+  assert.doesNotMatch(claude, /desk-task_update/u)
+  assert.ok(reason.length <= claude.length)
+})
+
 test("create over a live card is denied, a new card born done is denied, and a new card not done is allowed", () => {
   denied(guard(pre("create", { path: CARD_PATH, file_text: CARD })))
   denied(guard(pre("create", { path: path.join(DESK, "greenhouse", "fresh-task", "task.md"), file_text: "---\ntitle: x\nstatus: done\n---\n" })))

@@ -61,7 +61,7 @@ import * as path from "node:path"
 import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { isDeskWorkspace } from "../util/paths.js"
-import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
+import { deferredToolsLoadHint } from "../util/deferred-tools.js"
 import { COPILOT_SESSION_ENV, readCopilotSession } from "./copilot-session.js"
 import { copilotDeny, copilotToolCalls } from "./copilot-hook-payload.js"
 import { shellCardWrites } from "./shell-card-writes.js"
@@ -254,7 +254,7 @@ function taskCoordinates({ kind, segments }) {
   return { track: segments.at(kind === "archived" ? -4 : -3), slug: segments.at(-2) }
 }
 
-function denyReason(card, change, via = null) {
+function denyReason(card, change, via = null, host = "unknown") {
   const { track, slug } = taskCoordinates(card)
   const target = `{ track: "${track}", slug: "${slug}"`
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
@@ -275,7 +275,7 @@ function denyReason(card, change, via = null) {
     `Other fields (repos, iterations, a repo's url): ${target}, frontmatter: { ... } }; more text: ${target}, body_append: "<markdown>" }. ` +
     "If the card's frontmatter is corrupted so that it no longer parses, a direct edit is allowed so it can be repaired; this card parses, so it is not that case." +
     " A note is only a note: a task is finished by its pull request or check, and a card that says otherwise without one is not true. " +
-    DEFERRED_TOOLS_LOAD_HINT
+    deferredToolsLoadHint(host)
   )
 }
 
@@ -295,8 +295,8 @@ function claudeToolCalls(input) {
 }
 
 /** Claude's deny for one call, or null when the call may go ahead. */
-function decide({ toolName, args }, { root, cwd, home, read }) {
-  if (toolName === "Bash" || toolName === "PowerShell") return shellDecision(args.command, { root, cwd, home, read })
+function decide({ toolName, args }, { root, cwd, home, read, host }) {
+  if (toolName === "Bash" || toolName === "PowerShell") return shellDecision(args.command, { root, cwd, home, read, host })
   const card = classifyCard(args.file_path, { root, cwd, home })
   if (card === null) return null
 
@@ -310,7 +310,7 @@ function decide({ toolName, args }, { root, cwd, home, read }) {
     return null
   }
 
-  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, change) } }
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, change, null, host) } }
 }
 
 /**
@@ -328,7 +328,7 @@ export function taskStatusGuardHook(input, host, read = readCard, context = {}) 
   const root = context.root === undefined ? boundRoot(env, cwd, host === "copilot" ? copilotProjectFolder(input, env, cwd) : undefined) : context.root
   const home = context.home ?? os.homedir()
   for (const call of calls) {
-    const denied = decide(call, { root, cwd, home, read })
+    const denied = decide(call, { root, cwd, home, read, host })
     if (denied !== null) return host === "copilot" ? copilotDeny(denied) : denied
   }
   return {}
@@ -382,7 +382,7 @@ function cardIsConflicted(file) {
  * The deny for a `Bash` or `PowerShell` command that writes a live card of the bound desk (see `shell-card-writes.js` for the forms it reads and what
  * it cannot see), or `{}`. The words are resolved against the session folder, the desk and any folder the command moves into.
  */
-function shellDecision(command, { root, cwd, home, read }) {
+function shellDecision(command, { root, cwd, home, read, host }) {
   if (typeof command !== "string") return null
   const resolve = (word, directories) => {
     const bases = [cwd, ...(root === null ? [] : [root]), ...directories.map((directory) => absolutePath(directory, { cwd, home }))]
@@ -393,7 +393,7 @@ function shellDecision(command, { root, cwd, home, read }) {
   const writes = shellCardWrites(command, { resolve, vars, conflicted, slugCards: () => liveCardsOf(root, home, read) })
   if (writes.length === 0) return null
   const [{ card, via }] = writes
-  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, null, via) } }
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, null, via, host) } }
 }
 
 /** The desk root this session binds, or null when it cannot be determined (the marker fallback then applies). `hostProjectRoot` defaults to Claude's project folder. */

@@ -105,10 +105,12 @@ const hasText = (value) => typeof value === "string" && value.trim() !== ""
  * - `first_prompt_pointer`: whether the pointer reached the model with the very first user message. Copilot runs every `userPromptSubmitted` hook (Desk registers two) before it logs a
  *   user message, so a prompt is the group of those hook runs that precede one message. `prompts` counts such groups; `injected_on_first_prompt` is whether any hook in the first group returned the pointer;
  *   `reached_model` is whether the text is in that first message's `transformedContent` (what the model was given, tested before the saved copy is cut); `injected_count` counts the prompts that got one.
- * - `pre_tool_use_denials`: `preToolUse` hook ends whose output denies the call. `agent_stop_blocks`: `agentStop` hook ends that block the stop.
+ * - `pre_tool_use_denials`: `preToolUse` hook ends whose output denies the call (`permissionDecision: "deny"`, or Copilot's own `{ <tool call id>: "Denied by preToolUse hook: ..." }`). `agent_stop_blocks`: `agentStop` hook ends that block the stop.
  * - `hook_order`: the hook types in the order they began, with repeats collapsed, up to the first twelve.
  */
 export function copilotGates(events) {
+  // Copilot logs a denial as `{ "<tool call id>": "Denied by preToolUse hook: <reason>" }`; the flat `permissionDecision` pair is what a hook prints.
+  const isDenial = (output) => output.permissionDecision === "deny" || Object.values(output).some((value) => typeof value === "string" && value.startsWith("Denied by preToolUse hook"))
   const hookStarts = events.filter((e) => e.type === "hook.start")
   const hookEnds = events.filter((e) => e.type === "hook.end")
   const endOf = (start) => hookEnds.find((end) => end.data?.hookInvocationId === start.data?.hookInvocationId)
@@ -153,7 +155,7 @@ export function copilotGates(events) {
       reached_model: firstMessage !== undefined && (firstMessage.data?.pointer_present === true || POINTER.test(String(firstMessage.data?.transformedContent ?? ""))),
       injected_count: prompts.filter((p) => pointerIn(p.hooks)).length,
     },
-    pre_tool_use_denials: decisions("preToolUse", (output) => output.permissionDecision === "deny"),
+    pre_tool_use_denials: decisions("preToolUse", isDenial),
     agent_stop_blocks: decisions("agentStop", (output) => output.decision === "block"),
     hook_failures: hookEnds.filter((end) => end.data?.success === false).length,
     hook_order: order.slice(0, 12),
