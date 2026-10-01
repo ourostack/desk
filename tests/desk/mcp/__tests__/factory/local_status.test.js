@@ -290,3 +290,18 @@ test("an unparseable status or delivery record reads as no last flush and nothin
   assert.equal(entry.last_flush, null)
   assert.equal(entry.pending, 1, `${name} counts as pending`)
 }))
+
+test("an invalid declaration freezes the session: it counts as pending, never route_changed, whether its marker is present or pruned", () => scratch(async ({ base, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const broken = path.join(base, "broken-desk")
+  await fs.mkdir(path.join(broken, "_meta"), { recursive: true })
+  await fs.writeFile(path.join(broken, "_meta", "factory.json"), "{ not json")
+  // Both sessions last routed to the other store, so a readable route would make them stale here. 1 has a marker in the broken desk;
+  // 2's marker is pruned and its receipt names the broken desk.
+  const one = await outboxFile(env, STORE, 1)
+  const two = await outboxFile(env, STORE, 2)
+  await writeStatus(env, { derivations: { [one]: { store: STORE, route: OTHER }, [two]: { store: STORE, route: OTHER, desk_root: broken } } })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 0, quarantined: 0, last_flush: null })
+}))

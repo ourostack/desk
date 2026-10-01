@@ -11,7 +11,7 @@ import { validMarker } from "./marker.js"
 import { factoryStateRoot, listMarkers, readConsent, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
-import { resolveStore } from "./store-route.js"
+import { markerRoute, proofIndex, provenBy } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
 async function sourceStamp(file) {
@@ -90,33 +90,11 @@ export async function deriveMarker(env, marker, { claude = deriveClaudeSession, 
   }
 }
 
-const ROUTE_PROOF_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
-
-const realDesk = async (deskRoot) => fs.realpath(deskRoot).catch(() => path.resolve(deskRoot))
-const markerTime = (marker) => Date.parse(marker.ended_at ?? marker.updated_at)
-
-// A Codex marker records no plugins, so its default route never saw a plugin overlay. It is proven only by a
-// Claude Code or Copilot CLI marker for the same desk, within 30 days, whose own default route did check the
-// plugin registry. `proofIndex` lists those candidate markers as { desk, at }, once per list of markers.
-async function proofIndex(markers) {
-  const index = []
-  for (const other of markers) {
-    if (other.host === "codex-cli" || other.desk_root === null || other.routing?.source !== "default") continue
-    index.push({ desk: await realDesk(other.desk_root), at: markerTime(other) })
-  }
-  return index
-}
-
-// One memoized index for a whole sweep; a single derive builds its own.
+// A Codex marker records no plugins, so its default route never saw a plugin overlay; it is proven as the flush and reconcile prove it
+// (`session-route.js`). One memoized proof index for a whole sweep; a single derive builds its own.
 const lazyProofIndex = (load) => {
   let pending = null
   return () => (pending ??= load().then(proofIndex))
-}
-
-async function defaultRouteProven(marker, siblings) {
-  const desk = await realDesk(marker.desk_root)
-  const at = markerTime(marker)
-  return (await siblings()).some((other) => other.desk === desk && Math.abs(other.at - at) <= ROUTE_PROOF_WINDOW_MS)
 }
 
 async function newestMarker(env, root, marker, requireStored) {
@@ -138,14 +116,13 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (marker.desk_root === null) return { result: "held", store }
     if (isStaleDeriver(ownVersion, marker.plugins, marker.updated_at, now)) return { result: "held", store }
     await factoryStateRoot(env, { deskRoot: marker.desk_root })
-    const current = resolveStore({ deskRoot: marker.desk_root })
-    const route = current.source === "default" && marker.routing ? marker.routing : current
+    const route = markerRoute(marker)
     store = route.store
     const name = `${marker.host}-${marker.session_id}.json`
     if (route.warnings.length) await writeStatus(env, { routing_warnings: route.warnings })
     if (store === null) return { result: "held", store }
     if ((await readConsent(env)).stores[store]?.contribute !== true) return { result: "not_opted_in", store }
-    if (marker.host === "codex-cli" && route.source === "default" && !(await defaultRouteProven(marker, siblings))) return { result: "held", store: null, reason: "route_unverified" }
+    if (marker.host === "codex-cli" && route.source === "default" && !provenBy(marker, await siblings())) return { result: "held", store: null, reason: "route_unverified" }
     const before = await sourceStamp(marker.log_path)
     marker = await reconcileMarker(marker)
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }

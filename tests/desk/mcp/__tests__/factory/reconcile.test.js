@@ -550,6 +550,7 @@ test("no prompt text, log content or secret appears in the output", () => scratc
   assert.ok(!text.includes("PRIVATE") && !text.includes("SENTINEL") && !text.includes("must never persist"))
   assert.ok(!text.includes("machine-secret"))
   assert.deepEqual(Object.keys(result).sort(), ["counts", "desk", "mismatches", "ok", "tasks", "unbound_markers", "window"])
+  assert.deepEqual(Object.keys(result.desk), ["person"], "the desk is named by its person alias, never by its path")
 }))
 
 test("a task with no bound session is always no_marker; the desk's unbound markers are listed with their own reasons, inside the window only", () => scratch(async (context) => {
@@ -706,4 +707,17 @@ test("a tombstoned session routes elsewhere, a stale copy and a stalled retracti
   assert.deepEqual(mismatchOf(result, "stalecopy").map(({ reason, detail }) => [reason, detail]), [["route_changed", "stale_copy"]])
   assert.deepEqual(mismatchOf(result, "stall").map(({ reason, detail }) => [reason, detail]), [["route_changed", "retraction_stalled"]])
   assert.deepEqual(reasonsOf(result, "elsewhere"), [])
+}))
+
+test("a session whose desk declaration is invalid is frozen: held as store_unresolved, never a stale copy", () => scratch(async (context) => {
+  const { desk, env } = context
+  const repo = await standardDesk(desk, [["t", "broken"]])
+  repo.commit("2026-09-25T15:00:00Z", { "t/broken/work.md": "real\n" })
+  const session = await addSession(context, 50, "t", "broken", { delivered: false })
+  // Its last known route is the other store, so a readable route would make it stale here; the desk's declaration is unreadable.
+  await writeStatus(env, { derivations: { [session.name]: { store: STORE, route: OTHER, binding_version: BINDING_VERSION } } })
+  mkdirSync(path.join(desk, "_meta"), { recursive: true })
+  writeFileSync(path.join(desk, "_meta", "factory.json"), "{ not json")
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(mismatchOf(result, "broken").map(({ reason, detail }) => [reason, detail]), [["held", "store_unresolved"]])
 }))

@@ -33,7 +33,7 @@
 // `--store` to check, has the detail `pr_<n>_unchecked`.
 //
 // Privacy: names tracks and slugs only for the desk given; details are short codes and counts, never prompt
-// text, file contents, store names or the machine secret.
+// text, file contents, store names, a local path (the desk is named by its person alias only) or the machine secret.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
@@ -50,7 +50,7 @@ import { validatePublishedBytes } from "./published-schema.js"
 import { REFUSALS, keyedJobId } from "./publish.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
-import { derivedStoreOf, deskRootOf, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
+import { derivedStoreOf, deskRootOf, markerRoute, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -287,8 +287,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   // Why a marker's session did not become delivered facts, or `null`: held, consent, route, log, in pipeline order.
   const markerProblem = (name, marker) => {
     if (marker.desk_root === null) return { reason: "held", detail: "no_desk_root" }
-    const current = resolveStore({ deskRoot: marker.desk_root })
-    const route = current.source === "default" && marker.routing ? marker.routing : current
+    const route = markerRoute(marker)
     const store = route.store
     if (store === null) return { reason: "held", detail: "store_unresolved" }
     if (consentDecision(consent, store) !== "yes") return { reason: "not_opted_in", detail: "store_without_consent" }
@@ -469,7 +468,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   return {
     ok: true,
     window: { since, until },
-    desk: { root, person: alias },
+    desk: { person: alias },
     tasks: outTasks,
     mismatches,
     unbound_markers: deskMarkers.map(({ name, marker }) => ({ session: name.slice(0, -5), ...(markerProblem(name, marker) ?? { reason: null, detail: "marker_not_bound" }) })),

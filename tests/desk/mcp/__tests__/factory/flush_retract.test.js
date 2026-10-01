@@ -118,32 +118,45 @@ test("a file whose session still routes to the store is never deleted, and an id
   assert.equal(dataFiles(github).length, 3)
 }))
 
-test("a marker that cannot be resolved falls back to the last known route; only a session with nothing positive known freezes", () => scratch(async (ctx) => {
-  const { github, desks } = await delivered(ctx, 4)
-  // 1: desk folder gone (moved or renamed). 2: unreadable declaration. 3: a declaration that is not a store. 4: default route whose hook
-  // recorded that it could not resolve one. Each has a receipt naming this store, so each keeps that route, and nothing is deleted.
+test("an invalid declaration freezes the session wherever it is read; only a missing marker, a gone desk folder or a null desk root keeps the last known route", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 6)
+  const root = await factoryStateRoot(ctx.env)
+  // 1: desk folder gone (moved or renamed): its last known route, this store. 2: unreadable declaration. 3: a declaration that is not a
+  // store. 4: default route whose hook recorded that it could not resolve one. 5: marker pruned, its receipt's desk folder still there
+  // with an unreadable declaration. 6: a marker with no desk root, whose receipt's desk now declares the other store.
   await fs.rm(desks[0], { recursive: true })
   await fs.writeFile(path.join(desks[1], "_meta", "factory.json"), "{ not json")
   await reroute(desks[2], "not a store")
   await fs.rm(path.join(desks[3], "_meta", "factory.json"))
   await marker(ctx.env, ctx.base, 4, desks[3], { routing: { store: null, source: "invalid_declaration", warnings: [] } })
-  const changed = localFacts(2)
-  changed.session.end_reason = "clear"
-  assert.equal((await writeLocalFacts(ctx.env, STORE, changed)).written, true)
-  // 7: a new session with no receipt whose desk's declaration cannot be read: nothing positive is known, so it waits, counted.
-  // 8: a new session with no receipt whose desk folder is gone: the sweep put it here, so it publishes, as the sweep would.
+  await fs.rm(path.join(root, "markers", nameOf(5)))
+  await fs.writeFile(path.join(desks[4], "_meta", "factory.json"), "{ not json")
+  await marker(ctx.env, ctx.base, 6, null)
+  await reroute(desks[5], OTHER)
+  // Changed facts of frozen sessions 2 and 5 wait. 7: a new session in desk 2 waits too. 8: a new session whose desk folder is gone
+  // publishes to the store the sweep put it in.
+  for (const n of [2, 5]) {
+    const changed = localFacts(n)
+    changed.session.end_reason = "clear"
+    assert.equal((await writeLocalFacts(ctx.env, STORE, changed)).written, true)
+  }
   await marker(ctx.env, ctx.base, 7, desks[1])
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(7))).written, true)
   await marker(ctx.env, ctx.base, 8, path.join(ctx.base, "moved-desk"))
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(8))).written, true)
+  const before = github.mainFiles()
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
-  assert.equal(github.pulls.at(-1).body, "2")
-  assert.equal((await lastFlush(ctx)).route_unknown, 1)
+  assert.equal(github.pulls.at(-1).body, "1\n\nRetracted: 1 files (route_changed)")
+  assert.equal((await lastFlush(ctx)).route_unknown, 5)
   github.mergeOpenPr()
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   await offline(ctx, github)
-  assert.deepEqual(dataFiles(github), [1, 2, 3, 4, 8].map((n) => `facts/${nameOf(n)}`))
-  assert.notEqual(github.mainFiles().get(`facts/${nameOf(2)}`), undefined)
+  assert.deepEqual(dataFiles(github), [1, 2, 3, 4, 5, 8].map((n) => `facts/${nameOf(n)}`))
+  for (const n of [2, 5]) assert.equal(github.mainFiles().get(`facts/${nameOf(n)}`), before.get(`facts/${nameOf(n)}`), "a frozen session's change never goes")
+  // The declaration is fixed: the session publishes again.
+  await reroute(desks[1], STORE)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal(github.pulls.at(-1).body, "2")
 }))
 
 test("a pruned marker keeps the derive-time route: a pending facts file and late labels publish, and nothing is deleted", () => scratch(async (ctx) => {

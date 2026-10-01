@@ -76,8 +76,9 @@
 //   routes now (`session-route.js`, shared with the local status and
 //   reconcile): here, away, stalled, unknown or stale. A positive route comes
 //   from a marker under 30 days old or, once it is gone, from the desk root
-//   the session's receipt recorded when that desk declares its store; else
-//   the session keeps its last known route (the receipt's recorded `route`,
+//   the session's receipt recorded when that desk declares its store; an
+//   invalid declaration there makes it unknown; else the session keeps its
+//   last known route (the receipt's recorded `route`,
 //   else its `store`, else this store). A retraction still open with no
 //   positive route is stalled; a finished retraction's tombstone keeps the
 //   session away. Three invariants hold. I1: only a `here` session is
@@ -857,7 +858,7 @@ async function deliver(env, context) {
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
   // route to another store, or a finished retraction's tombstone), `stalled` (a retraction open with no positive route), `unknown` (an
-  // unresolvable marker and nothing known) or `stale` (no positive route, and its last known route is another store). Only a `here`
+  // invalid declaration, frozen until it is fixed) or `stale` (no positive route, and its last known route is another store). Only a `here`
   // session is ever published (or released from quarantine) to this store; `unknown`, `stale` and `stalled` ones are frozen.
   const markers = await listMarkers(env)
   const markerByName = new Map(markers.map((marker) => [`${marker.host}-${marker.session_id}.json`, marker]))
@@ -1009,9 +1010,8 @@ async function deliver(env, context) {
   // kept as it is, counted, and its delete never goes.
   const back = [...Object.keys(delivered.retracting), ...Object.keys(delivered.retracted)].filter((name) => placeOf(name) === "here")
   progress.retractionStalled = new Set(Object.keys(delivered.retracting).filter((name) => placeOf(name) === "stalled").map(sessionOfName)).size
-  // Sessions an unknown route freezes with a file never delivered that waits.
-  const waiting = [...candidates, ...labelCandidates].map(({ name }) => name).filter((name) => !Object.hasOwn(delivered.blobs, name))
-  progress.routeUnknown = new Set(waiting.filter((name) => placeOf(name) === "unknown").map(sessionOfName)).size
+  // Sessions an unknown route freezes, until their declaration can be read again.
+  progress.routeUnknown = [...places.values()].filter((place) => place === "unknown").length
   // A held session keeps its file in the store, counted; a delete the store refused stays refused only while its file is delivered and its session away.
   progress.heldElsewhere = away.filter((item) => heldSessions.has(item.session)).length
   progress.refused = away.filter((item) => item.from === "delivered" && priorRefused.has(item.name)).map((item) => item.name)
