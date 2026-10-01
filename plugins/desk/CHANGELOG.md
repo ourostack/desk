@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.168 — 2026-10-01
+
+### Boot: "where were we?" now reports every active task
+
+The plain-text boot told the agent to "build the status block from active_tasks, open_prs and repo_states", which are field names of the `--json` result; the text prints sections called "Active tasks", "Repos of open tasks" and "Push routes", so agents could not map the instruction and reported only the one task a push-route instruction named (boot acceptance rounds F, H and J). The plain-text boot now says to report every task under "Active tasks", each with its status and its next step or blocker, then ask which to resume or whether to start new; the `--json` instructions keep the field names. The push-route instruction still comes first, and now ends by saying the route is one line of the report, not the whole of it.
+
+Agent-host detection now prefers Copilot when `COPILOT_AGENT_SESSION_ID` is set, so a Copilot session started from a Claude Code shell (which inherits `CLAUDECODE`) is no longer detected as Claude. The boot-acceptance gate report also tolerates a non-object hook output.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.167 — 2026-10-01
 
 The line that tells an agent how to find Desk's tools now names the tools for the host it runs on. On Copilot CLI the tools are `desk-<name>` (for example `desk-task_update`), called as tools and never through the shell; on Claude Code they are `mcp__plugin_desk_desk__<name>`, loaded with ToolSearch. Boot and the task-card guard's denial pick the line by host, and Codex, an unknown host and the git pre-commit hook get both names. Before, every host was told only the Claude Code names, and a Copilot agent in boot acceptance round I could not find `desk-task_update` and left its card unupdated.
