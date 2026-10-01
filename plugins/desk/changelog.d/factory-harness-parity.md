@@ -1,0 +1,5 @@
+The factory now records which harness ran each session with the same care as the model. Every factory worker records its agent type and the model that was requested, next to the model that actually answered. Agent types that are not built into the harness, or that come from a private plugin, are published as `custom`, so a private agent name never leaves the machine.
+
+Codex CLI sessions are now derived and captured. The deriver reads Codex rollout files, including the threads a session spawned, and the Codex activation registers `factory-end.cjs codex` on the Codex `SessionEnd` hook with a 3 second timeout. Codex capture is unproven: no real Codex session has run on our hosts yet, so the format comes from the openai/codex source and from fixtures, and Codex only runs the hook once it trusts it. A Codex session that crashes never fires `SessionEnd` and is not captured.
+
+Every stored session is derived again once after this release (binding version 3), so older sessions gain the new agent type and requested model fields.

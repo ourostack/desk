@@ -259,7 +259,8 @@ function dayFolders(sessionsDir, startedAt, lastAt) {
   const dayOf = (instant) => Math.floor(instant / DAY_MS) * DAY_MS
   const start = dayOf(Date.parse(startedAt))
   // A far-future timestamp must not stretch the scan: it ends at the earliest of the last record's day, today, and a year after the start, each plus a day.
-  const last = Math.min(Math.max(dayOf(Date.parse(lastAt)), start), dayOf(Date.now()), start + MAX_SCAN_DAYS * DAY_MS) + DAY_MS
+  // A root that starts after today (clock skew) still scans its own day and the next.
+  const last = Math.max(Math.min(Math.max(dayOf(Date.parse(lastAt)), start), dayOf(Date.now()), start + MAX_SCAN_DAYS * DAY_MS), start) + DAY_MS
   const first = start - DAY_MS
   const folders = []
   for (let day = first; day <= last; day += DAY_MS) {

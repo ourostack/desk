@@ -191,6 +191,8 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
       && plugins.length < 64 && !plugins.some((p) => p.name === name && p.version === version)) plugins.push({ name, version, source: source(name, version) });
   };
   const unknown = () => null;
+  // Codex has no plugin registry Desk reads, so a Codex marker records no plugins and routes by the desk alone.
+  if (host === "codex") return { plugins, dirs, incomplete, timedOut };
   const sourceLate = () => performance.now() > sourceDeadline;
   if (host === "copilot") {
     // opendir bounds the enumeration as well as the number of file reads.
@@ -249,20 +251,37 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
   return { plugins, dirs, incomplete, timedOut };
 }
 
+// A Codex thread spawned by another thread is not a session. SessionEnd never fires for one, but a payload or rollout that names a parent is refused anyway.
+function childThread(payload, log) {
+  if (payload.parent_thread_id || payload.source?.subagent) return true;
+  try {
+    const fd = fs.openSync(log, "r");
+    try {
+      const buffer = Buffer.alloc(65536);
+      const text = buffer.toString("utf8", 0, fs.readSync(fd, buffer, 0, buffer.length, 0));
+      const meta = JSON.parse(text.split("\n")[0])?.payload;
+      return Boolean(meta?.parent_thread_id || meta?.source?.subagent);
+    } finally { fs.closeSync(fd); }
+  } catch { return false; }
+}
+
 async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot, launch: start = launch, supportsFinalize } = {}) {
   try {
     const [{ absolutePath, readSmallText, validMarker }, { ENUMS, PATTERNS, isPlainObject }] = await Promise.all([
       runtime("src/factory/marker.js"), runtime("src/factory/schema.js"),
     ]);
-    if (!["claude", "copilot"].includes(host) || !isPlainObject(payload)) return "invalid";
+    if (!["claude", "copilot", "codex"].includes(host) || !isPlainObject(payload)) return "invalid";
     const claude = host === "claude";
-    const event = claude ? payload.hook_event_name : Object.hasOwn(payload, "stopReason") ? "agentStop" : Object.hasOwn(payload, "reason") ? "sessionEnd" : null;
-    if (!(claude ? ["Stop", "SessionEnd"] : ["agentStop", "sessionEnd"]).includes(event)) return "invalid";
-    const id = claude ? payload.session_id : payload.sessionId;
+    const codex = host === "codex";
+    // Codex fires only SessionEnd, root thread only (openai/codex 60947e2, codex-rs/core/src/hook_runtime.rs#L471-L499). Its stdin is session_id, transcript_path (the rollout, or null), cwd, hook_event_name and reason (codex-rs/hooks/src/schema.rs#L512-L523).
+    const event = claude || codex ? payload.hook_event_name : Object.hasOwn(payload, "stopReason") ? "agentStop" : Object.hasOwn(payload, "reason") ? "sessionEnd" : null;
+    if (!(codex ? ["SessionEnd"] : claude ? ["Stop", "SessionEnd"] : ["agentStop", "sessionEnd"]).includes(event)) return "invalid";
+    const id = claude || codex ? payload.session_id : payload.sessionId;
     if (typeof id !== "string" || !PATTERNS.sessionId.test(id) || !absolutePath(payload.cwd)) return "invalid";
     const home = env.HOME || os.homedir();
-    const log = claude ? payload.transcript_path : path.join(env.COPILOT_HOME || path.join(home, ".copilot"), "session-state", id, "events.jsonl");
+    const log = claude || codex ? payload.transcript_path : path.join(env.COPILOT_HOME || path.join(home, ".copilot"), "session-state", id, "events.jsonl");
     if (!absolutePath(log)) return "invalid";
+    if (codex && childThread(payload, log)) return "invalid";
     const [{ resolveHookDeskRoot }, outbox, { resolveStore }, cli] = await Promise.all([
       runtime("scripts/resolve-desk-root.js"), runtime("src/factory/outbox.js"), runtime("src/factory/store-route.js"), runtime("scripts/factory.js"),
     ]);
@@ -275,16 +294,18 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     let routing = deskRoot === null ? { store: null, source: "invalid_declaration", warnings: [] } : resolveStore({ deskRoot, pluginDirs: dirs, read: (file) => readSmallText(file) });
     if (incomplete && routing.source !== "desk") routing = { store: null, source: "invalid_declaration", warnings: routing.warnings };
     const marker = {
-      schema_version: 1, host: claude ? "claude-code" : "copilot-cli", session_id: id,
+      schema_version: 1, host: claude ? "claude-code" : codex ? "codex-cli" : "copilot-cli", session_id: id,
       log_path: log, cwd: payload.cwd, desk_root: deskRoot,
       end_reason: ended ? ENUMS.endReason.includes(payload.reason) ? payload.reason : "other" : null,
       ended_at: ended ? at : null, plugins, updated_at: new Date().toISOString(),
-      entrypoint: claude ? "unknown" : path.resolve(pluginRoot).startsWith(agency) ? "launcher" : "cli",
+      entrypoint: claude || codex ? "unknown" : path.resolve(pluginRoot).startsWith(agency) ? "launcher" : "cli",
       person_prefix: env.DESK_PERSON ? `desks/${env.DESK_PERSON.trim()}` : "",
       routing,
     };
     if (!validMarker(marker)) return "invalid";
     await outbox.writeMarker(env, marker);
+    // Codex gives SessionEnd at most 3 s (codex-rs/hooks/src/events/session_end.rs#L20-L24), so this hook only records the marker; the next session-start sweep derives it.
+    if (codex) return "written";
     const script = path.join(ownRoot, "mcp", "scripts", "factory.js");
     // One Node search per hook run, however many jobs it starts.
     let resolved;

@@ -644,6 +644,15 @@ test("a far-future timestamp never stretches the child scan or breaks the deriva
   }
 }))
 
+test("a root that starts after today (clock skew) still finds a child started the same day", () => withHome(async (home) => {
+  const future = new Date(Date.now() + 5 * 86400000).toISOString()
+  const child = uuid(2)
+  put(home, child, at(60, future), [meta({ id: child, parent: ROOT, startIso: at(60, future) })])
+  const rolloutPath = put(home, ROOT, future, [meta({ startIso: future }), turnContext(1, ROOT_MODEL, {}, future)])
+  const { facts } = await deriveCodexSession({ rolloutPath, codexHome: home, plugins: [], endReason: "complete" })
+  assert.deepEqual(facts.agents.map((agent) => agent.n), [0, 1])
+}))
+
 // --- Identity edge cases -----------------------------------------------------
 
 test("a first record that is not a usable session_meta, or a missing cli_version, is source_unreadable", () => withHome(async (home) => {

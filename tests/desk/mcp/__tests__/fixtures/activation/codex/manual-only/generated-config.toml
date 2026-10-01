@@ -13,6 +13,13 @@ matcher = "*"
 type = "command"
 command = "node \"plugins/desk/hooks/host-enforcement.cjs\" codex"
 
+[[hooks.SessionEnd]]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "node \"plugins/desk/hooks/factory-end.cjs\" codex"
+timeout = 3
+
 [plugins."superpowers@ourostack"]
 enabled = true
 

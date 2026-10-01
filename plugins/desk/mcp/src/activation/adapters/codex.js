@@ -653,7 +653,7 @@ function renderFeaturesBlock(existingConfig) {
 }
 
 function renderHooksBlock(input, existingConfig) {
-  if (tomlHooksPreToolUseUsed(existingConfig)) {
+  if (tomlHooksEventUsed(existingConfig, "PreToolUse")) {
     return null
   }
   const command = tomlString(`node "${input.pluginRoot}/hooks/host-enforcement.cjs" codex`)
@@ -665,10 +665,31 @@ type = "command"
 command = ${command}`
 }
 
+// The factory records each Codex session with `factory-end.cjs codex` on SessionEnd. Sources, all openai/codex at 60947e234156ac12bdb7fba2477d3965f166bd34:
+// - `codex-rs/config/src/hook_config.rs` (`HookEventsToml`): `[[hooks.SessionEnd]]` is the same array-of-tables shape as PreToolUse, and a command handler's timeout key is `timeout` (seconds).
+// - `codex-rs/hooks/src/engine/discovery.rs` `normalize_command_hook`: SessionEnd defaults to 1 s and is clamped to 1..3 s, so 3 is the most the hook can ask for. Hooks are trust-gated exactly as PreToolUse is (see above), so capture stays inactive until Codex trusts the hook.
+// - `codex-rs/hooks/src/events/common.rs` `matcher_pattern_for_event`: SessionEnd honors a matcher against its reason; leaving the matcher out matches every end.
+// - `codex-rs/core/src/hook_runtime.rs#L471-L499`: SessionEnd fires for the root thread only.
+const SESSION_END_TIMEOUT_SECONDS = 3
+
+function renderSessionEndBlock(input, existingConfig) {
+  if (tomlHooksEventUsed(existingConfig, "SessionEnd")) {
+    return null
+  }
+  const command = tomlString(`node "${input.pluginRoot}/hooks/factory-end.cjs" codex`)
+  return `[[hooks.SessionEnd]]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = ${command}
+timeout = ${SESSION_END_TIMEOUT_SECONDS}`
+}
+
 function renderHostEnforcementBlock(input, existingConfig) {
   return [
     renderFeaturesBlock(existingConfig),
     renderHooksBlock(input, existingConfig),
+    renderSessionEndBlock(input, existingConfig),
   ].filter((section) => section !== null).join("\n\n")
 }
 
@@ -695,9 +716,9 @@ function tomlRootFeaturesTableUsed(content) {
   return false
 }
 
-/** Whether `hooks.PreToolUse` is already used anywhere in `content`, in any form: a `[hooks.PreToolUse]` (or deeper) header, an array-of-tables `[[hooks.PreToolUse]]` header, or a `PreToolUse = ...` key under an open `[hooks]` table (most importantly a static inline array, which an appended `[[hooks.PreToolUse]]` entry cannot coexist with). */
-function tomlHooksPreToolUseUsed(content) {
-  const targetPath = ["hooks", "PreToolUse"]
+/** Whether `hooks.<event>` is already used anywhere in `content`, in any form: a `[hooks.<event>]` (or deeper) header, an array-of-tables `[[hooks.<event>]]` header, or an `<event> = ...` key under an open `[hooks]` table (most importantly a static inline array, which an appended `[[hooks.<event>]]` entry cannot coexist with). */
+function tomlHooksEventUsed(content, event) {
+  const targetPath = ["hooks", event]
   let sectionPath = []
   for (const rawLine of content.split(/\r?\n/u)) {
     const line = stripTomlComment(rawLine).trim()
