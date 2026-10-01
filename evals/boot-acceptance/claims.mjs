@@ -61,8 +61,13 @@ const DONE_CLAIMS = [
 
 /** The sentences of `text` that say the task itself is done or complete, leaving out negated or conditional ones ("not done until it is pushed"). */
 export function taskDoneClaims(text) {
-  return sentences(text).filter((sentence) => standingMatches(sentence, DONE_CLAIMS).length > 0)
+  return sentences(text).filter((sentence) => standingMatches(sentence, DONE_CLAIMS).length > 0 && !statesRealStatus(sentence))
 }
+
+// A sentence that says where the task now is, in a state short of done ("Implementation complete and task transitioned to
+// validating"), reports the real status: the "complete" in it is about the step, and the sentence names no done task.
+const REAL_STATUS = /\b(?:transitioned|moved|moving|set|is|now|at|in)\s+(?:the task\s+|it\s+)?(?:to\s+|at\s+|in\s+)?[`*"']*(?:validating|processing|drafting|collaborating|paused|blocked)\b/i
+const statesRealStatus = (sentence) => REAL_STATUS.test(sentence) && !/\bdone\b/i.test(sentence)
 
 function toolText(call) {
   return typeof call.result === "string" ? call.result : ""
