@@ -979,14 +979,27 @@ test("a fractional or unsafe token count is unknown with a tokens entry, and the
   }
 })
 
-test("an unknown count stays unknown when the same message repeats and when other requests add to the model", async () => {
+test("a good repeat of a message recovers an unreadable count, and a malformed repeat never erases a good one", async () => {
   const { facts } = await deriveInline([
     assistant("a", { input_tokens: 1.5, output_tokens: 7 }),
     assistant("a", { input_tokens: 4, output_tokens: 9 }),
     assistant("b", { input_tokens: 4, output_tokens: 1 }),
   ])
-  assert.deepEqual(facts.models[0].tokens, { input: null, output: 10, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.deepEqual(facts.models[0].tokens, { input: 8, output: 10, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   assert.equal(facts.models[0].requests, 2)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  // A malformed repeat of a message keeps the earlier good value and is flagged; a good repeat recovers an earlier bad one.
+  const kept = await deriveInline([assistant("a", { input_tokens: 4, output_tokens: 7 }), assistant("a", { input_tokens: 1.5, output_tokens: 9 })])
+  assert.deepEqual(kept.facts.models[0].tokens, { input: 4, output: 9, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.ok(kept.facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
+  const recovered = await deriveInline([assistant("a", { input_tokens: 1.5 }), assistant("a", { input_tokens: 6 })])
+  assert.equal(recovered.facts.models[0].tokens.input, 6)
+  // Sums past the safe range are unknown, not an invalid file.
+  const huge = await deriveInline([assistant("a", { input_tokens: Number.MAX_SAFE_INTEGER }), assistant("b", { input_tokens: 5 })])
+  assert.equal(huge.facts.models[0].tokens.input, null)
+  assert.ok(huge.facts.unavailable.some((entry) => entry.field === "tokens"))
+  assert.deepEqual(validateLocalFacts(huge.facts), { ok: true, errors: [] })
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 })
 

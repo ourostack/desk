@@ -219,27 +219,32 @@ function publishRefs(refs, askPublic) {
 
 const TOKEN_KEYS = ["input", "output", "cache_read", "cache_write", "reasoning"]
 
-// The sum of two counts where `null` means unknown: unknown only when both are, or when the sum is unsafe.
+// The sum of two counts; unknown (`null`) when either is unknown or the sum is unsafe, as everywhere else.
 function sumKnown(a, b) {
-  if (a === null && b === null) return null
-  const sum = (a ?? 0) + (b ?? 0)
+  if (a === null || b === null) return null
+  const sum = a + b
   return Number.isSafeInteger(sum) ? sum : null
 }
 
-// A model id the published validator would refuse publishes as `unknown`. Models that end up with the same id merge, so the published ids stay unique.
-function publishModels(models) {
+// A model id the published validator would refuse publishes as `unknown`. Models that end up with the same id merge, so the published ids stay unique, and the result is sorted by id. A merged count that cannot be summed is unknown, and says so in `unavailable`.
+function publishModels(models, flag) {
   const byId = new Map()
+  const merged = (field, a, b) => {
+    const sum = sumKnown(a, b)
+    if (sum === null && !(a === null && b === null)) flag(field, "source_unreadable")
+    return sum
+  }
   for (const model of models) {
     const id = publishableToken(scrub(model.id)) ? scrub(model.id) : "unknown"
     const held = byId.get(id)
     if (held === undefined) {
       byId.set(id, { id, requests: model.requests, tokens: Object.fromEntries(TOKEN_KEYS.map((key) => [key, model.tokens[key]])) })
     } else {
-      held.requests = sumKnown(held.requests, model.requests)
-      for (const key of TOKEN_KEYS) held.tokens[key] = sumKnown(held.tokens[key], model.tokens[key])
+      held.requests = merged("requests", held.requests, model.requests)
+      for (const key of TOKEN_KEYS) held.tokens[key] = merged("tokens", held.tokens[key], model.tokens[key])
     }
   }
-  return [...byId.values()]
+  return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : 1))
 }
 
 // A plugin is named in a public store only when it was installed from a public
@@ -394,7 +399,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
     schema: PUBLISHED_SCHEMA,
     session: publishSession(local.session, durationMs, sessionId),
     plugins: plugins.plugins,
-    models: publishModels(local.models),
+    models: publishModels(local.models, flag),
     agents: local.agents.map((agent) => publishAgent(agent, local.session.host, plugins.names)),
     intervals,
     counts: {

@@ -1,9 +1,6 @@
-// Helpers the three session derivers share: ordering, PR de-duplication,
-// schema limits, plugin sanitising, `unavailable` entries, count validation and
-// the `requested_model` rule. Pure functions with no host knowledge.
+// Helpers the three session derivers share: ordering, PR de-duplication, schema limits, plugin sanitising, `unavailable` entries, count validation and the `requested_model` rule. Pure functions with no host knowledge.
 //
-// `src/factory/**` imports only `node:` built-ins and other `src/factory/`
-// files.
+// `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
 import { LIMITS, PATTERNS, validPluginSource } from "./schema.js"
 
@@ -12,11 +9,7 @@ export function comparePrRefs(a, b) {
   return a.repo < b.repo ? -1 : 1
 }
 
-// Claude Code writes a `pr-link` line into the root transcript for every PR of
-// the session, including the ones a subagent created. A `gitOperation.pr` with
-// action `created` is the creating call; any other action (merged, ready,
-// closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of
-// the same kind the lowest worker wins.
+// Claude Code writes a `pr-link` line into the root transcript for every PR of the session, including the ones a subagent created. A `gitOperation.pr` with action `created` is the creating call; any other action (merged, ready, closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of the same kind the lowest worker wins.
 export function dedupePrRefs(refs) {
   const seen = new Map()
   for (const ref of refs) {
@@ -48,8 +41,7 @@ export function addUnavailable(unavailable, field, reason) {
   }
 }
 
-// Keeps only caller-supplied plugin entries that already match the schema,
-// up to the cap.
+// Keeps only caller-supplied plugin entries that already match the schema, up to the cap.
 export function sanitizePlugins(plugins, limits, unavailable) {
   const list = Array.isArray(plugins) ? plugins : []
   const valid = list.filter((entry) => typeof entry?.name === "string" && PATTERNS.pluginName.test(entry.name)
@@ -59,10 +51,7 @@ export function sanitizePlugins(plugins, limits, unavailable) {
   return valid.slice(0, limits.plugins).map(({ name, version, source }) => ({ name, version, source: source ?? null }))
 }
 
-// Trims every derived array to what `validateLocalFacts` accepts: drops
-// intervals whose end precedes their start, agents past the `n` range (with
-// their intervals), and anything past a schema cap, recording each loss in
-// `unavailable`. Pure, so tests can drive it with small limits.
+// Trims every derived array to what `validateLocalFacts` accepts: drops intervals whose end precedes their start, agents past the `n` range (with their intervals), and anything past a schema cap, recording each loss in `unavailable`. Pure, so tests can drive it with small limits.
 export function applyLimits({ agents, intervals, models, prs }, unavailable, limits = LIMITS) {
   let keptAgents = agents
   let keptIntervals = intervals
@@ -99,7 +88,6 @@ export function applyLimits({ agents, intervals, models, prs }, unavailable, lim
   const keptPrs = prs.slice(0, limits.prs).map(({ agent, ...ref }) => (keptNs.has(agent) ? { ...ref, agent } : ref))
   return { agents: keptAgents, intervals: keptIntervals, models: keptModels, prs: keptPrs }
 }
-
 
 /** A token or request count the schema accepts (a safe non-negative integer), else `null`. */
 export const countOrNull = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)

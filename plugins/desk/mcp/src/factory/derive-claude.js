@@ -119,9 +119,10 @@ function usageCount(value) {
   return value === undefined || value === null ? 0 : countOrNull(value)
 }
 
-// The larger of two counts, or `null` when either is unknown.
-function maxNullable(a, b) {
-  return a === null || b === null ? null : Math.max(a, b)
+// The larger of two counts; an unknown one yields to a readable one, so a malformed repeat of a message never erases a good value.
+function maxReadable(a, b) {
+  if (a === null) return b
+  return b === null ? a : Math.max(a, b)
 }
 
 function repoFromPrUrl(url) {
@@ -298,6 +299,7 @@ function createAgentProcessor({ agentIndex }) {
   let pendingApiRetryStarts = []
   let hadUnresolvedCall = false
   let invalidModelSeen = false
+  let tokensUnreadable = false
 
   let currentPromptStart = null
   let lastActivityTs = null
@@ -395,6 +397,7 @@ function createAgentProcessor({ agentIndex }) {
         cache_read: usageCount(usage.cache_read_input_tokens),
         cache_write: usageCount(usage.cache_creation_input_tokens),
       }
+      if (Object.values(fields).includes(null)) tokensUnreadable = true
       if (!usageById.has(id)) {
         if (isValidModelId(model)) {
           usageById.set(id, { model, ...fields })
@@ -405,10 +408,10 @@ function createAgentProcessor({ agentIndex }) {
         }
       } else {
         const existing = usageById.get(id)
-        existing.input = maxNullable(existing.input, fields.input)
-        existing.output = maxNullable(existing.output, fields.output)
-        existing.cache_read = maxNullable(existing.cache_read, fields.cache_read)
-        existing.cache_write = maxNullable(existing.cache_write, fields.cache_write)
+        existing.input = maxReadable(existing.input, fields.input)
+        existing.output = maxReadable(existing.output, fields.output)
+        existing.cache_read = maxReadable(existing.cache_read, fields.cache_read)
+        existing.cache_write = maxReadable(existing.cache_write, fields.cache_write)
       }
     }
 
@@ -541,6 +544,7 @@ function createAgentProcessor({ agentIndex }) {
         firstPromptTask,
         hadUnresolvedCall,
         invalidModelSeen,
+        tokensUnreadable,
         earliestTimestamp,
         latestTimestamp,
         hadUsableEnvelope,
@@ -693,7 +697,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   if ((models.length === 0 && totalParseFailures > 0) || invalidModelSeen) {
     addUnavailable(unavailable, "models", "source_unreadable")
   }
-  if (models.some(({ tokens }) => [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write].includes(null))) {
+  if (agentResults.some((result) => result.tokensUnreadable) || models.some(({ tokens }) => [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write].includes(null))) {
     addUnavailable(unavailable, "tokens", "source_unreadable")
   }
   addUnavailable(unavailable, "permission_waits", "host_does_not_record")

@@ -84,7 +84,7 @@ export async function runDeriveCommand({ argv, env }) {
   return deriveFile(env, options.get("marker"), { quietMs: Number(raw) })
 }
 
-/** `flush --store <owner/repo>`: one delivery attempt; prints `{ result, pr? }`. */
+/** `flush --store <owner/repo>`: one delivery attempt; prints `{ result, pr?, stale_retries?, rejections_unmatched? }`. */
 export async function runFlushCommand({ argv, env, runner }) {
   const options = parseOptions(argv)
   if (options === null || options.size !== 1 || !options.has("store")) throw new Error("Usage: factory.js flush --store <owner/repo>")

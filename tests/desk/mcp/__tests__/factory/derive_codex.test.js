@@ -551,18 +551,29 @@ test("token totals are cumulative: each increase is a request, a lower total is 
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 }))
 
-test("a fractional or unsafe token total is unknown with a tokens entry, and the facts stay valid", () => withHome(async (home) => {
+test("an unreadable total field keeps its baseline and is flagged; the next good total recovers the increase", () => withHome(async (home) => {
   for (const bad of [1.5, 2 ** 53 + 2, -5, "x"]) {
-    const { facts } = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { input_tokens: bad, output_tokens: 50, cached_input_tokens: 10 })])
-    assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: null, output: 50, cache_read: 10, cache_write: 0, reasoning: 0 } }], String(bad))
+    const { facts } = await deriveRoot(home, [
+      meta(), turnContext(1, ROOT_MODEL),
+      tokens(2, { input_tokens: 10, output_tokens: 5 }),
+      tokens(3, { input_tokens: bad, output_tokens: 8 }),
+      tokens(4, { input_tokens: 30, output_tokens: 9 }),
+    ])
+    assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 3, tokens: { input: 30, output: 9, cache_read: 0, cache_write: 0, reasoning: 0 } }], String(bad))
     assert.ok(unavailable(facts, "tokens", "source_unreadable"))
     assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
   }
-  // Both main counts unreadable, in a later total: the model's input and output stay unknown.
-  const later = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { input_tokens: 10, output_tokens: 5 }), tokens(3, { input_tokens: 1.5, output_tokens: 2 ** 53 + 2 }), tokens(4, { input_tokens: 40, output_tokens: 9 })])
-  assert.deepEqual(later.facts.models[0].tokens.input, null)
-  assert.deepEqual(later.facts.models[0].tokens.output, null)
-  assert.deepEqual(validateLocalFacts(later.facts), { ok: true, errors: [] })
+}))
+
+test("a bad cached or reasoning field never nulls a good input or output, and a sample with no readable increase is no request", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [
+    meta(), turnContext(1, ROOT_MODEL),
+    tokens(2, { input_tokens: 100, cached_input_tokens: 1.5, output_tokens: 50, reasoning_output_tokens: -1 }),
+    tokens(3, { input_tokens: "x", cached_input_tokens: 1.5, output_tokens: 2 ** 53 + 2 }),
+  ])
+  assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: 100, output: 50, cache_read: 0, cache_write: 0, reasoning: 0 } }])
+  assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 }))
 
 test("tokens with no known model, a bad model, or no usage at all are flagged, not invented", () => withHome(async (home) => {
