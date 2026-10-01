@@ -7,15 +7,22 @@ import * as path from "node:path"
 const OPERATOR_CHARS = new Set([";", "|", "&", "<", ">", "(", ")", "\n"])
 const SEPARATORS = new Set([";", "|", "||", "&&", "&", "(", ")", "\n"])
 
+// How many characters a backslash line continuation takes at `index` (`\\` then LF, or CRLF), or 0 when there is none.
+function continuation(text, index) {
+  if (text[index] !== "\\") return 0
+  if (text[index + 1] === "\n") return 2
+  return text[index + 1] === "\r" && text[index + 2] === "\n" ? 3 : 0
+}
+
 // One word starting at `at`: quotes removed, a backslash keeps the next character, an unquoted operator ends it.
 function readWord(text, at) {
   let word = ""
   let index = at
   while (index < text.length) {
     const char = text[index]
-    if (char === "\\" && text[index + 1] === "\n") {
+    if (continuation(text, index) > 0) {
       // A backslash before a line break continues the line: it is no character of the word.
-      index += 2
+      index += continuation(text, index)
     } else if (char === "\\") {
       word += text[index + 1] ?? ""
       index += 2
@@ -27,6 +34,11 @@ function readWord(text, at) {
     } else if (char === '"') {
       index += 1
       while (index < text.length && text[index] !== '"') {
+        // As in bash, a backslash before a line break inside double quotes joins the lines; before another character it escapes it.
+        if (continuation(text, index) > 0) {
+          index += continuation(text, index)
+          continue
+        }
         if (text[index] === "\\" && index + 1 < text.length) index += 1
         word += text[index]
         index += 1
@@ -74,8 +86,8 @@ export function tokenize(command) {
   let index = 0
   while (index < text.length) {
     const char = text[index]
-    if (char === " " || char === "\t" || (char === "\\" && text[index + 1] === "\n")) {
-      index += char === "\\" ? 2 : 1
+    if (char === " " || char === "\t" || continuation(text, index) > 0) {
+      index += char === "\\" ? continuation(text, index) : 1
     } else if (char === "\n") {
       tokens.push({ kind: "op", value: "\n" })
       index = skipHeredocBodies(text, index + 1, heredocs.splice(0))

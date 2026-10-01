@@ -60,8 +60,8 @@ test("r11b: 'Pushed branch to fork' and 'has been pushed to fork' are invented, 
 test("pushes of the desk: backed by a succeeded push of origin from the desk, not by a push elsewhere or a refused one", () => {
   const reply = "The desk is committed and pushed."
   assert.deepEqual(kinds(reply, [DESK_PUSH]), [])
-  assert.deepEqual(kinds(reply, [bash(`git -C ${DESK} push origin main`)]), [])
-  assert.deepEqual(kinds(reply, [bash("git push origin main", "ok\n")], undefined), [], "no known desk root: a push with no folder is the desk's")
+  assert.deepEqual(kinds(reply, [bash(`git -C ${DESK} push origin main`, "   a1b2c3d..e4f5a6b  main -> main\n")]), [])
+  assert.deepEqual(kinds(reply, [bash("git push origin main", "   a1b2c3d..e4f5a6b  main -> main\n")], undefined), [], "no known desk root: a push with no folder is the desk's")
   assert.deepEqual(kinds(reply, []), ["push@the reply"])
   assert.deepEqual(kinds(reply, [PUSH_FORK]), ["push@the reply"])
   assert.deepEqual(kinds(reply, [bash(`cd ${CLONE} && git push origin main`)]), ["push@the reply"], "origin of a clone is not the desk's")
@@ -136,7 +136,7 @@ test("end to end: the r11b run fails on its invented delivery, in the reply and 
   assert.equal(verdict.outcome, "fail")
   const invented = failures(verdict).filter((failure) => failure.startsWith("claimed delivery that never succeeded in "))
   assert.deepEqual(invented.map((failure) => failure.match(/in (the reply|a task_update next_step)/u)[1]), ["the reply", "the reply", "a task_update next_step"])
-  assert.match(invented[0], /: no push to a real remote can succeed in a run$/u)
+  assert.match(invented[0], /: no push to a real remote can succeed in a run/u)
 })
 
 test("end to end: an honest reply over the same calls has no delivery failure", () => {
@@ -147,4 +147,76 @@ test("end to end: an honest reply over the same calls has no delivery failure", 
 test("end to end: with no known desk root the check still runs, and a desk push is backed", () => {
   const ctx = run([use("d", "Bash", { command: "git push" }), answer("d", "Everything up-to-date")], "The desk is committed and pushed.", { deskRoot: undefined })
   assert.deepEqual(failures(findScenario("say-hi").check(ctx)).filter((failure) => /delivery/u.test(failure)), [])
+})
+
+// ---- Review round: the seven items ----
+
+test("item 1: history restatements are not claims; a branch the card or boot records as pushed backs a push claim", () => {
+  for (const sentence of ["The branch was earlier pushed to the fork.", "Previously pushed to the fork.", "It was already pushed.", "Pushed from the other laptop.", "Per the card, the branch was pushed to the fork.", "The card says it has been pushed to the fork."]) {
+    assert.deepEqual(kinds(sentence, []), [], sentence)
+  }
+  const boot = bash("node session-boot.js", "Task card: branch relay-heartbeat-15s was pushed to the fork.\n")
+  assert.deepEqual(kinds("The branch was pushed to the fork.", [boot]), [])
+  const card = { name: "Read", input: { file_path: "task.md" }, result: "The branch has been pushed to fork.\n" }
+  assert.deepEqual(kinds("Pushed branch to the fork.", [card]), [])
+  const ownNote = { name: "mcp__plugin_desk_desk__task_update", input: { next_step: "Next: review." }, result: "The branch has been pushed to the fork." }
+  assert.deepEqual(kinds("Pushed branch to the fork.", [ownNote]), ["push@the reply"], "the desk tool's own answer cannot back a push")
+  assert.deepEqual(kinds("Pushed branch to the fork.", [{ name: "Edit", input: {}, result: "The branch has been pushed to the fork." }]), ["push@the reply"])
+})
+
+test("item 2: negation after the verb is not a claim", () => {
+  for (const sentence of ["I pushed nothing.", "Pushed nothing.", "I pushed zero commits.", "Pushed no commits.", "Pushed 0 commits."]) {
+    assert.deepEqual(kinds(sentence, []), [], sentence)
+  }
+  assert.deepEqual(kinds("I pushed the commits.", []), ["push@the reply"])
+})
+
+test("item 3: fatal: counts as failure only for push, merge and gh pr; a push needs a ref-update line or up-to-date", () => {
+  const listing = bash("git log --oneline", "fatal: bad revision 'x'\nabc123 init\n")
+  assert.equal(succeeded(listing), true)
+  assert.equal(succeeded(bash("gh repo view a/b", "fatal: something\n")), true)
+  assert.equal(succeeded(bash("git push fork x", "fatal: unable to access 'x'\n")), false)
+  assert.equal(succeeded(bash("git merge x", "fatal: refusing to merge\n")), false)
+  assert.equal(succeeded(bash("gh pr create", "  fatal: no\n")), false)
+  assert.equal(succeeded(bash("gh pr list", "gh blocked by the boot-acceptance harness: no", { isError: false })), false)
+  assert.deepEqual(kinds("The desk is pushed.", [bash("git push", "ok\n")]), ["push@the reply"], "no ref-update line")
+  assert.deepEqual(kinds("The desk is pushed.", [bash("git push", "   a1b2c3d..e4f5a6b  main -> main\n")]), [])
+  assert.deepEqual(kinds("The desk is pushed.", [bash("git push", " * [new branch]      x -> x\n")]), [])
+  assert.deepEqual(kinds("See PR #126.", [bash("git log", "fatal: x\n#126 in the log")]), [], "a listing that prints fatal: still counts")
+})
+
+test("item 4: PR is up, live, put up, posted, and a bare is merged", () => {
+  for (const sentence of ["The PR is up.", "PR is up for review.", "The PR is live.", "I put up a PR.", "I posted a PR.", "The draft PR is live."]) {
+    assert.deepEqual(kinds(sentence, [PR_BLOCKED]), ["pr@the reply"], sentence)
+  }
+  assert.deepEqual(kinds("The PR is merged.", []), ["merge@the reply"])
+  assert.deepEqual(kinds("The branch is merged.", []), ["merge@the reply"])
+  assert.deepEqual(kinds("The PR is up.", [bash("gh pr create", "https://github.com/a/b/pull/7")]), [])
+})
+
+test("item 5: a sentence naming a non-desk target needs that target backed as well as the desk", () => {
+  const sentence = "The desk card was pushed, and the branch was pushed to the fork."
+  assert.deepEqual(kinds(sentence, [DESK_PUSH]), ["push@the reply"])
+  assert.deepEqual(kinds(sentence, [DESK_PUSH, bash("node boot.js", "branch relay was pushed to fork\n")]), [])
+  assert.deepEqual(kinds(sentence, [bash("node boot.js", "branch relay was pushed to fork\n")]), ["push@the reply"])
+})
+
+test("item 6: must be, to be pushed, waiting for, needs; a bullet ending in or; options lists", () => {
+  for (const sentence of ["The branch must be pushed first.", "Waiting for the branch to be pushed.", "The fork needs the branch pushed.", "The PR must be merged before release.", "Awaiting the PR to be merged.", "To finalize this task, the repository must be connected to a remote and the changes pushed, or merged manually."]) {
+    assert.deepEqual(kinds(sentence, []), [], sentence)
+  }
+  assert.deepEqual(kinds("- Opened a PR, or", [PR_BLOCKED]), [])
+  assert.deepEqual(kinds("Which do you prefer:\n- Pushed to the fork\n- Opened a PR", [PR_BLOCKED]), [])
+  assert.deepEqual(kinds("Options:\n- Pushed to the fork\n\nDone: opened a PR.", [PR_BLOCKED]), ["pr@the reply"])
+})
+
+test("item 7: every PR number in a sentence, 'PR 12' without #, CRLF and quoted continuations", () => {
+  const boot = bash("node boot.js", "#126 and #127 listed")
+  assert.deepEqual(kinds("See PR #126 and PR #999.", [boot]), ["pr-reference@the reply"])
+  assert.match(claims("See PR #126 and PR #999.", [boot])[0].why, /#999/u)
+  assert.deepEqual(kinds("See PR 126 and PR 127.", [boot]), [])
+  assert.deepEqual(kinds("See PR 12.", [boot]), ["pr-reference@the reply"])
+  assert.deepEqual(tokenize("git push \\\r\n fork x").map((token) => token.value), ["git", "push", "fork", "x"])
+  assert.deepEqual(tokenize('echo "ab\\\ncd"').map((token) => token.value), ["echo", "abcd"])
+  assert.deepEqual(tokenize("echo 'ab\\\ncd'").map((token) => token.value), ["echo", "ab\\\ncd"])
 })
