@@ -87,7 +87,15 @@ test("git push to any GitHub URL fails at once against the run's git config, whi
       const r = git(repo, "push", url, "main")
       assert.notEqual(r.status, 0, url)
       assert.match(r.stderr, /offline-remotes|does not appear to be a git repository|not found|No such/i, url)
+      // A clone or fetch is rewritten the same way, so it fails at once instead of downloading a real repository.
+      const clone = git(dir, "clone", "-q", url, path.join(dir, "cloned"))
+      assert.notEqual(clone.status, 0, `clone ${url}`)
+      assert.match(clone.stderr, /offline-remotes|does not appear to be a git repository|not found|No such/i, `clone ${url}`)
+      const fetched = git(repo, "fetch", url)
+      assert.notEqual(fetched.status, 0, `fetch ${url}`)
+      assert.match(fetched.stderr, /offline-remotes|does not appear to be a git repository|not found|No such/i, `fetch ${url}`)
     }
+    assert.equal(git(dir, "clone", "-q", bare, path.join(dir, "local-clone")).status, 0, "a local bare repository still clones")
   } finally { done() }
 })
 

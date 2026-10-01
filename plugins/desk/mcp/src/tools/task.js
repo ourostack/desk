@@ -576,8 +576,10 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  * "failed", reason }` on the result, omitted entirely on a normal, silent
  * success, when the file was already dirty, or on a non-Git desk.
  *
- * Returns: { status: "updated", path, commit?, next_step?, next_step_note? } (the last two when the call added a note
- * or changed the status without passing `next_step`: the card's current next step, or null, and a reminder)
+ * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note? } (`next_step` and
+ * `next_step_note` when the call added a note or changed the status without passing `next_step`: the card's current next
+ * step, or null, and a reminder; `report_as` and `report_note` whenever the status is not terminal: the sentence to
+ * report the task with, and a line against calling it done)
  */
 // `note` and `next_step` are checked before any write: an empty one would record progress that says nothing.
 function requiredText(value, field) {
@@ -688,9 +690,19 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
   // is already done (a run finished the step, logged it, and reported "Done" over a card still pointing at it): show
   // the step the card still carries and say it was not touched. A terminal status leaves no next step to keep current.
-  if (nextStep === undefined && !TERMINAL_STATUSES.has(merged.status) && (note !== undefined || merged.status !== existing.data.status)) {
-    result.next_step = nextStepOf(newBody)
+  const terminal = TERMINAL_STATUSES.has(merged.status)
+  const currentStep = nextStepOf(newBody)
+  if (nextStep === undefined && !terminal && (note !== undefined || merged.status !== existing.data.status)) {
+    result.next_step = currentStep
     result.next_step_note = "next_step unchanged \u2014 update it if this work changed it"
+  }
+  // Agents rarely reread a skill when they reply, so the cue sits in the response they have just read: the sentence to
+  // report an unfinished task with, and a line against calling it done (the reply opened "Done." over a validating card
+  // in four acceptance rounds running).
+  if (!terminal) {
+    const status = typeof merged.status === "string" && merged.status !== "" ? merged.status : "no recorded status"
+    result.report_as = `Task ${slug} is at ${status} (not done): ${currentStep ?? "no next step recorded"}`
+    result.report_note = `Do not tell the operator this task is done; it is at ${status}.`
   }
   return result
 }

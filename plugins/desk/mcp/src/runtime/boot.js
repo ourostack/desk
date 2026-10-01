@@ -604,6 +604,14 @@ export function resolveTaskQuery(query, cards, root) {
   return { status: "resolved", task: { ...summary(matches[0]), card: `${cardLocation({ desk: matches[0].desk, track: matches[0].track, slug: matches[0].slug })}/task.md`, file: matches[0].file } }
 }
 
+/** Names of the card's repos that are remote-only: recorded as `mode: remote`, or with no local path. */
+function remoteRepoNames(card) {
+  const repos = Array.isArray(card.data.repos) ? card.data.repos : []
+  return repos
+    .filter((repo) => repo !== null && typeof repo === "object" && (repo.mode === "remote" || typeof repo.local_path !== "string" || repo.local_path.trim() === ""))
+    .map((repo) => (typeof repo.name === "string" && repo.name !== "" ? redactCredentialLikeText(repo.name) : "a repo without a name"))
+}
+
 function hostLineHostname(cardText) {
   const match = /^Host: `([^`]+)`/mu.exec(cardText)
   return match === null ? null : match[1]
@@ -859,12 +867,18 @@ function missingCloneInstruction(missing) {
   const where = shellQuotePath(missing.local_path)
   const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}`
   if (typeof missing.url === "string") {
-    return `${lead}: clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url), then do the work that needs it.`
+    return `${lead}: only if the next step needs its code, clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url); otherwise do not clone it.`
   }
   if (typeof missing.repo === "string" && /^[\w.-]+\/[\w.-]+$/u.test(missing.repo)) {
-    return `${lead}: clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`, then do the work that needs it.`
+    return `${lead}: only if the next step needs its code, clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`; otherwise do not clone it.`
   }
   return `${lead}, and the card records no usable clone url for it. Do not invent the repo or any progress in it. Ask the operator one question: "Where is ${missing.repo} cloned, or what URL should I clone it from?" Then clone it to ${missing.local_path} (or record the path they give) and save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask.`
+}
+
+// A repo the card records as remote-only, or with no local path: it is read through the hosting service, and cloned only
+// when the next step needs its code (an agent once cloned a public repo into the shared /tmp just to look at it).
+function remoteRepoInstruction(names, root) {
+  return `The named task's remote-only repos (no local clone): ${names.join(", ")}. Do not clone any of them unless the next step needs its code. If it does, clone into the operator's code location (\`defaults.clone_root\` in ${root.path}/.machine-local.yml, default ~/code/), never /tmp, and record the clone on the card with task_update (the repo's \`local_path\`, with \`mode: local\`).`
 }
 
 function buildInstructions(ctx) {
@@ -894,6 +908,7 @@ function buildInstructions(ctx) {
       for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
         out.push(missingCloneInstruction(missing))
       }
+      if (task.task.remote_repos.length > 0) out.push(remoteRepoInstruction(task.task.remote_repos, root))
       if (task.host_line_changed) out.push(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
     } else if (task?.status === "ambiguous") {
       out.push(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
@@ -904,6 +919,7 @@ function buildInstructions(ctx) {
     out.push("No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new.")
   }
   out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
+  out.push("When you report on a task, say its real status; say 'done' only for a task whose status is done.")
   out.push(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`)
   return out
 }
@@ -1109,7 +1125,7 @@ export async function bootOnce({
     if (resolved.status === "resolved") {
       const { file, ...shown } = resolved.task
       const recorded = hostLineHostname(readCardText(file) ?? "")
-      task = { status: "resolved", task: shown, host_line_changed: recorded !== null && recorded !== host.hostname }
+      task = { status: "resolved", task: { ...shown, remote_repos: remoteRepoNames(cards.find((card) => card.file === file)) }, host_line_changed: recorded !== null && recorded !== host.hostname }
     } else {
       task = resolved
     }

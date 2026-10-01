@@ -311,6 +311,11 @@ export function shellWrites(command, { cwd, home }) {
         if (target !== undefined && target !== "") note(target, name)
       }
       else if (positional(rest).length >= 2) note(positional(rest).at(-1), name)
+    } else if (name === "gh" && rest[0] === "repo" && rest[1] === "clone") {
+      // Words after a bare `--` are git's own flags, not the repository or the folder.
+      const dashes = rest.indexOf("--")
+      const named = positional((dashes === -1 ? rest : rest.slice(0, dashes)).slice(2), ["-u", "--upstream-remote-name"])
+      if (named.length > 0) note(named[1] ?? path.posix.basename(named[0]), "gh repo clone")
     } else if (name === "git") {
       const git = gitParts(words)
       if (git === null) continue
@@ -327,4 +332,32 @@ export function shellWrites(command, { cwd, home }) {
     }
   }
   return [...new Map(found.map((write) => [`${write.via}\0${write.path}`, write])).values()]
+}
+
+// ---------------------------------------------------------------------------
+// Network fetches
+// ---------------------------------------------------------------------------
+
+// A URL or scp-style address that reaches another machine: any scheme URL whose host is not this one, and `user@host:path`.
+// A bare path and `file://` are local, so the fixture desk's own bare `origin` never matches.
+const REAL_REMOTE = /^(?:(?:https?|git|ssh|ftps?):\/\/(?!(?:localhost|127\.0\.0\.1|\[::1\])(?:[:/]|$))|[\w.-]+@[\w.-]+:)/iu
+const FETCHING_SUBCOMMANDS = new Set(["clone", "fetch", "pull", "ls-remote"])
+
+/**
+ * The network fetches a shell command makes from a real host, as `{ via, target }`: `git clone|fetch|pull|ls-remote` and
+ * `git remote add|set-url` with a URL that is not local (`https://github.com/...`, `git@github.com:...`), and `gh repo clone`, which always
+ * reaches GitHub. A bare path or `file://` URL (the fixture's own origin) is not one.
+ */
+export function remoteFetches(command) {
+  const found = []
+  for (const { words } of simpleCommands(command)) {
+    const git = gitParts(words)
+    if (git !== null) {
+      const target = git.subcommand === "remote" ? (["add", "set-url"].includes(git.args[0]) ? git.args.slice(1).find((arg) => REAL_REMOTE.test(arg)) : undefined) : FETCHING_SUBCOMMANDS.has(git.subcommand) ? git.args.find((arg) => REAL_REMOTE.test(arg)) : undefined
+      if (target !== undefined) found.push({ via: `git ${git.subcommand}`, target })
+    } else if (words[0] === "gh" && words[1] === "repo" && words[2] === "clone") {
+      found.push({ via: "gh repo clone", target: positional(words.slice(3), ["-u", "--upstream-remote-name"])[0] ?? "" })
+    }
+  }
+  return found
 }
