@@ -248,7 +248,10 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   const shimDir = path.join(runTmp, "shim")
   const ghLog = path.join(runTmp, "gh-denied.jsonl")
   const realGh = findRealGh(process.env.PATH, shimDir)
-  if (realGh) installGhShim({ shimDir, realGh, logFile: ghLog })
+  // Only the plugin under test's own boot script may receive a raw `gh auth token`.
+  const bootScriptFile = path.join(pluginDir, "desk", "mcp", "scripts", "session-boot.js")
+  const bootScript = existsSync(bootScriptFile) ? realpathSync(bootScriptFile) : null
+  if (realGh) installGhShim({ shimDir, realGh, logFile: ghLog, bootScript })
   const gitConfig = writeGitConfig(homeDir)
   const env = buildChildEnv({ parentEnv: process.env, homeDir, shimDir, gitConfig, ghLog })
 

@@ -3,7 +3,7 @@
 // replays canned stream-json. Run: node --test evals/boot-acceptance/round6.test.mjs
 
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -261,12 +261,12 @@ test("every scenario prompt is just the scenario: the critique is no longer appe
 // The shim redacts for every caller except the boot script.
 // ---------------------------------------------------------------------------
 
-function shimFixture() {
+function shimFixture({ bootScript = null } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "boot-acceptance-shim-"))
   const realDir = path.join(dir, "real")
   mkdirSync(realDir)
   writeFileSync(path.join(realDir, "gh"), `#!/bin/sh\nif [ "$1" = auth ] && [ "$2" = token ]; then echo ${CLASSIC}; echo "err ${OAUTH}" >&2; exit 3; fi\necho "real gh: $@"\n`, { mode: 0o755 })
-  const shim = installGhShim({ shimDir: path.join(dir, "shim"), realGh: findRealGh(realDir), logFile: path.join(dir, "log.jsonl") })
+  const shim = installGhShim({ shimDir: path.join(dir, "shim"), realGh: findRealGh(realDir), logFile: path.join(dir, "log.jsonl"), bootScript })
   return { dir, shim, done: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -283,29 +283,49 @@ test("a model-visible gh auth token prints a redacted value, keeps the exit code
   } finally { done() }
 })
 
-test("a shell whose command text mentions session-boot.js is still not the boot script", () => {
-  const { dir, shim, done } = shimFixture()
+test("isBootScriptCommand trusts only an absolute path whose realpath is exactly the pinned script", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "boot-acceptance-pin-"))
   try {
-    const r = spawnSync("sh", ["-c", `echo session-boot.js >/dev/null; ${JSON.stringify(shim)} auth token`], { encoding: "utf8" })
-    assert.equal(r.stdout.trim(), REDACTION_MARKER)
-    assert.equal(isBootScriptCommand("sh -c node scripts/session-boot.js"), false)
-    assert.equal(isBootScriptCommand("/usr/local/bin/node /tmp/p/mcp/scripts/session-boot.js --task x"), true)
-    assert.equal(isBootScriptCommand("node scripts/session-boot.js"), true)
-    assert.equal(isBootScriptCommand("node /x/scripts/session-boot.js"), true)
-    assert.equal(dir.length > 0, true)
-  } finally { done() }
-}  )
+    const real = path.join(dir, "plugin", "mcp", "scripts", "session-boot.js")
+    const lookalike = path.join(dir, "evil", "scripts", "session-boot.js")
+    for (const f of [real, lookalike]) { mkdirSync(path.dirname(f), { recursive: true }); writeFileSync(f, "") }
+    const link = path.join(dir, "link.js")
+    symlinkSync(real, link)
+    const evilLink = path.join(dir, "evil-link.js")
+    symlinkSync(lookalike, evilLink)
+    const pinned = realpathSync(real)
+    assert.equal(isBootScriptCommand(`/usr/bin/node ${real} --task x`, pinned), true)
+    assert.equal(isBootScriptCommand(`node --no-warnings ${link}`, pinned), true, "a symlink to the pinned script")
+    assert.equal(isBootScriptCommand(`node ${real}`, pinned), true)
+    assert.equal(isBootScriptCommand(`node ${lookalike}`, pinned), false, "a lookalike elsewhere")
+    assert.equal(isBootScriptCommand(`node ${evilLink}`, pinned), false, "a symlink to a lookalike")
+    assert.equal(isBootScriptCommand("node scripts/session-boot.js", pinned), false, "a relative path")
+    assert.equal(isBootScriptCommand(`node ${path.join(dir, "missing.js")}`, pinned), false, "a missing file")
+    assert.equal(isBootScriptCommand(`sh -c "node ${real}"`, pinned), false, "a shell mentioning the script")
+    assert.equal(isBootScriptCommand(`node ${real}`, null), false, "no pinned script")
+    assert.equal(isBootScriptCommand("", pinned), false)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
 
-test("the boot script itself, spawning gh with a piped stdout, still receives the raw token", () => {
-  const { dir, shim, done } = shimFixture()
+const bootScriptSource = (shim) => `import { spawnSync } from "node:child_process"\nconst r = spawnSync(${JSON.stringify(shim)}, ["auth", "token"], { encoding: "utf8" })\nprocess.stdout.write(JSON.stringify({ out: r.stdout.trim(), status: r.status }))\n`
+
+test("the pinned boot script receives the raw token; a lookalike session-boot.js at another path, or a shell mentioning it, gets a redacted one", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "boot-acceptance-shim-pin-"))
   try {
-    const scriptsDir = path.join(dir, "mcp", "scripts")
-    mkdirSync(scriptsDir, { recursive: true })
-    writeFileSync(path.join(scriptsDir, "session-boot.js"), `import { spawnSync } from "node:child_process"\nconst r = spawnSync(${JSON.stringify(shim)}, ["auth", "token"], { encoding: "utf8" })\nprocess.stdout.write(JSON.stringify({ out: r.stdout.trim(), status: r.status }))\n`)
-    const r = spawnSync(process.execPath, [path.join(scriptsDir, "session-boot.js")], { encoding: "utf8" })
-    // The script got the raw value (and, run directly here, printed it only so this test can see it).
-    assert.deepEqual(JSON.parse(r.stdout), { out: CLASSIC, status: 3 })
-  } finally { done() }
+    const real = path.join(dir, "plugin", "mcp", "scripts", "session-boot.js")
+    const lookalike = path.join(dir, "tmp-x", "scripts", "session-boot.js")
+    const { shim, done } = shimFixture({ bootScript: (mkdirSync(path.dirname(real), { recursive: true }), writeFileSync(real, ""), realpathSync(real)) })
+    try {
+      writeFileSync(real, bootScriptSource(shim))
+      mkdirSync(path.dirname(lookalike), { recursive: true })
+      writeFileSync(lookalike, bootScriptSource(shim))
+      const run = (script) => JSON.parse(spawnSync(process.execPath, [script], { encoding: "utf8" }).stdout)
+      assert.deepEqual(run(real), { out: CLASSIC, status: 3 })
+      assert.deepEqual(run(lookalike), { out: REDACTION_MARKER, status: 3 })
+      const viaShell = spawnSync("sh", ["-c", `echo ${real} >/dev/null; ${JSON.stringify(shim)} auth token`], { encoding: "utf8" })
+      assert.equal(viaShell.stdout.trim(), REDACTION_MARKER)
+    } finally { done() }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
 test("gh auth status is allowed, but not with -t, --show-token or a flag cluster that includes t", () => {

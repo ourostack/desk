@@ -18,7 +18,7 @@
 // show a write attempt, in case something bypassed the shim (for example by
 // calling the real binary by path).
 
-import { chmodSync, mkdirSync, writeFileSync, existsSync } from "node:fs"
+import { chmodSync, mkdirSync, writeFileSync, existsSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import * as process from "node:process"
@@ -28,7 +28,7 @@ import * as process from "node:process"
 // ---------------------------------------------------------------------------
 
 const READ_VERBS = {
-  // `auth token` is read-only and the boot script needs it to resolve each account's push route. The shim prints the raw token only to that script (see `isBootScriptCommand`); to any other caller its output is redacted.
+  // `auth token` is read-only and the boot script needs it to resolve each account's push route. The shim prints the raw token only to that script (the one `session-boot.js` of the plugin under test; see `isBootScriptCommand`); to any other caller its output is redacted.
   auth: ["status", "token"],
   pr: ["list", "view", "status", "diff", "checks"],
   issue: ["list", "view", "status"],
@@ -96,9 +96,18 @@ function tokenize(text) {
   return [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3])
 }
 
-/** True when `commandLine` is `node <...>/session-boot.js ...`: the process itself, not a shell whose command text mentions the script. */
-export function isBootScriptCommand(commandLine) {
-  return /^(?:\S*\/)?node(?:\.exe)?(?:\s+--?\S+)*\s+\S*\/?scripts\/session-boot\.js(?:\s|$)/.test(String(commandLine).trim())
+/**
+ * True when `commandLine` is `node [flags] <absolute path> ...` and that path, resolved with `realpath`, is exactly `bootScript` (the realpath of the plugin under test's `mcp/scripts/session-boot.js`, fixed when the shim is installed). A relative path is refused (the shim cannot know the parent's cwd), as is a lookalike script anywhere else, a script reached through a symlink to somewhere else, and a shell whose command text only mentions the script. Anything unparseable, such as a path with a space in it, fails closed.
+ */
+export function isBootScriptCommand(commandLine, bootScript, resolve = realpathSync) {
+  if (!bootScript) return false
+  const m = String(commandLine).trim().match(/^(?:\S*\/)?node(?:\.exe)?(?:\s+--?\S+)*\s+(\S+)(?:\s|$)/)
+  if (!m || !path.isAbsolute(m[1])) return false
+  try {
+    return resolve(m[1]) === bootScript
+  } catch {
+    return false
+  }
 }
 
 /** The command line of process `pid` (`ps`), or "" when it cannot be read. */
@@ -155,10 +164,10 @@ export function countTokenLeaks(text) {
  * `classifyGh`, runs the real `gh` for read-only calls and otherwise exits 97
  * after appending the attempt to `logFile`. `realGh` is the real binary.
  */
-export function installGhShim({ shimDir, realGh, logFile }) {
+export function installGhShim({ shimDir, realGh, logFile, bootScript = null }) {
   mkdirSync(shimDir, { recursive: true })
   const policy = new URL("./safety.mjs", import.meta.url).href
-  // Who gets a raw token: only the boot script, found by the shim's parent process (`ps`), never by an environment variable the model's shell could also set. The boot script spawns `gh` with a piped stdout, so its token goes to the script and not into the transcript. Everyone else (the model's shell, a hook) gets the child's output captured and passed through `redactTokens`, with the exit code kept.
+  // Who gets a raw token: only the plugin under test's own boot script (an exact realpath match, baked in at install time), found by the shim's parent process (`ps`), never by an environment variable the model's shell could also set. The boot script spawns `gh` with a piped stdout, so its token goes to the script and not into the transcript. Everyone else (the model's shell, a hook) gets the child's output captured and passed through `redactTokens`, with the exit code kept.
   const script = `#!${process.execPath}
 import { classifyGh, isBootScriptCommand, processCommand, redactTokens } from ${JSON.stringify(policy)}
 import { spawnSync } from "node:child_process"
@@ -170,7 +179,7 @@ if (!verdict.allowed) {
   process.stderr.write("gh blocked by the boot-acceptance harness: " + verdict.reason + ". Runs may only read from GitHub.\\n")
   process.exit(97)
 }
-if (isBootScriptCommand(processCommand(process.ppid))) {
+if (isBootScriptCommand(processCommand(process.ppid), ${JSON.stringify(bootScript)})) {
   const raw = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit" })
   process.exit(raw.status ?? 1)
 }
