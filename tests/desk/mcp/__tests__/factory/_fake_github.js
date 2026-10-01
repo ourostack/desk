@@ -65,6 +65,8 @@ export function fakeGitHub({
   intercept = null,
 } = {}) {
   const calls = []
+  // Which tree listings GitHub reports as truncated: `(sha, entries) -> boolean`, set by `setTruncated`.
+  let truncated = () => false
   const trees = new Map()
   const commits = new Map()
   const blobs = new Map()
@@ -199,7 +201,7 @@ export function fakeGitHub({
     if (method === "GET" && (m = /^repos\/([^/]+\/[^/]+)\/git\/trees\/([0-9a-f]+)$/u.exec(pathPart))) {
       const tree = trees.get(m[2])
       if (!tree) return httpError(404, "Not Found")
-      return ok({ sha: m[2], truncated: false, tree: [...tree].map(([name, entry]) => ({ path: name, mode: entry.type === "tree" ? "040000" : "100644", ...entry })) })
+      return ok({ sha: m[2], truncated: truncated(m[2], tree), tree: [...tree].map(([name, entry]) => ({ path: name, mode: entry.type === "tree" ? "040000" : "100644", ...entry })) })
     }
     if (method === "POST" && (m = /^repos\/([^/]+\/[^/]+)\/git\/trees$/u.exec(pathPart))) {
       let sha = body.base_tree
@@ -320,6 +322,12 @@ export function fakeGitHub({
       const sha = repo(repoName)?.refs.get(`heads/${branch}`)
       return sha ? factsOf(sha) : null
     },
+    /** Marks tree listings truncated from now on, as GitHub does for a very large tree: `(sha, entries) -> boolean`. */
+    setTruncated(predicate) {
+      truncated = predicate
+    },
+    /** The tree SHA of a commit. */
+    treeOf: (sha) => commits.get(sha).tree,
     /** Deletes a branch, as a store that removes head branches after a merge does. */
     dropBranch(repoName, branch) {
       repo(repoName).refs.delete(`heads/${branch}`)

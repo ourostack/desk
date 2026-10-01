@@ -72,22 +72,28 @@
 //      or one is opened titled `Factory intake` whose body is the file
 //      count, plus `Retracted: <n> files (route_changed)` when it deletes any.
 //
-//   Retraction. A file this machine delivered to a store is deleted from it,
-//   in that same intake PR, when its session's marker now positively routes to
-//   a different store (`retractions`): the route is resolved the way the sweep
-//   does (`resolveStore` from the marker's desk root). A missing or unreadable
-//   marker, a missing desk root, a declaration that does not resolve, a Codex
-//   default route nothing has verified, and a default route with no recorded
-//   overlay check all leave the file in place. The deletes are the session's
-//   facts file and every labels file delivered for it, at the published paths
-//   recorded when they were delivered (a record from an older Desk is trusted
-//   only when republishing now gives the same blob). Their delivered records
-//   stay until the store's default branch no longer has the file, which is
-//   how a merged delete is seen, and are then dropped with the local files
-//   that produced them; until then every flush retries. A session is never
-//   both published and deleted in one PR, and a delete the store refuses is
-//   quarantined like any other refused file.
-//
+//   Retraction. Every session the flush could act on is placed by where its
+//   marker routes now, resolved as the sweep resolves it (`routeResolver`):
+//   here, away (positively another store) or unknown. Three invariants hold.
+//   I1: only a `here` session is published, or released from quarantine, to
+//   the store; an unknown route or a held session (its facts quarantined) is
+//   frozen, never published and never deleted, and never sends a flush
+//   online. I2: an online flush rebuilds the intake branch from the change
+//   set the current state wants (publishes plus the deletes still needed);
+//   when that set is empty it closes this machine's open intake PR and resets
+//   the branch. `intake_pushed` in status keeps a flush going online until a
+//   pushed batch is settled, so this does not depend on any retracting
+//   record. I3: retraction never deletes local files. An away session's
+//   delivered files are deleted, at their recorded published paths, only
+//   where the default branch holds exactly the delivered blob; once pushed
+//   they are retracting (`retracting/<store-slug>.json`), and when the
+//   default branch no longer holds them only that record is dropped. A
+//   truncated tree listing proves no file absent. Online anyway, the flush
+//   also deletes an away session's file it has no record of when the store
+//   holds exactly the blob this Desk would publish for it. A delete the store
+//   refuses returns the session to delivered and is not retried while it
+//   stays away.
+
 // Every step's result is one stable `FlushCode`. The account token comes from
 // `gh auth token --user <account>`, lives only in memory and reaches `gh` only
 // through the runner's `token` option, which the real runner passes as
@@ -462,10 +468,10 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
 const githubRepoOfRemote = (remote) => (remote === null ? null : GITHUB_REMOTE.exec(normalizeRemote(remote))?.[1] ?? null)
 
-async function deskRepositories(env, { deadline, now }) {
+async function deskRepositories(markers, { deadline, now }) {
   const byName = new Map()
   const remotes = new Map()
-  for (const marker of await listMarkers(env)) {
+  for (const marker of markers) {
     const root = marker.desk_root
     if (root === null) continue
     if (!remotes.has(root)) {
@@ -568,71 +574,45 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
 }
 
 // ---------------------------------------------------------------------------
-// Retraction.
+// Routes.
 // ---------------------------------------------------------------------------
 
-// The store a session's marker routes to now, resolved as the sweep resolves it, or `null` when that cannot be said for certain.
-async function currentRoute(env, root, names) {
-  let marker = null
-  for (const name of names) {
-    try {
-      marker = await readMarker(env, path.join(root, "markers", name))
-    } catch {
-      marker = null
-    }
-    if (marker !== null) break
-  }
-  if (marker === null || typeof marker.desk_root !== "string" || !path.isAbsolute(marker.desk_root)) return null
-  try {
-    if (!(await fsp.stat(marker.desk_root)).isDirectory()) return null
-    const current = resolveStore({ deskRoot: marker.desk_root })
-    // A default route is settled only by the overlay check the session's own hook recorded; a Codex marker has none.
-    if (current.source === "default" && (marker.routing === undefined || marker.host === "codex-cli")) return null
-    const route = current.source === "default" ? marker.routing : current
-    return isRepo(route.store) ? route.store : null
-  } catch {
-    return null
-  }
-}
+// A Codex marker's default route is proven only by a Claude Code or Copilot CLI marker for the same desk within 30 days, as the sweep proves it.
+const ROUTE_PROOF_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+const markerTime = (marker) => Date.parse(marker.ended_at ?? marker.updated_at)
+const realDesk = (root) => fsp.realpath(root).catch(() => path.resolve(root))
+// The session a facts name or a local labels key belongs to, or `undefined` for any other name.
+const sessionOfName = (name) => LABELS_KEY.exec(name)?.[2] ?? FACTS_SESSION.exec(name)?.[1]
 
 /**
- * Every session this machine has delivered to `store`, or whose delete it has pushed, sorted by where its marker routes now: `{ away, back }`, each a list
- * of `{ name, path, labels, session, blob, held, from }`, `from` being `"delivered"` or `"retracting"`. `away` is a session that positively routes to a
- * different store: its files are deleted, or kept deleted. `back` is a session in the retracting state whose route is the store again or cannot be
- * resolved: it is undelivered again. `published` answers `{ path, sha }` for a delivered name whose record carries no path (an older Desk's).
+ * `routeResolver(markers) -> (session) => Promise<string | null>`: the store a session's marker routes to now, resolved as the sweep resolves
+ * it, or `null` when that cannot be said for certain: no marker, a desk root that is not an absolute folder, a declaration that does not
+ * resolve, a default route with no overlay check recorded by the session's hook, and a Codex default route no other marker proves.
  */
-async function retractions(env, { store, delivered, published }) {
-  const root = await factoryStateRoot(env)
-  const sessions = new Map()
-  const add = (name, item) => {
-    const labels = LABELS_KEY.exec(name)
-    const session = labels === null ? FACTS_SESSION.exec(name)?.[1] : labels[2]
-    if (!sessions.has(session)) sessions.set(session, new Map())
-    // A name in both states, left by a crash between the two writes, is retracting: the retracting records are added last and replace the delivered ones.
-    sessions.get(session).set(name, { name, labels: labels !== null, session, held: delivered.quarantined.has(name), ...item })
+function routeResolver(markers) {
+  const byName = new Map(markers.map((marker) => [`${marker.host}-${marker.session_id}.json`, marker]))
+  const proofs = markers.filter((other) => other.host !== "codex-cli" && typeof other.desk_root === "string" && other.routing?.source === "default")
+  const proven = async (marker) => {
+    const desk = await realDesk(marker.desk_root)
+    for (const other of proofs) if ((await realDesk(other.desk_root)) === desk && Math.abs(markerTime(other) - markerTime(marker)) <= ROUTE_PROOF_WINDOW_MS) return true
+    return false
   }
-  for (const name of Object.keys(delivered.blobs)) {
-    const record = delivered.paths[name]
-    const labels = LABELS_KEY.exec(name)
-    let where = typeof record === "string" ? record : record?.path
-    // A recorded path is trusted when it has the right shape and, if the record carries the blob, that blob is the one delivered.
-    const valid = (labels === null ? isFactsPath(where) : labelsPathParts(where)?.session === labels[2]) && (typeof record === "string" || record?.blob === delivered.blobs[name])
-    if (!valid) {
-      const recomputed = published(name)
-      where = recomputed?.sha === delivered.blobs[name] ? recomputed.path : undefined
+  const resolve = async (session) => {
+    const marker = factsNamesOf(session).map((name) => byName.get(name)).find((found) => found !== undefined)
+    if (marker === undefined || typeof marker.desk_root !== "string" || !path.isAbsolute(marker.desk_root)) return null
+    try {
+      if (!(await fsp.stat(marker.desk_root)).isDirectory()) return null
+      const current = resolveStore({ deskRoot: marker.desk_root })
+      if (current.source !== "default") return isRepo(current.store) ? current.store : null
+      const route = marker.routing ?? (marker.host === "codex-cli" ? current : null)
+      if (route === null) return null
+      if (marker.host === "codex-cli" && route.source === "default" && !(await proven(marker))) return null
+      return isRepo(route.store) ? route.store : null
+    } catch {
+      return null
     }
-    if (where !== undefined) add(name, { path: where, blob: delivered.blobs[name], from: "delivered" })
   }
-  for (const [name, record] of Object.entries(delivered.retracting)) add(name, { path: record.path, blob: record.blob, from: "retracting" })
-  const away = []
-  const back = []
-  for (const [session, items] of sessions) {
-    const route = await currentRoute(env, root, factsNamesOf(session))
-    // GitHub names are case-insensitive: a case-only difference is the same store.
-    if (route !== null && route.toLowerCase() !== store.toLowerCase()) away.push(...items.values())
-    else back.push(...[...items.values()].filter((item) => item.from === "retracting"))
-  }
-  return { away, back }
+  return resolve
 }
 
 // ---------------------------------------------------------------------------
@@ -759,29 +739,50 @@ function treeEntries(json) {
   return entries
 }
 
-async function factsOnBranch(client, repo, treeSha) {
-  const facts = treeEntries(await client.need("GET", `repos/${repo}/git/trees/${treeSha}`)).get("facts")
+// A path a listing does not show is absent only when no tree read for that listing was truncated; otherwise it is unknown.
+const UNKNOWN = Symbol("unknown")
+const newListing = () => ({ truncated: false })
+
+// The entries of one tree. GitHub truncates a very large tree listing; `listing.truncated` then records that a missing path proves nothing.
+async function readTree(client, repo, sha, listing) {
+  const json = await client.need("GET", `repos/${repo}/git/trees/${sha}`)
+  if (json?.truncated === true) listing.truncated = true
+  return treeEntries(json)
+}
+
+async function factsOnBranch(client, repo, treeSha, listing) {
+  const facts = (await readTree(client, repo, treeSha, listing)).get("facts")
   if (facts?.type !== "tree") return new Map()
   const blobs = new Map()
-  for (const [name, entry] of treeEntries(await client.need("GET", `repos/${repo}/git/trees/${requireSha(facts.sha)}`))) {
+  for (const [name, entry] of await readTree(client, repo, requireSha(facts.sha), listing)) {
     if (entry.type === "blob" && FACTS_NAME.test(name)) blobs.set(name, entry.sha)
   }
   return blobs
 }
 
 /** The blob SHA at each `labels/<job>/<session>.json` of `paths` in the tree, reading only the jobs asked about. */
-async function labelsOnBranch(client, repo, treeSha, paths) {
+async function labelsOnBranch(client, repo, treeSha, paths, listing) {
   const blobs = new Map()
   if (paths.length === 0) return blobs
-  const labels = treeEntries(await client.need("GET", `repos/${repo}/git/trees/${treeSha}`)).get("labels")
+  const labels = (await readTree(client, repo, treeSha, listing)).get("labels")
   if (labels?.type !== "tree") return blobs
-  const jobs = treeEntries(await client.need("GET", `repos/${repo}/git/trees/${requireSha(labels.sha)}`))
+  const jobs = await readTree(client, repo, requireSha(labels.sha), listing)
   for (const job of [...new Set(paths.map((item) => item.split("/")[1]))].sort()) {
     const entry = jobs.get(job)
     if (entry?.type !== "tree") continue
-    for (const [name, blob] of treeEntries(await client.need("GET", `repos/${repo}/git/trees/${requireSha(entry.sha)}`))) blobs.set(`labels/${job}/${name}`, blob.sha)
+    for (const [name, blob] of await readTree(client, repo, requireSha(entry.sha), listing)) blobs.set(`labels/${job}/${name}`, blob.sha)
   }
   return blobs
+}
+
+/** `(item) -> sha | undefined | UNKNOWN`: what a tree holds at an item's published path, read through `factsOnBranch` and `labelsOnBranch` with one listing; `.facts` is the facts listing itself. */
+async function treeLookup(client, repo, treeSha, items) {
+  const listing = newListing()
+  const facts = await factsOnBranch(client, repo, treeSha, listing)
+  const labels = await labelsOnBranch(client, repo, treeSha, items.filter((item) => item.labels).map((item) => item.path), listing)
+  const at = (item) => (item.labels ? labels.get(item.path) : facts.get(item.path.slice("facts/".length))) ?? (listing.truncated ? UNKNOWN : undefined)
+  at.facts = facts
+  return at
 }
 
 function takeBatch(remaining, { maxFiles, maxBytes }) {
@@ -801,10 +802,9 @@ async function pushBatch(client, { target, branch, base, batch }) {
     tree: batch.map((item) => (item.retract ? { path: item.path, mode: "100644", type: "blob", sha: null } : { path: item.path, mode: "100644", type: "blob", content: item.bytes.toString("utf8") })),
   })
   const tree = requireSha(created?.sha)
-  // The tree must hold exactly the bytes that were checked.
-  const landed = await factsOnBranch(client, target.repo, tree)
-  const landedLabels = await labelsOnBranch(client, target.repo, tree, batch.filter((item) => item.labels).map((item) => item.path))
-  for (const item of batch) if ((item.labels ? landedLabels.get(item.path) : landed.get(item.file)) !== (item.retract ? undefined : item.sha)) stop("unexpected")
+  // The tree must hold exactly the bytes that were checked, and no longer hold what it deletes; a listing too large to show a path proves neither.
+  const landed = await treeLookup(client, target.repo, tree, batch)
+  for (const item of batch) if (landed(item) !== (item.retract ? undefined : item.sha)) stop("unexpected")
   const current = await client.api("GET", `repos/${target.repo}/git/ref/heads/${branch}`)
   if (current.status !== 200 && current.status !== 404) stop("unexpected")
   const headSha = current.status === 200 ? requireSha(current.json?.object?.sha) : null
@@ -854,38 +854,67 @@ async function deliver(env, context) {
 
   // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so they go again.
   await releaseRefusedPluginNames(env, store)
-  // Quarantined files are candidates too: a store may have refused an older publication that this Desk now publishes differently.
+  const prior = (await readStatus(env)).last_flush?.[store] ?? {}
+  const priorRefused = new Set(list(prior.refused_retractions).filter((name) => typeof name === "string"))
+  // A batch pushed and not yet seen settled: the intake PR may be open, carrying changes the current state no longer wants.
+  const mayBeOpen = prior.intake_pushed === true
   let delivered = await readDelivered(env, store)
-  // A crash between the two writes of a retraction leaves a name in both states; retracting wins.
-  const both = Object.keys(delivered.retracting).filter((name) => Object.hasOwn(delivered.blobs, name))
-  if (both.length > 0) {
-    await undeliver(env, store, both)
+  // A crash can cut a state change short. A refused delete whose return to delivered was interrupted finishes it; any other name in both states is retracting.
+  const unfinished = Object.entries(delivered.retracting).filter(([name]) => priorRefused.has(name)).map(([name, item]) => ({ name, ...item }))
+  const both = Object.keys(delivered.retracting).filter((name) => !priorRefused.has(name) && Object.hasOwn(delivered.blobs, name))
+  if (unfinished.length > 0 || both.length > 0) {
+    await returnToDelivered(env, store, unfinished)
+    if (both.length > 0) await undeliver(env, store, both)
     delivered = await readDelivered(env, store)
   }
+  progress.refused = []
+  progress.heldElsewhere = 0
+  progress.routeUnknown = 0
+  // Quarantined files are candidates too: a store may have refused an older publication that this Desk now publishes differently.
   const candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true })
   const labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })
-  const prior = (await readStatus(env)).last_flush?.[store] ?? {}
-  const priorRefused = list(prior.refused_retractions).filter((name) => typeof name === "string")
-  progress.refused = priorRefused
-  progress.heldElsewhere = 0
-  // A session in the retracting state is reconciled against the store on every flush, whatever else is pending.
-  const retractingNames = Object.keys(delivered.retracting)
-  if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && retractingNames.length === 0) return { result: "nothing_pending" }
+  if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && !mayBeOpen) return { result: "nothing_pending" }
+
+  // Every session this flush could act on is placed by where its marker routes now: `here` (this store), `away` (positively another store) or `unknown`.
+  // Only a `here` session is ever published (or released from quarantine) to this store; an `unknown` one is frozen: never published and never deleted.
+  const markers = await listMarkers(env)
+  const routeOf = routeResolver(markers)
+  const places = new Map()
+  const sessions = [...candidates.map(({ name }) => name), ...labelCandidates.map(({ name }) => name), ...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting)].map(sessionOfName)
+  for (const session of new Set(sessions.filter((session) => session !== undefined))) {
+    const route = await routeOf(session)
+    places.set(session, route === null ? "unknown" : sameRepo(route, store) ? "here" : "away")
+  }
+  const placeOf = (name) => places.get(sessionOfName(name))
+  // A session whose facts are quarantined is held: frozen while it routes elsewhere, neither deleted nor published.
+  const heldSessions = new Set([...delivered.quarantined].filter((name) => !LABELS_KEY.test(name)).map(sessionOfName))
+
+  // Where a delivered file went, from its record: trusted when it has the right shape and, if the record carries the blob, that blob is the one delivered.
+  const recordedPath = (name) => {
+    const item = delivered.paths[name]
+    const labels = LABELS_KEY.exec(name)
+    const where = typeof item === "string" ? item : item?.path
+    const valid = (labels === null ? isFactsPath(where) : labelsPathParts(where)?.session === labels[2]) && (typeof item === "string" || item?.blob === delivered.blobs[name])
+    return valid ? where : undefined
+  }
+  // A delivered file of an away session whose record names no trusted path is found by publishing it again: an older Desk's record, trusted only when the blob matches.
+  const needsPath = new Set(Object.keys(delivered.blobs).filter((name) => placeOf(name) === "away" && !heldSessions.has(sessionOfName(name)) && recordedPath(name) === undefined))
+  const here = (name) => placeOf(name) === "here"
 
   // `pendingFiles` already quarantined every file that does not parse, and `pendingLabels` lists only labels that parse.
-  const parsed = candidates.map(({ name, localBytes, quarantine: held }) => ({ name, held, local: JSON.parse(localBytes.toString("utf8")) }))
-  const parsedLabels = labelCandidates.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) }))
-  const desks = await deskRepositories(env, { deadline, now })
+  const parse = ({ localBytes }) => JSON.parse(localBytes.toString("utf8"))
+  const parsed = candidates.filter(({ name }) => here(name)).map((item) => ({ name: item.name, held: item.quarantine, local: parse(item) }))
+  const parsedLabels = labelCandidates.filter(({ name }) => here(name)).map((item) => ({ key: item.name, local: parse(item) }))
+  const desks = await deskRepositories(markers, { deadline, now })
   // What a file needs resolved: the repositories it references, its desk remote, and the store when it names a plugin.
   const reposOf = ({ name, local }) => [
     ...referencedRepos(local),
     ...(list(local?.plugins).length > 0 ? [store] : []),
     ...(desks.get(name) ? [desks.get(name)] : []),
   ]
+  const labelsReposOf = ({ local }) => factsNamesOf(local?.session).map((name) => desks.get(name)).filter((repo) => typeof repo === "string")
   const ordinary = parsed.filter(({ held }) => held === null)
-  const repos = ordinary.flatMap(reposOf)
-  for (const { local } of parsedLabels) for (const name of factsNamesOf(local?.session)) if (desks.get(name)) repos.push(desks.get(name))
-  const known = await resolveVisibility(env, client, account, repos, nowIso)
+  const known = await resolveVisibility(env, client, account, [...ordinary.flatMap(reposOf), ...parsedLabels.flatMap(labelsReposOf)], nowIso)
   // A held file is a retry, never a reason to stop for a repository it cannot resolve: its repositories resolve one file at a time, and a file whose repositories cannot all be resolved keeps its record and waits for a later flush.
   // A file whose repositories are all known already needs no lookup, and no state-root check, so an unchanged held file costs nothing.
   // Only an `unexpected` answer is swallowed; a deadline, an offline network, a rate limit or a failed sign-in still ends the flush.
@@ -902,6 +931,24 @@ async function deliver(env, context) {
     }
   }
   const secret = await readMachineSecret(env)
+  // Where this Desk would publish the outbox files `names` of away sessions now, as `{ path, sha }` by name: used only to find this machine's
+  // files in the store, never sent and never quarantined.
+  const republish = async (names) => {
+    const facts = candidates.filter(({ name, quarantine: held }) => names.has(name) && held === null).map((item) => ({ name: item.name, local: parse(item) }))
+    const labels = labelCandidates.filter(({ name }) => names.has(name)).map((item) => ({ key: item.name, local: parse(item) }))
+    for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) known.set(repo, visibility)
+    const found = new Map()
+    for (const { name, local } of facts) {
+      const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
+      if (out.bytes) found.set(name, { path: `facts/${out.file}`, sha: gitBlobSha(out.bytes) })
+    }
+    for (const { key, local } of labels) {
+      const out = publishLabelsOne(local, key, { known, desks, secret })
+      if (out.bytes) found.set(key, { path: out.path, sha: gitBlobSha(out.bytes) })
+    }
+    return found
+  }
+  const republished = await republish(needsPath)
 
   const bytesByName = new Map()
   const publishedFile = new Map()
@@ -932,43 +979,49 @@ async function deliver(env, context) {
   // Labels held back behind facts released above are ordinary candidates now; their facts' repositories were resolved with the facts.
   if (releasedLabels) {
     const seen = new Set(labelsByKey.keys())
-    const again = (await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })).filter(({ name }) => !seen.has(name))
-    await publishLabels(again.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) })))
+    const again = (await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })).filter(({ name }) => !seen.has(name) && here(name))
+    await publishLabels(again.map((item) => ({ key: item.name, local: parse(item) })))
   }
-  // A file without bytes is one whose record is not a regular file (its file stays where it is) or a held file that stays held; the listing skips it.
-  const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) ?? null }))
+  // Only files with published bytes are listed, and only those of `here` sessions have them. A file without bytes is one whose record is not a regular file (its file stays where it is), a held file that stays held, or a file of a session that is not `here`.
+  const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts?.session?.host}-${facts?.session?.id}.json`) ?? null }))
     .map(({ name }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
-  const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`).bytes }))
+  const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`)?.bytes ?? null }))
     .map(({ name }) => {
       const { path: published, bytes } = labelsByKey.get(name)
       const [, job, session] = LABELS_KEY.exec(name)
       return { name, path: published, bytes, sha: gitBlobSha(bytes), labels: true, job, session }
     })
-  // What this machine delivered to the store whose session now routes to another store is deleted; nothing of such a session is published.
-  const { away: retractAll, back } = await retractions(env, {
-    store,
-    delivered,
-    published: (name) => {
-      const labels = labelsByKey.get(name)
-      if (labels !== undefined) return { path: labels.path, sha: gitBlobSha(labels.bytes) }
-      return publishedFile.has(name) && bytesByName.has(name) ? { path: `facts/${publishedFile.get(name)}`, sha: gitBlobSha(bytesByName.get(name)) } : undefined
-    },
-  })
-  const retracting = new Set(retractAll.map((item) => item.session))
-  // A delete the store refused is not retried while the session still routes elsewhere; a session that routes back is forgotten.
-  progress.refused = priorRefused.filter((name) => retractAll.some((item) => item.name === name))
-  const refusedBefore = new Set(progress.refused)
-  // A quarantined name keeps its file in the store but is never published again while its session routes elsewhere.
-  let retract = retractAll.filter((item) => !refusedBefore.has(item.name) && !item.held)
-  progress.heldElsewhere = retractAll.filter((item) => item.held).length
   // Labels whose facts are quarantined never go; `holdLabels` quarantines them instead. Checked again after rejections, which may quarantine facts.
   const withoutHeld = async (items) => {
     const kept = []
     for (const item of items) if (!item.labels || (await holdLabels(env, store, { job: item.job, session: item.session })) === null) kept.push(item)
     return kept
   }
-  let pending = await withoutHeld([...factsPending, ...labelsPending].filter((item) => !retracting.has(item.session)))
-  if (pending.length === 0 && retract.length === 0 && back.length === 0 && retractingNames.length === 0) return { result: "nothing_pending" }
+  let pending = await withoutHeld([...factsPending, ...labelsPending])
+
+  // Retraction. Every delivered or retracting file of an away session is a delete candidate, at its recorded path (or the republished one when the blob matches).
+  const away = []
+  for (const name of Object.keys(delivered.blobs)) {
+    if (placeOf(name) !== "away") continue
+    const where = recordedPath(name) ?? (republished.get(name)?.sha === delivered.blobs[name] ? republished.get(name).path : undefined)
+    if (where !== undefined) away.push({ name, path: where, blob: delivered.blobs[name], labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "delivered" })
+  }
+  const back = []
+  for (const [name, item] of Object.entries(delivered.retracting)) {
+    const place = placeOf(name)
+    if (place === "away") away.push({ name, path: item.path, blob: item.blob, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "retracting" })
+    // A retracting session that routes back is retracting no more: its delete leaves the intake branch below, then its record goes, and its local files publish as any undelivered file does. An unknown route leaves the record frozen as it is.
+    else if (place === "here") back.push(name)
+  }
+  // Sessions an unknown route freezes with something left to do: a retracting record kept as it is, or a file never delivered that waits.
+  const frozen = [...Object.keys(delivered.retracting), ...[...candidates, ...labelCandidates].map(({ name }) => name).filter((name) => !Object.hasOwn(delivered.blobs, name))]
+  progress.routeUnknown = new Set(frozen.filter((name) => placeOf(name) === "unknown").map(sessionOfName)).size
+  // A held session keeps its file in the store, counted; a delete the store refused stays refused only while its file is delivered and its session away.
+  progress.heldElsewhere = away.filter((item) => heldSessions.has(item.session)).length
+  progress.refused = away.filter((item) => item.from === "delivered" && priorRefused.has(item.name)).map((item) => item.name)
+  let retract = away.filter((item) => !heldSessions.has(item.session) && !priorRefused.has(item.name))
+  // Frozen and refused names never send the flush online; only work that changes the store, or a batch that may still be open, does.
+  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
   await client.session(account)
@@ -987,57 +1040,67 @@ async function deliver(env, context) {
   progress.rejectionsUnmatched = rejections.unmatched
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
   progress.refused.push(...rejections.refused)
-  retract = retract.filter((item) => !rejections.refused.has(item.name))
   // A refused delete leaves the file in the store: the session is delivered again.
-  await returnToDelivered(env, store, retractAll.filter((item) => item.from === "retracting" && rejections.refused.has(item.name)))
+  await returnToDelivered(env, store, retract.filter((item) => item.from === "retracting" && rejections.refused.has(item.name)))
+  retract = retract.filter((item) => !rejections.refused.has(item.name))
+
+  // Online anyway: an away session's outbox file with no record (a retraction already ended, or a record lost) is deleted too if the store holds
+  // exactly what this Desk would publish for it, which only this machine's file can be.
+  const recorded = new Set([...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting)])
+  const orphans = new Set([...candidates, ...labelCandidates].map(({ name }) => name).filter((name) => placeOf(name) === "away" && !recorded.has(name) && !heldSessions.has(sessionOfName(name))))
+  for (const [name, found] of await republish(orphans)) retract.push({ name, path: found.path, blob: found.sha, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "orphan" })
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
-  const onMain = await factsOnBranch(client, store, base.tree)
-  const labelsOnMain = await labelsOnBranch(client, store, base.tree, [...pending, ...retract].filter((item) => item.labels).map((item) => item.path))
+  const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract])
   const remaining = []
   for (const item of pending) {
-    if ((item.labels ? labelsOnMain.get(item.path) : onMain.get(item.file)) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path })
+    if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path })
     else remaining.push(item)
   }
-  // A retraction is confirmed the way a delivery is: by the store's default branch. A retracting file that is gone from it (the delete merged) is done; one still there is deleted again.
+  // A delete goes only where the store's default branch holds exactly the blob this machine delivered. Anything else there, or nothing (the delete
+  // merged, or someone else removed it), ends the retraction: the record goes and the local files stay. A listing too large to show the path proves nothing either way.
   const deletes = []
-  const done = []
+  const ended = []
   for (const item of retract) {
-    const current = item.labels ? labelsOnMain.get(item.path) : onMain.get(item.path.slice("facts/".length))
-    // Only the blob this machine delivered is deleted. A path that holds anything else is left alone.
+    const current = onMain(item)
     if (current === item.blob) deletes.push({ ...item, retract: true, bytes: Buffer.alloc(0) })
-    else if (current === undefined && item.from === "retracting") done.push(item.name)
+    else if (current !== UNKNOWN && item.from !== "orphan") ended.push(item)
   }
-  await dropRetracting(env, store, done, { removeLocal: true })
+  await dropRetracting(env, store, ended.filter((item) => item.from === "retracting").map((item) => item.name))
+  const endedDelivered = ended.filter((item) => item.from === "delivered").map((item) => item.name)
+  if (endedDelivered.length > 0) await undeliver(env, store, endedDelivered)
   progress.pending = remaining.map((item) => item.name)
-  // A session that routes back (or whose route is unknown) while retracting is undelivered again. The intake branch is rebuilt without its delete before the state is dropped, so a crash in between leaves the state, never a branch that deletes a file the session needs. With nothing to push, an open PR is closed and the branch reset.
+
+  // The intake branch is always rebuilt from the change set this flush computed, so it never carries a delete or a file the current state does not want.
+  // The retracting records of sessions that routed back go only once that is done, so a crash in between leaves the record, never a stale delete.
   const settle = async (result) => {
-    if (back.length > 0) {
-      if (result.result === "nothing_pending") {
-        const open = await findOpenPr(client, store, head)
-        if (open !== undefined) await client.need("PATCH", `repos/${store}/pulls/${open.number}`, { state: "closed" })
-        const ref = await client.api("GET", `repos/${target.repo}/git/ref/heads/${branch}`)
-        if (ref.status === 200) await client.need("PATCH", `repos/${target.repo}/git/refs/heads/${branch}`, { sha: base.sha, force: true })
-      }
-      await dropRetracting(env, store, back.map((item) => item.name), { removeLocal: false })
-    }
+    await dropRetracting(env, store, back)
     return result
   }
-  if (remaining.length === 0 && deletes.length === 0) return settle({ result: "nothing_pending" })
-
   // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
   const takenAll = takeBatch([...deletes, ...remaining], { maxFiles, maxBytes })
   const takenDeletes = takenAll.filter((item) => item.retract)
   const taken = takenAll.filter((item) => !item.retract)
-  const factsReady = new Set([...onMain.keys(), ...pending.filter((item) => !item.labels && onMain.has(item.file)).map((item) => item.name), ...taken.filter((item) => !item.labels).map((item) => item.name)])
+  const factsReady = new Set([...onMain.facts.keys(), ...pending.filter((item) => !item.labels && onMain.facts.has(item.file)).map((item) => item.name), ...taken.filter((item) => !item.labels).map((item) => item.name)])
   const publishing = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
   const batch = [...takenDeletes, ...publishing]
-  if (batch.length === 0) return settle({ result: "nothing_pending" })
+  if (batch.length === 0) {
+    // Nothing to change: an open intake PR of this machine is closed and its branch reset, whatever it carried.
+    const open = await findOpenPr(client, store, head)
+    if (open !== undefined) {
+      await client.need("PATCH", `repos/${store}/pulls/${open.number}`, { state: "closed" })
+      const ref = await client.api("GET", `repos/${target.repo}/git/ref/heads/${branch}`)
+      if (ref.status === 200) await client.need("PATCH", `repos/${target.repo}/git/refs/heads/${branch}`, { sha: base.sha, force: true })
+    }
+    progress.intakePushed = false
+    return settle({ result: "nothing_pending" })
+  }
   await pushBatch(client, { target, branch, base, batch })
+  progress.intakePushed = true
   const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length, retracted: takenDeletes.length })
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
-  await markRetracting(env, store, takenDeletes.filter((item) => item.from === "delivered"))
+  await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting"))
   // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.
   if (rejections.stale > 0) return settle({ result: "intake_stale_retried", pr, stale_retries: rejections.stale })
   return settle({ result: "delivered_pr_open", pr })
@@ -1058,7 +1121,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, intakePushed: null }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -1072,7 +1135,10 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     const before = (await readStatus(env)).last_flush?.[store]
     const previous = before?.rejections_through
     const heldElsewhere = progress.heldElsewhere ?? before?.held_elsewhere
+    const routeUnknown = progress.routeUnknown ?? before?.route_unknown
     const refused = progress.refused ?? list(before?.refused_retractions)
+    // Only a flush that pushed sets it, and only one that found nothing to change, and no PR left open, clears it.
+    const intakePushed = progress.intakePushed ?? before?.intake_pushed === true
     const through = progress.rejectionsThrough ?? (Number.isSafeInteger(previous) ? previous : null)
     await writeStatus(env, {
       last_flush: {
@@ -1084,7 +1150,9 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           ...(outcome.rejections_unmatched ? { rejections_unmatched: outcome.rejections_unmatched } : {}),
           ...(through !== null ? { rejections_through: through } : {}),
           ...(Number.isSafeInteger(heldElsewhere) && heldElsewhere > 0 ? { held_elsewhere: heldElsewhere } : {}),
+          ...(Number.isSafeInteger(routeUnknown) && routeUnknown > 0 ? { route_unknown: routeUnknown } : {}),
           ...(refused.length > 0 ? { retractions_refused: refused.length, refused_retractions: refused } : {}),
+          ...(intakePushed ? { intake_pushed: true } : {}),
         },
       },
     })

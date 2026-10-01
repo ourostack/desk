@@ -18,7 +18,7 @@ import { serializePublished, toPublished } from "../../../../../plugins/desk/mcp
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { BOT, TOKEN, fakeGitHub, httpError } from "./_fake_github.js"
-import { STORE, scratch } from "./_session_helpers.js"
+import { STORE, routeTo, scratch } from "./_session_helpers.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
 async function load() {
@@ -48,6 +48,7 @@ async function intakeBranch(env) {
 }
 
 async function put(env, facts) {
+  await routeTo(env, facts.session.id, { host: facts.session.host })
   const written = await writeLocalFacts(env, STORE, facts)
   assert.equal(written.written, true, JSON.stringify(written))
   return written.name
@@ -440,12 +441,12 @@ test("an unauthenticated retry due only after the deadline is already spent is r
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // For this exact fixture (one plugin, no refs), the account's own gh calls make exactly eight `now()`
-  // reads before the retry's own precheck: a real clock racing them is at the mercy of host load, so this
-  // counts invocations instead. The ninth read is the retry's precheck, already past a deadline the first
-  // eight never approached.
+  // For this exact fixture (one plugin, no refs), reading the routed desk's remote and the account's own gh
+  // calls make exactly ten `now()` reads before the retry's own precheck: a real clock racing them is at the
+  // mercy of host load, so this counts invocations instead. The eleventh read is the retry's precheck, already
+  // past a deadline the first ten never approached.
   let calls = 0
-  const now = () => { calls += 1; return calls >= 9 ? 2_000_000 : 1_000_000 }
+  const now = () => { calls += 1; return calls >= 11 ? 2_000_000 : 1_000_000 }
   const anonymousLookup = async () => { throw new Error("the retry must never be attempted once the deadline is already spent") }
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup, now, deadlineMs: 500_000 }), { result: "deadline" })
 }))
@@ -456,11 +457,11 @@ test("an unauthenticated retry that never answers is cut off at the deadline", (
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // As above, the ninth `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
+  // As above, the eleventh `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
   // which becomes the real timer the retry races against, so a hung lookup is cut off quickly and
   // deterministically rather than by racing host load against a short wall-clock deadline.
   let calls = 0
-  const now = () => { calls += 1; return calls === 9 ? 1_100_000 : 1_000_000 }
+  const now = () => { calls += 1; return calls === 11 ? 1_100_000 : 1_000_000 }
   const hung = { ...github, anonymousLookup: () => new Promise(() => {}) }
   assert.deepEqual(await flush(env, { store: STORE, runner: hung.runner, anonymousLookup: hung.anonymousLookup, now, deadlineMs: 100_100 }), { result: "deadline" })
 }))
@@ -563,7 +564,7 @@ async function deskRepository(base, remote) {
 async function markerFor(env, desk, n) {
   const log = path.join(desk, "..", `log-${n}.jsonl`)
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: desk, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: desk, desk_root: desk, routing: { store: STORE, source: "default", warnings: [] }, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
 }
 
 test("a public or unknown desk publishes machine-keyed job IDs without timing; a private desk keeps its job clock", () => scratch(async ({ base, env }) => {
@@ -619,6 +620,8 @@ test("sessions the transform refuses or the published gate rejects are quarantin
   const good = await put(env, localFacts(3))
   const dated = await put(env, localFacts(4))
   const root = await factoryStateRoot(env)
+  // Files of sessions that route to the store; a file of a session routed nowhere is never even transformed.
+  for (const n of [5, 6, 8]) await routeTo(env, sessionId(n))
   const invalid = "claude-code-00000005-0000-4000-8000-000000000005.json"
   await fs.writeFile(path.join(root, "outbox", "ourostack__factory", invalid), `${JSON.stringify({ schema: "desk.factory.facts/1" })}\n`, { mode: 0o600 })
   const mismatch = "claude-code-00000006-0000-4000-8000-000000000006.json"
@@ -1199,7 +1202,12 @@ test("a missing intake ID, an unusable lock and a failing clock are unexpected, 
   await optIn(env)
   await put(env, localFacts(1, { refs: { prs: [{ repo: "acme/open", number: 1 }], commits: [], unresolved: { prs: 0, commits: 0 } } }))
   const github = fakeGitHub({ visibility: { "acme/open": "public" } })
-  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup, now: () => Number.NaN }), { result: "unexpected" })
+  // A failing clock stops the flush at its first deadline check (reading the routed desk's remote) with a stable code.
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup, now: () => Number.NaN }), { result: "deadline" })
+  // A clock that fails only once the desk's remote is read passes every later deadline check and breaks the first timestamp: unexpected.
+  let reads = 0
+  const failing = () => { reads += 1; return reads <= 3 ? 1_000_000 : Number.NaN }
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup, now: failing }), { result: "unexpected" })
   const root = await factoryStateRoot(env)
   const consent = JSON.parse(await fs.readFile(path.join(root, "consent.json"), "utf8"))
   delete consent.stores[STORE].intake_id

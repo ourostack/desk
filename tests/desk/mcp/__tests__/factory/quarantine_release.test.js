@@ -16,7 +16,7 @@ import {
   factoryStateRoot, quarantine, readConsent, readMachineSecret, releaseRefusedPluginNames, setConsent, writeLocalFacts, writeLocalLabels,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
-import { STORE, scratch } from "./_session_helpers.js"
+import { STORE, routeTo, scratch } from "./_session_helpers.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -30,6 +30,7 @@ async function put(env, n, { labels = true } = {}) {
   const facts = structuredClone(GOLDEN)
   facts.session.id = sessionId(n)
   facts.refs = { prs: [], commits: [], unresolved: { prs: 0, commits: 0 } }
+  await routeTo(env, facts.session.id)
   assert.equal((await writeLocalFacts(env, STORE, facts)).written, true)
   if (labels) assert.equal((await writeLocalLabels(env, STORE, { ...structuredClone(LABELS), session: sessionId(n) })).written, true)
 }

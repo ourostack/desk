@@ -51,3 +51,23 @@ export async function session({ base, desk, env }, host = "claude-code") {
 
 /** A marker `updated_at` on the real clock: `listMarkers` prunes a marker whose `updated_at` is over 30 days old, so a fixed date would rot. */
 export const recent = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString()
+
+/**
+ * Routes session `sessionId` of `host` to `store`, as a delivery needs: a flush publishes a session only while its marker positively routes to the
+ * store. The desk `env.DESK` declares `store` (written once), and the session's marker names it as its desk root. A marker already there is kept.
+ */
+export async function routeTo(env, sessionId, { host = "claude-code", store = STORE } = {}) {
+  const { factoryStateRoot, writeMarker } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  const { existsSync } = await import("node:fs")
+  const declaration = path.join(env.DESK, "_meta", "factory.json")
+  if (!existsSync(declaration)) await json(declaration, { schema_version: 1, store })
+  const marker = path.join(await factoryStateRoot(env), "markers", `${host}-${sessionId}.json`)
+  if (existsSync(marker)) return
+  const log = path.join(env.DESK, "..", `route-${host}-${sessionId}.jsonl`)
+  await writeFile(log, "{}\n")
+  // A quiet log: the session ended long enough ago for finalize to stop waiting on it.
+  const { utimes } = await import("node:fs/promises")
+  const old = new Date(Date.now() - 60 * 60 * 1000)
+  await utimes(log, old, old)
+  await writeMarker(env, { schema_version: 1, host, session_id: sessionId, log_path: log, cwd: env.DESK, desk_root: env.DESK, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+}

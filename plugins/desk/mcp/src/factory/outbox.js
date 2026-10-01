@@ -751,23 +751,19 @@ export async function markRetracting(env, store, items, { platform = process.pla
 }
 
 /**
- * `dropRetracting(env, store, names, { removeLocal })`: ends the retracting state of `names`. With `removeLocal` the delete is done (the store no longer
- * has the file) and the local outbox and labels files for `store` go too, so they are not published again; without it the session is simply
- * undelivered again and its local files publish as new.
+ * `dropRetracting(env, store, names)`: ends the retracting state of `names`, because the delete is done (the store's default branch no longer has
+ * the file) or the session routes back. Only the record goes: the local outbox and labels files stay, so a session that routes back publishes
+ * again, and the flush never publishes them while the session routes elsewhere.
  */
-export async function dropRetracting(env, store, names, { removeLocal, platform = process.platform, runner = undefined }) {
+export async function dropRetracting(env, store, names, { platform = process.platform, runner = undefined } = {}) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
   const own = ownNames(names)
   if (own.length === 0) return
   await updateJsonLocked(root, retractingFile(root, slug), {}, removeNames(own), { platform, env, runner })
-  if (!removeLocal) return
-  for (const name of own) {
-    await fsp.rm(OUTBOX_NAME_PATTERN.test(name) ? path.join(root, "outbox", slug, name) : path.join(root, "labels", slug, name.slice("labels/".length)), { force: true })
-  }
 }
 
-/** `undeliver(env, store, names)`: drops the delivered records of `names`, which a crash left beside their retracting records; a retracting session is never also delivered. */
+/** `undeliver(env, store, names)`: drops the delivered records of `names`: a crash left them beside their retracting records (a retracting session is never also delivered), or the store's default branch no longer holds what was delivered while the session routes elsewhere. */
 export async function undeliver(env, store, names, { platform = process.platform, runner = undefined } = {}) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })

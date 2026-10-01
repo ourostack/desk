@@ -19,7 +19,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
-import { STORE, scratch } from "./_session_helpers.js"
+import { STORE, routeTo, scratch } from "./_session_helpers.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -45,10 +45,12 @@ async function setup(env) {
 }
 
 async function putFacts(env, n) {
+  await routeTo(env, sessionId(n))
   assert.equal((await writeLocalFacts(env, STORE, localFacts(n))).written, true)
 }
 
 async function putLabels(env, n, value = localLabels(n)) {
+  await routeTo(env, value.session)
   assert.equal((await writeLocalLabels(env, STORE, value)).written, true)
 }
 
@@ -103,7 +105,7 @@ test("a private desk's labels keep their plain job, as its facts do", () => scra
   execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/private-desk.git"])
   const log = path.join(base, "log-1.jsonl")
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), routing: { store: STORE, source: "default", warnings: [] }, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
   await putFacts(env, 1)
   await putLabels(env, 1)
   const github = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
