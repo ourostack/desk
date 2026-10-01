@@ -95,7 +95,7 @@ Plugins and their MCP servers load when a session starts, so ask the operator to
 - the session runs as `desk:worker`, and the Desk foundation appears at startup;
 - `desk_status` reports the bound desk root and its source;
 - `desk:session-start` runs normally and offers work to resume or start;
-- the `web` server's tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain".
+- the `desk-web` server's tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain".
 
 If any of these fail, `desk_doctor` explains why. Desk never ends setup by being unavailable: with no desk bound it runs in setup mode and routes back to step 5.
 

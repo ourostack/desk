@@ -366,7 +366,7 @@ test("an unreachable registry fails fast with one line naming the registry, and 
     assert.equal(payload.status, "degraded")
     assert.equal(payload.state, "degraded:install_failed")
     assert.equal(payload.code, "install_failed")
-    assert.match(payload.fix, /reconnect the web MCP server/u)
+    assert.match(payload.fix, /reconnect the desk-web MCP server/u)
     assert.deepEqual(readdirSync(path.join(m.state, "installs")), [])
     assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
   }
@@ -577,7 +577,7 @@ test("with no compatible Node the launcher names the fix and serves the browser 
   assert.match(errors.join(""), /Desk needs Node\.js >=20\.0\.0 to start the browser; this one is v16\.20\.2.*serving degraded:node_missing/u)
   const payload = toolPayload(responses[0])
   assert.equal(payload.code, "node_missing")
-  assert.match(payload.fix, /Install Node >=20\.0\.0, then reconnect the web MCP server/u)
+  assert.match(payload.fix, /Install Node >=20\.0\.0, then reconnect the desk-web MCP server/u)
 })
 
 test("a Node with no npm beside it is named and served as degraded, never a silent exit", async () => {
@@ -620,7 +620,7 @@ test("the degraded responder completes a full JSON-RPC handshake: initialize wit
   assert.equal(withVersion.id, 0)
   assert.equal(withVersion.result.protocolVersion, "2025-03-26")
   assert.deepEqual(withVersion.result.capabilities, { tools: { listChanged: true } })
-  assert.match(withVersion.result.instructions, /reconnect the web MCP server/u)
+  assert.match(withVersion.result.instructions, /reconnect the desk-web MCP server/u)
   assert.equal(bare.id, 1)
   assert.equal(bare.result.protocolVersion, "2025-06-18")
   assert.deepEqual(ping.result, {})
@@ -709,8 +709,8 @@ test("run finds HOME through USERPROFILE and the running system's home", async (
 
 test("the Claude and Copilot configs declare the web server beside Desk, never a bare playwright name", () => {
   const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers
-  assert.deepEqual(Object.keys(claude), ["desk", "web"])
-  const server = claude.web
+  assert.deepEqual(Object.keys(claude), ["desk", "desk-web"])
+  const server = claude["desk-web"]
   assert.deepEqual(Object.keys(server), ["type", "command", "args", "cwd", "env"])
   assert.equal(server.type, "stdio")
   assert.equal(server.command, "node")
@@ -751,7 +751,7 @@ async function fixturePlugin(prefix) {
 
 test("the Claude inline launcher finds the plugin through DESK_PLUGIN_ROOT or the working directory", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-claude-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.web
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
   const viaEnv = spawnSync(process.execPath, claude.args, { cwd: fixture.root, encoding: "utf8", env: { ...fixture.env, DESK_PLUGIN_ROOT: fixture.plugin } })
   assert.match(viaEnv.stdout, /^ran \[--headless\] \[--isolated\]( \[--browser\] \[msedge\]| \[--executable-path\] \[[^\]]+\])? \[--output-dir\] \[[^\]]+state\/output\]\n$/u, viaEnv.stderr)
   assert.match(viaEnv.stderr, /\[web\] @playwright\/mcp 0\.0\.82 \(playwright-core 1\.64\.0-test\) from /u)
@@ -761,7 +761,7 @@ test("the Claude inline launcher finds the plugin through DESK_PLUGIN_ROOT or th
 
 test("the Claude inline launcher still completes a handshake on this Node when it cannot find the plugin", async () => {
   const cwd = await mkTempRoot("desk-web-noplugin-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.web
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
   const result = spawnSync(process.execPath, claude.args, {
     cwd,
     encoding: "utf8",
@@ -784,7 +784,7 @@ test("the Claude inline launcher still completes a handshake on this Node when i
   assert.deepEqual(ping.result, {})
   assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
   assert.equal(toolPayload(status).state, "degraded:plugin_root_missing")
-  assert.match(toolPayload(status).fix, /reconnect the web MCP server/u)
+  assert.match(toolPayload(status).fix, /reconnect the desk-web MCP server/u)
   assert.equal(status.result.isError, true)
   assert.equal(unknown.error.code, -32601)
   assert.equal(bare.result.protocolVersion, "2025-06-18")
