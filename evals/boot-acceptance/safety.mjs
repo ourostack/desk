@@ -149,6 +149,13 @@ export function redactTokens(text) {
   return String(text).replace(TOKEN_SHAPE, REDACTION_MARKER)
 }
 
+/** `text` with every token-shaped string and every exact value in `secrets` (a credential the run was given, whatever it looks like) replaced by the redaction marker. */
+export function redactSecrets(text, secrets = []) {
+  let out = redactTokens(text)
+  for (const secret of secrets) if (typeof secret === "string" && secret.length >= 8) out = out.split(secret).join(REDACTION_MARKER)
+  return out
+}
+
 /** How many token-shaped strings or redaction markers `text` holds: a leak that was seen, or one already redacted when the text was saved. */
 export function countTokenLeaks(text) {
   const t = String(text)
@@ -215,11 +222,14 @@ export function findRealGh(searchPath, skipDir = null) {
 // by the caller; HOME is always the run's temp HOME. Anthropic credentials
 // are passed only if the parent has them (on macOS login is normally the
 // keychain, reached through the HOME symlink).
-export const PASS_THROUGH = [
-  "PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TERM", "TZ", "USER", "LOGNAME", "SHELL", "TMPDIR",
+const BASE_PASS_THROUGH = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TERM", "TZ", "USER", "LOGNAME", "SHELL", "TMPDIR"]
+const CLAUDE_PASS_THROUGH = [
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
   "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_REGION", "AWS_PROFILE",
 ]
+export const PASS_THROUGH = [...BASE_PASS_THROUGH, ...CLAUDE_PASS_THROUGH]
+// The Copilot child gets none of the Anthropic or AWS credentials: its only credential is `extraEnv` (see copilot.mjs `resolveCopilotAuth`).
+export const COPILOT_PASS_THROUGH = BASE_PASS_THROUGH
 
 /** Writes the run's private global git config: no credential helper, and fetches and pushes to GitHub URLs rewritten to a dead local path, so a clone or fetch fails at once instead of downloading a real repository. */
 export function writeGitConfig(homeDir) {
@@ -237,10 +247,14 @@ export function writeGitConfig(homeDir) {
   return file
 }
 
-/** The allowlisted environment for the `claude` child. */
-export function buildChildEnv({ parentEnv, homeDir, shimDir, gitConfig, ghLog }) {
+/**
+ * The allowlisted environment for the host's child (`claude` by default). `host: "copilot"` passes no Anthropic or AWS variable and instead gets `extraEnv`: the
+ * explicit, named variables the host needs (its credential, its profile folder). Nothing else is inherited.
+ */
+export function buildChildEnv({ parentEnv, homeDir, shimDir, gitConfig, ghLog, host = "claude", extraEnv = {} }) {
   const env = {}
-  for (const name of PASS_THROUGH) if (parentEnv[name] !== undefined) env[name] = parentEnv[name]
+  for (const name of host === "copilot" ? COPILOT_PASS_THROUGH : PASS_THROUGH) if (parentEnv[name] !== undefined) env[name] = parentEnv[name]
+  Object.assign(env, extraEnv)
   env.PATH = [shimDir, parentEnv.PATH ?? "/usr/bin:/bin"].join(path.delimiter)
   env.HOME = homeDir
   env.XDG_CONFIG_HOME = path.join(homeDir, ".config")

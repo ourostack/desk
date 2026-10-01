@@ -5,25 +5,28 @@
 // critique turn ran, critique-transcript.jsonl (see run.mjs); the scenario
 // checks judge the first only, the safety checks read both.
 //
-//   node evals/boot-acceptance/rescore.mjs --out-dir <dir>
+//   node evals/boot-acceptance/rescore.mjs --out-dir <dir> [--host claude|copilot]
+//
+// `--host` names the CLI that wrote the transcripts (default claude); a Copilot
+// transcript is read through the same normalizer the run used.
 
 import { existsSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 import * as process from "node:process"
 import { fileURLToPath } from "node:url"
 
-import { loadRunContext } from "./run.mjs"
+import { HOSTS, loadRunContext, scoreRun } from "./run.mjs"
 import { SCENARIOS } from "./scenarios.mjs"
 
 /** `[{ id, outcome, notes }]` for every saved run under `outDir`, in scenario then run order. */
-export function rescoreAll(outDir) {
+export function rescoreAll(outDir, host = "claude") {
   const rows = []
   for (const scenario of SCENARIOS) {
     const scenarioDir = path.join(outDir, scenario.id)
     if (!existsSync(scenarioDir)) continue
     for (const run of readdirSync(scenarioDir).sort()) {
       if (!existsSync(path.join(scenarioDir, run, "transcript.jsonl"))) continue
-      const result = scenario.check(loadRunContext(path.join(scenarioDir, run)))
+      const result = scoreRun(scenario, loadRunContext(path.join(scenarioDir, run), host), host)
       rows.push({ id: `${scenario.id}/${run}`, outcome: result.outcome, notes: result.notes })
     }
   }
@@ -33,7 +36,10 @@ export function rescoreAll(outDir) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const i = process.argv.indexOf("--out-dir")
   if (i < 0 || !process.argv[i + 1]) throw new Error("--out-dir is required")
-  for (const row of rescoreAll(process.argv[i + 1])) {
+  const h = process.argv.indexOf("--host")
+  const host = h < 0 ? "claude" : process.argv[h + 1]
+  if (!HOSTS.includes(host)) throw new Error(`--host must be one of ${HOSTS.join(", ")}, got ${JSON.stringify(host)}`)
+  for (const row of rescoreAll(process.argv[i + 1], host)) {
     console.log(`${row.id}: ${row.outcome}`)
     for (const note of row.notes) console.log(`    ${note}`)
   }

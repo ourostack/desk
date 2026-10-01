@@ -393,7 +393,7 @@ export function breakOriginForFailure(deskRoot) {
  * per run -- it holds no operator content, only Desk's own installed code.
  * Everything else in the isolated HOME starts empty.
  */
-export function createIsolatedHome({ homeDir, sharedCacheDir }) {
+export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude" }) {
   mkdirSync(homeDir, { recursive: true })
   mkdirSync(path.join(homeDir, "Library"), { recursive: true })
   symlinkSync(path.join(REAL_HOME, "Library", "Keychains"), path.join(homeDir, "Library", "Keychains"))
@@ -422,6 +422,7 @@ export function createIsolatedHome({ homeDir, sharedCacheDir }) {
   // is no AI attribution anywhere). Left on, the harness's temporary home made Claude Code tell agents to add a
   // `Co-Authored-By` trailer, which contradicted the desk and confused them. `attribution` is the current key;
   // `includeCoAuthoredBy` is its deprecated predecessor, set too so an older Claude Code obeys the same setting.
+  if (host === "copilot") return homeDir // the Copilot profile and its attribution default are written by copilot.mjs `writeCopilotProfile`
   const claudeDir = path.join(homeDir, ".claude") // the run never gets CLAUDE_CONFIG_DIR (buildChildEnv), so Claude Code's profile is under this home
   mkdirSync(claudeDir, { recursive: true })
   writeFileSync(path.join(claudeDir, "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)
