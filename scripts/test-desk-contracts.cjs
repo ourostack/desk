@@ -1049,10 +1049,10 @@ contract("boot prints the bound desk's AGENTS.md, and no step orders a read of i
   assert.doesNotMatch(source, /Confirm this session can call the Desk MCP/u);
   assert.match(source, /out\.push\(DEFERRED_TOOLS_HINT\)/u);
   const text9 = text("plugins/desk/mcp/src/runtime/boot-text.js");
-  assert.match(text9, /AGENTS_MD_CAP_BYTES = 6 \* 1024/u);
+  assert.match(text9, /AGENTS_MD_CAP_BYTES = 16 \* 1024/u);
   assert.match(text9, /read the rest at/u);
   const hint = text("plugins/desk/mcp/src/util/deferred-tools.js");
-  assert.match(hint, /ToolSearch `select:` naming the exact tools/u);
+  assert.match(hint, /If your host defers tools.*Claude Code: ToolSearch `select:mcp__plugin_desk_desk__task_update/su);
   assert.match(hint, /mcp__plugin_desk_desk__task_update/u);
   assert.match(text("plugins/desk/mcp/src/runtime/task-status-guard.js"), /DEFERRED_TOOLS_LOAD_HINT/u, "the guard's deny message carries the same hint");
 });

@@ -112,7 +112,7 @@ test("non_code and ci_run evidence cannot finish a task that names code repos, a
   await fs.writeFile(path.join(root, "t", "proof.md"), "proof\n")
   await assert.rejects(
     done(root, { kind: "non_code", ref: "t/proof.md" }),
-    /`non_code` evidence cannot complete a task that names code repos.*kind: "pr".*kind: "commit".*no remote configured at all.*A commit in the desk itself does not count.*leave it at `validating` and tell the operator the commit sha/s,
+    /`non_code` evidence cannot complete a task that names code repos.*kind: "pr".*kind: "commit".*a repo Desk recorded as local-only.*A commit in the desk itself does not count.*leave it at `validating` and tell the operator the commit sha/s,
   )
   await assert.rejects(done(root, { kind: "ci_run", ref: "https://ci.example.invalid/1" }), /`ci_run` evidence cannot complete a task that names code repos/)
 })
@@ -358,10 +358,10 @@ test("recordedRepos reads only usable entries and treats anything else as no rep
   assert.deepEqual(recordedRepos("acme/widgets"), [])
   assert.deepEqual(recordedRepos(undefined), [])
   assert.deepEqual(recordedRepos([null, 3, { name: "  " }, { local_path: "x" }, "  "]), [])
-  assert.deepEqual(recordedRepos([" foo "]), [{ name: "foo", localPath: "", mode: undefined }])
+  assert.deepEqual(recordedRepos([" foo "]), [{ name: "foo", localPath: "", mode: undefined, url: false }])
   assert.deepEqual(recordedRepos([{ name: " a/b ", local_path: " ~/b ", mode: "local" }, { name: "c" }]), [
-    { name: "a/b", localPath: "~/b", mode: "local" },
-    { name: "c", localPath: "", mode: undefined },
+    { name: "a/b", localPath: "~/b", mode: "local", url: false },
+    { name: "c", localPath: "", mode: undefined, url: false },
   ])
 })
 

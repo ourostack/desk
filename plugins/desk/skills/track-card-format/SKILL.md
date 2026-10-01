@@ -73,6 +73,8 @@ Optional: background a reader needs that the one-line `scope:` cannot hold.
 - **Planning docs preserved**: see `_planning/` (current) and `_planning/_history/` (superseded)
 ```
 
+`task_update` keeps the `State` column current: when a task's status changes it rewrites that task's row (found by the `Slug` column) in this table, and leaves every other column and any table that does not have the `Slug` and `State` headings alone. The other columns (repos, links, doing doc) are written when the row is made and are not updated by a tool, because track tools only append to the body; keep them short so they rarely go stale.
+
 consumer agents may add a "Work-tracker structure" body section (e.g. an enterprise Feature/Requirement/Task hierarchy) — that belongs in the consumer's extension skill, not here.
 
 keep the body concise. when a resuming operator slides the drawer open, they should know what's in flight and what's next in under 30 seconds.

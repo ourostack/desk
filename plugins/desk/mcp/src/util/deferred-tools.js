@@ -4,8 +4,8 @@
 // one hint boot and the task-card guard both give instead: load the exact tools when first needed.
 
 export const DEFERRED_TOOLS_LOAD_HINT =
-  "Desk's tools may be deferred: when you first need one, load it with ToolSearch `select:` naming the exact tools, for example " +
-  "`select:mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status` (every Desk tool is `mcp__plugin_desk_desk__<name>`: " +
+  "If your host defers tools, Desk's may be listed by name without being loaded: load the exact ones you need before first use " +
+  "(Claude Code: ToolSearch `select:mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status`; every Desk tool is `mcp__plugin_desk_desk__<name>`: " +
   "task_update, task_create, task_move, task_archive, desk_status, desk_search and the rest)."
 
 export const DEFERRED_TOOLS_HINT =

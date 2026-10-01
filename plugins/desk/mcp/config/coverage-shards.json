@@ -306,6 +306,8 @@
     "tests/desk/mcp/__tests__/tools/status_readiness_word.test.js": 1,
     "tests/desk/mcp/__tests__/tools/task_archive.test.js": 0.6,
     "tests/desk/mcp/__tests__/tools/task_done_evidence_repos.test.js": 2.5,
+    "tests/desk/mcp/__tests__/tools/local_only.test.js": 3,
+    "tests/desk/mcp/__tests__/tools/track_row.test.js": 1.5,
     "tests/desk/mcp/__tests__/tools/task_progress_notes.test.js": 1.5,
     "tests/desk/mcp/__tests__/tools/task_create.test.js": 0.6,
     "tests/desk/mcp/__tests__/tools/task_update.test.js": 1.7,

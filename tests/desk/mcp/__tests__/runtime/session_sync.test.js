@@ -110,7 +110,7 @@ test("syncWorkspace reports synced, without ever pulling, on a plain repo with n
   const root = await mkPlainRepo()
   await writeAndCommit(root, "seed.md", "seed\n", "seed")
   const result = await syncWorkspace({ root, env })
-  assert.deepEqual(result, { state: "synced" })
+  assert.deepEqual(result, { state: "synced", nothingToSync: "no_remote" })
 })
 
 test("syncWorkspace reports synced when a remote exists but the current branch has no upstream", async () => {
@@ -119,7 +119,7 @@ test("syncWorkspace reports synced when a remote exists but the current branch h
   git(root, ["remote", "add", "origin", origin])
   await writeAndCommit(root, "seed.md", "seed\n", "seed")
   const result = await syncWorkspace({ root, env })
-  assert.deepEqual(result, { state: "synced" })
+  assert.deepEqual(result, { state: "synced", nothingToSync: "no_upstream" })
 })
 
 // ---------------------------------------------------------------------------

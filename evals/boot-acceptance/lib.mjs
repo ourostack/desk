@@ -107,6 +107,7 @@ repos:
   - name: greenhouse-irrigation
     local_path: ~/code/greenhouse-irrigation
     mode: local
+    local_only: true
 ---
 
 ## Current work
@@ -357,7 +358,9 @@ if __name__ == "__main__":
   sh("git", ["-C", repo, "config", "user.name", "Desk Operator"])
   sh("git", ["-C", repo, "config", "commit.gpgsign", "false"])
   sh("git", ["-C", repo, "add", "-A"])
-  sh("git", ["-C", repo, "commit", "-q", "-m", "Stub the rain-delay policy and its boundary test"])
+  // Made the day after the card was created, as the real stub commit would be: a commit older than the task is not work done for it.
+  const seeded = { ...process.env, GIT_AUTHOR_DATE: "2026-09-21T09:00:00Z", GIT_COMMITTER_DATE: "2026-09-21T09:00:00Z" }
+  sh("git", ["-C", repo, "commit", "-q", "-m", "Stub the rain-delay policy and its boundary test"], { env: seeded })
   return repo
 }
 
@@ -414,6 +417,12 @@ export function createIsolatedHome({ homeDir, sharedCacheDir }) {
       if (existsSync(src)) copyFileSync(src, path.join(ghConfig, file))
     }
   }
+  // A real operator's setup has Claude Code's default commit and pull-request attribution turned off (the desk's own rule
+  // is no AI attribution anywhere). Left on, the harness's temporary home made Claude Code tell agents to add a
+  // `Co-Authored-By` trailer, which contradicted the desk and confused them. `attribution` is the current key;
+  // `includeCoAuthoredBy` is its deprecated predecessor, set too so an older Claude Code obeys the same setting.
+  mkdirSync(path.join(homeDir, ".claude"), { recursive: true })
+  writeFileSync(path.join(homeDir, ".claude", "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)
   return homeDir
 }
 

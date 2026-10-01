@@ -43,7 +43,18 @@ function listDirs(dir) {
   }
 }
 
-// null when the card is missing or unreadable; `{}` data when its frontmatter is malformed.
+const NEXT_STEP_CAP = 200
+
+// The card's `**Next step:**` paragraph (task-body.js writes it), one line, redacted like any other text, or null.
+function nextStepOf(content) {
+  const match = /^\*\*Next step:\*\*[ \t]*(.*(?:\n(?![ \t]*\n|[ \t]*(?:[-*+]|\d+[.)])\s|#{1,6}\s).+)*)/mu.exec(content)
+  if (match === null) return null
+  const line = redactCredentialLikeText(match[1].replace(/\s+/gu, " ").trim())
+  if (line === "") return null
+  return line.length > NEXT_STEP_CAP ? `${line.slice(0, NEXT_STEP_CAP - 3)}...` : line
+}
+
+// null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
 function readCardData(filePath) {
   let fd
   try {
@@ -55,9 +66,10 @@ function readCardData(filePath) {
     const buffer = Buffer.alloc(MAX_CARD_BYTES)
     const bytesRead = readSync(fd, buffer, 0, MAX_CARD_BYTES, 0)
     try {
-      return parseFrontmatter(buffer.toString("utf8", 0, bytesRead)).data
+      const parsed = parseFrontmatter(buffer.toString("utf8", 0, bytesRead))
+      return { data: parsed.data, content: parsed.content }
     } catch {
-      return {}
+      return { data: {}, content: "" }
     }
   } finally {
     closeSync(fd)
@@ -100,8 +112,9 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
     const trackDir = path.join(scanRoot, trackName)
     const tasks = []
     for (const taskName of listDirs(trackDir)) {
-      const data = readCardData(path.join(trackDir, taskName, "task.md"))
-      if (data === null) continue
+      const card = readCardData(path.join(trackDir, taskName, "task.md"))
+      if (card === null) continue
+      const { data, content } = card
       const status = asText(data.status)
       if (TERMINAL_STATUSES.has(status)) continue
       const slug = redactName(taskName)
@@ -117,6 +130,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
         status: status === null ? null : redactName(status),
         updated: asText(data.updated),
         repos: shownRepos(data.repos),
+        next_step: nextStepOf(content),
       })
     }
     if (tasks.length === 0) continue
@@ -131,7 +145,8 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
 /**
  * activeTasks(deskRoot) -> { tracks, task_count, track_count, redacted }
  *
- * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos }] }]`,
+ * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
+ * where `next_step` is the card's `**Next step:**` paragraph on one line (at most 200 characters) or null,
  * where `repos` is `[{ name?, local_path?, mode? }]`.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.

@@ -32,6 +32,8 @@ import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
+import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
+import { setTaskState } from "./track-row.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
@@ -150,7 +152,7 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
       )
     }
   }
-  assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit: card.spawnGit, homeDir: card.homeDir })
+  assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit: card.spawnGit, homeDir: card.homeDir, existingRepos: card.existingRepos, created: card.created })
 }
 
 /**
@@ -279,12 +281,12 @@ function stagingAllowed(filePath, spawnGit) {
 // return value, which a caller attaches to its result under `commit` only
 // on failure, so a normal, silent success stays byte-identical to today's
 // response shape.
-function stageAndCommitCard(filePath, message, spawnGit) {
+function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = []) {
   const dir = path.dirname(filePath)
-  const basename = path.basename(filePath)
-  const staged = stagePaths(dir, [basename], spawnGit)
+  const paths = [path.basename(filePath), ...alsoRelative]
+  const staged = stagePaths(dir, paths, spawnGit)
   if (!staged.ok) return { status: "failed", reason: staged.stderr }
-  const committed = commitPaths(dir, [basename], message, spawnGit)
+  const committed = commitPaths(dir, paths, message, spawnGit)
   return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }
 
@@ -451,7 +453,7 @@ function splitAbsolutePath(candidate) {
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md", commit? }
  */
-export async function task_create({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_create({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -497,6 +499,9 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   for (const k of OPTIONAL_RUNTIME_FIELDS) {
     if (values[k] !== undefined) data[k] = values[k]
   }
+  // Desk records which repos are local-only (a clone with no remote and no `url`), here and when boot first sees one; a
+  // `local_only` the caller wrote is dropped (see `local-only.js`).
+  if (data.repos !== undefined) data.repos = withLocalOnlyRecorded(data.repos, { spawnGit, homeDir: env.HOME, deskRoot })
 
   await writeMarkdown(filePath, data, values.body ?? "")
   let commit
@@ -508,6 +513,22 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   return result
+}
+
+// Sets the task's `State` in the track card's Tasks table when the card has one in the documented format and no one has
+// unstaged edits in it; returns the card's path when it wrote it, else null. A track card that is missing, unreadable,
+// or has no such row is left alone.
+async function updateTrackRow({ filePath, slug, status, spawnGit }) {
+  const trackFile = path.join(path.dirname(path.dirname(filePath)), "track.md")
+  try {
+    if (isGitRepository(path.dirname(trackFile), spawnGit) && hasUnstagedWork(path.dirname(trackFile), ["track.md"], spawnGit)) return null
+    const next = setTaskState(await fs.readFile(trackFile, "utf8"), slug, String(status))
+    if (next === null) return null
+    await fs.writeFile(trackFile, next, "utf8")
+    return trackFile
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -596,6 +617,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   }
 
   const existing = await readMarkdown(filePath)
+  assertLocalOnlyUnchanged(frontmatter?.repos, existing.data.repos)
   const merged = { ...existing.data, ...(frontmatter ?? {}) }
 
   // Preserve immutable fields even if the caller passed them.
@@ -633,6 +655,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     await assertDoneEvidence(evidence, deskRoot, "task_update", {
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
       repos: [...asList(existing.data.repos), ...asList(frontmatter.repos)],
+      // Only these can earn the local-only exemption: repos added in this call never do (`done-evidence.js`).
+      existingRepos: existing.data.repos, created: existing.data.created,
       files: [filePath], spawnGit, homeDir: env.HOME,
     })
     merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
@@ -650,7 +674,9 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
 
   const stage = stagingAllowed(filePath, spawnGit)
   await writeMarkdown(filePath, merged, newBody)
-  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit) : undefined
+  // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
+  const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
+  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
@@ -797,7 +823,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
       } else {
-        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME })
+        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME })
         archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
       }
     }

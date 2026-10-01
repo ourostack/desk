@@ -74,6 +74,7 @@ import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
+import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "./boot-text.js"
 import { DEFERRED_TOOLS_HINT } from "../util/deferred-tools.js"
 
@@ -847,7 +848,7 @@ function pushLines(pushAccounts, namedTask) {
   }
   const lines = [...groups.values()].map(({ entry, locations }) => pushInstruction(entry, taskList(locations)))
   if (lines.length <= PUSH_LINE_CAP) return lines
-  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: check \`push_accounts\` in the boot result before pushing anywhere.`]
+  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: read the Push routes section of this output (the \`push_accounts\` field with \`--json\`) before pushing anywhere.`]
 }
 
 // What to do about a recorded local clone that is not on this machine: the exact clone command when the card carries
@@ -939,6 +940,7 @@ export async function bootOnce({
   activeTasksFn = activeTasks,
   walkFn = walkTaskCards,
   repoFn = repoStates,
+  localOnlyFn = recordLocalOnlyOnCards,
   prFn = openPullRequests,
   factoryStatusFn = factoryStatus,
   lastSyncFn = lastSyncedAt,
@@ -1014,11 +1016,11 @@ export async function bootOnce({
   if (syncProblem !== null) degraded.push(syncProblem)
   let lastSyncAt = null
   try {
-    lastSyncAt = lastSyncFn(root.path)
+    lastSyncAt = lastSyncFn({ root: root.path, env })
   } catch {
     lastSyncAt = null
   }
-  const syncSummaryText = syncSummary({ sync, timedOut: syncTimedOut, lastSyncAt })
+  const syncSummaryText = syncSummary({ sync, timedOut: syncTimedOut, lastSyncAt, root: root.path })
   // The desk's own rules, read after the sync so a pull that changed them is already in. Never throws.
   let agentsMd = null
   try {
@@ -1074,6 +1076,13 @@ export async function bootOnce({
     pending.push(...found.pending)
   } catch (error) {
     degraded.push(`repo_states: ${error.message}`)
+  }
+  // A clone seen with no remote and no card url is recorded on its card as local-only, once: the only record the done
+  // check trusts for a commit with nowhere to push (`tools/local-only.js`).
+  try {
+    await localOnlyFn({ cards, deskRoot: root.path, spawnGit, homeDir })
+  } catch {
+    // Recording is a convenience and never a reason to degrade a boot.
   }
 
   let openPrs = []
@@ -1135,8 +1144,10 @@ export async function bootOnce({
 /** `--task <query>` and `--json` from the command line: the named task or null, and whether to print the structured result. */
 export function parseBootArgs(argv) {
   const index = argv.indexOf("--task")
+  // `--task --json` names no task: a flag is never the query.
+  const value = index === -1 ? undefined : argv[index + 1]
   return {
-    taskQuery: index !== -1 && typeof argv[index + 1] === "string" && argv[index + 1].trim() !== "" ? argv[index + 1] : null,
+    taskQuery: typeof value === "string" && value.trim() !== "" && !value.startsWith("--") ? value : null,
     json: argv.includes("--json"),
   }
 }

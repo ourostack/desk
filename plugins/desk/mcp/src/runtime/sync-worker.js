@@ -298,15 +298,17 @@ function updateSyncStatus(root, env, patch) {
 /**
  * Records how the last desk sync (`syncWorkspace`'s pull) ended, for `desk_status`'s one health word: a failed pull
  * changes no ahead/behind count, so without this record `desk_status` reads "in sync" beside a boot that said
- * `degraded`. A synced outcome clears the record; so does a later successful push. Best effort, never throws.
+ * `degraded`. A synced outcome clears the record; so does a later successful push. A pull that really happened also
+ * records `last_success_at`, which boot shows as "local desk is as of": FETCH_HEAD cannot say that, because a failed
+ * fetch touches it too. A desk with nothing to sync against records no success time. Best effort, never throws.
  */
 export function recordPullOutcome({ root, env, result }) {
   try {
     const failed = result?.state === "unresolved"
+    const at = new Date().toISOString()
     updateSyncStatus(root, env, {
-      last_pull: failed
-        ? { state: "unresolved", reason: result.reason ?? null, cause: result.cause ?? null, at: new Date().toISOString() }
-        : null,
+      last_pull: failed ? { state: "unresolved", reason: result.reason ?? null, cause: result.cause ?? null, at } : null,
+      ...(failed || result?.nothingToSync ? {} : { last_success_at: at }),
     })
   } catch {
     // The record is a convenience for the next reader, never a reason to fail a sync.

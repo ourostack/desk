@@ -226,7 +226,7 @@ test("denies every direct edit of a real task card, body edits included, and nam
       assert.match(reason, /frontmatter: \{ \.\.\. \}/u)
       assert.match(reason, /body_append: "/u)
       // The same ToolSearch hint boot gives: Desk's tools may be deferred, so name the exact tools.
-      assert.match(reason, /Desk's tools may be deferred.*ToolSearch `select:`.*mcp__plugin_desk_desk__task_update/su)
+      assert.match(reason, /If your host defers tools.*Claude Code: ToolSearch `select:.*mcp__plugin_desk_desk__task_update/su)
       assert.doesNotMatch(reason, /changes the card's `status:`/u)
     }
   })
