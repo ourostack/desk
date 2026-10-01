@@ -25,8 +25,8 @@ function readSessionInput() {
       clearTimeout(timer);
       process.stdin.destroy();
       try {
-        const { cwd, sessionId } = JSON.parse(input);
-        resolve({ folder: typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd(), sessionId });
+        const { cwd, sessionId, source } = JSON.parse(input);
+        resolve({ folder: typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd(), sessionId, source });
       } catch {
         resolve({ folder: process.cwd() });
       }
@@ -43,10 +43,10 @@ function readSessionInput() {
 // it sees, in a file keyed by the session id; the server reads it whenever it resolves its root (see
 // mcp/src/runtime/copilot-session.js). It runs before the line below is composed, so the line and the server resolve alike.
 // Writing the record never throws (a session must start without it); only a Desk install that cannot load the module reaches the fallback line.
-async function recordSession({ folder, sessionId }) {
+async function recordSession({ folder, sessionId, source }) {
   const { recordCopilotSession } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-session.js")).href);
   const { resolveActivationConfigPath } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "paths.js")).href);
-  recordCopilotSession({ sessionId, folder: path.resolve(folder), activationConfig: resolveActivationConfigPath({ env: process.env }), env: process.env });
+  recordCopilotSession({ sessionId, folder: path.resolve(folder), source, activationConfig: resolveActivationConfigPath({ env: process.env }), env: process.env });
 }
 
 // Let Desk's shared startup module resolve the root the way the Desk server will, with the session folder as the

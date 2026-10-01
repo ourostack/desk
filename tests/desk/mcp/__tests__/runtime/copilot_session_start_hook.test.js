@@ -46,7 +46,7 @@ test("the plugin registers the card guard, the done-claim gate and its two feede
   assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot prompt', 'node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"'])
 })
 
-test("the first prompt of a recorded session gets the boot direction as context, and later prompts and unrecorded sessions get none", () => {
+test("the first prompt of a session gets the boot direction as context, in either order with sessionStart, and later prompts get none", () => {
   const desk = path.join(ROOT, "boot-desk")
   mkdirSync(path.join(desk, "_meta"), { recursive: true })
   mkdirSync(path.join(desk, "_archive"), { recursive: true })
@@ -59,6 +59,12 @@ test("the first prompt of a recorded session gets the boot direction as context,
   const first = prompt("sess-boot")
   assert.match(first.additionalContext, /^Desk boot is pending for this session: run `node \S*session-boot\.js` first \(one quick call\), then answer this message\. A child agent with a bounded brief skips this\.$/u)
   assert.deepEqual(prompt("sess-boot"), {})
-  assert.deepEqual(prompt("a-child-agents-session"), {})
   assert.deepEqual(prompt("sess-boot", null), {}, "a broken payload fails open")
+
+  // Copilot's real order on a new session: the prompt hook runs first, before sessionStart has recorded anything, and still directs the boot, once.
+  const fresh = prompt("sess-prompt-first")
+  assert.match(fresh.additionalContext, /^Desk boot is pending for this session/u)
+  const session = spawnSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { input: JSON.stringify({ sessionId: "sess-prompt-first", cwd: desk, source: "new" }), env, encoding: "utf8" })
+  assert.equal(session.status, 0, session.stderr)
+  assert.deepEqual(prompt("sess-prompt-first"), {}, "sessionStart after the claim does not re-arm the pointer")
 })

@@ -45,9 +45,18 @@ export function startDirection(command = bootCommand()) {
 }
 const START = startDirection()
 
-// Copilot weighs sessionStart context lightly: on a bare greeting the model answered without booting (boot acceptance rounds F and G), while the same imperative delivered as `userPromptSubmitted` context, next to the message itself, was followed every time it was probed. So the first prompt of a recorded session carries this shorter line, worded as a pointer rather than a claim about the boot's state (see hooks/copilot-boot-prompt.cjs).
+// Copilot weighs sessionStart context lightly: on a bare greeting the model answered without booting (boot acceptance rounds F and G), while the same imperative delivered as `userPromptSubmitted` context, next to the message itself, was followed every time it was probed. So the first prompt of each session carries this shorter line, worded as a pointer rather than a claim about the boot's state (see hooks/copilot-boot-prompt.cjs).
 export function promptBootDirection(command = bootCommand()) {
   return `Desk boot is pending for this session: run \`${command}\` first (one quick call), then answer this message. A child agent with a bounded brief skips this.`
+}
+
+/**
+ * The pointer for a Copilot first prompt, or null when there is nothing to point at: the root resolved the way `copilotStartupDirection` resolves it (the session folder as the project folder, the saved binding) must be a usable desk.
+ * A folder that is no desk, with no binding and no home fallback, is setup mode or a repository the operator happens to be in, so it gets no pointer; an unusable or unreadable binding gets none either, because the boot script could not run there.
+ */
+export function copilotPromptPointer({ env, sessionFolder, homeDir }) {
+  const bound = resolveStartupRoot({ activationConfigPath: resolveActivationConfigPath({ env }), env, homeDir, hostProjectRoot: sessionFolder })
+  return bound.root && !bound.unavailable && !bound.error ? promptBootDirection() : null
 }
 
 export const DESK_SETUP_DIRECTION =
