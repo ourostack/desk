@@ -76,7 +76,7 @@ test("desk_status reports the factory for the bound desk, routed by the overlay 
       store: OTHER,
       source: "overlay",
       consent: "yes",
-      stores: [{ store: OTHER, consent: "yes", pending: 0, quarantined: 0, last_flush: "nothing_pending" }],
+      stores: [{ store: OTHER, consent: "yes", pending: 0, route_changed: 0, quarantined: 0, last_flush: "nothing_pending" }],
       warnings: [],
     })
   }
@@ -142,3 +142,10 @@ test("desk_status and desk_doctor never print a path, secret, account, token or 
     }
   }
 }))
+
+test("the doctor's summary names files routed elsewhere only when there are some", async () => {
+  const { factorySummary } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
+  const status = (routeChanged) => ({ store: STORE, source: "desk", consent: "yes", stores: [{ store: STORE, consent: "yes", pending: 1, route_changed: routeChanged, quarantined: 0, last_flush: null }], warnings: [] })
+  assert.match(factorySummary(status(2)), /ourostack\/factory: yes, 1 pending, 2 routed elsewhere, 0 quarantined, no flush yet/u)
+  assert.match(factorySummary(status(0)), /ourostack\/factory: yes, 1 pending, 0 quarantined, no flush yet/u)
+})

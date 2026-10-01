@@ -13,7 +13,7 @@ import { main as factoryCli } from "../../../../../plugins/desk/mcp/scripts/fact
 import { chooseAccount, deliveryRoute, flush, signedInAccounts } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { setConsent, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
-import { STORE, routeTo, scratch } from "./_session_helpers.js"
+import { STORE, scratch } from "./_session_helpers.js"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
@@ -125,7 +125,6 @@ test("a flush whose recorded account cannot fork the store stops with account_ca
 
   // A managed (EMU) login may be recorded, because a work store needs one, but it cannot fork a public store outside its enterprise.
   await setConsent(env, { store: STORE, contribute: true, account: "worker_corp" })
-  await routeTo(env, golden.session.id)
   assert.equal((await writeLocalFacts(env, STORE, golden)).written, true)
   let github = fakeGitHub({ push: false, account: "worker_corp" })
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "account_cannot_deliver" })

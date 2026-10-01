@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
-  factoryStateRoot, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker,
+  factoryStateRoot, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
@@ -118,28 +118,82 @@ test("a file whose session still routes to the store is never deleted, and an id
   assert.equal(dataFiles(github).length, 3)
 }))
 
-test("an unknown route is frozen: no marker, no desk root, a bad declaration, a default with no recorded check, an invalid recorded route", () => scratch(async (ctx) => {
-  const { github, desks } = await delivered(ctx, 6)
-  const root = await factoryStateRoot(ctx.env)
-  // 1: no marker. 2: desk folder gone. 3: unreadable declaration. 4: default route without a recorded overlay check. 5: a declaration that is
-  // not a store. 6: default route whose hook recorded that it could not resolve one.
-  await fs.rm(path.join(root, "markers", nameOf(1)))
-  await fs.rm(desks[1], { recursive: true })
-  await fs.writeFile(path.join(desks[2], "_meta", "factory.json"), "{ not json")
+test("a marker whose route cannot be resolved freezes the session: desk gone, bad declaration, invalid declaration, invalid recorded route", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 4)
+  // 1: desk folder gone. 2: unreadable declaration. 3: a declaration that is not a store. 4: default route whose hook recorded that it
+  // could not resolve one.
+  await fs.rm(desks[0], { recursive: true })
+  await fs.writeFile(path.join(desks[1], "_meta", "factory.json"), "{ not json")
+  await reroute(desks[2], "not a store")
   await fs.rm(path.join(desks[3], "_meta", "factory.json"))
-  await reroute(desks[4], "not a store")
-  await fs.rm(path.join(desks[5], "_meta", "factory.json"))
-  await marker(ctx.env, ctx.base, 6, desks[5], { routing: { store: null, source: "invalid_declaration", warnings: [] } })
-  // A changed file for a frozen session is not published either; a new session with no marker at all waits too, and is counted.
-  const changed = localFacts(4)
+  await marker(ctx.env, ctx.base, 4, desks[3], { routing: { store: null, source: "invalid_declaration", warnings: [] } })
+  // A changed file of a frozen session is not published; a new session whose desk's declaration cannot be read waits too, and is counted.
+  const changed = localFacts(2)
   changed.session.end_reason = "clear"
   assert.equal((await writeLocalFacts(ctx.env, STORE, changed)).written, true)
+  await marker(ctx.env, ctx.base, 7, desks[1])
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(7))).written, true)
   const before = github.pullCount()
   await offline(ctx, github)
   assert.equal(github.pullCount(), before)
   assert.equal((await lastFlush(ctx)).route_unknown, 1)
-  assert.equal(dataFiles(github).length, 6)
+  assert.equal(dataFiles(github).length, 4)
+}))
+
+test("a pruned marker keeps the derive-time route: a pending facts file and late labels publish, and nothing is deleted", () => scratch(async (ctx) => {
+  const { github } = await delivered(ctx, 1)
+  const root = await factoryStateRoot(ctx.env)
+  // Session 2 was derived while its marker lived, which the receipt records; then the marker was pruned. Session 1's labels arrive late.
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(2))).written, true)
+  await writeStatus(ctx.env, { derivations: { [nameOf(2)]: { store: STORE, marker: "x", binding_version: 4 } } })
+  await fs.rm(path.join(root, "markers", nameOf(1)))
+  assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), session: sessionId(1) })).written, true)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal(github.pulls.at(-1).body, "2")
+  github.mergeOpenPr()
+  const job = await keyedJob(ctx.env)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`, `facts/${nameOf(2)}`, `labels/${job}/${sessionId(1)}.json`])
+}))
+
+test("an older hook's marker with no recorded route keeps the derive-time route: it publishes, and is never deleted", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  // The desk declares nothing, so its default route needs the overlay check this hook never recorded.
+  const desk = await deskFor(ctx.base, "old-desk", null)
+  await marker(ctx.env, ctx.base, 1, desk)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  const github = fakeGitHub()
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  await offline(ctx, github)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("a copy left in an older store's outbox is stale once the receipt names the store the session moved to: never published, never deleted", () => scratch(async (ctx) => {
+  const { github } = await delivered(ctx, 1)
+  const root = await factoryStateRoot(ctx.env)
+  await fs.rm(path.join(root, "markers", nameOf(1)))
+  // A later derive went to the other store; the copy here is stale. A new session left behind the same way never goes either.
+  await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: OTHER, marker: "x", binding_version: 4 }, [nameOf(2)]: { store: OTHER, marker: "x", binding_version: 4 } } })
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(2))).written, true)
+  await offline(ctx, github)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("a finished retraction stays finished after the marker is pruned: the receipt keeps the route the marker last gave", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  await run(ctx.env, github)
+  // The other store has no consent here, so the sweep never re-derived the session: only the flush saw the new route.
+  const receipt = (await readStatus(ctx.env)).derivations[nameOf(1)]
+  assert.equal(receipt.route, OTHER)
+  await fs.rm(path.join(await factoryStateRoot(ctx.env), "markers", nameOf(1)))
+  await another(ctx)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(9)}`])
 }))
 
 test("a held session keeps its file: a marker with no desk root, and a Codex default route nothing has verified", () => scratch(async (ctx) => {
@@ -156,7 +210,7 @@ test("a held session keeps its file: a marker with no desk root, and a Codex def
   assert.equal(dataFiles(github).length, 2)
 }))
 
-test("a Codex session on the default route is published only while a Claude Code marker for the same desk proves that route", () => scratch(async (ctx) => {
+test("a Codex session on the default route: published when proven, kept by its derive-time route when the proof is gone, deleted only on a positive route elsewhere", () => scratch(async (ctx) => {
   await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
   const desk = await deskFor(ctx.base, "codex-desk", null)
   const id = "01927a3b-8c00-7abc-8def-0123456789ab"
@@ -166,16 +220,24 @@ test("a Codex session on the default route is published only while a Claude Code
   const facts = localFacts(1, "codex-cli")
   facts.session.id = id
   assert.equal((await writeLocalFacts(ctx.env, STORE, facts)).written, true)
-  // A proof candidate for a desk that no longer exists proves nothing.
+  // A proof candidate for a desk that no longer exists proves nothing; a Claude Code session in the same desk whose hook checked the
+  // plugin overlays and found none proves the default route.
   await marker(ctx.env, ctx.base, 3, path.join(ctx.base, "gone-desk"), { routing: { store: STORE, source: "default", warnings: [] } })
-  const github = fakeGitHub()
-  await offline(ctx, github)
-  assert.equal((await lastFlush(ctx)).route_unknown, 1)
-  // A Claude Code session in the same desk whose hook checked the plugin overlays and found none proves the default route.
   await marker(ctx.env, ctx.base, 2, desk, { routing: { store: STORE, source: "default", warnings: [] } })
+  const github = fakeGitHub()
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
   github.mergeOpenPr()
   assert.equal(dataFiles(github).length, 1)
+  // The proving marker is gone: the session was proven when it was derived, so it keeps its route and nothing happens.
+  await fs.rm(path.join(await factoryStateRoot(ctx.env), "markers", nameOf(2)))
+  await run(ctx.env, github)
+  await offline(ctx, github)
+  assert.equal(dataFiles(github).length, 1)
+  // The desk now declares another store: a positive route, so the file is retracted.
+  await reroute(desk, OTHER)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [])
 }))
 
 test("labels are retracted with their facts, at the keyed path they were delivered at, and nothing else goes", () => scratch(async (ctx) => {
@@ -241,8 +303,8 @@ test("the PR names neither the other store nor a session, and its branch and com
   const pr = github.pulls.at(-1)
   const branch = await branchOf(ctx.env)
   const commit = github.commit(github.ref(STORE, branch))
-  const status = await fs.readFile(path.join(await factoryStateRoot(ctx.env), "status.json"), "utf8")
-  assert.doesNotMatch(status, /ms-desk-factory|shared-internal-tools/u)
+  // The store's flush status never names the other store; the session's local derivation receipt keeps its route, as receipts keep every derive's store.
+  assert.doesNotMatch(JSON.stringify(await lastFlush(ctx)), /ms-desk-factory|shared-internal-tools/u)
   // The tree call names the deleted path, which holds the session id by design; everything else must not.
   const trees = github.calls.filter((call) => /git\/trees/u.test(call.args.join(" "))).map((call) => call.input ?? "")
   const texts = [pr.title, pr.body, pr.head.ref, commit.message, ...github.calls.filter((call) => /pulls|commits|refs/u.test(call.args.join(" "))).map((call) => call.input ?? "")]
@@ -433,7 +495,7 @@ test("an unknown route freezes a retracting session: its delete leaves the branc
   await reroute(desks[0], OTHER)
   await run(ctx.env, github)
   const open = github.pulls.at(-1)
-  await fs.rm(path.join(await factoryStateRoot(ctx.env), "markers", nameOf(1)))
+  await fs.writeFile(path.join(desks[0], "_meta", "factory.json"), "{ not json")
   // Online because the pushed batch is unsettled: nothing is wanted now, so the PR is closed; nothing is published or deleted.
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.equal(open.state, "closed")
@@ -584,12 +646,9 @@ test("a refused delete is counted, not quarantined, not retried, cleared when th
   assert.equal((await lastFlush(ctx)).retractions_refused, 1)
   assert.equal(github.pullCount(), before)
   // An unknown route is a state change too: the stale entry goes, so nothing can keep a flush online.
-  const root = await factoryStateRoot(ctx.env)
-  const kept = await fs.readFile(path.join(root, "markers", nameOf(1)))
-  await fs.rm(path.join(root, "markers", nameOf(1)))
+  await fs.writeFile(path.join(desks[0], "_meta", "factory.json"), "{ not json")
   await offline(ctx, github)
   assert.equal((await lastFlush(ctx)).retractions_refused, undefined)
-  await fs.writeFile(path.join(root, "markers", nameOf(1)), kept, { mode: 0o600 })
   // Routed back: a changed file for the session goes out.
   await reroute(desks[0], STORE)
   const changed = localFacts(1)

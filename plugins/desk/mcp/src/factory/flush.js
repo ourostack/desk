@@ -72,12 +72,18 @@
 //      or one is opened titled `Factory intake` whose body is the file
 //      count, plus `Retracted: <n> files (route_changed)` when it deletes any.
 //
-//   Retraction. Every session the flush could act on is placed by where its
-//   marker routes now, resolved as the sweep resolves it (`routeResolver`):
-//   here, away (positively another store) or unknown. Three invariants hold.
+//   Retraction. Every session the flush could act on is placed by where it
+//   routes now (`session-route.js`, shared with the local status and
+//   reconcile): here, away (its marker positively routes to another store),
+//   unknown (its marker exists but the route cannot be resolved) or stale. A
+//   session whose marker says nothing new (missing or pruned, an older hook
+//   with no recorded overlay check, a Codex default route not proven now)
+//   keeps its last known route: the `route` its receipt recorded when a
+//   marker last routed positively, else the receipt's derive-time `store`,
+//   else this store, whose outbox holds the file. Three invariants hold.
 //   I1: only a `here` session is published, or released from quarantine, to
-//   the store; an unknown route or a held session (its facts quarantined) is
-//   frozen, never published and never deleted, and never sends a flush
+//   the store; unknown, stale and held (facts quarantined) sessions are
+//   frozen, never published and never deleted, and never send a flush
 //   online. I2: an online flush rebuilds the intake branch from the change
 //   set the current state wants (publishes plus the deletes still needed);
 //   when that set is empty it closes this machine's open intake PR and resets
@@ -88,11 +94,11 @@
 //   where the default branch holds exactly the delivered blob; once pushed
 //   they are retracting (`retracting/<store-slug>.json`), and when the
 //   default branch no longer holds them only that record is dropped. A
-//   truncated tree listing proves no file absent. Online anyway, the flush
-//   also deletes an away session's file it has no record of when the store
-//   holds exactly the blob this Desk would publish for it. A delete the store
-//   refuses returns the session to delivered and is not retried while it
-//   stays away.
+//   delete always needs a positive current route. A truncated tree listing
+//   proves no file absent. Online anyway, the flush also deletes an away
+//   session's file it has no record of when the store holds exactly the blob
+//   this Desk would publish for it. A delete the store refuses returns the
+//   session to delivered and is not retried while it stays away.
 
 // Every step's result is one stable `FlushCode`. The account token comes from
 // `gh auth token --user <account>`, lives only in memory and reaches `gh` only
@@ -141,6 +147,7 @@ import {
   pendingLabels,
   quarantine,
   readConsent,
+  recordRoutes,
   readDelivered,
   readJobsIndex,
   readMachineSecret,
@@ -160,7 +167,7 @@ import { serializePublished, toPublished, toPublishedLabels } from "./publish.js
 import { validatePublishedBytes } from "./published-schema.js"
 import { isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
 import { PATTERNS, isPlainObject } from "./schema.js"
-import { resolveStore } from "./store-route.js"
+import { derivedStoreOf, sessionPlace, sessionRoute } from "./session-route.js"
 
 /** Every result `flush` can return. */
 export const FLUSH_CODES = Object.freeze([
@@ -577,43 +584,8 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
 // Routes.
 // ---------------------------------------------------------------------------
 
-// A Codex marker's default route is proven only by a Claude Code or Copilot CLI marker for the same desk within 30 days, as the sweep proves it.
-const ROUTE_PROOF_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
-const markerTime = (marker) => Date.parse(marker.ended_at ?? marker.updated_at)
-const realDesk = (root) => fsp.realpath(root).catch(() => path.resolve(root))
 // The session a facts name or a local labels key belongs to, or `undefined` for any other name.
 const sessionOfName = (name) => LABELS_KEY.exec(name)?.[2] ?? FACTS_SESSION.exec(name)?.[1]
-
-/**
- * `routeResolver(markers) -> (session) => Promise<string | null>`: the store a session's marker routes to now, resolved as the sweep resolves
- * it, or `null` when that cannot be said for certain: no marker, a desk root that is not an absolute folder, a declaration that does not
- * resolve, a default route with no overlay check recorded by the session's hook, and a Codex default route no other marker proves.
- */
-function routeResolver(markers) {
-  const byName = new Map(markers.map((marker) => [`${marker.host}-${marker.session_id}.json`, marker]))
-  const proofs = markers.filter((other) => other.host !== "codex-cli" && typeof other.desk_root === "string" && other.routing?.source === "default")
-  const proven = async (marker) => {
-    const desk = await realDesk(marker.desk_root)
-    for (const other of proofs) if ((await realDesk(other.desk_root)) === desk && Math.abs(markerTime(other) - markerTime(marker)) <= ROUTE_PROOF_WINDOW_MS) return true
-    return false
-  }
-  const resolve = async (session) => {
-    const marker = factsNamesOf(session).map((name) => byName.get(name)).find((found) => found !== undefined)
-    if (marker === undefined || typeof marker.desk_root !== "string" || !path.isAbsolute(marker.desk_root)) return null
-    try {
-      if (!(await fsp.stat(marker.desk_root)).isDirectory()) return null
-      const current = resolveStore({ deskRoot: marker.desk_root })
-      if (current.source !== "default") return isRepo(current.store) ? current.store : null
-      const route = marker.routing ?? (marker.host === "codex-cli" ? current : null)
-      if (route === null) return null
-      if (marker.host === "codex-cli" && route.source === "default" && !(await proven(marker))) return null
-      return isRepo(route.store) ? route.store : null
-    } catch {
-      return null
-    }
-  }
-  return resolve
-}
 
 // ---------------------------------------------------------------------------
 // Store side.
@@ -854,7 +826,8 @@ async function deliver(env, context) {
 
   // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so they go again.
   await releaseRefusedPluginNames(env, store)
-  const prior = (await readStatus(env)).last_flush?.[store] ?? {}
+  const status = await readStatus(env)
+  const prior = status.last_flush?.[store] ?? {}
   const priorRefused = new Set(list(prior.refused_retractions).filter((name) => typeof name === "string"))
   // A batch pushed and not yet seen settled: the intake PR may be open, carrying changes the current state no longer wants.
   const mayBeOpen = prior.intake_pushed === true
@@ -875,16 +848,26 @@ async function deliver(env, context) {
   const labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })
   if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && !mayBeOpen) return { result: "nothing_pending" }
 
-  // Every session this flush could act on is placed by where its marker routes now: `here` (this store), `away` (positively another store) or `unknown`.
-  // Only a `here` session is ever published (or released from quarantine) to this store; an `unknown` one is frozen: never published and never deleted.
+  // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (its marker
+  // positively routes to another store), `unknown` (its marker exists but its route cannot be resolved) or `stale` (no new information, and
+  // its derivation receipt names another store). A session whose marker says nothing new keeps its derive-time route. Only a `here` session
+  // is ever published (or released from quarantine) to this store; `unknown` and `stale` ones are frozen: never published and never deleted.
   const markers = await listMarkers(env)
-  const routeOf = routeResolver(markers)
+  const markerByName = new Map(markers.map((marker) => [`${marker.host}-${marker.session_id}.json`, marker]))
+  const receipts = isPlainObject(status.derivations) ? status.derivations : {}
   const places = new Map()
-  const sessions = [...candidates.map(({ name }) => name), ...labelCandidates.map(({ name }) => name), ...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting)].map(sessionOfName)
-  for (const session of new Set(sessions.filter((session) => session !== undefined))) {
-    const route = await routeOf(session)
-    places.set(session, route === null ? "unknown" : sameRepo(route, store) ? "here" : "away")
+  const localNames = [...candidates.map(({ name }) => name), ...labelCandidates.map(({ name }) => name), ...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting)]
+  // A positive route is kept in the session's receipts (`recordRoutes`), so the session keeps it once its marker is pruned.
+  const routes = {}
+  for (const session of new Set(localNames.map(sessionOfName).filter((session) => session !== undefined))) {
+    const names = factsNamesOf(session)
+    const marker = names.map((name) => markerByName.get(name)).find((found) => found !== undefined) ?? null
+    const route = sessionRoute(marker, { siblings: () => markers })
+    places.set(session, sessionPlace(store, route, derivedStoreOf(receipts, names)))
+    if (route.kind !== "store") continue
+    for (const name of names.filter((name) => localNames.includes(name) && receipts[name]?.route !== route.store)) routes[name] = route.store
   }
+  if (Object.keys(routes).length > 0) await recordRoutes(env, routes)
   const placeOf = (name) => places.get(sessionOfName(name))
   // A session whose facts are quarantined is held: frozen while it routes elsewhere, neither deleted nor published.
   const heldSessions = new Set([...delivered.quarantined].filter((name) => !LABELS_KEY.test(name)).map(sessionOfName))

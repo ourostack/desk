@@ -657,3 +657,28 @@ test("the commit rule is the binder's: housekeeping drops, a sweep binds nothing
   assert.equal(rule("s", ["t/a/x.md", "t/b/x.md", "t/c/x.md", "t/tidy/task.md"]).mass, false, "a housekeeping card does not count toward a sweep")
   assert.ok(normalizeRemote("https://github.com/acme/desk.git"))
 })
+
+test("a session whose marker now routes to another store is route_changed, never not_delivered or delivered, read as the flush reads routes", () => scratch(async (context) => {
+  const { desk, env } = context
+  const repo = await standardDesk(desk, [["t", "moved"], ["t", "movedsent"], ["t", "stays"], ["t", "pruned"]])
+  for (const slug of ["moved", "movedsent", "stays", "pruned"]) repo.commit("2026-09-25T15:00:00Z", { [`t/${slug}/work.md`]: "real\n" })
+  // The markers were written now, as a hook writes them, so they say where each session routes today.
+  await addSession(context, 30, "t", "moved", { delivered: false, markerStore: OTHER })
+  await addSession(context, 31, "t", "movedsent", { markerStore: OTHER })
+  await addSession(context, 32, "t", "stays")
+  // Delivered to OTHER under a marker past the 30 days that names STORE: the marker says nothing new, so the session stays in OTHER's
+  // outbox and the older pipeline check names the store it was delivered to.
+  await addSession(context, 33, "t", "pruned", { store: OTHER })
+  const root = await factoryStateRoot(env)
+  for (const [n, at] of [[30, Date.now()], [31, Date.now()], [32, Date.now()], [33, Date.now() - 40 * 24 * 60 * 60 * 1000]]) {
+    const file = path.join(root, "markers", `claude-code-${sessionId(n)}.json`)
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), updated_at: new Date(at).toISOString() }))
+  }
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(reasonsOf(result, "moved"), ["route_changed"])
+  assert.equal(mismatchOf(result, "moved")[0].detail, "routes_elsewhere")
+  assert.deepEqual(reasonsOf(result, "movedsent"), ["route_changed"])
+  assert.deepEqual(reasonsOf(result, "stays"), [])
+  assert.deepEqual(reasonsOf(result, "pruned"), ["route_changed"])
+  assert.equal(mismatchOf(result, "pruned")[0].detail, "delivered_to_other_store")
+}))

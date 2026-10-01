@@ -14,7 +14,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
 import { fakeGitHub } from "./_fake_github.js"
-import { STORE, routeTo, scratch, session } from "./_session_helpers.js"
+import { STORE, scratch, session } from "./_session_helpers.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
 async function load() {
@@ -43,7 +43,6 @@ async function jobFile(ctx, n) {
   const facts = structuredClone(GOLDEN)
   facts.session.id = sessionId(n)
   facts.refs = { prs: [], commits: [], unresolved: { prs: 0, commits: 0 } }
-  await routeTo(ctx.env, facts.session.id)
   const written = await writeLocalFacts(ctx.env, STORE, facts)
   assert.equal(written.written, true)
   await indexJob(ctx.env, JOB, written.name)
@@ -238,6 +237,5 @@ test("without a request finalize works from the jobs index alone, and flushes ev
   })
   assert.deepEqual(result, { result: "cleared", flushes: { "acme/second": "nothing_pending", [STORE]: "nothing_pending" } })
   assert.deepEqual(flushed, ["acme/second", STORE])
-  // Session 1 is indexed and routed (it has a marker); session 3 has a marker but is not indexed, and there is no request.
-  assert.deepEqual(derived, [`claude-code-${sessionId(1)}.json`], "no request, so only indexed sessions with markers are derived")
+  assert.deepEqual(derived, [], "no request, so only indexed sessions with markers are derived")
 }))

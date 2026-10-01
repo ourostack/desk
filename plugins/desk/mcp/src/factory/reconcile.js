@@ -50,6 +50,7 @@ import { validatePublishedBytes } from "./published-schema.js"
 import { REFUSALS, keyedJobId } from "./publish.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
 import { ENUMS, PATTERNS } from "./schema.js"
+import { derivedStoreOf, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -62,7 +63,6 @@ const REFUSAL_CODES = new Set(["invalid", "facts_quarantined", "private_plugins_
 const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
 const PRIVATE_DESKS = new Set(["private", "internal"])
 const OPEN_PR_RESULTS = new Set(["delivered_pr_open", "intake_stale_retried"])
-const ROUTE_PROOF_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 const MIN_SECRET_BYTES = 32
 const GIT_TIMEOUT_MS = 120000
 
@@ -279,12 +279,9 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   // Markers with no outbox file: sessions that never became facts. A marker with facts is explained by its own job.
   const deskMarkers = markerNames.filter((name) => !withFacts.has(name)).map((name) => ({ name, marker: markerOf(name) })).filter(({ marker }) => marker !== null && marker.desk_root !== null
     && realOf(marker.desk_root) === root && (marker.person_prefix ?? "") === personPrefix && markerTime(marker) >= sinceMs && markerTime(marker) <= untilMs)
-  // A Codex marker's default route is proven only by a Claude Code or Copilot marker for the desk within 30 days.
-  const proven = (marker) => markerNames.some((name) => {
-    const other = markerOf(name)
-    return other !== null && other.host !== "codex-cli" && other.desk_root !== null && other.routing?.source === "default"
-      && realOf(other.desk_root) === realOf(marker.desk_root) && Math.abs(markerTime(other) - markerTime(marker)) <= ROUTE_PROOF_WINDOW_MS
-  })
+  // A Codex marker's default route is proven only by a Claude Code or Copilot marker for the desk within 30 days, as the sweep and the flush prove it.
+  const siblings = () => markerNames.map(markerOf).filter((other) => other !== null)
+  const proven = (marker) => routeProven(marker, siblings())
 
   // Why a marker's session did not become delivered facts, or `null`: held, consent, route, log, in pipeline order.
   const markerProblem = (name, marker) => {
@@ -364,8 +361,17 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     return storeDir === null ? `pr_${flush.pr}_unchecked` : `pr_${flush.pr}`
   }
 
+  // Whether an outbox file's session now positively routes to a store other than the one whose outbox holds it, read as the flush and
+  // the local status read it (`session-route.js`): the flush never publishes it there, and retracts it if it was delivered.
+  const routedAway = (session) => {
+    const names = ENUMS.host.map((host) => `${host}-${session.name.slice(-41, -5)}.json`)
+    const marker = names.map(markerOf).find((found) => found !== null) ?? null
+    return sessionPlace(session.slug.replace("__", "/"), sessionRoute(marker, { siblings }), derivedStoreOf(status.derivations, names)) === "away"
+  }
+
   // Why one outbox file's session is not delivered facts in the store, or `null` when it is.
   const sessionProblem = (session, inStore) => {
+    if (routedAway(session)) return { reason: "route_changed", detail: "routes_elsewhere" }
     const marker = markerOf(session.name)
     const fromMarker = marker === null ? null : markerProblem(session.name, marker)
     if (fromMarker !== null) return fromMarker

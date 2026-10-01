@@ -828,6 +828,21 @@ export async function writeStatus(env, patch, { platform = process.platform, run
   }, { platform, env, runner }, isStatusShape)
 }
 
+/**
+ * `recordRoutes(env, routes)`: for each `{ name: store }`, keeps `store` as `route` in the derivation receipt of facts file `name`, the
+ * other keys unchanged (a receipt is created when there is none). `route` is the store the session's marker last positively routed to, as
+ * the flush saw it. It outlives the marker, which is pruned after 30 days, and the sweep's own `store`, which a route to a store without
+ * consent never updates, so a session whose marker is gone keeps the route it last had (`session-route.js`).
+ */
+export async function recordRoutes(env, routes, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
+    const derivations = { ...current.derivations }
+    for (const [name, store] of Object.entries(routes)) derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), route: store }
+    return { ...current, derivations }
+  }, { platform, env, runner }, isStatusShape)
+}
+
 function assertVisibilityEntries(patch) {
   for (const [key, entry] of Object.entries(patch)) {
     requirePlainObject(entry, `patch[${JSON.stringify(key)}]`)
