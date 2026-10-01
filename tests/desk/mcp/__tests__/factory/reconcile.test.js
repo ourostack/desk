@@ -682,3 +682,28 @@ test("a session whose marker now routes to another store is route_changed, never
   assert.deepEqual(reasonsOf(result, "pruned"), ["route_changed"])
   assert.equal(mismatchOf(result, "pruned")[0].detail, "delivered_to_other_store")
 }))
+
+test("a tombstoned session routes elsewhere, a stale copy and a stalled retraction are route_changed too, and an unreadable retracting file reads as none", () => scratch(async (context) => {
+  const { desk, env } = context
+  const repo = await standardDesk(desk, [["t", "tomb"], ["t", "stalecopy"], ["t", "stall"], ["t", "elsewhere"]])
+  for (const slug of ["tomb", "stalecopy", "stall", "elsewhere"]) repo.commit("2026-09-25T15:00:00Z", { [`t/${slug}/work.md`]: "real\n" })
+  const tomb = await addSession(context, 40, "t", "tomb", { delivered: false })
+  const stale = await addSession(context, 41, "t", "stalecopy", { delivered: false })
+  const stall = await addSession(context, 42, "t", "stall", { delivered: false })
+  await addSession(context, 43, "t", "elsewhere", { store: OTHER, markerStore: OTHER })
+  const root = await factoryStateRoot(env)
+  // Every marker is past the 30 days, so it says nothing new.
+  for (const n of [40, 41, 42, 43]) {
+    const file = path.join(root, "markers", `claude-code-${sessionId(n)}.json`)
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), updated_at: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString() }))
+  }
+  await writeStatus(env, { derivations: { [stale.name]: { store: STORE, route: OTHER, binding_version: BINDING_VERSION } } })
+  mkdirSync(path.join(root, "retracting"), { recursive: true })
+  writeFileSync(path.join(root, "retracting", `${tomb.slug}.json`), JSON.stringify({ [tomb.name]: { path: `facts/${tomb.name}`, blob: blob(40), done: true }, [stall.name]: { path: `facts/${stall.name}`, blob: blob(42) } }))
+  writeFileSync(path.join(root, "retracting", `${OTHER.replace("/", "__")}.json`), "{ not json")
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(mismatchOf(result, "tomb").map(({ reason, detail }) => [reason, detail]), [["route_changed", "routes_elsewhere"]])
+  assert.deepEqual(mismatchOf(result, "stalecopy").map(({ reason, detail }) => [reason, detail]), [["route_changed", "stale_copy"]])
+  assert.deepEqual(mismatchOf(result, "stall").map(({ reason, detail }) => [reason, detail]), [["route_changed", "retraction_stalled"]])
+  assert.deepEqual(reasonsOf(result, "elsewhere"), [])
+}))

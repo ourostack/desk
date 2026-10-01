@@ -18,11 +18,12 @@
 // `consent` is the resolved store's decision; `held` means no store is
 // resolved, so nothing is asked and nothing is sent. `stores` lists the
 // resolved store first, then every other store with a recorded decision,
-// sorted. `pending` counts the store's outbox files never delivered, not
-// quarantined and not routed elsewhere; `route_changed` counts its outbox
-// files, not quarantined, whose session's marker now positively routes to
-// another store (`session-route.js`, read as the flush reads it: the flush
-// never publishes them there and retracts any it delivered); `quarantined`
+// sorted. `pending` counts the store's outbox files never delivered and not
+// quarantined whose session the flush would publish there (`here`, or
+// `unknown`, waiting for its route); `route_changed` counts its outbox files,
+// not quarantined, whose session routes elsewhere as the flush reads it
+// (`session-route.js`: `away`, including a finished retraction's tombstone,
+// `stale` or `stalled`): the flush never publishes them there; `quarantined`
 // counts its quarantined files; `last_flush` is the last flush's result
 // code, or `null`.
 //
@@ -46,7 +47,7 @@ import { consentDecision, consentRecords as readConsentRecords, factoryStateDir 
 import { readSmallText, validMarker } from "./marker.js"
 import { jobLink } from "./pipeline/build.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
-import { derivedStoreOf, sessionPlace, sessionRoute } from "./session-route.js"
+import { derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 
 const STATE_BYTES = 8 * 1024 * 1024
@@ -54,6 +55,8 @@ const MAX_ENTRIES = 4096
 const OUTBOX_NAME = new RegExp(`^(?:${ENUMS.host.join("|")})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.json$`, "u")
 const RESULT_CODE = /^[a-z][a-z0-9_]{0,63}$/u
 const UNREADABLE = Symbol("unreadable")
+// The places whose files the flush never publishes to the store they sit in (`session-route.js`).
+const ELSEWHERE = new Set(["away", "stale", "stalled"])
 
 /** A JSON object state file: `fallback` when absent, `UNREADABLE` when unsafe, unreadable or not an object (as the boot check reads it). */
 function readState(file, fallback) {
@@ -105,12 +108,14 @@ function placer(dir, receipts) {
   }
   let siblings = null
   const listSiblings = () => (siblings ??= outboxNames(path.join(dir, "markers")).map(markerOf).filter((marker) => marker !== null))
-  return (store, name) => {
-    // An outbox name ends in the 36-character session id and `.json`.
+  // `retracting` is the store's retracting records and tombstones, by name.
+  return (store, name, retracting) => {
+    // An outbox name, like a labels key, ends in the 36-character session id and `.json`.
     const session = name.slice(-41, -5)
     const names = ENUMS.host.map((host) => `${host}-${session}.json`)
     const marker = names.map(markerOf).find((found) => found !== null) ?? null
-    return sessionPlace(store, sessionRoute(marker, { siblings: listSiblings }), derivedStoreOf(receipts, names))
+    const records = Object.entries(retracting).filter(([key, record]) => key.slice(-41, -5) === session && isPlainObject(record)).map(([, record]) => record)
+    return sessionPlace(store, sessionRoute(marker, { siblings: listSiblings, deskRoot: deskRootOf(receipts, names) }), derivedStoreOf(receipts, names), records)
   }
 }
 
@@ -118,8 +123,9 @@ function storeEntry(dir, records, store, lastFlush, place) {
   const slug = store.replace("/", "__")
   const delivered = readState(path.join(dir, "delivered", `${slug}.json`), {})
   const quarantined = new Set(outboxNames(path.join(dir, "quarantine", slug)))
+  const retracting = readState(path.join(dir, "retracting", `${slug}.json`), {})
   const listed = outboxNames(path.join(dir, "outbox", slug)).filter((name) => !quarantined.has(name))
-  const away = new Set(listed.filter((name) => place(store, name) === "away"))
+  const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, retracting === UNREADABLE ? {} : retracting))))
   const pending = listed.filter((name) => !away.has(name) && (delivered === UNREADABLE || !Object.hasOwn(delivered, name))).length
   const flush = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) ? lastFlush[store].result : null
   return { store, consent: decision(records, store), pending, route_changed: away.size, quarantined: quarantined.size, last_flush: typeof flush === "string" && RESULT_CODE.test(flush) ? flush : null }

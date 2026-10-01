@@ -106,6 +106,30 @@ test("an outbox file whose session now routes to another store is route_changed,
   assert.deepEqual(status.stores, [{ store: STORE, consent: "yes", pending: 4, route_changed: 2, quarantined: 0, last_flush: null }])
 }))
 
+test("tombstoned, stale and stalled copies count as route_changed, never pending; an unknown route still waits as pending", () => scratch(async ({ base, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const root = await factoryStateRoot(env)
+  const moved = path.join(base, "moved-desk")
+  await json(path.join(moved, "_meta", "factory.json"), { schema_version: 1, store: OTHER })
+  const broken = path.join(base, "broken-desk")
+  await fs.mkdir(path.join(broken, "_meta"), { recursive: true })
+  await fs.writeFile(path.join(broken, "_meta", "factory.json"), "{ not json")
+  // 1: a finished retraction (tombstone), marker pruned. 2: a stale copy, its receipt naming the other store. 3: a retraction still open with
+  // no positive route. 4: marker pruned, its receipt's desk root now declares the other store. 5: an unresolvable marker and nothing known.
+  const names = []
+  for (const n of [1, 2, 3, 4, 5]) names.push(await outboxFile(env, STORE, n))
+  const blob = "b".repeat(40)
+  const retracting = path.join(root, "retracting", `${STORE.replace("/", "__")}.json`)
+  await json(retracting, { [names[0]]: { path: `facts/${names[0]}`, blob, done: true }, [names[2]]: { path: `facts/${names[2]}`, blob }, junk: 7 })
+  await writeStatus(env, { derivations: { [names[1]]: { store: OTHER }, [names[3]]: { store: STORE, desk_root: moved } } })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(5), log_path: path.join(base, "log-5.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 1, route_changed: 4, quarantined: 0, last_flush: null })
+  // An unreadable retracting file reads as none: the tombstoned and stalled copies count as pending again.
+  await fs.writeFile(retracting, "{ not json")
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 3, route_changed: 2, quarantined: 0, last_flush: null })
+}))
+
 test("the desk's declaration picks the store, and every other decided store is listed after it", () => scratch(async ({ desk, env }) => {
   const { factoryLocalStatus } = await load()
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: OTHER })

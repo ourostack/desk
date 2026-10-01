@@ -16,7 +16,7 @@ import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
   factoryStateRoot, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { fakeGitHub } from "./_fake_github.js"
+import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
@@ -52,7 +52,7 @@ async function marker(env, base, n, desk, extra = {}, host = "claude-code") {
 }
 
 // Sessions 1..count delivered to the store and merged there, each from a desk declaring the store, with labels for the sessions in `labelled`.
-async function delivered({ base, env }, count, { labelled = [] } = {}) {
+async function delivered({ base, env }, count, { labelled = [], github: options = {} } = {}) {
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   const desks = []
   for (let n = 1; n <= count; n += 1) {
@@ -61,7 +61,7 @@ async function delivered({ base, env }, count, { labelled = [] } = {}) {
     assert.equal((await writeLocalFacts(env, STORE, localFacts(n))).written, true)
   }
   for (const n of labelled) assert.equal((await writeLocalLabels(env, STORE, { ...structuredClone(LABELS), session: sessionId(n) })).written, true)
-  const github = fakeGitHub()
+  const github = fakeGitHub(options)
   assert.equal((await run(env, github)).result, "delivered_pr_open")
   github.mergeOpenPr()
   // The merged delivery is confirmed by the next flush, as any delivery is.
@@ -118,26 +118,32 @@ test("a file whose session still routes to the store is never deleted, and an id
   assert.equal(dataFiles(github).length, 3)
 }))
 
-test("a marker whose route cannot be resolved freezes the session: desk gone, bad declaration, invalid declaration, invalid recorded route", () => scratch(async (ctx) => {
+test("a marker that cannot be resolved falls back to the last known route; only a session with nothing positive known freezes", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 4)
-  // 1: desk folder gone. 2: unreadable declaration. 3: a declaration that is not a store. 4: default route whose hook recorded that it
-  // could not resolve one.
+  // 1: desk folder gone (moved or renamed). 2: unreadable declaration. 3: a declaration that is not a store. 4: default route whose hook
+  // recorded that it could not resolve one. Each has a receipt naming this store, so each keeps that route, and nothing is deleted.
   await fs.rm(desks[0], { recursive: true })
   await fs.writeFile(path.join(desks[1], "_meta", "factory.json"), "{ not json")
   await reroute(desks[2], "not a store")
   await fs.rm(path.join(desks[3], "_meta", "factory.json"))
   await marker(ctx.env, ctx.base, 4, desks[3], { routing: { store: null, source: "invalid_declaration", warnings: [] } })
-  // A changed file of a frozen session is not published; a new session whose desk's declaration cannot be read waits too, and is counted.
   const changed = localFacts(2)
   changed.session.end_reason = "clear"
   assert.equal((await writeLocalFacts(ctx.env, STORE, changed)).written, true)
+  // 7: a new session with no receipt whose desk's declaration cannot be read: nothing positive is known, so it waits, counted.
+  // 8: a new session with no receipt whose desk folder is gone: the sweep put it here, so it publishes, as the sweep would.
   await marker(ctx.env, ctx.base, 7, desks[1])
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(7))).written, true)
-  const before = github.pullCount()
-  await offline(ctx, github)
-  assert.equal(github.pullCount(), before)
+  await marker(ctx.env, ctx.base, 8, path.join(ctx.base, "moved-desk"))
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(8))).written, true)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal(github.pulls.at(-1).body, "2")
   assert.equal((await lastFlush(ctx)).route_unknown, 1)
-  assert.equal(dataFiles(github).length, 4)
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  await offline(ctx, github)
+  assert.deepEqual(dataFiles(github), [1, 2, 3, 4, 8].map((n) => `facts/${nameOf(n)}`))
+  assert.notEqual(github.mainFiles().get(`facts/${nameOf(2)}`), undefined)
 }))
 
 test("a pruned marker keeps the derive-time route: a pending facts file and late labels publish, and nothing is deleted", () => scratch(async (ctx) => {
@@ -490,7 +496,7 @@ test("F3: a session with no record whose route is away is never published, and c
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(9)}`])
 }))
 
-test("an unknown route freezes a retracting session: its delete leaves the branch, its record stays, and frozen state never sends a flush online", () => scratch(async (ctx) => {
+test("a retracting session whose route can no longer be shown positive is stalled: its delete leaves the branch, its record stays, counted, and it never sends a flush online", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 1)
   await reroute(desks[0], OTHER)
   await run(ctx.env, github)
@@ -500,8 +506,10 @@ test("an unknown route freezes a retracting session: its delete leaves the branc
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.equal(open.state, "closed")
   assert.deepEqual(await names(ctx, "retracting"), [nameOf(1)])
-  assert.equal((await lastFlush(ctx)).route_unknown, 1)
+  assert.equal((await lastFlush(ctx)).retraction_stalled, 1)
+  assert.equal((await lastFlush(ctx)).route_unknown, undefined)
   await offline(ctx, github)
+  assert.equal((await lastFlush(ctx)).retraction_stalled, 1)
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
 }))
 
@@ -773,4 +781,188 @@ test("a session that routes back after its delete PR was closed unmerged, or its
   assert.deepEqual(await names(ctx, "retracting"), [])
   assert.deepEqual(await names(ctx), [nameOf(1)])
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+// ---------------------------------------------------------------------------
+// Adjudicated follow-up: intake PRs under an earlier head, tombstones, desk roots, store_missing.
+// ---------------------------------------------------------------------------
+
+const openPrs = (github) => github.pulls.filter((pr) => pr.state === "open")
+
+test("H1: a delete PR opened from the fork, then push permission, then a route back: the fork PR is closed by its number and main keeps the file", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1, { github: { push: false, fork: "ready" } })
+  await reroute(desks[0], OTHER)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  const forkPr = github.pulls.at(-1)
+  assert.equal(forkPr.head.label, `contributor:${await branchOf(ctx.env)}`)
+  assert.deepEqual((await lastFlush(ctx)).intake_prs, [{ number: forkPr.number, head: forkPr.head.label }])
+  // The account is given push permission: the intake head is the store's own branch now, where the fork PR is invisible.
+  github.setPush(true)
+  await reroute(desks[0], STORE)
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(forkPr.state, "closed")
+  assert.deepEqual(openPrs(github), [])
+  const entry = await lastFlush(ctx)
+  assert.equal(entry.intake_pushed, undefined)
+  assert.equal(entry.intake_prs, undefined)
+  assert.deepEqual(await names(ctx), [nameOf(1)])
+  await offline(ctx, github)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("H1: a delete PR open under one account, then the consent account changes and the session routes back: the old PR is closed and main keeps the file", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1, { github: { push: false, fork: "ready" } })
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  const oldPr = github.pulls.at(-1)
+  // Another account, one with push permission, delivers for this store from now on.
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "maintainer" })
+  github.setAccount("maintainer")
+  github.setPush(true)
+  await reroute(desks[0], STORE)
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(oldPr.state, "closed")
+  assert.deepEqual(openPrs(github), [])
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+  // A later change goes under the new head, and only the new PR is recorded.
+  await another(ctx)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  const pr = github.pulls.at(-1)
+  assert.deepEqual((await lastFlush(ctx)).intake_prs, [{ number: pr.number, head: `ourostack:${await branchOf(ctx.env)}` }])
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`, `facts/${nameOf(9)}`])
+}))
+
+test("H1: a recorded PR under an earlier head that cannot be read or closed stays recorded and keeps the flush online until it is closed; a missing or closed one is dropped", () => scratch(async (ctx) => {
+  let refuse = true
+  const { github, desks } = await delivered(ctx, 1, {
+    github: {
+      push: false, fork: "ready",
+      intercept: (call) => (refuse && call.args.includes("PATCH") && call.args.some((arg) => /^repos\/[^/]+\/[^/]+\/pulls\/\d+$/u.test(arg)) && !call.input?.includes("body") ? httpError(403, "Forbidden") : undefined),
+    },
+  })
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  const forkPr = github.pulls.at(-1)
+  // Recorded beside it: a PR the store no longer has, a PR already closed, and one whose read fails.
+  const closed = github.addClosedPr({ headLabel: `old:${await branchOf(ctx.env)}` })
+  const entry = await lastFlush(ctx)
+  await writeStatus(ctx.env, { last_flush: { [STORE]: { ...entry, intake_prs: [...entry.intake_prs, { number: 999, head: "gone:intake/x" }, { number: closed, head: `old:${await branchOf(ctx.env)}` }, { number: "junk" }] } } })
+  github.setPush(true)
+  await reroute(desks[0], STORE)
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(forkPr.state, "open")
+  assert.deepEqual((await lastFlush(ctx)).intake_prs, [{ number: forkPr.number, head: forkPr.head.label }])
+  assert.equal((await lastFlush(ctx)).intake_pushed, true)
+  // The next flush goes online for it, and closes it once the store lets it.
+  refuse = false
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(forkPr.state, "closed")
+  assert.equal((await lastFlush(ctx)).intake_prs, undefined)
+  await offline(ctx, github)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("H1: a recorded PR whose read fails stays recorded", () => scratch(async (ctx) => {
+  let fail = false
+  const { github, desks } = await delivered(ctx, 1, {
+    github: { push: false, fork: "ready", intercept: (call) => (fail && call.args.includes("GET") && call.args.some((arg) => /\/pulls\/\d+$/u.test(arg)) ? httpError(502, "Bad Gateway") : undefined) },
+  })
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  const forkPr = github.pulls.at(-1)
+  github.setPush(true)
+  fail = true
+  await reroute(desks[0], STORE)
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.deepEqual((await lastFlush(ctx)).intake_prs, [{ number: forkPr.number, head: forkPr.head.label }])
+  fail = false
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(forkPr.state, "closed")
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("P1b: a finished retraction keeps a tombstone, so losing status.json after the marker is pruned never publishes the session again", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1, { labelled: [1] })
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  const job = await keyedJob(ctx.env)
+  const tombstones = JSON.parse(await fs.readFile(await retractingFile(ctx), "utf8"))
+  assert.deepEqual(Object.keys(tombstones).sort(), [`labels/${LABELS.job}/${sessionId(1)}.json`, nameOf(1)].sort())
+  assert.ok(Object.values(tombstones).every((record) => record.done === true))
+  assert.equal(tombstones[nameOf(1)].path, `facts/${nameOf(1)}`)
+  assert.deepEqual(await names(ctx, "retracting"), [])
+  const root = await factoryStateRoot(ctx.env)
+  await fs.rm(path.join(root, "markers", nameOf(1)))
+  await fs.rm(path.join(root, "status.json"))
+  await another(ctx)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(9)}`])
+  assert.ok(!dataFiles(github).includes(`labels/${job}/${sessionId(1)}.json`))
+  // A positive route back clears the tombstone, and the session publishes again.
+  await marker(ctx.env, ctx.base, 1, desks[0])
+  await reroute(desks[0], STORE)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.deepEqual(Object.keys(JSON.parse(await fs.readFile(await retractingFile(ctx), "utf8"))), [])
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`, `facts/${nameOf(9)}`, `labels/${job}/${sessionId(1)}.json`])
+}))
+
+test("P2c: a desk that reroutes after its sessions' markers were pruned retracts them, read from the desk root the receipt recorded", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 2)
+  const receipt = (await readStatus(ctx.env)).derivations[nameOf(1)]
+  assert.equal(receipt.desk_root, desks[0])
+  const root = await factoryStateRoot(ctx.env)
+  for (const n of [1, 2]) await fs.rm(path.join(root, "markers", nameOf(n)))
+  // Still declaring the store: nothing moves. Desk 2 declares nothing any more, the default route, which says nothing new.
+  await fs.rm(path.join(desks[1], "_meta", "factory.json"))
+  await offline(ctx, github)
+  await reroute(desks[0], OTHER)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal((await readStatus(ctx.env)).derivations[nameOf(1)].route, OTHER)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(2)}`])
+}))
+
+test("P2: a marker pruned while its delete is open keeps retracting with a resolvable desk root, and is counted stalled without one", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 2)
+  await reroute(desks[0], OTHER)
+  await reroute(desks[1], OTHER)
+  await run(ctx.env, github)
+  const open = github.pulls.at(-1)
+  const root = await factoryStateRoot(ctx.env)
+  for (const n of [1, 2]) await fs.rm(path.join(root, "markers", nameOf(n)))
+  // Desk 2 is gone too: its root cannot be resolved, so its delete leaves the branch and its record stays, counted.
+  await fs.rm(desks[1], { recursive: true })
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal(open.state, "open")
+  assert.deepEqual([...github.headFiles(STORE, await branchOf(ctx.env)).keys()], [`facts/${nameOf(2)}`])
+  assert.equal((await lastFlush(ctx)).retraction_stalled, 1)
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.deepEqual(await names(ctx, "retracting"), [nameOf(2)])
+  assert.equal((await lastFlush(ctx)).retraction_stalled, 1)
+  await offline(ctx, github)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(2)}`])
+}))
+
+test("Q1: store_missing clears intake_pushed, so an idle flush after it makes no call", () => scratch(async (ctx) => {
+  let missing = false
+  const { github } = await delivered(ctx, 1, { github: { intercept: (call) => (missing && call.args.includes(`repos/${STORE}`) ? httpError(404, "Not Found") : undefined) } })
+  await another(ctx)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal((await lastFlush(ctx)).intake_pushed, true)
+  // The session's file goes away locally, and the store answers 404.
+  await fs.rm(await outboxFile(ctx, 9))
+  missing = true
+  assert.deepEqual(await run(ctx.env, github), { result: "store_missing" })
+  const entry = await lastFlush(ctx)
+  assert.equal(entry.intake_pushed, undefined)
+  assert.equal(entry.intake_prs, undefined)
+  await offline(ctx, github)
 }))

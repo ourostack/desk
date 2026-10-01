@@ -188,7 +188,8 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
     await setJobsForFile(env, written.name, jobs.map((j) => j.job))
-    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, ...before } } })
+    // `desk_root` stays local: the flush reads the desk's declaration from it once the marker is pruned (`session-route.js`).
+    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, ...before } } })
     return { result: "written", store }
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }

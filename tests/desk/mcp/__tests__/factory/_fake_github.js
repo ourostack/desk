@@ -256,6 +256,10 @@ export function fakeGitHub({
       pulls.push(pr)
       return ok(publicPr(pr), 201)
     }
+    if (method === "GET" && (m = new RegExp(`^repos/${store}/pulls/(\\d+)$`, "u").exec(pathPart))) {
+      const pr = pulls.find((item) => item.number === Number(m[1]))
+      return pr ? ok(publicPr(pr)) : httpError(404, "Not Found")
+    }
     if (method === "PATCH" && (m = new RegExp(`^repos/${store}/pulls/(\\d+)$`, "u").exec(pathPart))) {
       const pr = pulls.find((item) => item.number === Number(m[1]))
       if (Object.hasOwn(body, "body")) pr.body = body.body
@@ -328,6 +332,14 @@ export function fakeGitHub({
     },
     /** The tree SHA of a commit. */
     treeOf: (sha) => commits.get(sha).tree,
+    /** The account's push permission on the store changes, as when a maintainer grants it. */
+    setPush(value) {
+      storeRepo().meta.permissions.push = value
+    },
+    /** Another account is signed in and answers for the token from now on; the old account's fork stays as it was. */
+    setAccount(name) {
+      account = name
+    },
     /** Deletes a branch, as a store that removes head branches after a merge does. */
     dropBranch(repoName, branch) {
       repo(repoName).refs.delete(`heads/${branch}`)

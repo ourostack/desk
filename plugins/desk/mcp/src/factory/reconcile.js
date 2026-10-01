@@ -49,8 +49,8 @@ import { readSmallText, validMarker } from "./marker.js"
 import { validatePublishedBytes } from "./published-schema.js"
 import { REFUSALS, keyedJobId } from "./publish.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
-import { ENUMS, PATTERNS } from "./schema.js"
-import { derivedStoreOf, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
+import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
+import { derivedStoreOf, deskRootOf, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -63,6 +63,7 @@ const REFUSAL_CODES = new Set(["invalid", "facts_quarantined", "private_plugins_
 const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
 const PRIVATE_DESKS = new Set(["private", "internal"])
 const OPEN_PR_RESULTS = new Set(["delivered_pr_open", "intake_stale_retried"])
+const ELSEWHERE_DETAIL = Object.freeze({ __proto__: null, away: "routes_elsewhere", stale: "stale_copy", stalled: "retraction_stalled" })
 const MIN_SECRET_BYTES = 32
 const GIT_TIMEOUT_MS = 120000
 
@@ -361,17 +362,28 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     return storeDir === null ? `pr_${flush.pr}_unchecked` : `pr_${flush.pr}`
   }
 
-  // Whether an outbox file's session now positively routes to a store other than the one whose outbox holds it, read as the flush and
-  // the local status read it (`session-route.js`): the flush never publishes it there, and retracts it if it was delivered.
-  const routedAway = (session) => {
-    const names = ENUMS.host.map((host) => `${host}-${session.name.slice(-41, -5)}.json`)
+  // Why an outbox file's session is placed elsewhere than the store whose outbox holds it, read as the flush and the local status read it
+  // (`session-route.js`), or `undefined`: the flush never publishes it there. `away` (a positive route elsewhere, or a finished retraction's
+  // tombstone) is `routes_elsewhere`, `stale` (its last known route is another store) is `stale_copy`, and `stalled` (a retraction open with no
+  // positive route) is `retraction_stalled`. An unreadable retracting file reads as none.
+  const retractingCache = new Map()
+  const retractingOf = (slug) => {
+    if (!retractingCache.has(slug)) retractingCache.set(slug, readState(path.join(dir, "retracting", `${slug}.json`), {}) ?? {})
+    return retractingCache.get(slug)
+  }
+  const elsewhere = (session) => {
+    const id = session.name.slice(-41, -5)
+    const names = ENUMS.host.map((host) => `${host}-${id}.json`)
     const marker = names.map(markerOf).find((found) => found !== null) ?? null
-    return sessionPlace(session.slug.replace("__", "/"), sessionRoute(marker, { siblings }), derivedStoreOf(status.derivations, names)) === "away"
+    const records = Object.entries(retractingOf(session.slug)).filter(([key, record]) => key.slice(-41, -5) === id && isPlainObject(record)).map(([, record]) => record)
+    const route = sessionRoute(marker, { siblings, deskRoot: deskRootOf(status.derivations, names) })
+    return ELSEWHERE_DETAIL[sessionPlace(session.slug.replace("__", "/"), route, derivedStoreOf(status.derivations, names), records)]
   }
 
   // Why one outbox file's session is not delivered facts in the store, or `null` when it is.
   const sessionProblem = (session, inStore) => {
-    if (routedAway(session)) return { reason: "route_changed", detail: "routes_elsewhere" }
+    const moved = elsewhere(session)
+    if (moved !== undefined) return { reason: "route_changed", detail: moved }
     const marker = markerOf(session.name)
     const fromMarker = marker === null ? null : markerProblem(session.name, marker)
     if (fromMarker !== null) return fromMarker

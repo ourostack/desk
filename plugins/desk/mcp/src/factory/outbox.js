@@ -25,7 +25,8 @@
 //   outbox/<store-slug>/<host>-<session_id>.json   local facts, never as-is
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
 //   delivered-paths/<store-slug>.json  name -> the { path, blob } it was delivered at
-//   retracting/<store-slug>.json       name -> { path, blob } of a file whose delete has been pushed
+//   retracting/<store-slug>.json       name -> { path, blob } of a file whose delete has been pushed, or
+//                                      { path, blob, done: true }, a tombstone once the delete is done
 //   quarantine/<store-slug>/<name>     { reason, at, blob? } (blob: the
 //                                      published blob sha the store refused),
 //                                      and for labels
@@ -710,9 +711,9 @@ export async function markDelivered(env, store, { name, publishedBlobSha, publis
 }
 
 /**
- * `readDelivered(env, store) -> { blobs, paths, retracting, quarantined }`: what this machine delivered to `store`. `blobs` maps each delivered name (a facts file
- * name or a labels key) to its published blob SHA, `paths` maps the names delivered by a Desk that recorded it to the `{ path, blob }` it went to, `retracting` is the same for files whose delete was pushed, and `quarantined` is
- * the set of names with a quarantine record.
+ * `readDelivered(env, store) -> { blobs, paths, retracting, retracted, quarantined }`: what this machine delivered to `store`. `blobs` maps each delivered name (a facts file
+ * name or a labels key) to its published blob SHA, `paths` maps the names delivered by a Desk that recorded it to the `{ path, blob }` it went to, `retracting` is the same for files whose delete was pushed,
+ * `retracted` is the same for the tombstones of deletes that are done, and `quarantined` is the set of names with a quarantine record.
  */
 export async function readDelivered(env, store, { platform = process.platform } = {}) {
   const slug = storeSlug(store)
@@ -720,13 +721,15 @@ export async function readDelivered(env, store, { platform = process.platform } 
   const blobs = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, platform)
   const paths = await readJsonFileSafe(path.join(root, "delivered-paths", `${slug}.json`), {}, platform)
   const stored = await readJsonFileSafe(path.join(root, "retracting", `${slug}.json`), {}, platform)
-  const retracting = Object.fromEntries(Object.entries(stored).filter(([name, record]) => ownNames([name]).length === 1 && isPlainObject(record) && typeof record.path === "string" && SHA1.test(record.blob)))
+  const records = Object.entries(stored).filter(([name, record]) => ownNames([name]).length === 1 && isPlainObject(record) && typeof record.path === "string" && SHA1.test(record.blob))
+  const retracting = Object.fromEntries(records.filter(([, record]) => record.done !== true))
+  const retracted = Object.fromEntries(records.filter(([, record]) => record.done === true))
   const dir = path.join(root, "quarantine", slug)
   const quarantined = new Set(await listRegularFiles(dir, OUTBOX_NAME_PATTERN))
   for (const job of await listDirSafe(path.join(dir, "labels"))) {
     for (const file of await listRegularFiles(path.join(dir, "labels", job), LABELS_NAME_PATTERN)) quarantined.add(`labels/${job}/${file}`)
   }
-  return { blobs, paths, retracting, quarantined }
+  return { blobs, paths, retracting, retracted, quarantined }
 }
 
 const retractingFile = (root, slug) => path.join(root, "retracting", `${slug}.json`)
@@ -751,9 +754,24 @@ export async function markRetracting(env, store, items, { platform = process.pla
 }
 
 /**
- * `dropRetracting(env, store, names)`: ends the retracting state of `names`, because the delete is done (the store's default branch no longer has
- * the file) or the session routes back. Only the record goes: the local outbox and labels files stay, so a session that routes back publishes
- * again, and the flush never publishes them while the session routes elsewhere.
+ * `finishRetracting(env, store, items)`: the store's default branch no longer holds what was delivered for each `{ name, path, blob }`, a
+ * retracting file or a delivered one of a session that routes elsewhere. Each becomes a tombstone, `{ path, blob, done: true }`, written first,
+ * and its delivered records are dropped second. The tombstone keeps the session away from `store` until a positive route says it routes there
+ * again (`session-route.js`), whatever else is lost. The local outbox and labels files stay.
+ */
+export async function finishRetracting(env, store, items, { platform = process.platform, runner = undefined } = {}) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform, runner })
+  const own = items.filter((item) => ownNames([item.name]).length === 1)
+  if (own.length === 0) return
+  const done = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, done: true }]))
+  await updateJsonLocked(root, retractingFile(root, slug), {}, (current) => ({ ...current, ...done }), { platform, env, runner })
+  await undeliver(env, store, own.map((item) => item.name), { platform, runner })
+}
+
+/**
+ * `dropRetracting(env, store, names)`: drops the retracting records or tombstones of `names`, because the session routes back to `store`.
+ * Only the record goes: the local outbox and labels files stay, so the session publishes again.
  */
 export async function dropRetracting(env, store, names, { platform = process.platform, runner = undefined } = {}) {
   const slug = storeSlug(store)
@@ -763,7 +781,7 @@ export async function dropRetracting(env, store, names, { platform = process.pla
   await updateJsonLocked(root, retractingFile(root, slug), {}, removeNames(own), { platform, env, runner })
 }
 
-/** `undeliver(env, store, names)`: drops the delivered records of `names`: a crash left them beside their retracting records (a retracting session is never also delivered), or the store's default branch no longer holds what was delivered while the session routes elsewhere. */
+/** `undeliver(env, store, names)`: drops the delivered records of `names`: a crash left them beside their retracting records (a retracting session is never also delivered), or `finishRetracting` tombstoned them. */
 export async function undeliver(env, store, names, { platform = process.platform, runner = undefined } = {}) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
@@ -829,16 +847,19 @@ export async function writeStatus(env, patch, { platform = process.platform, run
 }
 
 /**
- * `recordRoutes(env, routes)`: for each `{ name: store }`, keeps `store` as `route` in the derivation receipt of facts file `name`, the
- * other keys unchanged (a receipt is created when there is none). `route` is the store the session's marker last positively routed to, as
- * the flush saw it. It outlives the marker, which is pruned after 30 days, and the sweep's own `store`, which a route to a store without
- * consent never updates, so a session whose marker is gone keeps the route it last had (`session-route.js`).
+ * `recordRoutes(env, routes)`: for each `{ name: { store, deskRoot } }`, keeps `store` as `route`, and `deskRoot` (an absolute path) as
+ * `desk_root`, in the derivation receipt of facts file `name`, the other keys unchanged (a receipt is created when there is none).
+ * `route` is the store the session last positively routed to, as the flush saw it. It outlives the marker, which is pruned after 30 days,
+ * and the sweep's own `store`, which a route to a store without consent never updates, so a session whose marker is gone keeps the route it
+ * last had; `desk_root` lets the flush read the desk's declaration then (`session-route.js`). Both stay local and are never published.
  */
 export async function recordRoutes(env, routes, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
     const derivations = { ...current.derivations }
-    for (const [name, store] of Object.entries(routes)) derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), route: store }
+    for (const [name, { store, deskRoot }] of Object.entries(routes)) {
+      derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), route: store, desk_root: deskRoot }
+    }
     return { ...current, derivations }
   }, { platform, env, runner }, isStatusShape)
 }
