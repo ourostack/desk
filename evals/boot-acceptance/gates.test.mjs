@@ -74,6 +74,18 @@ test("a Copilot denial logged as a tool-call-id map counts as a preToolUse denia
   assert.equal(gates.agent_stop_blocks, 1)
 })
 
+test("a preToolUse hook.end whose output is null, a string or absent is not a denial and does not throw", () => {
+  const text = log(
+    start("t1", "preToolUse", {}),
+    line("hook.end", { hookInvocationId: "t1", hookType: "preToolUse", success: true, output: null }),
+    start("t2", "preToolUse", {}),
+    line("hook.end", { hookInvocationId: "t2", hookType: "preToolUse", success: true, output: "ok" }),
+    start("t3", "preToolUse", {}),
+    end("t3", "preToolUse", { permissionDecision: "deny" }),
+  )
+  assert.equal(copilotGates(parseEventLines(text)).pre_tool_use_denials, 1)
+})
+
 test("a Copilot log with the pointer on the first prompt records that it was injected and that it reached the model", () => {
   const text = log(
     start("p1", "userPromptSubmitted", { prompt: "hi" }),

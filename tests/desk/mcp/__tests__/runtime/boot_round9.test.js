@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
-import { AGENTS_MD_CAP_BYTES, formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint, deferredToolsLoadHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 
@@ -347,4 +347,15 @@ test("active_tasks carries each task's next step on one line, whole and redacted
   assert.equal(tasks["no-step"], null)
   assert.equal(tasks["empty-step"], null)
   assert.doesNotMatch(tasks["secret-step"], /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
+})
+
+test("plain-text boot with no named task tells the agent to report every task under Active tasks, without the JSON field names; --json keeps them", () => {
+  const noTask = { status: "ready", instructions: [NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION] }
+  const text = formatBootText(noTask)
+  assert.match(text, /1\. No task was named: report every task under "Active tasks" below, each with its status and its next step or blocker/u)
+  assert.match(text, /then ask which one to resume or whether to start new\./u)
+  assert.match(text, /2\. The name matches no open task: report every task under "Active tasks" below/u)
+  assert.doesNotMatch(text, /active_tasks|open_prs|repo_states/u)
+  // The structured result keeps the field names for JSON consumers.
+  assert.match(NO_TASK_INSTRUCTION, /active_tasks, open_prs and repo_states/u)
 })

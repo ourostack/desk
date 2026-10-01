@@ -113,6 +113,7 @@ test("bootOnce: a fork route names the repo, the account and the route, in instr
   assert.match(line, /account ari cannot push to it directly\. Push your branch to ari's fork/u)
   assert.match(line, /never push to acme\/widgets itself\. Tell the operator this route in one line/u)
   assert.ok(result.instructions.includes(line))
+  assert.match(line, /Tell the operator this route in one line when you report on this task; it is one line of your report, not the whole of it\.$/u)
 })
 
 test("bootOnce: when only a non-active account can push, the instruction names both and how to push as the right one", async () => {

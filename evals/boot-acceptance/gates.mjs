@@ -110,7 +110,7 @@ const hasText = (value) => typeof value === "string" && value.trim() !== ""
  */
 export function copilotGates(events) {
   // Copilot logs a denial as `{ "<tool call id>": "Denied by preToolUse hook: <reason>" }`; the flat `permissionDecision` pair is what a hook prints.
-  const isDenial = (output) => output.permissionDecision === "deny" || Object.values(output).some((value) => typeof value === "string" && value.startsWith("Denied by preToolUse hook"))
+  const isDenial = (output) => typeof output === "object" && output !== null && (output.permissionDecision === "deny" || Object.values(output).some((value) => typeof value === "string" && value.startsWith("Denied by preToolUse hook")))
   const hookStarts = events.filter((e) => e.type === "hook.start")
   const hookEnds = events.filter((e) => e.type === "hook.end")
   const endOf = (start) => hookEnds.find((end) => end.data?.hookInvocationId === start.data?.hookInvocationId)
