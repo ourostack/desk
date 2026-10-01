@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.166 — 2026-10-01
+
+Copilot's first-prompt boot pointer now reaches the model on the first prompt. Copilot runs the `userPromptSubmitted` hook for a new session's first prompt before it runs `sessionStart`, so the pointer, which waited for the session record that `sessionStart` writes, was never delivered there and only fired on a resumed turn. It now claims once per session id in its own file, created exclusively so a concurrent record write cannot drop it, and only when the session folder resolves to a usable desk the way `sessionStart` resolves it, so a folder that is no desk gets no pointer. `sessionStart` with `source: "resume"` clears the claim, so a resumed session is directed again on its next prompt.
+
+The `task_update` response puts its note about the card commit second, right after `status`, and says no git is needed: Desk already committed the card and is pushing it in the background, so do not run `git add`, `git commit` or `git push` for it. This holds on both hosts because both read the same tool response.
+
+The boot acceptance harness now records which Desk gates fired in each run's `summary.json` (`gates`) and, on Copilot, saves a reduced, redacted copy of the session's hook events as `copilot-events.jsonl`, so a run shows whether the pointer was injected and where. See [the harness README](../../../evals/boot-acceptance/README.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.165 — 2026-10-01
 
 Desk on Copilot CLI now has the same session binding and most of the same guards as Desk on Claude Code.
