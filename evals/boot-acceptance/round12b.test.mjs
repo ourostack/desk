@@ -245,3 +245,9 @@ test("end to end: resume-named-task with a node script that rewrites the card an
   const deniedCommit = findScenario("resume-named-task").check(run([...step("g", `git add ${CARD} && git commit -m "x"`, "PreToolUse:Bash hook error: refused", true)], "The RainDelayPolicy 30% check is not wired yet."))
   assert.ok(deniedCommit.notes.some((note) => /^WARNING: tried to commit a task card by hand/u.test(note)), deniedCommit.notes.join("\n"))
 })
+
+test("a reply that opens with a check mark or bullet before Done is a done claim (r12-check resume-named-task: \"✓ **Done:** Wired ...\")", async () => {
+  const { taskDoneClaims } = await import("./claims.mjs")
+  for (const sentence of ["✓ **Done:** Wired the 30% threshold.", "✅ Done. Wired it.", "• Completed: wired it.", "- **Done:** wired it", "✔ Finished."]) assert.equal(taskDoneClaims(sentence).length, 1, sentence)
+  for (const sentence of ["✓ Wired the threshold.", "- Done in 3 steps would be fine, not now.".replace("Done in", "Next in"), "✓ Tests pass."]) assert.equal(taskDoneClaims(sentence).length, 0, sentence)
+})

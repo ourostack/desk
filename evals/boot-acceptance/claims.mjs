@@ -55,8 +55,9 @@ const DONE_CLAIMS = [
   /\b(?:all|everything)\b[^.\n]{0,20}\b(?:done|complete[d]?)\b/i,
   /\bCompleted work\b/,
   // A reply (or note) that opens with the word: "**Done.** Implemented the check", "Completed. Tests pass" (round C: a reply that
-  // began "**Done.**" over a card still at `processing` matched none of the patterns above and passed).
-  /^[\s*_#>"'`-]*(?:all\s+done|done|completed?|finished)\b[\s*_"'`]*(?:[.!\u2014\u2013-]|:(?![\s*_"'`]*$)|$)/i,
+  // began "**Done.**" over a card still at `processing` matched none of the patterns above and passed). A check mark or bullet before it ("\u2713 **Done:** wired the check", r12-check
+  // resume-named-task) is part of the same opening.
+  /^[\s*_#>"'`\-\u2713\u2714\u2705\u2611\u2022]*(?:all\s+done|done|completed?|finished)\b[\s*_"'`]*(?:[.!\u2014\u2013-]|:(?![\s*_"'`]*$)|$)/i,
 ]
 
 /** The sentences of `text` that say the task itself is done or complete, leaving out negated or conditional ones ("not done until it is pushed"). */

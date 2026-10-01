@@ -28,6 +28,9 @@ function sh(cwd, args, env = {}) {
 function makeDesk({ withMarkers = true } = {}) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "card-guard-")))
   assert.equal(sh(root, ["init", "-q", "-b", "main"]).status, 0)
+  // Desk's own commit path (commitPaths) runs git with the process environment, so the identity lives in the repository.
+  assert.equal(sh(root, ["config", "user.name", "t"]).status, 0)
+  assert.equal(sh(root, ["config", "user.email", "t@example.com"]).status, 0)
   if (withMarkers) {
     mkdirSync(path.join(root, "_meta"), { recursive: true })
     mkdirSync(path.join(root, "_archive"), { recursive: true })
