@@ -5,7 +5,7 @@ description: Canonical layout of `$DESK/` — tracks, tasks, repo workspaces, re
 
 # Directory structure
 
-this is the floor plan of the room. the desk lives at `$DESK/` — the same shape whether that resolves to a Claude Code workspace (e.g. `~/<your-workspace>/` for a corporate worker overlay), an ouro agent's bundle subdirectory (`~/AgentBundles/<name>.ouro/desk/`), or any other host context. drawers are tracks. folders are tasks. pages are iterations. the back of the room is `_archive/`, still browsable, still mine.
+this is the floor plan of the room. the desk lives at `$DESK/` (shorthand for the desk's absolute path, which the session-start boot result gives; it is a placeholder, never a shell variable to export or rely on, because an agent's shell calls do not share one) — the same shape whether that resolves to a Claude Code workspace (e.g. `~/<your-workspace>/` for a corporate worker overlay), an ouro agent's bundle subdirectory (`~/AgentBundles/<name>.ouro/desk/`), or any other host context. drawers are tracks. folders are tasks. pages are iterations. the back of the room is `_archive/`, still browsable, still mine.
 
 ```
 $DESK/

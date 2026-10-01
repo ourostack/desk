@@ -19,6 +19,7 @@ import { createAdmission, exceptionOutcome } from "./admission.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
 import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
+import { compactStatus } from "./status-compact.js"
 import { inspectStateBranch, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
@@ -592,7 +593,9 @@ export function createDeskSession(deps) {
           : { ...lastStatusDetail.payload, status_detail: `cached: ${why}; this detail is from ${lastStatusDetail.at} (${ageSeconds(lastStatusDetail.at)} s old). Call desk_status again shortly for a fresh one.`, status_detail_from: lastStatusDetail.at }
       }
     }
-    return jsonResult(withAdmission(payload, admission.snapshot()))
+    const full = withAdmission(payload, admission.snapshot())
+    // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
+    return jsonResult(input?.detail === true ? full : compactStatus(full))
   }
 
   // Starts a runtime status computation. Its detail is kept even when it arrives after the call that started it has answered, so the next call serves it, marked cached with when it was computed. An abandoned computation that finishes late never replaces a detail from a newer one.

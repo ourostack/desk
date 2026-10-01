@@ -16,12 +16,21 @@ Desk owns work identity, authority, durable state and the agreed delivery endpoi
 ```text
 Entry: start | reconciled-resume | material-redesign.
 Read: canonical task, recorded approval, delivery endpoint, explicit artifact map.
-Select once: brainstorming for new/material design; writing-plans for approved unplanned design; subagent-driven-development for this approved plan; executing-plans only as the same ready-set sequential fallback.
+Select once: brainstorming for new/material design; writing-plans for approved unplanned design, task-card-only work included; subagent-driven-development for this approved plan; executing-plans only for an existing plan, as the same ready-set sequential fallback, never for a task with no plan.
 Pass: task path, design/plan/progress pointers, authority and endpoint.
 Return: selected provider entry and mapped context. Do not review, recover, schedule, deliver or measure here.
 ```
 
-Nothing else enters here. Use `superpowers:brainstorming` for new/material design, `superpowers:writing-plans` for approved unplanned design, `superpowers:subagent-driven-development` for this approved plan, and `superpowers:executing-plans` only as the same ready-set sequential fallback. A resume that has already reconciled its writer and source re-enters at its recorded step; a genuinely new outcome or material design change re-enters at selection. Everything after the handover belongs to the selected Superpowers skill.
+Nothing else enters here. Pick the entry from what the task already holds, top row that applies first:
+
+| What the task holds | Select |
+| --- | --- |
+| No approved design, a new outcome, or a material design change | `superpowers:brainstorming` |
+| An approved design or outcome but **no plan** (including approved work that lives only on the task card; `planPath` would be `null`) | `superpowers:writing-plans` |
+| An approved plan (an existing plan file to pass as `--plan-path`) | `superpowers:subagent-driven-development` |
+| An approved plan and the same ready set must run in this session with no subagent tool, or the human chose inline execution | `superpowers:executing-plans` |
+
+`superpowers:executing-plans` executes a plan, so it is never the entry for a task with no plan: a task card is not a plan, and "the card is clear enough" does not skip planning, it only means the plan can be short. Select `writing-plans` (or `brainstorming` when the design itself is unapproved) first, then re-enter the plan row. A resume that has already reconciled its writer and source re-enters at its recorded step; a genuinely new outcome or material design change re-enters at selection. Everything after the handover belongs to the selected Superpowers skill.
 
 ## Authority carried into the provider
 
@@ -55,7 +64,7 @@ Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk
 
 | Option | Meaning |
 | --- | --- |
-| `--plan-path` | Optional. A supplied plan must be an existing regular file within the Desk root; a shared cross-repository plan stays at its existing Desk planning path. Omit it for approved task-card-only work, which returns `planPath: null`. |
+| `--plan-path` | Optional. A supplied plan must be an existing regular file within the Desk root; a shared cross-repository plan stays at its existing Desk planning path. Omit it while the task has no plan: the mapper returns `planPath: null`, and the selection above is `writing-plans`, not `executing-plans`. |
 | `--progress-path` | Optional. A supplied progress record must be an existing regular file inside this task's own directory, resolved through any symlink, and within the effective person prefix, because progress and rulings are written. Omit it to select the iteration's existing `doing.md`, then the canonical `task.md`. |
 
 Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input or `null`; `progressPath` is the existing progress record and `rulingsPath` is derived from it, so a provider progress file never becomes a second ruling store and a legacy `doing.md` is never renamed; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations under the approved private evidence root. Produce the normal Superpowers brief and review contents at those paths with native file and diff tools. This changes storage binding, not the engineering method.

@@ -4,17 +4,39 @@ import * as path from "node:path"
 import { protectWindowsPaths } from "../feedback/windows-acl.js"
 import { withActiveLexicalGeneration } from "./generations.js"
 
+// The state directory itself must be a real directory the controller made, never a link someone placed there. A link
+// *above* it is the user's own layout (a home under /home -> /export/home, ~/.cache moved to another disk, a temp folder
+// under macOS's /var -> /private/var), so the existing ancestors are resolved to their real path first and the journal
+// lives under that. A real user with such a layout used to lose the index to "unsafe state directory ancestry".
+function resolveStateDirectory(io, stateDir) {
+  const present = (file) => {
+    try { return statIfPresent(io, file) } catch (error) {
+      if (error.code === "ENOTDIR") throw new Error("journal has unsafe state directory ancestry")
+      throw error
+    }
+  }
+  const own = present(stateDir)
+  if (own && (!own.isDirectory() || own.isSymbolicLink())) throw new Error("journal has unsafe state directory ancestry")
+  const missing = [path.basename(stateDir)]
+  let ancestor = path.dirname(stateDir)
+  while (!present(ancestor)) {
+    missing.unshift(path.basename(ancestor))
+    ancestor = path.dirname(ancestor)
+  }
+  let real
+  try {
+    real = io.realpathSync(ancestor)
+  } catch {
+    throw new Error("journal has unsafe state directory ancestry")
+  }
+  if (!io.lstatSync(real).isDirectory()) throw new Error("journal has unsafe state directory ancestry")
+  return path.join(real, ...missing)
+}
+
 // The elected controller is the sole writer. No journal operation elects another owner.
 export async function openChangeJournal({ root, stateDir, io = filesystem }) {
   root = io.realpathSync(root)
-  stateDir = path.resolve(stateDir)
-  for (let current = stateDir; ; current = path.dirname(current)) {
-    const stat = statIfPresent(io, current)
-    if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
-      throw new Error("journal has unsafe state directory ancestry")
-    }
-    if (current === path.dirname(current)) break
-  }
+  stateDir = resolveStateDirectory(io, path.resolve(stateDir))
   const created = await ensurePrivateJournalDirectory({ stateDir, io })
   const directoryStat = io.lstatSync(stateDir)
   if (process.platform !== "win32" &&

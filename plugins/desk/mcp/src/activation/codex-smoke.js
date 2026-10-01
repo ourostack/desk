@@ -16,7 +16,7 @@ const STACK_FRAME_PATTERN = /^\s*at (?:async )?\S.*(?:\r?\n|$)/gmu
 
 const smokePrompt = [
   "Report the current instructions you loaded, list available MCP tool names,",
-  "call desk_status, and return one JSON object with instruction_sources,",
+  "call desk_status with {\"detail\": true}, and return one JSON object with instruction_sources,",
   "combined_instructions, tools, and desk_status.",
 ].join(" ")
 

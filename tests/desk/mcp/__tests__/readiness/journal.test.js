@@ -166,6 +166,72 @@ test("journal rejects path escape, foreign roots, hard links and symlinked state
   await assert.rejects(other.open(), /unsafe.*directory/)
 })
 
+test("journal accepts a state directory under a symlinked ancestor and keeps the journal on the real path", async () => {
+  const root = await mkTempRoot("desk-journal-linked-")
+  const real = path.join(root, "real-cache")
+  fs.mkdirSync(real)
+  const link = path.join(root, "linked-cache")
+  fs.symlinkSync(real, link, "junction")
+  const module = await import("../../../../../plugins/desk/mcp/src/readiness/journal.js")
+  // Both an existing linked ancestor and several missing levels below it, the shape of `~/.cache` moved to another disk.
+  const journal = await module.openChangeJournal({ root, stateDir: path.join(link, "desk", "readiness", "id", "journal") })
+  await journal.appendChange({ path: "task.md" })
+  await journal.close()
+  assert.equal(fs.existsSync(path.join(real, "desk", "readiness", "id", "journal", "changes.jsonl")), true)
+})
+
+test("an unexpected filesystem error while resolving the state directory is not hidden as an ancestry problem", async () => {
+  const root = await mkTempRoot("desk-journal-io-error-")
+  const module = await import("../../../../../plugins/desk/mcp/src/readiness/journal.js")
+  const io = { ...fs, lstatSync: (file) => { if (String(file).endsWith("probe")) throw Object.assign(new Error("denied"), { code: "EACCES" }); return fs.lstatSync(file) } }
+  await assert.rejects(module.openChangeJournal({ root, stateDir: path.join(root, "probe"), io }), /denied/)
+})
+
+test("a controller whose state home sits under a symlinked ancestor journals a real MCP mutation (a home under /var -> /private/var)", async () => {
+  const directory = await mkTempRoot("desk-journal-linked-home-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const realHome = path.join(directory, "real-home")
+  fs.mkdirSync(realHome)
+  const linkedHome = path.join(directory, "linked-home")
+  fs.symlinkSync(realHome, linkedHome, "junction")
+  let controller
+  const desk = await startInProcess({
+    argv: ["--root", root],
+    env: {},
+    readinessPolicy: { write_authority: "workspace", semantic: "unsupported", authority_provider: null },
+    runtimeImporter: async () => ({
+      callTool,
+      async connectOrStartController(options) {
+        controller = await connectOrStartController({ ...options, stateHome: path.join(linkedHome, ".cache", "desk", "readiness"), ephemeral: true })
+        return controller
+      },
+    }),
+  })
+  try {
+    const result = await desk.call("task_create", { track: "ops", slug: "linked", title: "durable" })
+    assert.equal(result.isError, false, JSON.stringify(result.payload))
+    await controller.barrier({ capability: "lexical", wait: true })
+    const status = await controller.status()
+    assert.equal(status.freshness.cursor.sequence, 1)
+    assert.notEqual(status.convergence?.status, "failed", JSON.stringify(status.convergence))
+  } finally {
+    await desk.close()
+    await controller?.close()
+  }
+})
+
+test("journal still refuses an ancestor that is a file or a dangling link", async () => {
+  const root = await mkTempRoot("desk-journal-bad-ancestor-")
+  const module = await import("../../../../../plugins/desk/mcp/src/readiness/journal.js")
+  const file = path.join(root, "file")
+  fs.writeFileSync(file, "x")
+  await assert.rejects(module.openChangeJournal({ root, stateDir: path.join(file, "journal") }), /unsafe state directory ancestry/)
+  const dangling = path.join(root, "dangling")
+  fs.symlinkSync(path.join(root, "nowhere"), dangling)
+  await assert.rejects(module.openChangeJournal({ root, stateDir: path.join(dangling, "journal") }), /unsafe state directory ancestry/)
+})
+
 function deferred() {
   let resolve
   const promise = new Promise((done) => { resolve = done })

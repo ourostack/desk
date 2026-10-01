@@ -20,7 +20,7 @@ import { flag, integer, list, oneOf, schema, text } from "./tool-schema-parts.js
 export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "reclaim_controller", "prune_readiness_state"])
 
 // Tools that take no input at all. Only these may declare no properties.
-export const NO_INPUT_TOOLS = Object.freeze(["desk_status"])
+export const NO_INPUT_TOOLS = Object.freeze([])
 
 const SCOPE = {
   type: "string",
@@ -56,7 +56,7 @@ const TASK_DONE_EVIDENCE = {
     ref: text('The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
   },
   required: ["kind", "ref"],
-  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
+  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. A task whose card lists `repos` can only be finished with `pr` (a PR URL in one of those repos) or `commit` (a commit that resolves in a recorded clone and is pushed): `ci_run` and `non_code` are refused, and a commit made in the desk never counts. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
 }
 
 const TASK_ARCHIVE_OUTCOME = {
@@ -113,7 +113,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_move: schema({
     ...TASK_TARGET,
-    handle: text("The task's handle from desk_status active_tasks or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
+    handle: text("The task's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
     to_track: text("The destination track; its track.md must already exist."),
     to_slug: text("The new task folder name: an outcome name."),
     unarchive: flag("Reopen an archived task into a live folder."),
@@ -133,7 +133,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   track_update: schema({ slug: text("The track folder name."), ...CARD_UPDATE }, ["slug"]),
   track_rename: schema({
     track: text("The track folder to rename."),
-    handle: text("The track's handle from desk_status active_tasks or a desk_doctor finding, in place of track; use it for a name shown as <redacted segment>."),
+    handle: text("The track's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of track; use it for a name shown as <redacted segment>."),
     to: text("The new track folder name: an outcome name."),
     allow_dirty: flag("Rename even though the track has unstaged or untracked changes."),
   }, ["to"]),
@@ -198,7 +198,9 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     direction: { type: "string", enum: ["forward", "backward", "both"], description: "Which edges to follow; defaults to both." },
   }, ["start_path"]),
   desk_reindex: schema({ force: flag("Request a full rebuild; it still joins the shared controller's convergence.") }),
-  desk_status: schema({}),
+  desk_status: schema({
+    detail: flag("Pass true for the full payload (index, snapshots, vector packs, embedding spec, admission internals; tens of KB). Omit it for the compact answer: one `state` word, why it is not `ready`, what to do, and pointers."),
+  }),
   desk_doctor: schema({
     format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
     repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },

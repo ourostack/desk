@@ -77,7 +77,7 @@ export async function startInProcess(options = {}, { connect = true } = {}) {
   async function statusUntil(predicate, { deadlineMs = 15000 } = {}) {
     const deadline = Date.now() + deadlineMs
     for (;;) {
-      const { payload } = await call("desk_status")
+      const { payload } = await call("desk_status", { detail: true })
       if (predicate(payload)) return payload
       if (Date.now() > deadline) throw new Error(`desk_status never matched; last: ${JSON.stringify(payload)}`)
       await new Promise((resolve) => setTimeout(resolve, 50))

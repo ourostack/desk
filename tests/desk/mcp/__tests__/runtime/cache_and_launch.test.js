@@ -504,7 +504,7 @@ async function runListToolsSession({ command, args, cwd, env, waitForAdmission =
     assert.ok(tools.result.tools.some((tool) => tool.name === "task_create"), "desk task_create tool should be available");
     // The handshake comes first; the runtime restore runs during admission afterwards. desk_status waits for it.
     for (let id = 3; waitForAdmission; id += 1) {
-      child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: {} }));
+      child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: { detail: true } }));
       const status = JSON.parse((await waitForResponse(child, id, stderrChunks)).result.content[0].text);
       if (status.state !== "admitting") break;
     }
@@ -768,7 +768,7 @@ async function deskStatusSession({ command, args, cwd, env }) {
     child.stdin.write(makeMcpEnvelope(1, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "copilot-factory-test", version: "1.0.0" } }));
     await waitForResponse(child, 1, stderrChunks);
     for (let id = 2; ; id += 1) {
-      child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: {} }));
+      child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: { detail: true } }));
       const status = JSON.parse((await waitForResponse(child, id, stderrChunks, 60000)).result.content[0].text);
       if (status.state !== "admitting") return status;
     }

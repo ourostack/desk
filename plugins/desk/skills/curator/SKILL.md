@@ -43,7 +43,7 @@ curator is also the kaizen worker: it moves system friction through the kaizen l
 
 ## Process
 
-1. **list the still-pinned cards.** `ls $DESK/<track>/_friction/` plus `$DESK/_meta/friction.md` for cross-track entries. skip archived entries under `_archive/`.
+1. **list the still-pinned cards.** `ls <desk path>/<track>/_friction/` plus `<desk path>/_meta/friction.md` for cross-track entries. skip archived entries under `_archive/`.
 2. **read each card end-to-end** before picking a disposition. don't skim. reactive edits without reading the full entry produce churn.
 3. **decide disposition.** name the target file or rationale.
 4. **batch decisions.** present dispositions to operator in one message with a clear table (entry → disposition → target). wait for signoff. don't walk the operator through one card at a time (`interaction-style` §1). include the kaizen candidates to file in the same table; file them only after the signoff.

@@ -76,7 +76,7 @@ export async function openSession({ command, args = [], env, cwd, timeoutMs = 20
     const deadline = Date.now() + deadlineMs
     let last
     for (;;) {
-      last = (await call("desk_status")).payload
+      last = (await call("desk_status", { detail: true })).payload
       if (predicate(last)) return last
       if (Date.now() > deadline) {
         throw new Error(`desk_status did not reach the expected state within ${deadlineMs} ms; last:\n${JSON.stringify(last, null, 2)}\nstderr:\n${stderr}`)

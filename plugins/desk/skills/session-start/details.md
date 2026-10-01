@@ -37,7 +37,7 @@ if the operator chooses **Continue without reminders**, honor the mute for the r
 after sync, check whether this workspace carries a committed desk registry: `$DESK/_meta/desks.md`. **default-tolerant — absent → behave exactly as today (single-desk, no shared-workspace awareness).** the file is plain markdown that travels with the repo (no machine-local fork), so reading it is a cheap existence-check + parse.
 
 ```bash
-test -f "$DESK/_meta/desks.md" && cat "$DESK/_meta/desks.md"
+test -f "<desk path>/_meta/desks.md" && cat "<desk path>/_meta/desks.md"
 ```
 
 the file makes this a crew workspace only when it holds the crew roster: the table below, whose header names both `alias` and `identity`. then the roster tells the agent two things:

@@ -107,9 +107,9 @@ test("setup, missing roots and activation errors are named degraded states, from
     assert.match(snapshot.fix, fix)
   }
   assert.equal(session.admission.snapshot().diagnostic.observed.failure.phase, "VERIFYING")
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).status, "degraded")
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status, "degraded")
   result = cases[0][0]
-  const setup = payload(await session.callTool({ name: "desk_status" }))
+  const setup = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(setup.status, "setup_required")
   assert.equal(setup.mode, "setup")
   result = cases[3][0]
@@ -257,7 +257,7 @@ test("a hung controller is counted across attempts and marked controller_hung af
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
   assert.equal(runtime.calls.at(-1).admission, undefined, "the write went straight to the file")
   await session.admission.refresh({ force: true })
-  const status = payload(await session.callTool({ name: "desk_status" }))
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(status.admission.hung_controller.owner_pid, 4242)
   assert.ok(status.admission.hung_controller.misses >= 4)
   assert.match(status.summary ?? status.admission.summary, /3 of 3 checks missed; hung/u)
@@ -356,7 +356,7 @@ test("an embedding override degrades semantic search only: lexical reads, writes
   assert.equal(payload(recall).code, "embedding_override")
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
   runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", semantic: { current: true } }) }] })
-  const status = payload(await session.callTool({ name: "desk_status" }))
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(status.state, "ready")
   assert.equal(status.semantic.status, "unavailable (embedding_override)")
   assert.equal(status.semantic.current, false)
@@ -412,7 +412,7 @@ test("a lost controller is found by desk_status in the background, and a write f
   const { session } = await makeSession(t, { runtime })
   await session.admission.refresh()
   alive = false
-  await session.callTool({ name: "desk_status" })
+  await session.callTool({ name: "desk_status", input: { detail: true } })
   await flush()
   await flush()
   assert.equal(connections, 2, "the background check re-elected at once")
@@ -452,7 +452,7 @@ test("recordException degrades to runtime_exception, keeps serving and re-admits
   assert.equal(snapshot.state, "degraded:runtime_exception")
   assert.match(snapshot.fix, /no restart is needed/u)
   session.recordException("unhandled_rejection", "rejected value")
-  const status = payload(await session.callTool({ name: "desk_status" }))
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.deepEqual(status.admission.exceptions.map((entry) => entry.message), ["boom after ready", "rejected value"])
   assert.equal(status.state, "ready", "desk_status retried admission")
   for (let index = 0; index < 6; index += 1) session.recordException("uncaught_exception", new Error(`e${index}`))
@@ -628,7 +628,7 @@ test("a launcher in refuse mode admits nothing and refuses every data tool", asy
   assert.equal(resolved, 0)
   const read = payload(await session.callTool({ name: "desk_search" }))
   assert.equal(read.code, "lifecycle_conflict")
-  const status = payload(await session.callTool({ name: "desk_status" }))
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(status.mode, "refused")
   assert.deepEqual(status.admission.launcher, { code: "lifecycle_conflict", reason: "two providers claim worker", mode: "refuse" })
   const doctor = payload(await session.callTool({ name: "desk_doctor" }))
@@ -685,11 +685,11 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   const { session } = await makeSession(t, { runtime })
   await session.admission.refresh()
   runtime.callTool = async () => { throw new Error("status exploded") }
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).status_error, "status exploded")
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_error, "status exploded")
   runtime.callTool = async () => { throw "string" }
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).status_error, "string")
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_error, "string")
   runtime.callTool = async () => ({ content: [{ type: "text", text: "not json" }] })
-  assert.match(payload(await session.callTool({ name: "desk_status" })).status_error, /JSON/u)
+  assert.match(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_error, /JSON/u)
   // desk_status's own timer is unreferenced (a real server is kept alive by its stdin), so the test holds the event loop open while a computation it controls is pending.
   const keepAlive = setInterval(() => {}, 1000)
   t.after(() => clearInterval(keepAlive))
@@ -700,13 +700,13 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
     return new Promise((resolve) => { release = () => resolve({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state: "late" } }) }] }) })
   }
   const started = Date.now()
-  const slow = payload(await session.callTool({ name: "desk_status" }))
+  const slow = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.ok(Date.now() - started < 400, `desk_status took ${Date.now() - started} ms`)
   assert.match(slow.status_detail, /^unavailable: .*did not answer within this call's budget/u)
   assert.equal(slow.state, "ready")
   // While that computation runs, another call waits only its own budget for it and does not start a second one.
   const joinedStarted = Date.now()
-  assert.match(payload(await session.callTool({ name: "desk_status" })).status_detail, /^unavailable: a runtime status computation .* that started at \d{4}-.* is still running/u)
+  assert.match(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_detail, /^unavailable: a runtime status computation .* that started at \d{4}-.* is still running/u)
   assert.ok(Date.now() - joinedStarted < 200, `desk_status took ${Date.now() - joinedStarted} ms`)
   assert.equal(computations, 1)
   // A late detail is kept: the next call serves it, marked cached with when it was computed.
@@ -714,7 +714,7 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   release()
   await new Promise((resolve) => setImmediate(resolve))
   runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
-  const late = payload(await session.callTool({ name: "desk_status" }))
+  const late = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(late.local_db.state, "late")
   assert.match(late.status_detail, /^cached: .*this detail is from \d{4}-/u)
   assert.ok(late.status_detail_from < beforeLate, "the detail is dated from when its computation started")
@@ -726,13 +726,13 @@ test("desk_status serves a fresh detail once no older computation is running, an
   const { session } = await makeSession(t, { runtime })
   await session.admission.refresh()
   runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state: "fresh" } }) }] })
-  const fresh = payload(await session.callTool({ name: "desk_status" }))
+  const fresh = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(fresh.local_db.state, "fresh")
   assert.equal(fresh.status_detail, undefined)
   assert.equal(fresh.status_detail_from, undefined)
   runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
   const cachedStarted = Date.now()
-  const cached = payload(await session.callTool({ name: "desk_status" }))
+  const cached = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.ok(Date.now() - cachedStarted < 200, `desk_status took ${Date.now() - cachedStarted} ms`)
   assert.equal(cached.local_db.state, "fresh")
   assert.match(cached.status_detail, /^cached: .*this detail is from \d{4}-/u)
@@ -747,7 +747,7 @@ test("desk_status: a call that arrives while a computation runs waits its own bu
     computations += 1
     return new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state: "shared" } }) }] }), 30))
   }
-  const replies = (await Promise.all([session.callTool({ name: "desk_status" }), session.callTool({ name: "desk_status" })])).map(payload)
+  const replies = (await Promise.all([session.callTool({ name: "desk_status", input: { detail: true } }), session.callTool({ name: "desk_status", input: { detail: true } })])).map(payload)
   assert.equal(computations, 1)
   assert.deepEqual(replies.map((reply) => reply.local_db.state), ["shared", "shared"])
   const joined = replies.filter((reply) => reply.status_detail !== undefined)
@@ -765,19 +765,19 @@ test("desk_status abandons a stuck computation after its age limit, and the aban
   const reply = (state) => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state } }) }] })
   let computations = 0
   runtime.callTool = async () => { computations += 1; return reply("old") }
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).local_db.state, "old")
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).local_db.state, "old")
   let releaseStuck
   runtime.callTool = () => { computations += 1; return new Promise((resolve) => { releaseStuck = () => resolve(reply("stale")) }) }
-  assert.match(payload(await session.callTool({ name: "desk_status" })).status_detail, /^cached: .*did not answer within this call's budget; this detail is from \d{4}-.* \(\d+ s old\)/u)
+  assert.match(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_detail, /^cached: .*did not answer within this call's budget; this detail is from \d{4}-.* \(\d+ s old\)/u)
   runtime.callTool = async () => { computations += 1; return reply("recovered") }
   // Within the age limit the stuck computation is still joined, and the reply says so.
-  const joined = payload(await session.callTool({ name: "desk_status" }))
+  const joined = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(joined.local_db.state, "old")
   assert.match(joined.status_detail, /^cached: a runtime status computation .* is still running; this detail is from /u)
   assert.equal(computations, 2)
   // Past the limit, the next call starts a new computation and the runtime's recovery shows.
   await new Promise((resolve) => setTimeout(resolve, 350))
-  const recovered = payload(await session.callTool({ name: "desk_status" }))
+  const recovered = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(computations, 3)
   assert.equal(recovered.local_db.state, "recovered")
   assert.equal(recovered.status_detail, undefined)
@@ -785,7 +785,7 @@ test("desk_status abandons a stuck computation after its age limit, and the aban
   releaseStuck()
   await new Promise((resolve) => setImmediate(resolve))
   runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve(reply("slow")), 1000))
-  const cached = payload(await session.callTool({ name: "desk_status" }))
+  const cached = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(cached.local_db.state, "recovered")
   assert.match(cached.status_detail, /^cached: /u)
 })
@@ -794,7 +794,7 @@ test("desk_status answers while an admission attempt is still running", async (t
   let release
   const { session } = await makeSession(t, { loadRuntime: () => new Promise((resolve) => { release = () => resolve({ runtimeServer: fakeRuntime(), runtimeStatus: {} }) }) })
   const started = Date.now()
-  const status = payload(await session.callTool({ name: "desk_status" }))
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.ok(Date.now() - started < 200, `desk_status took ${Date.now() - started} ms`)
   assert.equal(status.state, "admitting")
   release()
@@ -805,7 +805,7 @@ test("a runtime status keeps its own status value when ready", async (t) => {
   runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ root: {} }) }] })
   const { session } = await makeSession(t, { runtime })
   await session.admission.refresh()
-  const status = payload(await session.callTool({ name: "desk_status" }))
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(status.status, "ok")
   assert.equal(status.admission.writes, "available")
   assert.equal(status.admission.controller, "connected")
@@ -843,7 +843,7 @@ test("the root's own start record begins with admitting, and desk_status points 
   const { session, base } = await makeSession(t, { loadRuntime: async () => { await loading; return { runtimeServer: runtime, runtimeStatus: { state: "ready" } } } })
   const noRoot = await makeSession(t, { resolveInputs: async () => ({ rootError: { name: "Error", message: "gone", code: "DESK_ROOT_UNAVAILABLE" } }) })
   await noRoot.session.admission.refresh()
-  assert.equal(payload(await noRoot.session.callTool({ name: "desk_status" })).admission.last_start, path.join(noRoot.base, "state", "last-start.json"), "no root: the shared record")
+  assert.equal(payload(await noRoot.session.callTool({ name: "desk_status", input: { detail: true } })).admission.last_start, path.join(noRoot.base, "state", "last-start.json"), "no root: the shared record")
   const root = path.join(base, "desk")
   const perRoot = path.join(base, "state", "last-start", `${lastStartRootKey(root)}.json`)
   const attempt = session.admission.refresh()
@@ -853,7 +853,7 @@ test("the root's own start record begins with admitting, and desk_status points 
   release()
   assert.equal((await attempt).state, "ready")
   assert.equal(JSON.parse(readFileSync(perRoot, "utf8")).state, "ready")
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).admission.last_start, perRoot)
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).admission.last_start, perRoot)
 })
 
 test("a controller whose close fails is still forgotten, and dispose closes the controller", async (t) => {

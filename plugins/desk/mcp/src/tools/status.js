@@ -17,10 +17,10 @@ import { aheadBehindCounts, hasRemoteConfigured, readSyncStatus } from "../runti
 const OWN_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
-// desk_status takes no input at all (NO_INPUT_TOOLS in tool-schemas.js).
-// Kept here, empty, so __tests__/tool_schema_parity.test.js can check every
-// tool the same way rather than special-casing this one.
-export const DESK_STATUS_FIELDS = []
+// desk_status's one input, `detail`, is read where the answer is shaped for the caller (runtime/desk-session.js, which
+// compacts the payload built here unless `detail: true`); this function always builds the full payload. Listed here so
+// __tests__/tool_schema_parity.test.js checks the schema against it like every other tool.
+export const DESK_STATUS_FIELDS = ["detail"]
 
 // desk_status never files (a fix round after this Part first shipped: the real filer reached straight
 // from here hung this tool on every call once `gh` was installed). The boot check already files, once

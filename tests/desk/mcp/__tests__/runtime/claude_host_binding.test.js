@@ -193,7 +193,7 @@ test("main serves setup mode instead of exiting when no desk exists yet, and loa
   mkdirSync(path.join(fixture.home, "ms-desk", "_meta"), { recursive: true })
   mkdirSync(path.join(fixture.home, "ms-desk", "_archive"), { recursive: true })
   try {
-    const { payload: diagnostic } = await desk.call("desk_status")
+    const { payload: diagnostic } = await desk.call("desk_status", { detail: true })
     assert.equal(diagnostic.state, "degraded:no_desk_root")
     assert.equal(diagnostic.mode, "setup")
     assert.equal(diagnostic.status, "setup_required")
@@ -332,7 +332,7 @@ test("an empty ~/desk is not a desk: with no binding, main serves setup mode ins
     runtimeImporter: async () => assert.fail("an empty ~/desk must not be bound"),
   })
   try {
-    const { payload } = await desk.call("desk_status")
+    const { payload } = await desk.call("desk_status", { detail: true })
     assert.equal(payload.state, "degraded:no_desk_root")
     assert.equal(payload.mode, "setup")
     assert.deepEqual(payload.paths_tried.map((entry) => entry.path), [path.join(fixture.home, "desk"), path.join(fixture.home, "worker-workspace")])

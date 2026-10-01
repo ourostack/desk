@@ -523,7 +523,7 @@ test("an index.js that cannot load is served as a degraded state, never a crash"
     stderr: { write: (text) => errors.push(text) },
     importIndex: () => Promise.reject(new Error("index.js is broken")),
   })
-  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } })}\n`)
   await running
   const payload = toolPayload(read()[0])
   assert.equal(payload.state, "degraded:bootstrap_failed")
@@ -606,7 +606,7 @@ test("a Node that cannot be spawned falls back to the degraded responder", async
     stderr: { write: (text) => errors.push(text) },
   })
   child.emit("error", new Error("spawn EACCES"))
-  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } })}\n`)
   await running
   const payload = toolPayload(read()[0])
   assert.equal(payload.state, "degraded:node_spawn_failed")
@@ -757,7 +757,7 @@ for (const major of [16, 22]) {
         { jsonrpc: "2.0", method: "notifications/initialized" },
         { method: "ping", jsonrpc: "2.0", id: 1 },
         { method: "tools/list", jsonrpc: "2.0", id: 2 },
-        { method: "tools/call", params: { name: "desk_status", arguments: {} }, jsonrpc: "2.0", id: 3 },
+        { method: "tools/call", params: { name: "desk_status", arguments: { detail: true } }, jsonrpc: "2.0", id: 3 },
         { method: "prompts/list", jsonrpc: "2.0", id: "p" },
         { method: "initialize", jsonrpc: "2.0", id: 4 },
       ].map((message) => JSON.stringify(message)).join("\n") + "\nnot json\n",
@@ -797,7 +797,7 @@ test("a spawn that throws synchronously is served as node_spawn_failed", async (
     stdout: output,
     stderr: { write() {} },
   })
-  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } })}\n`)
   await running
   assert.equal(toolPayload(read()[0]).state, "degraded:node_spawn_failed")
 })
@@ -817,7 +817,7 @@ test("anything that throws while picking a Node is served as bootstrap_failed", 
     stdout: output,
     stderr: { write: (text) => errors.push(text) },
   })
-  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } })}\n`)
   await running
   const payload = toolPayload(read()[0])
   assert.equal(payload.state, "degraded:bootstrap_failed")
@@ -933,7 +933,7 @@ test("with no pack for this platform the node_missing fix still names a command"
   const output = new PassThrough()
   const read = collect(output)
   const running = bootstrap.run({ ...machine(root, { platform: "sunos", arch: "sparc" }), args: [], stdin: input, stdout: output, stderr: { write() {} } })
-  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } })}\n`)
   await running
   const payload = toolPayload(read()[0])
   assert.equal(payload.recommended_node_major, null)

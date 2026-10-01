@@ -22,7 +22,7 @@ async function session(t, { semantic = "background", handler } = {}) {
   const probeRelease = deferred()
   const state = { controller: null, convergence: null, initial: null, context: null, desk: null }
   const read = async () => {
-    const response = await state.desk.call("desk_status")
+    const response = await state.desk.call("desk_status", { detail: true })
     assert.equal(response.isError, false, JSON.stringify(response.payload))
     return response.payload
   }

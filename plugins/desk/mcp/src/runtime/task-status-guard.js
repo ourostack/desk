@@ -154,7 +154,7 @@ function denyReason(filePath, change) {
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
   const target = change.to === null ? "<new status>" : change.to
   const evidence = change.to === "done"
-    ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
+    ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them or a pushed commit from one of them) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
     : ""
   return (
     `Desk denies a direct edit that changes a task card's \`status:\` (${shown(change.from)} to ${shown(change.to)}). ` +

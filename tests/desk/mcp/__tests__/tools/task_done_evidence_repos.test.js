@@ -1,0 +1,268 @@
+// A task whose card names code repos can only reach `done` with code evidence from those repos: a PR URL in one of
+// them, or a pushed commit that resolves in a recorded clone. Never a desk commit, `ci_run` or `non_code`
+// (boot acceptance round 6: an agent that could not open its PR recorded a desk commit as `commit` evidence).
+
+import { test } from "node:test"
+import { strict as assert } from "node:assert"
+import * as path from "node:path"
+import { promises as fs } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { assertCodeRepoEvidence, recordedRepos } from "../../../../../plugins/desk/mcp/src/tools/done-evidence.js"
+import { mkTempRoot } from "../_temp_roots.js"
+import { mkTempDeskRoot, readFront } from "./_helpers.js"
+
+function git(dir, ...args) {
+  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" })
+  assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`)
+  return result.stdout.trim()
+}
+
+function identity(dir) {
+  git(dir, "config", "user.email", "test@example.com")
+  git(dir, "config", "user.name", "Test")
+}
+
+// A clone whose origin looks like github.com/<slug> and whose `main` is pushed (so a remote-tracking branch holds it).
+async function makeClone(slug, { upstream } = {}) {
+  const base = await mkTempRoot("desk-done-repo-")
+  const bare = path.join(base, "remote.git")
+  const clone = path.join(base, "clone")
+  spawnSync("git", ["init", "-q", "--bare", "-b", "main", bare])
+  spawnSync("git", ["clone", "-q", bare, clone])
+  identity(clone)
+  git(clone, "checkout", "-q", "-b", "main")
+  await fs.writeFile(path.join(clone, "a.txt"), "a\n")
+  git(clone, "add", ".")
+  git(clone, "commit", "-q", "-m", "first")
+  git(clone, "push", "-q", "origin", "main")
+  const pushed = git(clone, "rev-parse", "HEAD")
+  git(clone, "remote", "set-url", "origin", `https://github.com/${slug}.git`)
+  if (upstream) git(clone, "remote", "add", "upstream", `git@github.com:${upstream}.git`)
+  await fs.writeFile(path.join(clone, "b.txt"), "b\n")
+  git(clone, "add", ".")
+  git(clone, "commit", "-q", "-m", "second, not pushed")
+  return { clone, pushed, unpushed: git(clone, "rev-parse", "HEAD") }
+}
+
+async function codeTask(repos, root) {
+  root ??= await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T", status: "processing", repos } })
+  return root
+}
+
+const done = (root, evidence, extra = {}) =>
+  task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter: { status: "done" }, evidence, ...extra } })
+
+test("a card with repos accepts a PR URL in one of them and records it", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  const ref = "https://github.com/acme/widgets/pull/7"
+  assert.equal((await done(root, { kind: "pr", ref })).status, "updated")
+  const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.equal(data.evidence.ref, ref)
+})
+
+test("a PR in a repo the card does not list is refused, and the error names the task's repos", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  await assert.rejects(
+    done(root, { kind: "pr", ref: "https://github.com/anthropics/claude-code/pull/1" }),
+    /is not in this task's repos \(acme\/widgets \(.*clone\)\)\. Supply a PR URL in one of those repos/,
+  )
+  const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.equal(data.status, "processing")
+})
+
+test("a PR is accepted on the upstream a fork-route clone also records, and on the fork itself", async () => {
+  const { clone } = await makeClone("me/widgets", { upstream: "acme/widgets" })
+  const root = await codeTask([{ name: "widgets", local_path: clone, mode: "local" }])
+  assert.equal((await done(root, { kind: "pr", ref: "https://github.com/acme/widgets/pull/9" })).status, "updated")
+  const second = await codeTask([{ name: "widgets", local_path: clone, mode: "local" }])
+  assert.equal((await done(second, { kind: "pr", ref: "https://github.com/me/widgets/pull/9/files" })).status, "updated")
+})
+
+test("a bare repo name matches a GitHub PR on any owner's repo of that name, but a full name pins the owner", async () => {
+  const root = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
+  assert.equal((await done(root, { kind: "pr", ref: "https://github.com/anyone/widgets/pull/1" })).status, "updated")
+  const pinned = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
+  await assert.rejects(done(pinned, { kind: "pr", ref: "https://github.com/other/widgets/pull/1" }), /not in this task's repos \(acme\/widgets \(no local clone recorded\)\)/)
+})
+
+test("an Azure DevOps pull request matches by repo name, from the recorded name or a clone's remote", async () => {
+  const root = await codeTask([{ name: "OrderService", local_path: "", mode: "remote" }])
+  const ado = "https://dev.azure.com/org/proj/_git/OrderService/pullrequest/12"
+  assert.equal((await done(root, { kind: "pr", ref: ado })).status, "updated")
+  const { clone } = await makeClone("acme/other")
+  git(clone, "remote", "set-url", "origin", "https://dev.azure.com/org/proj/_git/Billing")
+  const viaRemote = await codeTask([{ name: "x", local_path: clone, mode: "local" }])
+  assert.equal((await done(viaRemote, { kind: "pr", ref: "https://dev.azure.com/org/proj/_git/Billing/pullrequest/3" })).status, "updated")
+  const wrong = await codeTask([{ name: "OrderService", local_path: "", mode: "remote" }])
+  await assert.rejects(done(wrong, { kind: "pr", ref: "https://dev.azure.com/org/proj/_git/Other/pullrequest/3" }), /not in this task's repos/)
+})
+
+test("a PR URL with no repo segment names no repo of the task's", async () => {
+  const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
+  await assert.rejects(done(root, { kind: "pr", ref: "https://github.com/pull/5" }), /not in this task's repos/)
+})
+
+test("non_code and ci_run evidence cannot finish a task that names code repos, and the error says what to supply", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  await fs.writeFile(path.join(root, "t", "proof.md"), "proof\n")
+  await assert.rejects(
+    done(root, { kind: "non_code", ref: "t/proof.md" }),
+    /`non_code` evidence cannot complete a task that names code repos.*kind: "pr".*kind: "commit".*A commit in the desk itself does not count.*`blocked` or `collaborating`/s,
+  )
+  await assert.rejects(done(root, { kind: "ci_run", ref: "https://ci.example.invalid/1" }), /`ci_run` evidence cannot complete a task that names code repos/)
+})
+
+test("a commit made in the desk is refused for a card with repos, even though it is pushed-looking and real", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  git(root, "init", "-q")
+  identity(root)
+  git(root, "add", ".")
+  git(root, "commit", "-q", "-m", "card edit only")
+  const deskSha = git(root, "rev-parse", "HEAD")
+  await assert.rejects(done(root, { kind: "commit", ref: deskSha }), new RegExp(`commit ${deskSha} does not resolve in any of this task's repo clones.*A commit made in the desk`, "s"))
+})
+
+test("a repo whose recorded clone is the desk itself never vouches for a commit", async () => {
+  const root = await mkTempDeskRoot()
+  git(root, "init", "-q")
+  identity(root)
+  await codeTask([{ name: "acme/desk", local_path: root, mode: "local" }], root)
+  git(root, "add", ".")
+  git(root, "commit", "-q", "--allow-empty", "-m", "x")
+  await assert.rejects(done(root, { kind: "commit", ref: git(root, "rev-parse", "HEAD") }), /does not resolve in any of this task's repo clones/)
+})
+
+test("a commit in a recorded clone that no remote-tracking branch contains is refused as not pushed", async () => {
+  const { clone, unpushed } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  await assert.rejects(
+    done(root, { kind: "commit", ref: unpushed }),
+    new RegExp(`commit ${unpushed} exists in acme/widgets \\(.*\\) but no remote-tracking branch contains it.*Push the branch`, "s"),
+  )
+})
+
+test("a commit is looked up in every recorded clone: found in a later one, and refused as unpushed when two clones both hold it unpushed", async () => {
+  const { clone, pushed, unpushed } = await makeClone("acme/widgets")
+  const second = await makeClone("acme/other")
+  const both = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }, { name: "acme/widgets-copy", local_path: clone, mode: "local" }])
+  await assert.rejects(done(both, { kind: "commit", ref: unpushed }), /but no remote-tracking branch contains it/)
+  const root = await codeTask([{ name: "acme/other", local_path: second.clone, mode: "local" }, { name: "acme/widgets", local_path: clone, mode: "local" }])
+  assert.equal((await done(root, { kind: "commit", ref: pushed })).status, "updated")
+})
+
+test("a pushed commit in a recorded clone is accepted as a bare sha, with a branch suffix, and as a commit URL", async () => {
+  const { clone, pushed } = await makeClone("acme/widgets")
+  for (const ref of [pushed, `${pushed.slice(0, 9)} on origin/main`, `https://github.com/acme/widgets/commit/${pushed}`]) {
+    const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+    assert.equal((await done(root, { kind: "commit", ref })).status, "updated", ref)
+  }
+})
+
+test("a commit URL in another repo is refused before any git lookup", async () => {
+  const { clone, pushed } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  await assert.rejects(done(root, { kind: "commit", ref: `https://github.com/someone/else/commit/${pushed}` }), /not in this task's repos/)
+  await assert.rejects(done(root, { kind: "commit", ref: `https://github.com/commit/${pushed}` }), /not in this task's repos/)
+})
+
+test("commit evidence with no recorded local clone says to supply a PR URL or record the clone", async () => {
+  const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
+  await assert.rejects(done(root, { kind: "commit", ref: "a1b2c3d4" }), /needs a local clone to check.*Supply a pull request URL instead/s)
+})
+
+test("a tilde local_path resolves against the call's HOME", async () => {
+  const { clone, pushed } = await makeClone("acme/widgets")
+  const home = path.dirname(clone)
+  const root = await codeTask([{ name: "acme/widgets", local_path: "~/clone", mode: "local" }])
+  const result = await task_update({
+    deskRoot: root, env: { HOME: home },
+    input: { track: "t", slug: "ship-it", frontmatter: { status: "done" }, evidence: { kind: "commit", ref: pushed } },
+  })
+  assert.equal(result.status, "updated")
+})
+
+test("a recorded clone that does not exist on disk resolves nothing", async () => {
+  const root = await codeTask([{ name: "acme/widgets", local_path: path.join(root0(), "absent"), mode: "local" }])
+  await assert.rejects(done(root, { kind: "commit", ref: "a1b2c3d4" }), /does not resolve in any of this task's repo clones/)
+})
+function root0() { return path.join("/", "definitely-not-here") }
+
+test("a call cannot drop the card's repos to skip the check: the repos on the card before the call still count", async () => {
+  const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
+  await assert.rejects(
+    task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter: { status: "done", repos: [] }, evidence: { kind: "non_code", ref: "https://example.invalid/x" } } }),
+    /cannot complete a task that names code repos/,
+  )
+})
+
+test("a call that adds repos while finishing the task is checked against them too", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T", status: "processing" } })
+  await assert.rejects(
+    task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter: { status: "done", repos: [{ name: "acme/widgets", local_path: "", mode: "remote" }] }, evidence: { kind: "ci_run", ref: "https://ci.example.invalid/1" } } }),
+    /`ci_run` evidence cannot complete/,
+  )
+})
+
+test("task_archive applies the same rule when it bumps a card with repos to done", async () => {
+  const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
+  await assert.rejects(
+    task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "non_code", ref: "https://example.invalid/x" } } }),
+    /task_archive: `non_code` evidence cannot complete a task that names code repos/,
+  )
+  const ok = await task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "pr", ref: "https://github.com/acme/widgets/pull/2" } } })
+  assert.equal(ok.status, "archived")
+})
+
+test("a card with no repos is unchanged, but a non_code ref may not be the task card itself", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T", status: "processing" } })
+  await assert.rejects(
+    done(root, { kind: "non_code", ref: "t/ship-it/task.md" }),
+    /is the task card itself.*point at a separate proof/s,
+  )
+  await assert.rejects(done(root, { kind: "non_code", ref: "t/../t/ship-it/task.md" }), /is the task card itself/)
+  await fs.writeFile(path.join(root, "t", "ship-it", "outcome.md"), "the outcome\n")
+  assert.equal((await done(root, { kind: "non_code", ref: "t/ship-it/outcome.md" })).status, "updated")
+})
+
+test("task_archive also refuses the card itself as non_code proof", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T", status: "processing" } })
+  await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "non_code", ref: "t/ship-it/task.md" } } }), /is the task card itself/)
+})
+
+test("recordedRepos reads only usable entries and treats anything else as no repos", () => {
+  assert.deepEqual(recordedRepos("acme/widgets"), [])
+  assert.deepEqual(recordedRepos(undefined), [])
+  assert.deepEqual(recordedRepos([null, 3, { name: "  " }, { local_path: "x" }]), [])
+  assert.deepEqual(recordedRepos([{ name: " a/b ", local_path: " ~/b ", mode: "local" }, { name: "c" }]), [
+    { name: "a/b", localPath: "~/b", mode: "local" },
+    { name: "c", localPath: "", mode: undefined },
+  ])
+})
+
+test("assertCodeRepoEvidence does nothing without repos, and survives odd git results and remotes", () => {
+  assertCodeRepoEvidence({ toolName: "t", evidence: { kind: "non_code", ref: "x" }, repos: [], deskRoot: "/d" })
+  const repos = [{ name: "acme/widgets", localPath: "/c", mode: "local" }]
+  const odd = (outputs) => (cmd, args) => (args.includes("config") ? outputs.config : outputs.other)
+  // No result at all, a nonzero status and a non-string stdout all read as "git said nothing".
+  for (const config of [undefined, { status: 1, stdout: "" }, { status: 0, stdout: null }]) {
+    assert.throws(
+      () => assertCodeRepoEvidence({ toolName: "t", evidence: { kind: "pr", ref: "https://github.com/other/x/pull/1" }, repos, deskRoot: "/d", spawnGit: odd({ config }) }),
+      /not in this task's repos/,
+    )
+  }
+  // A key with no URL, a non-URL remote and a host-only URL are skipped or read without a path.
+  const config = { status: 0, stdout: "remote.a.url\nremote.b.url /srv/git/x.git\nremote.c.url https://github.com\nremote.d.url https://dev.azure.com\n" }
+  assert.throws(
+    () => assertCodeRepoEvidence({ toolName: "t", evidence: { kind: "pr", ref: "https://github.com/other/x/pull/1" }, repos, deskRoot: "/d", spawnGit: odd({ config }) }),
+    /not in this task's repos/,
+  )
+})
