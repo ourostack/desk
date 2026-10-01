@@ -91,6 +91,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" claude prompt",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -107,7 +116,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__(?:plugin_desk_)?desk__task_(?:update|create|move|archive)",
+        "matcher": "mcp__.*__task_(update|create|move|archive)",
         "hooks": [
           {
             "type": "command",

@@ -172,7 +172,7 @@ test("the harness and the gate judge the same sentences the same way", () => {
   ]
   for (const [reply, status, blocked] of cases) {
     const gate = doneClaims(reply).length > 0 && !statesStatus(reply, status)
-    const harness = taskDoneClaims(reply, { statuses: [status] }).length > 0
+    const harness = taskDoneClaims(reply, { statuses: [status], stripQuotes: true }).length > 0
     assert.equal(gate, blocked, `gate: ${reply}`)
     assert.equal(harness, blocked, `harness: ${reply}`)
   }
@@ -184,4 +184,19 @@ test("resume-named-task: a 'Done.' reply that states the task's status passes th
   assert.ok(!failures(ok).some((failure) => /said the task is done in the reply/u.test(failure)), failures(ok).join("|"))
   const bad = check("resume-named-task", [...BOOT_PLAIN, ...events], "Done. Wired the 30% check in RainDelayPolicy.")
   assert.ok(failures(bad).some((failure) => /said the task is done in the reply/u.test(failure)))
+})
+
+test("the harness and the gate read the same sentences as claims or not (review of 69442ece)", () => {
+  const claims = ["Done.", "Done. Task is done.", "Work complete.", "The task is complete.", "I'm done with the task and pushed.", "**Completed work:**\n- x", "Everything is done."]
+  const quiet = ["I'm done with the task review.", "All tests are done running.", "The fix is done.", "Shipped.", "I'm done for now.", "Done reading the card.", "She wrote \"the task is complete\" in it.", "I read `Done.` in the log.", "```\nDone.\n```", "The task is not done yet.", "The task is complete once the PR merges.", "I was told the task was done."]
+  for (const reply of claims) {
+    assert.ok(doneClaims(reply).length > 0, `gate: ${reply}`)
+    assert.ok(taskDoneClaims(reply, { stripQuotes: true }).length > 0, `harness: ${reply}`)
+  }
+  for (const reply of quiet) {
+    assert.deepEqual(doneClaims(reply), [], `gate: ${reply}`)
+    assert.deepEqual(taskDoneClaims(reply, { stripQuotes: true }), [], `harness: ${reply}`)
+  }
+  // A commit message is read as written, quotes and all.
+  assert.equal(taskDoneClaims('git commit -m "Task complete"').length, 1)
 })
