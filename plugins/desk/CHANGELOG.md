@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.155 — 2026-10-01
+
+`scripts/session-boot.js` now restores the plugin's runtime dependencies the way the MCP server does, so the one-command boot works from an installed plugin folder. Before, the script ran with no `node_modules` beside it, could not load `gray-matter`, and so could not read the `repos:` lists in task cards: `push_accounts` came back empty and every card's repos showed "not validated". The script now restores the shipped runtime pack into the same cache folder the server uses (`DESK_RUNTIME_CACHE_DIR`, `XDG_CACHE_HOME`), with the same atomic publication, before the boot code loads. A machine the pack does not cover keeps the dependency-free reader, and the "card repos: not validated" line now says why the restore failed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.154 — 2026-10-01
 
 Boot and status fixes from the fifth Haiku acceptance round. A desk sync that fails now says why: an unreachable origin, refused credentials, a diverged history, a timeout or a real conflict each get their own instruction, where every failure used to read as "resolve the git conflict" and sent agents to a `git status` that looked clean. An unreachable or refusing remote no longer moves stray files to `_cache/` either. The boot `instructions` now carry the push route for the named (or every active) task's repos whenever it is a fork, goes through a non-active account, or no account can deliver, naming repo, account and route; lines are grouped per repo (first few tasks named, then a count) and capped at five plus a summary.
