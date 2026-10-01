@@ -260,14 +260,14 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
     file: filing?.file ?? "filing in background",
     tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
   })
-  const result = { state: "unresolved", diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs), error: firstErrorLine(failed?.stderr), conflicted }
+  const result = { state: "unresolved", reason, diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs), error: firstErrorLine(failed?.stderr), conflicted }
   if (quarantinedPaths !== undefined) result.quarantinedPaths = quarantinedPaths
   return result
 }
 
 /**
- * `{ root, env, spawnGit? }` -> `{ state: "synced" } | { state:
- * "quarantined", quarantinedPaths } | { state: "unresolved", diagnostic,
+ * `{ root, env, spawnGit? }` -> `{ state: "synced", nothingToSync? } | { state:
+ * "quarantined", quarantinedPaths } | { state: "unresolved", reason, diagnostic,
  * quarantinedPaths? }`. Never throws.
  *
  * A desk with no remote at all, or whose current branch has no upstream yet
@@ -294,8 +294,9 @@ export async function syncWorkspace(options) {
 async function runSync({
   root, env, spawnGit = spawnSync, fileProblem = queueDeskProblemFiling, now = () => Date.now(),
 }) {
-  if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced" }
-  if (aheadBehindCounts({ root, spawnGit }) === null) return { state: "synced" }
+  // Nothing to sync against is "synced" for every caller, with `nothingToSync` saying which kind so boot never reports it as a sync that worked.
+  if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced", nothingToSync: "no_remote" }
+  if (aheadBehindCounts({ root, spawnGit }) === null) return { state: "synced", nothingToSync: "no_upstream" }
 
   const deadlineAt = now() + SYNC_WORKSPACE_DEADLINE_MS
   const remaining = () => deadlineAt - now()

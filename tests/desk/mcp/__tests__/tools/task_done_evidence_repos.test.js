@@ -112,7 +112,7 @@ test("non_code and ci_run evidence cannot finish a task that names code repos, a
   await fs.writeFile(path.join(root, "t", "proof.md"), "proof\n")
   await assert.rejects(
     done(root, { kind: "non_code", ref: "t/proof.md" }),
-    /`non_code` evidence cannot complete a task that names code repos.*kind: "pr".*kind: "commit".*A commit in the desk itself does not count.*`blocked` or `collaborating`/s,
+    /`non_code` evidence cannot complete a task that names code repos.*kind: "pr".*kind: "commit".*a repo Desk recorded as local-only.*A commit in the desk itself does not count.*leave it at `validating` and tell the operator the commit sha/s,
   )
   await assert.rejects(done(root, { kind: "ci_run", ref: "https://ci.example.invalid/1" }), /`ci_run` evidence cannot complete a task that names code repos/)
 })
@@ -143,8 +143,46 @@ test("a commit in a recorded clone that no remote-tracking branch contains is re
   const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
   await assert.rejects(
     done(root, { kind: "commit", ref: unpushed }),
-    new RegExp(`commit ${unpushed} exists in acme/widgets \\(.*\\) but no remote-tracking branch contains it.*push the branch`, "s"),
+    new RegExp(`commit ${unpushed} exists in acme/widgets \\(.*\\) but no remote-tracking branch contains it.*push the branch.*open a pull request.*leave the task at \`validating\` and tell the operator the commit sha ${unpushed.slice(0, 7)}`, "s"),
   )
+})
+
+// A clone with no remote at all (never pushed anywhere, nowhere to push): a commit that exists in it is the finished work.
+async function makeLocalOnlyClone() {
+  const dir = await mkTempRoot("desk-done-local-")
+  const clone = path.join(dir, "clone")
+  await fs.mkdir(clone)
+  git(clone, "init", "-q", "-b", "main")
+  identity(clone)
+  await fs.writeFile(path.join(clone, "a.txt"), "a\n")
+  git(clone, "add", ".")
+  git(clone, "commit", "-q", "-m", "work")
+  return { clone, sha: git(clone, "rev-parse", "HEAD") }
+}
+
+test("a commit in a recorded clone that has no remote configured at all is valid done evidence", async () => {
+  const { clone, sha } = await makeLocalOnlyClone()
+  const root = await codeTask([{ name: "greenhouse", local_path: clone, mode: "local" }])
+  assert.equal((await done(root, { kind: "commit", ref: sha })).status, "updated")
+  const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.equal(data.evidence.ref, sha)
+})
+
+test("a local-only clone still has to contain the commit, and one with a remote still needs it pushed", async () => {
+  const { clone } = await makeLocalOnlyClone()
+  const root = await codeTask([{ name: "greenhouse", local_path: clone, mode: "local" }])
+  await assert.rejects(done(root, { kind: "commit", ref: "a1b2c3d4" }), /does not resolve in any of this task's repo clones/)
+  git(clone, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+  await fs.writeFile(path.join(clone, "b.txt"), "b\n")
+  git(clone, "add", ".")
+  git(clone, "commit", "-q", "-m", "more")
+  await assert.rejects(done(root, { kind: "commit", ref: git(clone, "rev-parse", "HEAD") }), /no remote-tracking branch contains it/)
+})
+
+test("a remote-less lookalike does not count when git cannot list the remotes", () => {
+  const repos = [{ name: "w", localPath: "/c", mode: "local" }]
+  const spawnGit = (cmd, args) => (args.includes("cat-file") ? { status: 0, stdout: "" } : args.includes("for-each-ref") ? { status: 0, stdout: "" } : { status: 1, stdout: "" })
+  assert.throws(() => assertCodeRepoEvidence({ toolName: "t", evidence: { kind: "commit", ref: "a1b2c3d4" }, repos, deskRoot: "/d", spawnGit }), /not pushed|no remote-tracking branch/)
 })
 
 test("a commit is looked up in every recorded clone: found in a later one, and refused as unpushed when two clones both hold it unpushed", async () => {
@@ -320,10 +358,10 @@ test("recordedRepos reads only usable entries and treats anything else as no rep
   assert.deepEqual(recordedRepos("acme/widgets"), [])
   assert.deepEqual(recordedRepos(undefined), [])
   assert.deepEqual(recordedRepos([null, 3, { name: "  " }, { local_path: "x" }, "  "]), [])
-  assert.deepEqual(recordedRepos([" foo "]), [{ name: "foo", localPath: "", mode: undefined }])
+  assert.deepEqual(recordedRepos([" foo "]), [{ name: "foo", localPath: "", mode: undefined, url: false }])
   assert.deepEqual(recordedRepos([{ name: " a/b ", local_path: " ~/b ", mode: "local" }, { name: "c" }]), [
-    { name: "a/b", localPath: "~/b", mode: "local" },
-    { name: "c", localPath: "", mode: undefined },
+    { name: "a/b", localPath: "~/b", mode: "local", url: false },
+    { name: "c", localPath: "", mode: undefined, url: false },
   ])
 })
 

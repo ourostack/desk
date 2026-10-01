@@ -23,6 +23,8 @@ const line = (event) => JSON.stringify(event)
 const init = (id) => line({ type: "system", subtype: "init", session_id: id })
 const assistantText = (text) => line({ type: "assistant", message: { content: [{ type: "text", text }] } })
 const toolUse = (name, input) => line({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } })
+const toolUseWithId = (id, name, input) => line({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } })
+const toolResultFor = (id, text) => line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: text }] } })
 const toolResult = (text) => line({ type: "user", message: { content: [{ type: "tool_result", content: text }] } })
 const result = (text, extra = {}) => line({ type: "result", subtype: "success", is_error: false, result: text, total_cost_usd: 0.01, session_id: "s-1", ...extra })
 
@@ -164,7 +166,7 @@ test("before this change the critique shared the turn and replaced the reply: th
 
 test("a gh write or a task marked done in the critique turn still fails the run", async () => {
   const first = sayHiTurn()
-  const second = stream(init("s-1"), toolUse("Bash", { command: "gh pr create --fill" }), toolUse("mcp__plugin_desk_desk__task_update", { status: "done" }), result("done"))
+  const second = stream(init("s-1"), toolUse("Bash", { command: "gh pr create --fill" }), toolUseWithId("u1", "mcp__plugin_desk_desk__task_update", { status: "done" }), toolResultFor("u1", JSON.stringify({ status: "updated" })), result("done"))
   const { claude } = fakeClaude([{ stdout: first, stderr: "" }, { stdout: second, stderr: "" }])
   const out = await runTurns({ claude, ...RUN })
   const verdict = findScenario("say-hi").check(out.ctx)
@@ -174,7 +176,7 @@ test("a gh write or a task marked done in the critique turn still fails the run"
 })
 
 test("a task_update that sets frontmatter.status to done fails the run, with or without evidence (the fixture supplies none)", () => {
-  const move = (frontmatter) => buildContext(parseStreamJson(stream(init("s-1"), toolUse("Bash", { command: "node s/session-boot.js" }), toolUse("mcp__plugin_desk_desk__task_update", { track: "t", slug: "s", frontmatter, evidence: { kind: "commit", ref: "d40151a" } }), assistantText("You have watering-schedule-api in progress."), result("You have watering-schedule-api in progress."))))
+  const move = (frontmatter) => buildContext(parseStreamJson(stream(init("s-1"), toolUse("Bash", { command: "node s/session-boot.js" }), toolUseWithId("u1", "mcp__plugin_desk_desk__task_update", { track: "t", slug: "s", frontmatter, evidence: { kind: "commit", ref: "d40151a" } }), toolResultFor("u1", JSON.stringify({ status: "updated" })), assistantText("You have watering-schedule-api in progress."), result("You have watering-schedule-api in progress."))))
   const scenario = findScenario("say-hi")
   assert.equal(scenario.check(move({ status: "done" })).outcome, "fail")
   assert.equal(scenario.check(move({ status: "validating" })).outcome, "pass")

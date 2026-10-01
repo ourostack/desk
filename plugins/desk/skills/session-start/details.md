@@ -4,11 +4,9 @@ The parts of `desk:session-start` that only some sessions need. `SKILL.md` links
 
 ## Desk MCP availability and repair
 
-**Desk MCP availability checkpoint.** now, before treating session-start as healthy, check whether the active host session exposes the Desk MCP tool surface. this is a distinct concern from the boot script's own `status`: the boot script reports the desk *workspace's* state, while this checks whether *this running session* can reach Desk's MCP tools at all. this applies to every agent built on `desk:worker`, including downstream overlays like `ms-desk` and area-specific workers. overlays may add their own MCP checks, but they inherit this substrate check rather than re-implementing it.
+**Desk MCP availability checkpoint.** boot no longer orders a `desk_status` check up front. If your host defers tools, Desk's may be listed by name without being loaded, so the first time you need one, load it (Claude Code: ToolSearch `select:` naming the exact tools, `mcp__plugin_desk_desk__task_update`, `mcp__plugin_desk_desk__desk_status` and the others). this section applies when a Desk tool is still absent after that. it is a distinct concern from the boot script's own `status`: the boot script reports the desk *workspace's* state, while this checks whether *this running session* can reach Desk's MCP tools at all. this applies to every agent built on `desk:worker`, including downstream overlays like `ms-desk` and area-specific workers. overlays may add their own MCP checks, but they inherit this substrate check rather than re-implementing it.
 
-re-run this check after a context-compaction resume, not only at the very first message of a session: compaction can restart the host process or reload tools, so a tool surface confirmed available before compaction is not guaranteed to still be available after — treat a fresh resume the same as a fresh session for this one check, even mid-task.
-
-the minimum sentinel is `desk_status`. if the host exposes an active tool list, look for `desk_status` or the Desk MCP namespace. if the host does not expose a tool-list API, infer from the callable tools available in the current session. this is an active-session check: repo source and plugin cache can both be current while this running agent still lacks the MCP because the host has not reloaded or the MCP failed to launch.
+the minimum sentinel is `desk_status`. if the host exposes an active tool list, look for `desk_status` or the Desk MCP namespace. if the host does not expose a tool-list API, infer from the callable tools available in the current session. this is an active-session check: repo source and plugin cache can both be current while this running agent still lacks the MCP because the host has not reloaded or the MCP failed to launch. a context-compaction resume can reload tools, so check again after one if a Desk tool call fails.
 
 when `desk_status` is callable:
 - call it once.
@@ -73,7 +71,7 @@ a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` 
 
 ### agent-work migrations
 
-the boot script's `instructions` name any pending `agent_work: true` migration (today `02-tidy-desk`) with the command to run. do it after the desk is synced and this session's own desk is known: pass the `root.path` and `write_scope.person` that `desk_status` reports. for another plugin's migration, go through `session-start-migrations` with `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the same values. for `02-tidy-desk`, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
+the boot script's `instructions` name any pending `agent_work: true` migration (today `02-tidy-desk`) with the command to run. do it after the desk is synced and this session's own desk is known: pass the desk path boot printed on its `Desk:` line as `root.path`; `write_scope.person` is the desk's own handle, empty on a single desk, and `desk_status` reports it when you need it (load that tool first if your host defers it). for another plugin's migration, go through `session-start-migrations` with `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the same values. for `02-tidy-desk`, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
 
 ## Redacted names
 

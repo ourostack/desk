@@ -20,7 +20,7 @@
 // does. Everything else starts empty.
 
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, rmSync, realpathSync, copyFileSync } from "node:fs"
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, rmSync, realpathSync, copyFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -107,6 +107,7 @@ repos:
   - name: greenhouse-irrigation
     local_path: ~/code/greenhouse-irrigation
     mode: local
+    local_only: true
 ---
 
 ## Current work
@@ -118,6 +119,8 @@ Implementing the \`/schedule\` endpoint's rain-delay logic on branch
 \`RainDelayPolicy.shouldDelay()\` and add the missing unit test for the
 boundary case (exactly 30% soil moisture). Tests are green except
 \`test_rain_delay_boundary\`, which is still a stub.
+
+**Test command:** \`python3 -m unittest\`, run from \`~/code/greenhouse-irrigation\`.
 
 ## Ruling (operator, 2026-09-25)
 
@@ -331,19 +334,33 @@ class RainDelayPolicy:
     def should_delay(self, soil_moisture_percent):
         raise NotImplementedError("wire the moisture threshold check here")
 `)
-  writeFileSync(path.join(repo, "tests", "test_rain_delay.py"), `def test_rain_delay_dry_soil():
-    pass  # TODO
+  // Standard library only: `python3 -m unittest` from the repo root runs the suite (the packages need their `__init__.py` for discovery).
+  writeFileSync(path.join(repo, "src", "__init__.py"), "")
+  writeFileSync(path.join(repo, "tests", "__init__.py"), "")
+  writeFileSync(path.join(repo, "tests", "test_rain_delay.py"), `import unittest
+
+from src.rain_delay import RainDelayPolicy
 
 
-def test_rain_delay_boundary():
-    pass  # stub: exactly 30% soil moisture
+class RainDelayPolicyTest(unittest.TestCase):
+    def test_rain_delay_dry_soil(self):
+        pass  # TODO
+
+    def test_rain_delay_boundary(self):
+        self.skipTest("stub: exactly 30% soil moisture")
+
+
+if __name__ == "__main__":
+    unittest.main()
 `)
   sh("git", ["init", "-q", "-b", "feature/rain-delay"], { cwd: repo })
   sh("git", ["-C", repo, "config", "user.email", "operator@example.com"])
   sh("git", ["-C", repo, "config", "user.name", "Desk Operator"])
   sh("git", ["-C", repo, "config", "commit.gpgsign", "false"])
   sh("git", ["-C", repo, "add", "-A"])
-  sh("git", ["-C", repo, "commit", "-q", "-m", "Stub the rain-delay policy and its boundary test"])
+  // Made the day after the card was created, as the real stub commit would be: a commit older than the task is not work done for it.
+  const seeded = { ...process.env, GIT_AUTHOR_DATE: "2026-09-21T09:00:00Z", GIT_COMMITTER_DATE: "2026-09-21T09:00:00Z" }
+  sh("git", ["-C", repo, "commit", "-q", "-m", "Stub the rain-delay policy and its boundary test"], { env: seeded })
   return repo
 }
 
@@ -400,11 +417,18 @@ export function createIsolatedHome({ homeDir, sharedCacheDir }) {
       if (existsSync(src)) copyFileSync(src, path.join(ghConfig, file))
     }
   }
+  // A real operator's setup has Claude Code's default commit and pull-request attribution turned off (the desk's own rule
+  // is no AI attribution anywhere). Left on, the harness's temporary home made Claude Code tell agents to add a
+  // `Co-Authored-By` trailer, which contradicted the desk and confused them. `attribution` is the current key;
+  // `includeCoAuthoredBy` is its deprecated predecessor, set too so an older Claude Code obeys the same setting.
+  const claudeDir = path.join(homeDir, ".claude") // the run never gets CLAUDE_CONFIG_DIR (buildChildEnv), so Claude Code's profile is under this home
+  mkdirSync(claudeDir, { recursive: true })
+  writeFileSync(path.join(claudeDir, "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)
   return homeDir
 }
 
 // ---------------------------------------------------------------------------
-// Scratch plugin-dir: symlinks exactly Desk + its two declared dependencies
+// Scratch plugin-dir: copies exactly Desk + its two declared dependencies
 // (superpowers, plain-language) from the worktree's plugins/ folder, so
 // `--plugin-dir` loads Desk under test plus what its own plugin.json
 // declares -- and nothing else the desk repo's plugins/ folder happens to
@@ -414,15 +438,30 @@ export function createIsolatedHome({ homeDir, sharedCacheDir }) {
 
 const DESK_DEPENDENCIES = ["desk", "superpowers", "plain-language"]
 
+/**
+ * Copies Desk and its two dependencies into `targetDir`, real files and no symlinks. A symlinked plugin resolves to its
+ * source checkout, so the agent's startup line, skill base directory and hook paths named the real worktree and agents ran
+ * the boot script from it (round B). A copy is the only path the agent can see. `node_modules` and `.git` stay behind
+ * (the harness gives Desk its own shared runtime cache).
+ */
 export function buildPluginDir({ worktreeRoot, targetDir }) {
   if (existsSync(targetDir)) rmSync(targetDir, { recursive: true, force: true })
   mkdirSync(targetDir, { recursive: true })
   for (const name of DESK_DEPENDENCIES) {
     const src = path.join(worktreeRoot, "plugins", name)
     if (!existsSync(src)) throw new Error(`expected plugin dir missing: ${src}`)
-    symlinkSync(realpathSync(src), path.join(targetDir, name))
+    cpSync(realpathSync(src), path.join(targetDir, name), {
+      recursive: true,
+      dereference: true,
+      filter: (file) => !["node_modules", ".git"].includes(path.basename(file)),
+    })
   }
   return targetDir
+}
+
+/** Every spelling of a checkout's path an agent could meet: as given and with symlinks resolved. A tool call naming one has found the real worktree. */
+export function sourcePaths(worktreeRoot) {
+  return [...new Set([path.resolve(worktreeRoot), realpathSync(worktreeRoot)])]
 }
 
 export function freshTempDir(prefix) {

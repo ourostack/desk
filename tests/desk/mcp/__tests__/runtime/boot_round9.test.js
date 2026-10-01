@@ -1,0 +1,337 @@
+// Round 9 boot fixes: boot does the work instead of ordering ceremony (AGENTS.md text included, deferred-tool hint
+// instead of a desk_status check), readable text output with `--json` for tools, and plain sync wording.
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
+import { promises as fs } from "node:fs"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+import { mkTempRoot } from "../_temp_roots.js"
+import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
+import { AGENTS_MD_CAP_BYTES, formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
+import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
+
+const jq = async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" })
+const gh = async (args) => {
+  if (args[0] === "--version") return { code: 0, stdout: "gh version 2.54.0 (2024-07-31)\n", stderr: "" }
+  if (args[0] === "auth" && args[1] === "status") return { code: 0, stdout: "github.com\n  ✓ Logged in to github.com account ari (keyring)\n  - Active account: ari\n", stderr: "" }
+  return { code: 1, stdout: "", stderr: "unexpected call" }
+}
+
+async function desk() {
+  const root = await mkTempRoot("desk-boot-round9-")
+  await fs.mkdir(path.join(root, "_meta"), { recursive: true })
+  await fs.mkdir(path.join(root, "_archive"), { recursive: true })
+  const dir = path.join(root, "ops", "flash-valves")
+  await fs.mkdir(dir, { recursive: true })
+  const card = ["schema_version: 1", "title: Flash valves", "status: processing", "created: '2026-01-01T00:00:00Z'", "updated: '2026-01-02T00:00:00Z'", "track: ops", "repos:\n  - name: valves\n    local_path: ~/code/valves\n    mode: local"].join("\n")
+  await fs.writeFile(path.join(dir, "task.md"), `---\n${card}\n---\n\nBody.\n`)
+  return root
+}
+
+const boot = (root, extra = {}) => bootOnce({
+  env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+  syncFn: async () => ({ state: "synced" }),
+  factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
+  repoFn: () => ({ states: [], pending: [] }),
+  lastSyncFn: () => "2026-09-30T10:00:00.000Z",
+  ...extra,
+})
+
+// ── AGENTS.md ───────────────────────────────────────────────────────────
+
+test("readAgentsMd returns the desk's AGENTS.md, null without one, and cuts a long file at its last line break inside the cap", async () => {
+  const root = await mkTempRoot("desk-agents-")
+  assert.equal(readAgentsMd(root), null)
+  const file = path.join(root, "AGENTS.md")
+  await fs.writeFile(file, "# Rules\n")
+  assert.deepEqual(readAgentsMd(root), { path: file, text: "# Rules\n", truncated: false, bytes: 8, shownBytes: 8 })
+  assert.equal(AGENTS_MD_CAP_BYTES, 16384)
+  await fs.writeFile(file, "x".repeat(AGENTS_MD_CAP_BYTES))
+  assert.equal(readAgentsMd(root).truncated, false, "a file of exactly the cap is whole")
+  await fs.writeFile(file, "line one\nline two\nline three")
+  const cut = readAgentsMd(root, { cap: 22 })
+  assert.deepEqual([cut.text, cut.truncated, cut.bytes, cut.shownBytes], ["line one\nline two", true, 28, 17], "cut after the last whole line, never mid-rule")
+  await fs.writeFile(file, `${"x".repeat(9)}é and more`)
+  assert.equal(readAgentsMd(root, { cap: 10 }).text, "x".repeat(9), "with no line break, half of a two-byte character is dropped, not printed as a replacement mark")
+  await fs.writeFile(file, "x".repeat(20))
+  assert.equal(readAgentsMd(root, { cap: 4 }).text, "xxxx")
+  await fs.writeFile(file, "a \u{FFFD}")
+  assert.equal(readAgentsMd(root).text, "a \u{FFFD}", "a replacement character the file itself holds is kept")
+})
+
+test("boot carries AGENTS.md in its result, and nothing orders the agent to read it or to confirm desk_status", async () => {
+  const root = await desk()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "Keep replies short.\n")
+  const result = await boot(root)
+  assert.equal(result.agents_md.text, "Keep replies short.\n")
+  assert.equal(result.instructions.some((line) => /AGENTS\.md/u.test(line)), false)
+  assert.equal(result.instructions.some((line) => /Confirm this session can call/u.test(line)), false)
+  assert.equal(result.instructions.filter((line) => line === DEFERRED_TOOLS_HINT).length, 1)
+  const throwing = await boot(root, { agentsFn: () => { throw new Error("denied") } })
+  assert.equal(throwing.agents_md, null)
+})
+
+test("the deferred-tools hint names ToolSearch select: with the exact Desk tools", () => {
+  assert.match(DEFERRED_TOOLS_LOAD_HINT, /^If your host defers tools.*\(Claude Code: ToolSearch `select:/su)
+  assert.match(DEFERRED_TOOLS_LOAD_HINT, /mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status/u)
+  assert.ok(DEFERRED_TOOLS_HINT.startsWith(DEFERRED_TOOLS_LOAD_HINT))
+  assert.match(DEFERRED_TOOLS_HINT, /never continue silently in local-only mode/u)
+})
+
+// ── Sync wording ────────────────────────────────────────────────────────
+
+test("syncSummary says plainly what happened: a failure pulled and pushed nothing and names when the desk was last current", () => {
+  const asOf = "2026-09-30T10:00:00.000Z"
+  const failed = (cause) => syncSummary({ sync: { state: "unresolved", cause }, lastSyncAt: asOf })
+  assert.equal(failed("unreachable"), `sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of ${asOf}`)
+  assert.match(failed("auth_failed"), /^sync failed: remote refused this host's credentials; nothing was pulled or pushed/u)
+  assert.match(failed("deadline"), /^sync failed: git timed out;/u)
+  assert.match(failed("conflict"), /^sync failed: the pull hit a conflict;/u)
+  assert.match(failed("diverged"), /^sync failed: the desk and its remote have diverged;/u)
+  assert.match(failed("other"), /^sync failed: the pull did not complete;/u)
+  assert.match(syncSummary({ sync: { state: "unresolved", cause: "unreachable" } }), /local desk is as of unknown$/u)
+  assert.match(syncSummary({ sync: null, timedOut: true }), /^sync failed: it did not finish within the boot's time budget; nothing was pulled or pushed; local desk is as of unknown$/u)
+  assert.match(syncSummary({ sync: null }), /^sync failed: it did not run;/u)
+  assert.match(syncSummary({ sync: undefined }), /^sync failed: it did not run;/u)
+  assert.equal(syncSummary({ sync: { state: "synced" } }), "sync ok")
+  assert.equal(syncSummary({ sync: { state: "synced", nothingToSync: "no_remote" } }), "no remote; nothing to sync")
+  assert.equal(syncSummary({ sync: { state: "synced", nothingToSync: "no_upstream" } }), "no upstream branch; nothing to sync")
+  const moved = ["_cache/stray-2026-09-30/a.md", "_cache/stray-2026-09-30/b.md"]
+  assert.equal(syncSummary({ sync: { state: "quarantined", quarantinedPaths: moved }, root: "/work/desk" }), "sync ok: moved 2 stray untracked paths to /work/desk/_cache/stray-2026-09-30/ first, then pulled")
+  assert.equal(syncSummary({ sync: { state: "quarantined", quarantinedPaths: [moved[0]] } }), "sync ok: moved 1 stray untracked path to _cache/stray-2026-09-30/ first, then pulled")
+  assert.equal(syncSummary({ sync: { state: "quarantined" } }), "sync ok: moved 0 stray untracked paths to _cache/ first, then pulled")
+})
+
+test("syncSummary tells a pop conflict (the pull worked) from a failed pull, and says where quarantined files went", () => {
+  const pop = syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict", cause: "conflict", conflicted: ["a.md", "b.md"] }, lastSyncAt: "2026-09-30T10:00:00.000Z" })
+  assert.equal(pop, "sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in (conflicted: a.md, b.md); nothing was pushed; resolve them before changing the desk")
+  assert.doesNotMatch(pop, /sync failed|nothing was pulled/u)
+  assert.match(syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict_after_quarantine", conflicted: [], quarantinedPaths: ["_cache/stray-d/x"] }, root: "/d" }), /^sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in; nothing was pushed; resolve them before changing the desk \(1 stray untracked path had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
+  assert.match(syncSummary({ sync: { state: "unresolved", reason: "pull_rebase_failed_after_quarantine", cause: "conflict", quarantinedPaths: ["_cache/stray-d/x", "_cache/stray-d/y"] }, root: "/d" }), /^sync failed: the pull hit a conflict; nothing was pulled or pushed; local desk is as of unknown \(2 stray untracked paths had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
+})
+
+test("boot reports the sync summary for a failed sync, a timed-out one and one whose last-fetch lookup throws", async () => {
+  const root = await desk()
+  const failed = await boot(root, { syncFn: async () => ({ state: "unresolved", cause: "unreachable", reason: "pull_rebase_failed" }) })
+  assert.equal(failed.sync_summary, "sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of 2026-09-30T10:00:00.000Z")
+  const unknown = await boot(root, { syncFn: async () => ({ state: "unresolved", cause: "unreachable" }), lastSyncFn: () => { throw new Error("no git") } })
+  assert.match(unknown.sync_summary, /local desk is as of unknown$/u)
+  const slow = await boot(root, { budgetMs: 1, syncFn: () => new Promise(() => {}) })
+  assert.match(slow.sync_summary, /did not finish within the boot's time budget/u)
+  const threw = await boot(root, { syncFn: async () => { throw new Error("boom") } })
+  assert.match(threw.sync_summary, /^sync failed: it did not run/u)
+})
+
+test("lastSyncedAt reads the recorded last success, never FETCH_HEAD, and is null without a usable record", () => {
+  const at = "2026-09-30T10:00:00.000Z"
+  const reads = (status) => lastSyncedAt({ root: "/d", env: {} }, { readStatus: () => status })
+  assert.equal(reads({ last_success_at: at }), at)
+  assert.equal(reads({ last_success_at: "not a time" }), null)
+  assert.equal(reads({ last_success_at: 5 }), null)
+  assert.equal(reads({ last_pull: { state: "unresolved" } }), null)
+  assert.equal(reads(null), null)
+  assert.equal(lastSyncedAt({ root: "/d", env: {} }, { readStatus: () => { throw new Error("bad json") } }), null)
+})
+
+test("a failed fetch that bumps FETCH_HEAD does not move the 'as of' time: only a real success does", async () => {
+  const root = await mkTempRoot("desk-lastsync-")
+  const state = await mkTempRoot("desk-lastsync-state-")
+  const env = { DESK: root, XDG_STATE_HOME: state, HOME: state }
+  execFileSync("git", ["init", "-q", root])
+  assert.equal(lastSyncedAt({ root, env }), null, "never synced")
+  recordPullOutcome({ root, env, result: { state: "synced" } })
+  const first = lastSyncedAt({ root, env })
+  assert.match(first, /^\d{4}-\d{2}-\d{2}T/u)
+  // The failed fetch touches FETCH_HEAD, as git does, and the pull is recorded as failed.
+  await fs.writeFile(path.join(root, ".git", "FETCH_HEAD"), "")
+  const later = new Date(Date.parse(first) + 3600_000)
+  await fs.utimes(path.join(root, ".git", "FETCH_HEAD"), later, later)
+  recordPullOutcome({ root, env, result: { state: "unresolved", cause: "unreachable", reason: "pull_rebase_failed" } })
+  assert.equal(lastSyncedAt({ root, env }), first, "FETCH_HEAD's newer mtime is not the sync time")
+  recordPullOutcome({ root, env, result: { state: "unresolved" } })
+  assert.equal(lastSyncedAt({ root, env }), first, "a failure with no reason or cause still keeps the last success")
+  recordPullOutcome({ root, env, result: { state: "synced", nothingToSync: "no_remote" } })
+  assert.equal(lastSyncedAt({ root, env }), first, "a desk with nothing to sync records no success")
+  recordPullOutcome({ root, env, result: { state: "quarantined", quarantinedPaths: [] } })
+  assert.ok(Date.parse(lastSyncedAt({ root, env })) >= Date.parse(first))
+})
+
+test("repoStates marks a clone with no remote at all as local-only, and nothing else", () => {
+  const card = { track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "r", local_path: "/clones/r", mode: "local" }] } }
+  const states = (remotes) => repoStates({
+    cards: [card], now: () => 0, deadline: 60000,
+    spawnGit: (cmd, args) => (args.includes("remote") ? remotes : args.includes("status") ? { status: 0, stdout: "## main\n" } : { status: 1, stdout: "" }),
+  }).states[0]
+  assert.equal(states({ status: 0, stdout: "\n" }).local_only, true)
+  assert.equal(states({ status: 0, stdout: "origin\n" }).local_only, undefined)
+  assert.equal(states({ status: 1, stdout: "" }).local_only, undefined)
+  assert.equal(states({ status: 0, stdout: null }).local_only, undefined)
+  assert.equal(states(undefined).local_only, undefined)
+})
+
+// ── Readable output ─────────────────────────────────────────────────────
+
+function sampleResult(extra = {}) {
+  return {
+    status: "degraded",
+    degraded: ["sync: unresolved (unreachable)"],
+    pending: ["repo state for r: boot_budget_exceeded"],
+    instructions: ["First thing.", "Second thing."],
+    root: { path: "/work/desk", source: "env" },
+    host: { hostname: "mac", user: "ari", agent: "claude" },
+    push_accounts: [
+      { track: "ops", slug: "flash-valves", repo: "valves", store: "acme/valves", result: "account_found", account: "ari", route: "direct" },
+      { track: "ops", slug: "other-task", repo: "valves", store: "acme/valves", result: "account_found", account: "ari", route: "direct" },
+      { desk: "crew", track: "t", slug: "s", repo: "forked", store: "acme/forked", result: "account_found", account: "me", route: "fork" },
+      { track: "ops", slug: "flash-valves", repo: "valves-again", store: "acme/valves", result: "account_found", account: "ari", route: "direct" },
+      { track: "ops", slug: "flash-valves", repo: "plain", store: "acme/plain", result: "account_found", account: "ari" },
+      { track: "ops", slug: "flash-valves", repo: "x", store: "acme/x", result: "no_account_can_deliver" },
+      { track: "ops", slug: "flash-valves", repo: "local", result: "not_a_github_repo" },
+      { track: "ops", slug: "flash-valves", repo: "slow", store: "acme/slow", result: "pending", reason: "boot_budget_exceeded" },
+      { track: "ops", slug: "flash-valves", repo: "odd", store: "acme/odd", result: "gh_failed" },
+    ],
+    sync_summary: "sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of unknown",
+    active_tasks: {
+      task_count: 2,
+      tracks: [
+        { track: "ops", tasks: [{ slug: "flash-valves", title: "Flash valves", status: "processing", updated: "2026-09-28T15:30:00Z", handle: "task-1", next_step: "Wire the relay, then run the suite." }, { slug: "same", title: "same", status: null, updated: null, handle: "task-2" }] },
+        { desk: "crew", track: "<redacted segment>", tasks: [{ slug: "<redacted segment>", title: null, status: "drafting", updated: null, handle: "task-3" }] },
+      ],
+    },
+    open_prs: [{ store: "acme/w", number: 4, title: "Fix it", draft: true, review: "REVIEW_REQUIRED", url: "https://github.com/acme/w/pull/4" }, { store: "acme/w", number: 5, title: "Plain", draft: false, review: null, url: "https://github.com/acme/w/pull/5" }],
+    repo_states: [
+      { track: "ops", slug: "flash-valves", repo: "valves", present: true, branch: "main", dirty: true, fetched: true },
+      { track: "ops", slug: "flash-valves", repo: "other", present: true, branch: null, dirty: false, fetched: false },
+      { track: "ops", slug: "flash-valves", repo: "solo", present: true, branch: "feature/x", dirty: false, fetched: false, local_only: true },
+      { desk: "crew", track: "t", slug: "s", repo: "gone", local_path: "~/code/gone", url: "https://example.com/g.git", present: false },
+      { track: "ops", slug: "flash-valves", repo: "gone2", local_path: "~/code/gone2", present: false },
+    ],
+    task: null,
+    agents_md: { path: "/work/desk/AGENTS.md", text: "Rule one.\n\n", truncated: false },
+    ...extra,
+  }
+}
+
+test("formatBootText leads with the status and the numbered instructions, then the data and the desk's AGENTS.md", () => {
+  const text = formatBootText(sampleResult())
+  const order = ["Desk boot: degraded", "- degraded: sync: unresolved (unreachable)", "- pending (not finished in time, carry it): repo state", "Desk: /work/desk (bound by env)", "Host: mac / ari / claude", "Instructions, in order:", "1. First thing.", "2. Second thing.", "sync failed: remote unreachable", "Active tasks (2):", "Open pull requests:", "Repos of open tasks:", "Push routes:", "## The desk's AGENTS.md (/work/desk/AGENTS.md)"]
+  let at = -1
+  for (const piece of order) {
+    const next = text.indexOf(piece)
+    assert.ok(next > at, `${piece} comes after the previous section`)
+    at = next
+  }
+  assert.match(text, /- ops\/flash-valves "Flash valves": processing, updated 2026-09-28\n  next: Wire the relay, then run the suite\.\n/u)
+  assert.match(text, /- acme\/valves: push as ari \(route direct\) \(ops\/flash-valves, ops\/other-task\)\n/u)
+  assert.match(text, /- acme\/plain: push as ari \(ops\/flash-valves\)\n/u)
+  assert.match(text, /- acme\/forked: push as me \(route fork\) \(crew\/t\/s\)\n/u)
+  assert.match(text, /- acme\/x: no signed-in account can push \(ops\/flash-valves\)\n/u)
+  assert.match(text, /- local: no GitHub remote, so no push route to check \(ops\/flash-valves\)\n/u)
+  assert.match(text, /- acme\/slow: not checked \(pending: boot_budget_exceeded\) \(ops\/flash-valves\)\n/u)
+  assert.match(text, /- acme\/odd: not checked \(gh_failed\) \(ops\/flash-valves\)\n/u)
+  assert.match(text, /- ops\/same: no status\n/u)
+  assert.match(text, /- crew\/<redacted segment>\/<redacted segment>: drafting \(handle task-3\)\n/u)
+  assert.match(text, /- acme\/w#4 Fix it \(draft\), REVIEW_REQUIRED: https:\/\/github\.com\/acme\/w\/pull\/4\n/u)
+  assert.match(text, /- acme\/w#5 Plain: /u)
+  assert.match(text, /- valves \(ops\/flash-valves\): branch main, uncommitted changes, fetched\n/u)
+  assert.match(text, /- other \(ops\/flash-valves\): branch unknown, clean, fetch failed\n/u)
+  assert.match(text, /- solo \(ops\/flash-valves\): branch feature\/x, clean, no remote configured\n/u)
+  assert.match(text, /- gone \(crew\/t\/s\): not at ~\/code\/gone; clone url https:\/\/example\.com\/g\.git\n/u)
+  assert.match(text, /- gone2 \(ops\/flash-valves\): not at ~\/code\/gone2\n/u)
+  assert.match(text, /\n## The desk's AGENTS\.md \(\/work\/desk\/AGENTS\.md\); its rules bind this session\n\nRule one\.\n$/u)
+  assert.doesNotMatch(text, /^-----$/mu, "no fence for the file's own text to collide with")
+  assert.doesNotMatch(text, /Cut at/u)
+})
+
+test("formatBootText marks a cut AGENTS.md with the path to the rest, and skips what it does not have", () => {
+  const cut = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "start\n-----\nmiddle", truncated: true, bytes: 30000, shownBytes: 20 } }))
+  assert.match(cut, /\[Cut after 20 of 30000 bytes \(limit 16 KB\): read the rest at \/work\/desk\/AGENTS\.md\]\n$/u)
+  assert.match(cut, /start\n-----\nmiddle\n\n\[Cut/u, "a rule line inside the file is just text")
+  const bare = formatBootText({ status: "ready" })
+  assert.equal(bare, "Desk boot: ready\n\nInstructions, in order:\n\nActive tasks: unavailable (see degraded)\n")
+  const empty = formatBootText({ status: "ready", active_tasks: { task_count: 0, tracks: [] }, root: { path: "/d" }, host: {} })
+  assert.match(empty, /Desk: \/d\n/u)
+  assert.match(empty, /Host: unknown \/ unknown \/ unknown\n/u)
+  assert.match(empty, /Active tasks \(0\):\n- none\n/u)
+})
+
+test("formatBootText shows the named task, an ambiguous name and a name that matches nothing", () => {
+  const resolved = formatBootText(sampleResult({ task: { status: "resolved", task: { track: "ops", slug: "flash-valves", status: "processing", card: "ops/flash-valves/task.md" } } }))
+  assert.match(resolved, /Named task: ops\/flash-valves \(processing\), card ops\/flash-valves\/task\.md\n/u)
+  const ambiguous = formatBootText(sampleResult({ task: { status: "ambiguous", candidates: [{ track: "a", slug: "x" }, { track: "b", slug: "y" }] } }))
+  assert.match(ambiguous, /Named task: ambiguous, matches a\/x, b\/y\n/u)
+  assert.match(formatBootText(sampleResult({ task: { status: "not_found" } })), /Named task: matches no open task\n/u)
+})
+
+test("runBootCli prints readable text by default and the one-line JSON with --json", async () => {
+  const root = await desk()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "Be brief.\n")
+  const run = async (argv) => {
+    let written = ""
+    const code = await runBootCli({ argv, env: { DESK: root }, io: { stdout: { write: (text) => { written += text } } }, bootFn: (options) => boot(root, options) })
+    assert.equal(code, 0)
+    return written
+  }
+  const text = await run([])
+  assert.match(text, /^Desk boot: ready\n/u)
+  assert.match(text, /Instructions, in order:\n1\. Use the absolute path /u)
+  assert.match(text, /Be brief\./u)
+  assert.throws(() => JSON.parse(text))
+  const json = JSON.parse(await run(["--json"]))
+  assert.equal(json.status, "ready")
+  assert.equal(json.agents_md.text, "Be brief.\n")
+  const failing = []
+  await runBootCli({ env: {}, io: { stdout: { write: (text) => failing.push(text) } }, bootFn: async () => { throw new Error("kaput") } })
+  assert.match(failing[0], /^Desk boot: degraded\n- degraded: boot: kaput\n/u)
+})
+
+test("the shipped script prints text by default and JSON with --json", async () => {
+  const script = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/session-boot.js", import.meta.url))
+  const home = await mkTempRoot("desk-boot-text-home-")
+  const env = { ...process.env, HOME: home, DESK: "", CLAUDE_PROJECT_DIR: "", DESK_ACTIVATION_CONFIG: "", CODEX_HOME: "", CLAUDE_PLUGIN_DATA: "" }
+  const text = execFileSync(process.execPath, [script], { encoding: "utf8", cwd: home, env })
+  assert.match(text, /^Desk boot: setup_required\n/u)
+  assert.match(text, /1\. No desk is bound on this host/u)
+  assert.equal(JSON.parse(execFileSync(process.execPath, [script, "--json"], { encoding: "utf8", cwd: home, env })).status, "setup_required")
+})
+
+// ── Review fixes ────────────────────────────────────────────────────────
+
+test("parseBootArgs: a flag after --task is never the task name", () => {
+  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false })
+})
+
+test("boot hands every card to the local-only recorder, and a recorder that throws never degrades the boot", async () => {
+  const root = await desk()
+  const seen = []
+  const ok = await boot(root, { localOnlyFn: async (args) => { seen.push(args) } })
+  assert.equal(ok.status, "ready")
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].deskRoot, root)
+  assert.equal(seen[0].cards.length, 1)
+  const threw = await boot(root, { localOnlyFn: async () => { throw new Error("denied") } })
+  assert.equal(threw.status, "ready")
+})
+
+test("active_tasks carries each task's next step on one line, capped and redacted, and null when the card has none", async () => {
+  const root = await mkTempRoot("desk-next-step-")
+  const card = (slug, body) => fs.mkdir(path.join(root, "ops", slug), { recursive: true }).then(() => fs.writeFile(path.join(root, "ops", slug, "task.md"), `---\ntitle: ${slug}\nstatus: processing\nupdated: '2026-01-02T00:00:00Z'\n---\n\n${body}`))
+  await card("with-step", "Intro.\n\n**Next step:** Wire the relay\nthen run the suite.\n\n- a list item\n")
+  await card("long-step", `**Next step:** ${"word ".repeat(80)}\n`)
+  await card("no-step", "Just a body.\n")
+  await card("empty-step", "**Next step:**\n\nMore.\n")
+  await card("secret-step", "**Next step:** use ghp_abcdefghijklmnopqrstuvwxyz0123456789 to push\n")
+  const tasks = Object.fromEntries(activeTasks(root).tracks[0].tasks.map((task) => [task.slug, task.next_step]))
+  assert.equal(tasks["with-step"], "Wire the relay then run the suite.")
+  assert.equal(tasks["long-step"].length, 200)
+  assert.ok(tasks["long-step"].endsWith("..."))
+  assert.equal(tasks["no-step"], null)
+  assert.equal(tasks["empty-step"], null)
+  assert.doesNotMatch(tasks["secret-step"], /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
+})

@@ -7,6 +7,15 @@
 //   - `pr`: a pull request URL whose repository is one of the task's repos (no network call: shape and repository only);
 //   - `commit`: a commit that resolves in one of the task's recorded local clones and is already contained in a
 //     remote-tracking branch of that clone (pushed), never a commit in the desk;
+//   - a commit in a clone that has no remote at all is finished work with nowhere to push it (round 9: a local-only repo
+//     otherwise left an agent inventing `non_code` evidence that pointed at the task card), so such a commit counts, but
+//     only under the rule that closed the five ways round 9's review found to fake that state (`local-only.js` holds the
+//     recording): the repo entry was already on the card before this call and carries `local_only: true`, which Desk
+//     itself recorded when `task_create` or boot first saw the clone with no remote and the entry had no `url`; the clone
+//     still has no remote and is not inside the desk or holding it; the commit is reachable from HEAD or a local branch;
+//     and its committer date is not before the card's `created`. A clone with any remote needs the commit pushed or a pull
+//     request. What remains possible: an agent can make a new commit in a repo that really is local-only, which is real
+//     work in the recorded repo and so acceptable;
 //   - `ci_run` and `non_code` are refused: a task with code repos is not a non-code task.
 // A card with no repos is unaffected here (`task.js` keeps its own per-kind shape checks for it).
 
@@ -15,6 +24,7 @@ import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { resolveLocalPath } from "../util/paths.js"
 import { normalizeRemote } from "../factory/binding.js"
+import { isLocalOnlyClone, repoKey } from "./local-only.js"
 
 const GIT_TIMEOUT_MS = 5000
 const SHA_PREFIX = /^[0-9a-f]{7,40}/iu
@@ -45,9 +55,9 @@ const OTHER_URL = {
 export function recordedRepos(value) {
   if (!Array.isArray(value)) return []
   return value.flatMap((entry) => {
-    if (typeof entry === "string") return entry.trim() === "" ? [] : [{ name: entry.trim(), localPath: "", mode: undefined }]
+    if (typeof entry === "string") return entry.trim() === "" ? [] : [{ name: entry.trim(), localPath: "", mode: undefined, url: false }]
     if (entry === null || typeof entry !== "object" || typeof entry.name !== "string" || entry.name.trim() === "") return []
-    return [{ name: entry.name.trim(), localPath: typeof entry.local_path === "string" ? entry.local_path.trim() : "", mode: entry.mode }]
+    return [{ name: entry.name.trim(), localPath: typeof entry.local_path === "string" ? entry.local_path.trim() : "", mode: entry.mode, url: typeof entry.url === "string" && entry.url.trim() !== "" }]
   })
 }
 
@@ -130,9 +140,10 @@ function codeRepoUsage(toolName, repos) {
   return (
     `This task's card names code repos (${describeRepos(repos)}), so it is finished by code in them. ` +
     `Pass \`evidence: { kind: "pr", ref: "<the pull request's URL>" }\` for a pull request in one of those repos, or ` +
-    `\`evidence: { kind: "commit", ref: "<sha>" }\` for a commit that exists in a recorded clone and is already pushed (a remote-tracking branch contains it). ` +
+    `\`evidence: { kind: "commit", ref: "<sha>" }\` for a commit that exists in a recorded clone and is already pushed (a remote-tracking branch contains it), ` +
+    `or, for a repo Desk recorded as local-only (\`local_only: true\` on its entry, set when the clone was first seen with no remote), a commit in that clone that is reachable from a branch and was made after the task was created. ` +
     `A commit in the desk itself does not count, and neither does a plan or notes file. If the work cannot be delivered yet (no way to open the pull request, no push access), ` +
-    `do not mark the task done: leave it \`blocked\` or \`collaborating\` and say what is missing.`
+    `do not mark the task done: leave it at \`validating\` and tell the operator the commit sha and what is missing (use \`blocked\` or \`collaborating\` only if the work itself is unfinished).`
   )
 }
 
@@ -144,7 +155,37 @@ function sameDirectory(a, b) {
   }
 }
 
-function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir }) {
+// The recorded entries whose clone Desk marked local-only: only entries that were on the card before this call (a repo
+// added in the done call earns nothing), with `local_only: true`, and no `url` anywhere (an entry that has a url never
+// qualifies, whichever list it is in).
+function exemptKeys(existingRepos, repos) {
+  const withUrl = new Set(repos.filter((repo) => repo.url).map((repo) => repoKey({ name: repo.name, local_path: repo.localPath })))
+  const keys = new Set()
+  for (const entry of Array.isArray(existingRepos) ? existingRepos : []) {
+    if (entry === null || typeof entry !== "object" || entry.local_only !== true) continue
+    const key = repoKey(entry)
+    if (!withUrl.has(key) && !(typeof entry.url === "string" && entry.url.trim() !== "")) keys.add(key)
+  }
+  return keys
+}
+
+const toMs = (value) => (value instanceof Date ? value.getTime() : Date.parse(String(value)))
+
+// Why a commit in a recorded local-only clone is still not accepted, or null when it is: the commit must be reachable
+// from HEAD or a local branch (not a dangling object), and made at or after the card's `created`.
+function localOnlyRefusal({ spawnGit, dir, sha, created }) {
+  const onBranch = git(spawnGit, dir, ["for-each-ref", "--contains", sha, "--count=1", "--format=%(refname)", "refs/heads"])
+  const onHead = git(spawnGit, dir, ["merge-base", "--is-ancestor", sha, "HEAD"])
+  if ((onBranch ?? "").trim() === "" && onHead === null) return `commit ${sha.slice(0, 7)} is not reachable from HEAD or any local branch`
+  const createdMs = toMs(created)
+  if (Number.isNaN(createdMs)) return "the card has no readable `created` time to compare the commit's date against"
+  const committed = Number.parseInt(git(spawnGit, dir, ["show", "-s", "--format=%ct", sha]) ?? "", 10) * 1000
+  if (!(committed >= Math.floor(createdMs / 1000) * 1000)) return `commit ${sha.slice(0, 7)} was made before the task was created, so it is not work done for this task`
+  return null
+}
+
+function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, existingRepos, created }) {
+  const exempt = exemptKeys(existingRepos, repos)
   const ref = evidence.ref.trim()
   const isUrl = ref.startsWith("https://")
   if (isUrl && !matchesRepos(urlRepo(ref, "commit"), repoIdentities(repos, { spawnGit, homeDir, deskRoot }))) {
@@ -159,9 +200,18 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
     )
   }
   let unpushed = null
+  let localOnlyWhy = null
   for (const { repo, dir } of clones) {
     if (sameDirectory(dir, deskRoot)) continue
     if (git(spawnGit, dir, ["cat-file", "-e", `${sha}^{commit}`]) === null) continue
+    // A clone Desk recorded as local-only has nowhere to push: a commit that is really its work is the delivered work.
+    if (exempt.has(repoKey({ name: repo.name, local_path: repo.localPath })) && isLocalOnlyClone(dir, { spawnGit, deskRoot })) {
+      const why = localOnlyRefusal({ spawnGit, dir, sha, created })
+      if (why === null) return
+      localOnlyWhy ??= `${repo.name} is recorded as local-only, but ${why}`
+    } else if (git(spawnGit, dir, ["remote"])?.trim() === "") {
+      localOnlyWhy ??= `${repo.name} has no remote, but it does not qualify as a local-only repo (Desk records that on the card when the task is created, or boot first sees the clone with no remote and the entry has no \`url\`, and the clone must be outside the desk)`
+    }
     const pushed = git(spawnGit, dir, ["for-each-ref", "--contains", sha, "--count=1", "--format=%(refname)", "refs/remotes"])
     if (pushed !== null && pushed.trim() !== "") return
     unpushed ??= repo
@@ -169,8 +219,10 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
   if (unpushed !== null) {
     throw new Error(
       `${toolName}: commit ${sha} exists in ${unpushed.name} (${unpushed.localPath}) but no remote-tracking branch contains it, so it is not pushed. ` +
+        (localOnlyWhy === null ? "" : `${localOnlyWhy}. `) +
         "If the commit was pushed or merged elsewhere (a squash-merged PR's commit reaches the default branch only after a fetch), run `git fetch` in that clone and repeat this call. " +
-        "Otherwise push the branch (`git push`, which also updates the remote-tracking branch), then repeat; or supply the pull request URL.",
+        "Otherwise push the branch (`git push`, which also updates the remote-tracking branch), then repeat; or open a pull request and supply its URL (`evidence: { kind: \"pr\", ref: \"<URL>\" }`); " +
+        `or leave the task at \`validating\` and tell the operator the commit sha ${sha.slice(0, 7)}, which is waiting to be pushed.`,
     )
   }
   throw new Error(
@@ -182,9 +234,10 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
 
 /**
  * Throws, naming exactly what to supply, unless `evidence` (already shape-checked by `task.js`) is acceptable for a
- * card that records `repos`. Does nothing when the card records none. `spawnGit` and `homeDir` are test seams.
+ * card that records `repos`. Does nothing when the card records none. `existingRepos` is the card's raw `repos` list before
+ * this call and `created` its creation time (both only for the local-only rule). `spawnGit` and `homeDir` are test seams.
  */
-export function assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit = spawnSync, homeDir = os.homedir() }) {
+export function assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit = spawnSync, homeDir = os.homedir(), existingRepos = [], created }) {
   if (repos.length === 0) return
   if (evidence.kind === "non_code" || evidence.kind === "ci_run") {
     throw new Error(`${toolName}: \`${evidence.kind}\` evidence cannot complete a task that names code repos. ${codeRepoUsage(toolName, repos)}`)
@@ -194,5 +247,5 @@ export function assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, sp
     if (!matchesRepos(urlRepo(evidence.ref.trim(), "pr"), identities)) throw new Error(repoRefusal(toolName, "pr", evidence.ref, repos))
     return
   }
-  checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
+  checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, existingRepos, created })
 }

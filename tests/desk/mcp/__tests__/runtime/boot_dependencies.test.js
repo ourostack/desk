@@ -171,7 +171,7 @@ test("session-boot.js run from a plugin folder with no node_modules still parses
 
   const home = await mkTempRoot("desk-boot-plugin-home-")
   const cacheDir = await mkTempRoot("desk-boot-plugin-cache-")
-  const stdout = execFileSync(process.execPath, [path.join(mcpRoot, "scripts", "session-boot.js")], {
+  const stdout = execFileSync(process.execPath, [path.join(mcpRoot, "scripts", "session-boot.js"), "--json"], {
     encoding: "utf8",
     cwd: desk,
     // NODE_PATH is cleared so nothing but the restored runtime pack can supply gray-matter (the coverage runner sets it).

@@ -1036,15 +1036,25 @@ contract("session-start asks the factory contribution question once, in plain wo
 contract("session-start still owns the factory consent question", () => {
   assert.match(text(sessionStart), /factory consent/u);
 });
-// Kaizen card 4: the desk's own interaction contract (its AGENTS.md) binds before the first question or action.
-contract("session-start reads the bound desk's AGENTS.md before the first question or action", () => {
+// Kaizen card 4, round 9: the desk's own interaction contract (its AGENTS.md) reaches the agent because boot prints it,
+// not because a step orders the agent to go and read it (agents skipped that step in 11 of 12 runs). The same goes for
+// the Desk MCP: boot names the exact ToolSearch call to load a deferred tool instead of ordering a `desk_status` check.
+contract("boot prints the bound desk's AGENTS.md, and no step orders a read of it or a desk_status check", () => {
   const body = text(sessionStart);
-  assert.match(body, /`instructions` already cover the desk's `AGENTS\.md`/u);
-  assert.doesNotMatch(body, /Its rules bind the whole session/u, "the boot instructions say it once");
+  assert.match(body, /It already includes the desk's `AGENTS\.md`/u);
+  assert.match(body, /prints plain text and always exits 0; add `--json` only when a tool needs to parse the result/u);
+  assert.doesNotMatch(body, /Confirm this session can call the Desk MCP/u);
   const source = text(bootSource);
-  assert.match(source, /before the first question or action on the desk/u);
-  assert.match(source, /its rules bind this session \(read it again if sync changed it\)/u);
-  assert.ok(source.indexOf("AGENTS.md") < source.indexOf("Use the absolute path ${root.path} for the desk"), "AGENTS.md is read before anything else is asked");
+  assert.doesNotMatch(source, /Read \$\{path\.join\(root\.path, "AGENTS\.md"\)\} now/u, "boot no longer orders a read of AGENTS.md");
+  assert.doesNotMatch(source, /Confirm this session can call the Desk MCP/u);
+  assert.match(source, /out\.push\(DEFERRED_TOOLS_HINT\)/u);
+  const text9 = text("plugins/desk/mcp/src/runtime/boot-text.js");
+  assert.match(text9, /AGENTS_MD_CAP_BYTES = 16 \* 1024/u);
+  assert.match(text9, /read the rest at/u);
+  const hint = text("plugins/desk/mcp/src/util/deferred-tools.js");
+  assert.match(hint, /If your host defers tools.*Claude Code: ToolSearch `select:mcp__plugin_desk_desk__task_update/su);
+  assert.match(hint, /mcp__plugin_desk_desk__task_update/u);
+  assert.match(text("plugins/desk/mcp/src/runtime/task-status-guard.js"), /DEFERRED_TOOLS_LOAD_HINT/u, "the guard's deny message carries the same hint");
 });
 // Kaizen card 5: archiving stages only the paths it moved, as git-hygiene's targeted staging requires.
 contract("archive-workflow stages only the paths it moved", () => {
