@@ -66,10 +66,10 @@ test("inspectionCommand puts Git behind the alarm wrapper, drops Perl's code and
 
 test("reapOnSignal delivers the signal again only when nobody else listens for it", () => {
   const raised = []
-  reapOnSignal("SIGTERM", { listenerCount: () => 1, raise: (name) => raised.push(name) })
+  reapOnSignal("SIGTERM", { listenerCount: () => 1, kill: (pid, name) => raised.push([pid === process.pid, name]) })
   assert.deepEqual(raised, [])
-  reapOnSignal("SIGTERM", { listenerCount: () => 0, raise: (name) => raised.push(name) })
-  assert.deepEqual(raised, ["SIGTERM"])
+  reapOnSignal("SIGTERM", { listenerCount: () => 0, kill: (pid, name) => raised.push([pid === process.pid, name]) })
+  assert.deepEqual(raised, [[true, "SIGTERM"]])
 })
 
 test("two concurrent reads share one set of handlers, and the handlers are gone once both finish", { skip: posixOnly }, async (t) => {

@@ -100,10 +100,10 @@ function reapLive() {
 }
 
 /** Kill every live inspection Git, then let the signal take its normal course. Our listener only cleans up: when no other listener handles the signal, deliver it again so the default action still ends the process. */
-export function reapOnSignal(sig, { listenerCount = (name) => process.listenerCount(name), raise = (name) => process.kill(process.pid, name) } = {}) {
+export function reapOnSignal(sig, { listenerCount = (name) => process.listenerCount(name), kill = process.kill } = {}) {
   reapLive()
   removeReaper()
-  if (listenerCount(sig) === 0) raise(sig)
+  if (listenerCount(sig) === 0) kill(process.pid, sig)
 }
 
 function installReaper() {
