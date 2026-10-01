@@ -704,7 +704,7 @@ test("validateLocalFactsBytes delegates to validateLocalFacts for valid JSON wit
 test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself) is frozen", () => {
   assert.ok(Object.isFrozen(ENUMS))
   const table = {
-    host: ["claude-code", "copilot-cli"],
+    host: ["claude-code", "copilot-cli", "codex-cli"],
     entrypoint: ["cli", "desktop", "sdk", "launcher", "unknown"],
     endReason: ["clear", "resume", "logout", "prompt_input_exit", "complete", "user_exit", "error", "other"],
     toolKind: ["read", "edit", "shell", "search", "web", "agent", "desk", "skill", "mcp", "plan", "other"],

@@ -7,7 +7,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Readable } from "node:stream"
 import { factoryStateRoot, listMarkers, requestFinalize, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { END, ID, SENTINEL, json, scratch, session } from "./_session_helpers.js"
+import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
 const require = createRequire(import.meta.url)
@@ -51,6 +51,74 @@ for (const event of ["SessionEnd", "Stop", "sessionEnd", "agentStop"]) {
     assert.equal((await listMarkers(ctx.env)).length, 1)
   }))
 }
+
+// Codex SessionEnd stdin: openai/codex 60947e2 codex-rs/hooks/src/schema.rs#L512-L523.
+async function codexRollout(ctx, { parent } = {}) {
+  const file = path.join(ctx.base, ".codex", "sessions", "2026", "09", "26", `rollout-2026-09-26T08-00-00-${ID}.jsonl`)
+  const payload = { id: ID, timestamp: START, cwd: ctx.desk, cli_version: "0.130.0", source: parent ? { subagent: { thread_spawn: { parent_thread_id: parent } } } : "cli", ...(parent ? { parent_thread_id: parent } : {}) }
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, `${JSON.stringify({ timestamp: START, type: "session_meta", payload })}\n${JSON.stringify({ timestamp: END, type: "event_msg", payload: { type: "user_message", message: SENTINEL } })}\n`)
+  return file
+}
+const codexPayload = (ctx, file, extra = {}) => ({ session_id: ID, transcript_path: file, cwd: ctx.desk, hook_event_name: "SessionEnd", reason: "other", ...extra })
+
+test("a Codex SessionEnd writes exactly one root marker, only records it, and never carries content", () => scratch(async (ctx) => {
+  const file = await codexRollout(ctx)
+  const payload = codexPayload(ctx, file, { last_assistant_message: SENTINEL })
+  const run = () => hook().runHook({ host: "codex", payload, env: ctx.env, launch: async () => assert.fail("the Codex hook must not derive or launch anything") })
+  assert.equal(await run(), "written")
+  assert.equal(await run(), "written")
+  const markers = await listMarkers(ctx.env)
+  assert.equal(markers.length, 1)
+  const [saved] = markers
+  assert.equal(saved.host, "codex-cli")
+  assert.equal(saved.session_id, ID)
+  assert.equal(saved.log_path, file)
+  assert.equal(saved.desk_root, ctx.desk)
+  assert.equal(saved.entrypoint, "unknown")
+  assert.deepEqual(saved.plugins, [])
+  assert.equal(saved.end_reason, "other")
+  assert.notEqual(saved.ended_at, null)
+  assert.equal(JSON.stringify(saved).includes(SENTINEL), false)
+  const root = await factoryStateRoot(ctx.env)
+  if (process.platform !== "win32") assert.equal((await fs.stat(path.join(root, "markers", `codex-cli-${ID}.json`))).mode & 0o777, 0o600)
+}))
+
+test("a Codex marker waits for consent: the sweep derives nothing and queues nothing without it, and queues once with it", () => scratch(async (ctx) => {
+  const file = await codexRollout(ctx)
+  await hook().runHook({ host: "codex", payload: codexPayload(ctx, file), env: ctx.env, launch: async () => {} })
+  const [marker] = await listMarkers(ctx.env)
+  const { deriveMarker } = await import("../../../../../plugins/desk/mcp/src/factory/derive-run.js")
+  assert.equal((await deriveMarker(ctx.env, marker, { quietMs: 0, requireStored: true })).result, "not_opted_in")
+  const root = await factoryStateRoot(ctx.env)
+  assert.equal(existsSync(path.join(root, "outbox")), false)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.equal((await deriveMarker(ctx.env, marker, { quietMs: 0, requireStored: true })).result, "written")
+  assert.equal(existsSync(path.join(root, "outbox", STORE.replace("/", "__"), `codex-cli-${ID}.json`)), true)
+}))
+
+test("a Codex child thread never writes a marker, whether the payload or the rollout names a parent", () => scratch(async (ctx) => {
+  const parent = "0199a1b0-aaaa-7000-8000-000000000001"
+  const root = await codexRollout(ctx)
+  const first = codexPayload(ctx, root, { parent_thread_id: parent })
+  const second = codexPayload(ctx, root, { source: { subagent: { thread_spawn: { parent_thread_id: parent } } } })
+  const child = await codexRollout(ctx, { parent })
+  for (const payload of [first, second, codexPayload(ctx, child)]) {
+    assert.equal(await hook().runHook({ host: "codex", payload, env: ctx.env, launch: async () => assert.fail("must not launch") }), "invalid")
+  }
+  assert.equal((await listMarkers(ctx.env)).length, 0)
+}))
+
+test("Codex payloads that are not a root SessionEnd with a rollout path never write", () => scratch(async (ctx) => {
+  const file = await codexRollout(ctx)
+  const good = codexPayload(ctx, file)
+  for (const payload of [{ ...good, hook_event_name: "Stop" }, { ...good, transcript_path: null }, { ...good, transcript_path: "relative.jsonl" }, { ...good, session_id: "../x" }, { ...good, cwd: "relative" }]) {
+    assert.equal(await hook().runHook({ host: "codex", payload, env: ctx.env, launch: async () => assert.fail("must not launch") }), "invalid")
+  }
+  assert.equal((await listMarkers(ctx.env)).length, 0)
+  // An unreadable rollout is not provably a child; the marker is still recorded and the sweep reports it missing.
+  assert.equal(await hook().runHook({ host: "codex", payload: { ...good, transcript_path: path.join(ctx.base, "missing.jsonl") }, env: ctx.env, launch: async () => {} }), "written")
+}))
 
 test("stdin is byte bounded, malformed input and stalled input finish silently", async () => {
   const { readInput } = hook()

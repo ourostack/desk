@@ -50,9 +50,26 @@ function copilotToolKind(name) {
   return "other"
 }
 
+// Codex tool names as the Codex source names them (see
+// tests/desk/mcp/__tests__/factory/fixtures/codex/FORMAT.md): `exec_command`
+// and `local_shell_call` run a shell command, `apply_patch` edits files,
+// `spawn_agent` starts a child thread. An MCP tool is `mcp__<server>__<tool>`.
+const CODEX_SHELL = new Set(["exec_command", "local_shell_call"])
+const CODEX_DESK_MCP = /^mcp__.*desk.*__(task|track|friction|lesson|desk)_/u
+
+function codexToolKind(name) {
+  if (CODEX_SHELL.has(name)) return "shell"
+  if (name === "apply_patch") return "edit"
+  if (name === "spawn_agent") return "agent"
+  if (CODEX_DESK_MCP.test(name)) return "desk"
+  if (name.startsWith("mcp__")) return "mcp"
+  return "other"
+}
+
 const BY_HOST = {
   "claude-code": claudeToolKind,
   "copilot-cli": copilotToolKind,
+  "codex-cli": codexToolKind,
 }
 
 /**

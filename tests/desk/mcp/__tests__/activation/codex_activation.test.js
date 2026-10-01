@@ -338,6 +338,36 @@ test("Codex activation pins features.memories = false and registers host-enforce
   assert.equal(materializeCodexActivation(activationInput("manual-only")).generatedConfig, loadFixture("manual-only", "generated-config.toml"))
 })
 
+test("Codex activation registers factory-end.cjs codex on SessionEnd with a 3 second timeout, in every mode, and only once across applies", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  for (const mode of ["global-personal", "project-local", "manual-only"]) {
+    const { generatedConfig } = materializeCodexActivation(activationInput(mode))
+    assert.match(generatedConfig, /^\[\[hooks\.SessionEnd\]\]$/mu, `${mode}: SessionEnd group`)
+    assert.doesNotMatch(tableBody(generatedConfig, "[[hooks.SessionEnd]]"), /matcher/u, `${mode}: no matcher, so every end matches`)
+    const body = tableBody(generatedConfig, "[[hooks.SessionEnd.hooks]]")
+    assert.match(body, /^type = "command"$/mu)
+    assert.match(body, /^command = "node \\"plugins\/desk\/hooks\/factory-end\.cjs\\" codex"$/mu)
+    assert.match(body, /^timeout = 3$/mu)
+    assertNoDuplicateTableHeaders(generatedConfig)
+  }
+  const first = materializeCodexActivation(activationInput("global-personal"))
+  const second = materializeCodexActivation(activationInput("global-personal", { existingConfig: first.generatedConfig }))
+  assert.equal(second.generatedConfig, first.generatedConfig)
+  assert.equal((second.generatedConfig.match(/^\[\[hooks\.SessionEnd\]\]$/gmu) ?? []).length, 1)
+})
+
+test("Codex activation leaves the operator's own hooks.SessionEnd alone and still registers PreToolUse", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const own = `${existingConfig}
+[hooks]
+SessionEnd = [{ hooks = [{ type = "command", command = "echo custom" }] }]
+`
+  const result = materializeCodexActivation(activationInput("global-personal", { existingConfig: own }))
+  assert.doesNotMatch(result.generatedConfig, /\[\[hooks\.SessionEnd/u)
+  assert.doesNotMatch(result.generatedConfig, /factory-end\.cjs/u)
+  assert.match(result.generatedConfig, /^\[\[hooks\.PreToolUse\]\]$/mu)
+})
+
 test("Codex activation writes features/hooks as real table headers, never a bare dotted key that would inherit whatever table trails the operator's config", async () => {
   const { materializeCodexActivation } = await loadCodexAdapter()
   const trailingTableConfig = `${existingConfig}
@@ -468,9 +498,10 @@ test("Codex activation escapes the host-enforcement.cjs hook command for host pa
   const result = materializeCodexActivation(activationInput("global-personal", {
     pluginRoot: String.raw`C:\Users\Ari "Desk"\plugins\desk`,
   }))
-  // The escaped plugin root must appear once for the MCP args and once for the hook command, both through the same tomlString escaping.
-  assert.equal(countOccurrences(result.generatedConfig, String.raw`C:\\Users\\Ari \"Desk\"\\plugins\\desk`), 2)
+  // The escaped plugin root must appear once for the MCP args and once for each of the two hook commands, both through the same tomlString escaping.
+  assert.equal(countOccurrences(result.generatedConfig, String.raw`C:\\Users\\Ari \"Desk\"\\plugins\\desk`), 3)
   assert.ok(result.generatedConfig.includes(String.raw`hooks/host-enforcement.cjs\" codex`))
+  assert.ok(result.generatedConfig.includes(String.raw`hooks/factory-end.cjs\" codex`))
 })
 
 test("Codex activation injects the full Desk foundation once in automatic modes", async () => {
@@ -1096,8 +1127,10 @@ test("Codex activation deactivates generated artifacts through the ownership led
       now: "2026-06-14T19:00:00.000Z",
     }))
 
+    assert.match(readHostFile(root, ".codex/config.toml"), /hooks\.SessionEnd/u)
     const result = deactivateCodexActivation({ hostRoot: root, ledgerPath })
 
+    assert.doesNotMatch(readHostFile(root, ".codex/config.toml"), /SessionEnd|factory-end/u, "deactivation removes the SessionEnd registration")
     assert.equal(readHostFile(root, ".codex/config.toml"), existingConfig)
     assert.equal(readHostFile(root, "AGENTS.md"), existingInstructions)
     assert.deepEqual(

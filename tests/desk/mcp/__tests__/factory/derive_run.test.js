@@ -320,14 +320,14 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
 
 test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
-  assert.equal(BINDING_VERSION, 2)
+  assert.equal(BINDING_VERSION, 3)
   const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
   const name = `claude-code-${ID}.json`
   const receipt = (await readStatus(ctx.env)).derivations[name]
   assert.equal(receipt.binding_version, BINDING_VERSION)
-  for (const older of [undefined, 1]) {
+  for (const older of [undefined, 1, 2]) {
     const { binding_version, ...legacy } = receipt
     await writeStatus(ctx.env, { derivations: { [name]: older === undefined ? legacy : { ...legacy, binding_version: older } } })
     assert.equal((await deriveMarker(ctx.env, marker)).result, "written")

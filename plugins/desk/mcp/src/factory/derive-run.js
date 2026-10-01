@@ -4,6 +4,7 @@ import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { bindSession } from "./binding.js"
 import { deriveClaudeSession } from "./derive-claude.js"
+import { deriveCodexSession } from "./derive-codex.js"
 import { deriveCopilotSession } from "./derive-copilot.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
@@ -19,7 +20,7 @@ async function sourceStamp(file) {
 }
 
 /** Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. */
-export const BINDING_VERSION = 2
+export const BINDING_VERSION = 3
 
 const sameSource = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ino === b.ino && a.dev === b.dev
 
@@ -78,11 +79,11 @@ function isStaleDeriver(ownVersion, plugins, updatedAt, now) {
   return isVersion(own) && compareVersions(own, declared) < 0
 }
 
-export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = ownDeskVersion, now = Date.now } = {}) {
+export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = ownDeskVersion, now = Date.now } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
   try {
-    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, quietMs, requireQuiet, requireStored, root, ownVersion, now }), { deskRoot: marker.desk_root })
+    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now }), { deskRoot: marker.desk_root })
   } catch {
     return { result: "source_unreadable", store: null }
   }
@@ -100,7 +101,7 @@ async function newestMarker(env, root, marker, requireStored) {
   }
 }
 
-async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQuiet, requireStored, root, ownVersion, now }) {
+async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now }) {
   let store = null
   try {
     let marker = await newestMarker(env, root, input, requireStored)
@@ -132,6 +133,10 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
     let derived
     if (marker.host === "claude-code") {
       derived = await claude({ transcriptPath: marker.log_path, plugins: marker.plugins, endReason: marker.end_reason })
+    } else if (marker.host === "codex-cli") {
+      // A rollout lives at <codexHome>/sessions/YYYY/MM/DD/rollout-*.jsonl; when it does not, the deriver resolves the home itself.
+      const sessions = path.resolve(marker.log_path, "..", "..", "..", "..")
+      derived = await codex({ rolloutPath: marker.log_path, codexHome: path.basename(sessions) === "sessions" ? path.dirname(sessions) : undefined, plugins: marker.plugins, endReason: marker.end_reason })
     } else {
       const home = path.resolve(marker.log_path, "..", "..", "..")
       if (path.join(home, "session-state", marker.session_id, "events.jsonl") !== marker.log_path) return { result: "invalid", store }

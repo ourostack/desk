@@ -116,6 +116,17 @@ test("a session whose ID could never be published gets no brief", () => {
   assert.equal(brief({ localFacts: notV4 }), null)
 })
 
+test("a Codex session (v7 id) gets no brief and is skipped when evaluations are prepared", () => scratch(async (env) => {
+  const codex = local()
+  codex.session.id = "01927a3b-8c00-7abc-8def-0123456789ab"
+  codex.session.host = "codex-cli"
+  assert.equal(brief({ localFacts: codex }), null)
+  await seed(env, { marker: false })
+  await writeLocalFacts(env, STORE, codex)
+  await indexJob(env, JOB, `codex-cli-${codex.session.id}.json`)
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).briefs.length, 1, "only the seeded Claude session")
+}))
+
 test("the brief builder's caller contracts throw without naming a value", () => {
   const unbound = local()
   unbound.jobs = unbound.jobs.filter((job) => job.job !== JOB)

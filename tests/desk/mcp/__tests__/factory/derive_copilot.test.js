@@ -183,7 +183,7 @@ test("with neither a shutdown nor database rows, tokens are unavailable, not zer
     const { facts } = await derive(home, SESSIONS.noUsage)
     assertValid(facts)
     assert.deepEqual(facts.models, [])
-    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "unknown" }])
+    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "unknown", requested_model: "claude-opus-5-5" }])
     assert.deepEqual(facts.unavailable, [
       { field: "tokens", reason: "session_open" },
       { field: "commits", reason: "log_missing" },
@@ -261,9 +261,9 @@ test("subagents get the next agent numbers, their own tools, their model and the
   try {
     const { facts } = await derive(home, SESSIONS.full)
     assert.deepEqual(facts.agents, [
-      { n: 0, parent: null, model: "claude-opus-5-5" },
-      { n: 1, parent: 0, model: "claude-sonnet-5" },
-      { n: 2, parent: 1, model: "gpt-5.2" },
+      { n: 0, parent: null, model: "claude-opus-5-5", requested_model: "claude-opus-5-5" },
+      { n: 1, parent: 0, model: "claude-sonnet-5", agent_type: "explore", requested_model: "claude-sonnet-5" },
+      { n: 2, parent: 1, model: "gpt-5.2", agent_type: "my-private-agent", requested_model: "gpt-5.2" },
     ])
     assert.deepEqual(intervalsOf(facts, "subagent"), [
       { kind: "subagent", agent: 0, ...span(31, 40) },
@@ -382,7 +382,8 @@ test("an open session: open turn, orphan tool, failed subagent, truncated last l
     assert.equal(facts.session.ended_at, null)
     assert.equal(facts.session.end_reason, null)
     assert.equal(facts.session.derived_through, at(22))
-    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "claude-opus-5-5" }, { n: 1, parent: 0, model: "unknown" }])
+    // The subagent's name and model both fail their local patterns, so neither is stored.
+    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "claude-opus-5-5", requested_model: "claude-opus-5-5" }, { n: 1, parent: 0, model: "unknown" }])
     assert.deepEqual(intervalsOf(facts, "subagent"), [{ kind: "subagent", agent: 0, ...span(6, 8) }])
     assert.deepEqual(intervalsOf(facts, "turn"), [{ kind: "turn", agent: 0, ...span(2, 11) }])
     assert.deepEqual(intervalsOf(facts, "human_wait"), [{ kind: "human_wait", agent: 0, ...span(11, 20) }])
@@ -477,6 +478,30 @@ async function deriveText(events, { store = null, ...overrides } = {}) {
     rmSync(home, { recursive: true, force: true })
   }
 }
+
+test("a subagent's agentDisplayName and agentDescription never enter facts, and a second session.start does not replace the root's requested model", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([
+    ev("session.start", 0, { sessionId: EDGE, copilotVersion: "1.0.88", selectedModel: "first-model", context: {} }),
+    ev("session.start", 1, { sessionId: EDGE, copilotVersion: "1.0.88", selectedModel: "second-model", context: {} }),
+    ev("tool.execution_start", 2, { toolCallId: "t1", toolName: "task" }),
+    ev("subagent.started", 3, { toolCallId: "t1", agentName: "explore", agentDisplayName: "DisplayLeak", agentDescription: "DescriptionLeak", model: "gpt-5.2" }),
+    ev("subagent.completed", 4, { toolCallId: "t1" }),
+  ])
+  assert.equal(facts.agents[0].requested_model, "first-model")
+  assert.equal(facts.agents[1].agent_type, "explore")
+  assert.equal(JSON.stringify(facts).includes("DisplayLeak"), false)
+  assert.equal(JSON.stringify(facts).includes("DescriptionLeak"), false)
+})
+
+test("a root selectedModel that fails the model pattern is left out", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([
+    ev("session.start", 0, { sessionId: EDGE, copilotVersion: "1.0.88", selectedModel: "not a model!", context: {} }),
+    ev("user.message", 1, { content: "x" }),
+  ])
+  assert.equal(Object.hasOwn(facts.agents[0], "requested_model"), false)
+})
 
 test("a session id that is not a UUID is refused before any path is built", async () => {
   for (const sessionId of ["../../etc", 42, undefined]) {

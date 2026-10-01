@@ -393,12 +393,12 @@ test("validate-pr reads a labeled session's facts in the merge result when the p
   assert.deepEqual(calls, [
     `diff --name-status -z --no-renames ${shaA} ${MERGE_TREE}`,
     `show ${MERGE_TREE}:${LABEL_1111}`,
-    `ls-tree -z --name-only ${shaA} -- ${facts1111} facts/copilot-cli-11111111-1111-4111-8111-111111111111.json`,
+    `ls-tree -z --name-only ${shaA} -- ${facts1111} facts/copilot-cli-11111111-1111-4111-8111-111111111111.json facts/codex-cli-11111111-1111-4111-8111-111111111111.json`,
     `show ${shaA}:${facts1111}`,
     `show ${MERGE_TREE}:${facts2222}`,
     `show ${shaA}:${facts2222}`,
     `show ${MERGE_TREE}:${LABEL_2222}`,
-    `ls-tree -z --name-only ${shaA} -- facts/claude-code-22222222-2222-4222-8222-222222222222.json`,
+    `ls-tree -z --name-only ${shaA} -- facts/claude-code-22222222-2222-4222-8222-222222222222.json facts/codex-cli-22222222-2222-4222-8222-222222222222.json`,
     `show ${MERGE_TREE}:${facts2222}`,
   ])
 })
@@ -406,17 +406,18 @@ test("validate-pr reads a labeled session's facts in the merge result when the p
 test("validate-pr asks Git nothing about base facts when the pull request touches every facts path of a labeled session", async () => {
   const facts1111 = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
   const copilot1111 = "facts/copilot-cli-11111111-1111-4111-8111-111111111111.json"
+  const codex1111 = "facts/codex-cli-11111111-1111-4111-8111-111111111111.json"
   const bytes = { [facts1111]: readFileSync(path.join(FIXTURE_STORE, facts1111)), [LABEL_1111]: readFileSync(path.join(FIXTURE_STORE, LABEL_1111)) }
   const calls = []
   const result = await runValidatePrCommand({
     argv: ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
     git: mergeGit((gitArgs) => {
       calls.push(gitArgs[0])
-      if (gitArgs[0] === "diff") return `A\0${facts1111}\0D\0${copilot1111}\0A\0${LABEL_1111}\0`
+      if (gitArgs[0] === "diff") return `A\0${facts1111}\0D\0${copilot1111}\0D\0${codex1111}\0A\0${LABEL_1111}\0`
       return bytes[gitArgs[1].slice(41)]
     }),
   })
-  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: copilot1111 }] })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: copilot1111 }, { code: "removal", path: codex1111 }] })
   assert.deepEqual(calls, ["diff", "show", "show", "show"])
 })
 

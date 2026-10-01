@@ -57,6 +57,7 @@
 
 import {
   AGENT_SPEC,
+  agentFields,
   COUNTS_SPEC,
   ENUMS,
   LIMITS,
@@ -102,6 +103,24 @@ export const PUBLISHED_LIMITS = Object.freeze({
 })
 
 const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/1$/u
+
+const DATE_PARTS = /(\d{4})-(\d{2})-(\d{2})/u
+const TIME_PARTS = /(\d{2}):(\d{2})/u
+
+/**
+ * Removes the hyphens of every ISO date and the colons of every time of day
+ * in an identifier, including one that an earlier removal uncovers
+ * (`x-2024-08-06-01-02`, `m:08:30:00`).
+ */
+export function scrub(id) {
+  let text = id
+  // Each pass removes at least one character, so this ends.
+  while (DATE_SHAPE.test(text) || TIME_SHAPE.test(text)) text = text.replace(DATE_PARTS, "$1$2$3").replace(TIME_PARTS, "$1$2")
+  return text
+}
+
+/** Whether a free token passes the public rules `publicTokenField` applies beyond its pattern: no date, no time of day, not credential-like. Publishing asks this so it never emits a value the validator rejects. */
+export const publishableToken = (value) => !DATE_SHAPE.test(value) && !TIME_SHAPE.test(value) && !isCredentialLike(value)
 
 // A pattern-checked string that must also carry no date and no time of day.
 // Exported for `label-schema.js`, which applies the same public rules.
@@ -184,6 +203,9 @@ const AGENT = {
   ...AGENT_SPEC,
   model: modelIdField(),
 }
+
+// A requested model carries the same public rules as a resolved one.
+const publishedAgentFields = (value) => agentFields(value, AGENT, publicTokenField(PATTERNS.agentType), modelIdField())
 
 const PR = {
   ...PR_SPEC,
@@ -273,7 +295,7 @@ const TOP = {
   session: objectField(SESSION),
   plugins: arrayField(objectField(PLUGIN), LIMITS.plugins),
   models: arrayField(objectField(MODEL), LIMITS.models),
-  agents: arrayField(objectField(AGENT), LIMITS.agents),
+  agents: arrayField(objectField(publishedAgentFields), LIMITS.agents),
   intervals: arrayField(objectField(intervalFields, intervalOrderCheck), LIMITS.intervals),
   counts: objectField(COUNTS_SPEC),
   refs: objectField(REFS),

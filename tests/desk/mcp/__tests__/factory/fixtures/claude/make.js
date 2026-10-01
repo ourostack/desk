@@ -474,11 +474,11 @@ function buildFullSession() {
     sub1Envelope({ type: "assistant", message: { id: "sub1-msg-4", model: "claude-sonnet-5", usage: usage(1, 1, 0, 0), content: [textBlock(`done ${SENTINEL}`)] } }),
   ]
   const subagent1Meta = {
-    agentType: `general-purpose-${SENTINEL}`,
+    agentType: "Explore",
     description: `investigate something ${SENTINEL}`,
     toolUseId: "tool-agent-1",
     spawnDepth: 1,
-    model: "claude-sonnet-5",
+    model: "sonnet",
   }
 
   const sub2Next = makeClock("2026-09-25T08:00:37.500Z")
@@ -495,7 +495,7 @@ function buildFullSession() {
     }),
   ]
   const subagent2Meta = {
-    agentType: `general-purpose-${SENTINEL}`,
+    agentType: "general-purpose",
     description: `nested investigation ${SENTINEL}`,
     toolUseId: "tool-agent-2",
     spawnDepth: 2,
@@ -565,8 +565,9 @@ function buildFullSession() {
   // A meta.json that exists but whose `model` doesn't match the model-id
   // pattern: distinct from agent-a3's missing meta — falls back to
   // "unknown" for a different reason, and must still count.
+  // Its agentType fails the local pattern too, so neither new key is stored.
   const subagent4Meta = {
-    agentType: `general-purpose-${SENTINEL}`,
+    agentType: "not a valid type!",
     description: `bad model meta ${SENTINEL}`,
     toolUseId: "no-matching-tool-use",
     spawnDepth: 1,

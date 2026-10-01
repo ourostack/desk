@@ -80,6 +80,7 @@ import {
   writeLocalLabels,
 } from "./outbox.js"
 import { publishedClock } from "./publish.js"
+import { SESSION_ID_V4 } from "./published-schema.js"
 import { LIMITS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
 
 export const BRIEF_SCHEMA = "desk.factory.evaluator-brief/1"
@@ -111,8 +112,9 @@ export function buildEvaluatorBrief({ job, localFacts, logPath, outputPath, plug
   contract(typeof outputPath === "string" && path.isAbsolute(outputPath), "outputPath must be absolute")
   contract(typeof pluginVersion === "string" && DESK_VERSION.test(pluginVersion), "pluginVersion must be a Desk version")
 
-  const { clock, reason } = publishedClock(localFacts)
-  if (reason === "session_id_not_v4") return null
+  // Codex sessions carry a version-7 ID and are not labelled yet (parked for milestone 4); their published ID is keyed, which labels cannot carry.
+  if (!SESSION_ID_V4.test(localFacts.session.id)) return null
+  const { clock } = publishedClock(localFacts)
   const unavailable = []
   if (logPath === null) unavailable.push("session_log_missing")
   if (clock === null) unavailable.push("facts_missing")
@@ -202,7 +204,7 @@ async function sessionLog(env, root, name) {
 async function labelableFacts(env, store, name, job) {
   const localFacts = await readLocalFacts(env, store, name)
   if (localFacts === null || !localFacts.jobs.some((bound) => bound.job === job)) return null
-  return publishedClock(localFacts).reason === "session_id_not_v4" ? null : localFacts
+  return SESSION_ID_V4.test(localFacts.session.id) ? localFacts : null
 }
 
 // Whether the session of outbox file `name` has its labels held back because its facts are quarantined, even facts too broken to read.
