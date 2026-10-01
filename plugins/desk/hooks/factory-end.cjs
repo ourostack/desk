@@ -145,9 +145,17 @@ function copilotSources(copilotHome, readSmallText, PATTERNS, late, detailed = f
 const UNKNOWN_ORIGIN = Symbol("unknown origin");
 function agencySources(home, readSmallText, PATTERNS, late, detailed = false) {
   const cache = path.join(home, ".local", "agency", "plugins", "cache");
-  const entries = Object.entries(objectOf(parseSmall(readSmallText, path.join(cache, "cache_index.json"), MAX_INPUT)?.entries) ?? {});
   const answer = (outcome) => (detailed || typeof outcome === "string" ? outcome : null);
   const none = () => answer(CONFLICT);
+  // The install-source backfill (`detailed`) treats an index that is there but cannot be read, parsed or shaped as `{entries: {...}}` as a conflict, since it could name anything; only a missing index means Agency holds nothing.
+  let index;
+  try {
+    index = JSON.parse(readSmallText(path.join(cache, "cache_index.json"), MAX_INPUT));
+  } catch (error) {
+    if (detailed && error.code !== "ENOENT") return none;
+  }
+  if (detailed && index !== undefined && objectOf(objectOf(index)?.entries) === null) return none;
+  const entries = Object.entries(objectOf(objectOf(index)?.entries) ?? {});
   if (entries.length > MAX_SOURCE_ENTRIES) return none;
   const byName = new Map();
   for (const [spec, entry] of entries) {

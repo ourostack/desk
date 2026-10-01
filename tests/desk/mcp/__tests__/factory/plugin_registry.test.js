@@ -158,6 +158,25 @@ test("Copilot: a plain record with no GitHub marketplace blocks even when Agency
   assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null)
 }))
 
+test("Copilot: a corrupt, unreadable or wrongly shaped Agency index blocks a plain record, and a missing index does not", () => scratch(async (ctx) => {
+  await copilotRegistry(ctx, PLAIN_A, MARKETS_A)
+  const index = path.join(ctx.base, ".local", "agency", "plugins", "cache", "cache_index.json")
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk", "missing index")
+  await fs.mkdir(path.dirname(index), { recursive: true })
+  for (const body of ["{not json", "[]", "null", '{"entries": []}', '{"other": {}}', '{"entries": "x"}']) {
+    await fs.writeFile(index, body)
+    assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null, body)
+  }
+  await json(index, { entries: {} })
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk", "empty index")
+  await fs.chmod(index, 0)
+  try {
+    assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null, "unreadable")
+  } finally {
+    await fs.chmod(index, 0o600)
+  }
+}))
+
 test("the hook's own lookups still answer only a repository or null", () => scratch(async (ctx) => {
   const { PATTERNS } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
   const { readSmallText } = await import("../../../../../plugins/desk/mcp/src/factory/marker.js")
@@ -169,6 +188,8 @@ test("the hook's own lookups still answer only a repository or null", () => scra
   assert.equal(plain("desk", "9.9.9"), null)
   assert.equal(agency("desk", "3.2.0"), null)
   assert.equal(agency("other", "3.2.0"), null)
+  await fs.writeFile(path.join(ctx.base, ".local", "agency", "plugins", "cache", "cache_index.json"), "{not json")
+  assert.equal(hook.agencySources(ctx.base, readSmallText, PATTERNS, () => false)("desk", "3.2.0"), null)
 }))
 
 test("a symlinked plugin or version folder in the Claude Code cache does not count", () => scratch(async (ctx) => {
