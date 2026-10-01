@@ -11,6 +11,7 @@ import {
   bootCommand,
   copilotStartupDirection,
   deskStartupDirection,
+  promptBootDirection,
   resolveStartupRoot,
   startDirection,
 } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
@@ -53,11 +54,6 @@ test("the startup line names the bound root and where it came from", () => {
     assert.match(line, /The boot has not run yet: .* not a scan of the workspace\. Run `node \S*session-boot\.js` now, before other work/u)
     assert.match(line, /An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound/u)
   }
-  // The session folder agreeing with the bound root is the same single-root case.
-  assert.equal(
-    deskStartupDirection({ root: "/desks/one", source: "env:DESK" }, { sessionDesk: "/desks/one" }),
-    deskStartupDirection({ root: "/desks/one", source: "env:DESK" }),
-  )
 })
 
 test("the startup line routes to setup only when no desk is found", () => {
@@ -75,8 +71,6 @@ test("an unreadable root configuration is reported as unreadable, never as setup
   assert.match(line, /^Desk startup: Desk's root configuration could not be read \(desk-mcp: activation config \/x must be valid JSON\), so this hook cannot say which desk is bound\./u)
   assert.match(line, /desk_status reports the actual state/u)
   assert.doesNotMatch(line, /no desk is bound yet|setup mode|\$DESK is/u)
-  const inDesk = deskStartupDirection({ root: null, error: "bad" }, { sessionDesk: "/work/crew" })
-  assert.match(inDesk, /This session's folder \/work\/crew is a desk; an overlay that launches Desk in this folder binds it\./u)
 })
 
 test("a binding whose folder is missing is named as unusable, never as setup mode or another desk", () => {
@@ -105,18 +99,6 @@ test("a binding whose folder is missing is named as unusable, never as setup mod
   })
 })
 
-test("when the session folder is a desk the server will not bind, the line names both roots and never asserts one", () => {
-  const line = deskStartupDirection({ root: "/home/me/desk", source: "home_fallback" }, { sessionDesk: "/work/crew" })
-  assert.match(line, /^Desk startup: this session's folder \/work\/crew is a desk, but Desk without an overlay binds \/home\/me\/desk \(a home-folder fallback\); an overlay that launches Desk in this folder binds \/work\/crew instead\./u)
-  assert.match(line, /desk_status reports the root Desk actually bound, and it wins\./u)
-  assert.match(line, /The boot has not run yet: .* not a scan of the workspace\. Run `node \S*session-boot\.js` now, before other work/u)
-  assert.doesNotMatch(line, /\$DESK is/u)
-
-  const unbound = deskStartupDirection({ root: null }, { sessionDesk: "/work/crew" })
-  assert.match(unbound, /^Desk startup: this session's folder \/work\/crew is a desk, but Desk without an overlay has no desk bound and starts in setup mode; an overlay that launches Desk in this folder binds \/work\/crew instead\./u)
-  assert.match(unbound, /desk_status reports the root Desk actually bound, and it wins\./u)
-})
-
 test("resolveStartupRoot separates a missing desk from an unreadable configuration", () => {
   withSandbox(({ env, fallback, malformed }) => {
     assert.deepEqual(resolveStartupRoot({ env, homeDir: env.HOME }), { root: fallback, source: "home_fallback" })
@@ -128,16 +110,15 @@ test("resolveStartupRoot separates a missing desk from an unreadable configurati
   })
 })
 
-test("Copilot compares the session folder with the root the plain Desk server binds", () => {
+test("Copilot resolves the root with the session folder as the project folder, exactly as the server will", () => {
   withSandbox(({ env, fallback, solo, crew, codeRepo, malformed }) => {
     const copilot = (extra, sessionFolder) => copilotStartupDirection({ env: { ...env, ...extra }, sessionFolder, homeDir: env.HOME })
     // An ordinary folder: one root, the one the server binds.
     assert.equal(copilot({}, codeRepo), deskStartupDirection({ root: fallback, source: "home_fallback" }))
-    // A desk-shaped session folder that the server also binds: one root.
-    assert.equal(copilot({ DESK: crew }, crew), deskStartupDirection({ root: crew, source: "env:DESK" }))
-    // A desk-shaped session folder that the server does not bind: both roots, desk_status wins.
-    assert.equal(copilot({ DESK: solo }, crew), deskStartupDirection({ root: solo, source: "env:DESK" }, { sessionDesk: crew }))
-    assert.equal(copilot({}, crew), deskStartupDirection({ root: fallback, source: "home_fallback" }, { sessionDesk: crew }))
+    // A desk-shaped session folder is the root, as it is on Claude Code, whatever $DESK or the home fallback say.
+    assert.equal(copilot({ DESK: crew }, crew), deskStartupDirection({ root: crew, source: "host-project" }))
+    assert.equal(copilot({ DESK: solo }, crew), deskStartupDirection({ root: crew, source: "host-project" }))
+    assert.equal(copilot({}, crew), deskStartupDirection({ root: crew, source: "host-project" }))
     // An unreadable saved binding is reported as unreadable.
     assert.match(copilot({ DESK_ACTIVATION_CONFIG: malformed }, codeRepo), /root configuration could not be read/u)
     // No session folder at all behaves like an ordinary folder.
@@ -227,4 +208,13 @@ test("the startup line gives the boot command by absolute path, says the boot ha
   assert.match(DESK_SETUP_DIRECTION, /the boot has not run/u)
   assert.ok(DESK_SETUP_DIRECTION.includes(command))
   assert.doesNotMatch(line, /Desk boot pre-checks:/u, "a hook with no pre-check line never mentions one")
+})
+
+test("the per-prompt boot direction is short, gives the exact command, and holds even for a greeting", () => {
+  const line = promptBootDirection("node /x/session-boot.js")
+  assert.match(line, /^Desk boot: the boot has not run in this session\. Before you reply to this message, run `node \/x\/session-boot\.js`/u)
+  assert.match(line, /--task "<what the operator named>"/u)
+  assert.match(line, /even when this message is only a greeting/u)
+  assert.match(line, /A child agent with a bounded brief follows the brief instead and skips this/u)
+  assert.ok(promptBootDirection().includes(bootCommand()))
 })

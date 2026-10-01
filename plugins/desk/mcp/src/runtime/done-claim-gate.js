@@ -11,12 +11,13 @@
 //
 // It fails open everywhere: a missing transcript, an unreadable or malformed state file, an unreadable card, a parse error or a write error lets the turn end. A child agent's stop (SubagentStop, or a payload carrying an agent id) is never gated, and `stop_hook_active` (the hook already blocked this stop) ends the loop.
 //
-// Claude Code only today. Copilot has `agentStop` and Codex has a stop event, but Desk has not verified that either can block a reply or hands over the transcript, so there the rule stays the agent's to keep (see the hooks section of the plugin README and the task-lifecycle skill).
+// Claude Code and Copilot CLI. Copilot's `postToolUse`, `userPromptSubmitted` and `agentStop` hooks carry the same session id, and `agentStop` takes the same `{ decision: "block", reason }` (it makes Copilot continue with the reason as a follow-up message, and the next stop carries `stop_hook_active`); `runtime/copilot-hook-payload.js` maps the payloads, and `copilotStopHook` below reads the reply from the session transcript, which Copilot writes just after the hook starts. Codex has a stop event, but Desk has not verified that it can block a reply or hands over the transcript, and its hooks are not trusted by default, so there the rule stays the agent's to keep (see the hooks section of the plugin README and the task-lifecycle skill).
 
 import { createHash } from "node:crypto"
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
+import { claudeShapedPayload, copilotFinalReply } from "./copilot-hook-payload.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
@@ -339,6 +340,23 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
     const [task] = unstated
     const reportAs = typeof task.report_as === "string" && task.report_as !== "" ? ` (task_update returned report_as: ${JSON.stringify(task.report_as)})` : ""
     return { decision: "block", reason: `Your reply says the work is done, but task ${task.slug} is at ${task.status}. Restate the reply with the task's real status${reportAs}.` }
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Copilot's `agentStop`: the same decision as `doneClaimStopHook`, with the reply read from the session transcript (the payload does not carry it, and the file only holds it a moment after the hook starts).
+ * A session that touched no task is answered at once, without reading or waiting for anything. Returns `{}` on any error. `options` (`stateDir`, `waitMs`, `stepMs`, `sleep`) are for tests.
+ */
+export async function copilotStopHook(input, { env = process.env, stateDir = resolveDeskStateDir({ env }), ...reading } = {}) {
+  try {
+    const payload = claudeShapedPayload(input)
+    if (typeof payload.session_id !== "string" || payload.session_id === "") return {}
+    if (payload.stop_hook_active !== true && !existsSync(sessionFile(stateDir, payload.session_id))) return {}
+    const reply = payload.stop_hook_active === true ? null : await copilotFinalReply(payload.transcript_path, reading)
+    // The reply goes in `last_assistant_message`; the Claude transcript reader must not be pointed at Copilot's events.
+    return doneClaimStopHook({ ...payload, transcript_path: undefined, last_assistant_message: reply }, { env, stateDir })
   } catch {
     return {}
   }

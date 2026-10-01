@@ -3,10 +3,12 @@
 //
 // On Claude the server receives the project folder (CLAUDE_PROJECT_DIR), so
 // the hook and the server resolve the same root and the line names it. On
-// Copilot the plain Desk server gets no session folder; only an overlay
-// launcher that starts Desk with `--root` binds it. So when the session folder
-// is a desk that plain Desk would not bind, the line names both roots and says
-// desk_status reports the one actually bound.
+// Copilot the server receives no session folder, so the `sessionStart` hook
+// records it for the session (runtime/copilot-session.js) and the server reads
+// that record: the hook resolves with the session folder as the project folder,
+// exactly as the server will. Only an overlay launcher that starts Desk with
+// `--root` can bind a different root, which the closing sentence of the line
+// covers.
 
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -16,7 +18,6 @@ import {
   DESK_ROOT_UNAVAILABLE,
   HOME_FALLBACK,
   OVERLAY_HOME_FALLBACK,
-  isDeskWorkspace,
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
 } from "./paths.js"
@@ -44,6 +45,11 @@ export function startDirection(command = bootCommand()) {
 }
 const START = startDirection()
 
+// Copilot weighs sessionStart context lightly: on a bare greeting the model answered without booting (boot acceptance rounds F and G), while the same imperative delivered as `userPromptSubmitted` context, next to the message itself, was followed every time it was probed. So the first prompt of a recorded session carries this shorter line (see hooks/copilot-boot-prompt.cjs).
+export function promptBootDirection(command = bootCommand()) {
+  return `Desk boot: the boot has not run in this session. Before you reply to this message, run \`${command}\` (add \`--task "<what the operator named>"\` when this message names a task), even when this message is only a greeting, then do what its \`instructions\` say. A child agent with a bounded brief follows the brief instead and skips this.`
+}
+
 export const DESK_SETUP_DIRECTION =
   "Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, run the boot script (" + bootCommand() + ") for the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
 
@@ -69,34 +75,24 @@ export function resolveStartupRoot(options) {
   }
 }
 
-// `bound` is what the Desk server binds without an overlay; `sessionDesk` is
-// the session folder when it is itself a desk and only an overlay binds it.
+// `bound` is what the Desk server binds without an overlay.
 // The line reaches every session's context and transcript, so a path segment
 // that carries a secret's value is redacted; desk_status still reports the
 // real root to the agent that needs it.
-export function deskStartupDirection(bound, options) {
-  return redactCredentialLikeText(composeStartupDirection(bound, options))
+export function deskStartupDirection(bound) {
+  return redactCredentialLikeText(composeStartupDirection(bound))
 }
 
-function composeStartupDirection(bound, { sessionDesk = null } = {}) {
+function composeStartupDirection(bound) {
   const root = bound?.root ?? null
   if (bound?.error) {
-    const overlay = sessionDesk
-      ? ` This session's folder ${sessionDesk} is a desk; an overlay that launches Desk in this folder binds it.`
-      : ""
-    return `Desk startup: Desk's root configuration could not be read (${bound.error}), so this hook cannot say which desk is bound. desk_status reports the actual state.${overlay} ${START}`
+    return `Desk startup: Desk's root configuration could not be read (${bound.error}), so this hook cannot say which desk is bound. desk_status reports the actual state. ${START}`
   }
   if (bound?.unavailable) {
     const remedy = bound.unavailable.source === "env:DESK"
       ? "restore the desk there, or correct or unset DESK and reconnect the Desk MCP server"
       : "restore the desk there, or rebind with desk:first-run-bootstrap"
     return `Desk startup: Desk cannot use the desk it is bound to (${bound.unavailable.message}) desk_status reports root_unavailable with the fix (${remedy}), and Desk recovers in place once the folder exists. ${START}`
-  }
-  if (sessionDesk && sessionDesk !== root) {
-    const plain = root
-      ? `binds ${root} (${sourceLabel(bound.source)})`
-      : "has no desk bound and starts in setup mode"
-    return `Desk startup: this session's folder ${sessionDesk} is a desk, but Desk without an overlay ${plain}; an overlay that launches Desk in this folder binds ${sessionDesk} instead. desk_status reports the root Desk actually bound, and it wins. ${START}`
   }
   if (!root) return DESK_SETUP_DIRECTION
   return `Desk startup: $DESK is ${root} (${sourceLabel(bound.source)}). ${START} An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound, so use that root if the two differ.`
@@ -113,10 +109,13 @@ export function claudeStartupDirection({ env, homeDir }) {
   }))
 }
 
-// Copilot: resolve what the plain server binds (no project folder), then say
-// separately whether the session folder is a desk that only an overlay binds.
+// Copilot: the server takes the session folder the `sessionStart` hook recorded
+// as its project folder, so one resolution with it is the root the server binds.
 export function copilotStartupDirection({ env, sessionFolder, homeDir }) {
-  const bound = resolveStartupRoot({ activationConfigPath: resolveActivationConfigPath({ env }), env, homeDir })
-  const sessionDesk = isDeskWorkspace(sessionFolder) ? path.resolve(sessionFolder) : null
-  return deskStartupDirection(bound, { sessionDesk })
+  return deskStartupDirection(resolveStartupRoot({
+    activationConfigPath: resolveActivationConfigPath({ env }),
+    env,
+    homeDir,
+    hostProjectRoot: sessionFolder,
+  }))
 }

@@ -185,21 +185,19 @@ function compatibleCommand(script, ...args) {
 
 async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, inspectionBudgetMs }, expired, signal) {
   try {
-    const [{ resolveStartupRoot }, { resolveActivationConfigPath, isDeskWorkspace }] = await Promise.all([
+    const [{ resolveStartupRoot }, { resolveActivationConfigPath }] = await Promise.all([
       runtime("util/startup-direction.js"), runtime("util/paths.js"),
     ]);
+    // The server binds the same project folder: Claude's environment passes it, and Copilot's `sessionStart` hook records the session folder for the server.
     const bound = resolveStartupRoot({
       env, activationConfigPath: resolveActivationConfigPath({ env }),
-      hostProjectRoot: host === "claude" ? env.CLAUDE_PROJECT_DIR : undefined,
+      hostProjectRoot: { claude: env.CLAUDE_PROJECT_DIR, copilot: sessionFolder }[host],
     });
     if (bound.error) return "workspace-tidy deferred; binding configuration unreadable; resolve with desk_status.";
     const { inspectWorkspace, tidyLine, canonicalDeskRoot } = await runtime("runtime/workspace-tidy.js");
     // One identity for the bound desk, resolved once: a symlink alias and its
     // real path are the same desk for the inventory, the report and the lock.
     const root = bound.root ? await canonicalDeskRoot(bound.root) : null;
-    if (host === "copilot" && isDeskWorkspace(sessionFolder) && await canonicalDeskRoot(path.resolve(sessionFolder)) !== root) {
-      return "workspace-tidy deferred; binding is ambiguous; use desk_status root before requesting repair.";
-    }
     if (bound.unavailable) return "workspace-tidy skipped; the bound desk is unavailable; see desk_status.";
     if (!root) return "workspace-tidy skipped; no bound desk.";
     const inventory = await inspectWorkspace({ deskRoot: root, signal, budgetMs: inspectionBudgetMs });
@@ -297,7 +295,7 @@ async function boundRoot(ctx) {
         env: ctx.env,
         cwd: ctx.host === "copilot" ? ctx.sessionFolder ?? process.cwd() : ctx.env.CLAUDE_PROJECT_DIR || process.cwd(),
         homeDir: ctx.env.HOME || require("node:os").homedir(),
-        hostProjectRoot: ctx.env.CLAUDE_PROJECT_DIR,
+        hostProjectRoot: ctx.host === "copilot" ? ctx.sessionFolder : ctx.env.CLAUDE_PROJECT_DIR,
         readActivationConfig: (file) => readSmallText(file),
       }).root;
     } catch {

@@ -12,13 +12,12 @@ const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 // the agent can open from any repository. Computed, never read at startup.
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
 
-// Copilot passes the session's working folder as `cwd` in the hook input. Read
-// it briefly and fall back to the process folder, so startup never waits on a
-// host that leaves stdin open.
-function readSessionFolder() {
+// Copilot passes the session's working folder as `cwd` and the session id as `sessionId` in the hook input. Read
+// them briefly and fall back to the process folder, so startup never waits on a host that leaves stdin open.
+function readSessionInput() {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) {
-      resolve(process.cwd());
+      resolve({ folder: process.cwd() });
       return;
     }
     let input = "";
@@ -26,10 +25,10 @@ function readSessionFolder() {
       clearTimeout(timer);
       process.stdin.destroy();
       try {
-        const folder = JSON.parse(input).cwd;
-        resolve(typeof folder === "string" && folder.length > 0 ? folder : process.cwd());
+        const { cwd, sessionId } = JSON.parse(input);
+        resolve({ folder: typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd(), sessionId });
       } catch {
-        resolve(process.cwd());
+        resolve({ folder: process.cwd() });
       }
     };
     const timer = setTimeout(finish, 500);
@@ -40,14 +39,25 @@ function readSessionFolder() {
   });
 }
 
-// Let Desk's shared startup module compare the session folder with the root
-// the plain Desk server binds, so the line never names a root the server will
-// not use.
+// Copilot gives the Desk MCP server no session folder, so this hook records the one it was given, and the saved binding
+// it sees, in a file keyed by the session id; the server reads it whenever it resolves its root (see
+// mcp/src/runtime/copilot-session.js). It runs before the line below is composed, so the line and the server resolve alike.
+// Writing the record never throws (a session must start without it); only a Desk install that cannot load the module reaches the fallback line.
+async function recordSession({ folder, sessionId }) {
+  const { recordCopilotSession } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-session.js")).href);
+  const { resolveActivationConfigPath } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "paths.js")).href);
+  recordCopilotSession({ sessionId, folder: path.resolve(folder), activationConfig: resolveActivationConfigPath({ env: process.env }), env: process.env });
+}
+
+// Let Desk's shared startup module resolve the root the way the Desk server will, with the session folder as the
+// project folder, so the line never names a root the server will not use.
 async function startupDirection() {
   try {
     const modulePath = path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js");
     const { copilotStartupDirection } = await import(pathToFileURL(modulePath).href);
-    const sessionFolder = await readSessionFolder();
+    const session = await readSessionInput();
+    const sessionFolder = session.folder;
+    await recordSession(session);
     const direction = copilotStartupDirection({ env: process.env, sessionFolder });
     // The boot checks add one agent line only when one of them has something to say.
     const { runBootChecks, migrationLine } = require("./boot-checks.cjs");

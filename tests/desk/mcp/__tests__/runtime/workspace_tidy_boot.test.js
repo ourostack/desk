@@ -100,13 +100,16 @@ test("boot check queues a detached repair, returns without waiting, and records 
   assert.match(next, /ownership/)
 })
 
-test("ambiguous Copilot binding never launches cleanup against a guessed desk", async () => {
+test("a Copilot session folder that is a desk is the desk the check inspects, never another one $DESK names", async () => {
   const f = await fixture()
   const other = path.join(f.root, "other")
   await fs.mkdir(path.join(other, "_meta"), { recursive: true })
   await fs.mkdir(path.join(other, "_archive"))
-  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: other })
-  assert.match(line, /binding.*ambiguous/)
+  const launched = []
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: other, launch: async (...args) => { launched.push(args) } })
+  // The server binds the session folder too, so the check never speaks about, or repairs, the $DESK desk.
+  assert.doesNotMatch(line, /ambiguous/)
+  assert.deepEqual(launched.map(([root]) => root), [await fs.realpath(other)])
   assert.equal((await fs.readdir(path.join(f.desk, ".git"))).some((name) => name.startsWith("desk-workspace")), false)
 })
 
