@@ -95,7 +95,7 @@ test("a check with no index change adds no index-drift block, and the usual line
   const { runBootChecks } = require(BOOT)
   const { env } = fixture(t)
   const line = await runBootChecks({ ...quiet, env, checks: [{ id: "quiet-check", budgetMs: 50, run: async () => ({ line: "fine" }) }] })
-  assert.equal(line, "Desk boot: fine")
+  assert.equal(line, "Desk boot pre-checks: fine")
   assert.doesNotMatch(line, /Desk problem/)
 })
 
@@ -166,7 +166,7 @@ test("a git call that reports a timeout mid-snapshot never drops the check's lin
     spawnGit: timedOutSpawnGit,
     checks: [{ id: "quiet-check", budgetMs: 20, run: async () => ({ line: "fine" }) }],
   })
-  assert.equal(line, "Desk boot: fine")
+  assert.equal(line, "Desk boot pre-checks: fine")
 })
 
 test("a before-snapshot that fails skips the after-snapshot entirely — it never turns its own failure into a false-positive drift", async (t) => {
@@ -180,7 +180,7 @@ test("a before-snapshot that fails skips the after-snapshot entirely — it neve
   }
   const line = await runBootChecks({ ...quiet, env, spawnGit, checks: [{ id: "probe", budgetMs: 50, run: async () => ({ line: "fine" }) }] })
   assert.equal(diffCalls, 1, "only the before-snapshot is attempted; the after-snapshot is skipped")
-  assert.equal(line, "Desk boot: fine")
+  assert.equal(line, "Desk boot pre-checks: fine")
   assert.doesNotMatch(line, /Desk problem/)
 })
 
@@ -201,5 +201,5 @@ test("a snapshot slower than the check's own tiny budget never drops the check's
     spawnGit: slowSpawnGit,
     checks: [{ id: "quiet-check", budgetMs: 20, run: async () => ({ line: "fine" }) }],
   })
-  assert.equal(line, "Desk boot: fine")
+  assert.equal(line, "Desk boot pre-checks: fine")
 })

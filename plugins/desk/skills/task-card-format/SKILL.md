@@ -41,6 +41,7 @@ repos:
   - name: OrderService
     local_path: ~/code/OrderService     # tilde paths only — never absolute /Users/<alias>/...
     mode: local                         # local (cloned) | remote (read-only via API)
+    url: https://github.com/<org>/OrderService.git  # optional: where to clone it from; boot's missing-clone instruction runs `git clone <url> <local_path>`
   - name: OrderAdminPortal
     local_path: ""
     mode: remote
@@ -70,7 +71,7 @@ iterations:
 
 ## Required fields
 
-`title`, `status`, `created`, `updated`, `track`, `repos[]` (each with `name`, `local_path`, `mode`).
+`title`, `status`, `created`, `updated`, `track`, `repos[]` (each with `name`, `local_path`, `mode`, and optionally `url`, the clone URL boot uses when the local clone is missing).
 
 ## Schema versioning
 

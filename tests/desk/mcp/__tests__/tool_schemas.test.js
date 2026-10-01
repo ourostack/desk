@@ -71,7 +71,7 @@ test("every declared field has a type, so hosts need not guess an object's or a 
     }
   }
   const repos = TOOL_INPUT_SCHEMAS.task_create.properties.repos
-  assert.deepEqual(Object.keys(repos.items.properties), ["name", "local_path", "mode"])
+  assert.deepEqual(Object.keys(repos.items.properties), ["name", "local_path", "mode", "url"])
 })
 
 test("task_create declares the fields start-task sends", () => {

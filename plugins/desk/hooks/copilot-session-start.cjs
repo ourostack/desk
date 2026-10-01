@@ -9,6 +9,7 @@ const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
+const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
 
 // Copilot passes the session's working folder as `cwd` in the hook input. Read
@@ -57,7 +58,7 @@ async function startupDirection() {
     const migrations = await pending;
     return [direction, boot, migrations].filter(Boolean).join("\n\n");
   } catch {
-    return "Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.";
+    return `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node ${bootScript} now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.`;
   }
 }
 
@@ -82,6 +83,6 @@ function emit(additionalContext) {
     await startFactory();
     emit(output);
   } catch {
-    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Invoke desk:session-start before other work; it remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this.`);
+    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node ${bootScript} before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this.`);
   }
 })();

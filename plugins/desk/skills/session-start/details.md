@@ -93,7 +93,7 @@ if the runtime does not support walked-up workspace MCP discovery, this step is 
 
 ## Factory boot lines
 
-the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels and andon ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
+the session-start hook appends at most one `Desk boot pre-checks:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels and andon ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
 
 `<Desk plugin folder>` below is two levels above this skill's folder; run the commands from it.
 

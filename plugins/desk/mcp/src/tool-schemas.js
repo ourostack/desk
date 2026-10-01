@@ -46,11 +46,14 @@ const CARD_UPDATE = {
     description: "Fields to shallow-merge into the card's frontmatter, as a JSON object (not a string). `schema_version` and `created` are kept; `updated` is refreshed.",
   },
   body_append: text("Markdown to append to the card body, separated by a blank line."),
-  note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
-  next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
 }
 
 const REPOS_REMOVED_REASON = text("Required to remove every repo from a card that names code repos (a task whose work turned out not to touch them): one line on why, recorded on the card as `repos_removed` with each repo\'s name and the time. The same call may not set `status: done`; finish in a separate call. Not needed when the call sets `status: cancelled`.")
+
+const TASK_PROGRESS = {
+  note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
+  next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
+}
 
 const TASK_DONE_EVIDENCE = {
   type: "object",
@@ -94,6 +97,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
           name: text("The repository name."),
           local_path: text("Where it is cloned, as a tilde path; empty when it is not cloned."),
           mode: { type: "string", enum: ["local", "remote"], description: "local (cloned) or remote (read through the API)." },
+          url: text("Where to clone it from, when the clone is missing on a machine; optional."),
         },
         required: ["name"],
         additionalProperties: true,
@@ -113,7 +117,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_move: schema({
     ...TASK_TARGET,

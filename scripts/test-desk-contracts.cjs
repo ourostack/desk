@@ -1031,7 +1031,7 @@ contract("session-start asks the factory contribution question once, in plain wo
   assert.match(step, /account --store \$\{store\}/u);
   assert.match(step, /no_account_can_deliver/u);
   assert.doesNotMatch(step, /gh api user/u, "the active account is never assumed");
-  assert.match(text(sessionStart), /factory consent question[\s\S]+noninteractive session[\s\S]+do not ask and do not record anything/u);
+  assert.doesNotMatch(text(sessionStart), /noninteractive session/u, "the skill leaves the consent wording to the boot instructions");
 });
 contract("session-start still owns the factory consent question", () => {
   assert.match(text(sessionStart), /factory consent/u);
@@ -1039,8 +1039,8 @@ contract("session-start still owns the factory consent question", () => {
 // Kaizen card 4: the desk's own interaction contract (its AGENTS.md) binds before the first question or action.
 contract("session-start reads the bound desk's AGENTS.md before the first question or action", () => {
   const body = text(sessionStart);
-  assert.match(body, /Read the desk's `AGENTS\.md` \(in `root\.path`\) when the instructions say to\. Its rules bind the whole session/u);
-  assert.match(body, /reads the desk's `AGENTS\.md`/u);
+  assert.match(body, /`instructions` already cover the desk's `AGENTS\.md`/u);
+  assert.doesNotMatch(body, /Its rules bind the whole session/u, "the boot instructions say it once");
   const source = text(bootSource);
   assert.match(source, /before the first question or action on the desk/u);
   assert.match(source, /its rules bind this session \(read it again if sync changed it\)/u);
@@ -1165,9 +1165,9 @@ contract("the evaluation packet prose is not hard-wrapped", () => {
 // machine created can carry a secret's value in its name, and a git diffstat or a glob would put it in the transcript.
 contract("session start syncs the desk quietly and says why", () => {
   const skill = text(sessionStart);
-  assert.match(skill, /node <Desk plugin folder>\/mcp\/scripts\/session-boot\.js/u);
-  assert.match(skill, /never streaming git's own diffstat to this session's output, so a folder another machine created with a secret's value in its name can't land here before the `active_tasks` listing hides it/u);
-  assert.match(skill, /To see what changed, use that listing, never `git log --stat` or `git diff --stat` on the desk/u);
+  assert.match(skill, /node <absolute plugin folder>\/mcp\/scripts\/session-boot\.js/u);
+  assert.match(skill, /syncs without streaming git's diffstat, so a folder another machine created with a secret in its name cannot land here before the listing hides it/u);
+  assert.match(skill, /To see what changed, use the listing, never `git log --stat` or `git diff --stat` on the desk/u);
   for (const match of skill.matchAll(/git (?:-C \S+ )?(pull|fetch|log|diff|status|ls-files)\b[^\n`]*/gu)) {
     if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat|--autostash/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
   }
@@ -1178,7 +1178,7 @@ contract("session start and status list active tasks from desk_status, never a s
     assert.doesNotMatch(skill, /active-tasks\.js/u, `${file} still runs the listing script`);
     assert.match(skill, /`active_tasks`/u, `${file} does not read desk_status active_tasks`);
   }
-  assert.match(text(sessionStart), /do not fall back to globbing the desk/u);
+  assert.match(text(sessionStart), /never glob the desk instead/u);
   assert.match(text("plugins/desk/skills/session-start/details.md"), /`task_move` with `handle` and an outcome `to_slug`/u);
 });
 contract("the tidy renames a redacted folder by its handle, never by listing its parent", () => {
@@ -1198,6 +1198,24 @@ contract("a task with no plan routes to writing-plans or brainstorming, never to
   assert.match(rowFor("executing-plans") ?? "", /^\| An approved plan, and there is no subagent tool or the human chose inline/u);
   assert.match(skill, /never the entry for a task with no plan/u);
   assert.doesNotMatch(skill, /executing-plans[^.\n]*task-card-only work/u);
+});
+
+contract("resuming a named task continues its recorded next step, plans live in the task's own iteration folder, and the agent picks the execution method", () => {
+  const skill = text("plugins/desk/skills/using-superpowers-with-desk/SKILL.md");
+  assert.match(skill, /"Resume `<task>`" continues the card's recorded next step/u);
+  assert.match(skill, /one small, clear change[\s\S]*the step on the card is the plan[\s\S]*No plan document is written/u);
+  assert.match(skill, /<track>\/<task>\/<repo>\/<YYYY-MM-DD>-<slug>\/planning\.md/u);
+  assert.match(skill, /never into the desk root/u);
+  assert.match(skill, /Choose the execution method[^.]*yourself[^.]*not a question for the operator/u);
+  assert.match(skill, /`writing-plans` is a skill that writes a plan file\. It is not the host's Plan mode/u);
+});
+contract("every write to an existing task card goes through task_update, and the guard says which call to use", () => {
+  const lifecycle = text("plugins/desk/skills/task-lifecycle/SKILL.md");
+  assert.match(lifecycle, /Every write to an existing task card goes through `task_update`/u);
+  for (const field of ["note", "next_step", "frontmatter", "body_append"]) assert.match(lifecycle, new RegExp(`\`${field}\``, "u"));
+  const guard = text("plugins/desk/mcp/src/runtime/task-status-guard.js");
+  assert.match(guard, /Desk denies a direct edit of an existing task card/u);
+  assert.match(text("plugins/desk/skills/task-card-format/SKILL.md"), /url: https:\/\/github\.com\/<org>\/OrderService\.git/u);
 });
 
 assert.equal(

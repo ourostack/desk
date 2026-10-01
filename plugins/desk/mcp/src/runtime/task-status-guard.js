@@ -1,19 +1,19 @@
-// Desk's task-status guard: a Claude Code `PreToolUse` hook on
-// `Write`/`Edit`/`MultiEdit` that denies a direct edit changing a task
-// card's `status:` frontmatter line (any value, not only `done`), pointing
-// the agent at `task_update` instead. Body edits, other fields and brand
-// new cards (a Write to a path that does not exist yet) pass through; a new
-// card may still not be born `done`.
+// Desk's task-card guard: a Claude Code `PreToolUse` hook on `Write`/`Edit`/`MultiEdit` that denies any direct
+// edit of an EXISTING task card (`.../task.md`) and names the `task_update` call to use instead. Creating a card is
+// `task_create`'s job, but a brand new card path may still be written (and may not be born `done`).
 //
-// Round 5 widening (2026-09-30): an agent finished real work, then edited
-// task.md straight to `status: validating` with a hand-written "Completed
-// work" section and committed it, bypassing `task_update`. Every status move
-// belongs to `task_update` (valid transitions, `done` evidence, staging and
-// committing), so the guard now compares the card's `status:` before and
-// after the call instead of matching only `done`. It reads the card from
-// disk to apply an Edit/MultiEdit to it; when the card cannot be read or an
-// edit does not apply, it compares the status lines inside the edit's own
-// old and new strings.
+// Round A widening (2026-09-30), from the status-only guard it replaces: an agent resumed a task whose push route
+// was a fork, could not open the PR, then edited the card body to claim "Push routing confirmed ... scenario is
+// handled", committed, pushed and told the operator it was "completed" -- with no PR and no check. The earlier
+// guard only compared `status:`, so a body edit passed. Every write to a card now goes through `task_update`:
+// `frontmatter` (status, repos, iterations), `note` (a dated line under `## Progress log`), `next_step` (replaces
+// the recorded next step) and `body_append`. Desk's own code (the task tools, tidy, migrations, tests) writes cards
+// through the file system, which this hook never sees: it only inspects host tool calls.
+//
+// Round 5 history: an agent finished real work, then edited task.md straight to `status: validating` with a
+// hand-written "Completed work" section and committed it, bypassing `task_update` (valid transitions, `done`
+// evidence, staging and committing). The deny reason still spells out the exact status call when a status line
+// changes, and the `done` evidence shape when it becomes `done`.
 //
 // Why (the invented-completion finding, 2026-09-29): an acceptance run
 // under the `resume-named-task` scenario was told to resume a fixture
@@ -29,18 +29,12 @@
 // tool-call boundary, before the write lands, and tells the agent which
 // tool call does carry the evidence check.
 //
-// Scope, deliberately narrow (the lightest mechanism that works on Claude
-// Code first). This module only recognizes Claude Code's own `PreToolUse`
-// wire shape and its `Write`/`Edit`/`MultiEdit` tool-input shapes
-// (`file_path`, `content`, `old_string`, `new_string`, `replace_all`, and
-// MultiEdit's `edits: [{ old_string, new_string }, ...]` -- the same
-// `Write`/`Edit` fields `runtime/ask-gate.js` already reads for those two
-// tools, plus MultiEdit's array). It denies exactly the write that changes
-// the card's frontmatter `status:` -- for MultiEdit, the edits are applied
-// in order and the final text is compared; every other task-card edit -- a
-// body section, a different field, a non-`task.md` file -- passes through
-// untouched. Whether a `done` claim carries evidence is `task_update`'s own
-// question, not this hook's: it just refuses the direct-edit shortcut.
+// Scope. This module only recognizes Claude Code's own `PreToolUse` wire shape and its `Write`/`Edit`/`MultiEdit`
+// tool-input shapes (`file_path`, `content`, `old_string`, `new_string`, `replace_all`, and MultiEdit's
+// `edits: [{ old_string, new_string }, ...]` -- the same fields `runtime/ask-gate.js` already reads). It denies every
+// such call whose target is an existing `task.md`; a Write to a path with no card yet passes unless it would create a
+// card already `done`. It cannot see a shell command that writes the file (`sed -i`, a heredoc): that is the reach
+// of any tool-call hook, and the commit-time evidence check in `task_update` remains the real gate for `done`.
 //
 // What Copilot and Codex would need (not done here): their own
 // `PreToolUse` tool-name and tool-input field mapping, the way
@@ -151,24 +145,28 @@ function taskCoordinates(filePath) {
 
 function denyReason(filePath, change) {
   const { track, slug } = taskCoordinates(filePath)
+  const target = `{ track: "${track}", slug: "${slug}"`
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
-  const target = change.to === null ? "<new status>" : change.to
-  const evidence = change.to === "done"
-    ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them or a pushed commit from one of them) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
-    : ""
+  const statusPart = change === null
+    ? ""
+    : ` This edit changes the card's \`status:\` (${shown(change.from)} to ${shown(change.to)}): call \`task_update\` with ${target}, frontmatter: { status: "${change.to === null ? "<new status>" : change.to}" } }; it checks the transition.` +
+      (change.to === "done"
+        ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them or a pushed commit from one of them) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
+        : "")
   return (
-    `Desk denies a direct edit that changes a task card's \`status:\` (${shown(change.from)} to ${shown(change.to)}). ` +
-    `Call \`task_update\` instead with \`{ track: "${track}", slug: "${slug}", frontmatter: { status: "${target}" } }\`: ` +
-    "it checks the transition, stages and commits the write itself, and keeps the card's history honest." +
-    evidence +
-    " Editing the card's body or other fields directly is fine; only the status line belongs to `task_update`."
+    "Desk denies a direct edit of an existing task card: every write to a card goes through `task_update`, which commits it for you and keeps its history honest." +
+    statusPart +
+    ` To record progress: \`task_update\` with ${target}, note: "<one line of what actually happened>" } (a dated line under \`## Progress log\`). ` +
+    `To change what is next: ${target}, next_step: "<the next action>" }. ` +
+    `Other fields (repos, iterations, a repo's url): ${target}, frontmatter: { ... } }; more text: ${target}, body_append: "<markdown>" }. ` +
+    "A note is only a note: a task is finished by its pull request or check, and a card that says otherwise without one is not true."
   )
 }
 
 /**
  * `input` is the hook's JSON stdin (Claude Code's `PreToolUse` payload).
- * Returns Claude Code's `PreToolUse` deny shape when this call would change
- * a task card's `status:` (or create a card already `done`), or `{}` to let
+ * Returns Claude Code's `PreToolUse` deny shape when this call would edit an
+ * existing task card (or create one already `done`), or `{}` to let
  * the call through untouched. Only `host === "claude"` is recognized today
  * (see the module doc comment for what Copilot/Codex would need).
  */
@@ -188,7 +186,8 @@ export function taskStatusGuardHook(input, host, read = readCard) {
   if (!args || typeof args !== "object") return {}
   if (!isTaskCardPath(args.file_path)) return {}
   const change = statusChange(toolName, args, read)
-  if (change === null) return {}
+  // An existing card is never edited directly; a path with no card yet is `task_create`'s, so only a `done` birth is denied.
+  if (change === null && read(args.file_path) === null) return {}
 
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(args.file_path, change) } }
 }

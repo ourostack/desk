@@ -3,7 +3,7 @@
 // JSON. Startup hooks call this so they can never disagree with the server.
 // `--root-only` prints just the root (empty when none); `--startup-line` prints
 // the `Desk startup:` line the Claude hook appends; `--boot-checks` appends the
-// one `Desk boot:` line when a boot check has something to say and the one
+// one `Desk boot pre-checks:` line when a boot check has something to say and the one
 // `Desk migrations:` line when one of Desk's own migrations is pending, then
 // starts factory delivery detached. Always exits 0: a hook must not block session
 // start.

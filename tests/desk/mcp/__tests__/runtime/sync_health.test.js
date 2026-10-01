@@ -124,3 +124,12 @@ test("a failed sync is listed first when Desk is also not ready, and a healthy s
   assert.equal(compact.fix, "Fix it.")
   assert.equal(compactStatus({ ...ready, sync: { ...ready.sync, last_pull: { state: "synced" } } }).state, "ready")
 })
+
+test("desk_status reports no failed pull when nothing was recorded or the record is cleared", async () => {
+  const { root } = await mkDeskWithOrigin()
+  assert.equal(readSyncStatus({ root, env }), null)
+  assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false)
+  recordPullOutcome({ root, env, result: { state: "synced" } })
+  assert.equal(readSyncStatus({ root, env }).last_pull, null)
+  assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false)
+})

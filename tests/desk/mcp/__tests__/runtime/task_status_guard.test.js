@@ -163,7 +163,7 @@ test("denies a direct Edit of a real task card from processing to validating, an
     assert.match(reason, /task_update/u)
     assert.match(reason, /track: "greenhouse", slug: "watering-api", frontmatter: \{ status: "validating" \}/u)
     assert.doesNotMatch(reason, /evidence/u, "evidence is only asked for on a move to done")
-    assert.match(reason, /body or other fields directly is fine/u)
+    assert.match(reason, /note: "<one line of what actually happened>"/u)
   })
 })
 
@@ -221,7 +221,44 @@ test("denies a Claude Code MultiEdit whose edits array includes a status change,
   assertDenied(result)
 })
 
-test("allows a Claude Code MultiEdit to a task card whose edits never touch the status line", () => {
+test("denies every direct edit of a real task card, body edits included, and names the task_update call for each need", () => {
+  withCard(CARD, (file) => {
+    const claim = "Push routing confirmed; scenario is handled."
+    const calls = [
+      { toolName: "Edit", toolInput: { file_path: file, old_string: "Next: write the test.", new_string: claim } },
+      { toolName: "MultiEdit", toolInput: { file_path: file, edits: [{ old_string: "Next: write the test.", new_string: claim }] } },
+      { toolName: "Write", toolInput: { file_path: file, content: `${CARD}\n${claim}\n` } },
+      { toolName: "Edit", toolInput: { file_path: file, old_string: "not in the card", new_string: claim } },
+    ]
+    for (const call of calls) {
+      const reason = taskStatusGuardHook(writeInput(call), "claude").hookSpecificOutput.permissionDecisionReason
+      assert.match(reason, /Desk denies a direct edit of an existing task card/u)
+      assert.match(reason, /track: "greenhouse", slug: "watering-api", note: "/u)
+      assert.match(reason, /next_step: "/u)
+      assert.match(reason, /frontmatter: \{ \.\.\. \}/u)
+      assert.match(reason, /body_append: "/u)
+      assert.doesNotMatch(reason, /changes the card's `status:`/u)
+    }
+  })
+})
+
+test("a status change on a real card adds the status call to the same message", () => {
+  withCard(CARD, (file) => {
+    const reason = taskStatusGuardHook(
+      writeInput({ toolName: "Edit", toolInput: { file_path: file, old_string: "status: processing", new_string: "status: done" } }),
+      "claude",
+    ).hookSpecificOutput.permissionDecisionReason
+    assert.match(reason, /changes the card's `status:`/u)
+    assert.match(reason, /evidence: \{ kind, ref \}/u)
+  })
+})
+
+test("a path with no card yet is task_create's: a Write or an Edit there that leaves status alone passes", () => {
+  assertAllowed(taskStatusGuardHook(writeInput({ toolName: "Write", toolInput: { file_path: "/nowhere/track/new-task/task.md", content: "---\nstatus: drafting\n---\n" } }), "claude"))
+  assertAllowed(taskStatusGuardHook(writeInput({ toolName: "Edit", toolInput: { file_path: "/nowhere/track/new-task/task.md", old_string: "a", new_string: "b" } }), "claude"))
+})
+
+test("allows a Claude Code MultiEdit to a task card whose edits never touch the status line, when the card does not exist yet", () => {
   const result = taskStatusGuardHook(
     writeInput({
       toolName: "MultiEdit",
@@ -238,7 +275,7 @@ test("allows a Claude Code MultiEdit to a task card whose edits never touch the 
   assertAllowed(result)
 })
 
-test("allows a Write/Edit to a task card that touches a different field, leaving status alone", () => {
+test("allows a Write/Edit to a path with no card that touches a different field, leaving status alone", () => {
   const result = taskStatusGuardHook(
     writeInput({ toolName: "Edit", toolInput: { file_path: "/repo/track/my-task/task.md", old_string: "old next step", new_string: "new next step" } }),
     "claude",

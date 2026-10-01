@@ -474,7 +474,7 @@ test("Claude SessionStart injects the full Desk foundation once without scanning
   ]) {
     assert.equal(countOccurrences(startup, phrase), 1)
   }
-  assert.match(startup, /desk:session-start.*authoritative workspace scan/isu)
+  assert.match(startup, /The boot has not run yet:.*session-boot\.js/isu)
   assert.deepEqual(
     startup.split("\n").filter((line) => line.startsWith("Desk RFC:")),
     [`Desk RFC: ${path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md")}`],

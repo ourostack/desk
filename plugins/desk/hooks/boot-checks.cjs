@@ -16,7 +16,7 @@
 // exists the skip and its elapsed milliseconds are recorded in the protected
 // status.json (`boot_checks`). Repairs start detached with
 // ignored stdio after every check has run. The hook appends exactly one line,
-// `Desk boot: <line>; <line>`, addressed to the agent, and nothing at all when
+// `Desk boot pre-checks: <line>; <line>`, addressed to the agent, and nothing at all when
 // no check has a line, so its output is then byte-identical to the output it
 // built before the registry ran.
 //
@@ -434,7 +434,7 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
  * `launchRepair(command, env)`, `record(env, skipped)`, `launch` (the
  * workspace-tidy repair launcher), `loadRedaction`, `loadArgvSafeReason` and
  * `spawnGit` (the index-tracing Git seam; real callers never pass it).
- * Resolves `""` or one `Desk boot:` line; never rejects. The line names
+ * Resolves `""` or one `Desk boot pre-checks:` line; never rejects. The line names
  * worktree paths, branches and error messages, so each path segment or word
  * that carries a secret's value is redacted (mcp/src/util/redact.js); if the
  * redaction cannot load, the line is withheld rather than shown unredacted.
@@ -563,7 +563,7 @@ async function runBootChecks(options = {}) {
   if (lines.length === 0) return "";
   try {
     const { redactCredentialLikeText } = await loadRedaction();
-    return redactCredentialLikeText(`Desk boot: ${lines.join("; ")}`);
+    return redactCredentialLikeText(`Desk boot pre-checks: ${lines.join("; ")}`);
   } catch {
     return "";
   }

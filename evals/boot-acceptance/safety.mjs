@@ -226,7 +226,7 @@ export function writeGitConfig(homeDir) {
   const dead = "file:///nonexistent/boot-acceptance-github-push-blocked/"
   const prefixes = ["https://github.com/", "http://github.com/", "git://github.com/", "git@github.com:", "ssh://git@github.com/"]
   const body = [
-    "[user]", "\tname = Boot Acceptance Fixture", "\temail = fixture@boot-acceptance.local",
+    "[user]", "\tname = Desk Operator", "\temail = operator@example.com",
     "[commit]", "\tgpgsign = false",
     `[url "${dead}"]`, ...prefixes.map((p) => `\tpushInsteadOf = ${p}`),
   ].join("\n") + "\n"

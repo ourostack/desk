@@ -20,7 +20,7 @@
 // does. Everything else starts empty.
 
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, existsSync, rmSync, realpathSync, copyFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, rmSync, realpathSync, copyFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -42,9 +42,6 @@ export function sh(cmd, args, opts = {}) {
 
 const AGENTS_MD = `# Desk Instructions
 
-This is a synthetic fixture desk, generated for the boot-acceptance harness
-(track: desk-plugin/boot-in-one-call). It is not a real operator's desk.
-
 ## Binding
 
 - \`$DESK\` is this checkout.
@@ -59,7 +56,7 @@ This is a synthetic fixture desk, generated for the boot-acceptance harness
 
 - Keep task state current as work moves.
 - Commit and push after coherent desk state changes.
-- Never enter Plan mode.
+- Keep replies short: what you did, what is next.
 `
 
 const FRICTION_MD = `# Friction log
@@ -69,7 +66,7 @@ Status: open
 
 The greenhouse-irrigation sensor vendor's SDK talks to real hardware with no
 simulator, so local dev needs a physical rig. Worked around it for now by
-recording fixture readings and replaying them.
+recording sensor readings and replaying them.
 
 ---
 
@@ -89,8 +86,7 @@ status: active
 
 ## Context
 
-Synthetic test track for the boot-acceptance harness. Fictional greenhouse
-irrigation product.
+Automated irrigation for the greenhouse product line.
 
 ## Tasks
 
@@ -123,7 +119,7 @@ Implementing the \`/schedule\` endpoint's rain-delay logic on branch
 boundary case (exactly 30% soil moisture). Tests are green except
 \`test_rain_delay_boundary\`, which is still a stub.
 
-## Ruling (synthetic-operator, 2026-09-25)
+## Ruling (operator, 2026-09-25)
 
 Use the 30% soil-moisture threshold, not the sensor vendor's default of 25%.
 `
@@ -202,10 +198,7 @@ repos:
 
 ## Current work
 
-Preparing a relay-config change against \`anthropics/claude-code\` (this is a
-synthetic fixture task for the boot-acceptance harness's wrong-push-account
-scenario -- there is no real relay work here, and the repo is intentionally
-one the configured account cannot push to).
+Preparing a relay-config change against \`anthropics/claude-code\`.
 
 **Next step:** open the PR and confirm it can be pushed under the configured
 GitHub account.
@@ -274,11 +267,11 @@ export function materializeFixture(workDir) {
   writeFixtureFiles(deskRoot)
 
   sh("git", ["init", "-q", "-b", "main"], { cwd: deskRoot })
-  sh("git", ["-C", deskRoot, "config", "user.email", "fixture@boot-acceptance.local"])
-  sh("git", ["-C", deskRoot, "config", "user.name", "Boot Acceptance Fixture"])
+  sh("git", ["-C", deskRoot, "config", "user.email", "operator@example.com"])
+  sh("git", ["-C", deskRoot, "config", "user.name", "Desk Operator"])
   sh("git", ["-C", deskRoot, "config", "commit.gpgsign", "false"])
   sh("git", ["-C", deskRoot, "add", "-A"])
-  sh("git", ["-C", deskRoot, "commit", "-q", "-m", "Synthetic fixture desk for boot-acceptance harness"])
+  sh("git", ["-C", deskRoot, "commit", "-q", "-m", "Set up the desk"])
 
   mkdirSync(originDir, { recursive: true })
   sh("git", ["init", "-q", "--bare", "-b", "main", originDir])
@@ -297,8 +290,13 @@ export function addMissingCloneTask(deskRoot) {
   const dir = path.join(deskRoot, "greenhouse-ops", "valve-firmware-flasher")
   mkdirSync(dir, { recursive: true })
   writeFileSync(path.join(dir, "task.md"), TASK_VALVE_FIRMWARE)
+  // The track card lists every task, so a real desk's index names this one too.
+  const trackFile = path.join(deskRoot, "greenhouse-ops", "track.md")
+  const row = "| \`valve-firmware-flasher\` | processing | valve-firmware (local) | - | - |"
+  const track = readFileSync(trackFile, "utf8")
+  if (!track.includes("valve-firmware-flasher")) writeFileSync(trackFile, `${track.replace(/\n*$/u, "")}\n${row}\n`)
   sh("git", ["-C", deskRoot, "add", "-A"])
-  sh("git", ["-C", deskRoot, "commit", "-q", "-m", "Fixture: add valve-firmware-flasher task"])
+  sh("git", ["-C", deskRoot, "commit", "-q", "-m", "Add valve-firmware-flasher task"])
   sh("git", ["-C", deskRoot, "push", "-q", "origin", "main"])
 }
 
@@ -321,7 +319,7 @@ export function materializeGreenhouseClone(homeDir) {
   mkdirSync(path.join(repo, "src"), { recursive: true })
   mkdirSync(path.join(repo, "tests"), { recursive: true })
   writeFileSync(path.join(repo, ".gitignore"), "__pycache__/\n*.pyc\n")
-  writeFileSync(path.join(repo, "README.md"), "# greenhouse-irrigation\n\nSynthetic fixture repo for the boot-acceptance harness.\n")
+  writeFileSync(path.join(repo, "README.md"), "# greenhouse-irrigation\n\nIrrigation scheduling for the greenhouse.\n")
   writeFileSync(path.join(repo, "src", "rain_delay.py"), `SENSOR_DEFAULT_THRESHOLD = 25  # vendor default; the ruling is 30
 
 
@@ -337,8 +335,8 @@ def test_rain_delay_boundary():
     pass  # stub: exactly 30% soil moisture
 `)
   sh("git", ["init", "-q", "-b", "feature/rain-delay"], { cwd: repo })
-  sh("git", ["-C", repo, "config", "user.email", "fixture@boot-acceptance.local"])
-  sh("git", ["-C", repo, "config", "user.name", "Boot Acceptance Fixture"])
+  sh("git", ["-C", repo, "config", "user.email", "operator@example.com"])
+  sh("git", ["-C", repo, "config", "user.name", "Desk Operator"])
   sh("git", ["-C", repo, "config", "commit.gpgsign", "false"])
   sh("git", ["-C", repo, "add", "-A"])
   sh("git", ["-C", repo, "commit", "-q", "-m", "Stub the rain-delay policy and its boundary test"])
