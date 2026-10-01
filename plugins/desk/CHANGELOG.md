@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.158 — 2026-10-01
+
+The factory now records which harness ran each session with the same care as the model. Subagents record their agent type and the model that was requested, next to the model that actually answered, wherever the harness records them; the Claude Code root session records neither. Agent types that are not built into the harness, or that come from a private plugin, are published as `custom`, so a private agent name never leaves the machine.
+
+Codex CLI sessions are now derived and captured. The deriver reads Codex rollout files, including the threads a session spawned, and the Codex activation registers `factory-end.cjs codex` on the Codex `SessionEnd` hook with a 3 second timeout. A Codex session is captured when it ends cleanly, and it is derived and published at the next Claude Code or Copilot CLI session start. Codex capture is unproven: no real Codex session has run on our hosts yet, so the format comes from the openai/codex source and from fixtures, and Codex runs the hook only once it trusts it. A Codex session that crashes never fires `SessionEnd` and is not captured. Codex session ids carry their creation time, so they are published as a per-machine keyed id.
+
+Sessions whose local markers remain, about the last 30 days, are derived again once after this release (binding version 3), so they gain the new agent type and requested model fields.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.157 — 2026-10-01
 
 Follow-ups to the code-repo done evidence check. A `pr` or `commit` URL must now have exactly the host's own shape: `https://github.com/<owner>/<repo>/pull/<N>` (a sub-page, query or fragment may follow), an Azure DevOps `.../_git/<repo>/pullrequest/<N>` URL, or, for any other host, a host that one of the recorded clones has a remote on. A repo name smuggled into another URL's path, or on an unrelated host, no longer matches. A commit that does not resolve, or is not pushed, now tells the agent to run `git fetch` in the recorded clone first, because a squash-merged PR's commit reaches the default branch only after a fetch. A card whose `repos:` lists plain names (`repos: [widgets]`) counts as naming code repos. A relative `local_path` is resolved against the desk root, not the process's working directory, by one shared helper (`resolveLocalPath`) that boot's repo checks use too.
