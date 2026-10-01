@@ -24,7 +24,8 @@
 //   markers/<host>-<session_id>.json   pending-session bookkeeping
 //   outbox/<store-slug>/<host>-<session_id>.json   local facts, never as-is
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
-//   delivered-paths/<store-slug>.json  name -> the path it was delivered at
+//   delivered-paths/<store-slug>.json  name -> the { path, blob } it was delivered at
+//   retracting/<store-slug>.json       name -> { path, blob } of a file whose delete has been pushed
 //   quarantine/<store-slug>/<name>     { reason, at, blob? } (blob: the
 //                                      published blob sha the store refused),
 //                                      and for labels
@@ -709,8 +710,8 @@ export async function markDelivered(env, store, { name, publishedBlobSha, publis
 }
 
 /**
- * `readDelivered(env, store) -> { blobs, paths, quarantined }`: what this machine delivered to `store`. `blobs` maps each delivered name (a facts file
- * name or a labels key) to its published blob SHA, `paths` maps the names delivered by a Desk that recorded it to the published path, and `quarantined` is
+ * `readDelivered(env, store) -> { blobs, paths, retracting, quarantined }`: what this machine delivered to `store`. `blobs` maps each delivered name (a facts file
+ * name or a labels key) to its published blob SHA, `paths` maps the names delivered by a Desk that recorded it to the `{ path, blob }` it went to, `retracting` is the same for files whose delete was pushed, and `quarantined` is
  * the set of names with a quarantine record.
  */
 export async function readDelivered(env, store, { platform = process.platform } = {}) {
@@ -718,29 +719,72 @@ export async function readDelivered(env, store, { platform = process.platform } 
   const root = await factoryStateRoot(env, { platform })
   const blobs = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, platform)
   const paths = await readJsonFileSafe(path.join(root, "delivered-paths", `${slug}.json`), {}, platform)
+  const stored = await readJsonFileSafe(path.join(root, "retracting", `${slug}.json`), {}, platform)
+  const retracting = Object.fromEntries(Object.entries(stored).filter(([name, record]) => ownNames([name]).length === 1 && isPlainObject(record) && typeof record.path === "string" && SHA1.test(record.blob)))
   const dir = path.join(root, "quarantine", slug)
   const quarantined = new Set(await listRegularFiles(dir, OUTBOX_NAME_PATTERN))
   for (const job of await listDirSafe(path.join(dir, "labels"))) {
     for (const file of await listRegularFiles(path.join(dir, "labels", job), LABELS_NAME_PATTERN)) quarantined.add(`labels/${job}/${file}`)
   }
-  return { blobs, paths, quarantined }
+  return { blobs, paths, retracting, quarantined }
+}
+
+const retractingFile = (root, slug) => path.join(root, "retracting", `${slug}.json`)
+const removeNames = (names) => (current) => Object.fromEntries(Object.entries(current).filter(([name]) => !names.includes(name)))
+const ownNames = (names) => [...new Set(names)].filter((name) => typeof name === "string" && (OUTBOX_NAME_PATTERN.test(name) || LABELS_KEY_PATTERN.test(name)))
+
+/**
+ * `markRetracting(env, store, items)`: a session's delete has been pushed. Each `{ name, path, blob }` moves from delivered to retracting: the
+ * retracting record is written first and the delivered records are dropped second, so a crash between the two leaves both, which the next flush
+ * reads as retracting; the local files stay, so the session can publish again if it routes back.
+ */
+export async function markRetracting(env, store, items, { platform = process.platform, runner = undefined } = {}) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform, runner })
+  const own = items.filter((item) => ownNames([item.name]).length === 1)
+  if (own.length === 0) return
+  const added = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob }]))
+  await updateJsonLocked(root, retractingFile(root, slug), {}, (current) => ({ ...current, ...added }), { platform, env, runner })
+  const names = own.map((item) => item.name)
+  await updateJsonLocked(root, path.join(root, "delivered", `${slug}.json`), {}, removeNames(names), { platform, env, runner })
+  await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, removeNames(names), { platform, env, runner })
 }
 
 /**
- * `forgetDelivered(env, store, names)`: drops the delivered records of `names` (facts file names and labels keys) once their retraction is confirmed, and the
- * local outbox and labels files for `store` that produced them, so the next listing does not publish them again. A name of another shape is ignored.
+ * `dropRetracting(env, store, names, { removeLocal })`: ends the retracting state of `names`. With `removeLocal` the delete is done (the store no longer
+ * has the file) and the local outbox and labels files for `store` go too, so they are not published again; without it the session is simply
+ * undelivered again and its local files publish as new.
  */
-export async function forgetDelivered(env, store, names, { platform = process.platform, runner = undefined } = {}) {
+export async function dropRetracting(env, store, names, { removeLocal, platform = process.platform, runner = undefined }) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
-  const own = [...new Set(names)].filter((name) => typeof name === "string" && (OUTBOX_NAME_PATTERN.test(name) || LABELS_KEY_PATTERN.test(name)))
+  const own = ownNames(names)
   if (own.length === 0) return
-  const drop = (current) => Object.fromEntries(Object.entries(current).filter(([name]) => !own.includes(name)))
-  await updateJsonLocked(root, path.join(root, "delivered", `${slug}.json`), {}, drop, { platform, env, runner })
-  await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, drop, { platform, env, runner })
+  await updateJsonLocked(root, retractingFile(root, slug), {}, removeNames(own), { platform, env, runner })
+  if (!removeLocal) return
   for (const name of own) {
     await fsp.rm(OUTBOX_NAME_PATTERN.test(name) ? path.join(root, "outbox", slug, name) : path.join(root, "labels", slug, name.slice("labels/".length)), { force: true })
   }
+}
+
+/** `undeliver(env, store, names)`: drops the delivered records of `names`, which a crash left beside their retracting records; a retracting session is never also delivered. */
+export async function undeliver(env, store, names, { platform = process.platform, runner = undefined } = {}) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform, runner })
+  const own = ownNames(names)
+  await updateJsonLocked(root, path.join(root, "delivered", `${slug}.json`), {}, removeNames(own), { platform, env, runner })
+  await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, removeNames(own), { platform, env, runner })
+}
+
+/** `returnToDelivered(env, store, items)`: the store refused the delete, so the file is still there; `{ name, path, blob }` become delivered records again, then leave the retracting state. */
+export async function returnToDelivered(env, store, items, { platform = process.platform, runner = undefined } = {}) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform, runner })
+  const own = items.filter((item) => ownNames([item.name]).length === 1)
+  if (own.length === 0) return
+  await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, ...Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob }])) }), { platform, env, runner })
+  await updateJsonLocked(root, path.join(root, "delivered", `${slug}.json`), {}, (current) => ({ ...current, ...Object.fromEntries(own.map((item) => [item.name, item.blob])) }), { platform, env, runner })
+  await updateJsonLocked(root, retractingFile(root, slug), {}, removeNames(own.map((item) => item.name)), { platform, env, runner })
 }
 
 /**

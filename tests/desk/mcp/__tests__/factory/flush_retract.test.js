@@ -190,25 +190,32 @@ test("the PR names neither the other store nor a session, and its branch and com
   assert.equal(commit.message, "Factory intake")
 }))
 
-test("the delivered record is kept while the delete is open, retried by the next flush, and removed once it merges", () => scratch(async (ctx) => {
+const names = async (ctx, which = "blobs") => Object.keys((await readDelivered(ctx.env, STORE))[which]).sort()
+const retractingFile = async (ctx) => path.join(await factoryStateRoot(ctx.env), "retracting", "ourostack__factory.json")
+
+test("a pushed delete moves the session from delivered to retracting, is retried while open, and is done once the store no longer has the file", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 1, { labelled: [1] })
   const root = await factoryStateRoot(ctx.env)
+  const both = [`labels/${LABELS.job}/${sessionId(1)}.json`, nameOf(1)].sort()
   await reroute(desks[0], OTHER)
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
   const open = github.pulls.at(-1).number
-  const kept = async () => Object.keys((await readDelivered(ctx.env, STORE)).blobs).sort()
-  assert.deepEqual(await kept(), [`labels/${LABELS.job}/${sessionId(1)}.json`, nameOf(1)].sort())
-  // Still open: the next flush deletes again on the same PR and keeps the records.
+  assert.deepEqual(await names(ctx), [])
+  assert.deepEqual(await names(ctx, "paths"), [])
+  assert.deepEqual(await names(ctx, "retracting"), both)
+  // The local files stay, so the session can publish again if it routes back.
+  assert.equal((await fs.stat(path.join(root, "outbox", "ourostack__factory", nameOf(1)))).isFile(), true)
+  // Still open: the next flush deletes again on the same PR and keeps the state.
   assert.equal((await run(ctx.env, github)).pr.number, open)
   assert.equal(github.pullCount(), 2)
-  assert.deepEqual(await kept(), [`labels/${LABELS.job}/${sessionId(1)}.json`, nameOf(1)].sort())
+  assert.deepEqual(await names(ctx, "retracting"), both)
   github.mergeOpenPr()
+  // Merged and still routed elsewhere: done. The state and the local files go, and nothing more is pushed.
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
-  assert.deepEqual(await kept(), [])
-  assert.deepEqual((await readDelivered(ctx.env, STORE)).paths, {})
-  // The local files that produced the retracted ones go with the record, so they are not published again.
+  assert.deepEqual(await names(ctx, "retracting"), [])
   await assert.rejects(fs.stat(path.join(root, "outbox", "ourostack__factory", nameOf(1))))
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(github.pullCount(), 2)
   assert.deepEqual(dataFiles(github), [])
 }))
 
@@ -230,22 +237,102 @@ test("a session is never both published and deleted in one PR", () => scratch(as
   assert.deepEqual(head, [`facts/${nameOf(2)}`, `facts/${nameOf(3)}`])
 }))
 
-test("a session routed back to the store before its delete merges keeps its file: the delete PR is closed", () => scratch(async (ctx) => {
+test("delete pushed and merged, then the session routes back with no flush between: the file is republished", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1, { labelled: [1] })
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [])
+  await reroute(desks[0], STORE)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.equal(dataFiles(github).length, 2)
+  assert.deepEqual(await names(ctx, "retracting"), [])
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal((await names(ctx)).length, 2)
+}))
+
+test("delete pushed and still open, then the session routes back: the branch is rebuilt without the delete and main keeps the file", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 1)
   await reroute(desks[0], OTHER)
-  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  await run(ctx.env, github)
   const open = github.pulls.at(-1)
-  assert.equal(open.state, "open")
   await reroute(desks[0], STORE)
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.equal(open.state, "closed")
-  assert.equal(github.pulls.filter((pr) => pr.state === "open").length, 0)
-  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
-  // The branch no longer carries the delete, and a later flush has nothing to reconcile.
   assert.deepEqual([...github.headFiles(STORE, await branchOf(ctx.env)).keys()], [`facts/${nameOf(1)}`])
-  const calls = github.calls.length
+  assert.deepEqual(await names(ctx, "retracting"), [])
+  assert.deepEqual(await names(ctx), [nameOf(1)])
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("delete pushed, status.json lost, then the session routes back: the file is not lost", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  await fs.rm(path.join(await factoryStateRoot(ctx.env), "status.json"))
+  await reroute(desks[0], STORE)
+  await run(ctx.env, github)
+  while (github.pulls.some((pr) => pr.state === "open")) github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("delete pushed and merged, status.json lost, routed back: the file is republished", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  await fs.rm(path.join(await factoryStateRoot(ctx.env), "status.json"))
+  await reroute(desks[0], STORE)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("a crash between the delivered and retracting writes leaves a safe state, in either order", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  const root = await factoryStateRoot(ctx.env)
+  const blobs = JSON.parse(await fs.readFile(path.join(root, "delivered", "ourostack__factory.json"), "utf8"))
+  const paths = JSON.parse(await fs.readFile(path.join(root, "delivered-paths", "ourostack__factory.json"), "utf8"))
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  // Retracting written but delivered not yet dropped: the next flush reads retracting, finishes it, and no stale delivered record is left.
+  await fs.writeFile(path.join(root, "delivered", "ourostack__factory.json"), JSON.stringify(blobs))
+  await fs.writeFile(path.join(root, "delivered-paths", "ourostack__factory.json"), JSON.stringify(paths))
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
-  assert.ok(github.calls.length - calls <= 6)
+  assert.deepEqual(await names(ctx), [])
+  assert.deepEqual(await names(ctx, "retracting"), [])
+}))
+
+test("a delete the store refuses returns the session to delivered and is counted", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], OTHER)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.deepEqual(await names(ctx, "retracting"), [nameOf(1)])
+  github.rejectOpenPr("factory-rejected: removal")
+  const pr = github.pulls.at(-1)
+  github.addClosedPr({ comment: "factory-rejected: removal", fileNames: [nameOf(1)], headLabel: pr.head.label })
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.deepEqual(await names(ctx, "retracting"), [])
+  assert.deepEqual(await names(ctx), [nameOf(1)])
+  assert.equal((await readStatus(ctx.env)).last_flush[STORE].retractions_refused, 1)
+  const before = github.pullCount()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(github.pullCount(), before)
+}))
+
+test("a held session is not in the delete set: while retracting it keeps its record and nothing is pushed", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  await quarantine(ctx.env, STORE, nameOf(1), "invalid", { blob: "e".repeat(40) })
+  const before = github.pullCount()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(github.pullCount(), before)
+  assert.deepEqual(await names(ctx, "retracting"), [nameOf(1)])
+  assert.equal((await readStatus(ctx.env)).last_flush[STORE].held_elsewhere, 1)
 }))
 
 test("a route back with other deletes still pending rebuilds the branch without the delete it no longer needs", () => scratch(async (ctx) => {
@@ -343,4 +430,41 @@ test("junk and quarantined records are ignored; a store that deletes its branch 
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.equal((await readStatus(ctx.env)).last_flush[STORE].retractions_pushed, undefined)
   assert.deepEqual(dataFiles(github), [])
+}))
+
+test("the other crash order, delivered dropped and retracting never written, ends with a redundant republish and then the retraction", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  const root = await factoryStateRoot(ctx.env)
+  await fs.rm(path.join(root, "delivered"), { recursive: true })
+  await fs.rm(path.join(root, "delivered-paths"), { recursive: true })
+  await reroute(desks[0], OTHER)
+  // The file is on the store with the same blob: it is recorded as delivered again, and nothing is lost.
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.deepEqual(await names(ctx), [nameOf(1)])
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [])
+}))
+
+test("a session that routes back after its delete PR was closed unmerged, or its branch removed, is settled without a PR to close", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 2)
+  await reroute(desks[0], OTHER)
+  await reroute(desks[1], OTHER)
+  await run(ctx.env, github)
+  // Someone closes the PR without merging; session 1 routes back.
+  github.pulls.at(-1).state = "closed"
+  await reroute(desks[0], STORE)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+  // The store removes the branch; session 1 retracts again and routes back once more.
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.pulls.at(-1).state = "closed"
+  github.dropBranch(STORE, await branchOf(ctx.env))
+  await reroute(desks[0], STORE)
+  await run(ctx.env, github)
+  // Session 2's delete had merged with the first PR, so it is done; session 1 is delivered again.
+  assert.deepEqual(await names(ctx, "retracting"), [])
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`].filter(() => github.mainFiles().has(`facts/${nameOf(1)}`)))
 }))
