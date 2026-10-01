@@ -20,19 +20,40 @@ import { normalizeRemote } from "../factory/binding.js"
 const GIT_TIMEOUT_MS = 5000
 const SHA_PREFIX = /^[0-9a-f]{7,40}/iu
 const SHA_IN_URL = /\/commit\/([0-9a-f]{7,40})(?![0-9a-f])/iu
-const PULL_URL = /^https:\/\/([^/\s]+)\/(.+?)\/pull(?:request)?\/\d+/iu
-const COMMIT_URL = /^https:\/\/([^/\s]+)\/(.+?)\/commit\/[0-9a-f]{7,40}/iu
+// A URL's tail may carry a sub-page (`/files`), a query or a fragment, but nothing before the identifying segments.
+const TAIL = String.raw`(?:[/?#].*)?$`
+const GITHUB_URL = {
+  pr: new RegExp(String.raw`^https://(?:www\.)?github\.com/([^/\s?#]+)/([^/\s?#]+)/pull/\d+${TAIL}`, "iu"),
+  commit: new RegExp(String.raw`^https://(?:www\.)?github\.com/([^/\s?#]+)/([^/\s?#]+)/commit/[0-9a-f]{7,40}(?![0-9a-f])${TAIL}`, "iu"),
+}
+// Azure DevOps: `dev.azure.com/<org>/<project>/_git/<repo>/...` or `<org>.visualstudio.com/<project>/_git/<repo>/...` (the project may be omitted when it is named like the repo).
+const ADO_URL = {
+  pr: new RegExp(String.raw`^https://(?:dev\.azure\.com/[^/\s?#]+|[^/\s?#.]+\.visualstudio\.com)(?:/[^/\s?#]+)?/_git/([^/\s?#]+)/pullrequest/\d+${TAIL}`, "iu"),
+  commit: new RegExp(String.raw`^https://(?:dev\.azure\.com/[^/\s?#]+|[^/\s?#.]+\.visualstudio\.com)(?:/[^/\s?#]+)?/_git/([^/\s?#]+)/commit/[0-9a-f]{7,40}(?![0-9a-f])${TAIL}`, "iu"),
+}
+// Any other host (GitHub Enterprise and the like) is trusted only when a recorded clone has a remote on it.
+const OTHER_URL = {
+  pr: new RegExp(String.raw`^https://([^/\s?#]+)/(?:[^/\s?#]+/)*?([^/\s?#]+)/(?:pull|pullrequest)/\d+${TAIL}`, "iu"),
+  commit: new RegExp(String.raw`^https://([^/\s?#]+)/(?:[^/\s?#]+/)*?([^/\s?#]+)/commit/[0-9a-f]{7,40}(?![0-9a-f])${TAIL}`, "iu"),
+}
 
-/** The card's recorded repos as `{ name, localPath, mode }`, or `[]` when it names none (not a list, or no usable entry). */
+/**
+ * The card's recorded repos as `{ name, localPath, mode }`, or `[]` when it names none (not a list, or no usable entry).
+ * A bare string entry (`repos: [widgets]`) names a repo with no recorded clone, so it counts as a repo.
+ */
 export function recordedRepos(value) {
   if (!Array.isArray(value)) return []
-  return value
-    .filter((entry) => entry !== null && typeof entry === "object" && typeof entry.name === "string" && entry.name.trim() !== "")
-    .map((entry) => ({
-      name: entry.name.trim(),
-      localPath: typeof entry.local_path === "string" ? entry.local_path.trim() : "",
-      mode: entry.mode,
-    }))
+  return value.flatMap((entry) => {
+    if (typeof entry === "string") return entry.trim() === "" ? [] : [{ name: entry.trim(), localPath: "", mode: undefined }]
+    if (entry === null || typeof entry !== "object" || typeof entry.name !== "string" || entry.name.trim() === "") return []
+    return [{ name: entry.name.trim(), localPath: typeof entry.local_path === "string" ? entry.local_path.trim() : "", mode: entry.mode }]
+  })
+}
+
+// A clone's directory: `~` against the call's home, and a relative path against the desk root (never the process's
+// working directory, which differs from call to call).
+function clonePath(localPath, { homeDir, deskRoot }) {
+  return path.resolve(deskRoot, expandHome(localPath, homeDir))
 }
 
 function describeRepos(repos) {
@@ -50,19 +71,23 @@ function lastSegments(urlPath, count) {
 
 const isGithub = (host) => /^(www\.)?github\.com$/iu.test(host)
 
-// The repository a PR or commit URL points at: GitHub by `owner/repo`, any other host (Azure DevOps and the like) by
-// the bare repo name, which is the segment before `pullrequest` / `commit`.
-function urlRepo(ref, pattern) {
-  const match = pattern.exec(ref)
-  if (match === null) return { github: false, id: "" }
-  const [, host, repoPath] = match
-  return isGithub(host) ? { github: true, id: lastSegments(repoPath, 2) } : { github: false, id: lastSegments(repoPath, 1) }
+// The repository a PR or commit URL points at, by the host's own shape: GitHub `owner/repo`, Azure DevOps and any other
+// host by the bare repo name. A URL that does not have exactly that shape names no repo (`host: ""`).
+function urlRepo(ref, kind) {
+  let match = GITHUB_URL[kind].exec(ref)
+  if (match !== null) return { type: "github", id: `${match[1]}/${match[2]}`.toLowerCase() }
+  match = ADO_URL[kind].exec(ref)
+  if (match !== null) return { type: "ado", id: match[1].toLowerCase() }
+  match = OTHER_URL[kind].exec(ref)
+  if (match !== null && !isGithub(match[1])) return { type: "other", host: match[1].toLowerCase(), id: match[2].toLowerCase() }
+  return { type: "none", id: "" }
 }
 
 // Every name a repo can be recognised by: its recorded name, plus the remotes of its local clone (an `origin` that is a
 // fork and an `upstream` are both in the clone's config, so a PR opened from the fork route against the upstream, or on
 // the fork itself, both match).
-function repoIdentities(repos, { spawnGit, homeDir }) {
+function repoIdentities(repos, { spawnGit, homeDir, deskRoot }) {
+  const hosts = new Set()
   const github = new Set()
   const bare = new Set()
   const plainNames = new Set()
@@ -71,7 +96,7 @@ function repoIdentities(repos, { spawnGit, homeDir }) {
     else plainNames.add(repo.name.toLowerCase())
     bare.add(lastSegments(repo.name, 1))
     if (repo.localPath === "") continue
-    const listed = git(spawnGit, expandHome(repo.localPath, homeDir), ["config", "--get-regexp", "^remote\\..*\\.url$"])
+    const listed = git(spawnGit, clonePath(repo.localPath, { homeDir, deskRoot }), ["config", "--get-regexp", "^remote\\..*\\.url$"])
     for (const line of (listed ?? "").split("\n")) {
       const url = line.trim().split(/\s+/u)[1]
       if (url === undefined) continue
@@ -79,14 +104,20 @@ function repoIdentities(repos, { spawnGit, homeDir }) {
       const host = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)(\/.*|)$/u.exec(normalized)
       if (host === null) continue
       if (isGithub(host[1])) github.add(lastSegments(host[2], 2))
-      else bare.add(lastSegments(host[2], 1))
+      else {
+        bare.add(lastSegments(host[2], 1))
+        hosts.add(host[1].toLowerCase())
+      }
     }
   }
-  return { github, bare, plainNames }
+  return { github, bare, plainNames, hosts }
 }
 
 function matchesRepos(target, identities) {
-  return target.github ? identities.github.has(target.id) || identities.plainNames.has(target.id.split("/").at(-1)) : identities.bare.has(target.id)
+  if (target.type === "github") return identities.github.has(target.id) || identities.plainNames.has(target.id.split("/").at(-1))
+  if (target.type === "ado") return identities.bare.has(target.id)
+  if (target.type === "other") return identities.hosts.has(target.host) && identities.bare.has(target.id)
+  return false
 }
 
 function repoRefusal(toolName, kind, ref, repos) {
@@ -117,11 +148,11 @@ function sameDirectory(a, b) {
 function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir }) {
   const ref = evidence.ref.trim()
   const isUrl = ref.startsWith("https://")
-  if (isUrl && !matchesRepos(urlRepo(ref, COMMIT_URL), repoIdentities(repos, { spawnGit, homeDir }))) {
+  if (isUrl && !matchesRepos(urlRepo(ref, "commit"), repoIdentities(repos, { spawnGit, homeDir, deskRoot }))) {
     throw new Error(repoRefusal(toolName, "commit", evidence.ref, repos))
   }
   const sha = (isUrl ? SHA_IN_URL : SHA_PREFIX).exec(ref)[isUrl ? 1 : 0]
-  const clones = repos.filter((repo) => repo.localPath !== "").map((repo) => ({ repo, dir: expandHome(repo.localPath, homeDir) }))
+  const clones = repos.filter((repo) => repo.localPath !== "").map((repo) => ({ repo, dir: clonePath(repo.localPath, { homeDir, deskRoot }) }))
   if (clones.length === 0) {
     throw new Error(
       `${toolName}: commit evidence needs a local clone to check, and none of this task's repos (${describeRepos(repos)}) records one. ` +
@@ -139,11 +170,13 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
   if (unpushed !== null) {
     throw new Error(
       `${toolName}: commit ${sha} exists in ${unpushed.name} (${unpushed.localPath}) but no remote-tracking branch contains it, so it is not pushed. ` +
-        "Push the branch (`git push`, which also updates the remote-tracking branch), then repeat this call; or supply the pull request URL.",
+        "If the commit was pushed or merged elsewhere (a squash-merged PR's commit reaches the default branch only after a fetch), run `git fetch` in that clone and repeat this call. " +
+        "Otherwise push the branch (`git push`, which also updates the remote-tracking branch), then repeat; or supply the pull request URL.",
     )
   }
   throw new Error(
     `${toolName}: commit ${sha} does not resolve in any of this task's repo clones (${describeRepos(repos)}). ` +
+      "If the commit is on the remote (for example a squash-merged PR), run `git fetch` in the recorded clone first and repeat this call. " +
       "A commit made in the desk, or in a repo the card does not list, does not count. Supply a commit from one of those repos that is pushed, or the pull request URL.",
   )
 }
@@ -158,8 +191,8 @@ export function assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, sp
     throw new Error(`${toolName}: \`${evidence.kind}\` evidence cannot complete a task that names code repos. ${codeRepoUsage(toolName, repos)}`)
   }
   if (evidence.kind === "pr") {
-    const identities = repoIdentities(repos, { spawnGit, homeDir })
-    if (!matchesRepos(urlRepo(evidence.ref.trim(), PULL_URL), identities)) throw new Error(repoRefusal(toolName, "pr", evidence.ref, repos))
+    const identities = repoIdentities(repos, { spawnGit, homeDir, deskRoot })
+    if (!matchesRepos(urlRepo(evidence.ref.trim(), "pr"), identities)) throw new Error(repoRefusal(toolName, "pr", evidence.ref, repos))
     return
   }
   checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })

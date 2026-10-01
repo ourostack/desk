@@ -110,7 +110,7 @@ Each of those tools also schedules a debounced background push right after a suc
 cd <desk path> && git push origin main
 ```
 
-and is the right call when the push needs to have actually landed before doing something else — handing off to another machine or agent mid-session, say — rather than leaving it to the background worker's own timing. Either way, `desk_status`'s `sync` field reports whether the desk is caught up (`blocked: false`, with `ahead`/`behind` counts and the last recorded push time) or stuck (`blocked: true`, with `reason`/`paths`); it never makes a network call itself, so it reports state as of the last push attempt or fetch, not a live check.
+and is the right call when the push needs to have actually landed before doing something else — handing off to another machine or agent mid-session, say — rather than leaving it to the background worker's own timing. Either way, `desk_status`'s `sync` field (an object, returned only by `desk_status({ detail: true })`; the compact default answer omits it) reports whether the desk is caught up (`blocked: false`, with `ahead`/`behind` counts and the last recorded push time) or stuck (`blocked: true`, with `reason`/`paths`); it never makes a network call itself, so it reports state as of the last push attempt or fetch, not a live check.
 
 Auth and push convention is consumer-specific: corporate-worker overlays push under whatever enterprise-managed identity the org requires (the overlay's git-identity skill handles this); ouroboros agents push under whatever account their bundle's git remote is configured for; personal agents per their setup. This applies to the background worker's own pushes as much as a manual one — both use whatever credentials are already configured in the environment.
 

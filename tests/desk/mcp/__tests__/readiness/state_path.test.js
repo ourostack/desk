@@ -90,3 +90,20 @@ test("a controller whose state home sits under a symlinked ancestor journals a r
     await controller?.close()
   }
 })
+
+test("the directory holding the state directory must belong to the user or root and not be writable by group or others, unless sticky", async () => {
+  const root = await mkTempRoot("desk-state-path-perm-")
+  const stat = (over) => (file) => ({ ...fs.lstatSync(file), isDirectory: () => true, ...over })
+  const ioWith = (over) => ({ ...fs, lstatSync: (file) => (file === fs.realpathSync(root) ? stat(over)(file) : fs.lstatSync(file)) })
+  const target = path.join(root, "journal")
+  const ok = (over, platform = "linux", uid = 501) => resolveStateDirectory(target, ioWith(over), platform, uid)
+  assert.equal(ok({ uid: 501, mode: 0o40755 }), path.join(fs.realpathSync(root), "journal"))
+  assert.equal(ok({ uid: 0, mode: 0o40755 }), path.join(fs.realpathSync(root), "journal"))
+  assert.equal(ok({ uid: 501, mode: 0o41777 }), path.join(fs.realpathSync(root), "journal"))
+  assert.throws(() => ok({ uid: 501, mode: 0o40775 }), /unsafe state directory ancestry: .* must be owned by the current user or root and not writable by group or others/)
+  assert.throws(() => ok({ uid: 501, mode: 0o40757 }), /unsafe state directory ancestry/)
+  assert.throws(() => ok({ uid: 777, mode: 0o40755 }), /unsafe state directory ancestry/)
+  // Windows has no such modes, and a platform without uids is not checked either.
+  assert.equal(ok({ uid: 777, mode: 0o40777 }, "win32"), path.join(fs.realpathSync(root), "journal"))
+  assert.equal(resolveStateDirectory(target, ioWith({ uid: 777, mode: 0o40777 }), "linux", null), path.join(fs.realpathSync(root), "journal"))
+})

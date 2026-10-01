@@ -597,6 +597,15 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     merged.created = existing.data.created
   }
   merged.updated = nowIso()
+  // A card's code repos are what make `done` need code evidence, so one call cannot empty them and a second finish the
+  // task on `non_code`. Clearing every repo is allowed only when the same call cancels the task.
+  if (recordedRepos(existing.data.repos).length > 0 && recordedRepos(merged.repos).length === 0 && merged.status !== "cancelled") {
+    throw new Error(
+      "task_update: this call would remove every repo from a card that names code repos, which would let the task finish without code evidence. " +
+        "Keep at least one repo in `repos`; to drop them all, set `status: \"cancelled\"` in the same call (a cancelled task needs no evidence), " +
+        "or, if the repos were recorded wrongly, fix the entries instead of emptying the list.",
+    )
+  }
   if (merged.status === "done" && existing.data.status !== "done") {
     await assertDoneEvidence(evidence, deskRoot, "task_update", {
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.

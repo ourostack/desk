@@ -13,7 +13,7 @@ the minimum sentinel is `desk_status`. if the host exposes an active tool list, 
 when `desk_status` is callable:
 - call it once.
 - if it reports healthy/fresh state, include `Desk MCP: available` in the session-start status block.
-- if it reports degraded state (missing/stale DB, lexical index, vector coverage, runtime pack, snapshot, or embedding endpoint), include a concise `Desk MCP: degraded` line with the `desk_status` guidance. degraded is not the same as absent: the agent can still use MCP-backed CRUD/status and can repair via `desk_reindex`, runtime-pack verification, snapshot/vector-pack import, or embedding/Ollama checks.
+- if it reports degraded state, include a concise `Desk MCP: degraded` line with the `desk_status` guidance. the compact answer carries only `state` (`ready`, `degraded`, `admitting` or `setup_required`), why and what to do when not ready, and `search`; the per-part fields (missing/stale DB, lexical index, vector coverage, runtime pack, snapshot, embedding endpoint) are present only with `desk_status({ detail: true })`, so call it that way when you need to name the failing part. degraded is not the same as absent: the agent can still use MCP-backed CRUD/status and can repair via `desk_reindex`, runtime-pack verification, snapshot/vector-pack import, or embedding/Ollama checks.
 
 when `desk_status` or the Desk MCP namespace is absent:
 - do **not** silently continue in local-only mode.
