@@ -66,6 +66,7 @@ import * as path from "node:path"
 import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { isDeskWorkspace } from "../util/paths.js"
+import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
 
 const TASK_CARD_BASENAME = "task.md"
 
@@ -263,7 +264,7 @@ function denyReason(card, change) {
     ? ""
     : ` This edit changes the card's \`status:\` (${shown(change.from)} to ${shown(change.to)}): call \`task_update\` with ${target}, frontmatter: { status: "${change.to === null ? "<new status>" : change.to}" } }; it checks the transition.` +
       (change.to === "done"
-        ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them or a pushed commit from one of them) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
+        ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them, a pushed commit from one of them, or a commit in a clone that has no remote at all) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
         : "")
   return (
     "Desk denies a direct edit of an existing task card: every write to a card goes through `task_update`, which commits it for you and keeps its history honest." +
@@ -272,7 +273,8 @@ function denyReason(card, change) {
     `To change what is next: ${target}, next_step: "<the next action>" }. ` +
     `Other fields (repos, iterations, a repo's url): ${target}, frontmatter: { ... } }; more text: ${target}, body_append: "<markdown>" }. ` +
     "If the card's frontmatter is corrupted so that it no longer parses, a direct edit is allowed so it can be repaired; this card parses, so it is not that case." +
-    " A note is only a note: a task is finished by its pull request or check, and a card that says otherwise without one is not true."
+    " A note is only a note: a task is finished by its pull request or check, and a card that says otherwise without one is not true. " +
+    DEFERRED_TOOLS_LOAD_HINT
   )
 }
 

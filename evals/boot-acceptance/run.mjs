@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import * as process from "node:process"
 
-import { materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, freshTempDir, REAL_HOME } from "./lib.mjs"
+import { materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
 import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactTokens, writeGitConfig } from "./safety.mjs"
 
@@ -105,6 +105,7 @@ export function parseStreamJson(text) {
 
 export function buildContext(events) {
   const toolCalls = []
+  const callsById = new Map()
   const textParts = []
   const assistantTexts = []
   let finalResult = null
@@ -113,7 +114,17 @@ export function buildContext(events) {
     if (sessionId === null && typeof ev.session_id === "string") sessionId = ev.session_id
     if ((ev.type === "assistant" || ev.type === "user") && Array.isArray(ev.message?.content)) {
       for (const block of ev.message.content) {
-        if (block.type === "tool_use") toolCalls.push({ name: block.name, input: block.input })
+        if (block.type === "tool_use") {
+          const call = { name: block.name, input: block.input }
+          toolCalls.push(call)
+          if (typeof block.id === "string") callsById.set(block.id, call)
+        }
+        // A tool's answer is kept on its call (`result`, `isError`), so a check can tell a refused move from an accepted one.
+        if (block.type === "tool_result" && callsById.has(block.tool_use_id)) {
+          const call = callsById.get(block.tool_use_id)
+          call.result = Array.isArray(block.content) ? block.content.map((part) => part?.text ?? "").join("\n") : String(block.content ?? "")
+          call.isError = block.is_error === true
+        }
         if (block.type === "text" && typeof block.text === "string") {
           textParts.push(block.text)
           if (ev.type === "assistant") assistantTexts.push(block.text)
@@ -258,6 +269,8 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   const startedAt = Date.now()
   const { ctx, critique, critiqueSkipped, turns } = await runTurns({ claude: runClaude, prompt: scenario.prompt, critiquePrompt: CRITIQUE_PROMPT, flags, cwd: deskRoot, env, timeoutMs: args.timeoutMin * 60 * 1000 })
   ctx.deskRoot = deskRoot
+  // With the harness's own plugin copy, the source checkout's path must never appear in a tool call. A `--plugin-dir` run names its own folder, which is then the plugin under test, so there is no source to hide.
+  ctx.sourcePaths = args.pluginDir ? [] : sourcePaths(worktreeRoot)
   const wallMs = Date.now() - startedAt
   const [first] = turns
 

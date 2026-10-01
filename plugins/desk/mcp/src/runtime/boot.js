@@ -33,8 +33,9 @@
 // whole call.
 //
 // `bootOnce` returns `{ boot_complete: true, status, degraded, pending,
-// instructions, root, host, prereqs, sync, active_tasks, card_validation,
-// push_accounts, factory }`. `status` is one of "ready", "degraded" or
+// instructions, root, host, prereqs, sync, sync_summary, agents_md, active_tasks,
+// card_validation, push_accounts, factory }`. The CLI prints it as readable
+// text (`boot-text.js`) unless `--json` asks for this structure. `status` is one of "ready", "degraded" or
 // "setup_required" — never two words, and `degraded` always lists why.
 // `instructions` is the one list of next steps an agent acts on, each naming
 // the task, repo or file it is about (it used to be mirrored by an `actions`
@@ -46,7 +47,7 @@
 // it found is healthy.
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process"
-import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
+import { closeSync, openSync, readdirSync, readSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -73,6 +74,8 @@ import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
+import { formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "./boot-text.js"
+import { DEFERRED_TOOLS_HINT } from "../util/deferred-tools.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -630,12 +633,15 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
         continue
       }
       const lines = status.stdout.split("\n").filter((line) => line !== "")
+      // A clone with no remote at all has nowhere to push: its commits are the delivered work (`done-evidence.js`).
+      const remotes = spawnGit("git", ["-C", dir, "remote"], { encoding: "utf8", timeout: 5000 })
       states.push({
         ...label,
         present: true,
         branch: (lines[0] ?? "").replace(/^## (?:No commits yet on )?/u, "").split("...")[0] || null,
         dirty: lines.length > 1,
         fetched: Boolean(fetched) && fetched.status === 0,
+        ...(remotes?.status === 0 && typeof remotes.stdout === "string" && remotes.stdout.trim() === "" ? { local_only: true } : {}),
       })
     }
   }
@@ -727,6 +733,8 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     migrations: [],
     prereqs: null,
     sync: null,
+    sync_summary: null,
+    agents_md: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
     card_validation: [],
@@ -863,9 +871,6 @@ function buildInstructions(ctx) {
   for (const entry of migrationEntries) {
     out.push(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
   }
-  if (existsSync(path.join(root.path, "AGENTS.md"))) {
-    out.push(`Read ${path.join(root.path, "AGENTS.md")} now, before the first question or action on the desk: it is the desk's own interaction contract and its rules bind this session (read it again if sync changed it).`)
-  }
   out.push(`Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`)
   for (const [name, check] of Object.entries(prereqResults)) {
     if (check.ok || check.reason.endsWith("_timeout")) continue
@@ -880,7 +885,7 @@ function buildInstructions(ctx) {
   // The named task's repos when the operator named one, every active task's otherwise.
   const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
   out.push(...pushLines(pushAccounts, namedTask))
-  out.push("Confirm this session can call the Desk MCP (`desk_status` is the sentinel; its compact answer's `state` uses the same words as this result's `status`, and a degraded `search` there is only the index, never an outage), again after any context compaction; if it is absent, repair first (see the session-start skill) and never continue silently in local-only mode.")
+  out.push(DEFERRED_TOOLS_HINT)
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
       out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
@@ -936,6 +941,8 @@ export async function bootOnce({
   repoFn = repoStates,
   prFn = openPullRequests,
   factoryStatusFn = factoryStatus,
+  lastSyncFn = lastSyncedAt,
+  agentsFn = readAgentsMd,
   nestedCards = NESTED_CARD_FIELDS,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
@@ -993,15 +1000,32 @@ export async function bootOnce({
   }
 
   let sync = null
+  let syncTimedOut = false
   try {
     const synced = await withinBudget(syncFn({ root: root.path, env }), Math.min(SYNC_BUDGET_MS, deadline - now()), { timedOut: true })
-    if (synced.timedOut === true) pending.push("sync: boot_budget_exceeded")
-    else sync = synced
+    if (synced.timedOut === true) {
+      syncTimedOut = true
+      pending.push("sync: boot_budget_exceeded")
+    } else sync = synced
   } catch (error) {
     degraded.push(`sync: ${error.message}`)
   }
   const syncProblem = syncDegradation(sync)
   if (syncProblem !== null) degraded.push(syncProblem)
+  let lastSyncAt = null
+  try {
+    lastSyncAt = lastSyncFn(root.path)
+  } catch {
+    lastSyncAt = null
+  }
+  const syncSummaryText = syncSummary({ sync, timedOut: syncTimedOut, lastSyncAt })
+  // The desk's own rules, read after the sync so a pull that changed them is already in. Never throws.
+  let agentsMd = null
+  try {
+    agentsMd = agentsFn(root.path)
+  } catch {
+    agentsMd = null
+  }
 
   let tasks = null
   try {
@@ -1095,6 +1119,8 @@ export async function bootOnce({
     migrations: migrationSummary,
     prereqs,
     sync,
+    sync_summary: syncSummaryText,
+    agents_md: agentsMd,
     active_tasks: tasks,
     card_parser: parserName(nestedCards),
     card_validation: cardValidationResult,
@@ -1106,17 +1132,24 @@ export async function bootOnce({
   }
 }
 
-/** `--task <query>` from the command line, or null. */
+/** `--task <query>` and `--json` from the command line: the named task or null, and whether to print the structured result. */
 export function parseBootArgs(argv) {
   const index = argv.indexOf("--task")
-  return { taskQuery: index !== -1 && typeof argv[index + 1] === "string" && argv[index + 1].trim() !== "" ? argv[index + 1] : null }
+  return {
+    taskQuery: index !== -1 && typeof argv[index + 1] === "string" && argv[index + 1].trim() !== "" ? argv[index + 1] : null,
+    json: argv.includes("--json"),
+  }
 }
 
-/** The CLI entrypoint: prints `bootOnce`'s result as one line of JSON and always exits 0 — a boot script must never block session start. */
+/**
+ * The CLI entrypoint: prints `bootOnce`'s result as readable text (or, with `--json`, as one line of JSON for tools and
+ * tests) and always exits 0 — a boot script must never block session start.
+ */
 export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce }) {
+  const { taskQuery, json } = parseBootArgs(argv)
   let result
   try {
-    result = await bootFn({ env, ...parseBootArgs(argv) })
+    result = await bootFn({ env, taskQuery })
   } catch (error) {
     result = emptyResult({
       status: "degraded",
@@ -1127,6 +1160,6 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
       host: null,
     })
   }
-  io.stdout.write(`${JSON.stringify(result)}\n`)
+  io.stdout.write(json ? `${JSON.stringify(result)}\n` : formatBootText(result))
   return 0
 }

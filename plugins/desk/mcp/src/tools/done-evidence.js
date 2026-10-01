@@ -7,6 +7,9 @@
 //   - `pr`: a pull request URL whose repository is one of the task's repos (no network call: shape and repository only);
 //   - `commit`: a commit that resolves in one of the task's recorded local clones and is already contained in a
 //     remote-tracking branch of that clone (pushed), never a commit in the desk;
+//   - a commit in a clone that has no remote configured at all is finished work with nowhere to push it (round 9:
+//     a local-only repo otherwise left an agent inventing `non_code` evidence that pointed at the task card), so a commit
+//     that exists in such a clone counts. A clone with any remote still needs the commit pushed or a pull request;
 //   - `ci_run` and `non_code` are refused: a task with code repos is not a non-code task.
 // A card with no repos is unaffected here (`task.js` keeps its own per-kind shape checks for it).
 
@@ -130,9 +133,10 @@ function codeRepoUsage(toolName, repos) {
   return (
     `This task's card names code repos (${describeRepos(repos)}), so it is finished by code in them. ` +
     `Pass \`evidence: { kind: "pr", ref: "<the pull request's URL>" }\` for a pull request in one of those repos, or ` +
-    `\`evidence: { kind: "commit", ref: "<sha>" }\` for a commit that exists in a recorded clone and is already pushed (a remote-tracking branch contains it). ` +
+    `\`evidence: { kind: "commit", ref: "<sha>" }\` for a commit that exists in a recorded clone and is already pushed (a remote-tracking branch contains it), ` +
+    `or for a commit in a recorded clone that has no remote configured at all (a local-only repo has nowhere to push). ` +
     `A commit in the desk itself does not count, and neither does a plan or notes file. If the work cannot be delivered yet (no way to open the pull request, no push access), ` +
-    `do not mark the task done: leave it \`blocked\` or \`collaborating\` and say what is missing.`
+    `do not mark the task done: leave it at \`validating\` and tell the operator the commit sha and what is missing (use \`blocked\` or \`collaborating\` only if the work itself is unfinished).`
   )
 }
 
@@ -162,6 +166,8 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
   for (const { repo, dir } of clones) {
     if (sameDirectory(dir, deskRoot)) continue
     if (git(spawnGit, dir, ["cat-file", "-e", `${sha}^{commit}`]) === null) continue
+    // No remote configured at all: the commit exists and there is nowhere to push it, so it is the delivered work.
+    if (git(spawnGit, dir, ["remote"])?.trim() === "") return
     const pushed = git(spawnGit, dir, ["for-each-ref", "--contains", sha, "--count=1", "--format=%(refname)", "refs/remotes"])
     if (pushed !== null && pushed.trim() !== "") return
     unpushed ??= repo
@@ -170,7 +176,8 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
     throw new Error(
       `${toolName}: commit ${sha} exists in ${unpushed.name} (${unpushed.localPath}) but no remote-tracking branch contains it, so it is not pushed. ` +
         "If the commit was pushed or merged elsewhere (a squash-merged PR's commit reaches the default branch only after a fetch), run `git fetch` in that clone and repeat this call. " +
-        "Otherwise push the branch (`git push`, which also updates the remote-tracking branch), then repeat; or supply the pull request URL.",
+        "Otherwise push the branch (`git push`, which also updates the remote-tracking branch), then repeat; or open a pull request and supply its URL (`evidence: { kind: \"pr\", ref: \"<URL>\" }`); " +
+        `or leave the task at \`validating\` and tell the operator the commit sha ${sha.slice(0, 7)}, which is waiting to be pushed.`,
     )
   }
   throw new Error(

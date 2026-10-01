@@ -1013,7 +1013,7 @@ test("bootOnce: homeDir, gh and jq default to their real implementations when om
 test("runBootCli: writes one line of JSON and always exits 0", async () => {
   let written = ""
   const io = { stdout: { write: (text) => { written += text } } }
-  const code = await runBootCli({ env: {}, io, bootFn: async () => ({ boot_complete: true, status: "ready" }) })
+  const code = await runBootCli({ argv: ["--json"], env: {}, io, bootFn: async () => ({ boot_complete: true, status: "ready" }) })
   assert.equal(code, 0)
   assert.deepEqual(JSON.parse(written), { boot_complete: true, status: "ready" })
 })
@@ -1026,7 +1026,7 @@ test("runBootCli: env and io default to the real process when omitted, writing t
     return true
   }
   try {
-    const code = await runBootCli({ bootFn: async () => ({ boot_complete: true, status: "ready" }) })
+    const code = await runBootCli({ argv: ["--json"], bootFn: async () => ({ boot_complete: true, status: "ready" }) })
     assert.equal(code, 0)
     assert.deepEqual(JSON.parse(written), { boot_complete: true, status: "ready" })
   } finally {
@@ -1040,7 +1040,7 @@ test("runBootCli: bootFn defaults to the real bootOnce — no desk at the isolat
   const io = { stdout: { write: (text) => { written += text } } }
   process.env.PATH = "/nonexistent-bin"
   try {
-    const code = await runBootCli({ io })
+    const code = await runBootCli({ argv: ["--json"], io })
     assert.equal(code, 0)
     const result = JSON.parse(written)
     assert.equal(result.boot_complete, true)
@@ -1053,6 +1053,7 @@ test("runBootCli: bootOnce itself throwing still produces one complete, degraded
   let written = ""
   const io = { stdout: { write: (text) => { written += text } } }
   const code = await runBootCli({
+    argv: ["--json"],
     env: {},
     io,
     bootFn: async () => {
@@ -1193,10 +1194,11 @@ test("detectAgentHost: names the covered host from its own variables, unknown ot
 })
 
 test("parseBootArgs: --task takes the next argument; a missing or blank value is no task", () => {
-  assert.deepEqual(parseBootArgs([]), { taskQuery: null })
-  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk" })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null })
+  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false })
+  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true })
 })
 
 test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
@@ -1336,12 +1338,14 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   const result = await healthyBoot(root)
   assert.deepEqual(result.covers_hosts, ["claude", "copilot", "codex"])
   assert.ok(result.instructions.some((line) => line.includes(`Use the absolute path ${root} for the desk`) && !line.includes("export DESK=")))
-  assert.ok(result.instructions.some((line) => line.includes("desk_status")))
-  assert.ok(!result.instructions.some((line) => line.includes("AGENTS.md")))
+  // The old ceremony is gone: no "confirm desk_status" step and no "read AGENTS.md" step (the text carries AGENTS.md itself).
+  assert.ok(result.instructions.some((line) => line.startsWith("Desk's tools may be deferred") && line.includes("ToolSearch `select:`") && line.includes("mcp__plugin_desk_desk__task_update")))
+  assert.ok(!result.instructions.some((line) => /Confirm this session can call/u.test(line)))
   assert.ok(result.instructions.some((line) => line.startsWith("No task was named")))
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)
-  assert.ok(withAgents.instructions.some((line) => line.startsWith(`Read ${path.join(root, "AGENTS.md")} now`)))
+  assert.ok(!withAgents.instructions.some((line) => /AGENTS\.md/u.test(line)))
+  assert.deepEqual(withAgents.agents_md, { path: path.join(root, "AGENTS.md"), text: "rules\n", truncated: false })
   assert.match(result.instructions.at(-1), /hosts/u)
   assert.equal(result.task, null)
   const claude = await healthyBoot(root, { env: { DESK: root, CLAUDECODE: "1" } })
@@ -1536,7 +1540,7 @@ test("bootOnce: open-PR lookup is asked only for the GitHub repos the push-accou
 test("scripts/session-boot.js runs the command line for real, as a subprocess", async () => {
   const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/session-boot.js", import.meta.url))
   const emptyHome = await mkTempRoot("desk-boot-script-home-")
-  const stdout = execFileSync(process.execPath, [SCRIPT], {
+  const stdout = execFileSync(process.execPath, [SCRIPT, "--json"], {
     encoding: "utf8",
     cwd: emptyHome,
     env: {
