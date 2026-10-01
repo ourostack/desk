@@ -56,6 +56,9 @@ async function launch(script, args, env, resolveNode = compatibleNode) {
 }
 
 const MAX_SOURCE_ENTRIES = 256;
+// What a detailed source lookup answers instead of a repository: nothing is installed at the name and version, or something is but its source is not one GitHub repository.
+const ABSENT = Symbol("absent");
+const CONFLICT = Symbol("conflict");
 // How long the Stop hook may spend finding install sources before it names none.
 const SOURCE_BUDGET_MS = 400;
 
@@ -122,25 +125,29 @@ function claudeSources(configDir, readSmallText, PATTERNS, late) {
 }
 
 // Plain Copilot: `config.json` `installedPlugins` records each plugin's marketplace, and `settings.json` `extraKnownMarketplaces` says which repository that marketplace is. A plugin has a source only when exactly one install record matches its name and version and that record's marketplace is a GitHub repository.
-function copilotSources(copilotHome, readSmallText, PATTERNS, late) {
+function copilotSources(copilotHome, readSmallText, PATTERNS, late, detailed = false) {
   const config = parseCommented(readSmallText, path.join(copilotHome, "config.json"));
   const settings = parseCommented(readSmallText, path.join(copilotHome, "settings.json"));
   const installed = Array.isArray(config?.installedPlugins) && config.installedPlugins.length <= MAX_SOURCE_ENTRIES ? config.installedPlugins : [];
   const marketplaces = objectOf(settings?.extraKnownMarketplaces) ?? {};
+  // `detailed` (the install-source backfill) tells a plugin with no record (ABSENT) from one whose record names no GitHub source (CONFLICT); the hook itself only ever wants the repository or null.
+  const answer = (outcome) => (detailed || typeof outcome === "string" ? outcome : null);
   return (name, version) => {
-    if (late()) return null;
+    if (late()) return answer(CONFLICT);
     const records = installed.map(objectOf).filter((record) => record?.name === name && record.version === version);
-    if (records.length !== 1 || typeof records[0].marketplace !== "string" || !Object.hasOwn(marketplaces, records[0].marketplace)) return null;
-    return githubSource(objectOf(marketplaces[records[0].marketplace])?.source, PATTERNS);
+    if (records.length === 0) return answer(ABSENT);
+    if (records.length !== 1 || typeof records[0].marketplace !== "string" || !Object.hasOwn(marketplaces, records[0].marketplace)) return answer(CONFLICT);
+    return answer(githubSource(objectOf(marketplaces[records[0].marketplace])?.source, PATTERNS) ?? CONFLICT);
   };
 }
 
 // Copilot under Agency: each session copies its plugins from Agency's cache, whose index maps a spec such as `copilot:github:owner/repo:plugins/x@ref` to a cached folder. Every entry counts, whatever its origin: a non-GitHub entry is an unknown source for its plugin name. A plugin has a source only when the scan read the whole index and every cached entry at the plugin's exact name and version came from one GitHub repository. A cut-short scan, an entry whose name cannot be read and a name-only match all give no source.
 const UNKNOWN_ORIGIN = Symbol("unknown origin");
-function agencySources(home, readSmallText, PATTERNS, late) {
+function agencySources(home, readSmallText, PATTERNS, late, detailed = false) {
   const cache = path.join(home, ".local", "agency", "plugins", "cache");
   const entries = Object.entries(objectOf(parseSmall(readSmallText, path.join(cache, "cache_index.json"), MAX_INPUT)?.entries) ?? {});
-  const none = () => null;
+  const answer = (outcome) => (detailed || typeof outcome === "string" ? outcome : null);
+  const none = () => answer(CONFLICT);
   if (entries.length > MAX_SOURCE_ENTRIES) return none;
   const byName = new Map();
   for (const [spec, entry] of entries) {
@@ -165,9 +172,10 @@ function agencySources(home, readSmallText, PATTERNS, late) {
   return (name, version) => {
     const versions = byName.get(name);
     const origins = new Set([...(versions?.get(version) ?? []), ...(versions?.get(null) ?? [])]);
-    if (versions?.get(version) === undefined || origins.size !== 1) return null;
+    if (origins.size === 0) return answer(ABSENT);
+    if (versions.get(version) === undefined || origins.size !== 1) return answer(CONFLICT);
     const [origin] = origins;
-    return origin === UNKNOWN_ORIGIN ? null : origin;
+    return answer(origin === UNKNOWN_ORIGIN ? CONFLICT : origin);
   };
 }
 
@@ -323,7 +331,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
   }
 }
 
-module.exports = { readInput, runHook, launch, metadata, claudeSources, copilotSources, agencySources };
+module.exports = { readInput, runHook, launch, metadata, claudeSources, copilotSources, agencySources, ABSENT, CONFLICT };
 
 async function runBoundedHook(host, input) {
   const deadline = Date.now() + 1500;

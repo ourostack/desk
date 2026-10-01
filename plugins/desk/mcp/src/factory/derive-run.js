@@ -132,7 +132,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       }
     }
     let derived
-    // A marker from a hook older than 58adb141 names plugins without `source`; the installed registry fills it in for this derivation only.
+    // A marker from a hook older than 58adb141 names plugins without `source`; the host's plugin cache and install records fill it in for this derivation only.
     const plugins = backfillPluginSources(marker.host, marker.plugins, { env })
     if (marker.host === "claude-code") {
       derived = await claude({ transcriptPath: marker.log_path, plugins, endReason: marker.end_reason })

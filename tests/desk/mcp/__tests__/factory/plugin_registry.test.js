@@ -105,7 +105,7 @@ test("a Copilot CLI plugin copied from Agency's cache takes the cached entry's G
   assert.equal(registrySource("copilot-cli", "desk", "3.3.0", { env: ctx.env }), null)
 }))
 
-test("the backfill reads the registry through the end hook's own lookups", () => scratch(async (ctx) => {
+test("the backfill gives the same source as the end hook's own metadata for the same installed plugin", () => scratch(async (ctx) => {
   await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"]])
   await json(path.join(ctx.base, "cc", "plugins", "installed_plugins.json"), { plugins: { "desk@ourostack": [{ version: "3.2.0", installPath: path.join(ctx.base, "cc", "plugins", "cache", "ourostack", "desk", "3.2.0") }] } })
   const { PATTERNS } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
@@ -114,6 +114,73 @@ test("the backfill reads the registry through the end hook's own lookups", () =>
   const [hooked] = metadata.plugins
   assert.equal(registrySource("claude-code", hooked.name, hooked.version, { env: ctx.env }), hooked.source)
   assert.equal(hooked.source, "ourostack/desk")
+}))
+
+async function agencyIndex({ base }, specs) {
+  const cache = path.join(base, ".local", "agency", "plugins", "cache")
+  const entries = {}
+  let n = 0
+  for (const [spec, version] of specs) {
+    const dir = `entry-${n++}`
+    entries[spec] = { dir_name: dir }
+    await json(path.join(cache, "entries", dir, "plugin.json"), { name: "desk", version })
+  }
+  await json(path.join(cache, "cache_index.json"), { entries })
+}
+const PLAIN_A = [{ name: "desk", version: "3.2.0", marketplace: "ours" }]
+const MARKETS_A = { ours: { source: { source: "github", repo: "ourostack/desk" } } }
+const AGENCY_A = "copilot:github:ourostack/desk:plugins/desk@main"
+
+test("Copilot: a plain install and an absent Agency entry give the plain source; an absent plain install and an Agency entry give the Agency source", () => scratch(async (ctx) => {
+  await copilotRegistry(ctx, PLAIN_A, MARKETS_A)
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
+  await copilotRegistry(ctx, [], {})
+  await agencyIndex(ctx, [[AGENCY_A, "3.2.0"]])
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
+}))
+
+test("Copilot: plain and Agency naming the same repository agree; naming different repositories, or Agency holding a non-GitHub entry at that version, block", () => scratch(async (ctx) => {
+  await copilotRegistry(ctx, PLAIN_A, MARKETS_A)
+  await agencyIndex(ctx, [[AGENCY_A, "3.2.0"]])
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
+  await agencyIndex(ctx, [["copilot:github:acme/other:plugins/desk@main", "3.2.0"]])
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null)
+  await agencyIndex(ctx, [["copilot:url:https://example.com/desk.git", "3.2.0"]])
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null)
+  // A different version in Agency's cache does not conflict.
+  await agencyIndex(ctx, [["copilot:url:https://example.com/desk.git", "3.1.0"]])
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
+}))
+
+test("Copilot: a plain record with no GitHub marketplace blocks even when Agency names a repository", () => scratch(async (ctx) => {
+  await copilotRegistry(ctx, PLAIN_A, { ours: { source: { source: "url", url: "https://example.com" } } })
+  await agencyIndex(ctx, [[AGENCY_A, "3.2.0"]])
+  assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null)
+}))
+
+test("the hook's own lookups still answer only a repository or null", () => scratch(async (ctx) => {
+  const { PATTERNS } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
+  const { readSmallText } = await import("../../../../../plugins/desk/mcp/src/factory/marker.js")
+  await copilotRegistry(ctx, PLAIN_A, MARKETS_A)
+  await agencyIndex(ctx, [["copilot:url:https://example.com/desk.git", "3.2.0"]])
+  const plain = hook.copilotSources(ctx.env.COPILOT_HOME, readSmallText, PATTERNS, () => false)
+  const agency = hook.agencySources(ctx.base, readSmallText, PATTERNS, () => false)
+  assert.equal(plain("desk", "3.2.0"), "ourostack/desk")
+  assert.equal(plain("desk", "9.9.9"), null)
+  assert.equal(agency("desk", "3.2.0"), null)
+  assert.equal(agency("other", "3.2.0"), null)
+}))
+
+test("a symlinked plugin or version folder in the Claude Code cache does not count", () => scratch(async (ctx) => {
+  await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"], ["ourostack", "old", "1.0.0"]])
+  const cache = path.join(ctx.base, "cc", "plugins", "cache", "ourostack")
+  await fs.mkdir(path.join(ctx.base, "elsewhere"), { recursive: true })
+  await fs.symlink(path.join(ctx.base, "elsewhere"), path.join(cache, "desk", "3.3.0"))
+  await fs.rm(path.join(cache, "old"), { recursive: true })
+  await fs.symlink(path.join(cache, "desk"), path.join(cache, "old"))
+  assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
+  assert.equal(registrySource("claude-code", "desk", "3.3.0", { env: ctx.env }), null)
+  assert.equal(registrySource("claude-code", "old", "1.0.0", { env: ctx.env }), null)
 }))
 
 test("a re-derive of a marker without sources publishes desk:worker by name, and the marker file is not rewritten", () => scratch(async (ctx) => {
