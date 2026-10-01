@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.172 — 2026-10-01
+
+Desk's browser MCP server is now named `desk-web` on every host, not only in `.mcp.copilot.json`. Copilot CLI reads the plugin's `.mcp.json`, not the `.mcp.copilot.json` that `plugin.json` names, so the earlier Copilot-only rename never took effect: a fresh `copilot plugin install` still exposed `web-browser_click`, and OpenAI-backed models rejected every request because `web` is a reserved namespace. With the key renamed in `.mcp.json`, the same install exposes `desk-web-browser_click`. On Claude Code the tools now read `mcp__plugin_desk_desk-web__browser_navigate` and so on; update any permission allowlist that named `mcp__plugin_desk_web__*`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.171 — 2026-10-01
 
 A task card's status must now be one of the eight lifecycle states: `task_create` (`status`) and `task_update` (`frontmatter.status`) reject any other value and list the valid ones. A new agent-work migration, `03-normalize-task-status`, finds cards that carry a ghost status and prints one `task_update` for each. It folds case and the separators `-`, `_` and space, then maps `active`, `doing` and `in progress` to `processing`, `planning` and `backlog` to `drafting`, `needs review` to `collaborating`, and `waiting` to `blocked`. A value it does not know is reported and left alone, because the migration never guesses.
