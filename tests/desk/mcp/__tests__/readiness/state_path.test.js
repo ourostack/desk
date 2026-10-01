@@ -9,6 +9,7 @@ import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { resolveStateDirectory } from "../../../../../plugins/desk/mcp/src/readiness/state-path.js"
 import { callTool, connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
+import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
 import { startInProcess } from "../runtime/_in_process_desk.js"
 
 test("a state directory under a symlinked ancestor resolves to the real path, existing or not", async () => {
@@ -91,19 +92,37 @@ test("a controller whose state home sits under a symlinked ancestor journals a r
   }
 })
 
-test("the directory holding the state directory must belong to the user or root and not be writable by group or others, unless sticky", async () => {
+test("the directory holding the state directory must belong to the user or root and not be world-writable unless sticky; group-writable is fine", async () => {
   const root = await mkTempRoot("desk-state-path-perm-")
+  const real = fs.realpathSync(root)
   const stat = (over) => (file) => ({ ...fs.lstatSync(file), isDirectory: () => true, ...over })
-  const ioWith = (over) => ({ ...fs, lstatSync: (file) => (file === fs.realpathSync(root) ? stat(over)(file) : fs.lstatSync(file)) })
+  const ioWith = (over) => ({ ...fs, lstatSync: (file) => (file === real ? stat(over)(file) : fs.lstatSync(file)) })
   const target = path.join(root, "journal")
   const ok = (over, platform = "linux", uid = 501) => resolveStateDirectory(target, ioWith(over), platform, uid)
-  assert.equal(ok({ uid: 501, mode: 0o40755 }), path.join(fs.realpathSync(root), "journal"))
-  assert.equal(ok({ uid: 0, mode: 0o40755 }), path.join(fs.realpathSync(root), "journal"))
-  assert.equal(ok({ uid: 501, mode: 0o41777 }), path.join(fs.realpathSync(root), "journal"))
-  assert.throws(() => ok({ uid: 501, mode: 0o40775 }), /unsafe state directory ancestry: .* must be owned by the current user or root and not writable by group or others/)
-  assert.throws(() => ok({ uid: 501, mode: 0o40757 }), /unsafe state directory ancestry/)
-  assert.throws(() => ok({ uid: 777, mode: 0o40755 }), /unsafe state directory ancestry/)
+  assert.equal(ok({ uid: 501, mode: 0o40755 }), path.join(real, "journal"))
+  assert.equal(ok({ uid: 0, mode: 0o40755 }), path.join(real, "journal"))
+  assert.equal(ok({ uid: 501, mode: 0o41777 }), path.join(real, "journal"))
+  assert.equal(ok({ uid: 501, mode: 0o40775 }), path.join(real, "journal"))
+  assert.equal(ok({ uid: 501, mode: 0o40770 }), path.join(real, "journal"))
+  const world = new RegExp(`unsafe state directory ancestry: ${real} is writable by everyone.*chmod o-w "${real}"`)
+  assert.throws(() => ok({ uid: 501, mode: 0o40757 }), world)
+  assert.throws(() => ok({ uid: 501, mode: 0o40777 }), world)
+  assert.throws(() => ok({ uid: 777, mode: 0o40755 }), new RegExp(`unsafe state directory ancestry: ${real} is owned by another user \\(uid 777\\).*chown "\\$USER" "${real}"`))
   // Windows has no such modes, and a platform without uids is not checked either.
-  assert.equal(ok({ uid: 777, mode: 0o40777 }, "win32"), path.join(fs.realpathSync(root), "journal"))
-  assert.equal(resolveStateDirectory(target, ioWith({ uid: 777, mode: 0o40777 }), "linux", null), path.join(fs.realpathSync(root), "journal"))
+  assert.equal(ok({ uid: 777, mode: 0o40777 }, "win32"), path.join(real, "journal"))
+  assert.equal(resolveStateDirectory(target, ioWith({ uid: 777, mode: 0o40777 }), "linux", null), path.join(real, "journal"))
+})
+
+test("the refusal reaches the compact desk_status as the degraded search note, naming the directory and the chmod", async () => {
+  const open = await mkTempRoot("desk-state-path-world-")
+  fs.chmodSync(open, 0o777)
+  const real = fs.realpathSync(open)
+  let refusal
+  try { resolveStateDirectory(path.join(open, "journal")) } catch (error) { refusal = error }
+  assert.match(refusal.message, new RegExp(`chmod o-w "${real}"`))
+  // The controller turns a journal failure into a failed convergence carrying this message (controller-server.js), which the compact answer shows.
+  const compact = compactStatus({ status: "ok", readiness: { state: "degraded", detail: { convergence: { status: "failed", diagnostic: { message: refusal.message } } } } })
+  assert.equal(compact.state, "ready")
+  assert.equal(compact.search, "degraded")
+  assert.match(compact.notes.join("\n"), new RegExp(`chmod o-w "${real}"`))
 })

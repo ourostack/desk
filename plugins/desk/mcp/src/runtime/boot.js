@@ -62,7 +62,7 @@ import { factoryStatus } from "../tools/factory-context.js"
 import {
   claudeBindingPath,
   DESK_ROOT_NOT_FOUND,
-  expandHome,
+  resolveLocalPath,
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
 } from "../util/paths.js"
@@ -436,9 +436,9 @@ const MIN_ACCOUNT_CALL_MS = 3000
 // check above already rules out, so neither call needs its own try/catch —
 // a card whose `local_path` cannot be read still degrades cleanly, one
 // level up, through `resolvePushAccounts`'s own caller in `bootOnce`.
-function resolveLocalStore(localPath, { spawnGit, homeDir, timeoutMs }) {
+function resolveLocalStore(localPath, { spawnGit, homeDir, deskRoot, timeoutMs }) {
   if (typeof localPath !== "string" || localPath.trim() === "") return null
-  const resolved = expandHome(localPath, homeDir)
+  const resolved = resolveLocalPath(localPath, { homeDir, deskRoot })
   const result = spawnGit("git", ["-C", resolved, "config", "--get", "remote.origin.url"], { encoding: "utf8", timeout: timeoutMs })
   if (!result || result.status !== 0 || typeof result.stdout !== "string") return null
   const url = result.stdout.trim()
@@ -494,7 +494,7 @@ export async function resolvePushAccounts({
       if (repo.mode === "remote" && typeof repo.name === "string" && PATTERNS.prRepo.test(repo.name)) {
         store = repo.name
       } else if (repo.mode === "local") {
-        store = resolveLocalStore(repo.local_path, { spawnGit, homeDir, timeoutMs: 5000 })
+        store = resolveLocalStore(repo.local_path, { spawnGit, homeDir, deskRoot: root, timeoutMs: 5000 })
       }
       if (store === null) {
         results.push({ ...label, result: "not_a_github_repo" })
@@ -596,7 +596,7 @@ function hostLineHostname(cardText) {
 const REPO_FETCH_TIMEOUT_MS = 10000
 
 /** `git fetch` plus branch and dirty state for every locally-cloned repo of every open task, within the deadline. */
-export function repoStates({ cards, spawnGit = spawnSync, homeDir = os.homedir(), now, deadline }) {
+export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.homedir(), now, deadline }) {
   const states = []
   const pending = []
   for (const card of cards) {
@@ -604,7 +604,7 @@ export function repoStates({ cards, spawnGit = spawnSync, homeDir = os.homedir()
     for (const repo of card.data.repos) {
       if (repo === null || typeof repo !== "object" || repo.mode !== "local" || typeof repo.local_path !== "string") continue
       const label = repoLabel(card, repo)
-      const dir = expandHome(repo.local_path, homeDir)
+      const dir = resolveLocalPath(repo.local_path, { homeDir, deskRoot: root })
       if (deadline - now() < MIN_ACCOUNT_CALL_MS) {
         pending.push(`repo state for ${label.repo} (${cardLocation(card)}): boot_budget_exceeded`)
         continue
@@ -1018,7 +1018,7 @@ export async function bootOnce({
 
   let repoStateList = []
   try {
-    const found = repoFn({ cards, spawnGit, homeDir, now, deadline })
+    const found = repoFn({ cards, root: root.path, spawnGit, homeDir, now, deadline })
     repoStateList = found.states
     pending.push(...found.pending)
   } catch (error) {

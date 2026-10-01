@@ -281,6 +281,15 @@ export function expandHome(p, homeDir = os.homedir()) {
 }
 
 /**
+ * A card's `local_path` as an absolute directory: `~` expanded against `homeDir`, and a relative path resolved against
+ * the desk root (a card is part of the desk, and the process's working directory differs from call to call). With no
+ * desk root known, the working directory is the base.
+ */
+export function resolveLocalPath(localPath, { homeDir = os.homedir(), deskRoot = process.cwd() } = {}) {
+  return path.resolve(deskRoot, expandHome(localPath, homeDir))
+}
+
+/**
  * `<state home>` for the protected stores: `XDG_STATE_HOME` (with `~`
  * expanded against `HOME`) when set and not blank, else `HOME/.local/state`.
  * The private stores and the doctor's count of the retired ledger's folders

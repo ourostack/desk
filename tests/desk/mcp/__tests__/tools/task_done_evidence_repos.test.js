@@ -345,3 +345,11 @@ test("assertCodeRepoEvidence does nothing without repos, and survives odd git re
     /not in this task's repos/,
   )
 })
+
+test("resolveLocalPath expands ~, resolves a relative path against the desk root, and falls back to the working directory", async () => {
+  const { resolveLocalPath } = await import("../../../../../plugins/desk/mcp/src/util/paths.js")
+  assert.equal(resolveLocalPath("a/b", { homeDir: "/h", deskRoot: "/desk" }), "/desk/a/b")
+  assert.equal(resolveLocalPath("~/a", { homeDir: "/h", deskRoot: "/desk" }), "/h/a")
+  assert.equal(resolveLocalPath("/abs", { homeDir: "/h", deskRoot: "/desk" }), "/abs")
+  assert.equal(resolveLocalPath("a"), path.resolve("a"))
+})

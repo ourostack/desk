@@ -12,9 +12,8 @@
 
 import { realpathSync } from "node:fs"
 import * as os from "node:os"
-import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { expandHome } from "../util/paths.js"
+import { resolveLocalPath } from "../util/paths.js"
 import { normalizeRemote } from "../factory/binding.js"
 
 const GIT_TIMEOUT_MS = 5000
@@ -50,11 +49,7 @@ export function recordedRepos(value) {
   })
 }
 
-// A clone's directory: `~` against the call's home, and a relative path against the desk root (never the process's
-// working directory, which differs from call to call).
-function clonePath(localPath, { homeDir, deskRoot }) {
-  return path.resolve(deskRoot, expandHome(localPath, homeDir))
-}
+const clonePath = resolveLocalPath
 
 function describeRepos(repos) {
   return repos.map((repo) => (repo.localPath === "" ? `${repo.name} (no local clone recorded)` : `${repo.name} (${repo.localPath})`)).join(", ")
