@@ -353,3 +353,48 @@ test("resolveLocalPath expands ~, resolves a relative path against the desk root
   assert.equal(resolveLocalPath("/abs", { homeDir: "/h", deskRoot: "/desk" }), "/abs")
   assert.equal(resolveLocalPath("a"), path.resolve("a"))
 })
+
+test("removing every repo needs a repos_removed_reason, is recorded on the card, and never finishes the task in the same call", async () => {
+  const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }, { name: "acme/other", local_path: "", mode: "remote" }])
+  const update = (input) => task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", ...input } })
+  const proof = { kind: "non_code", ref: "https://example.invalid/x" }
+  await assert.rejects(update({ frontmatter: { repos: [] } }), /repos_removed_reason: "<one line on why>".*separate call.*status: "cancelled".*task-lifecycle/s)
+  await assert.rejects(update({ frontmatter: { repos: [] }, repos_removed_reason: "   " }), /repos_removed_reason/)
+  await assert.rejects(update({ frontmatter: { repos: [] }, repos_removed_reason: 7 }), /repos_removed_reason/)
+  await assert.rejects(
+    update({ frontmatter: { status: "done", repos: [] }, repos_removed_reason: "never touched them", evidence: proof }),
+    /cannot also set `status: "done"`.*separate call with `non_code` evidence that is not the task card itself/s,
+  )
+  let { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.equal(data.repos.length, 2)
+  assert.equal(data.repos_removed, undefined)
+  assert.equal((await update({ frontmatter: { repos: [] }, repos_removed_reason: " the work was docs only " })).status, "updated")
+  ;({ data } = await readFront(path.join(root, "t", "ship-it", "task.md")))
+  assert.deepEqual(data.repos_removed.map((entry) => [entry.name, entry.reason]), [["acme/widgets", "the work was docs only"], ["acme/other", "the work was docs only"]])
+  assert.match(data.repos_removed[0].at, /^\d{4}-\d{2}-\d{2}T/)
+  // Finishing is a separate call; non_code works now, but not the card itself.
+  await assert.rejects(update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", ref: "t/ship-it/task.md" } }), /is the task card itself/)
+  await fs.writeFile(path.join(root, "t", "outcome.md"), "outcome\n")
+  assert.equal((await update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", ref: "t/outcome.md" } })).status, "updated")
+})
+
+test("an earlier repos_removed list is kept when a later removal appends to it", async () => {
+  const root = await codeTask([{ name: "a/one", local_path: "", mode: "remote" }])
+  const update = (input) => task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", ...input } })
+  await update({ frontmatter: { repos: [] }, repos_removed_reason: "first" })
+  await update({ frontmatter: { repos: [{ name: "a/two" }] } })
+  await update({ frontmatter: { repos: [] }, repos_removed_reason: "second" })
+  const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.deepEqual(data.repos_removed.map((entry) => [entry.name, entry.reason]), [["a/one", "first"], ["a/two", "second"]])
+})
+
+test("ssh remotes with a login and a port match the same host in an https PR URL, and legacy visualstudio.com DefaultCollection URLs match", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  git(clone, "remote", "set-url", "origin", "ssh://git@ghe.corp.example:2222/acme/widgets.git")
+  const root = await codeTask([{ name: "widgets", local_path: clone, mode: "local" }])
+  assert.equal((await done(root, { kind: "pr", ref: "https://ghe.corp.example:8443/acme/widgets/pull/3" })).status, "updated")
+  const ado = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
+  assert.equal((await done(ado, { kind: "pr", ref: "https://org.visualstudio.com/DefaultCollection/proj/_git/widgets/pullrequest/3" })).status, "updated")
+  const bare = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
+  assert.equal((await done(bare, { kind: "pr", ref: "https://org.visualstudio.com/DefaultCollection/_git/widgets/pullrequest/3" })).status, "updated")
+})

@@ -26,9 +26,11 @@ const GITHUB_URL = {
   commit: new RegExp(String.raw`^https://(?:www\.)?github\.com/([^/\s?#]+)/([^/\s?#]+)/commit/[0-9a-f]{7,40}(?![0-9a-f])${TAIL}`, "iu"),
 }
 // Azure DevOps: `dev.azure.com/<org>/<project>/_git/<repo>/...` or `<org>.visualstudio.com/<project>/_git/<repo>/...` (the project may be omitted when it is named like the repo).
+// `<org>.visualstudio.com` may carry the legacy `DefaultCollection` segment before the project.
+const ADO_BASE = String.raw`(?:dev\.azure\.com/[^/\s?#]+|[^/\s?#.]+\.visualstudio\.com(?:/DefaultCollection)?)(?:/[^/\s?#]+)?`
 const ADO_URL = {
-  pr: new RegExp(String.raw`^https://(?:dev\.azure\.com/[^/\s?#]+|[^/\s?#.]+\.visualstudio\.com)(?:/[^/\s?#]+)?/_git/([^/\s?#]+)/pullrequest/\d+${TAIL}`, "iu"),
-  commit: new RegExp(String.raw`^https://(?:dev\.azure\.com/[^/\s?#]+|[^/\s?#.]+\.visualstudio\.com)(?:/[^/\s?#]+)?/_git/([^/\s?#]+)/commit/[0-9a-f]{7,40}(?![0-9a-f])${TAIL}`, "iu"),
+  pr: new RegExp(String.raw`^https://${ADO_BASE}/_git/([^/\s?#]+)/pullrequest/\d+${TAIL}`, "iu"),
+  commit: new RegExp(String.raw`^https://${ADO_BASE}/_git/([^/\s?#]+)/commit/[0-9a-f]{7,40}(?![0-9a-f])${TAIL}`, "iu"),
 }
 // Any other host (GitHub Enterprise and the like) is trusted only when a recorded clone has a remote on it.
 const OTHER_URL = {
@@ -49,7 +51,6 @@ export function recordedRepos(value) {
   })
 }
 
-const clonePath = resolveLocalPath
 
 function describeRepos(repos) {
   return repos.map((repo) => (repo.localPath === "" ? `${repo.name} (no local clone recorded)` : `${repo.name} (${repo.localPath})`)).join(", ")
@@ -64,6 +65,8 @@ function lastSegments(urlPath, count) {
   return urlPath.split("/").filter((segment) => segment !== "").slice(-count).join("/").toLowerCase()
 }
 
+// A host without its login (`git@`) and port (`:22`, `:8443`): an ssh remote and an https URL name the same machine.
+const bareHost = (host) => host.replace(/^.*@/u, "").replace(/:\d+$/u, "").toLowerCase()
 const isGithub = (host) => /^(www\.)?github\.com$/iu.test(host)
 
 // The repository a PR or commit URL points at, by the host's own shape: GitHub `owner/repo`, Azure DevOps and any other
@@ -74,7 +77,7 @@ function urlRepo(ref, kind) {
   match = ADO_URL[kind].exec(ref)
   if (match !== null) return { type: "ado", id: match[1].toLowerCase() }
   match = OTHER_URL[kind].exec(ref)
-  if (match !== null && !isGithub(match[1])) return { type: "other", host: match[1].toLowerCase(), id: match[2].toLowerCase() }
+  if (match !== null && !isGithub(bareHost(match[1]))) return { type: "other", host: bareHost(match[1]), id: match[2].toLowerCase() }
   return { type: "none", id: "" }
 }
 
@@ -91,17 +94,18 @@ function repoIdentities(repos, { spawnGit, homeDir, deskRoot }) {
     else plainNames.add(repo.name.toLowerCase())
     bare.add(lastSegments(repo.name, 1))
     if (repo.localPath === "") continue
-    const listed = git(spawnGit, clonePath(repo.localPath, { homeDir, deskRoot }), ["config", "--get-regexp", "^remote\\..*\\.url$"])
+    const listed = git(spawnGit, resolveLocalPath(repo.localPath, { homeDir, deskRoot }), ["config", "--get-regexp", "^remote\\..*\\.url$"])
     for (const line of (listed ?? "").split("\n")) {
       const url = line.trim().split(/\s+/u)[1]
       if (url === undefined) continue
       const normalized = normalizeRemote(url)
-      const host = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)(\/.*|)$/u.exec(normalized)
-      if (host === null) continue
-      if (isGithub(host[1])) github.add(lastSegments(host[2], 2))
+      const parsed = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)(\/.*|)$/u.exec(normalized)
+      if (parsed === null) continue
+      const host = bareHost(parsed[1])
+      if (isGithub(host)) github.add(lastSegments(parsed[2], 2))
       else {
-        bare.add(lastSegments(host[2], 1))
-        hosts.add(host[1].toLowerCase())
+        bare.add(lastSegments(parsed[2], 1))
+        hosts.add(host)
       }
     }
   }
@@ -147,7 +151,7 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir })
     throw new Error(repoRefusal(toolName, "commit", evidence.ref, repos))
   }
   const sha = (isUrl ? SHA_IN_URL : SHA_PREFIX).exec(ref)[isUrl ? 1 : 0]
-  const clones = repos.filter((repo) => repo.localPath !== "").map((repo) => ({ repo, dir: clonePath(repo.localPath, { homeDir, deskRoot }) }))
+  const clones = repos.filter((repo) => repo.localPath !== "").map((repo) => ({ repo, dir: resolveLocalPath(repo.localPath, { homeDir, deskRoot }) }))
   if (clones.length === 0) {
     throw new Error(
       `${toolName}: commit evidence needs a local clone to check, and none of this task's repos (${describeRepos(repos)}) records one. ` +

@@ -252,7 +252,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "evidence"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "evidence", "repos_removed_reason"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 const asList = (value) => (Array.isArray(value) ? value : [])
@@ -597,14 +597,26 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     merged.created = existing.data.created
   }
   merged.updated = nowIso()
-  // A card's code repos are what make `done` need code evidence, so one call cannot empty them and a second finish the
-  // task on `non_code`. Clearing every repo is allowed only when the same call cancels the task.
-  if (recordedRepos(existing.data.repos).length > 0 && recordedRepos(merged.repos).length === 0 && merged.status !== "cancelled") {
-    throw new Error(
-      "task_update: this call would remove every repo from a card that names code repos, which would let the task finish without code evidence. " +
-        "Keep at least one repo in `repos`; to drop them all, set `status: \"cancelled\"` in the same call (a cancelled task needs no evidence), " +
-        "or, if the repos were recorded wrongly, fix the entries instead of emptying the list.",
-    )
+  // A card's code repos are what make `done` need code evidence, so one call cannot empty them and finish the task on
+  // `non_code`. Emptying them is allowed when the call cancels the task, or says why (`repos_removed_reason`, recorded
+  // on the card as `repos_removed`) and does not also finish the task: finishing is a separate call.
+  const priorRepos = recordedRepos(existing.data.repos)
+  if (priorRepos.length > 0 && recordedRepos(merged.repos).length === 0 && merged.status !== "cancelled") {
+    const reason = typeof values.repos_removed_reason === "string" ? values.repos_removed_reason.trim() : ""
+    if (reason === "") {
+      throw new Error(
+        "task_update: this call would remove every repo from a card that names code repos, which would let the task finish without code evidence. " +
+          "If the work turned out not to touch them, repeat the call with `repos_removed_reason: \"<one line on why>\"` (it is recorded on the card as `repos_removed`), " +
+          "and finish the task in a separate call afterwards; to abandon the task, set `status: \"cancelled\"` instead; if the repos were recorded wrongly, fix the entries instead of emptying the list. " +
+          "See `task-lifecycle` and `task-card-format`.",
+      )
+    }
+    if (merged.status === "done") {
+      throw new Error(
+        "task_update: a call that removes every repo cannot also set `status: \"done\"`. Remove the repos with `repos_removed_reason` in this call, then finish the task in a separate call with `non_code` evidence that is not the task card itself.",
+      )
+    }
+    merged.repos_removed = [...asList(existing.data.repos_removed), ...priorRepos.map((repo) => ({ name: repo.name, reason, at: merged.updated }))]
   }
   if (merged.status === "done" && existing.data.status !== "done") {
     await assertDoneEvidence(evidence, deskRoot, "task_update", {
