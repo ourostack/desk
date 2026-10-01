@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.165 — 2026-10-01
+
+Desk on Copilot CLI now has the same session binding and most of the same guards as Desk on Claude Code.
+
+The Desk MCP server binds the folder the session was opened in. Copilot gives its MCP servers no session folder, so the `sessionStart` hook records the folder and the saved desk binding in a small file keyed by the session id (`COPILOT_AGENT_SESSION_ID`, which the server also sees), and the server reads that file each time it resolves its root. Copilot starts the server before it fires the hook, so the first resolution finds nothing; Desk's admission resolves again on every `desk_status` and gated call, so the first call after the hook binds with no restart. Each session has its own file, written by rename, so concurrent sessions never read each other's. The record only hints at a folder that must be a desk right now, so a stale record falls back to the saved binding and `$DESK`. Records unused for 30 days are pruned. `DESK` no longer has to be set to use the Desk tools on Copilot, and the boot check and the startup line name the same desk the server binds.
+
+The card guard now runs on Copilot's `preToolUse`: a direct edit or write of a live task card, and a shell command that writes one, is denied with the same message as on Claude Code, because Copilot's tool names and payloads are mapped onto the Claude-shaped calls the existing guard reads. The done-claim gate runs on Copilot's `agentStop`, reading the reply from the session transcript, and is fed by `postToolUse` and `userPromptSubmitted` hooks. The ask gate cannot run on Copilot, because its hooks carry no attended-or-not signal; it stays Claude-only. Codex hooks are trust-gated and inactive, so nothing is wired there.
+
+The first prompt of each Copilot session now carries the boot direction as `userPromptSubmitted` context. Copilot weighs `sessionStart` context lightly, and a bare greeting was answered without booting; the same line next to the message was followed every time in boot acceptance. See [Copilot and the Desk MCP server](../README.md) and [host enforcement live proof](../docs/host-enforcement-live-proof.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.164 — 2026-10-01
 
 A reply that says "Done." or "Work complete" over a task this turn touched that is still at `processing` or `validating` is now stopped once, on Claude Code, by a `Stop` hook ([`hooks/done-claim-gate.cjs`](hooks/done-claim-gate.cjs)). A `PostToolUse` hook on `task_update`, `task_create`, `task_move` and `task_archive` records the tasks the session touched, a `UserPromptSubmit` hook starts each turn clean (any Stop that does not block clears them too), and at Stop each touched card is read again, so a task finished or left in an earlier turn never gates a later reply. The hook reads the final reply (`last_assistant_message`, else the transcript's last assistant message) and blocks, with a reason that names the task, its status and the `report_as` sentence, only when the reply says the task or the work is done and never states the task's real status in a status clause. Code and quoted text are ignored, and "I'm done with the task review" and "All tests are done running" are not claims. It blocks at most once per stop, never gates a child agent, and fails open on any error. Copilot and Codex have no equivalent yet; the plugin README section and the `task-lifecycle` skill say so.
