@@ -21,10 +21,10 @@ const target = (overrides = {}) => ({
   ...overrides,
 })
 
-test("default write-target behavior still provisions a missing person root", async () => {
+test("default write-target behavior resolves a missing person root and leaves creating it to the write", async () => {
   const result = await resolveWriteTarget(target())
   assert.equal(result, path.join(deskRoot, "desks", "member", "track", "outcome", "task.md"))
-  assert.equal(existsSync(path.join(deskRoot, "desks", "member")), true)
+  assert.equal(existsSync(path.join(deskRoot, "desks")), false)
 })
 
 test("no-create resolution rejects a missing person root without creating any directory", async () => {

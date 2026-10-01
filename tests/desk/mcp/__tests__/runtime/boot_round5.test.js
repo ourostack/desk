@@ -110,7 +110,7 @@ test("bootOnce: a fork route names the repo, the account and the route, in instr
   const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh })
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
   assert.match(line, /task example-track\/one/u)
-  assert.match(line, /account ari cannot push to it directly, so its route is a fork/u)
+  assert.match(line, /account ari cannot push to it directly\. Push your branch to ari's fork/u)
   assert.match(line, /never push to acme\/widgets itself\. Tell the operator this route in one line/u)
   assert.ok(result.instructions.includes(line))
 })

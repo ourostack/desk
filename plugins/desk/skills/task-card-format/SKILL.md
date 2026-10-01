@@ -7,6 +7,8 @@ description: Schema for `task.md` — the per-task card inside a task directory.
 
 `task.md` is the cover of the folder — one task per folder, one folder per piece of work. it lives inside a task directory and represents one unit of work within a track.
 
+A blocked task's card records why in a `## Blocker` (or `## Waiting on`) section or a `Blocker:` line; boot prints that reason beside the task, and falls back to the card's `**Next step:**` paragraph. Boot prints both whole, never cut.
+
 ## Template
 
 ```yaml

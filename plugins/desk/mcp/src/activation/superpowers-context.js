@@ -5,10 +5,27 @@ import { fileURLToPath } from "node:url"
 import { parseDeskTaskLine } from "../factory/desk-task-line.js"
 import { expandHome, isPathContained, personPrefix, resolveWriteTarget } from "../util/paths.js"
 
+// What to pass for a missing path, with an example built from the paths already checked (`deskRoot`, then `taskPath`,
+// are required before the ones below them). An agent that got a bare "iterationPath is required" invented a
+// `fixture/evidence` folder and an empty iteration folder outside the desk.
+function missingPathHint(input, name) {
+  const trim = (value) => value.trim().replace(/\/+$/u, "")
+  switch (name) {
+    case "iterationPath":
+      return `pass --iteration-path <task folder>/<repo>/<YYYY-MM-DD>-<slug>, a folder under the task's own folder, for example ${trim(input.taskPath)}/<repo>/2026-09-30-<slug>. The mapper only reads and creates nothing, so do not mkdir it first`
+    case "taskPath":
+      return `pass --task-path <desk>/<track>/<task>, the task's folder (the one that holds task.md), for example ${trim(input.deskRoot)}/<track>/<task>`
+    case "evidenceRoot":
+      return `pass --evidence-root <a folder outside the desk>, for example ${path.posix.dirname(trim(input.deskRoot)).replace(/\/$/u, "")}/evidence; the mapper only names paths under it and creates nothing`
+    default:
+      return `pass --desk-root <the desk's absolute path>, which boot prints as "Desk:"`
+  }
+}
+
 function requiredPath(input, name) {
   const value = input[name]
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`Superpowers context: ${name} is required`)
+    throw new Error(`Superpowers context: ${name} is required: ${missingPathHint(input, name)}`)
   }
   return path.resolve(expandHome(value))
 }

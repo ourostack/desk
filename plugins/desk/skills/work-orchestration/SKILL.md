@@ -5,6 +5,8 @@ description: Align new work before go by gathering every decision that needs the
 
 # Work orchestration
 
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
+
 Invoke `desk:using-superpowers-with-desk`. This Desk adapter selects no second engineering method: Superpowers owns discovery, planning, execution and verification; Desk owns the work state and approved terminal boundary.
 
 Read the existing task, agreement and plan before choosing the matching Superpowers skill. Consume prior approval without reopening it. Use `superpowers:brainstorming` for missing design agreement, `superpowers:writing-plans` when a plan is needed, and `superpowers:executing-plans` or authorized `superpowers:subagent-driven-development` for implementation. Keep plans and progress on Desk. Invoke `superpowers:requesting-code-review` for the normal review transition.

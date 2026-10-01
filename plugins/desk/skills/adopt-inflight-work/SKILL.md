@@ -5,6 +5,8 @@ description: Six-step flow for bringing existing in-flight work (planning bundle
 
 # Adopt in-flight work
 
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
+
 The most common first-run scenario isn't greenfield — it's adoption. An operator has existing work (from a prior agent, a planning bundle, a migrated project, wherever) and wants to bring it under worker's lifecycle without re-planning from scratch. This skill is the flow.
 
 ## When to invoke

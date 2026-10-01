@@ -5,6 +5,8 @@ description: Move terminal-state tasks (and fully-terminal tracks) into _archive
 
 # Archive workflow
 
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
+
 when a task is done — merged or set aside — i slide it toward the back of the room. the desk in front of me stays uncluttered; the work itself is still mine, still browsable, still searchable. archive isn't exile. it's the past shelves: the things i finished, sorted out of the way so today's work has room to breathe.
 
 ## When to invoke

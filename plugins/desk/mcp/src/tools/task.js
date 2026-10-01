@@ -35,6 +35,8 @@ import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState } from "./track-row.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
+import { withCreatedDirs } from "../util/created-dirs.js"
+import { nextStepOf } from "../desk/active-tasks.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
@@ -574,7 +576,8 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  * "failed", reason }` on the result, omitted entirely on a normal, silent
  * success, when the file was already dirty, or on a non-Git desk.
  *
- * Returns: { status: "updated", path, commit? }
+ * Returns: { status: "updated", path, commit?, next_step?, next_step_note? } (the last two when the call added a note
+ * or changed the status without passing `next_step`: the card's current next step, or null, and a reminder)
  */
 // `note` and `next_step` are checked before any write: an empty one would record progress that says nothing.
 function requiredText(value, field) {
@@ -682,6 +685,13 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
+  // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
+  // is already done (a run finished the step, logged it, and reported "Done" over a card still pointing at it): show
+  // the step the card still carries and say it was not touched. A terminal status leaves no next step to keep current.
+  if (nextStep === undefined && !TERMINAL_STATUSES.has(merged.status) && (note !== undefined || merged.status !== existing.data.status)) {
+    result.next_step = nextStepOf(newBody)
+    result.next_step_note = "next_step unchanged \u2014 update it if this work changed it"
+  }
   return result
 }
 
@@ -836,8 +846,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   })
 
   // Move the dir. fs.rename is atomic on the same filesystem.
-  await fs.mkdir(path.dirname(archiveDir), { recursive: true })
-  await fs.rename(srcDir, archiveDir)
+  await withCreatedDirs(path.dirname(archiveDir), () => fs.rename(srcDir, archiveDir))
   // A directory move invalidates both subtrees, including companion documents.
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
     { path: relPath(deskRoot, srcDir), operation: "delete" },

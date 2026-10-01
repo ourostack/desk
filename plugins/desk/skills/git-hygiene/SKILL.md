@@ -5,6 +5,8 @@ description: Keep the code repos the agent touches synced and never leave state 
 
 # Git hygiene
 
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
+
 > **overlay users**: consumer overlays may add their own state-sync workflow for the `$DESK/` repo, identity context (e.g. enterprise-managed git accounts), and overlay-specific anti-patterns. This skill stays generic.
 
 The agent's pushes must reach the remote intact and on the right branch. This skill covers source-as-evidence reads, the pre-push CI-parity gate, merge-conflict EOL/BOM rules, force-push safe-conditions, and the post-commit verify gate.

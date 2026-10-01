@@ -271,7 +271,7 @@ test("an explicit cross-repository Desk plan is preserved rather than rebound by
 })
 
 for (const [label, overrides, message] of [
-  ["missing protected-evidence root", { evidenceRoot: undefined }, "Superpowers context: evidenceRoot is required"],
+  ["missing protected-evidence root", { evidenceRoot: undefined }, /^Superpowers context: evidenceRoot is required: pass --evidence-root /u],
   ["invalid step", { step: 0 }, "Superpowers context: step must be a positive integer"],
   ["invalid attempt", { attempt: 0 }, "Superpowers context: attempt must be a positive integer"],
   ["task outside Desk", { taskPath: path.join(tmpdir(), "outside-task") }, "Superpowers context: taskPath must be within the effective Desk scope"],
@@ -432,7 +432,7 @@ test("CLI missing evidence root fails with its own diagnostic and no partial out
   assert.deepEqual(snapshotTree(), before)
   assert.equal(result.status, 1)
   assert.equal(result.stdout, "")
-  assert.equal(result.stderr.trim(), "Superpowers context: evidenceRoot is required")
+  assert.match(result.stderr.trim(), /^Superpowers context: evidenceRoot is required: pass --evidence-root <a folder outside the desk>, for example .*\/evidence; the mapper only names paths under it and creates nothing$/u)
 })
 
 test("CLI unknown option fails with its own diagnostic and no partial output or writes", () => {

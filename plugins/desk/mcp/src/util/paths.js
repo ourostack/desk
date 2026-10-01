@@ -422,16 +422,18 @@ async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot 
   let lexicalCursor = lexicalDeskRoot
   let realCursor = realDeskRoot
 
-  for (const segment of rootSegments) {
+  for (const [index, segment] of rootSegments.entries()) {
     lexicalCursor = path.join(lexicalCursor, segment)
     realCursor = path.join(realCursor, segment)
-    let stat = await lstatIfExists(lexicalCursor)
+    const stat = await lstatIfExists(lexicalCursor)
     if (stat === null) {
       if (createPersonRoot === false) {
         throw new Error(`desk-mcp: effective write root does not exist: ${lexicalCursor}`)
       }
-      await fs.mkdir(lexicalCursor)
-      stat = await fs.lstat(lexicalCursor)
+      // A missing person root is not created here: a call that fails afterwards (a task that does not exist, a name
+      // the rules refuse) would leave an empty `desks/<alias>/` behind. The write itself creates it with its
+      // parent folders; nothing below a missing folder exists, so there is nothing more to check.
+      return path.join(realCursor, ...rootSegments.slice(index + 1))
     }
     const resolved = await realpathOrSymlinkError(lexicalCursor)
     if (resolved !== realCursor) {

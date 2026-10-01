@@ -98,13 +98,48 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
   return "sync ok"
 }
 
+/** How many active tasks the boot text lists; the rest are counted, never cut mid-sentence. */
+export const TASKS_SHOWN_CAP = 15
+
+const NO_NEXT_STEP = "no next step recorded"
+
+/** The longest next step or blocker boot prints; longer ones are cut at a word boundary and point at the card. */
+export const TEXT_CEILING = 600
+
+/**
+ * `text` as it is printed: whole when it fits `TEXT_CEILING`, otherwise cut at the last space inside the ceiling, backing
+ * out of an open `code` span, so an identifier or a path is never split, then "... (see card)".
+ */
+export function ceiling(text, limit = TEXT_CEILING) {
+  if (text.length <= limit) return text
+  let cut = text.slice(0, limit + 1)
+  const space = cut.lastIndexOf(" ")
+  // One unbroken word longer than the limit stays whole, up to the next space.
+  if (space > 0) cut = cut.slice(0, space)
+  else cut = text.indexOf(" ", limit) === -1 ? text : text.slice(0, text.indexOf(" ", limit))
+  if ((cut.match(/`/gu) ?? []).length % 2 === 1 && cut.lastIndexOf("`") > 0) cut = cut.slice(0, cut.lastIndexOf("`"))
+  return `${cut.trimEnd()} ... (see card)`
+}
+
+// A task's next step or blocker is printed whole: a cut line made agents guess the rest or open the card. A blocked
+// task shows the card's blocker reason (falling back to its next step); a card that records neither says so, so no
+// agent invents filler.
+function stepLine(task) {
+  const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
+  const blocker = typeof task.blocker === "string" && task.blocker !== "" ? task.blocker : null
+  if (task.status === "blocked") {
+    if (blocker !== null) return `\n  blocked: ${ceiling(blocker)}${next === null ? "" : `\n  next: ${ceiling(next)}`}`
+    return `\n  blocked: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`
+  }
+  return `\n  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`
+}
+
 function taskLine(track, task) {
   const named = `${track.desk ? `${track.desk}/` : ""}${track.track}/${task.slug}`
   const title = typeof task.title === "string" && task.title !== task.slug ? ` "${task.title}"` : ""
   const hidden = /redacted/u.test(named) ? ` (handle ${task.handle})` : ""
   const updated = typeof task.updated === "string" ? `, updated ${task.updated.slice(0, 10)}` : ""
-  const next = typeof task.next_step === "string" && task.next_step !== "" ? `\n  next: ${task.next_step}` : ""
-  return `- ${named}${title}: ${task.status ?? "no status"}${updated}${hidden}${next}`
+  return `- ${named}${title}: ${task.status ?? "no status"}${updated}${hidden}${stepLine(task)}`
 }
 
 function repoLine(state) {
@@ -114,6 +149,20 @@ function repoLine(state) {
   return `- ${state.repo} (${where}): branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
 }
 
+/**
+ * How to push a repo, naming the account every time and the fork when the route is one: "push as arimendelow via fork
+ * arimendelow/widgets; the active gh account (work) is not the push account for this repo" when gh's active account
+ * differs. An agent that reads only "route confirmed" once wrote the active account into a card as the push account.
+ */
+export function pushRoute(entry) {
+  const store = typeof entry.store === "string" ? entry.store : ""
+  const repoName = store.split("/")[1]
+  const via = entry.route === "fork" ? ` via fork ${repoName ? `${entry.account}/${repoName}` : `${entry.account}'s fork of ${store}`}` : entry.route ? ` (route ${entry.route})` : ""
+  const active = Array.isArray(entry.accounts) ? entry.accounts[0]?.account : undefined
+  const differs = typeof active === "string" && active !== entry.account ? `; the active gh account (${active}) is not the push account for this repo` : ""
+  return `push as ${entry.account}${via}${differs}`
+}
+
 // One line per distinct store, outcome, account and route, naming the task(s) it is for: the full list behind the few
 // push-route notes among the numbered instructions.
 function pushRouteLines(accounts) {
@@ -121,7 +170,7 @@ function pushRouteLines(accounts) {
   for (const entry of accounts) {
     const how =
       entry.result === "account_found"
-        ? `push as ${entry.account}${entry.route ? ` (route ${entry.route})` : ""}`
+        ? pushRoute(entry)
         : entry.result === "no_account_can_deliver"
           ? "no signed-in account can push"
           : entry.result === "not_a_github_repo"
@@ -169,7 +218,13 @@ export function formatBootText(result) {
   if (Array.isArray(tracks)) {
     lines.push("", `Active tasks (${result.active_tasks.task_count}):`)
     if (tracks.length === 0) lines.push("- none")
-    for (const track of tracks) for (const task of track.tasks) lines.push(taskLine(track, task))
+    // Blocked tasks first, then the most recently updated, before the cap cuts the list.
+    const rank = ({ task }) => (task.status === "blocked" ? 0 : 1)
+    const everyTask = tracks
+      .flatMap((track) => track.tasks.map((task) => ({ track, task })))
+      .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
+    for (const { track, task } of everyTask.slice(0, TASKS_SHOWN_CAP)) lines.push(taskLine(track, task))
+    if (everyTask.length > TASKS_SHOWN_CAP) lines.push(`- ...and ${everyTask.length - TASKS_SHOWN_CAP} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
   } else if (result.status !== "setup_required") {
     lines.push("", "Active tasks: unavailable (see degraded)")
   }

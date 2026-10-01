@@ -227,12 +227,12 @@ test("formatBootText leads with the status and the numbered instructions, then t
   assert.match(text, /- ops\/flash-valves "Flash valves": processing, updated 2026-09-28\n  next: Wire the relay, then run the suite\.\n/u)
   assert.match(text, /- acme\/valves: push as ari \(route direct\) \(ops\/flash-valves, ops\/other-task\)\n/u)
   assert.match(text, /- acme\/plain: push as ari \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- acme\/forked: push as me \(route fork\) \(crew\/t\/s\)\n/u)
+  assert.match(text, /- acme\/forked: push as me via fork me\/forked \(crew\/t\/s\)\n/u)
   assert.match(text, /- acme\/x: no signed-in account can push \(ops\/flash-valves\)\n/u)
   assert.match(text, /- local: no GitHub remote, so no push route to check \(ops\/flash-valves\)\n/u)
   assert.match(text, /- acme\/slow: not checked \(pending: boot_budget_exceeded\) \(ops\/flash-valves\)\n/u)
   assert.match(text, /- acme\/odd: not checked \(gh_failed\) \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- ops\/same: no status\n/u)
+  assert.match(text, /- ops\/same: no status\n  next: no next step recorded\n/u)
   assert.match(text, /- crew\/<redacted segment>\/<redacted segment>: drafting \(handle task-3\)\n/u)
   assert.match(text, /- acme\/w#4 Fix it \(draft\), REVIEW_REQUIRED: https:\/\/github\.com\/acme\/w\/pull\/4\n/u)
   assert.match(text, /- acme\/w#5 Plain: /u)
@@ -319,7 +319,7 @@ test("boot hands every card to the local-only recorder, and a recorder that thro
   assert.equal(threw.status, "ready")
 })
 
-test("active_tasks carries each task's next step on one line, capped and redacted, and null when the card has none", async () => {
+test("active_tasks carries each task's next step on one line, whole and redacted, and null when the card has none", async () => {
   const root = await mkTempRoot("desk-next-step-")
   const card = (slug, body) => fs.mkdir(path.join(root, "ops", slug), { recursive: true }).then(() => fs.writeFile(path.join(root, "ops", slug, "task.md"), `---\ntitle: ${slug}\nstatus: processing\nupdated: '2026-01-02T00:00:00Z'\n---\n\n${body}`))
   await card("with-step", "Intro.\n\n**Next step:** Wire the relay\nthen run the suite.\n\n- a list item\n")
@@ -329,8 +329,7 @@ test("active_tasks carries each task's next step on one line, capped and redacte
   await card("secret-step", "**Next step:** use ghp_abcdefghijklmnopqrstuvwxyz0123456789 to push\n")
   const tasks = Object.fromEntries(activeTasks(root).tracks[0].tasks.map((task) => [task.slug, task.next_step]))
   assert.equal(tasks["with-step"], "Wire the relay then run the suite.")
-  assert.equal(tasks["long-step"].length, 200)
-  assert.ok(tasks["long-step"].endsWith("..."))
+  assert.equal(tasks["long-step"], "word ".repeat(80).trim(), "a long next step is kept whole")
   assert.equal(tasks["no-step"], null)
   assert.equal(tasks["empty-step"], null)
   assert.doesNotMatch(tasks["secret-step"], /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)

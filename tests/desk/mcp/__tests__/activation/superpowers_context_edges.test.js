@@ -27,7 +27,7 @@ for (const [args, expected] of [
   })
 }
 test("context rejects whitespace-only required paths", async () => {
-  await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " \t " }), { message: "Superpowers context: evidenceRoot is required" })
+  await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " \t " }), { message: /^Superpowers context: evidenceRoot is required: pass --evidence-root <a folder outside the desk>/u })
 })
 for (const key of ["planPath", "progressPath"]) {
   test(`context rejects a supplied but empty ${key} without filesystem work`, async () => {
@@ -64,4 +64,22 @@ test("context preserves an unexpected canonical-file stat error", async (t) => {
     t.mock.restoreAll()
     syncBuiltinESMExports()
   }
+})
+
+test("a missing iterationPath says exactly what to pass, with an example under the task's folder, and creates nothing", async () => {
+  const { iterationPath, ...rest } = input
+  await assert.rejects(resolveSuperpowersContext(rest), (error) => {
+    assert.match(error.message, /^Superpowers context: iterationPath is required: pass --iteration-path <task folder>\/<repo>\/<YYYY-MM-DD>-<slug>, a folder under the task's own folder, for example .*\/<repo>\/2026-09-30-<slug>\. The mapper only reads and creates nothing, so do not mkdir it first$/u)
+    assert.ok(error.message.includes(`${input.taskPath.replace(/\/+$/u, "")}/<repo>/`), "the example sits under the task folder that was passed")
+    return true
+  })
+})
+
+test("the hint for each missing path names its flag, with an example built from the paths already given", async () => {
+  await assert.rejects(resolveSuperpowersContext({ ...input, taskPath: undefined }), /taskPath is required: pass --task-path <desk>\/<track>\/<task>/u)
+  await assert.rejects(resolveSuperpowersContext({ ...input, deskRoot: undefined }), /deskRoot is required: pass --desk-root <the desk's absolute path>/u)
+  await assert.rejects(resolveSuperpowersContext({ deskRoot: "/desk", taskPath: "/desk/t/x/", step: 1, attempt: 1 }), /iterationPath is required: .* for example \/desk\/t\/x\/<repo>\//u)
+  await assert.rejects(resolveSuperpowersContext({ deskRoot: "/desk", taskPath: " ", step: 1, attempt: 1 }), /taskPath is required/u)
+  await assert.rejects(resolveSuperpowersContext({ deskRoot: "/desk", taskPath: "/desk/t/x", iterationPath: "/desk/t/x/r/d", step: 1, attempt: 1 }), /evidenceRoot is required: pass --evidence-root <a folder outside the desk>, for example \/evidence;/u)
+  await assert.rejects(resolveSuperpowersContext({ taskPath: "/desk/t/x", iterationPath: "/desk/t/x/r/d", step: 1, attempt: 1 }), /deskRoot is required/u)
 })

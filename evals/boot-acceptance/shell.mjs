@@ -1,0 +1,330 @@
+// A small shell reader for the harness checks: it turns a Bash command into words and operators the way a shell would,
+// so a check can tell a real `git push` from the text "push" inside a commit message, and can find the paths a command
+// writes. It is not a full shell: no expansion beyond `~`, `$HOME` and `${HOME}`, and nothing is run.
+
+import * as path from "node:path"
+
+const OPERATOR_CHARS = new Set([";", "|", "&", "<", ">", "(", ")", "\n"])
+const SEPARATORS = new Set([";", "|", "||", "&&", "&", "(", ")", "\n"])
+
+// One word starting at `at`: quotes removed, a backslash keeps the next character, an unquoted operator ends it.
+function readWord(text, at) {
+  let word = ""
+  let index = at
+  while (index < text.length) {
+    const char = text[index]
+    if (char === "\\") {
+      word += text[index + 1] ?? ""
+      index += 2
+    } else if (char === "'") {
+      const close = text.indexOf("'", index + 1)
+      const end = close === -1 ? text.length : close
+      word += text.slice(index + 1, end)
+      index = end + 1
+    } else if (char === '"') {
+      index += 1
+      while (index < text.length && text[index] !== '"') {
+        if (text[index] === "\\" && index + 1 < text.length) index += 1
+        word += text[index]
+        index += 1
+      }
+      index += 1
+    } else if (char === "$" && text.startsWith("$((", index)) {
+      // Arithmetic: a `>` inside is a comparison, never a redirection.
+      const close = text.indexOf("))", index + 3)
+      const end = close === -1 ? text.length : close + 2
+      word += text.slice(index, end)
+      index = end
+    } else if (char === " " || char === "\t" || OPERATOR_CHARS.has(char)) {
+      break
+    } else {
+      word += char
+      index += 1
+    }
+  }
+  return [word, index]
+}
+
+// Skips heredoc bodies that start after the newline at `at`: each body runs to a line holding only its delimiter.
+function skipHeredocBodies(text, at, delimiters) {
+  let index = at
+  for (const delimiter of delimiters) {
+    while (index < text.length) {
+      const end = text.indexOf("\n", index)
+      const line = text.slice(index, end === -1 ? text.length : end)
+      index = end === -1 ? text.length : end + 1
+      if (line.trim() === delimiter) break
+    }
+  }
+  return index
+}
+
+/**
+ * The command as `{ kind: "word" | "op" | "redir", value, target? }` tokens: operators (`&&`, `||`, `;`, `|`, `&`,
+ * parentheses, line breaks), redirections with their target (`>`, `>>`, `<`; a `>&2` style duplication is dropped) and
+ * words. Heredoc bodies are skipped.
+ */
+export function tokenize(command) {
+  const text = String(command ?? "")
+  const tokens = []
+  const heredocs = []
+  let index = 0
+  while (index < text.length) {
+    const char = text[index]
+    if (char === " " || char === "\t") {
+      index += 1
+    } else if (char === "\n") {
+      tokens.push({ kind: "op", value: "\n" })
+      index = skipHeredocBodies(text, index + 1, heredocs.splice(0))
+    } else if (char === "<" && text.startsWith("<<", index) && text[index + 2] !== "<") {
+      index += 2
+      if (text[index] === "-") index += 1
+      while (text[index] === " " || text[index] === "\t") index += 1
+      const [delimiter, next] = readWord(text, index)
+      heredocs.push(delimiter)
+      index = next
+    } else if (char === ">" || char === "<") {
+      // `2>file`: the file descriptor was read as a word of digits just before; drop it.
+      if (tokens.at(-1)?.kind === "word" && /^\d+$/u.test(tokens.at(-1).value) && text[index - 1] !== " " && text[index - 1] !== "\t") tokens.pop()
+      const op = text.startsWith(">>", index) ? ">>" : char
+      index += op.length
+      // `>|` forces the write past `noclobber`; it is a redirection, not a pipe.
+      const forced = op === ">" && text[index] === "|"
+      if (forced) index += 1
+      if (text[index] === "&") {
+        index += 1
+        while (/[\d-]/u.test(text[index] ?? "")) index += 1
+        continue
+      }
+      while (text[index] === " " || text[index] === "\t") index += 1
+      const [target, next] = readWord(text, index)
+      tokens.push({ kind: "redir", value: op, target, forced })
+      index = next
+    } else if (OPERATOR_CHARS.has(char)) {
+      const two = text.slice(index, index + 2)
+      const op = two === "&&" || two === "||" ? two : char
+      tokens.push({ kind: "op", value: op })
+      index += op.length
+    } else {
+      const [word, next] = readWord(text, index)
+      tokens.push({ kind: "word", value: word })
+      index = next
+    }
+  }
+  return tokens
+}
+
+// Words that run the rest of the command: shell keywords, `env`, `time`, `sudo`, `nohup`, `command`, `exec`, `nice`.
+const WRAPPERS = new Set(["env", "time", "sudo", "command", "exec", "nohup", "nice", "then", "do", "else", "elif", "if", "while", "until", "!", "{", "}"])
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"])
+// `xargs` and `ssh` options that take the next word as their value.
+const XARGS_VALUE = new Set(["-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"])
+const SSH_VALUE = new Set(["-p", "-i", "-o", "-l", "-F", "-J", "-L", "-R", "-D", "-b", "-c", "-e", "-S", "-W"])
+const basename = (word) => String(word).replace(/^.*\//u, "")
+
+// The simple commands of one command text, before wrappers are looked through.
+function rawCommands(command) {
+  const out = []
+  let current = { words: [], redirects: [] }
+  const finish = () => {
+    if (current.words.length > 0 || current.redirects.length > 0) out.push(current)
+    current = { words: [], redirects: [] }
+  }
+  for (const token of tokenize(command)) {
+    if (token.kind === "op" && SEPARATORS.has(token.value)) finish()
+    else if (token.kind === "redir") current.redirects.push({ op: token.value, target: token.target, forced: token.forced })
+    else current.words.push(token.value)
+  }
+  finish()
+  return out
+}
+
+// The text inside every `$(...)` (balanced) and backtick pair of `text`.
+function substitutions(text) {
+  const found = []
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "$" && text[index + 1] === "(" && text[index + 2] !== "(") {
+      let depth = 1
+      let end = index + 2
+      while (end < text.length && depth > 0) {
+        if (text[end] === "(") depth += 1
+        else if (text[end] === ")") depth -= 1
+        end += 1
+      }
+      found.push(text.slice(index + 2, depth === 0 ? end - 1 : end))
+    } else if (text[index] === "`") {
+      const end = text.indexOf("`", index + 1)
+      if (end === -1) break
+      found.push(text.slice(index + 1, end))
+      index = end
+    }
+  }
+  return found
+}
+
+// Looks through wrappers to the command they run: `VAR=x`, `env`, `time`, `sudo`, `nohup`, `then`, `timeout 5`, `xargs -n1`, `ssh host`.
+function unwrap(words) {
+  let rest = [...words]
+  for (let guard = 0; guard < 32 && rest.length > 0; guard += 1) {
+    const first = rest[0]
+    if (/^[A-Za-z_]\w*=/u.test(first) || WRAPPERS.has(first)) {
+      rest = rest.slice(1)
+    } else if (basename(first) === "timeout") {
+      rest = rest.slice(1)
+      while (rest[0]?.startsWith("-")) rest = rest.slice(["-k", "-s", "--kill-after", "--signal"].includes(rest[0]) ? 2 : 1)
+      rest = rest.slice(1)
+    } else if (basename(first) === "xargs") {
+      rest = rest.slice(1)
+      while (rest[0]?.startsWith("-")) rest = rest.slice(XARGS_VALUE.has(rest[0]) ? 2 : 1)
+    } else if (basename(first) === "ssh") {
+      rest = rest.slice(1)
+      while (rest[0]?.startsWith("-")) rest = rest.slice(SSH_VALUE.has(rest[0]) ? 2 : 1)
+      rest = rest.slice(1)
+    } else {
+      break
+    }
+  }
+  return rest
+}
+
+/**
+ * Every simple command in `command`, as `{ words, redirects }`, looking through what runs other commands: wrappers
+ * (`env`, `time`, `sudo`, `nohup`, `timeout`, `xargs`, `then`/`do`/`else`, `ssh host`), `sh|bash|zsh -c '<script>'`
+ * strings, and `$(...)` and backtick substitutions. A git path is reduced to `git`. Nested commands follow their parent.
+ */
+export function simpleCommands(command, depth = 0) {
+  const text = String(command ?? "")
+  const out = []
+  for (const raw of rawCommands(text)) {
+    const words = unwrap(raw.words)
+    if (words.length === 0 && raw.redirects.length === 0) continue
+    if (words.length > 0 && basename(words[0]) === "git") words[0] = "git"
+    out.push({ words, redirects: raw.redirects })
+    if (depth < 4 && words.length > 0 && SHELLS.has(basename(words[0]))) {
+      const flag = words.findIndex((word, index) => index > 0 && /^-[A-Za-z]*c[A-Za-z]*$/u.test(word))
+      if (flag !== -1 && words[flag + 1] !== undefined) out.push(...simpleCommands(words[flag + 1], depth + 1))
+    }
+  }
+  if (depth < 4) for (const inner of substitutions(text)) out.push(...simpleCommands(inner, depth + 1))
+  return out
+}
+
+// Git's own options that take the next word as their value (the `--opt=value` spelling takes none).
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"])
+
+/**
+ * A `git` command's parts: `{ subcommand, args, directory }`, or null when `words` is not a git command. Global options
+ * come before the subcommand and are skipped (`-C <dir>`, `-c k=v`, `--git-dir <dir>`, `--no-pager` ...); the first word
+ * that is not an option is the subcommand. `directory` is the last `-C` value, if any.
+ */
+export function gitParts(words) {
+  if (words[0] !== "git") return null
+  let index = 1
+  let directory
+  const aliases = new Map()
+  while (index < words.length && words[index].startsWith("-")) {
+    const option = words[index]
+    if (option === "-C") directory = words[index + 1]
+    // `git -c alias.p=push p`: the alias names git's own subcommand.
+    const alias = option === "-c" ? /^alias\.([^=]+)=!?(?:git\s+)?(\S+)/u.exec(words[index + 1] ?? "") : null
+    if (alias !== null) aliases.set(alias[1], alias[2])
+    index += GIT_VALUE_OPTIONS.has(option) ? 2 : 1
+  }
+  const subcommand = aliases.get(words[index]) ?? words[index]
+  return { subcommand, args: words.slice(index + 1), directory }
+}
+
+/** Every git command in `command` with the folder it runs in: `{ subcommand, args, directory }`, where `directory` follows `cd` and `git -C` (relative paths resolved from `cwd`). */
+export function gitCommands(command, { cwd } = {}) {
+  const found = []
+  let directory = cwd
+  for (const { words } of simpleCommands(command)) {
+    if (words[0] === "cd" && words[1] !== undefined) {
+      directory = directory === undefined || words[1].startsWith("~") ? words[1] : path.posix.resolve(directory, words[1])
+      continue
+    }
+    const git = gitParts(words)
+    if (git === null || git.subcommand === undefined) continue
+    const dir = git.directory === undefined ? directory : git.directory.startsWith("~") || directory === undefined ? git.directory : path.posix.resolve(directory, git.directory)
+    found.push({ subcommand: git.subcommand, args: git.args, directory: dir })
+  }
+  return found
+}
+
+// ---------------------------------------------------------------------------
+// Writes
+// ---------------------------------------------------------------------------
+
+// The words of `args` that are not options, skipping the value of each option in `valueOptions` (`-b main`, `--depth 1`).
+function positional(args, valueOptions = []) {
+  const takesValue = new Set(valueOptions)
+  const out = []
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index].startsWith("-")) {
+      if (takesValue.has(args[index])) index += 1
+    } else {
+      out.push(args[index])
+    }
+  }
+  return out
+}
+
+const CLONE_VALUE_OPTIONS = ["-b", "--branch", "--depth", "-o", "--origin", "--reference", "--reference-if-able", "--separate-git-dir", "-c", "--config", "--filter", "-j", "--jobs", "--template", "-u", "--upload-pack", "--server-option", "--shallow-since", "--shallow-exclude", "--bundle-uri"]
+const INIT_VALUE_OPTIONS = ["-b", "--initial-branch", "--template", "--separate-git-dir", "--object-format", "--shared"]
+const WORKTREE_VALUE_OPTIONS = ["-b", "-B", "--reason"]
+
+/** A path with `~`, `$HOME` and `${HOME}` expanded and relative paths made absolute from `cwd`; null when it uses another variable or has no base. */
+export function resolveShellPath(value, { cwd, home }) {
+  let text = String(value)
+  if (home !== undefined) text = text.replace(/^~(?=\/|$)/u, home).replace(/^\$HOME(?=\/|$)|^\$\{HOME\}(?=\/|$)/u, home)
+  if (/\$|`/u.test(text) || text.startsWith("~")) return null
+  if (text.startsWith("/")) return path.posix.normalize(text)
+  return cwd === undefined ? null : path.posix.resolve(cwd, text)
+}
+
+/**
+ * The paths a shell command writes or creates, as `{ path, via }`: redirections, `mkdir`, `touch`, `tee`, the target of
+ * `cp`, `mv`, `ln` and `install`, `git clone`, `git init` and `git worktree add`. `cwd` is where the command starts
+ * and `cd` moves it; `home` expands `~`. A path that cannot be resolved is left out.
+ */
+export function shellWrites(command, { cwd, home }) {
+  const found = []
+  let directory = cwd
+  const note = (value, via) => {
+    const resolved = resolveShellPath(value, { cwd: directory, home })
+    if (resolved !== null) found.push({ path: resolved, via })
+  }
+  for (const { words, redirects } of simpleCommands(command)) {
+    for (const redirect of redirects) if (redirect.op !== "<" && redirect.target !== "") note(redirect.target, `a shell redirection (${redirect.op})`)
+    const [name, ...rest] = words
+    if (name === "cd" && rest[0] !== undefined) {
+      directory = resolveShellPath(rest[0], { cwd: directory, home }) ?? directory
+    } else if (name === "mkdir" || name === "touch" || name === "tee") {
+      const skipValue = name === "mkdir" ? new Set(["-m", "--mode"]) : new Set()
+      const args = rest.filter((arg, index) => !skipValue.has(rest[index - 1]))
+      for (const arg of positional(args)) note(arg, name)
+    } else if (name === "cp" || name === "mv" || name === "ln" || name === "install") {
+      // `-t DIR` and `--target-directory DIR` name the destination, whatever the other words are.
+      const flagged = rest.findIndex((arg) => arg === "-t" || arg === "--target-directory" || arg.startsWith("--target-directory="))
+      if (flagged !== -1) {
+        const target = rest[flagged].includes("=") ? rest[flagged].slice(rest[flagged].indexOf("=") + 1) : rest[flagged + 1]
+        if (target !== undefined && target !== "") note(target, name)
+      }
+      else if (positional(rest).length >= 2) note(positional(rest).at(-1), name)
+    } else if (name === "git") {
+      const git = gitParts(words)
+      if (git === null) continue
+      if (git.subcommand === "clone") {
+        const args = positional(git.args, CLONE_VALUE_OPTIONS)
+        if (args.length > 0) note(args[1] ?? path.posix.basename(args[0]).replace(/\.git$/u, ""), "git clone")
+      } else if (git.subcommand === "init") {
+        const args = positional(git.args, INIT_VALUE_OPTIONS)
+        if (args.length > 0) note(args[0], "git init")
+      } else if (git.subcommand === "worktree") {
+        const args = positional(git.args, WORKTREE_VALUE_OPTIONS)
+        if (args[0] === "add" && args[1] !== undefined) note(args[1], "git worktree add")
+      }
+    }
+  }
+  return [...new Map(found.map((write) => [`${write.via}\0${write.path}`, write])).values()]
+}

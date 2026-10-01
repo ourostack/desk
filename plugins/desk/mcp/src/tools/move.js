@@ -23,6 +23,7 @@ import {
   pathExists,
 } from "../util/fm.js"
 import { resolveWriteTarget, personPrefix } from "../util/paths.js"
+import { withCreatedDirs } from "../util/created-dirs.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
@@ -198,8 +199,11 @@ function commitMove({ root, movedDirs, writtenFiles, message, spawnGit }) {
  * Never commits.
  */
 async function movePath({ root, from, to, spawnGit }) {
-  await fs.mkdir(path.dirname(to), { recursive: true })
+  // A move that fails leaves no empty destination folder behind.
+  await withCreatedDirs(path.dirname(to), () => moveInto({ root, from, to, spawnGit }))
+}
 
+async function moveInto({ root, from, to, spawnGit }) {
   if (!isGitRepository(root, spawnGit)) {
     await fs.rename(from, to)
     return

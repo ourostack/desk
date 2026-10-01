@@ -43,15 +43,102 @@ function listDirs(dir) {
   }
 }
 
-const NEXT_STEP_CAP = 200
+// The card's text with fenced code blocks blanked, so a marker quoted inside a fence is never mistaken for the card's own.
+function withoutFences(content) {
+  let open = null
+  return content
+    .split(/\r?\n/u)
+    .map((line) => {
+      const fence = /^\s{0,3}(`{3,}|~{3,})/u.exec(line)
+      if (open === null) {
+        if (fence === null) return line
+        open = fence[1]
+        return ""
+      }
+      if (fence !== null && fence[1][0] === open[0] && fence[1].length >= open.length && line.trim() === fence[1]) open = null
+      return ""
+    })
+    .join("\n")
+}
+
+// A line that starts a new labelled field (`**Label:** ...`) ends the paragraph before it.
+const LABEL_LINE = /^\s*(?:>\s*)?(?:[-*+]\s+)?\*\*[^*\n]+:\*\*/u
 
 // The card's `**Next step:**` paragraph (task-body.js writes it), one line, redacted like any other text, or null.
-function nextStepOf(content) {
-  const match = /^\*\*Next step:\*\*[ \t]*(.*(?:\n(?![ \t]*\n|[ \t]*(?:[-*+]|\d+[.)])\s|#{1,6}\s).+)*)/mu.exec(content)
+export function nextStepOf(content) {
+  const match = /^\*\*Next step:\*\*[ \t]*(.*(?:\n(?![ \t]*\n|[ \t]*(?:[-*+]|\d+[.)])\s|#{1,6}\s|\*\*[^*\n]+:\*\*).+)*)/mu.exec(withoutFences(content))
   if (match === null) return null
   const line = redactCredentialLikeText(match[1].replace(/\s+/gu, " ").trim())
-  if (line === "") return null
-  return line.length > NEXT_STEP_CAP ? `${line.slice(0, NEXT_STEP_CAP - 3)}...` : line
+  return line === "" ? null : line
+}
+
+const BLOCKER_LABELS = "(?:blockers?|waiting on|blocked on|blocked by)"
+const BLOCKER_LINE = new RegExp(`^(?:\\*\\*${BLOCKER_LABELS}:?\\*\\*:?|${BLOCKER_LABELS}:)[ \\t]*(.*)$`, "iu")
+const BLOCKER_HEADING = new RegExp(`^#{1,6}[ \\t]+${BLOCKER_LABELS}[ \\t]*:?[ \\t]*$`, "iu")
+const LIST_MARKER = /^(?:[-*+]|\d+[.)])\s+/u
+const NOTHING = /^(?:none|n\/a|na|nil|no blockers?|nothing|-|—)\.?$/iu
+
+// A card line without its blockquote and list markers.
+const bare = (line) => line.trim().replace(/^>\s*/u, "").replace(LIST_MARKER, "")
+
+const nonBlank = (lines, start) => {
+  let index = start
+  while (index < lines.length && lines[index].trim() === "") index += 1
+  return index
+}
+
+// The lines from `start` that continue one paragraph: it ends at a blank line, a heading, a list item or the next `**Label:**` line.
+function paragraphFrom(lines, start) {
+  const out = []
+  for (let index = start; index < lines.length; index += 1) {
+    const raw = lines[index]
+    const line = raw.trim().replace(/^>\s*/u, "")
+    if (line === "" || /^#{1,6}\s/u.test(line) || LIST_MARKER.test(line) || LABEL_LINE.test(raw)) break
+    out.push(line)
+  }
+  return out.join(" ")
+}
+
+// The text of a `## Blockers` section: its list items joined with "; ", or its first paragraph when it has no list.
+function sectionText(lines, start) {
+  let end = start
+  while (end < lines.length && !/^#{1,6}\s/u.test(lines[end])) end += 1
+  const body = lines.slice(start, end)
+  const items = []
+  for (let index = 0; index < body.length; index += 1) {
+    const line = body[index].trim().replace(/^>\s*/u, "")
+    if (!LIST_MARKER.test(line)) continue
+    const item = [line.replace(LIST_MARKER, "")]
+    while (index + 1 < body.length && body[index + 1].trim() !== "" && !LIST_MARKER.test(body[index + 1].trim().replace(/^>\s*/u, ""))) {
+      index += 1
+      item.push(body[index].trim().replace(/^>\s*/u, ""))
+    }
+    items.push(item.join(" "))
+  }
+  if (items.length > 0) return items.map((item) => item.trim()).filter((item) => !NOTHING.test(item.replace(/\s+/gu, " ").trim()) && item.trim() !== "").join("; ")
+  return paragraphFrom(body, nonBlank(body, 0))
+}
+
+// Why the card says the task is blocked, one line, redacted like any other text, or null. Cards record it as a
+// `## Blocker`, `## Blockers` (a list) or `## Waiting on` section, or as a `**Blocker:**` / `Waiting on:` line, which may
+// sit in a list item or a blockquote (task-lifecycle: the transition to `blocked` writes a "Blocker" / "Waiting on" line with
+// the specific reason). "None" and "n/a" mean no blocker. Fenced code is skipped.
+function blockerOf(content) {
+  const lines = withoutFences(content).split(/\r?\n/u)
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = bare(lines[index])
+    let text = null
+    if (BLOCKER_HEADING.test(lines[index].trim())) {
+      text = sectionText(lines, index + 1)
+    } else {
+      const inline = BLOCKER_LINE.exec(line)
+      // The reason is on the label's line (a wrapped reason continues below it) or, when the line holds only the label, below it.
+      if (inline !== null) text = [inline[1], paragraphFrom(lines, inline[1] === "" ? nonBlank(lines, index + 1) : index + 1)].join(" ")
+    }
+    const clean = text === null ? "" : redactCredentialLikeText(text.replace(/\s+/gu, " ").trim())
+    if (clean !== "" && !NOTHING.test(clean)) return clean
+  }
+  return null
 }
 
 // null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
@@ -131,6 +218,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
         updated: asText(data.updated),
         repos: shownRepos(data.repos),
         next_step: nextStepOf(content),
+        blocker: blockerOf(content),
       })
     }
     if (tasks.length === 0) continue
@@ -146,7 +234,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
  * activeTasks(deskRoot) -> { tracks, task_count, track_count, redacted }
  *
  * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
- * where `next_step` is the card's `**Next step:**` paragraph on one line (at most 200 characters) or null,
+ * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
  * where `repos` is `[{ name?, local_path?, mode? }]`.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.
