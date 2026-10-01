@@ -434,6 +434,21 @@ test("the controller's tool calls are split with its time, by the segment that h
   assert.deepEqual(sharedCounts.map((formulas) => formulas.tool_calls_by_kind.partial_reasons), [["worker_split", "worker_shared"], ["worker_split", "worker_shared"], ["worker_split"]])
 })
 
+test("tool and API retries carry the same partial reasons: split, and shared when the job holds a shared span", () => {
+  const segmented = publishedSession([["a", [0], [span(0, 40000), span(40000, 50000, true)]], ["b", [0], [span(40000, 50000, true), span(50000, 100000)]]])
+  segmented.counts = { tool_calls: {}, tool_failures: {}, tool_retries: 1, api_retries: 3, compactions: 0 }
+  const whole = publishedSession([["a", [0, 1]]])
+  whole.session.id = "66666666-6666-4666-8666-666666666666"
+  whole.counts = { tool_calls: {}, tool_failures: {}, tool_retries: 2, api_retries: 1, compactions: 0 }
+  const signals = formulasOf("a", [segmented, whole]).rework_signals
+  const reasons = ["worker_split", "worker_shared"]
+  assert.deepEqual(signals.tool_retries, { class: "inferred", value: 2, partial: true, uncovered_sessions: 1, partial_reasons: reasons })
+  assert.deepEqual(signals.api_retries, { class: "inferred", value: 1, partial: true, uncovered_sessions: 1, partial_reasons: reasons })
+  // Every session split: nothing to report, for either.
+  const alone = formulasOf("a", [segmented]).rework_signals
+  assert.deepEqual([alone.tool_retries.class, alone.api_retries.class, alone.api_retries.reason], ["unavailable", "unavailable", "worker_split"])
+})
+
 test("each controller PR with a time lands in exactly one job; a boundary goes to the later job", () => {
   const prs = [
     { repo: "o/r", number: 1, agent: 0, at_ms: 10000 },

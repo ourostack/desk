@@ -143,6 +143,16 @@ export function fieldCoverage(sessions, fields, partialFields = [], split = new 
   return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText), split: splitCount, shared: sharedCount }
 }
 
+// Retries have no worker, so a split session cannot say which of them were the
+// job's. A job whose sessions are all split therefore has none to report: that
+// is unavailable, never a measured zero. With some whole sessions the sum
+// covers those only, and the measure stays partial (`worker_split`).
+function retryCoverage(sessions, fields, split, shared) {
+  const coverage = fieldCoverage(sessions, fields, [], split, shared)
+  if (sessions.length === 0 || split.size < sessions.length) return coverage
+  return { ...coverage, none: true, reasons: [...new Set([...coverage.reasons, "worker_split"])].sort(compareText) }
+}
+
 function missingValue(coverage) {
   return coverage.reasons.length === 1 ? unavailable(coverage.reasons[0]) : unavailable("mixed", { reasons: coverage.reasons })
 }
@@ -444,7 +454,8 @@ export function calculateFormulas(timeline) {
   const references = uniqueReferences(timeline)
   const split = splitSessions(timeline)
   const counted = jobCounted(timeline, split)
-  const splitCoverage = fieldCoverage(sourceSessions, [], [], split, sharedSegmentSessions(timeline))
+  const sharedSegments = sharedSegmentSessions(timeline)
+  const splitCoverage = fieldCoverage(sourceSessions, [], [], split, sharedSegments)
   const privatePrs = sourceSessions.reduce((total, session) => total + session.refs.private.prs, 0)
   const privateCommits = sourceSessions.reduce((total, session) => total + session.refs.private.commits, 0)
 
@@ -475,8 +486,8 @@ export function calculateFormulas(timeline) {
     }), fieldCoverage(sourceSessions, [], [], new Set(), references.withheld)),
     rework_signals: {
       tool_failures: withCoverage(inferred(Object.values(sumMap(counted, "tool_failures")).reduce((total, value) => total + value, 0)), splitCoverage),
-      tool_retries: withCoverage(inferred(sumField(counted, "tool_retries")), splitCoverage),
-      api_retries: covered(fieldCoverage(sourceSessions, ["api_retries"], [], split), () => inferred(sumField(counted, "api_retries"))),
+      tool_retries: covered(retryCoverage(sourceSessions, [], split, sharedSegments), () => inferred(sumField(counted, "tool_retries"))),
+      api_retries: covered(retryCoverage(sourceSessions, ["api_retries"], split, sharedSegments), () => inferred(sumField(counted, "api_retries"))),
       session_retouches: inferred(Math.max(0, sourceSessions.length - 1)),
     },
     unavailable: measured(unavailableGroups(sourceSessions)),
