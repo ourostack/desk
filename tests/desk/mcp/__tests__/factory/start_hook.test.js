@@ -27,7 +27,6 @@ const boot = () => {
   assert.ok(existsSync(BOOT), "the boot-check registry must exist")
   return require(BOOT)
 }
-const NO_CONSENT = "Factory: this desk hasn't decided whether to contribute measurement data; ask the operator once (desk:session-start)"
 const DAY = 24 * 60 * 60 * 1000
 
 const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
@@ -215,11 +214,11 @@ test("launchCommand starts detached with ignored stdio and never waits for the c
 // The factory and desk-health checks inside the registry.
 // ---------------------------------------------------------------------------
 
-test("the factory check asks once when the bound desk's store has no decision, and is silent without a desk", () => scratch(async ({ env, desk }) => {
+test("the factory check says nothing when the bound desk's store has no decision (the boot script owns the question), and is silent without a desk", () => scratch(async ({ env, desk }) => {
   const { runBootChecks, factoryCheck } = boot()
   const run = (options) => runBootChecks({ ...quiet, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, ...options })
-  assert.equal(await run({ host: "claude", env }), `Desk boot: ${NO_CONSENT}`)
-  assert.equal(await run({ host: "copilot", env, sessionFolder: desk }), `Desk boot: ${NO_CONSENT}`)
+  assert.equal(await run({ host: "claude", env }), "")
+  assert.equal(await run({ host: "copilot", env, sessionFolder: desk }), "")
   const unbound = { ...env, DESK: "" }
   delete unbound.DESK
   assert.equal(await run({ host: "claude", env: { ...unbound, HOME: path.join(desk, "..", "empty-home") } }), "")
@@ -412,7 +411,7 @@ for (const host of ["claude", "copilot"]) {
   }))
 }
 
-test("the real hooks with a bound desk and no decision say exactly the no-consent line, once", () => scratch(async ({ env, desk, base }) => {
+test("the real hooks with a bound desk and no decision add no factory boot line and never ask for consent", () => scratch(async ({ env, desk, base }) => {
   const preload = path.join(base, "relax.cjs")
   await fs.writeFile(preload, `const boot = require(${JSON.stringify(BOOT)}); const run = boot.runBootChecks; boot.runBootChecks = (options) => run({ ...options, launch: async () => {}, launchRepair: async () => {}, totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } });\n`)
   const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() }
@@ -422,9 +421,8 @@ test("the real hooks with a bound desk and no decision say exactly the no-consen
     const parsed = JSON.parse(result.stdout)
     const context = parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext
     const bootLines = context.split("\n").filter((line) => line.startsWith("Desk boot:"))
-    assert.equal(bootLines.length, 1, context)
-    assert.ok(bootLines[0].includes(NO_CONSENT), `${host}: ${bootLines[0]}`)
-    assert.doesNotMatch(bootLines[0], /\b(you|please|human)\b/iu, "the line is addressed to the agent")
+    assert.deepEqual(bootLines.filter((line) => /Factory:/u.test(line)), [], `${host}: ${context}`)
+    assert.doesNotMatch(context, /Factory: this desk/u)
   }
   assert.equal(existsSync(path.join(base, "state", "ouroboros-skills", "desk", "factory")), false, "startup never creates factory state")
 }))
