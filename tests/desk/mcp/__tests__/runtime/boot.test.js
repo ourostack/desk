@@ -33,6 +33,7 @@ import {
   runBootCli,
   walkTaskCards,
 } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
+import { setRuntimeResolver, setRuntimeResolverFailure } from "../../../../../plugins/desk/mcp/src/desk/runtime-resolver.js"
 import { REDACTED_SEGMENT } from "../../../../../plugins/desk/mcp/src/util/redact.js"
 
 // Every collaborator that reaches outside the process (migration Detect
@@ -1162,6 +1163,24 @@ test("bootOnce: without gray-matter the repos lists are not validated, and the r
   assert.equal(lite.card_parser, "lite")
   assert.deepEqual(lite.card_validation, [])
   assert.ok(lite.pending.some((line) => line.startsWith("card repos: not validated")))
+})
+
+test("bootOnce: when restoring the runtime dependencies failed, the not-validated line says why", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const { gh, jq } = okPrereqRunners()
+  setRuntimeResolverFailure("no runtime pack for linux-x64-node-999")
+  try {
+    const lite = await bootOnce({
+      env: { DESK: root }, cwd: root, homeDir: root, gh, jq, nestedCards: false,
+      walkFn: () => [],
+      syncFn: async () => ({ state: "synced" }),
+      factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
+    })
+    assert.ok(lite.pending.some((line) => line.startsWith("card repos: not validated") && line.includes("restoring the runtime dependencies failed: no runtime pack for linux-x64-node-999")))
+  } finally {
+    setRuntimeResolver(null)
+  }
 })
 
 // ── detectAgentHost, parseBootArgs ───────────────────────────────────────

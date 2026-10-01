@@ -64,6 +64,7 @@ import {
 } from "../util/paths.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { readSmallText } from "../factory/marker.js"
+import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 
@@ -996,7 +997,10 @@ export async function bootOnce({
   } catch (error) {
     degraded.push(`card_validation: ${error.message}`)
   }
-  if (!nestedCards) pending.push("card repos: not validated, gray-matter is not installed (the dependency-free reader cannot parse repos lists)")
+  if (!nestedCards) {
+    const why = runtimeResolverFailure()
+    pending.push(`card repos: not validated, gray-matter is not installed (the dependency-free reader cannot parse repos lists)${why === null ? "" : `; restoring the runtime dependencies failed: ${redactCredentialLikeText(why)}`}`)
+  }
   if (cardValidationResult.length > 0) {
     degraded.push(`${cardValidationResult.length} task card${cardValidationResult.length === 1 ? "" : "s"} with corrupted frontmatter`)
   }
