@@ -270,7 +270,7 @@ export function claimSources({ reply, calls }) {
   for (const call of liveCalls(calls)) {
     const input = call.input ?? {}
     if (String(call.name ?? "").endsWith("task_update")) {
-      for (const field of ["note", "body_append", "next_step"]) if (typeof input[field] === "string") sources.push({ where: `a task_update ${field}`, text: input[field] })
+      for (const field of ["note", "body_append", "next_step"]) if (typeof input[field] === "string") sources.push({ where: `a task_update ${field}`, text: input[field], call })
     } else if (["Edit", "Write", "MultiEdit"].includes(call.name) && /task\.md/.test(JSON.stringify(input))) {
       // Only the words being written: the text already on the card is not the agent's claim.
       const written = [input.new_string, input.content, ...(Array.isArray(input.edits) ? input.edits.map((edit) => edit?.new_string) : [])].filter((text) => typeof text === "string")

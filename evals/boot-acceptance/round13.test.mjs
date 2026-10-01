@@ -200,3 +200,31 @@ test("the harness and the gate read the same sentences as claims or not (review 
   // A commit message is read as written, quotes and all.
   assert.equal(taskDoneClaims('git commit -m "Task complete"').length, 1)
 })
+
+// ---- card notes written with a non-done status ----
+
+const TU_STATUS = (note) => [use("n", "mcp__plugin_desk_desk__task_update", { track: "g", slug: "t", ...note }), answer("n", JSON.stringify({ status: "updated", report_as: "Task t is at processing (not done): next" }))]
+const TU_BARE = (note) => [use("n", "mcp__plugin_desk_desk__task_update", { track: "g", slug: "t", ...note }), answer("n", JSON.stringify({ status: "updated" }))]
+const doneIn = (verdict, where) => failures(verdict).some((failure) => new RegExp(`said the task is done in ${where}`, "u").test(failure))
+
+test("a note or next_step in a task_update that left a non-done status is a claim about the work, not the task", () => {
+  for (const field of ["note", "next_step", "body_append"]) {
+    const v = check("resume-named-task", [...BOOT_PLAIN, ...TU_STATUS({ [field]: "The rain-delay policy implementation is complete and tested." })], "Wired the 30% check; the card is at processing.")
+    assert.ok(!doneIn(v, `a task_update ${field}`), `${field}: ${failures(v).join("|")}`)
+  }
+})
+
+test("a note with no status on the card, a commit message, and a reply are still judged on their own words", () => {
+  const bare = check("resume-named-task", [...BOOT_PLAIN, ...TU_BARE({ note: "The task is complete." })], "Wired the 30% check.")
+  assert.ok(doneIn(bare, "a task_update note"))
+  const commit = check("resume-named-task", [...BOOT_PLAIN, use("c", "Bash", { command: 'git commit -m "Task complete"' }), answer("c", "[main abc] Task complete")], "Wired the 30% check.")
+  assert.ok(doneIn(commit, "a git commit message"))
+  const reply = check("resume-named-task", [...BOOT_PLAIN, ...TU_STATUS({ note: "ok" })], "Done. Wired the check.")
+  assert.ok(doneIn(reply, "the reply"))
+})
+
+test("a cleared note still faces the test-claim check", () => {
+  const v = check("resume-named-task", [...BOOT_PLAIN, ...TU_STATUS({ note: "Implementation complete; all tests pass." })], "Wired the 30% check; the card is at processing.")
+  assert.ok(failures(v).some((failure) => /claimed tests pass/u.test(failure)), failures(v).join("|"))
+  assert.ok(!doneIn(v, "a task_update note"))
+})
