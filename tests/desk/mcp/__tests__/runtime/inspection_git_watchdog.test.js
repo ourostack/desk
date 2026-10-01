@@ -1,9 +1,12 @@
 // Unit tests for the inspection-Git watchdog pieces: the kernel alarm wrapper, the process-group kill and the reaper bookkeeping.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { inspectionCommand, isExecutable, inspectionSpawnOptions, killProcessGroup, liveInspectionChildren, readInspectionGit, reapOnSignal, resolveWatchdog, watchdogSeconds } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
+import { inspectionCommand, isExecutable, inspectionSpawnOptions, killProcessGroup, liveInspectionChildren, readInspectionGit, reapOnSignal, resetWatchdogForTests, watchdogIsBroken, resolveWatchdog, watchdogSeconds } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
 import * as path from "node:path"
-import { blockedRepo, posixOnly } from "../_process_hygiene.js"
+import { execFileSync } from "node:child_process"
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { blockedRepo, posixOnly, removeFixtureAfter } from "../_process_hygiene.js"
 
 test("the watchdog never fires on a Git read that answers, and the in-process timeout still reports ETIMEDOUT", { skip: posixOnly }, async (t) => {
   const quick = blockedRepo(t)
@@ -59,9 +62,10 @@ test("inspectionCommand puts Git behind the alarm wrapper, drops Perl's code and
   assert.deepEqual(wrapped.argv.slice(0, 1), ["-e"])
   assert.match(wrapped.argv[1], /^alarm shift @ARGV; exec /u)
   assert.deepEqual(wrapped.argv.slice(2), ["3", "/usr/bin/git", "status"])
-  assert.deepEqual(env, { PATH: "/usr/bin" })
+  assert.deepEqual(wrapped.env, { PATH: "/usr/bin" })
+  assert.deepEqual(env, { PATH: "/usr/bin", PERL5OPT: "-e1", PERL5LIB: "/x", PERLLIB: "/y" }, "the caller's environment is not changed")
   const bare = inspectionCommand({ watchdog: undefined, git: "/usr/bin/git", args: ["status"], timeoutMs: 2000, env: { PERL5OPT: "keep" } })
-  assert.deepEqual(bare, { file: "/usr/bin/git", argv: ["status"] })
+  assert.deepEqual(bare, { file: "/usr/bin/git", argv: ["status"], env: { PERL5OPT: "keep" } })
 })
 
 test("reapOnSignal delivers the signal again only when nobody else listens for it", () => {
@@ -101,4 +105,95 @@ test("a SIGTERM delivered to a process with a live read kills that read's Git an
   await assert.rejects(read)
   assert.equal(liveInspectionChildren(), 0)
   assert.equal(process.listenerCount("SIGTERM"), before)
+})
+
+// A repository whose `git status` runs a slow fsmonitor hook: a Git grandchild that only a group kill can reach.
+function fsmonitorRepo(t) {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-guard-fsmonitor-"))
+  removeFixtureAfter(t, root)
+  execFileSync("git", ["init", "-q", "-b", "main", root])
+  const pidFile = path.join(root, "hook.pid")
+  const hook = path.join(root, "hook.sh")
+  writeFileSync(hook, `#!/bin/sh\necho $$ > ${pidFile}\nexec sleep 300\n`)
+  chmodSync(hook, 0o755)
+  return { root, pidFile, args: ["-c", `core.fsmonitor=${hook}`, "status"] }
+}
+
+async function assertHookGone(f) {
+  assert.ok(existsSync(f.pidFile), "the fsmonitor hook started")
+  const pid = Number(readFileSync(f.pidFile, "utf8"))
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try { process.kill(pid, 0) } catch (error) { assert.equal(error.code, "ESRCH"); return }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  assert.fail(`the Git helper ${pid} outlived the kill`)
+}
+
+test("an in-process timeout kills Git's helper as well as Git", { skip: posixOnly }, async (t) => {
+  const f = fsmonitorRepo(t)
+  await assert.rejects(() => readInspectionGit(f.root, f.args, {}, { timeoutMs: 1500 }), { code: "ETIMEDOUT" })
+  await assertHookGone(f)
+})
+
+test("an abort kills Git's helper as well as Git", { skip: posixOnly }, async (t) => {
+  const f = fsmonitorRepo(t)
+  const controller = new AbortController()
+  const read = readInspectionGit(f.root, f.args, {}, { signal: controller.signal, timeoutMs: 60000 })
+  for (let attempt = 0; attempt < 50 && !existsSync(f.pidFile); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100))
+  controller.abort()
+  await assert.rejects(read, { name: "AbortError" })
+  await assertHookGone(f)
+})
+
+function fakePerl(t, body) {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-guard-fakeperl-"))
+  removeFixtureAfter(t, root)
+  const file = path.join(root, "perl")
+  writeFileSync(file, `#!/bin/sh\n${body}\n`)
+  chmodSync(file, 0o755)
+  return { root, file }
+}
+
+test("a wrapper that fails before exec is retried once with bare Git and then remembered as broken", { skip: posixOnly }, async (t) => {
+  resetWatchdogForTests()
+  t.after(resetWatchdogForTests)
+  const f = fakePerl(t, 'echo "exec failed: No such file or directory" >&2; exit 127')
+  const first = await readInspectionGit(f.root, ["--version"], {}, { watchdog: f.file })
+  assert.equal(first.ok, true)
+  assert.match(first.stdout, /^git version /u)
+  assert.equal(watchdogIsBroken(), true)
+  const second = await readInspectionGit(f.root, ["--version"], {})
+  assert.equal(second.ok, true)
+})
+
+test("a wrapper that cannot start at all is retried with bare Git", { skip: posixOnly }, async (t) => {
+  resetWatchdogForTests()
+  t.after(resetWatchdogForTests)
+  const result = await readInspectionGit(tmpdir(), ["--version"], {}, { watchdog: "/nonexistent/desk-no-such-perl" })
+  assert.equal(result.ok, true)
+  assert.equal(watchdogIsBroken(), true)
+})
+
+test("a Git failure is never mistaken for a broken wrapper, even with exit 127 or another code", { skip: posixOnly }, async (t) => {
+  resetWatchdogForTests()
+  t.after(resetWatchdogForTests)
+  const plain127 = fakePerl(t, "exit 127")
+  const first = await readInspectionGit(plain127.root, ["--version"], {}, { watchdog: plain127.file })
+  assert.deepEqual([first.ok, first.code], [false, 127])
+  const other = fakePerl(t, 'echo "exec failed: x" >&2; exit 5')
+  const second = await readInspectionGit(other.root, ["--version"], {}, { watchdog: other.file })
+  assert.deepEqual([second.ok, second.code], [false, 5])
+  assert.equal(watchdogIsBroken(), false)
+})
+
+test("a missing working directory is not blamed on the wrapper", { skip: posixOnly }, async (t) => {
+  resetWatchdogForTests()
+  t.after(resetWatchdogForTests)
+  await assert.rejects(readInspectionGit("/nonexistent/desk-no-such-cwd", ["--version"], {}), /ENOENT/u)
+  assert.equal(watchdogIsBroken(), false)
+})
+
+test("output past the 1 MiB limit kills Git and is reported as an error", { skip: posixOnly }, async (t) => {
+  const f = fsmonitorRepo(t)
+  await assert.rejects(() => readInspectionGit(f.root, ["-c", "alias.big=!head -c 1300000 /dev/zero", "big"], {}, { timeoutMs: 10000 }), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" })
 })
