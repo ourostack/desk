@@ -26,8 +26,8 @@ import * as path from "node:path"
 import * as process from "node:process"
 
 import { materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, freshTempDir, REAL_HOME } from "./lib.mjs"
-import { SCENARIOS, CRITIQUE_SUFFIX, findScenario } from "./scenarios.mjs"
-import { buildChildEnv, findRealGh, installGhShim, writeGitConfig } from "./safety.mjs"
+import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
+import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactTokens, writeGitConfig } from "./safety.mjs"
 
 const HERE = path.dirname(new URL(import.meta.url).pathname)
 const WORKTREE_ROOT = path.resolve(HERE, "..", "..")
@@ -108,7 +108,9 @@ export function buildContext(events) {
   const textParts = []
   const assistantTexts = []
   let finalResult = null
+  let sessionId = null
   for (const ev of events) {
+    if (sessionId === null && typeof ev.session_id === "string") sessionId = ev.session_id
     if ((ev.type === "assistant" || ev.type === "user") && Array.isArray(ev.message?.content)) {
       for (const block of ev.message.content) {
         if (block.type === "tool_use") toolCalls.push({ name: block.name, input: block.input })
@@ -127,6 +129,10 @@ export function buildContext(events) {
     allText,
     finalResultText: finalResult?.result ?? "",
     ghDenials: [],
+    sessionId,
+    // Token-shaped strings (or markers where one was already redacted) anywhere in the events; run.mjs adds stderr and the critique turn.
+    tokenLeaks: countTokenLeaks(JSON.stringify(events)),
+    critiqueToolCalls: [],
     isError: finalResult?.is_error ?? null,
     durationMs: finalResult?.duration_ms ?? null,
     durationApiMs: finalResult?.duration_api_ms ?? null,
@@ -136,10 +142,52 @@ export function buildContext(events) {
   }
 }
 
-/** The critique is asked as the last part of the one combined prompt; the model's final answer is the best available extraction. */
-function extractCritique(ctx) {
-  if (ctx.finalResultText && ctx.finalResultText.trim()) return ctx.finalResultText.trim()
-  return ctx.allText.trim()
+/**
+ * Both turns of one run. Turn 1 is the scenario prompt; turn 2 is the critique, sent into the same session with `--resume <session id>` and the same isolated environment, so turn 1's final reply is the agent's real answer to the operator and the critique is a separate field. `claude` is the foreground runner (`runClaude`; a test passes a fake). Token-shaped strings are redacted from every output before anything is parsed or saved; the markers left behind are counted in `ctx.tokenLeaks`.
+ * Returns { ctx, critique, critiqueSkipped, turns: [{ stdout, stderr, timedOut, status, signal }] }.
+ */
+export async function runTurns({ claude, prompt, critiquePrompt, flags, cwd, env, timeoutMs }) {
+  const turn = async (args) => {
+    const raw = await claude({ args, cwd, env, timeoutMs })
+    return { ...raw, stdout: redactTokens(raw.stdout ?? ""), stderr: redactTokens(raw.stderr ?? "") }
+  }
+  const first = await turn(["-p", prompt, ...flags])
+  const ctx = buildContext(parseStreamJson(first.stdout))
+  ctx.tokenLeaks += countTokenLeaks(first.stderr)
+  const turns = [first]
+  let critique = ""
+  let critiqueSkipped = null
+  if (first.timedOut) critiqueSkipped = "the scenario turn timed out"
+  else if (ctx.sessionId === null) critiqueSkipped = "the scenario turn's transcript has no session id to resume"
+  else {
+    const second = await turn(["-p", critiquePrompt, "--resume", ctx.sessionId, ...flags])
+    turns.push(second)
+    const critiqueCtx = buildContext(parseStreamJson(second.stdout))
+    critique = (critiqueCtx.finalResultText.trim() || critiqueCtx.allText.trim())
+    ctx.critiqueToolCalls = critiqueCtx.toolCalls
+    ctx.critiqueCostUsd = critiqueCtx.totalCostUsd
+    ctx.tokenLeaks += critiqueCtx.tokenLeaks + countTokenLeaks(second.stderr)
+    if (critique === "") critiqueSkipped = "the critique turn returned no text"
+  }
+  return { ctx, critique, critiqueSkipped, turns }
+}
+
+/**
+ * The scoring context of one saved run directory, with no model call: the scenario turn's transcript, the critique turn's tool calls and token markers from `critique-transcript.jsonl` when it exists, token markers in `stderr.log`, and the gh shim's denials. Used by rescore.mjs.
+ */
+export function loadRunContext(runDir) {
+  const read = (name) => (existsSync(path.join(runDir, name)) ? readFileSync(path.join(runDir, name), "utf8") : null)
+  const ctx = buildContext(parseStreamJson(read("transcript.jsonl") ?? ""))
+  const critiqueText = read("critique-transcript.jsonl")
+  if (critiqueText !== null) {
+    const critiqueCtx = buildContext(parseStreamJson(critiqueText))
+    ctx.critiqueToolCalls = critiqueCtx.toolCalls
+    ctx.tokenLeaks += critiqueCtx.tokenLeaks
+  }
+  ctx.tokenLeaks += countTokenLeaks(read("stderr.log") ?? "")
+  const denied = read("gh-denied.jsonl")
+  ctx.ghDenials = denied === null ? [] : denied.split("\n").filter(Boolean).map((l) => JSON.parse(l))
+  return ctx
 }
 
 /** One foreground `claude` call. On timeout the whole process group is killed, so no child outlives the run. */
@@ -185,14 +233,12 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   materializeGreenhouseClone(homeDir)
   const pluginDir = args.pluginDir ? path.resolve(args.pluginDir) : buildPluginDir({ worktreeRoot, targetDir: path.join(runTmp, "plugins") })
 
-  const prompt = `${scenario.prompt}${CRITIQUE_SUFFIX}`
-  const claudeArgs = [
-    "-p", prompt,
+  // Persistence is on (the default) so the critique turn can `--resume` the scenario turn's session; it writes only under this run's temp HOME.
+  const flags = [
     "--model", args.model,
     "--output-format", "stream-json",
     "--verbose",
     "--max-budget-usd", args.budget,
-    "--no-session-persistence",
     "--permission-mode", "bypassPermissions",
     "--plugin-dir", pluginDir,
   ]
@@ -207,16 +253,17 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   const env = buildChildEnv({ parentEnv: process.env, homeDir, shimDir, gitConfig, ghLog })
 
   const startedAt = Date.now()
-  const result = await runClaude({ args: claudeArgs, cwd: deskRoot, env, timeoutMs: args.timeoutMin * 60 * 1000 })
+  const { ctx, critique, critiqueSkipped, turns } = await runTurns({ claude: runClaude, prompt: scenario.prompt, critiquePrompt: CRITIQUE_PROMPT, flags, cwd: deskRoot, env, timeoutMs: args.timeoutMin * 60 * 1000 })
   const wallMs = Date.now() - startedAt
+  const [first] = turns
 
   const runDir = path.join(outDir, scenario.id, `run-${runIndex}`)
   mkdirSync(runDir, { recursive: true })
-  writeFileSync(path.join(runDir, "transcript.jsonl"), result.stdout ?? "")
-  if (result.stderr) writeFileSync(path.join(runDir, "stderr.log"), result.stderr)
+  writeFileSync(path.join(runDir, "transcript.jsonl"), first.stdout)
+  if (turns[1]) writeFileSync(path.join(runDir, "critique-transcript.jsonl"), turns[1].stdout)
+  const stderr = turns.map((t) => t.stderr).filter(Boolean).join("\n")
+  if (stderr) writeFileSync(path.join(runDir, "stderr.log"), stderr)
 
-  const events = parseStreamJson(result.stdout ?? "")
-  const ctx = buildContext(events)
   try {
     ctx.ghDenials = existsSync(ghLog) ? readFileSync(ghLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []
   } catch {
@@ -224,21 +271,22 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   }
   if (ctx.ghDenials.length) writeFileSync(path.join(runDir, "gh-denied.jsonl"), ctx.ghDenials.map((d) => JSON.stringify(d)).join("\n") + "\n")
   const checkResult = scenario.check(ctx)
-  const critique = extractCritique(ctx)
 
   const summary = {
     scenario: scenario.id,
     run: runIndex,
     prompt: scenario.prompt,
     injected: scenario.inject,
-    spawn_exit_code: result.status,
-    spawn_signal: result.signal,
-    timed_out: result.timedOut,
+    spawn_exit_code: first.status,
+    spawn_signal: first.signal,
+    timed_out: turns.some((t) => t.timedOut),
     gh_write_attempts_blocked: ctx.ghDenials.length,
+    token_leaks: ctx.tokenLeaks,
     wall_ms: wallMs,
     duration_ms: ctx.durationMs,
     duration_api_ms: ctx.durationApiMs,
     total_cost_usd: ctx.totalCostUsd,
+    critique_cost_usd: ctx.critiqueCostUsd ?? null,
     num_turns: ctx.numTurns,
     subtype: ctx.subtype,
     is_error: ctx.isError,
@@ -246,7 +294,10 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
     tool_call_names: ctx.toolCalls.map((t) => t.name),
     outcome: checkResult.outcome,
     outcome_notes: checkResult.notes,
+    // The scenario turn's final reply and the critique turn's reply are separate fields.
+    final_reply: ctx.finalResultText,
     critique,
+    critique_skipped: critiqueSkipped,
   }
   writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(summary, null, 2))
 
