@@ -243,6 +243,37 @@ test("recordLocalOnlyOnCards marks a clone boot first sees with no remote, once,
   assert.deepEqual(await recordLocalOnlyOnCards({ cards: [card((await readFront(file)).data)], deskRoot: root }), [])
 })
 
+test("recordLocalOnlyOnCards commits the card it records through Desk's commit path, and skips a card with unstaged edits", async () => {
+  const clone = await makeRepo()
+  const root = await mkTempDeskRoot()
+  git(root, "init", "-q", "-b", "main")
+  git(root, "config", "user.email", "t@example.com")
+  git(root, "config", "user.name", "T")
+  const write = async (slug, extra = "") => {
+    const dir = path.join(root, "t", slug)
+    await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, "task.md")
+    await fs.writeFile(file, `---\ntitle: T\nstatus: processing\nrepos:\n  - name: greenhouse\n    local_path: ${clone}\n    mode: local\n---\nbody\n${extra}`)
+    return file
+  }
+  const first = await write("ship-it")
+  const second = await write("other-job")
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "seed", "--no-verify")
+  await fs.appendFile(second, "unstaged human edit\n")
+  const open = { status: "processing", repos: [{ name: "greenhouse", local_path: clone, mode: "local" }] }
+  const cards = [{ file: first, track: "t", slug: "ship-it", data: open }, { file: second, track: "t", slug: "other-job", data: open }]
+  // The hook that refuses a hand commit of a card is installed, as boot does before this runs: Desk's own commit must still pass it.
+  const { installCardGuard } = await import("../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js")
+  assert.equal(installCardGuard(root).state, "installed")
+  assert.deepEqual(await recordLocalOnlyOnCards({ cards, deskRoot: root }), ["t/ship-it"])
+  assert.equal((await readFront(first)).data.repos[0].local_only, true)
+  assert.equal(git(root, "log", "-1", "--format=%s"), "boot: record local-only clone on t/ship-it")
+  assert.equal(git(root, "status", "--porcelain", "--", "t/ship-it/task.md"), "", "the recorded card is committed, not left modified")
+  assert.match(git(root, "status", "--porcelain", "--", "t/other-job/task.md"), /^M /u, "a card with unstaged edits is left alone")
+  assert.equal((await readFront(second)).data.repos[0].local_only, undefined)
+})
+
 test("task_archive also applies the rule: an old commit is refused, a new one in a recorded clone passes", async () => {
   const clone = await makeRepo({ date: "2020-01-01T00:00:00Z" })
   const old = git(clone, "rev-parse", "HEAD")

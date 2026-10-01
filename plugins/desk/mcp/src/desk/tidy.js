@@ -66,6 +66,7 @@ import { loadFrontmatterParser, organizationFindings, redactedRelPath } from "./
 import { operatorNames } from "./naming.js"
 import { crewWorkspace, parseCrewRoster, readCrewRoster } from "./crew-roster.js"
 import { hasUnstagedWork } from "../util/git-stage.js"
+import { installCardGuard } from "./card-commit-guard.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 import {
   expandHome,
@@ -829,6 +830,7 @@ export function runTidyStatusCli({
   spawnGit = spawnSync,
   spawnGh = spawnSync,
   spawnBackground = spawnChild,
+  installGuard = installCardGuard,
 }) {
   let args
   try {
@@ -868,6 +870,10 @@ export function runTidyStatusCli({
     io.stdout.write(`${stop.line}\n`)
     return 1
   }
+
+  // The tidy ends in a hand commit of the cards it moved; the desk's own pre-commit hook (refuses a hand commit that edits a card) is installed with it.
+  // Best effort: a failure to install never stops the tidy, and the boot names it.
+  installGuard(status.root, { spawnGit })
 
   if (args.mode === "report") {
     const claim = takeClaim(gitDir, { now: clock })

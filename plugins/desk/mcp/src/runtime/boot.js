@@ -75,6 +75,7 @@ import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
+import { installCardGuard } from "../desk/card-commit-guard.js"
 import { formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
 import { DEFERRED_TOOLS_HINT } from "../util/deferred-tools.js"
 
@@ -952,6 +953,7 @@ function buildInstructions(ctx) {
     out.push("No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new.")
   }
   out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
+  out.push("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.")
   out.push("When you report on a task, say its real status; say 'done' only for a task whose status is done.")
   out.push(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`)
   return out
@@ -994,6 +996,7 @@ export async function bootOnce({
   prFn = openPullRequests,
   factoryStatusFn = factoryStatus,
   lastSyncFn = lastSyncedAt,
+  cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
   nestedCards = NESTED_CARD_FIELDS,
 } = {}) {
@@ -1039,6 +1042,17 @@ export async function bootOnce({
   if (stopForMigration) {
     const instructions = migrationEntries.map((entry) => migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
     return { ...emptyResult({ status: "degraded", degraded, pending, root, host }), instructions, migrations: migrationSummary }
+  }
+
+  // The desk's own pre-commit hook (refuses a hand commit that changes a task card; see desk/card-commit-guard.js). Installing is idempotent and quiet;
+  // only a failure to install is worth a line.
+  try {
+    const guard = cardGuardFn(root.path, { spawnGit })
+    if (guard.state === "failed") degraded.push(`card guard: ${guard.reason}`)
+    // A tracked hooks folder is the team's choice, not a fault: one note with the manual remedy, nothing degraded.
+    if (guard.state === "tracked") pending.push(`card guard not installed: ${guard.reason}; ${guard.remedy}`)
+  } catch (error) {
+    degraded.push(`card guard: ${error.message}`)
   }
 
   const prereqs = await checkPrereqs({ gh, jq, ghAuth })

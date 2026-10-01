@@ -17,9 +17,10 @@
 // other slow git command and is reported the same way a stage or commit
 // failure is.
 const GIT_TIMEOUT_MS = 10_000
+const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT" // the same name `desk/card-commit-guard.js` exports; kept literal so this module stays dependency-free
 
-function run(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+function run(spawnGit, root, args, extra = {}) {
+  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
 }
 
 /** True when `result` (a `spawnSync`-shaped return value) is `spawnGit` reporting its own timeout kill. */
@@ -76,7 +77,9 @@ export function stagePaths(root, relPaths, spawnGit) {
  * and reported as `{ ok: false, stderr: "timeout" }`.
  */
 export function commitPaths(root, relPaths, message, spawnGit) {
-  const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths])
+  // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
+  // this is Desk's commit path, so it says so for the git call (and only for that call).
+  const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
   if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }
 }

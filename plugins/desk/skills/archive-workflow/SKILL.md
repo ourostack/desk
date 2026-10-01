@@ -57,14 +57,14 @@ iteration archival is not tied to PR merge alone — short-lived tasks where the
       $DESK/<track>/<task>/<repo>/_archive/<iteration-slug>
    ```
 
-2. update the task card's `iterations:` block:
+2. update the task card's `iterations:` block with `task_update` (`frontmatter.iterations`; it commits the card for you, and the desk's own git hook refuses a hand commit that changes a card):
    - move the archived iteration's entry from `active:` (if it was there) or update it in `history[]` so `path:` points at the `_archive/` location.
    - set `outcome:` to the terminal value (`merged`, `shipped-to-pr`, `reverted`).
 
-3. commit the moved iteration and the task card, and nothing else:
+3. commit the moved iteration, and nothing else:
    ```bash
-   cd <desk path> && git add -A -- <track>/<task>/<repo>/<iteration-slug> <track>/<task>/<repo>/_archive/<iteration-slug> <track>/<task>/task.md \
-     && git commit -m "archive: iteration <iteration-slug> (<outcome>)" -- <track>/<task>/<repo>/<iteration-slug> <track>/<task>/<repo>/_archive/<iteration-slug> <track>/<task>/task.md
+   cd <desk path> && git add -A -- <track>/<task>/<repo>/<iteration-slug> <track>/<task>/<repo>/_archive/<iteration-slug> \
+     && git commit -m "archive: iteration <iteration-slug> (<outcome>)" -- <track>/<task>/<repo>/<iteration-slug> <track>/<task>/<repo>/_archive/<iteration-slug>
    ```
 
 4. push.

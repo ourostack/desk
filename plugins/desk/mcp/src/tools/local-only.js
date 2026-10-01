@@ -12,7 +12,9 @@
 
 import { realpathSync } from "node:fs"
 import * as os from "node:os"
+import * as path from "node:path"
 import { spawnSync } from "node:child_process"
+import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { resolveLocalPath, isPathContained } from "../util/paths.js"
 
 const GIT_TIMEOUT_MS = 5000
@@ -96,8 +98,14 @@ export async function recordLocalOnlyOnCards({ cards, deskRoot, spawnGit = spawn
       // Loaded here, not at the top: boot must run from a plugin folder with no installed dependencies, and the card
       // reader needs them (a boot without them simply leaves the card unrecorded).
       const { readMarkdown, writeMarkdown } = await import("../util/fm.js")
+      // On a git desk the write is committed the way every other card write is (`commitPaths`), so boot never leaves a modified card behind for a
+      // hand commit; a card another session has edited and not staged is left unrecorded rather than adopted.
+      const git = isGitRepository(deskRoot, spawnGit)
+      const rel = path.relative(deskRoot, card.file)
+      if (git && hasUnstagedWork(deskRoot, [rel], spawnGit)) continue
       const parsed = await readMarkdown(card.file)
       await writeMarkdown(card.file, { ...parsed.data, repos: entries }, parsed.content)
+      if (git && stagePaths(deskRoot, [rel], spawnGit).ok) commitPaths(deskRoot, [rel], `boot: record local-only clone on ${card.track}/${card.slug}`, spawnGit)
       recorded.push(`${card.track}/${card.slug}`)
     } catch {
       // Recording is a convenience; a card that cannot be patched simply stays unrecorded.

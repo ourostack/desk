@@ -16,6 +16,7 @@
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained } from "../util/paths.js"
+import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
@@ -82,6 +83,10 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
     const absolute = path.resolve(deskRoot, relativePath)
     if (!isPathContained(effectiveRoot, absolute)) {
       throw new Error(`desk_save: \`paths\` includes a path outside the resolved write prefix: ${relativePath}`)
+    }
+    // Desk's commit path is the one the desk's pre-commit hook trusts, so a card must not be able to ride through it.
+    if (isLiveCardPath(path.relative(deskRoot, absolute))) {
+      throw new Error(`desk_save: \`paths\` includes a task card (${relativePath}); a card is written and committed only through task_update, task_create, task_move or task_archive`)
     }
   }
 
