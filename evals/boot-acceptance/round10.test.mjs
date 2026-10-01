@@ -203,7 +203,7 @@ test("writes inside the desk, the clones, HOME dot-folders and /tmp are fine; ot
   const calls = [
     { name: "Write", input: { file_path: `${RUN}/fixture/desk/lighthouse/x.md` } },
     { name: "Edit", input: { file_path: `${home}/code/greenhouse-irrigation/src/rain_delay.py` } },
-    { name: "Write", input: { file_path: `${home}/.claude/plans/p.md` } },
+    { name: "Write", input: { file_path: `${home}/.local/state/p.md` } },
     { name: "Write", input: { file_path: "/tmp/scratch.txt" } },
     { name: "Bash", input: { command: `mkdir -p ${RUN}/fixture/evidence/step-1 && echo x > ${RUN}/fixture/evidence/a.txt` } },
     { name: "Bash", input: { command: "mkdir -p greenhouse-ops/watering-schedule-api/greenhouse-irrigation/2026-09-30-x" } },
