@@ -252,7 +252,7 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     const result = await f.guard(command, { cwd: f.shared, env })
     assert.equal(result.deny, false, `${command} -> ${result.reason}`)
   }
-  const unresolved = /^Desk could not resolve .+, and it could run Git in a protected checkout\. Resolve the value in a separate command first\.$/u
+  const unresolved = /^Desk could not resolve .+; write it literally or set it in a separate command first\. It could run Git in a protected checkout; plain read-only Git \(status, log, diff, fetch into remote-tracking refs\) is not blocked\.$/u
   const deny = [
     ['cd "$(pick)" && git checkout main', /which checkout/u], ['cd "$(pick)"; git stash', /which checkout/u],
     ['git -C "$(pick)" reset --hard', /which checkout/u], ['GIT_DIR="$(pick)" git reset --hard', /could not inspect a Git command.*unresolved Git location/u],
@@ -294,8 +294,8 @@ test("A3b: PowerShell unknown values follow the same rule", async (t) => {
     ["$wt = New-Item -ItemType Directory x; Set-Location $wt; git checkout main", /which checkout/u],
     ["Pop-Location; git stash", /which checkout/u], [`pushd ${psq(f.shared)}; git stash`, /^Desk protected checkout /u],
     // Round 4 ruling: Git named as an argument outside a plain form is denied.
-    ["$g = (Get-Command git).Source; & $g checkout main", /^Desk allows Git in PowerShell only/u], ["& $(Get-Command git) status", /^Desk allows Git in PowerShell only/u],
-    ["& (Get-Command git) checkout main", /^Desk allows Git in PowerShell only/u],
+    ["$g = (Get-Command git).Source; & $g checkout main", /^Desk blocked this: run each git command/u], ["& $(Get-Command git) status", /^Desk blocked this: run each git command/u],
+    ["& (Get-Command git) checkout main", /^Desk blocked this: run each git command/u],
     // Replay ruling, 2026-09-27: a script Desk can read is inspected; one it cannot read is allowed.
     [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk protected checkout .+ this would move HEAD off/u], ["iex 'git status'", /^allowed$/u],
     ["$script = Get-Content x; iex $script", /^allowed$/u], ["Invoke-Expression $(Get-Content x)", /^allowed$/u], [". $(Get-Item x)", /^allowed$/u],
