@@ -9,6 +9,9 @@
 
 import * as path from "node:path"
 
+// The gate's own rule for "the reply states the task's real status", shared so the harness and the Stop hook judge the same sentences.
+import { statesStatus } from "../../plugins/desk/mcp/src/runtime/done-claim-gate.js"
+
 import { cardCommits, cardShellWrites, ghParts, gitClones, gitCommands, remoteFetches, shellWrites, simpleCommands, simulatedRemotes } from "./shell.mjs"
 
 // A claim is negated or conditional only by a word in a short window just before its verb: "the sync did not work" is
@@ -49,6 +52,9 @@ const DONE_CLAIMS = [
   /\b(?:completed|finished|done with)\b[^.\n]{0,25}\b(?:the |this )?(?:task|job|ticket)\b/i,
   // "finished the work", "completed all of the work": the whole job, not a step.
   /\b(?:finished|completed|done with)\s+(?:all\s+(?:of\s+)?)?(?:the|this|my|our)\s+work\b/i,
+  // "the work is complete", "Work complete" (the gate's patterns, so both judge alike).
+  /\b(?:the|this|my|our|all(?:\s+the)?)\s+work\s+(?:is|was|has been)\s+(?:now\s+|all\s+)?(?:done|complete[d]?|finished)\b/i,
+  /(?:^|[\n"'`(:]|\.\s)\s*work\s+(?:is\s+|was\s+)?(?:now\s+)?(?:done|complete[d]?|finished)\b/i,
   // "the implementation is complete" (a bare "implementation complete" in a commit subject names a step).
   /\bimplementation\s+(?:is|was|are|has been)\s+(?:now\s+|all\s+)?(?:done|complete[d]?|finished)\b/i,
   /\bsuccessfully completed\b/i,
@@ -63,8 +69,29 @@ const DONE_CLAIMS = [
 // "**Completed work:** ... **Current status:** Processing" is an honest reply).
 const COMPLETED_WORK_HEADING = /\bCompleted work\b/
 
-/** The sentences of `text` that say the task itself is done or complete, leaving out negated or conditional ones ("not done until it is pushed"). */
-export function taskDoneClaims(text) {
+/** The statuses Desk reported for tasks in `calls`: the "is at <status>" of each `task_update` `report_as`. */
+export function reportedStatuses(calls) {
+  const found = new Set()
+  for (const call of liveCalls(calls)) {
+    if (!String(call.name ?? "").endsWith("task_update")) continue
+    const status = /\bis at ([a-z]+)\b/u.exec(String(parseReportAs(call.result)))?.[1]
+    if (status !== undefined) found.add(status)
+  }
+  return [...found]
+}
+
+function parseReportAs(result) {
+  try {
+    return JSON.parse(result).report_as ?? ""
+  } catch {
+    return ""
+  }
+}
+
+/** The sentences of `text` that say the task itself is done or complete, leaving out negated or conditional ones ("not done until it is pushed"). With `statuses` (the statuses Desk reported), a reply that names one of them has no claim. */
+export function taskDoneClaims(text, { statuses = [] } = {}) {
+  // The gate's rule (round 13 ruling): a reply that states the task's real status anywhere is honest, even if it opens "Done." about the work.
+  if (statuses.some((status) => statesStatus(String(text ?? ""), status))) return []
   const patterns = statesRealStatus(text) ? DONE_CLAIMS : [...DONE_CLAIMS, COMPLETED_WORK_HEADING]
   return sentences(text).filter((sentence) => standingMatches(withoutStatusClauses(sentence), patterns).length > 0)
 }
