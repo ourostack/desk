@@ -40,9 +40,27 @@ test("gh and Copilot credential files", () => {
   assert.deepEqual(kinds("ls ~/.copilot/installed-plugins"), [])
 })
 
-test("gh auth token and --show-token from an agent command, however it is wrapped", () => {
-  for (const command of ["gh auth token", "GH_TOKEN=$(gh auth token --user me) git push", "/opt/homebrew/bin/gh auth token", "gh auth status --show-token", "x=$(gh auth token) && echo ok", "gh -R a/b auth token"]) assert.deepEqual(kinds(command), ["gh auth token outside the shim's allowed parent"], command)
-  for (const command of ["gh auth status", "gh pr list --repo a/b", "echo gh auth is fine"]) assert.deepEqual(kinds(command), [], command)
+test("gh auth token whose output can reach the transcript counts: alone, echoed, piped or redirected, in another variable, and --show-token always", () => {
+  for (const command of ["gh auth token", "/opt/homebrew/bin/gh auth token", "gh -R a/b auth token", "echo $(gh auth token)", "echo \"$(gh auth token --user me)\"", "gh auth token | cat", "gh auth token | tee /tmp/t", "gh auth token > /tmp/t", "x=$(gh auth token) && echo ok", "gh auth login --with-token < <(gh auth token --user me)", "gh auth token --user me | xargs echo", "gh auth status --show-token", "gh auth status -t", "GH_TOKEN=$(gh auth token) && echo $GH_TOKEN", "GH_TOKEN=$(gh auth token --user me) env | grep GH_TOKEN"]) {
+    assert.deepEqual(kinds(command).includes("gh auth token outside the shim's allowed parent"), true, command)
+  }
+})
+
+test("gh auth token inside the documented push recipe is not a credential read: GH_TOKEN, GITHUB_TOKEN, a credential helper", () => {
+  for (const command of [
+    "GH_TOKEN=$(gh auth token --user me) git push fork main",
+    "cd /tmp/claude-code && GH_TOKEN=$(gh auth token --user arimendelow) git remote add fork https://x",
+    "GITHUB_TOKEN=$(gh auth token --user me) gh pr create --repo a/b",
+    "export GH_TOKEN=\"$(gh auth token --user me)\"; git push",
+    "GH_TOKEN=`gh auth token --user me` git push",
+    "GH_TOKEN=$(/opt/homebrew/bin/gh auth token --user me) git push",
+    "cd /tmp/c && GH_TOKEN=$(gh auth token --user me) git -c credential.helper=\"!echo username=me; echo password=$GH_TOKEN\" fetch fork 2>&1 && git branch -a",
+    "git -c credential.helper= -c 'credential.helper=!f(){ echo username=x-access-token; echo password=$(gh auth token --user me); };f' push https://github.com/a/b.git HEAD:main",
+  ]) assert.deepEqual(kinds(command), [], command)
+  // A recipe in one command does not excuse a bare call in the same line.
+  assert.equal(kinds("GH_TOKEN=$(gh auth token --user me) git push; gh auth token").length, 1)
+  assert.equal(kinds("gh auth status").length, 0)
+  assert.equal(kinds("gh pr list --repo a/b").length, 0)
 })
 
 test("a finding carries the rule and a shortened, token-redacted command, never a token value", () => {
