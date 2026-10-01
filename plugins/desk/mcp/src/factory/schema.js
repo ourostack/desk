@@ -437,6 +437,11 @@ export function checkSegments(value, path, errors) {
     addError(errors, "type", path)
     return false
   }
+  // A job the controller holds no time in has no segments at all, never an empty list.
+  if (value.length === 0) {
+    addError(errors, "empty", path)
+    return false
+  }
   if (value.length > LIMITS.jobSegments) {
     addError(errors, "too_many", path)
     return false
@@ -464,6 +469,19 @@ export function jobFields(value, base) {
     ...(Object.hasOwn(value, "agents") ? { agents: customField(checkJobAgents) } : {}),
     ...(Object.hasOwn(value, "segments") ? { segments: customField(checkSegments) } : {}),
   }
+}
+
+/**
+ * Segments split the controller's (worker 0's) time, so a job carries them
+ * only when its `agents` lists worker 0; anything else is `inconsistent`.
+ * Shared by the local and published validators.
+ */
+export function checkSegmentAgents(value, results, errors) {
+  results.jobs?.forEach((jobResult, index) => {
+    if (jobResult?.segments === undefined) return
+    const job = value.jobs[index]
+    if (!Array.isArray(job.agents) || !job.agents.includes(0)) addError(errors, "inconsistent", `jobs.${index}.segments`)
+  })
 }
 
 /**
@@ -729,6 +747,7 @@ export function validateLocalFacts(value) {
   const results = validateObject(value, "", TOP_SPEC, errors)
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
+  checkSegmentAgents(value, results, errors)
   const sessionSound = results.session?.started_at === true && results.session.derived_through === true
   const durationMs = sessionSound ? Date.parse(value.session.derived_through) - Date.parse(value.session.started_at) : -1
   checkSessionBounds(value, results, errors, durationMs >= 0 ? durationMs : null)

@@ -246,10 +246,27 @@ function ownsWholeSession(session, binding) {
   return !Object.hasOwn(binding, "agents") || session.agents.every((agent) => binding.agents.includes(agent.n))
 }
 
-// The source sessions in which the job owns only some of the workers, so the
-// session-wide counts are not the job's own.
+// Whether the job's binding splits the controller's (worker 0's) time by segments.
+// Segments on a binding that does not list worker 0 (which the validators refuse) are ignored.
+function segmented(binding) {
+  return Object.hasOwn(binding, "segments") && Object.hasOwn(binding, "agents") && binding.agents.includes(0)
+}
+
+// The source sessions in which the job owns only some of the workers, or only
+// some of the controller's time, so the session-wide counts are not the job's own.
 export function splitSessions(timeline) {
-  return new Set(timeline.source_sessions.filter((session) => !ownsWholeSession(session, bindingOf(session, timeline.job))))
+  return new Set(timeline.source_sessions.filter((session) => {
+    const binding = bindingOf(session, timeline.job)
+    return segmented(binding) || !ownsWholeSession(session, binding)
+  }))
+}
+
+// The segmented source sessions in which the job holds a shared span of the controller's time.
+function sharedSegmentSessions(timeline) {
+  return new Set(timeline.source_sessions.filter((session) => {
+    const binding = bindingOf(session, timeline.job)
+    return segmented(binding) && binding.segments.some((segment) => segment.shared === true)
+  }))
 }
 
 // The source sessions in which one of the job's workers also belongs to
@@ -262,22 +279,27 @@ export function sharedSessions(timeline) {
   return new Set(timeline.source_sessions.filter((session) => {
     const own = bindingOf(session, timeline.job)
     if (!Object.hasOwn(own, "agents")) return false
-    const segmented = Object.hasOwn(own, "segments")
-    if (segmented && own.segments.some((segment) => segment.shared === true)) return true
-    const workers = segmented ? own.agents.filter((agent) => agent !== 0) : own.agents
+    const split = segmented(own)
+    if (split && own.segments.some((segment) => segment.shared === true)) return true
+    const workers = split ? own.agents.filter((agent) => agent !== 0) : own.agents
     return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => workers.includes(agent)))
   }))
 }
 
 // The counts of a split session that belong to the job: tool calls and
 // failures from the job's own tool intervals (a subagent interval is an
-// `agent` call, and carries no outcome). Retries and compactions have no
+// `agent` call, and carries no outcome). A segmented job counts a controller
+// (worker 0) interval only when one of its segments holds the interval's
+// start, so the controller's calls are split with its time; one starting in a
+// shared span counts for each job sharing it. Retries and compactions have no
 // worker, so they are left out and the measure is marked partial.
-function ownCounts(session, agents) {
+function ownCounts(session, binding) {
   const calls = {}
   const failures = {}
+  const durationMs = session.session.duration_ms
   for (const interval of session.intervals) {
-    if (!agents.includes(interval.agent)) continue
+    if (!binding.agents.includes(interval.agent)) continue
+    if (interval.agent === 0 && segmented(binding) && !binding.segments.some((segment) => holds(segment, interval.start_ms, durationMs))) continue
     if (interval.kind === "subagent") calls.agent = (calls.agent ?? 0) + 1
     if (interval.kind !== "tool") continue
     calls[interval.tool] = (calls[interval.tool] ?? 0) + 1
@@ -288,7 +310,7 @@ function ownCounts(session, agents) {
 
 function jobCounted(timeline, split) {
   return timeline.source_sessions.map((session) => split.has(session)
-    ? { counts: ownCounts(session, bindingOf(session, timeline.job).agents) }
+    ? { counts: ownCounts(session, bindingOf(session, timeline.job)) }
     : session)
 }
 
@@ -305,7 +327,7 @@ function holds(segment, at, durationMs) {
 // falls in a shared span or in no job's segment.
 function segmentOwner(session, pr) {
   if (pr.agent !== 0 || !Object.hasOwn(pr, "at_ms")) return undefined
-  const holders = session.jobs.filter((binding) => Object.hasOwn(binding, "segments")
+  const holders = session.jobs.filter((binding) => segmented(binding)
     && binding.segments.some((segment) => holds(segment, pr.at_ms, session.session.duration_ms)))
   if (holders.length !== 1) return undefined
   const shared = holders[0].segments.some((segment) => segment.shared === true && holds(segment, pr.at_ms, session.session.duration_ms))
@@ -422,7 +444,7 @@ export function calculateFormulas(timeline) {
   const references = uniqueReferences(timeline)
   const split = splitSessions(timeline)
   const counted = jobCounted(timeline, split)
-  const splitCoverage = fieldCoverage(sourceSessions, [], [], split)
+  const splitCoverage = fieldCoverage(sourceSessions, [], [], split, sharedSegmentSessions(timeline))
   const privatePrs = sourceSessions.reduce((total, session) => total + session.refs.private.prs, 0)
   const privateCommits = sourceSessions.reduce((total, session) => total + session.refs.private.commits, 0)
 

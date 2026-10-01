@@ -264,15 +264,16 @@ function msOf(value) {
  * `evidence` is worker 0's binding evidence, `{ key, start, end }` in epoch
  * milliseconds (`start` null when the evidence has no time; an instant has
  * `end === start`), and `keys` the jobs worker 0 binds. Times are clamped to
- * the session, `[0, endMs - startedMs]`. Sorted by start (then end, then key),
- * the span from one piece of evidence to the next belongs to the earlier
- * one's job, the time before the first to the first's, and the last runs to
- * the session's end. Where pieces sharing one start name different jobs, the
- * last of them (in that order) takes the span, so no zero-length segment is
- * ever made. A span covered by a timed piece (a commit window, a spawn) for
- * another job is held by both jobs and marked `shared`. Adjacent pieces of
- * one job with the same marking merge. No split when a job has no timed
- * evidence, or any job would need more than `LIMITS.jobSegments` segments.
+ * the session, `[0, endMs - startedMs]`. Evidence starting at one instant forms
+ * a group. The stretch from one group's start to the next group's belongs to
+ * the group's jobs, the stretch before the first group to the first group's,
+ * and the last group's runs to the session's end. A span covered by a timed
+ * piece (a commit window, a spawn) also belongs to its job. A stretch with
+ * more than one job is held by each of them, marked `shared`. Adjacent pieces
+ * of one job with the same marking merge. No split when a job has no timed
+ * evidence, a job would end with no time at all (its evidence clamped to the
+ * session's end, say), or any job would need more than `LIMITS.jobSegments`
+ * segments.
  */
 export function controllerSegments({ evidence, keys, startedMs, endMs }) {
   const total = endMs - startedMs
@@ -287,14 +288,18 @@ export function controllerSegments({ evidence, keys, startedMs, endMs }) {
   const spans = items.filter((item) => item.end > item.start)
   const bounds = [...new Set([0, total, ...items.flatMap((item) => [item.start, item.end])])].sort((x, y) => x - y)
   const segments = new Map([...keys].map((key) => [key, []]))
-  // The job before the first evidence: the last of the first evidence's instant.
-  let current = items.filter((item) => item.start === items[0].start).at(-1).key
+  // The jobs of the latest group to start; before the first evidence, the first group's.
+  const groupAt = (instant) => new Set(items.filter((item) => item.start === instant).map((item) => item.key))
+  let group = groupAt(items[0].start)
   let next = 0
   for (let index = 0; index < bounds.length - 1; index += 1) {
     const start = bounds[index]
     const end = bounds[index + 1]
-    while (next < items.length && items[next].start <= start) current = items[next++].key
-    const owners = new Set([current, ...spans.filter((item) => item.start <= start && start < item.end).map((item) => item.key)])
+    if (next < items.length && items[next].start <= start) {
+      while (next < items.length && items[next].start <= start) next += 1
+      group = groupAt(items[next - 1].start)
+    }
+    const owners = new Set([...group, ...spans.filter((item) => item.start <= start && start < item.end).map((item) => item.key)])
     const shared = owners.size > 1
     for (const key of owners) {
       const list = segments.get(key)
@@ -303,7 +308,9 @@ export function controllerSegments({ evidence, keys, startedMs, endMs }) {
       else list.push(shared ? { start_ms: start, end_ms: end, shared: true } : { start_ms: start, end_ms: end })
     }
   }
-  return [...segments.values()].some((list) => list.length > LIMITS.jobSegments) ? null : segments
+  const lists = [...segments.values()]
+  if (lists.some((list) => list.length === 0)) return null
+  return lists.some((list) => list.length > LIMITS.jobSegments) ? null : segments
 }
 
 function requireFunction(value, name) {

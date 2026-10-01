@@ -34,8 +34,10 @@ function intervalOnJobClock(session, interval, offset) {
 // A job with `segments` holds only those spans of the controller's (worker
 // 0's) time: each of its intervals is cut to them. Every other worker's
 // intervals, and every interval of a job without segments, are kept whole.
+// Segments on a binding that lists no workers (which the validators refuse)
+// are ignored.
 function jobParts(interval, binding) {
-  if (interval.agent !== 0 || !Object.hasOwn(binding, "segments")) return [interval]
+  if (interval.agent !== 0 || !Object.hasOwn(binding, "segments") || !Object.hasOwn(binding, "agents")) return [interval]
   return binding.segments.flatMap((segment) => {
     const start = Math.max(interval.start_ms, segment.start_ms)
     const end = Math.min(interval.end_ms, segment.end_ms)

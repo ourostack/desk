@@ -49,8 +49,10 @@
 //   - A job's optional `segments` (the controller's spans of the session,
 //     in milliseconds from its start) and a PR's optional `at_ms` never run
 //     past `session.duration_ms`, else `range`. A file marked
-//     `{job_offsets, desk_public}` carries no `segments` either: with a
-//     public desk's commit history, they would date the session.
+//     `{job_offsets, desk_public}` carries neither, else `inconsistent`:
+//     with a public desk's commit history or a public PR's creation time,
+//     they would date the session. A job carries `segments` only when its
+//     `agents` lists worker 0, else `inconsistent`.
 //   - `jobs[].session_offset_ms` and every `offset_ms` are safe integers
 //     (signed: a session may begin before its task card exists) or `null`,
 //     and at most `PUBLISHED_LIMITS.maxOffsetMs` (ten years) either way. The
@@ -76,6 +78,7 @@ import {
   booleanField,
   checkAgentReferences,
   checkBasis,
+  checkSegmentAgents,
   checkSessionBounds,
   customField,
   enumField,
@@ -338,6 +341,7 @@ export function validatePublished(value) {
   const results = validateObject(value, "", TOP, errors)
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
+  checkSegmentAgents(value, results, errors)
 
   // No entry or reference twice. Only items whose own fields are sound are
   // compared, and the later one is named.
@@ -366,6 +370,12 @@ export function validatePublished(value) {
         || (Array.isArray(job.transitions) && job.transitions.length > 0)
         || (isPlainObject(job.observed) && job.observed.offset_ms !== null)
       if (timed) addError(errors, "inconsistent", `jobs.${index}`)
+    })
+  }
+  // Nor a PR time, which with a public PR's own creation time would date the session.
+  if (deskPublic && refs?.prs) {
+    value.refs.prs.forEach((pr, index) => {
+      if (isPlainObject(pr) && Object.hasOwn(pr, "at_ms")) addError(errors, "inconsistent", `refs.prs.${index}`)
     })
   }
 
