@@ -87,3 +87,18 @@ test("isExecutable is true for an executable file and false for a missing one", 
   assert.equal(isExecutable(process.execPath), true)
   assert.equal(isExecutable("/nonexistent/desk-no-such-binary"), false)
 })
+
+test("a SIGTERM delivered to a process with a live read kills that read's Git and removes the handlers", { skip: posixOnly }, async (t) => {
+  const f = blockedRepo(t)
+  const host = () => {}
+  process.on("SIGTERM", host)
+  t.after(() => process.removeListener("SIGTERM", host))
+  const before = process.listenerCount("SIGTERM")
+  const read = readInspectionGit(f.prot, ["symbolic-ref", "HEAD"], {}, { timeoutMs: 60000 })
+  assert.equal(process.listenerCount("SIGTERM"), before + 1)
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  process.emit("SIGTERM", "SIGTERM")
+  await assert.rejects(read)
+  assert.equal(liveInspectionChildren(), 0)
+  assert.equal(process.listenerCount("SIGTERM"), before)
+})
