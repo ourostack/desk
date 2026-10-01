@@ -21,14 +21,14 @@ Pass: task path, design/plan/progress pointers, authority and endpoint.
 Return: selected provider entry and mapped context. Do not review, recover, schedule, deliver or measure here.
 ```
 
-Nothing else enters here. Pick the entry from what the task already holds, top row that applies first:
+Nothing else enters here. Pick the entry from what the task already holds, top row that applies first (the two plan rows differ only in how the plan runs, so each is reachable):
 
 | What the task holds | Select |
 | --- | --- |
 | No approved design, a new outcome, or a material design change | `superpowers:brainstorming` |
 | An approved design or outcome but **no plan** (including approved work that lives only on the task card; `planPath` would be `null`) | `superpowers:writing-plans` |
-| An approved plan (an existing plan file to pass as `--plan-path`) | `superpowers:subagent-driven-development` |
-| An approved plan and the same ready set must run in this session with no subagent tool, or the human chose inline execution | `superpowers:executing-plans` |
+| An approved plan (an existing plan file to pass as `--plan-path`), and a subagent tool is available, and the human did not choose inline execution | `superpowers:subagent-driven-development` |
+| An approved plan, and there is no subagent tool or the human chose inline execution: the same ready set runs in this session | `superpowers:executing-plans` |
 
 `superpowers:executing-plans` executes a plan, so it is never the entry for a task with no plan: a task card is not a plan, and "the card is clear enough" does not skip planning, it only means the plan can be short. Select `writing-plans` (or `brainstorming` when the design itself is unapproved) first, then re-enter the plan row. A resume that has already reconciled its writer and source re-enters at its recorded step; a genuinely new outcome or material design change re-enters at selection. Everything after the handover belongs to the selected Superpowers skill.
 

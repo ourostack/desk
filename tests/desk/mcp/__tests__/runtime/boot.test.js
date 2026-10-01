@@ -1553,3 +1553,20 @@ test("scripts/session-boot.js runs the command line for real, as a subprocess", 
   assert.equal(result.boot_complete, true)
   assert.equal(result.status, "setup_required")
 })
+
+test("a relative local_path resolves against the desk root in repoStates and resolvePushAccounts, after ~ expansion", async () => {
+  const deskRoot = await mkTempRoot("desk-boot-rel-root-")
+  const seen = []
+  const spawnGit = (cmd, args) => {
+    seen.push(args[1])
+    return { status: 0, stdout: args.includes("config") ? "https://github.com/acme/widgets.git\n" : "## main...origin/main\n" }
+  }
+  const repos = [{ name: "w", local_path: "clones/w", mode: "local" }, { name: "h", local_path: "~/h", mode: "local" }]
+  const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos } }]
+  repoStates({ cards, root: deskRoot, spawnGit, homeDir: "/home/x", now: () => 0, deadline: 60000 })
+  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), "/home/x/h"])
+  seen.length = 0
+  const runner = async () => ({ code: 1, stdout: "", stderr: "" })
+  await resolvePushAccounts({ root: deskRoot, cards, runner, spawnGit, homeDir: "/home/x" })
+  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), "/home/x/h"])
+})

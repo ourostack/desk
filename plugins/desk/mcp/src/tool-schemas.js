@@ -50,6 +50,8 @@ const CARD_UPDATE = {
   next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
 }
 
+const REPOS_REMOVED_REASON = text("Required to remove every repo from a card that names code repos (a task whose work turned out not to touch them): one line on why, recorded on the card as `repos_removed` with each repo\'s name and the time. The same call may not set `status: done`; finish in a separate call. Not needed when the call sets `status: cancelled`.")
+
 const TASK_DONE_EVIDENCE = {
   type: "object",
   additionalProperties: false,
@@ -111,7 +113,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, evidence: TASK_DONE_EVIDENCE }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_move: schema({
     ...TASK_TARGET,

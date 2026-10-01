@@ -1194,8 +1194,8 @@ contract("a task with no plan routes to writing-plans or brainstorming, never to
   assert.match(rowFor("brainstorming") ?? "", /No approved design/u);
   assert.match(rowFor("writing-plans") ?? "", /\*\*no plan\*\*/u);
   assert.match(rowFor("writing-plans") ?? "", /task card/u);
-  assert.match(rowFor("subagent-driven-development") ?? "", /An approved plan/u);
-  assert.match(rowFor("executing-plans") ?? "", /^\| An approved plan/u);
+  assert.match(rowFor("subagent-driven-development") ?? "", /An approved plan.*a subagent tool is available.*did not choose inline/u);
+  assert.match(rowFor("executing-plans") ?? "", /^\| An approved plan, and there is no subagent tool or the human chose inline/u);
   assert.match(skill, /never the entry for a task with no plan/u);
   assert.doesNotMatch(skill, /executing-plans[^.\n]*task-card-only work/u);
 });
