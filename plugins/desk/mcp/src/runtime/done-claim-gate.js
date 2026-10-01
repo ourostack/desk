@@ -4,7 +4,7 @@
 //
 // Two hooks share this module:
 //   - `recordTouchedTask` (PostToolUse on task_update, task_create, task_move and task_archive) notes which task this session touched and the status the call left it at, in a session-scoped file under Desk's state folder.
-//   - `doneClaimStopHook` (Stop) reads the last assistant message from the transcript and blocks once, with a reason, when all of these hold: this session touched a task whose status is not done; the reply says the task or the work is done; and the reply never states the task's real status.
+//   - `doneClaimStopHook` (Stop) reads the final reply (`last_assistant_message`, else the last assistant message of the transcript) and blocks once, with a reason, when all of these hold: this session touched a task whose status is not done; the reply says the task or the work is done; and the reply never states the task's real status.
 //
 // It fails open everywhere: a missing transcript, an unreadable or malformed state file, a parse error or a write error lets the turn end. A child agent's stop (SubagentStop, or a payload carrying an agent id) is never gated, and `stop_hook_active` (the hook already blocked this stop) ends the loop.
 //
@@ -195,17 +195,25 @@ export function lastAssistantText(transcript) {
 }
 
 /**
+ * The reply being stopped on. Claude Code puts it in the payload as `last_assistant_message`, and that is the source to trust: a live run (round 13) showed the transcript file does not yet hold the final message when the Stop hook runs, so reading it alone saw no reply and let "Done." through. The transcript is the fallback, for a host that sends no such field.
+ */
+function finalReply(payload) {
+  if (typeof payload.last_assistant_message === "string" && payload.last_assistant_message.trim() !== "") return payload.last_assistant_message
+  if (typeof payload.transcript_path !== "string" || statSync(payload.transcript_path).size > MAX_TRANSCRIPT_BYTES) return null
+  return lastAssistantText(readFileSync(payload.transcript_path, "utf8"))
+}
+
+/**
  * Stop: `{ decision: "block", reason }` when the reply says done over a task this session touched that is not done and the reply never states that task's status; `{}` otherwise, and on any error.
  * `options.stateDir` is for tests.
  */
 export function doneClaimStopHook(payload, { env = process.env, stateDir = resolveDeskStateDir({ env }) } = {}) {
   try {
     if (payload?.stop_hook_active === true || payload?.hook_event_name === "SubagentStop" || typeof payload?.agent_id === "string") return {}
-    if (typeof payload?.session_id !== "string" || payload.session_id === "" || typeof payload?.transcript_path !== "string") return {}
+    if (typeof payload?.session_id !== "string" || payload.session_id === "") return {}
     const open = Object.values(readState(sessionFile(stateDir, payload.session_id)).tasks).filter((task) => typeof task?.status === "string" && task.status !== "" && !TERMINAL.has(task.status) && typeof task.slug === "string")
     if (open.length === 0) return {}
-    if (statSync(payload.transcript_path).size > MAX_TRANSCRIPT_BYTES) return {}
-    const reply = lastAssistantText(readFileSync(payload.transcript_path, "utf8"))
+    const reply = finalReply(payload)
     if (reply === null || doneClaims(reply).length === 0) return {}
     const unstated = open.filter((task) => !statesStatus(reply, task.status))
     if (unstated.length === 0) return {}

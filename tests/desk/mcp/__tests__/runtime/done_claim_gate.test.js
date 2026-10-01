@@ -231,6 +231,19 @@ test("the false positives pass: a step finished, a pause, a stated status, the s
   ]) assert.deepEqual(stop(stateDir, reply), {}, reply)
 })
 
+test("the reply comes from last_assistant_message when the payload has one, even while the transcript does not hold it yet (round 13 live run)", () => {
+  const stateDir = touched()
+  const stale = transcript(asked) // the user's prompt is written; the final reply is not
+  const base = { hook_event_name: "Stop", session_id: "s1", transcript_path: stale }
+  assert.equal(doneClaimStopHook({ ...base, last_assistant_message: "Done." }, { stateDir }).decision, "block")
+  assert.deepEqual(doneClaimStopHook({ ...base, last_assistant_message: "Done. The task is at processing." }, { stateDir }), {})
+  assert.deepEqual(doneClaimStopHook({ ...base, last_assistant_message: "I'm done for now." }, { stateDir }), {})
+  // No transcript at all is fine when the message is there; an empty message falls back to the transcript.
+  assert.equal(doneClaimStopHook({ hook_event_name: "Stop", session_id: "s1", last_assistant_message: "Work complete." }, { stateDir }).decision, "block")
+  assert.equal(doneClaimStopHook({ ...base, last_assistant_message: "  ", transcript_path: transcript(asked, say("Done.")) }, { stateDir }).decision, "block")
+  assert.deepEqual(doneClaimStopHook({ ...base, last_assistant_message: 7 }, { stateDir }), {})
+})
+
 test("a done claim passes when the task is done, the session touched nothing, or the status is unknown", () => {
   const stateDir = freshState()
   assert.deepEqual(stop(stateDir, "Done."), {}, "no state file")
