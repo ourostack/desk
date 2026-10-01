@@ -38,7 +38,7 @@ async function readySession(t, fixture, options = {}) {
   const configPath = writeActivation(fixture)
   const session = await startDesk(fixture, { args: ["--activation-config", configPath], ...options })
   t.after(() => session.close())
-  await session.statusUntil((status) => status.state === "ready" && status.readiness?.convergence.status === "succeeded", { deadlineMs: 90000 })
+  await session.statusUntil((status) => status.state === "ready" && status.readiness?.detail.convergence.status === "succeeded", { deadlineMs: 90000 })
   return session
 }
 
@@ -136,7 +136,7 @@ test("child death during a 6,000-document reindex re-elects and returns the owni
     const interrupted = await reindex
     assert.equal(interrupted.isError, true, "an interrupted reindex is not reported as success")
     await assertConnected([session])
-    const recovered = await session.statusUntil((status) => status.state === "ready" && status.readiness?.convergence.status === "succeeded", { deadlineMs: 90000 })
+    const recovered = await session.statusUntil((status) => status.state === "ready" && status.readiness?.detail.convergence.status === "succeeded", { deadlineMs: 90000 })
     assert.equal(recovered.admission.controller, "connected")
     const replacement = ownerRecord(fixture)
     assert.notEqual(replacement.owner.pid, original.owner.pid)
