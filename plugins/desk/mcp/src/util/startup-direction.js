@@ -50,6 +50,15 @@ export function promptBootDirection(command = bootCommand()) {
   return `Desk boot is pending for this session: run \`${command}\` first (one quick call), then answer this message. A child agent with a bounded brief skips this.`
 }
 
+/**
+ * The pointer for a Copilot first prompt, or null when there is nothing to point at: the root resolved the way `copilotStartupDirection` resolves it (the session folder as the project folder, the saved binding) must be a usable desk.
+ * A folder that is no desk, with no binding and no home fallback, is setup mode or a repository the operator happens to be in, so it gets no pointer; an unusable or unreadable binding gets none either, because the boot script could not run there.
+ */
+export function copilotPromptPointer({ env, sessionFolder, homeDir }) {
+  const bound = resolveStartupRoot({ activationConfigPath: resolveActivationConfigPath({ env }), env, homeDir, hostProjectRoot: sessionFolder })
+  return bound.root && !bound.unavailable && !bound.error ? promptBootDirection() : null
+}
+
 export const DESK_SETUP_DIRECTION =
   "Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, run the boot script (" + bootCommand() + ") for the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
 

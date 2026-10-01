@@ -51,13 +51,14 @@ const USAGE = `Usage: node evals/boot-acceptance/run.mjs --out-dir <dir> [option
   --copilot-use-gh-token  copilot only: when COPILOT_GITHUB_TOKEN is unset, use the gh keychain token of Copilot's signed-in account. That is a full OAuth token (repo, workflow); a process listing in the run can read it. Default: refuse
   --shared-cache <dir>  Desk runtime-dependency pack reuse, default <out-dir>/.shared-runtime-cache
   --keep-fixtures       keep each run's temp fixture desk and HOME
+  --outside-desk        open the session in a plain folder that is no desk (no binding), to check that no Desk boot pointer appears there; the scenario's own checks do not apply
   --force               rerun a run that already has a summary.json
   --dry-run             print the plan and the child environment's variable names, run nothing
   --help                this text
 `
 
 export function parseArgs(argv) {
-  const args = { scenario: "all", runs: 2, host: "claude", model: undefined, budget: "1", timeoutMin: 15, keepFixtures: false, copilotBind: "project", copilotUseGhToken: false }
+  const args = { scenario: "all", runs: 2, host: "claude", model: undefined, budget: "1", timeoutMin: 15, keepFixtures: false, copilotBind: "project", copilotUseGhToken: false, outsideDesk: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--scenario") args.scenario = argv[++i]
@@ -75,6 +76,7 @@ export function parseArgs(argv) {
     else if (a === "--keep-fixtures") args.keepFixtures = true
     else if (a === "--copilot-bind") args.copilotBind = argv[++i]
     else if (a === "--copilot-use-gh-token") args.copilotUseGhToken = true
+    else if (a === "--outside-desk") args.outsideDesk = true
     else if (a === "--shared-cache") args.sharedCache = argv[++i]
     else throw new Error(`unknown arg: ${a}`)
   }
@@ -297,6 +299,9 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   if (scenario.inject === "missing-clone") addMissingCloneTask(deskRoot)
 
   const homeDir = path.join(runTmp, "home")
+  // `--outside-desk`: the session opens in an ordinary folder under the run's temp dir, with no `_meta`/`_archive` and no saved binding anywhere.
+  const sessionFolder = args.outsideDesk ? path.join(runTmp, "plain-project") : deskRoot
+  if (args.outsideDesk) mkdirSync(sessionFolder, { recursive: true })
   // The login keychain is linked into the run's HOME only for Claude Code without `CLAUDE_CODE_OAUTH_TOKEN` (its sign-in reads it); `gh` reaches the operator's login through the shim, never through this HOME.
   const keychain = args.host === "claude" && !process.env.CLAUDE_CODE_OAUTH_TOKEN
   createIsolatedHome({ homeDir, sharedCacheDir, host: args.host, keychain, ghAccounts: false })
@@ -317,11 +322,11 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   let bootScriptFile = path.join(pluginDir, "desk", "mcp", "scripts", "session-boot.js")
   const secrets = []
   if (args.host === "copilot") {
-    const copilotHome = writeCopilotProfile({ homeDir, trustedFolders: [deskRoot, path.join(homeDir, "code"), homeDir] })
+    const copilotHome = writeCopilotProfile({ homeDir, trustedFolders: [deskRoot, sessionFolder, path.join(homeDir, "code"), homeDir] })
     shareCopilotPackageCache({ homeDir, sharedDir: path.join(sharedCacheDir, "copilot-pkg") })
     env = buildChildEnv({ parentEnv: process.env, homeDir, shimDir, gitConfig, ghLog, host: "copilot", extraEnv: { COPILOT_HOME: copilotHome, COPILOT_AUTO_UPDATE: "false", ...(args.copilotBind === "env" ? { DESK: deskRoot } : {}) } })
     // Install Desk the way a Copilot user does, before the credential exists in the environment: installing needs none.
-    const installed = installCopilotPlugins({ copilot: args.binary, pluginDir, env, cwd: deskRoot })
+    const installed = installCopilotPlugins({ copilot: args.binary, pluginDir, env, cwd: sessionFolder })
     if (!installed.ok) throw new Error(`could not install Desk into the run's Copilot profile: ${installed.log.join(" | ")}`)
     bootScriptFile = path.join(installed.installedDesk, "mcp", "scripts", "session-boot.js")
     // The credential: one named variable on the child, never a file or an argument, redacted by value from every saved output.
@@ -345,7 +350,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   if (realGh) installGhShim({ shimDir, realGh, logFile: ghLog, bootScript, realEnv: realGhEnv() })
 
   const startedAt = Date.now()
-  const { ctx, critique, critiqueSkipped, turns } = await runTurns({ claude: runHost(args.binary), prompt: scenario.prompt, critiquePrompt: CRITIQUE_PROMPT, flags, cwd: deskRoot, env, timeoutMs: args.timeoutMin * 60 * 1000, host: args.host, secrets })
+  const { ctx, critique, critiqueSkipped, turns } = await runTurns({ claude: runHost(args.binary), prompt: scenario.prompt, critiquePrompt: CRITIQUE_PROMPT, flags, cwd: sessionFolder, env, timeoutMs: args.timeoutMin * 60 * 1000, host: args.host, secrets })
   if (args.host === "copilot") {
     const refused = authFailureProblem({ turn: turns[0], auth })
     if (refused !== null) throw new Error(refused)
@@ -395,6 +400,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     run: runIndex,
     prompt: scenario.prompt,
     injected: scenario.inject,
+    outside_desk: args.outsideDesk,
     spawn_exit_code: first.status,
     spawn_signal: first.signal,
     timed_out: turns.some((t) => t.timedOut),

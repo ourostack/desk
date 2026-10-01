@@ -7,6 +7,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { test } from "node:test"
 
+import { parseArgs } from "./run.mjs"
 import { claudeGates, copilotGates, copilotGatesUnavailable, gateReport, parseEventLines, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
 
 const GH = ["gho", "_", "Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq0Pp9Oo8"].join("")
@@ -42,7 +43,7 @@ test("a Copilot log from before the fix: no pointer on the first prompt, session
   assert.equal(gates.session_start.injected, true)
   assert.equal(gates.session_start.context_chars, "foundation ".repeat(100).length)
   assert.equal(gates.session_start.after_first_prompt_hook, true)
-  assert.deepEqual(gates.first_prompt_pointer, { fired: 1, injected_on_first_prompt: false, reached_model: false, injected_count: 0 })
+  assert.deepEqual(gates.first_prompt_pointer, { prompts: 1, injected_on_first_prompt: false, reached_model: false, injected_count: 0 })
   assert.equal(gates.pre_tool_use_denials, 1)
   assert.equal(gates.agent_stop_blocks, 1)
   assert.equal(gates.hook_failures, 0)
@@ -58,7 +59,7 @@ test("a Copilot log with the pointer on the first prompt records that it was inj
     end("p2", "userPromptSubmitted", {}),
   )
   const gates = copilotGates(parseEventLines(text))
-  assert.deepEqual(gates.first_prompt_pointer, { fired: 2, injected_on_first_prompt: true, reached_model: true, injected_count: 1 })
+  assert.deepEqual(gates.first_prompt_pointer, { prompts: 2, injected_on_first_prompt: true, reached_model: true, injected_count: 1 })
   assert.equal(gates.session_start.fired, 0)
   assert.equal(gates.session_start.injected, false)
   assert.equal(gates.session_start.context_chars, 0)
@@ -71,12 +72,12 @@ test("a pointer the hook returned but the model's message does not carry is told
     end("p1", "userPromptSubmitted", { additionalContext: POINTER }),
     line("user.message", { content: "hi", transformedContent: "hi" }),
   )
-  assert.deepEqual(copilotGates(parseEventLines(text)).first_prompt_pointer, { fired: 1, injected_on_first_prompt: true, reached_model: false, injected_count: 1 })
+  assert.deepEqual(copilotGates(parseEventLines(text)).first_prompt_pointer, { prompts: 1, injected_on_first_prompt: true, reached_model: false, injected_count: 1 })
 })
 
 test("an empty log, failed hooks, an unmatched hook and a log with no user message are all counted without throwing", () => {
   const empty = copilotGates([])
-  assert.equal(empty.first_prompt_pointer.fired, 0)
+  assert.equal(empty.first_prompt_pointer.prompts, 0)
   assert.equal(empty.first_prompt_pointer.injected_on_first_prompt, false)
   assert.equal(empty.first_prompt_pointer.reached_model, false)
   assert.deepEqual(empty.hook_order, [])
@@ -190,4 +191,44 @@ test("gateReport picks the host's counter and says so when a Copilot run has no 
   assert.deepEqual(missing, copilotGatesUnavailable)
   assert.equal(missing.events_saved, false)
   assert.notEqual(missing, copilotGatesUnavailable)
+})
+
+test("Desk registers two userPromptSubmitted hooks: a prompt is the group of hook runs before its message, and either hook may carry the pointer", () => {
+  const twoHooks = (n, pointerOnSecond) => [
+    start(`g${n}`, "userPromptSubmitted", { prompt: "p" }),
+    end(`g${n}`, "userPromptSubmitted", {}),
+    start(`b${n}`, "userPromptSubmitted", { prompt: "p" }),
+    end(`b${n}`, "userPromptSubmitted", pointerOnSecond ? { additionalContext: POINTER } : {}),
+  ]
+  // The pointer comes from the second hook of the first prompt: the first prompt was directed (the first hook's empty answer is not the prompt's).
+  const first = log(...twoHooks(1, true), line("user.message", { content: "hi", transformedContent: `hi ${POINTER}` }), ...twoHooks(2, false), line("user.message", { content: "again", transformedContent: "again" }))
+  assert.deepEqual(copilotGates(parseEventLines(first)).first_prompt_pointer, { prompts: 2, injected_on_first_prompt: true, reached_model: true, injected_count: 1 })
+  // The pointer only on a later prompt is not credited to the first.
+  const later = log(...twoHooks(1, false), line("user.message", { content: "hi", transformedContent: "hi" }), ...twoHooks(2, true), line("user.message", { content: "again", transformedContent: `again ${POINTER}` }))
+  assert.deepEqual(copilotGates(parseEventLines(later)).first_prompt_pointer, { prompts: 2, injected_on_first_prompt: false, reached_model: false, injected_count: 1 })
+})
+
+test("the pointer is found in a message longer than the saved copy keeps, and a secret across a cut point is redacted before the cut", () => {
+  const long = `${"x".repeat(70000)} ${POINTER}`
+  const raw = log(
+    start("p1", "userPromptSubmitted", {}),
+    end("p1", "userPromptSubmitted", {}),
+    line("user.message", { content: "hi", transformedContent: long }),
+  )
+  const reduced = reduceCopilotEvents(raw)
+  const [message] = parseEventLines(reduced).filter((e) => e.type === "user.message")
+  assert.equal(message.data.transformedContent.endsWith("...[cut]"), true)
+  assert.equal(message.data.pointer_present, true)
+  assert.equal(copilotGates(parseEventLines(reduced)).first_prompt_pointer.reached_model, true)
+  // A token that starts just inside the cut would be saved as a truncated, no-longer-recognizable fragment if the cut came first.
+  const straddling = log(line("user.message", { content: `${"a".repeat(1990)}${GH}`, transformedContent: "t" }))
+  const saved = reduceCopilotEvents(straddling)
+  assert.ok(!saved.includes(GH.slice(0, 12)), "no token fragment survives")
+  assert.match(saved, /\[REDACTED/u)
+})
+
+test("--outside-desk is a harness flag and is off by default", () => {
+  const out = path.join(os.tmpdir(), "gates-outside-desk-out")
+  assert.equal(parseArgs(["--out-dir", out]).outsideDesk, false)
+  assert.equal(parseArgs(["--out-dir", out, "--outside-desk"]).outsideDesk, true)
 })

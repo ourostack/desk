@@ -17,6 +17,7 @@ import * as path from "node:path"
 import { redactSecrets } from "./safety.mjs"
 
 const KEPT_TYPES = new Set(["session.start", "session.resume", "hook.start", "hook.end", "user.message"])
+const POINTER = /Desk boot is pending/u
 const MAX_OUTPUT_CHARS = 60000
 const MAX_FIELD_CHARS = 300
 
@@ -53,7 +54,8 @@ function reduceEvent(event) {
     case "hook.end":
       return { ...base, data: { hookInvocationId: data.hookInvocationId, hookType: data.hookType, success: data.success, ...(data.output === undefined ? {} : { output: reduceHookOutput(data.output) }) } }
     default:
-      return { ...base, data: { content: cut(data.content, 2000), transformedContent: cut(data.transformedContent, 60000) } }
+      // The pointer test reads the whole message before the cut, so a long message can never hide it from the gate report.
+      return { ...base, data: { content: cut(data.content, 2000), transformedContent: cut(data.transformedContent, 60000), pointer_present: POINTER.test(String(data.transformedContent ?? "")) } }
   }
 }
 
@@ -74,11 +76,12 @@ export function parseEventLines(text) {
 
 /**
  * The saved form of a session's `events.jsonl`: only the session, hook and user-message events, hook inputs cut down, every secret redacted (the token shapes
- * and each exact value in `secrets`). Returns the JSONL text, or "" when the log holds none of them.
+ * and each exact value in `secrets`). Each event is redacted whole first and cut after, so a secret that straddles a cut point is never left half-visible.
+ * Returns the JSONL text, or "" when the log holds none of them.
  */
 export function reduceCopilotEvents(text, { secrets = [] } = {}) {
-  const lines = parseEventLines(text).filter((event) => KEPT_TYPES.has(event.type)).map((event) => JSON.stringify(reduceEvent(event)))
-  return lines.length === 0 ? "" : redactSecrets(`${lines.join("\n")}\n`, secrets)
+  const lines = parseEventLines(text).filter((event) => KEPT_TYPES.has(event.type)).map((event) => JSON.stringify(reduceEvent(JSON.parse(redactSecrets(JSON.stringify(event), secrets)))))
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`
 }
 
 /**
@@ -92,7 +95,6 @@ export function readCopilotSessionEvents(copilotHome, { exists = existsSync, lis
   return files.length === 0 ? null : files.map(read).join("\n")
 }
 
-const POINTER = /Desk boot is pending/u
 const hasText = (value) => typeof value === "string" && value.trim() !== ""
 
 /**
@@ -100,8 +102,9 @@ const hasText = (value) => typeof value === "string" && value.trim() !== ""
  *
  * - `session_start`: whether the `sessionStart` hook ran and handed back context, how long, and whether it ran after the first prompt hook. Copilot fires
  *   `userPromptSubmitted` first, then `sessionStart`, on a new session, so the context a boot pointer needs from the start hook is not there yet at that first prompt.
- * - `first_prompt_pointer`: whether the pointer reached the model with the very first user message. `injected_on_first_prompt` is the hook's answer for that
- *   prompt; `reached_model` is whether the text appears in that message's `transformedContent`, which is what the model was given; `injected_count` counts every prompt that got one.
+ * - `first_prompt_pointer`: whether the pointer reached the model with the very first user message. Copilot runs every `userPromptSubmitted` hook (Desk registers two) before it logs a
+ *   user message, so a prompt is the group of those hook runs that precede one message. `prompts` counts such groups; `injected_on_first_prompt` is whether any hook in the first group returned the pointer;
+ *   `reached_model` is whether the text is in that first message's `transformedContent` (what the model was given, tested before the saved copy is cut); `injected_count` counts the prompts that got one.
  * - `pre_tool_use_denials`: `preToolUse` hook ends whose output denies the call. `agent_stop_blocks`: `agentStop` hook ends that block the stop.
  * - `hook_order`: the hook types in the order they began, with repeats collapsed, up to the first twelve.
  */
@@ -110,16 +113,26 @@ export function copilotGates(events) {
   const hookEnds = events.filter((e) => e.type === "hook.end")
   const endOf = (start) => hookEnds.find((end) => end.data?.hookInvocationId === start.data?.hookInvocationId)
   const outputOf = (start) => endOf(start)?.data?.output ?? {}
-  const promptStarts = hookStarts.filter((e) => e.data?.hookType === "userPromptSubmitted")
   const sessionStarts = hookStarts.filter((e) => e.data?.hookType === "sessionStart")
   const userMessages = events.filter((e) => e.type === "user.message")
 
-  const startContext = sessionStarts.map((start) => outputOf(start).additionalContext).filter(hasText)
-  const firstPrompt = promptStarts[0]
-  const firstPromptIndex = firstPrompt ? events.indexOf(firstPrompt) : -1
-  const firstStartIndex = sessionStarts[0] ? events.indexOf(sessionStarts[0]) : -1
+  // Group the prompt hooks by the user message they precede.
+  const prompts = []
+  let group = []
+  for (const event of events) {
+    if (event.type === "hook.start" && event.data?.hookType === "userPromptSubmitted") group.push(event)
+    else if (event.type === "user.message") {
+      prompts.push({ hooks: group, message: event })
+      group = []
+    }
+  }
+  if (group.length > 0) prompts.push({ hooks: group, message: null })
+  const pointerIn = (hooks) => hooks.some((start) => POINTER.test(String(outputOf(start).additionalContext ?? "")))
 
-  const pointerStarts = promptStarts.filter((start) => POINTER.test(String(outputOf(start).additionalContext ?? "")))
+  const startContext = sessionStarts.map((start) => outputOf(start).additionalContext).filter(hasText)
+  const firstPromptHook = prompts[0]?.hooks[0]
+  const firstPromptIndex = firstPromptHook ? events.indexOf(firstPromptHook) : -1
+  const firstStartIndex = sessionStarts[0] ? events.indexOf(sessionStarts[0]) : -1
   const firstMessage = userMessages[0]
 
   const order = []
@@ -135,10 +148,10 @@ export function copilotGates(events) {
       after_first_prompt_hook: firstPromptIndex >= 0 && firstStartIndex >= 0 ? firstStartIndex > firstPromptIndex : null,
     },
     first_prompt_pointer: {
-      fired: promptStarts.length,
-      injected_on_first_prompt: firstPrompt !== undefined && pointerStarts.includes(firstPrompt),
-      reached_model: firstMessage !== undefined && POINTER.test(String(firstMessage.data?.transformedContent ?? "")),
-      injected_count: pointerStarts.length,
+      prompts: prompts.length,
+      injected_on_first_prompt: prompts.length > 0 && pointerIn(prompts[0].hooks),
+      reached_model: firstMessage !== undefined && (firstMessage.data?.pointer_present === true || POINTER.test(String(firstMessage.data?.transformedContent ?? ""))),
+      injected_count: prompts.filter((p) => pointerIn(p.hooks)).length,
     },
     pre_tool_use_denials: decisions("preToolUse", (output) => output.permissionDecision === "deny"),
     agent_stop_blocks: decisions("agentStop", (output) => output.decision === "block"),
