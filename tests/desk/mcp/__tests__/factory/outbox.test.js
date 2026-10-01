@@ -135,7 +135,7 @@ function validMarker(overrides = {}) {
     end_reason: "prompt_input_exit",
     ended_at: "2026-09-25T09:30:00.000Z",
     plugins: [{ name: "desk", version: "3.2.0-alpha.20" }],
-    updated_at: "2026-09-25T09:30:00.000Z",
+    updated_at: new Date().toISOString(),
     ...overrides,
   }
 }

@@ -146,9 +146,9 @@ test("the route is the facts route: the desk's declaration, else the session's r
   await marker(env, { n: 3, deskRoot: null })
   assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner }), { result: "route_unknown" })
   // An overlay declaration recorded at session start wins over the public default, and the newest session decides.
-  await marker(env, { n: 4, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: "2026-09-26T10:00:00.000Z" })
+  await marker(env, { n: 4, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: new Date(Date.now() - 60000).toISOString() })
   await marker(env, { n: 5, deskRoot, routing: { source: "overlay", store: WORK_STORE, warnings: [] }, updatedAt: new Date().toISOString() })
-  await marker(env, { n: 6, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: "2026-09-26T10:00:00.000Z" })
+  await marker(env, { n: 6, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: new Date(Date.now() - 60000).toISOString() })
   assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, WORK_STORE)
   // A session whose scan could not read every manifest recorded no store: fail closed.
   await marker(env, { n: 7, deskRoot, routing: { source: "invalid_declaration", store: null, warnings: [] }, updatedAt: new Date(Date.now() + 1000).toISOString() })

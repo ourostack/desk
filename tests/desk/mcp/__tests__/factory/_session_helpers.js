@@ -48,3 +48,6 @@ export async function session({ base, desk, env }, host = "claude-code") {
     end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString(),
   }
 }
+
+/** A marker `updated_at` on the real clock: `listMarkers` prunes a marker whose `updated_at` is over 30 days old, so a fixed date would rot. */
+export const recent = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString()
