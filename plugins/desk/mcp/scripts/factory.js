@@ -481,7 +481,11 @@ export function isMainModule(importMetaUrl, argv1) {
   return importMetaUrl === pathToFileURL(argv1).href
 }
 
-if (isMainModule(import.meta.url, process.argv[1])) {
-  const code = await main()
-  process.exitCode = code
+/** Runs `run` and sets the exit code when `argv1` names this module; otherwise does nothing. Returns whether it ran. */
+export async function runIfMain(importMetaUrl, argv1, run = main) {
+  if (!isMainModule(importMetaUrl, argv1)) return false
+  process.exitCode = await run()
+  return true
 }
+
+await runIfMain(import.meta.url, process.argv[1])

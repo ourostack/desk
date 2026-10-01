@@ -15,6 +15,7 @@ import {
   SUPPORTED_COMMANDS,
   deskVersion,
   isMainModule,
+  runIfMain,
   main,
   parseOptions,
   runBuildCommand,
@@ -934,3 +935,36 @@ test("andon reads the store's jobs and syncs its alarms through gh with GH_TOKEN
   await assert.rejects(runAndonCommand({ argv: ["--repo", "ourostack/factory"], env: { ...env, GH_TOKEN: "x" }, runner }), /Usage: factory\.js andon/u)
   assert.ok(SUPPORTED_COMMANDS.includes("andon"))
 }))
+
+test("runIfMain runs the command and sets the exit code only for this module's own path", async () => {
+  const before = process.exitCode
+  try {
+    assert.equal(await runIfMain("file:///a/b.js", "/a/other.js", async () => assert.fail("must not run")), false)
+    assert.equal(await runIfMain("file:///a/b.js", "/a/b.js", async () => 3), true)
+    assert.equal(process.exitCode, 3)
+  } finally {
+    process.exitCode = before
+  }
+})
+
+test("main writes to stdout and stderr by default", async () => {
+  const out = []
+  const err = []
+  const write = process.stdout.write
+  const error = process.stderr.write
+  process.stdout.write = (text) => { out.push(String(text)); return true }
+  process.stderr.write = (text) => { err.push(String(text)); return true }
+  try {
+    assert.equal(await main({ argv: ["no-such-command"] }), 1)
+    // With no argv, main reads the process arguments, which name no subcommand here.
+    assert.equal(await main(), 1)
+    assert.equal(await main({ argv: ["validate-pr"] }), 1)
+    assert.equal(await main({ argv: ["reconcile", "--desk", "/nonexistent-desk-for-test", "--since", "2026-09-28T00:00:00Z", "--until", "2026-09-29T00:00:00Z"], env: { HOME: "/nonexistent-home-for-test" } }), 1)
+  } finally {
+    process.stdout.write = write
+    process.stderr.write = error
+  }
+  assert.match(err.join(""), /unknown subcommand/u)
+  assert.equal(out.length, 1)
+  assert.equal(JSON.parse(out[0]).ok, false)
+})

@@ -171,6 +171,15 @@ test("a Codex marker's default route proves nothing, so kaizen files only by a C
   assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, STORE)
 }))
 
+test("two recorded routings for the desk with the same time still give one route", () => scratch(async ({ env, deskRoot }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const { runner } = fakeGh()
+  const at = new Date().toISOString()
+  await marker(env, { n: 1, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: at })
+  await marker(env, { n: 2, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: at })
+  assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, STORE)
+}))
+
 test("a retry finds the open card by its fingerprint and files nothing again", () => scratch(async ({ env, deskRoot }) => {
   declare(deskRoot)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
