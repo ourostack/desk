@@ -120,6 +120,9 @@ export function parseTranscript(text, host = "claude") {
   return host === "copilot" ? parseCopilotTranscript(text) : parseStreamJson(text)
 }
 
+/** What a run records when its critique turn ended in an error (a usage limit, a crash) instead of answering. */
+export const CRITIQUE_UNAVAILABLE = "critique: unavailable (error)"
+
 export function buildContext(events) {
   const toolCalls = []
   const callsById = new Map()
@@ -198,7 +201,9 @@ export async function runTurns({ claude, prompt, critiquePrompt, flags, cwd, env
     ctx.critiqueToolCalls = critiqueCtx.toolCalls
     ctx.critiqueCostUsd = critiqueCtx.totalCostUsd
     ctx.tokenLeaks += critiqueCtx.tokenLeaks + countTokenLeaks(second.stderr)
-    if (critique === "") critiqueSkipped = "the critique turn returned no text"
+    // A limit or an error is no critique: its message is not saved as one.
+    if (critiqueCtx.isError === true) [critique, critiqueSkipped] = ["", CRITIQUE_UNAVAILABLE]
+    else if (critique === "") critiqueSkipped = "the critique turn returned no text"
   }
   return { ctx, critique, critiqueSkipped, turns }
 }
@@ -214,6 +219,7 @@ export function loadRunContext(runDir, host = "claude") {
   if (critiqueText !== null) {
     const critiqueCtx = buildContext(parseTranscript(critiqueText, host))
     ctx.critiqueToolCalls = critiqueCtx.toolCalls
+    ctx.critiqueIsError = critiqueCtx.isError === true
     ctx.tokenLeaks += critiqueCtx.tokenLeaks
   }
   ctx.tokenLeaks += countTokenLeaks(read("stderr.log") ?? "")

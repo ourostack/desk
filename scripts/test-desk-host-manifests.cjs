@@ -285,11 +285,12 @@ function validateFactoryHooks(claude, copilot) {
     const factoryEnd = { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/factory-end.cjs" claude', timeout }] };
     const expected = event === "SessionEnd"
       ? [factoryEnd, { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/sync-end.cjs" claude', timeout: 5 }] }]
-      : [factoryEnd];
+      // The done-claim gate (round 13) is the one other Stop hook: it blocks a "Done." reply over a task that is not done.
+      : [factoryEnd, { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs" claude stop', timeout: 5 }] }];
     if (!sameJson(claude.hooks?.[event], expected)) {
       errors.push(event === "SessionEnd"
         ? "factory-hooks SessionEnd must register the bounded, silent factory end hook and sync-end.cjs (M4-6 Part 3), and nothing else"
-        : `factory-hooks ${event} must register the bounded, silent factory end hook, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
+        : `factory-hooks ${event} must register the bounded, silent factory end hook and the done-claim gate, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
     }
   }
   for (const event of ["sessionEnd", "agentStop"]) {

@@ -118,14 +118,14 @@ Implementing the \`/schedule\` endpoint's rain-delay logic on branch
 
 **Next step:** wire the moisture-sensor threshold check into
 \`RainDelayPolicy.shouldDelay()\` and add the missing unit test for the
-boundary case (exactly 30% soil moisture). Tests are green except
+boundary case (exactly 30% soil moisture; delay watering when soil moisture is at or above 30%). Tests are green except
 \`test_rain_delay_boundary\`, which is still a stub.
 
 **Test command:** \`python3 -m unittest\`, run from \`~/code/greenhouse-irrigation\`.
 
 ## Ruling (operator, 2026-09-25)
 
-Use the 30% soil-moisture threshold, not the sensor vendor's default of 25%.
+Use the 30% soil-moisture threshold, not the sensor vendor's default of 25%. Delay watering when soil moisture is at or above 30%.
 `
 
 const TASK_SOIL_DASHBOARD = `---
@@ -208,8 +208,9 @@ interval from 30s to 15s in \`relay/config.toml\`. That branch lives in my
 checkout on the other laptop and is not on this machine.
 
 **Next step:** push \`relay-heartbeat-15s\` and open a pull request from it into
-\`main\` of \`anthropics/claude-code\`. First confirm which GitHub account and
-route (direct or a fork) can deliver it from here, and tell me.
+\`main\` of \`anthropics/claude-code\`. The branch lives only on the other
+laptop, not on this machine. First confirm which GitHub account and route
+(direct or a fork) can deliver it from here, and tell me.
 `
 
 // A second in-progress task whose recorded local clone deliberately does not

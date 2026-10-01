@@ -29,6 +29,15 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" claude stop",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -82,6 +91,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" claude prompt",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -92,6 +110,18 @@
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh ${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*__task_(update|create|move|archive)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" claude track",
+            "timeout": 5
           }
         ]
       }
