@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
-  factoryStateRoot, readConsent, readDelivered, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker,
+  factoryStateRoot, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
@@ -128,7 +128,9 @@ test("labels are retracted with their facts, at the keyed path they were deliver
   assert.notEqual(job, LABELS.job)
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`, `facts/${nameOf(2)}`, `labels/${job}/${sessionId(1)}.json`, `labels/${job}/${sessionId(2)}.json`])
   // The record keeps the published path, which is not the local key.
-  assert.equal((await readDelivered(ctx.env, STORE)).paths[`labels/${LABELS.job}/${sessionId(1)}.json`], `labels/${job}/${sessionId(1)}.json`)
+  const recorded = (await readDelivered(ctx.env, STORE)).paths[`labels/${LABELS.job}/${sessionId(1)}.json`]
+  assert.equal(recorded.path, `labels/${job}/${sessionId(1)}.json`)
+  assert.match(recorded.blob, /^[0-9a-f]{40}$/u)
   await reroute(desks[0], OTHER)
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
   assert.equal(github.pulls.at(-1).body, "0\n\nRetracted: 2 files (route_changed)")
@@ -175,11 +177,16 @@ test("the PR names neither the other store nor a session, and its branch and com
   const pr = github.pulls.at(-1)
   const branch = await branchOf(ctx.env)
   const commit = github.commit(github.ref(STORE, branch))
+  const status = await fs.readFile(path.join(await factoryStateRoot(ctx.env), "status.json"), "utf8")
+  assert.doesNotMatch(status, /ms-desk-factory|shared-internal-tools/u)
+  // The tree call names the deleted path, which holds the session id by design; everything else must not.
+  const trees = github.calls.filter((call) => /git\/trees/u.test(call.args.join(" "))).map((call) => call.input ?? "")
   const texts = [pr.title, pr.body, pr.head.ref, commit.message, ...github.calls.filter((call) => /pulls|commits|refs/u.test(call.args.join(" "))).map((call) => call.input ?? "")]
-  for (const text of texts) {
+  for (const text of [...texts, ...trees]) {
+    assert.equal(text.includes(ctx.base), false, "no desk path")
     assert.doesNotMatch(text, /ms-desk-factory|shared-internal-tools|internal/iu)
-    assert.doesNotMatch(text, new RegExp(sessionId(1), "u"))
   }
+  for (const text of texts) assert.doesNotMatch(text, new RegExp(sessionId(1), "u"))
   assert.equal(commit.message, "Factory intake")
 }))
 
@@ -223,12 +230,117 @@ test("a session is never both published and deleted in one PR", () => scratch(as
   assert.deepEqual(head, [`facts/${nameOf(2)}`, `facts/${nameOf(3)}`])
 }))
 
-test("a delete the store refuses is quarantined and not retried forever", () => scratch(async (ctx) => {
+test("a session routed back to the store before its delete merges keeps its file: the delete PR is closed", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 1)
   await reroute(desks[0], OTHER)
-  github.addClosedPr({ comment: "factory-rejected: removal_path", fileNames: [nameOf(1)], headLabel: `ourostack:${await branchOf(ctx.env)}` })
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  const open = github.pulls.at(-1)
+  assert.equal(open.state, "open")
+  await reroute(desks[0], STORE)
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(open.state, "closed")
+  assert.equal(github.pulls.filter((pr) => pr.state === "open").length, 0)
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+  // The branch no longer carries the delete, and a later flush has nothing to reconcile.
+  assert.deepEqual([...github.headFiles(STORE, await branchOf(ctx.env)).keys()], [`facts/${nameOf(1)}`])
+  const calls = github.calls.length
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.ok(github.calls.length - calls <= 6)
+}))
+
+test("a route back with other deletes still pending rebuilds the branch without the delete it no longer needs", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 2)
+  await reroute(desks[0], OTHER)
+  await reroute(desks[1], OTHER)
+  await run(ctx.env, github)
+  await reroute(desks[0], STORE)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal(github.pulls.at(-1).body, "0\n\nRetracted: 1 files (route_changed)")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("after a retraction merges, routing back publishes the session again as new", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.deepEqual(dataFiles(github), [])
+  await reroute(desks[0], STORE)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+}))
+
+test("a store name that differs only in case is the same store: the file stays", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], STORE.toUpperCase().replace("OUROSTACK/FACTORY", "Ourostack/Factory"))
   const before = github.pullCount()
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
-  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.equal(github.pullCount(), before)
+  assert.equal(dataFiles(github).length, 1)
+}))
+
+test("a recorded path that holds another session's blob is never deleted", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 2)
+  const root = await factoryStateRoot(ctx.env)
+  const file = path.join(root, "delivered-paths", "ourostack__factory.json")
+  const record = JSON.parse(await fs.readFile(file, "utf8"))
+  // Session 1's record is pointed at session 2's file, first with its own blob and then with no blob at all; the store holds session 2's blob there.
+  const own = (await readDelivered(ctx.env, STORE)).blobs[nameOf(1)]
+  record[nameOf(1)] = { path: `facts/${nameOf(2)}`, blob: own }
+  await fs.writeFile(file, JSON.stringify(record))
+  await reroute(desks[0], OTHER)
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  record[nameOf(1)] = `facts/${nameOf(2)}`
+  await fs.writeFile(file, JSON.stringify(record))
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`, `facts/${nameOf(2)}`])
+}))
+
+test("a refused delete is counted in status, not quarantined, not retried, and publishable again when the session routes back", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 1)
+  await reroute(desks[0], OTHER)
+  github.addClosedPr({ comment: "factory-rejected: removal", fileNames: [nameOf(1)], headLabel: `ourostack:${await branchOf(ctx.env)}` })
+  const before = github.pullCount()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  const entry = async () => (await readStatus(ctx.env)).last_flush[STORE]
+  assert.equal((await entry()).retractions_refused, 1)
+  assert.deepEqual((await readDelivered(ctx.env, STORE)).quarantined.size, 0)
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal((await entry()).retractions_refused, 1)
+  assert.equal(github.pullCount(), before)
+  // Routed back: forgotten, and a changed file for the session goes out.
+  await reroute(desks[0], STORE)
+  const changed = localFacts(1)
+  changed.session.end_reason = "clear"
+  assert.equal((await writeLocalFacts(ctx.env, STORE, changed)).written, true)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal((await entry()).retractions_refused, undefined)
+}))
+
+test("junk and quarantined records are ignored; a store that deletes its branch after the merge does not stop the status from clearing", () => scratch(async (ctx) => {
+  const { github, desks } = await delivered(ctx, 2)
+  const root = await factoryStateRoot(ctx.env)
+  const record = path.join(root, "delivered", "ourostack__factory.json")
+  const blobs = JSON.parse(await fs.readFile(record, "utf8"))
+  blobs["junk-name"] = "e".repeat(40)
+  await fs.writeFile(record, JSON.stringify(blobs))
+  await quarantine(ctx.env, STORE, nameOf(2), "invalid")
+  await reroute(desks[0], OTHER)
+  await reroute(desks[1], OTHER)
+  // The quarantined session's file is neither deleted nor published in this flush.
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal(github.pulls.at(-1).body, "0\n\nRetracted: 1 files (route_changed)")
+  github.mergeOpenPr()
+  github.dropBranch(STORE, await branchOf(ctx.env))
+  // Its quarantine record named no blob, so the flush released it; it retracts now.
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  github.dropBranch(STORE, await branchOf(ctx.env))
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal((await readStatus(ctx.env)).last_flush[STORE].retractions_pushed, undefined)
+  assert.deepEqual(dataFiles(github), [])
 }))

@@ -702,7 +702,7 @@ export async function markDelivered(env, store, { name, publishedBlobSha, publis
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
   if (publishedPath !== undefined) {
-    await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, [name]: publishedPath }), { platform, env, runner })
+    await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, [name]: { path: publishedPath, blob: publishedBlobSha } }), { platform, env, runner })
   }
   const file = path.join(root, "delivered", `${slug}.json`)
   return updateJsonLocked(root, file, {}, (current) => ({ ...current, [name]: publishedBlobSha }), { platform, env, runner })

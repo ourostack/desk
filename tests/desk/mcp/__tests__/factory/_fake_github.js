@@ -256,7 +256,8 @@ export function fakeGitHub({
     }
     if (method === "PATCH" && (m = new RegExp(`^repos/${store}/pulls/(\\d+)$`, "u").exec(pathPart))) {
       const pr = pulls.find((item) => item.number === Number(m[1]))
-      pr.body = body.body
+      if (Object.hasOwn(body, "body")) pr.body = body.body
+      if (body.state) pr.state = body.state
       return ok(publicPr(pr))
     }
     if (method === "GET" && (m = new RegExp(`^repos/${store}/issues/(\\d+)/comments$`, "u").exec(pathPart))) {
@@ -318,6 +319,10 @@ export function fakeGitHub({
     headFacts: (repoName, branch) => {
       const sha = repo(repoName)?.refs.get(`heads/${branch}`)
       return sha ? factsOf(sha) : null
+    },
+    /** Deletes a branch, as a store that removes head branches after a merge does. */
+    dropBranch(repoName, branch) {
+      repo(repoName).refs.delete(`heads/${branch}`)
     },
     ref: (repoName, branch) => repo(repoName)?.refs.get(`heads/${branch}`) ?? null,
     commit: (sha) => commits.get(sha),

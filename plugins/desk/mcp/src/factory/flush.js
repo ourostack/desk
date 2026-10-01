@@ -602,21 +602,24 @@ async function retractions(env, { store, delivered, published }) {
   for (const name of Object.keys(delivered.blobs)) {
     const labels = LABELS_KEY.exec(name)
     const session = labels === null ? FACTS_SESSION.exec(name)?.[1] : labels[2]
-    if (session === undefined || delivered.quarantined.has(name)) continue
-    let where = delivered.paths[name]
-    const valid = labels === null ? isFactsPath(where) : labelsPathParts(where)?.session === session
+    if (session === undefined) continue
+    const record = delivered.paths[name]
+    let where = typeof record === "string" ? record : record?.path
+    // A recorded path is trusted when it has the right shape and, if the record carries the blob, that blob is the one delivered.
+    const valid = (labels === null ? isFactsPath(where) : labelsPathParts(where)?.session === session) && (typeof record === "string" || record?.blob === delivered.blobs[name])
     if (!valid) {
       const recomputed = published(name)
       where = recomputed?.sha === delivered.blobs[name] ? recomputed.path : undefined
     }
     if (where === undefined) continue
     if (!sessions.has(session)) sessions.set(session, [])
-    sessions.get(session).push({ name, path: where, labels: labels !== null, session })
+    sessions.get(session).push({ name, path: where, labels: labels !== null, session, blob: delivered.blobs[name], held: delivered.quarantined.has(name) })
   }
   const out = []
   for (const [session, items] of sessions) {
     const route = await currentRoute(env, root, factsNamesOf(session))
-    if (route !== null && route !== store) out.push(...items)
+    // GitHub names are case-insensitive: a case-only difference is the same store.
+    if (route !== null && route.toLowerCase() !== store.toLowerCase()) out.push(...items)
   }
   return out
 }
@@ -680,8 +683,9 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
   return items.slice(0, maxItems)
 }
 
-async function readRejections(env, client, { store, head, through, labelKeys }) {
+async function readRejections(env, client, { store, head, through, labelKeys, retractPaths }) {
   const rejected = new Set()
+  const refused = new Set()
   let stale = 0
   let unmatched = 0
   let highest = through
@@ -717,6 +721,12 @@ async function readRejections(env, client, { store, head, through, labelKeys }) 
     // A batch holds up to MAX_FILES files; GitHub pages them 100 at a time.
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
       // A file is named back to its local key by its published path. One with no local key (a session already delivered or gone, or a keyed name no outbox file carries) has nothing to quarantine and is only counted.
+      // A refused delete is counted and never quarantined: the delivered file stays publishable if its session routes back.
+      const refusedName = retractPaths.get(String(file?.filename))
+      if (refusedName !== undefined) {
+        refused.add(refusedName)
+        continue
+      }
       const name = labelKeys.get(String(file?.filename))
       if (name === undefined) {
         unmatched += 1
@@ -726,7 +736,7 @@ async function readRejections(env, client, { store, head, through, labelKeys }) 
       rejected.add(name)
     }
   }
-  return { rejected, stale, unmatched, through: highest }
+  return { rejected, refused, stale, unmatched, through: highest }
 }
 
 function treeEntries(json) {
@@ -800,10 +810,14 @@ async function pushBatch(client, { target, branch, base, batch }) {
   return commit
 }
 
+async function findOpenPr(client, store, head) {
+  const open = await client.need("GET", `repos/${store}/pulls?state=open&head=${encodeURIComponent(head.label)}&per_page=10`)
+  return list(open).find((pr) => isPlainObject(pr) && Number.isSafeInteger(pr.number) && pr.head?.ref === head.ref)
+}
+
 async function openPr(client, { store, head, base, count, retracted }) {
   const body = retracted > 0 ? `${count}\n\nRetracted: ${retracted} files (${RETRACT_REASON})` : String(count)
-  const open = await client.need("GET", `repos/${store}/pulls?state=open&head=${encodeURIComponent(head.label)}&per_page=10`)
-  const existing = list(open).find((pr) => isPlainObject(pr) && Number.isSafeInteger(pr.number) && pr.head?.ref === head.ref)
+  const existing = await findOpenPr(client, store, head)
   let pr = existing
   if (pr === undefined) {
     pr = await client.need("POST", `repos/${store}/pulls`, { title: INTAKE_TITLE, head: head.label, base, body, maintainer_can_modify: false })
@@ -833,7 +847,13 @@ async function deliver(env, context) {
   const candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true })
   const labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })
   const delivered = await readDelivered(env, store)
-  if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0) return { result: "nothing_pending" }
+  // Deletes the last flush put on the intake branch: while that is so, the branch is reconciled with the current retractions even when nothing else is pending.
+  const prior = (await readStatus(env)).last_flush?.[store] ?? {}
+  const priorPushed = Number.isSafeInteger(prior.retractions_pushed) ? prior.retractions_pushed : 0
+  const priorRefused = list(prior.refused_retractions).filter((name) => typeof name === "string")
+  progress.retractionsPushed = priorPushed
+  progress.refused = priorRefused
+  if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && priorPushed === 0) return { result: "nothing_pending" }
 
   // `pendingFiles` already quarantined every file that does not parse, and `pendingLabels` lists only labels that parse.
   const parsed = candidates.map(({ name, localBytes, quarantine: held }) => ({ name, held, local: JSON.parse(localBytes.toString("utf8")) }))
@@ -908,7 +928,7 @@ async function deliver(env, context) {
       return { name, path: published, bytes, sha: gitBlobSha(bytes), labels: true, job, session }
     })
   // What this machine delivered to the store whose session now routes to another store is deleted; nothing of such a session is published.
-  const retract = await retractions(env, {
+  const retractAll = await retractions(env, {
     store,
     delivered,
     published: (name) => {
@@ -917,7 +937,12 @@ async function deliver(env, context) {
       return publishedFile.has(name) && bytesByName.has(name) ? { path: `facts/${publishedFile.get(name)}`, sha: gitBlobSha(bytesByName.get(name)) } : undefined
     },
   })
-  const retracting = new Set(retract.map((item) => item.session))
+  const retracting = new Set(retractAll.map((item) => item.session))
+  // A delete the store refused is not retried while the session still routes elsewhere; a session that routes back is forgotten.
+  progress.refused = priorRefused.filter((name) => retractAll.some((item) => item.name === name))
+  const refusedBefore = new Set(progress.refused)
+  // A quarantined name keeps its file in the store but is never published again while its session routes elsewhere.
+  let retract = retractAll.filter((item) => !refusedBefore.has(item.name) && !item.held)
   // Labels whose facts are quarantined never go; `holdLabels` quarantines them instead. Checked again after rejections, which may quarantine facts.
   const withoutHeld = async (items) => {
     const kept = []
@@ -925,7 +950,7 @@ async function deliver(env, context) {
     return kept
   }
   let pending = await withoutHeld([...factsPending, ...labelsPending].filter((item) => !retracting.has(item.session)))
-  if (pending.length === 0 && retract.length === 0) return { result: "nothing_pending" }
+  if (pending.length === 0 && retract.length === 0 && priorPushed === 0) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
   await client.session(account)
@@ -938,11 +963,13 @@ async function deliver(env, context) {
 
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
   // A rejected file is named back to its local key by its published path.
-  const labelKeys = new Map([...labelsPending, ...factsPending, ...retract].map((item) => [item.path, item.name]))
-  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys })
+  const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
+  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])) })
   progress.rejectionsThrough = rejections.through
   progress.rejectionsUnmatched = rejections.unmatched
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
+  progress.refused.push(...rejections.refused)
+  retract = retract.filter((item) => !rejections.refused.has(item.name))
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
@@ -957,13 +984,26 @@ async function deliver(env, context) {
   const deletes = []
   const gone = []
   for (const item of retract) {
-    if (rejections.rejected.has(item.name)) continue
-    if (item.labels ? labelsOnMain.has(item.path) : onMain.has(item.path.slice("facts/".length))) deletes.push({ ...item, retract: true, bytes: Buffer.alloc(0) })
-    else gone.push(item.name)
+    const current = item.labels ? labelsOnMain.get(item.path) : onMain.get(item.path.slice("facts/".length))
+    // Only the blob this machine delivered is deleted. A path that holds anything else, or that nothing recorded a delete for, is left alone.
+    if (current === item.blob) deletes.push({ ...item, retract: true, bytes: Buffer.alloc(0) })
+    else if (current === undefined && priorPushed > 0) gone.push(item.name)
   }
   await forgetDelivered(env, store, gone)
   progress.pending = remaining.map((item) => item.name)
-  if (remaining.length === 0 && deletes.length === 0) return { result: "nothing_pending" }
+  // An intake branch that still carries deletes nothing retracts any more would delete a file that routes here again when it merges: close it.
+  const retire = async () => {
+    if (priorPushed > 0) {
+      const open = await findOpenPr(client, store, head)
+      if (open !== undefined) await client.need("PATCH", `repos/${store}/pulls/${open.number}`, { state: "closed" })
+      // The branch itself goes back to the default branch, so it carries nothing that could merge later.
+      const ref = await client.api("GET", `repos/${target.repo}/git/ref/heads/${branch}`)
+      if (ref.status === 200) await client.need("PATCH", `repos/${target.repo}/git/refs/heads/${branch}`, { sha: base.sha, force: true })
+    }
+    progress.retractionsPushed = 0
+    return { result: "nothing_pending" }
+  }
+  if (remaining.length === 0 && deletes.length === 0) return retire()
 
   // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
   const takenAll = takeBatch([...deletes, ...remaining], { maxFiles, maxBytes })
@@ -972,8 +1012,9 @@ async function deliver(env, context) {
   const factsReady = new Set([...onMain.keys(), ...pending.filter((item) => !item.labels && onMain.has(item.file)).map((item) => item.name), ...taken.filter((item) => !item.labels).map((item) => item.name)])
   const publishing = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
   const batch = [...takenDeletes, ...publishing]
-  if (batch.length === 0) return { result: "nothing_pending" }
+  if (batch.length === 0) return retire()
   await pushBatch(client, { target, branch, base, batch })
+  progress.retractionsPushed = takenDeletes.length
   const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length, retracted: takenDeletes.length })
   // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.
   if (rejections.stale > 0) return { result: "intake_stale_retried", pr, stale_retries: rejections.stale }
@@ -995,7 +1036,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0 }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, retractionsPushed: null, refused: null }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -1006,7 +1047,10 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   // Rejected files with no local key are counted, never quarantined.
   if (progress.rejectionsUnmatched > 0) outcome = { ...outcome, rejections_unmatched: progress.rejectionsUnmatched }
   try {
-    const previous = (await readStatus(env)).last_flush?.[store]?.rejections_through
+    const before = (await readStatus(env)).last_flush?.[store]
+    const previous = before?.rejections_through
+    const pushed = progress.retractionsPushed ?? before?.retractions_pushed
+    const refused = progress.refused ?? list(before?.refused_retractions)
     const through = progress.rejectionsThrough ?? (Number.isSafeInteger(previous) ? previous : null)
     await writeStatus(env, {
       last_flush: {
@@ -1017,6 +1061,8 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           ...(outcome.stale_retries ? { stale_retries: outcome.stale_retries } : {}),
           ...(outcome.rejections_unmatched ? { rejections_unmatched: outcome.rejections_unmatched } : {}),
           ...(through !== null ? { rejections_through: through } : {}),
+          ...(Number.isSafeInteger(pushed) && pushed > 0 ? { retractions_pushed: pushed } : {}),
+          ...(refused.length > 0 ? { retractions_refused: refused.length, refused_retractions: refused } : {}),
         },
       },
     })
