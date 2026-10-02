@@ -276,5 +276,8 @@ export function buildChildEnv({ parentEnv, homeDir, shimDir, gitConfig, ghLog, h
   env.GH_PROMPT_DISABLED = "1"
   env.GH_CONFIG_DIR = path.join(homeDir, ".config", "gh")
   env.GH_SHIM_LOG = ghLog
+  // Desk's boot looks up the latest Desk version on the network; fixtures never do.
+  env.DESK_BOOT_VERSION_CHECK = "0"
+  env.DESK_BOOT_AUTO_REFRESH = "0"
   return env
 }

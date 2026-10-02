@@ -78,6 +78,8 @@ import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
+import { checkStaleDesk } from "./stale-desk.js"
+import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
 
 const parseFrontmatter = loadFrontmatterParser()
@@ -788,6 +790,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     open_prs: [],
     task: null,
     factory: null,
+    stale_desk: null,
   }
 }
 
@@ -1001,6 +1004,7 @@ export async function bootOnce({
   lastSyncFn = lastSyncedAt,
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
+  staleDeskFn = checkStaleDesk,
   nestedCards = NESTED_CARD_FIELDS,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
@@ -1046,6 +1050,11 @@ export async function bootOnce({
     const instructions = migrationEntries.map((entry) => migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
     return { ...emptyResult({ status: "degraded", degraded, pending, root, host }), instructions, migrations: migrationSummary }
   }
+
+  // The stale-Desk lookup runs alongside everything below; it has its own hard budget and never rejects.
+  const staleDesk = Promise.resolve()
+    .then(() => staleDeskFn({ env, pluginRoot, agentHost: host.agent, now }))
+    .catch(() => null)
 
   // The desk's own pre-commit hook (refuses a hand commit that changes a task card; see desk/card-commit-guard.js). Installing is idempotent and quiet;
   // only a failure to install is worth a line.
@@ -1181,6 +1190,7 @@ export async function bootOnce({
     }
   }
 
+  const staleFinding = await staleDesk
   const status = healthWord(degraded)
   const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
   return {
@@ -1205,6 +1215,7 @@ export async function bootOnce({
     open_prs: openPrs,
     task,
     factory,
+    stale_desk: staleFinding,
   }
 }
 
@@ -1223,7 +1234,7 @@ export function parseBootArgs(argv) {
  * The CLI entrypoint: prints `bootOnce`'s result as readable text (or, with `--json`, as one line of JSON for tools and
  * tests) and always exits 0 — a boot script must never block session start.
  */
-export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce }) {
+export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce, refreshOptions = {} }) {
   const { taskQuery, json } = parseBootArgs(argv)
   let result
   try {
@@ -1238,6 +1249,15 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
       host: null,
     })
   }
+  const finding = result.stale_desk ?? null
+  // A stale Desk is refreshed on its own host, but only after the boot output is written, and by a detached runner: boot never waits for it.
+  const options = { finding, env, pluginRoot: DESK_PLUGIN_ROOT, agentHost: result.host?.agent, root: result.root?.path ?? null, ...refreshOptions }
+  const prepared = finding === null ? { state: "unavailable" } : planStaleRefresh(options)
+  if (finding !== null) {
+    const started = prepared.state === "ready"
+    result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started ? startedLine(finding, prepared.plan) : finding.line } }
+  }
   io.stdout.write(json ? `${JSON.stringify(result)}\n` : formatBootText(result))
+  if (prepared.state === "ready") startStaleRefresh({ ...options, prepared })
   return 0
 }
