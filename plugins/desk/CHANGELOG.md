@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.173 — 2026-10-02
+
+### Protected-checkout guard: fewer false denials
+
+The protected-checkout guard keeps denying any PowerShell statement that names `git` outside the plain forms, and now allows two narrow statement shapes that provably run nothing: `Get-Command`/`gcm` with only literal names and common parameters, and `Write-Output`/`Write-Host`/`echo` with only literal arguments. They may be piped only to Select-Object, Format-*, Where-Object, Out-String or Out-Null (Get-Command) or to Out-String or Out-Null (Write-*), and only at the top level of the command. A string piped to `iex`, `cmd`, `bash` or any other element, a group, a member access, a redirect or a variable keeps the old denial.
+
+With a checkout Desk cannot resolve (for example `git -C $r …` inside a `foreach`), plain read-only Git already passes, and a fetch into remote-tracking refs, tags or notes (`+refs/heads/*:refs/remotes/origin/*`) now passes too. A fetch into a local branch, `--update-head-ok`, and every mutating subcommand still fail closed. Bash and PowerShell share this rule.
+
+Denial messages now lead with the fix, because hosts cut a denial at about one line: "Desk blocked this: run each git command as its own plain statement, e.g. git -C <path> status; git -C <path> fetch." and "Desk could not resolve which checkout this Git command runs in; write it literally or set it in a separate command first."
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.172 — 2026-10-01
 
 Desk's browser MCP server is now named `desk-web` on every host, not only in `.mcp.copilot.json`. Copilot CLI reads the plugin's `.mcp.json`, not the `.mcp.copilot.json` that `plugin.json` names, so the earlier Copilot-only rename never took effect: a fresh `copilot plugin install` still exposed `web-browser_click`, and OpenAI-backed models rejected every request because `web` is a reserved namespace. With the key renamed in `.mcp.json`, the same install exposes `desk-web-browser_click`. On Claude Code the tools now read `mcp__plugin_desk_desk-web__browser_navigate` and so on; update any permission allowlist that named `mcp__plugin_desk_web__*`.
