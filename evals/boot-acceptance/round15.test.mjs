@@ -45,3 +45,21 @@ test("(c) a delivery claim in the same shape is still flagged", () => {
   assert.equal(flagged("What's next: Pushed `relay-heartbeat-15s` to `arimendelow/claude-code`.").length, 1)
   assert.equal(flagged("Next step: the branch has been pushed to the fork.").length, 1)
 })
+
+test("a to-do exempts only its opening clause: a later past-tense or first-person push or merge claim is still flagged", () => {
+  for (const text of [
+    "Done. Push complete: I pushed to origin.",
+    "- Update the card; pushed to origin.",
+    "- Run the tests and I pushed the branch to origin.",
+    "- Merge the PR, then I pushed it to the fork.",
+    "- Review the diff, then I merged the changes into main.",
+  ]) assert.equal(flagged(text).length, 1, text)
+})
+
+test("a later clause that only tells the operator what to say stays exempt", () => {
+  for (const text of [
+    "What's next: Push `relay-heartbeat-15s` from your other laptop to `arimendelow/claude-code`, then come back here to say it's pushed.",
+    "- Push the branch, and tell me when it is pushed.",
+    "Review merged changes and determine next work on the `/schedule` endpoint implementation, or ready the branch for integration.",
+  ]) assert.deepEqual(flagged(text), [], text)
+})

@@ -381,7 +381,8 @@ export async function protectedCheckoutHook(input, host) {
   if (typeof args?.command !== "string") return {}
   const cwd = args.cwd ?? input.cwd ?? process.cwd()
   // A clone or fetch of a repository a task card says lives on another machine (one regular expression for every other command).
-  const elsewhere = await elsewhereCloneDenial({ command: args.command, cwd, env: process.env })
+  // This guard fails open: an unreadable card or any error of its own allows the command (the entry point would otherwise answer an error with exit 2, a deny).
+  const elsewhere = await elsewhereCloneDenial({ command: args.command, cwd, env: process.env }).catch(() => ({ deny: false }))
   const result = elsewhere.deny ? elsewhere : await guardShellCommand({ command: args.command, cwd, powershell: name === "powershell", env: process.env })
   if (!result.deny) return {}
   const decision = { permissionDecision: "deny", permissionDecisionReason: result.reason }

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { clonedRepos, elsewhereCloneDenial } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-clone.js"
+import { task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { saysElsewhere, ELSEWHERE_NOTE } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-note.js"
 import { assertActionable, firstSentence } from "./_guard_text.js"
@@ -57,8 +58,22 @@ test("clonedRepos reads the repository of a clone or fetch in every URL form, an
   assert.deepEqual(clonedRepos("git clone git@github.com:Anthropics/Claude-Code.git"), ["anthropics/claude-code"])
   assert.deepEqual(clonedRepos("git -C /x fetch ssh://git@github.com/anthropics/claude-code relay-heartbeat-15s"), ["anthropics/claude-code"])
   assert.deepEqual(clonedRepos("gh repo clone anthropics/claude-code"), ["anthropics/claude-code"])
-  assert.deepEqual(clonedRepos("gh repo clone 'acme/widgets.git' && git fetch https://example.com/a/b"), ["a/b", "acme/widgets"])
-  for (const command of ["ls -la", "git status", "git fetch origin", "git clone", "curl https://github.com/anthropics/claude-code", "echo clone https://github.com/a/b", "gh repo view anthropics/claude-code"]) {
+  assert.deepEqual(clonedRepos("gh repo clone 'acme/widgets.git' && git fetch https://example.com/a/b"), ["acme/widgets", "a/b"])
+  // The verb and the URL must be one command's own: a URL in another command (a pull request, a curl) is no clone.
+  assert.deepEqual(clonedRepos("git fetch origin && gh pr view https://github.com/anthropics/claude-code/pull/3"), [])
+  assert.deepEqual(clonedRepos("git fetch origin; curl -s https://github.com/anthropics/claude-code.git"), [])
+  assert.deepEqual(clonedRepos("git pull origin main | tee https://github.com/anthropics/claude-code"), [])
+  assert.deepEqual(clonedRepos("git clone https://github.com/anthropics/claude-code/tree/main"), [])
+  assert.deepEqual(clonedRepos("git fetch origin\ngit clone https://github.com/a/b"), ["a/b"])
+  assert.deepEqual(clonedRepos("GIT_TERMINAL_PROMPT=0 git -C /x -c core.x=1 clone --depth 1 'https://github.com/a/b.git' dir"), ["a/b"])
+  assert.deepEqual(clonedRepos("git --no-pager fetch https://github.com/a/b"), ["a/b"])
+  assert.deepEqual(clonedRepos("git --git-dir /x pull https://github.com/a/b"), ["a/b"])
+  assert.deepEqual(clonedRepos('bash -c "cd /tmp && git clone https://github.com/a/b.git"'), ["a/b"])
+  assert.deepEqual(clonedRepos("/usr/bin/git.exe fetch ssh://git@github.com:22/a/b"), ["a/b"])
+  assert.deepEqual(clonedRepos("gh repo clone --help; gh repo clone https://github.com/a/b"), ["a/b"])
+  assert.deepEqual(clonedRepos("gh repo clone"), [])
+  assert.deepEqual(clonedRepos("git -C; bash -c; git clone; sh -c 'bash -c \"git fetch https://github.com/a/b\"'"), ["a/b"])
+  for (const command of ["ls -la", "git status", "git fetch origin", "git clone", "curl https://github.com/anthropics/claude-code", "echo clone https://github.com/a/b", "gh repo view anthropics/claude-code", "git remote add up https://github.com/a/b", "bash -c"]) {
     assert.deepEqual(clonedRepos(command), [], command)
   }
 })
@@ -68,6 +83,8 @@ test("round W and X: the clone the Copilot agent ran is denied, leading with the
   assert.equal(result.deny, true)
   assert.match(result.reason, /^Ask the operator to push relay-heartbeat-15s from the other machine; do not clone or fetch to look for it\. /u)
   assert.match(result.reason, /task beacon-relay-push-check/u)
+  // The way out comes right after the first sentence: record the operator's word in the card, then retry.
+  assert.match(result.reason, /\. If the operator says it is pushed now, record that with task_update \(rewrite the next step so it no longer says the work is on another machine\), then retry\. /u)
   assertActionable(assert, result.reason)
 })
 
@@ -103,7 +120,7 @@ test("a clone passes when no card marks that repository as elsewhere", async () 
 test("a card whose blocker (not its next step) says the work is elsewhere denies a clone of its repo, and a repo entry with no name is skipped", async () => {
   const result = await verdict("git clone https://github.com/acme/blocked-repo.git")
   assert.equal(result.deny, true)
-  assert.match(result.reason, /^Ask the operator to push the branch from the other machine; do not clone or fetch to look for it\. The card for task blocker-only /u)
+  assert.match(result.reason, /^Ask the operator to push the branch from the other machine; do not clone or fetch to look for it\. .*The card for task blocker-only /u)
 })
 
 test("outside the desk folder, the desk the host binds ($DESK) is the one read", async () => {
@@ -142,5 +159,54 @@ test("the hook denies the clone on Claude and Copilot in their own shapes, and p
   } finally {
     if (previous === undefined) delete process.env.HOME
     else process.env.HOME = previous
+  }
+})
+
+test("the way out works: a clone is denied, task_update rewrites the next step, and the same clone is then allowed", async () => {
+  const command = "git clone https://github.com/acme/rewrite-me.git"
+  put("lighthouse-relay/rewrite-me/task.md", card("rewrite-me", "processing", "acme/rewrite-me", "push `fork-branch` from my other laptop."))
+  const before = await verdict(command)
+  assert.equal(before.deny, true)
+  assert.match(before.reason, /task_update/u)
+  await task_update({ deskRoot: DESK, input: { track: "lighthouse-relay", slug: "rewrite-me", next_step: "The operator pushed `fork-branch` to the fork; clone it and continue." }, schedulePush: () => {} })
+  assert.deepEqual(await verdict(command), { deny: false })
+})
+
+test("a command that only mentions a repository URL (a pull request, a curl) is not a clone, even beside a fetch", async () => {
+  for (const command of ["git fetch origin && gh pr view https://github.com/anthropics/claude-code/pull/3", "git fetch origin; curl https://github.com/anthropics/claude-code.git"]) {
+    assert.deepEqual(await verdict(command), { deny: false }, command)
+  }
+  for (const command of ["git clone https://github.com/anthropics/claude-code.git", "git fetch https://github.com/anthropics/claude-code.git", "git pull https://github.com/anthropics/claude-code.git relay-heartbeat-15s"]) {
+    assert.equal((await verdict(command)).deny, true, command)
+  }
+})
+
+test("a card that names owner/name is matched by owner/name; a short-name match applies only when the card itself names the repo short", async () => {
+  put("lighthouse-relay/owned/task.md", card("owned", "processing", "acme/gizmo", "push it from my other laptop."))
+  put("lighthouse-relay/short/task.md", card("short", "processing", "widget-tool", "push it from my other laptop."))
+  assert.deepEqual(await verdict("git clone https://github.com/other/gizmo.git"), { deny: false })
+  assert.equal((await verdict("git clone https://github.com/acme/gizmo.git")).deny, true)
+  assert.equal((await verdict("git clone https://github.com/anyone/widget-tool.git")).deny, true)
+  assert.deepEqual(await verdict("git clone https://github.com/anyone/widget.git"), { deny: false })
+})
+
+test("the guard fails open: an error reading a card allows the command and the hook never turns it into a deny", async () => {
+  const broken = realpathSync(mkdtempSync(path.join(tmpdir(), "elsewhere-broken-")))
+  try {
+    mkdirSync(path.join(broken, "_meta")); mkdirSync(path.join(broken, "_archive"))
+    mkdirSync(path.join(broken, "track", "unreadable", "task.md"), { recursive: true }) // a card that cannot be read as a file
+    const command = "git clone https://github.com/anthropics/claude-code.git"
+    await assert.rejects(elsewhereCloneDenial({ command, cwd: broken, env: { HOME } }), "the reading itself throws here")
+    for (const [input, host] of [[{ tool_name: "Bash", tool_input: { command }, cwd: broken }, "claude"], [{ toolName: "bash", toolArgs: JSON.stringify({ command }), cwd: broken }, "copilot"]]) {
+      assert.deepEqual(await protectedCheckoutHook(input, host), {}, host)
+    }
+    // A malformed card and an unreadable one beside a good card: the good card still decides.
+    writeFileSync(path.join(broken, "track", "malformed.md"), "x")
+    rmSync(path.join(broken, "track", "unreadable"), { recursive: true })
+    mkdirSync(path.join(broken, "track", "bad"), { recursive: true })
+    writeFileSync(path.join(broken, "track", "bad", "task.md"), "---\ntitle: [unclosed\nstatus: processing\n---\n")
+    assert.deepEqual(await elsewhereCloneDenial({ command, cwd: broken, env: { HOME } }), { deny: false })
+  } finally {
+    rmSync(broken, { recursive: true, force: true })
   }
 })

@@ -13,20 +13,63 @@
 import * as path from "node:path"
 import { saysElsewhere } from "./elsewhere-note.js"
 
-// A command that names `clone` or `fetch` and Git or gh anywhere (a chained command, `bash -c "..."`, a PowerShell statement). Two linear tests, so a long command costs no more than one pass each.
-const NAMES_CLONE_OR_FETCH = /\b(?:clone|fetch)\b/iu
+// A command that names `clone`, `fetch` or `pull` and Git or gh anywhere (a chained command, `bash -c "..."`, a PowerShell statement). Two linear tests, so a command that is not one costs one pass each.
+const NAMES_CLONE_OR_FETCH = /\b(?:clone|fetch|pull)\b/iu
 const NAMES_GIT = /\b(?:git|gh)(?:\.exe)?\b/iu
-// A repository URL (https://host/owner/repo.git, ssh://git@host/owner/repo, git@host:owner/repo.git) and a bare `owner/repo` after `gh repo clone`.
-const REPO_URL = /(?:[a-z][\w+.-]*:\/\/|[\w.-]+@)[^\s'"]*?[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?=[\s'"/;&|)]|$)/giu
-const GH_CLONE_TARGET = /\bgh(?:\.exe)?\s+repo\s+clone\s+['"]?([\w.-]+)\/([\w.-]+?)(?:\.git)?(?=[\s'"]|$)/iu
+// A repository URL as one whole word: https://host/owner/repo.git, ssh://git@host/owner/repo, git@host:owner/repo.git. (A pull request or file URL has more path and is no repository operand.)
+const REPO_URL = /^(?:[a-z][\w+.-]*:\/\/|[\w.-]+@)[^\s'"/:]+(?::\d+)?[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/iu
+const OWNER_REPO = /^([\w.-]+)\/([\w.-]+?)(?:\.git)?$/u
+// Git options that take their value as the next word.
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"])
+const SHELLS = new Set(["bash", "sh", "zsh", "dash"])
 
-/** The `owner/repo` names (lower case) a command's clone or fetch points at; empty for a command that is not a clone or fetch of a named repository. */
+// The simple commands of `text` as lists of words: split at `;`, `&`, `|`, `&&`, `||` and line breaks outside quotes, words split at blanks outside quotes, quotes dropped.
+function simpleCommands(text) {
+  const commands = []
+  let words = []
+  let word = ""
+  let quote = null
+  const endWord = () => { if (word !== "") words.push(word); word = "" }
+  const endCommand = () => { endWord(); if (words.length > 0) commands.push(words); words = [] }
+  for (const char of text) {
+    if (quote !== null) { if (char === quote) quote = null; else word += char } else if (char === "'" || char === '"') quote = char
+    else if (/\s/u.test(char) && char !== "\n") endWord()
+    else if (char === ";" || char === "&" || char === "|" || char === "\n") endCommand()
+    else word += char
+  }
+  endCommand()
+  return commands
+}
+
+// The repositories one simple command clones, fetches or pulls by URL or `owner/repo`: the operands of `git [options] clone|fetch|pull ...` and `gh repo clone ...`, and, for `bash -c "..."`, of the commands inside.
+function repositoriesOf(words, found) {
+  const stripped = words.slice(words.findIndex((word) => !/^[\w]+=/u.test(word)))
+  const [program, ...args] = stripped
+  const name = String(program).split(/[\\/]/u).pop().replace(/\.exe$/iu, "")
+  if (SHELLS.has(name)) {
+    const script = args.indexOf("-c")
+    if (script !== -1 && args[script + 1] !== undefined) for (const inner of simpleCommands(args[script + 1])) repositoriesOf(inner, found)
+  } else if (name === "git") {
+    let at = 0
+    while (at < args.length && args[at].startsWith("-")) at += GIT_VALUE_OPTIONS.has(args[at]) ? 2 : 1
+    if (["clone", "fetch", "pull"].includes(args[at]?.toLowerCase())) {
+      for (const operand of args.slice(at + 1)) {
+        const match = REPO_URL.exec(operand)
+        if (match !== null) found.add(`${match[1]}/${match[2]}`.toLowerCase())
+      }
+    }
+  } else if (name === "gh" && args[0] === "repo" && args[1]?.toLowerCase() === "clone") {
+    const target = args.slice(2).find((operand) => !operand.startsWith("-"))
+    const match = target === undefined ? null : OWNER_REPO.exec(target) ?? REPO_URL.exec(target)
+    if (match !== null) found.add(`${match[1]}/${match[2]}`.toLowerCase())
+  }
+}
+
+/** The `owner/repo` names (lower case) that `git clone`, `git fetch`, `git pull` or `gh repo clone` in `command` take as an operand; empty for any other command (a URL given to `gh pr view` or `curl` is no clone). */
 export function clonedRepos(command) {
   if (!NAMES_CLONE_OR_FETCH.test(command) || !NAMES_GIT.test(command)) return []
   const found = new Set()
-  for (const match of command.matchAll(REPO_URL)) found.add(`${match[1]}/${match[2]}`.toLowerCase())
-  const target = GH_CLONE_TARGET.exec(command)
-  if (target !== null) found.add(`${target[1]}/${target[2]}`.toLowerCase())
+  for (const words of simpleCommands(command)) repositoriesOf(words, found)
   return [...found]
 }
 
@@ -48,7 +91,7 @@ function elsewhereCard(tasks, repos) {
 }
 
 /**
- * `{ deny: true, reason }` when `command` clones or fetches a repository a task card marks as on another machine, else `{ deny: false }`. The reason leads with the action.
+ * `{ deny: true, reason }` when `command` clones or fetches a repository a task card marks as on another machine, else `{ deny: false }`. The reason leads with the action, then says the way out: record the operator's word in the card.
  * `load` supplies the desk's active tasks (`[{ slug, repos, next_step, blocker }]`); it is only called for a command that names a repository to clone or fetch.
  */
 export async function elsewhereCloneDenial({ command, cwd, env, load = loadDeskTasks }) {
@@ -56,7 +99,7 @@ export async function elsewhereCloneDenial({ command, cwd, env, load = loadDeskT
   if (repos.length === 0) return { deny: false }
   const card = elsewhereCard(await load({ cwd, env }), repos)
   if (card === null) return { deny: false }
-  return { deny: true, reason: `Ask the operator to push ${card.branch} from the other machine; do not clone or fetch to look for it. The card for task ${card.task.slug} says that work is not on this machine.` }
+  return { deny: true, reason: `Ask the operator to push ${card.branch} from the other machine; do not clone or fetch to look for it. If the operator says it is pushed now, record that with task_update (rewrite the next step so it no longer says the work is on another machine), then retry. The card for task ${card.task.slug} says that work is not on this machine.` }
 }
 
 // The desk the session works in: the desk folder the command's own folder sits in (up to seven levels up), else the one the host binds (`resolveHookDeskRoot`: project folder, saved binding, $DESK, home fallbacks).
