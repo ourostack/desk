@@ -804,6 +804,11 @@ test("auth: an offline token check that succeeds skips the online check, so a ra
   assert.ok(!JSON.stringify(result).includes("gho_secretvalue"), "the token is never kept")
 })
 
+test("auth: an offline check with no output is no proof of a sign-in, so the online check decides", async () => {
+  const gh = ghWith((args) => (args[1] === "token" ? { code: 0 } : { code: 0, stdout: "Logged in\n", stderr: "" }))
+  assert.deepEqual((await checkPrereqs({ gh, jq: jqOk })).auth, { ok: true })
+})
+
 test("auth: a transient online failure is retried once after a backoff, and a recovery is ok", async () => {
   let statusCalls = 0
   const waits = []
