@@ -59,5 +59,5 @@ export function unknownOutput(text) {
 }
 
 export function unresolved(what) {
-  return new GuardDenial(`Desk could not resolve ${what}, and it could run Git in a protected checkout. Resolve the value in a separate command first.`)
+  return new GuardDenial(`Desk could not resolve ${what}; write it literally or set it in a separate command first. It could run Git in a protected checkout; plain read-only Git (status, log, diff, fetch into remote-tracking refs) is not blocked.`)
 }

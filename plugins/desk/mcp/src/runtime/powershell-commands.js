@@ -7,7 +7,8 @@ import { physicalDirectory, processDirectory, staticGitOutput } from "./shell-pa
 import { inspectShell, shellScript, tokenizeShell } from "./shell-commands.js"
 import { GuardDenial, inspectionBudget, mayInvokeGit, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
-export const POWERSHELL_GIT_FORMS = `Desk allows Git in PowerShell only as a plain command in its own statement: git <arguments>, $name = git <arguments>, or git <arguments> piped to Out-String, Select-String, Select-Object, Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output, where every argument is literal text or a plain $variable. Rewrite this command as separate plain git commands joined by ; (for example $b = git branch --show-current; git push origin $b)`
+// The first sentence is the whole fix: hosts cut a denial at about one line, so the details come after it.
+export const POWERSHELL_GIT_FORMS = `Desk blocked this: run each git command as its own plain statement, e.g. git -C <path> status; git -C <path> fetch. Desk allows Git in PowerShell only as a plain command in its own statement: git <arguments>, $name = git <arguments>, or git <arguments> piped to Out-String, Select-String, Select-Object, Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output, where every argument is literal text or a plain $variable. Join the separate plain git commands with ; (for example $b = git branch --show-current; git push origin $b)`
 
 const GIT_PROGRAM = /^(?:.*[\\/])?git(?:\.exe)?$/iu
 const READ_ONLY = new Set(["out-string", "select-string", "sls", "select-object", "select", "where-object", "where", "?", "foreach-object", "foreach", "%", "measure-object", "measure", "sort-object", "sort", "out-null", "write-output", "write", "echo"])
@@ -233,6 +234,45 @@ function gitForm(words) {
   return { target, args, rest }
 }
 
+// The only statements that name `git` without running it (2026-10-01 ruling). Everything else that names Git stays under
+// the plain forms. A statement qualifies when it is, at the top level of the command:
+//   Get-Command/gcm with only literal names and common parameters, piped only to Select-Object, Format-*, Where-Object
+//   with literal words, Out-String or Out-Null; or
+//   Write-Output/Write-Host/echo with only literal arguments, piped only to Out-String or Out-Null.
+// There is no group, member access, call operator, redirect or variable, so nothing computes a command from the text, and
+// no downstream element can execute a string it receives.
+const LITERAL = /^[^$`@{}()|&;<>]*$/u
+const literal = (word) => Boolean(word?.parts) && LITERAL.test(wordText(word))
+const NAME_LIST = /^[\w.,-]+$/u
+const COMMON_PARAMETER = /^-(?:erroraction|ea|all|commandtype|name|totalcount|syntax)(?::\w+)?$/iu
+const PARAMETER_VALUE = /^[\w,]+$/u
+const ECHOES = new Set(["write-output", "write-host", "echo", "write"])
+const QUIET = new Set(["out-string", "out-null"])
+const LOOKUP_TAIL = new Set([...QUIET, "select-object", "select", "format-table", "ft", "format-list", "fl", "format-wide", "fw", "where-object", "where", "?"])
+
+function commandLookup(args) {
+  for (let i = 0; i < args.length; i++) {
+    const text = wordText(args[i])
+    if (COMMON_PARAMETER.test(text)) {
+      if (!text.includes(":") && !/^-(?:all|syntax)$/iu.test(text) && !PARAMETER_VALUE.test(wordText(args[++i] ?? ""))) return false
+    } else if (text.startsWith("-") || !NAME_LIST.test(text)) return false
+  }
+  return true
+}
+
+// Every downstream element is one of `allowed` (its own arguments are already known to be literal).
+const only = (rest, allowed) => rest.every(({ words: [next] }) => next !== undefined && !next.quoted && allowed.has(wordText(next).toLowerCase()))
+
+function namesGitWithoutRunningIt(words) {
+  const elements = pipeline(words)
+  if (elements.some((element) => element.redirects.length || !element.words.every(literal))) return false
+  const [{ words: [first, ...args] }, ...rest] = elements
+  if (first === undefined || first.quoted) return false
+  const name = wordText(first).toLowerCase()
+  if (ECHOES.has(name)) return only(rest, QUIET)
+  return (name === "get-command" || name === "gcm") && commandLookup(args) && only(rest, LOOKUP_TAIL)
+}
+
 // A single literal string piped into a shell is its script; anything else is input Desk cannot read.
 function literalInput(element) {
   const [word] = element.words
@@ -409,7 +449,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     for (const element of rest) await run(element.words, element.redirects, null)
   }
 
-  async function statementOf(words) {
+  async function statementOf(words, top = false) {
     const text = tokensText(words)
     // A foreach header `$item in <pipeline>`: the pipeline runs, and the item takes values Desk does not know.
     const header = words.length > 2 && words[0].parts && !words[0].quoted && SIMPLE_VARIABLE.exec(wordText(words[0]))
@@ -422,7 +462,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       if (form) return gitCall(form)
       // Git named only inside groups and subexpressions, or in an assigned value, runs as statements of its own
       // under these same forms when the statement is walked.
-      if (!namesGit(outerText(words)) || assignment(words)) return walk(words)
+      if (!namesGit(outerText(words)) || assignment(words) || (top && namesGitWithoutRunningIt(words))) return walk(words)
       // The allowlist protects protected checkouts only: `visit.unmodeled` answers whether this statement can reach
       // one. When it cannot, the statement runs unchecked, and what it may assign becomes unknown.
       if (!await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw new GuardDenial(POWERSHELL_GIT_FORMS)
@@ -439,16 +479,16 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     if (elements.length > 1) status = null
   }
 
-  async function sequence(list) {
+  async function sequence(list, top = false) {
     for (const { words, previous } of statements(list)) {
       if (terminated) return
       await budget.step()
       if (previous === "&&" || previous === "||") {
         // `a && b` runs b only after success and `a || b` only after failure; an unknown status may go either way.
         if (status === (previous === "||")) continue
-        if (status === null) { await maybe(() => statementOf(words)); continue }
+        if (status === null) { await maybe(() => statementOf(words, top)); continue }
       }
-      await statementOf(words)
+      await statementOf(words, top)
     }
   }
 
@@ -602,5 +642,5 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     status = ["echo", "write-host", "write-output"].includes(name) ? true : null
   }
 
-  await sequence(tokens)
+  await sequence(tokens, true)
 }

@@ -94,7 +94,7 @@ test("round 4: PowerShell Git runs only as git <args>, $name = git <args> or git
   const forms = [
     ". git status", "$a = @('status'); git @a", "git status | bash", "git diff | Out-File patch.diff", "git log | ForEach-Object { git show $_ }",
     "git status | ForEach-Object { 'git' }", "Start-Process git -ArgumentList 'status'", "git log '%h'x", "git --% status",
-    "git push origin 'main'--force", "Write-Host 'git'", "git status &", "| git status", "git status |", "gIt status | Out-File x", "pwsh -c git status",
+    "git push origin 'main'--force", "git status &", "| git status", "git status |", "gIt status | Out-File x", "pwsh -c git status",
     "git -C $pwd.Path status", "git status $x[0]", "git show HEAD@{1}",
   ]
   for (const command of forms) assert.equal((await f.guard(command)).reason, POWERSHELL_GIT_FORMS, command)

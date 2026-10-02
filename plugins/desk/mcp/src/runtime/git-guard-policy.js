@@ -261,7 +261,8 @@ function push(args) {
 function fetch(args) {
   const parsed = parseGitOptions(SPECS.fetch, args)
   if (hasOption(parsed, "update-head-ok")) return fixed(MESSAGES.fetch)
-  const destinations = parsed.operands.slice(1).filter((spec) => spec.includes(":")).map((spec) => spec.slice(spec.indexOf(":") + 1).replace(/^refs\/heads\//u, ""))
+  // Only a destination that names a local branch can rewrite one; remote-tracking refs, tags and notes are safe to fetch into.
+  const destinations = parsed.operands.slice(1).filter((spec) => spec.includes(":")).map((spec) => spec.slice(spec.indexOf(":") + 1)).filter((destination) => !/^refs\/(?:remotes|tags|notes)\//u.test(destination)).map((destination) => destination.replace(/^refs\/heads\//u, ""))
   if (!destinations.length) return null
   return async (ctx) => {
     for (const destination of destinations) {
