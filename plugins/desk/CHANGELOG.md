@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.181 — 2026-10-02
+
+### Fixed
+
+The done-claim gate no longer blocks a reply that says the work is complete and also states the task's real status, such as "The implementation is complete. The task is now in **validating** state." A Copilot acceptance run lost a turn to that block even though the reply already named the status. The gate now counts "is now in validating state" and "in the validating stage" as a status statement. It still blocks a reply that calls the task itself done, and it no longer accepts a status that the same sentence takes back ("status: validating, just kidding, it's done", "validating -> done") or that names another task. "Task watering-schedule-api is done." now counts as a done claim.
+
+A status statement never clears a claim about the task itself. "Task x is done", "Status: done", "validating (complete)", "validating -> done", "no, done", "which means it is finished" and "effectively done" block even when the reply also says the task is at validating; only claims about the work ("the code is done") are cleared by an honest status. Another task counts as the subject of a status only in an explicit reference ("task other-task is ...", "other-task: ...", a bullet or table row that starts with its slug), not for any hyphenated word. Status lines in `>` quotes or code fences are not the reply's own, and a status on the line after "Status:" counts.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.180 — 2026-10-02
 
 The factory's end-of-session derive worker no longer writes after its home is gone. The detached `factory.js derive --wait-quiet` process used to re-read its marker after each quiet wait through a call that creates Desk's factory state folders, so a session whose HOME, desk or state root was deleted during the wait (a throwaway profile, an evaluation run, a removed desk) got the empty `.local/state/ouroboros-skills/desk/factory/markers` skeleton back. The worker now checks that the marker file still exists, with a plain stat that creates nothing, before it reads the marker, after every wait and before it derives, and exits quietly with `invalid` when it is gone. The command also ends itself after six minutes at the latest (the wait is capped at five). The worker already runs in its own process group and is never a child the host waits on.
