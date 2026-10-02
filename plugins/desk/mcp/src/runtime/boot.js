@@ -1049,7 +1049,7 @@ function buildInstructionItems(ctx) {
   // An ask-and-stop blocker means the operator has one question to answer first: no consent line on this boot.
   const consent = needsOperator(ctx) === null ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
   consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
-  add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.", null)
+  add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it; never clone or fetch to look for it, and never clone inside the desk folder.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
   return out
@@ -1060,7 +1060,7 @@ function buildInstructions(ctx) {
 }
 
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
-const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
+const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for it, and never clone inside the desk folder; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.

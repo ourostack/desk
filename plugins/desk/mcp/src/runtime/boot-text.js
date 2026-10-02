@@ -125,6 +125,11 @@ export function ceiling(text, limit = TEXT_CEILING) {
 // A task's next step or blocker is printed whole: a cut line made agents guess the rest or open the card. A blocked
 // task shows the card's blocker reason (falling back to its next step); a card that records neither says so, so no
 // agent invents filler.
+// A next step or blocker that says the thing lives only on another machine: the agent must ask, never clone or fetch to look for it (boot acceptance round Q:
+// an agent cloned a fork into the desk folder to find a branch the card says is only on the other laptop).
+const ELSEWHERE = /\b(?:lives?|exists?|stays?|is|are|kept|only)\b[^.\n]{0,40}\bonly\b[^.\n]{0,30}\b(?:on|at)\b|\bonly (?:on|exists on|lives on)\b|\b(?:other|another|second|old|work|home) (?:laptop|machine|computer|mac|pc|host)\b|\bnot on this (?:machine|laptop|computer|mac)\b/i
+export const ELSEWHERE_NOTE = "not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
+
 function stepLines(task) {
   const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
   const blocker = typeof task.blocker === "string" && task.blocker !== "" ? task.blocker : null
@@ -209,7 +214,8 @@ function taskLines(track, task, pushNotes) {
   const hidden = /redacted/u.test(named) ? ` (handle ${task.handle})` : ""
   const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
   const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
-  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...push]
+  const elsewhere = ELSEWHERE.test(`${task.next_step ?? ""} ${task.blocker ?? ""}`) ? [`  ${ELSEWHERE_NOTE}`] : []
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...elsewhere, ...push]
 }
 
 function repoLine(state) {

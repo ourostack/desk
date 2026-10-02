@@ -81,3 +81,25 @@ test("with an ask-and-stop blocker the boot omits the factory consent instructio
   assert.ok(clear.instructions.some((line) => line.startsWith("Factory consent is undecided")))
   assert.ok(clear.text_instructions.some((line) => line.startsWith("Factory consent is undecided")))
 })
+
+test("a task whose next step or blocker says it lives only on another machine gets a not-here note: ask, never clone or fetch to look for it", () => {
+  const base = { status: "ready", degraded: [], pending: [] }
+  const tasks = (task) => ({ ...base, active_tasks: { task_count: 1, tracks: [{ track: "lighthouse-relay", desk: null, tasks: [{ slug: "push-check", handle: "h", status: "processing", ...task }] }] } })
+  const note = "  not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
+  const real = "Push relay-heartbeat-15s and open a pull request. The branch lives only on the other laptop, not on this machine. First confirm which GitHub account and route can deliver it from here, and tell me."
+  for (const task of [{ next_step: real }, { next_step: "the branch exists only on the work laptop" }, { next_step: "Wait", blocker: "branch is on another machine" }, { status: "blocked", blocker: "relay-heartbeat is not on this machine" }]) {
+    const lines = formatBootText(tasks(task)).split("\n")
+    const at = lines.indexOf(note)
+    assert.ok(at > 0, JSON.stringify(task))
+    assert.ok(/^- lighthouse-relay\/push-check/u.test(lines[at - 2] ?? "") || /^  (?:next|blocker):/u.test(lines[at - 1]), "the note sits under its task, after the step")
+  }
+  assert.ok(!formatBootText(tasks({ next_step: "Thread the flag through cli.py" })).includes("not here:"))
+  assert.ok(!formatBootText(tasks({})).includes("not here:"))
+})
+
+test("every boot's closing rule says never to clone or fetch to look for what is missing and never to clone inside the desk folder, in text and in JSON", async () => {
+  const root = await deskWithTask(CARD)
+  const result = await bootNamed(root, [state({ present: true })])
+  assert.ok(result.text_instructions.some((line) => line.startsWith("In every reply:") && line.includes("never clone or fetch to look for it, and never clone inside the desk folder")))
+  assert.ok(result.instructions.some((line) => line.includes("never clone or fetch to look for it, and never clone inside the desk folder")))
+})
