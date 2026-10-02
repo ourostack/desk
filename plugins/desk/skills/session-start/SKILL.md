@@ -1,6 +1,6 @@
 ---
 name: session-start
-description: Session-start. Invoke as the FIRST thing in every agent session. Runs one script that does every mechanical startup step (migrations, host, prerequisites, sync, task index, card validation, push accounts, repo state, open PRs) and prints readable text that leads with the work: one status line (status, desk path, host, sync), the active tasks grouped by state with each task's push route, open pull requests and repos, then only the numbered instructions that apply, and the desk's `AGENTS.md`. Hard-stops on a genuinely missing prerequisite. If no desk is bound, hands off to `first-run-bootstrap`. If the operator names a task, hands off to `session-resumption`.
+description: Session-start. Invoke as the FIRST thing in every agent session. Runs one script that does every mechanical startup step (migrations, host, prerequisites, sync, task index, card validation, push accounts, repo state, open PRs) and prints readable text that leads with the work, starting with one status line (status, desk path, host, sync), the active tasks grouped by state with each task's push route, open pull requests and repos, then only the numbered instructions that apply, and the desk's `AGENTS.md`. Hard-stops on a genuinely missing prerequisite. If no desk is bound, hands off to `first-run-bootstrap`. If the operator names a task, hands off to `session-resumption`.
 ---
 
 # Session start
