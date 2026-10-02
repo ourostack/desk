@@ -34,6 +34,7 @@ test("the call carries the changed fields, the appended text, or a note to fill 
   // Frontmatter that no longer parses leaves nothing to name but the note, unless the status line changed.
   assert.equal(call(deny("Write", { content: "---\nstatus: processing\ntitle: [unclosed\n---\nbody\n" })), '{"track":"t","slug":"s","note":"<one line of what actually happened>"}')
   assert.equal(call(deny("Write", { content: "---\n\n---\nbody\n" })), '{"track":"t","slug":"s","note":"<one line of what actually happened>"}')
+  assert.equal(call(deny("Write", {})), '{"track":"t","slug":"s","note":"<one line of what actually happened>"}')
   // An edit whose old text is not in the card cannot be applied: it is judged from its fragments.
   assert.equal(call(deny("Edit", { old_string: "no such text", new_string: "other text" })), '{"track":"t","slug":"s","note":"<one line of what actually happened>"}')
   assert.equal(call(deny("Edit", { old_string: "status: processing\nextra", new_string: "status: validating\nextra" })), '{"track":"t","slug":"s","frontmatter":{"status":"validating"}}')
