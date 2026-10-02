@@ -286,11 +286,11 @@ test("a commit message with push in it no longer counts as a push to GitHub or a
 
 test("cleanupRunDir retries the removal with force, recursion and retries, and never throws", async () => {
   const calls = []
-  assert.equal(await cleanupRunDir("/run", { remove: async (dir, options) => { calls.push([dir, options]) } }), true)
+  assert.equal(await cleanupRunDir("/run", { reap: async () => {}, remove: async (dir, options) => { calls.push([dir, options]) } }), true)
   assert.deepEqual(calls, [["/run", { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }]])
   const warnings = []
   const busy = Object.assign(new Error("ENOTEMPTY: directory not empty"), { code: "ENOTEMPTY" })
-  assert.equal(await cleanupRunDir("/run", { remove: async () => { throw busy }, warn: (message) => warnings.push(message) }), false)
+  assert.equal(await cleanupRunDir("/run", { reap: async () => {}, remove: async () => { throw busy }, warn: (message) => warnings.push(message) }), false)
   assert.match(warnings[0], /could not remove \/run: ENOTEMPTY: directory not empty; leaving it in place/u)
 })
 
@@ -307,7 +307,7 @@ test("cleanupRunDir removes a real folder, and warns on the console by default",
   const seen = []
   console.warn = (message) => seen.push(message)
   try {
-    assert.equal(await cleanupRunDir("/run", { remove: async () => { throw new Error("busy") } }), false)
+    assert.equal(await cleanupRunDir("/run", { reap: async () => {}, remove: async () => { throw new Error("busy") } }), false)
   } finally {
     console.warn = original
   }
