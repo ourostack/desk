@@ -121,7 +121,8 @@ const NAMED_TASK_LINE = /^Named task: (\S+) \(([^)]*)\), card (\S+)\s*$/mu
 
 /** The task a `session-boot.js` run resolved from the operator's name, in the shape `touchedTask` answers with, or null: not a boot run, no task named, or one that matched none or several. */
 export function bootNamedTask(toolName, input, response) {
-  if (!SHELL_TOOL.test(String(toolName ?? "")) || !/session-boot\.js\b/u.test(String(input?.command ?? "")) || !/(?:^|\s)--task\b/u.test(String(input?.command ?? ""))) return null
+  const command = String(input?.command ?? "")
+  if (!SHELL_TOOL.test(String(toolName ?? "")) || !/session-boot\.js\b/u.test(command) || !/(?:^|\s)--task\b/u.test(command)) return null
   const text = responseText(response)
   let named = null
   const json = parseJson(text.trim())
