@@ -231,6 +231,7 @@ const PLAIN_TEXT_INSTRUCTIONS = new Map([
  */
 export function formatBootText(result) {
   const lines = [`Desk boot: ${result.status}`]
+  if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
   for (const line of result.degraded ?? []) lines.push(`- degraded: ${line}`)
   for (const line of result.pending ?? []) lines.push(`- pending (not finished in time, carry it): ${line}`)
   lines.push("")

@@ -78,6 +78,7 @@ import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
+import { checkStaleDesk } from "./stale-desk.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
 
 const parseFrontmatter = loadFrontmatterParser()
@@ -788,6 +789,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     open_prs: [],
     task: null,
     factory: null,
+    stale_desk: null,
   }
 }
 
@@ -1001,6 +1003,7 @@ export async function bootOnce({
   lastSyncFn = lastSyncedAt,
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
+  staleDeskFn = checkStaleDesk,
   nestedCards = NESTED_CARD_FIELDS,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
@@ -1046,6 +1049,11 @@ export async function bootOnce({
     const instructions = migrationEntries.map((entry) => migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
     return { ...emptyResult({ status: "degraded", degraded, pending, root, host }), instructions, migrations: migrationSummary }
   }
+
+  // The stale-Desk lookup runs alongside everything below; it has its own hard budget and never rejects.
+  const staleDesk = Promise.resolve()
+    .then(() => staleDeskFn({ env, pluginRoot, agentHost: host.agent, now }))
+    .catch(() => null)
 
   // The desk's own pre-commit hook (refuses a hand commit that changes a task card; see desk/card-commit-guard.js). Installing is idempotent and quiet;
   // only a failure to install is worth a line.
@@ -1181,6 +1189,7 @@ export async function bootOnce({
     }
   }
 
+  const staleFinding = await staleDesk
   const status = healthWord(degraded)
   const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
   return {
@@ -1205,6 +1214,7 @@ export async function bootOnce({
     open_prs: openPrs,
     task,
     factory,
+    stale_desk: staleFinding,
   }
 }
 

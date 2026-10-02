@@ -1,0 +1,7 @@
+### Boot says when the running Desk is behind main
+
+Hosts cache plugin downloads (Agency keeps them for 24 hours), so a session could run a Desk many releases old while the fix for the bug in front of it had already shipped, with nothing saying so. Boot now compares the running plugin's version with `plugins/desk/plugin.json` on `main` and, only when it is behind, prints one line right under the status line, for example `Desk 3.2.0-alpha.153 is 19 releases behind main (3.2.0-alpha.172); update it with /plugin, then start a new session.` The `--json` result carries the same finding as `stale_desk` (`running`, `latest`, `behind`, `channel`, `refresh`, `line`), or `null`.
+
+The refresh step depends on the host: `/plugin` on Claude Code; on Copilot, `copilot plugin update desk` or, if Agency launched the session, `agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@main"`. Versions compare as semver, so `alpha.9` is older than `alpha.10`; the release count appears only when both versions share the same `major.minor.patch-alpha` line, and otherwise the line says just "behind".
+
+The lookup never slows or breaks boot. It starts in parallel with the rest of boot, is cut off after 1.5 seconds, sends no credentials, caches its answer in Desk's state directory (`latest-version.json`) for an hour (a failed lookup for 10 minutes), and says nothing on any error, timeout or offline machine. Set `DESK_BOOT_VERSION_CHECK=0` to turn it off; it is also off inside node:test runs and in the boot-acceptance harness's child environment.

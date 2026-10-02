@@ -66,6 +66,7 @@ test("the child environment is an allowlist: inherited secrets and redirects nev
   assert.equal(env.XDG_STATE_HOME, "/h/.local/state")
   assert.equal(env.XDG_CACHE_HOME, "/h/.cache")
   assert.equal(env.PATH.split(path.delimiter)[0], "/s")
+  assert.equal(env.DESK_BOOT_VERSION_CHECK, "0", "fixtures never look up the latest Desk version on the network")
 })
 
 test("git push to any GitHub URL fails at once against the run's git config, while a local remote still works", () => {
