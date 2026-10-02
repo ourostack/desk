@@ -792,7 +792,7 @@ function prereqAction(name, check) {
     return "Install jq: `brew install jq`, `winget install jqlang.jq`, or `sudo apt install jq`."
   }
   if (name === "auth" && check.reason === "auth_stale") {
-    return `Re-authenticate: run \`gh auth login --hostname github.com\`${check.detail ? ` (gh said: ${check.detail.replace(/\s+/gu, " ")})` : ""}.`
+    return `Re-authenticate: run \`gh auth login --hostname github.com\` (gh said: ${check.detail.replace(/\s+/gu, " ")}).`
   }
   return `Fix the ${name} prerequisite (${check.reason}) before continuing.`
 }

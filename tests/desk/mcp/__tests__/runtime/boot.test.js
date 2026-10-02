@@ -809,6 +809,13 @@ test("auth: an offline check with no output is no proof of a sign-in, so the onl
   assert.deepEqual((await checkPrereqs({ gh, jq: jqOk })).auth, { ok: true })
 })
 
+test("auth: an offline check that timed out or could not run falls through to the online check", async () => {
+  for (const offline of [{ code: null, stdout: "", stderr: "", timedOut: true }, { code: null, stdout: "", stderr: "", spawnError: "ENOENT" }, { code: 0, stdout: "tok\n", stderr: "", timedOut: true }]) {
+    const gh = ghWith((args) => (args[1] === "token" ? offline : { code: 0, stdout: "Logged in\n", stderr: "" }))
+    assert.deepEqual((await checkPrereqs({ gh, jq: jqOk })).auth, { ok: true })
+  }
+})
+
 test("auth: a transient online failure is retried once after a backoff, and a recovery is ok", async () => {
   let statusCalls = 0
   const waits = []
