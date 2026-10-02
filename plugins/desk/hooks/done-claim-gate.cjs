@@ -25,11 +25,18 @@ process.stdin.on("end", async () => {
     if (copilot) {
       const adapter = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/copilot-hook-payload.js")).href);
       // Copilot runs `track` for every tool: only the four task tools are this gate's business, so answer without loading it.
-      if (mode === "track" && !adapter.isTaskToolName(payload?.toolName)) {
+      // ... and the boot script run through the shell, which names the task the operator asked for.
+      const bootRun = /^(?:bash|powershell)$/iu.test(String(payload?.toolName ?? "")) && /session-boot\.js/u.test(JSON.stringify(payload?.toolArgs ?? ""));
+      if (mode === "track" && !adapter.isTaskToolName(payload?.toolName) && !bootRun) {
         process.stdout.write("{}\n");
         return;
       }
       shaped = adapter.claudeShapedPayload(payload);
+    }
+    // Claude runs `track` for Bash too (hooks.json), so answer at once for a shell call that is not the boot script.
+    if (!copilot && mode === "track" && /^(?:Bash|PowerShell)$/u.test(String(payload?.tool_name ?? "")) && !/session-boot\.js/u.test(String(payload?.tool_input?.command ?? ""))) {
+      process.stdout.write("{}\n");
+      return;
     }
     const gate = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/done-claim-gate.js")).href);
     const output = mode === "track" ? gate.recordTouchedTask(shaped) : mode === "prompt" ? gate.clearTouchedTasks(shaped) : copilot ? await gate.copilotStopHook(payload) : gate.doneClaimStopHook(payload);

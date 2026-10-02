@@ -77,7 +77,7 @@ import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
+import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
@@ -719,7 +719,7 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
       const fetched = spawnGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
       const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
       if (!status || status.status !== 0 || typeof status.stdout !== "string") {
-        states.push({ ...label, local_path: repo.local_path, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
+        states.push({ ...label, local_path: repo.local_path, path: dir, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
         continue
       }
       const lines = status.stdout.split("\n").filter((line) => line !== "")
@@ -728,6 +728,8 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
       states.push({
         ...label,
         present: true,
+        local_path: repo.local_path,
+        path: dir,
         branch: (lines[0] ?? "").replace(/^## (?:No commits yet on )?/u, "").split("...")[0] || null,
         dirty: lines.length > 1,
         fetched: Boolean(fetched) && fetched.status === 0,
@@ -964,8 +966,8 @@ function hasCloneSource(missing) {
 }
 
 function missingCloneInstruction(missing) {
-  const where = shellQuotePath(missing.local_path)
-  const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}`
+  const where = shellQuotePath(missing.path ?? missing.local_path)
+  const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${shownRepoPath(missing)}`
   if (typeof missing.url === "string") {
     return `${lead}: only if the next step needs its code, clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url); otherwise do not clone it.`
   }
@@ -993,9 +995,9 @@ function needsOperator(ctx) {
 }
 
 function askThenHandOff(blockers, task) {
-  const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${blockers[0].local_path}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${missing.local_path}`).join("; ")})`
+  const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${shownRepoPath(blockers[0])}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${shownRepoPath(missing)}`).join("; ")})`
   const questions = blockers.map((missing) => `"Where is ${missing.repo} cloned, or what URL should I clone it from?"`).join(" and ")
-  const finish = blockers.map((missing) => `clone ${missing.repo} to ${missing.local_path} (or record the path they give)`).join(" and ")
+  const finish = blockers.map((missing) => `clone ${missing.repo} to ${missing.path ?? missing.local_path} (or record the path they give)`).join(" and ")
   return `The operator named a task (${task.card}, handle ${task.handle}), but ${named}, and the card records no usable clone url for ${blockers.length === 1 ? "it" : "them"}. Do not invent the repo or any progress in it. Before anything else, ask the operator one question and stop until they answer: ${questions} Once they answer, ${finish}, save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask, and only then hand off to desk:session-resumption for ${task.card} (handle ${task.handle}), skipping the status block. Every other instruction below still applies.`
 }
 
@@ -1075,12 +1077,24 @@ function buildInstructions(ctx) {
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
 const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
+// What the reply must open with when the sync did not go cleanly, from the sync summary's own words (never a placeholder): a failed sync, or a pull that worked but left the desk's uncommitted changes in conflict.
+function syncOpening(summary) {
+  const failed = /^sync failed: (.+?); nothing was pulled or pushed;/u.exec(summary)
+  if (failed !== null) return { say: `Desk could not sync with origin (${failed[1]}); working from local state`, lead: "Desk could not sync" }
+  const conflict = /^sync: the pull succeeded, but (.+)$/u.exec(summary)
+  if (conflict !== null) return { say: `Desk pulled from origin, but ${conflict[1]}`, lead: "Desk pulled but could not finish syncing" }
+  return null
+}
+const syncRule = ({ say, lead }) => `${lead}: open your reply with \"${say}\" before anything else, and never use \"synced\" for it.`
+
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.
 function buildTextInstructions(ctx) {
   const plain = buildInstructionItems(ctx).map((item) => item.plain).filter((line) => line !== null)
   const factoryAt = plain.findIndex((line) => line.startsWith("Factory consent is undecided"))
-  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, CLOSING_RULES)
+  // A boot degraded by a failed sync adds how to say it (round S2: the headline said "sync failed" and the reply said "Desk synced locally").
+  const opening = syncOpening(ctx.syncSummaryText)
+  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, opening === null ? CLOSING_RULES : `${CLOSING_RULES} ${syncRule(opening)}`)
   return plain
 }
 
@@ -1319,7 +1333,7 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,

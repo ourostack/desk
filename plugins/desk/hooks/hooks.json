@@ -124,6 +124,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" claude track",
+            "timeout": 5
+          }
+        ]
       }
     ]
   }

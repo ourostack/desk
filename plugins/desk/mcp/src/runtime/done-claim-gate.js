@@ -100,6 +100,9 @@ function responseText(response) {
   if (Array.isArray(response)) return response.map((part) => (typeof part === "string" ? part : responseText(part))).join("\n")
   if (response === null || typeof response !== "object") return ""
   if (typeof response.text === "string") return response.text
+  // Claude Code's Bash PostToolUse `tool_response` is `{ stdout, stderr, interrupted, ... }`; some hosts name the text `output`.
+  if (typeof response.stdout === "string") return response.stdout
+  if (typeof response.output === "string") return response.output
   if (response.content !== undefined) return responseText(response.content)
   return response.structuredContent === undefined ? "" : JSON.stringify(response.structuredContent)
 }
@@ -113,6 +116,34 @@ function parseJson(text) {
   }
 }
 
+// The boot script run through the shell, and the line or the JSON it answers with when the operator named a task. Boot cannot know the session id (no host gives it to a
+// script), but the host's PostToolUse hook for the shell call does: so the hook reads the boot's answer and records the named task as touched, in the same file `task_update` uses
+// (round S: a reply claimed the named task was done, the agent never called task_update, and the gate had nothing to check). Only a run of `session-boot.js` counts.
+const SHELL_TOOL = /^(?:bash|powershell)$/iu
+// `session-boot.js` as the program that runs: `node [flags] <path>/session-boot.js ...` or the script itself, at the start of a command (after `VAR=x`, `;`, `&&`, `||`, `|` or a line break), with `--task` among its own arguments.
+const BOOT_RUN = /^(?:[A-Za-z_]\w*=\S*\s+)*(?:(?:\S*[\\/])?node(?:js)?(?:\.exe)?\s+(?:-\S+\s+)*)?["']?\S*session-boot\.js["']?(?<args>(?:\s[^\n]*)?)$/u
+const runsNamedBoot = (command) => command.split(/&&|\|\||[;|\n]/u).some((part) => { const hit = BOOT_RUN.exec(part.trim()); return hit !== null && /(?:^|\s)--task\b/u.test(hit.groups.args) })
+const NAMED_TASK_LINE = /^Named task: (\S+) \(([^)]*)\), card (\S+)\s*$/mu
+
+/** The task a `session-boot.js` run resolved from the operator's name, in the shape `touchedTask` answers with, or null: not a boot run, no task named, or one that matched none or several. */
+export function bootNamedTask(toolName, input, response) {
+  const command = String(input?.command ?? "")
+  if (!SHELL_TOOL.test(String(toolName ?? "")) || !runsNamedBoot(command)) return null
+  const text = responseText(response)
+  let named = null
+  const json = parseJson(text.trim())
+  if (json?.task?.status === "resolved" && typeof json.task.task?.card === "string") named = { card: json.task.task.card, status: json.task.task.status }
+  else {
+    const line = NAMED_TASK_LINE.exec(text)
+    if (line !== null) named = { card: line[3], status: line[2] }
+  }
+  if (named === null || !named.card.endsWith("/task.md")) return null
+  const key = path.posix.dirname(named.card)
+  const slug = path.posix.basename(key)
+  if (slug === "") return null
+  return { key, slug, status: typeof named.status === "string" && named.status !== "" && named.status !== "null" ? named.status : null, reportAs: null, path: named.card, oldKey: null }
+}
+
 /**
  * What one task tool call says about the task it touched: `{ key, slug, status, reportAs, path, oldKey }`, or null when the call failed or names no task.
  * `key` is the card's folder under the desk (`track/slug`, from the result path), so a moved or archived card is a different key; `oldKey` is the key a `task_move` or `task_archive` left behind (from the call's own track and slug), or null.
@@ -120,7 +151,7 @@ function parseJson(text) {
  */
 export function touchedTask(toolName, input, response) {
   const kind = TASK_TOOL.exec(String(toolName ?? ""))?.[1]
-  if (kind === undefined) return null
+  if (kind === undefined) return bootNamedTask(toolName, input, response)
   const result = parseJson(responseText(response))
   if (result === null || result.status === "failed" || result.error !== undefined) return null
   const cardPath = typeof result.path === "string" && result.path !== "" ? result.path : null
@@ -182,6 +213,27 @@ export function clearTouchedTasks(payload, { env = process.env, stateDir = resol
 // A claim is negated or conditional only by a word in a short window just before its verb, as in the acceptance harness.
 const NEGATION = /\b(?:not|never|nothing|none|neither|fail(?:ed|s|ure)?|unable|unreachable|couldn'?t|can'?t|cannot|didn'?t|doesn'?t|don'?t|wasn'?t|isn'?t|aren'?t|hasn'?t|haven'?t|won'?t|without|still needs?|yet to)\b|n['’]t\b/iu
 const CONDITIONAL = /\b(?:until|once|when|if|will|would|should|ready to)\b/iu
+// A done phrase that is addressed to the operator, or that depends on something the operator does, is no claim of the reply's own. Exactly three shapes (a bare "then", "after that", "say" or "confirm"
+// somewhere before the phrase is not enough: "I ran the tests, then the task is done." and "As I say, the task is done." are claims):
+//   (a) a request with the done phrase as its object: a request verb opening the clause ("say it's done", "tell me when it's done", "let me know once the task is done", "please confirm the task is done");
+//   (b) a condition on the operator or on future work, with a predicate, in the same sentence ("once you push it, it's done", "after that's merged, the task is done"); a bare "After that, ..." is not one,
+//       and a bare "After that it's done" is one only when the sentence before it is not the agent's own account of what it did;
+//   (c) a sentence that opens with an imperative addressed to the operator and links to the done phrase with "then" ("Push it, then the task is done.").
+const REQUEST_CLAUSE = /^(?:please\s+)?(?:say|tell me|let me know|reply|answer|confirm|report)\b(?:\s+\S+){0,3}$/iu
+const CONDITION_CLAUSE = /^(?:when|once|until|after|as soon as|if)\s+(?:you|that|this|it|they)\b\S*(?:\s+\S+)+$/iu
+const BARE_AFTER = /^(?:after|once|when|until|as soon as)\s+(?:that|this)\s*$/iu
+const OPERATOR_IMPERATIVE = /^[\s*_`"'(\d.)-]*(?:please\s+)?(?:push|pull|run|merge|approve|review|open|check|deploy|test|try|fetch|confirm|rebase)\b/iu
+const REQUEST_OPENING = /^[\s*_`"'(\d.)-]*(?:please\s+)?(?:say|tell me|let me know|reply|answer|confirm|report)\b/iu
+
+function addressedToOperator(sentence, matchIndex, previous) {
+  const prefix = sentence.slice(0, matchIndex)
+  const segments = prefix.split(/[,;:\u2014\u2013]|\s-\s/u).map((part) => part.trim())
+  const last = segments.at(-1).replace(/^(?:(?:and|then|also|so)\s+)+/iu, "")
+  if (REQUEST_CLAUSE.test(last)) return true
+  if (segments.some((segment) => CONDITION_CLAUSE.test(segment))) return true
+  if (OPERATOR_IMPERATIVE.test(sentence) && /\bthen\s*$/iu.test(prefix)) return true
+  return !/[,;:\u2014\u2013]/u.test(prefix) && BARE_AFTER.test(prefix.trim()) && (previous === "" || OPERATOR_IMPERATIVE.test(previous) || REQUEST_OPENING.test(previous))
+}
 const WINDOW_CHARS = 30
 const DONE_WORD = "(?:done|complete[d]?|finished)"
 
@@ -239,10 +291,11 @@ export function withoutQuotedText(text) {
     .replace(/(?<=\S\s)["“][^"”\n]*["”]/gu, " ")
 }
 
-function standing(sentence, patterns) {
+function standing(sentence, patterns, previous) {
   return patterns.some((pattern) => {
     const match = pattern.exec(sentence)
     if (match === null) return false
+    if (addressedToOperator(sentence, match.index, previous)) return false
     const before = sentence.slice(Math.max(0, match.index - WINDOW_CHARS), match.index + match[0].length)
     // A condition may also follow: "complete once the PR merges".
     const after = sentence.slice(match.index + match[0].length, match.index + match[0].length + WINDOW_CHARS)
@@ -252,7 +305,7 @@ function standing(sentence, patterns) {
 
 /** The sentences of `text` that say the task or the work is done or complete (code, quotations, negated, conditional and explicit status clauses left out). */
 export function doneClaims(text) {
-  return sentencesOf(withoutQuotedText(text)).filter((sentence) => standing(STATUS_CLAUSES.reduce((rest, clause) => rest.replace(clause, " "), sentence), [...DONE_CLAIM_PATTERNS, COMPLETED_WORK_HEADING]))
+  return sentencesOf(withoutQuotedText(text)).filter((sentence, index, all) => standing(STATUS_CLAUSES.reduce((rest, clause) => rest.replace(clause, " "), sentence), [...DONE_CLAIM_PATTERNS, COMPLETED_WORK_HEADING], all[index - 1] ?? ""))
 }
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
@@ -325,11 +378,11 @@ const TASK_LEVEL_WORK_EXEMPT = TASK_LEVEL_PATTERNS.slice(4)
  */
 export function taskLevelClaims(text, slug) {
   const body = withoutQuotedText(withoutBlockQuotes(text))
-  return sentencesOf(body).flatMap((sentence) => sentence.split(";")).filter((part) => {
+  return sentencesOf(body).flatMap((sentence) => sentence.split(";")).filter((part, index, all) => {
     if (otherTaskSlug(part, slug) !== null && !(typeof slug === "string" && new RegExp(`(?<![\\w-])${escapeRegExp(slug)}(?![\\w-])`, "iu").test(part))) return false
     const rest = STATUS_CLAUSES.reduce((remaining, clause) => remaining.replace(clause, " "), part)
     const patterns = [...TASK_CLAIM_PATTERNS, ...TASK_LEVEL_PATTERNS.filter((pattern) => !TASK_LEVEL_WORK_EXEMPT.includes(pattern) || !WORK_SUBJECT.test(rest))]
-    return standing(rest, patterns)
+    return standing(rest, patterns, all[index - 1] ?? "")
   })
 }
 

@@ -219,11 +219,20 @@ function taskLines(track, task, pushNotes) {
   return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...elsewhere, ...push]
 }
 
+// A repo's path as boot prints it: already expanded against this machine's HOME, with the card's own spelling after it ("/home/me/code/x (~/code/x)"), so an agent never expands `~` itself
+// (round T: two agents guessed `/Users/aris/code/...` for `~/code/...` and edited files there).
+export function shownRepoPath(state) {
+  const recorded = state.local_path
+  const absolute = typeof state.path === "string" && state.path !== "" ? state.path : recorded
+  return absolute === recorded || typeof recorded !== "string" ? absolute : `${absolute} (${recorded})`
+}
+
 function repoLine(state) {
+  const place = shownRepoPath(state)
   const where = `${state.desk ? `${state.desk}/` : ""}${state.track}/${state.slug}`
-  if (state.present === false) return `- ${state.repo} (${where}): not at ${state.local_path}${state.url ? `; clone url ${state.url}` : ""}`
+  if (state.present === false) return `- ${state.repo} (${where}): not at ${place}${state.url ? `; clone url ${state.url}` : ""}`
   const sync = state.local_only ? "no remote configured" : state.fetched ? "fetched" : "fetch failed"
-  return `- ${state.repo} (${where}): branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
+  return `- ${state.repo} (${where}): ${place === undefined ? "" : `${place}, `}branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
 }
 
 function prLine(pr) {
@@ -281,7 +290,10 @@ function taskSection(result, lines) {
     if (result.status !== "setup_required") lines.push("", "Active tasks: unavailable (see degraded)")
     return
   }
-  lines.push("", `Active tasks (${result.active_tasks.task_count}):`)
+  // With one task named, it leads in full and the rest are one line: the operator asked for that task, and the others pushed the question below the fold (round S2).
+  const named = result.task?.status === "resolved" ? result.task.task : null
+  const namedOnly = named !== null && tracks.some((track) => track.tasks.some((task) => task.slug === named.slug && track.track === named.track && (track.desk ?? "") === (named.desk ?? "")))
+  lines.push("", `Active tasks (${result.active_tasks.task_count})${namedOnly ? ", showing the named one" : ""}:`)
   if (tracks.length === 0) lines.push("- none")
   // Blocked tasks first, then the most recently updated, before the cap cuts the list.
   const rank = ({ task }) => (task.status === "blocked" ? 0 : 1)
@@ -289,11 +301,10 @@ function taskSection(result, lines) {
     .flatMap((track) => track.tasks.map((task) => ({ track, task })))
     .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
   // The task the operator named is always shown, first, whatever its rank: its push route is printed nowhere else.
-  const named = result.task?.status === "resolved" ? result.task.task : null
   const pinnedAt = named === null ? -1 : everyTask.findIndex(({ track, task }) => track.track === named.track && task.slug === named.slug && (track.desk ?? "") === (named.desk ?? ""))
   const pinned = pinnedAt === -1 ? [] : everyTask.splice(pinnedAt, 1)
   const groups = new Map()
-  const shownTasks = [...pinned, ...everyTask.slice(0, TASKS_SHOWN_CAP - pinned.length)]
+  const shownTasks = namedOnly ? pinned : [...pinned, ...everyTask.slice(0, TASKS_SHOWN_CAP - pinned.length)]
   for (const entry of shownTasks) {
     const status = entry.task.status ?? "no status"
     groups.set(status, [...(groups.get(status) ?? []), entry])
@@ -304,7 +315,9 @@ function taskSection(result, lines) {
     for (const { track, task } of entries) lines.push(...taskLines(track, task, pushNotes))
   }
   const hidden = everyTask.length + pinned.length - shownTasks.length
-  if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
+  if (namedOnly) {
+    if (hidden > 0) lines.push("", `Other active tasks: ${hidden} (say 'where were we' to list them)`)
+  } else if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
 }
 
 /**

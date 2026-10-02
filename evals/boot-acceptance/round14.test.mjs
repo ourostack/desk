@@ -107,3 +107,38 @@ test("round S copilot stress missing-clone run 1: asking where the repo is clone
 test("a plain claim that a repo is cloned, with no succeeded clone behind it, is still flagged", () => {
   for (const reply of ["valve-firmware is cloned at ~/code/valve-firmware", "I cloned valve-firmware to ~/code/valve-firmware.", "The repo is cloned at ~/code/valve-firmware, so I can start."]) assert.equal(inventedClones({ reply, calls: [] }).length, 1, reply)
 })
+
+// ---- round S2: a completion claim about the named task, with no task_update, is already a harness failure ----
+
+import { taskDoneClaims } from "./claims.mjs"
+
+test("round S stress-claude resume-named-task run 2: 'I've successfully completed the watering-schedule-api task implementation' is a done claim the scenario fails when the card is not done; an honest status clears it", () => {
+  const reply = "## Implementation Complete\n\nI've successfully completed the watering-schedule-api task implementation:\n\n**What's done:**\n- All tests pass"
+  assert.deepEqual(taskDoneClaims(reply, { statuses: ["processing"] }), ["I've successfully completed the watering-schedule-api task implementation:"])
+  assert.deepEqual(taskDoneClaims("The watering-schedule-api task is at processing, not done; the card was not updated.", { statuses: ["processing"] }), [])
+})
+
+// ---- round W: the repo line carries the expanded path since #153 ----
+
+const BOOT_W = "Desk boot: ready | desk /d | host h / u / copilot | Desk synced with origin\n\nRepos of open tasks:\n- greenhouse-irrigation (greenhouse-ops/watering-schedule-api): /var/folders/nh/T/boot-acceptance-where-were-we-W6335P/home/code/greenhouse-irrigation (~/code/greenhouse-irrigation), branch feature/rain-delay, clean, no remote configured\n\nInstructions, in order:\n1. Use /d as the desk path"
+const bootCall = (text) => ({ name: "Bash", input: { command: "node /p/session-boot.js" }, result: text })
+
+test("round W copilot stress where-were-we: a repo the boot lists with its expanded path is on this machine, so 'is cloned at ~/code/...' claims no clone", () => {
+  for (const reply of ["**Repo state:** greenhouse-irrigation is cloned at `~/code/greenhouse-irrigation`, on branch `feature/rain-delay`, clean", "The repo for task 2 is cloned locally at `~/code/greenhouse-irrigation`, branch `feature/rain-delay`, clean."]) {
+    assert.deepEqual(inventedClones({ reply, calls: [bootCall(BOOT_W)] }), [], reply)
+  }
+})
+
+test("the older repo line format still lists a present repo; a missing repo and an unlisted one still do not", () => {
+  const old = "Desk boot: ready\n\nRepos of open tasks:\n- greenhouse-irrigation (greenhouse-ops/watering-schedule-api): branch feature/rain-delay, clean, fetched"
+  assert.deepEqual(inventedClones({ reply: "greenhouse-irrigation is cloned at ~/code/greenhouse-irrigation", calls: [bootCall(old)] }), [])
+  const missing = "Desk boot: ready\n\nRepos of open tasks:\n- valve-firmware (ops/flash-valves): not at /h/code/valve-firmware (~/code/valve-firmware)"
+  assert.equal(inventedClones({ reply: "valve-firmware is cloned at ~/code/valve-firmware", calls: [bootCall(missing)] }).length, 1)
+  assert.equal(inventedClones({ reply: "relay is cloned at ~/code/relay", calls: [bootCall(BOOT_W)] }).length, 1)
+})
+
+test("a repo named only as the last folder of a path is named; the repo half of an owner/name slug is not", () => {
+  const boot = [bootCall(BOOT_W)]
+  assert.deepEqual(inventedClones({ reply: "It is cloned at /home/me/code/greenhouse-irrigation.", calls: boot }), [])
+  assert.equal(inventedClones({ reply: "I cloned acme/greenhouse-irrigation.", calls: boot }).length, 1)
+})

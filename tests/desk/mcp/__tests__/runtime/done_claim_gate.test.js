@@ -559,6 +559,8 @@ test("hooks.json wires the Stop gate beside the factory hook and the tracker on 
   assert.ok(hooks.UserPromptSubmit.some((group) => group.hooks.some((entry) => /done-claim-gate\.cjs" claude prompt$/u.test(entry.command))))
   assert.equal(matcher.test("mcp__plugin_desk_desk__desk_status"), false)
   assert.equal(matcher.test("Bash"), false)
+  const bash = hooks.PostToolUse.find((group) => group.matcher === "Bash|PowerShell")
+  assert.ok(bash.hooks.some((entry) => /done-claim-gate\.cjs" claude track$/u.test(entry.command)), "the boot script's shell call is tracked too (the .cjs answers at once for any other shell call)")
 })
 
 // ---- a done claim about the work is honest when the reply states the task's real status (round M, Copilot resume-named-task run 2) ----
