@@ -97,11 +97,27 @@ test("a task whose next step or blocker says it lives only on another machine ge
   assert.ok(!formatBootText(tasks({})).includes("not here:"))
 })
 
-test("every boot's closing rule says never to clone or fetch to look for what is missing and never to clone inside the desk folder, in text and in JSON", async () => {
+test("rule 5 is scoped: no clone or fetch to look for what the card says is on another machine, none inside the desk folder, and a missing repo is cloned only where an instruction above says to, in text and in JSON", async () => {
   const root = await deskWithTask(CARD)
   const result = await bootNamed(root, [state({ present: true })])
-  assert.ok(result.text_instructions.some((line) => line.startsWith("In every reply:") && line.includes("never clone or fetch to look for it, and never clone inside the desk folder")))
-  assert.ok(result.instructions.some((line) => line.includes("never clone or fetch to look for it, and never clone inside the desk folder")))
+  const scoped = ["never clone or fetch to look for something the card says is on another machine", "never clone inside the desk folder", "clone a missing repo only where an instruction above says to, at the path it gives"]
+  const text = result.text_instructions.find((line) => line.startsWith("In every reply:"))
+  const json = result.instructions.find((line) => line.includes("never clone inside the desk folder"))
+  for (const piece of scoped) for (const line of [text, json]) assert.ok(line?.toLowerCase().includes(piece), `${piece} in ${line}`)
+  assert.ok(!text.includes("to look for it"), "no unscoped 'never clone' left to contradict the missing-clone instruction")
+})
+
+test("the ask-then-hand-off instruction is number 1 in text and JSON, before the desk path and the tool names", async () => {
+  const root = await deskWithTask(CARD)
+  const result = await bootNamed(root, [state({})])
+  for (const list of [result.instructions, result.text_instructions]) {
+    assert.ok(list[0].includes("ask the operator one question and stop until they answer"), list[0].slice(0, 80))
+    assert.ok(list.findIndex((line) => line.includes("as the desk path")) > 0 || list.findIndex((line) => line.includes("the absolute path")) > 0)
+    assert.equal(list.filter((line) => line.includes("only then hand off")).length, 1)
+  }
+  assert.match(formatBootText(result), /Instructions, in order:\n1\. The operator named a task/u)
+  const clear = await bootNamed(root, [state({ present: true })])
+  assert.ok(!clear.instructions[0].includes("ask the operator one question"), "no blocker, no reorder")
 })
 
 test("the not-here rule matches an owner or pointer word with a machine noun and nothing else", () => {

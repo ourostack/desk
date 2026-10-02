@@ -92,3 +92,18 @@ test("'When I checked, I had already pushed the branch to the fork.' is flagged;
   for (const reply of ["I already pushed the branch to the fork.", "We've already pushed it to the fork."]) assert.equal(inventedDeliveries({ reply, calls: [], deskRoot: DESK }).length, 1, reply)
   for (const reply of ["The branch was already pushed to the fork.", "The branch was pushed earlier, per the card.", "Previously I pushed the branch to the fork."]) assert.deepEqual(inventedDeliveries({ reply, calls: [], deskRoot: DESK }), [], reply)
 })
+
+// ---- round S: a clause that asks for a clone is no clone claim ----
+
+import { inventedClones } from "./claims.mjs"
+
+const MISSING_CLONE_REPLY = "**Waiting:** Before I can resume work on valve-firmware-flasher, I need to know where the valve-firmware repository is cloned, or what URL I should clone it from.\n\nThe task is recorded in the desk, but the local checkout at `~/code/valve-firmware` doesn't exist on this machine. Please provide either:\n1. The path where valve-firmware is cloned on this machine, or\n2. The GitHub/Git URL to clone it from\n\nOnce you answer, I'll record it and proceed with the next step (threading the `--dry-run` flag from `cli.py` into `Flasher.write()` and covering it with a test)."
+
+test("round S copilot stress missing-clone run 1: asking where the repo is cloned, in a question, an 'or' option or a need-to-know clause, claims no clone", () => {
+  assert.deepEqual(inventedClones({ reply: MISSING_CLONE_REPLY, calls: [] }), [])
+  for (const reply of ["The path where valve-firmware is cloned on this machine, or", "Where is valve-firmware cloned?", "Please tell me where valve-firmware is cloned.", "I need to know where valve-firmware is cloned."]) assert.deepEqual(inventedClones({ reply, calls: [] }), [], reply)
+})
+
+test("a plain claim that a repo is cloned, with no succeeded clone behind it, is still flagged", () => {
+  for (const reply of ["valve-firmware is cloned at ~/code/valve-firmware", "I cloned valve-firmware to ~/code/valve-firmware.", "The repo is cloned at ~/code/valve-firmware, so I can start."]) assert.equal(inventedClones({ reply, calls: [] }).length, 1, reply)
+})

@@ -1374,9 +1374,10 @@ test("resolveTaskQuery: an exact slug, track/slug, title or handle resolves one 
   assert.equal(crew.task.desk, "alex")
 })
 
-test("resolveTaskQuery: a unique substring resolves; several are ambiguous; none, blank and finished tasks are not found", async () => {
+test("resolveTaskQuery: a unique title substring resolves and several are ambiguous; a partial slug, none, blank and finished tasks are not found", async () => {
   const { root, cards } = await taskFixture()
-  assert.equal(resolveTaskQuery("desk-flow", cards, root).task.slug, "faster-desk-flow")
+  assert.equal(resolveTaskQuery("desk-flow", cards, root).status, "not_found", "a partial slug never matches")
+  assert.equal(resolveTaskQuery("desk pr", cards, root).task.slug, "faster-desk-flow")
   const ambiguous = resolveTaskQuery("faster", cards, root)
   assert.equal(ambiguous.status, "ambiguous")
   assert.equal(ambiguous.candidates.length, 2)
@@ -1385,6 +1386,23 @@ test("resolveTaskQuery: a unique substring resolves; several are ambiguous; none
   assert.equal(resolveTaskQuery("old-one", cards, root).status, "not_found")
   assert.equal(resolveTaskQuery("untitled", cards, root).task.title, null)
   assert.equal(resolveTaskQuery("no-status", cards, root).task.status, null)
+})
+
+test("resolveTaskQuery: a phrase that holds exactly one open task's slug or track/slug as a whole token resolves it; two slugs are ambiguous; a partial slug is no match", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "greenhouse-ops", "valve-firmware-flasher", VALID_CARD.replace("Example task", "Flash valves"))
+  await writeCard(root, "greenhouse-ops", "watering-schedule-api", VALID_CARD.replace("Example task", "Watering API"))
+  await writeCard(root, "greenhouse-ops", "old-flasher", VALID_CARD.replace("status: processing", "status: done"))
+  const cards = walkTaskCards(root)
+  for (const phrase of ["resume valve-firmware-flasher", "pick up greenhouse-ops/valve-firmware-flasher please", "let's continue `valve-firmware-flasher`", "VALVE-FIRMWARE-FLASHER, now.", "valve-firmware-flasher"]) {
+    const found = resolveTaskQuery(phrase, cards, root)
+    assert.equal(found.status, "resolved", phrase)
+    assert.equal(found.task.slug, "valve-firmware-flasher", phrase)
+  }
+  const two = resolveTaskQuery("compare valve-firmware-flasher with watering-schedule-api", cards, root)
+  assert.equal(two.status, "ambiguous")
+  assert.deepEqual(two.candidates.map((candidate) => candidate.slug).sort(), ["valve-firmware-flasher", "watering-schedule-api"])
+  for (const phrase of ["flasher", "resume flasher", "valve-firmware", "resume valve-firmware-flasher-v2", "my-valve-firmware-flasher", "old-flasher"]) assert.equal(resolveTaskQuery(phrase, cards, root).status, "not_found", phrase)
 })
 
 // ── repoStates, openPullRequests ─────────────────────────────────────────
