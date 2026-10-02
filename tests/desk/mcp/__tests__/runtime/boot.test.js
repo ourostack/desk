@@ -1518,7 +1518,7 @@ test("bootOnce: the text boot gives undecided factory consent as one short line 
   const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
   const plain = result.text_instructions
   assert.equal(plain.filter((line) => /[Ff]actory consent/u.test(line)).length, 1, "one consent line in the text boot")
-  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, end your reply with one line: "Desk can contribute measurement data about your finished tasks to ourostack\/factory-intake; want the details\?" Ask nothing else and ask once\. If they say yes, follow "Factory consent" in .*skills.session-start.details\.md\.$/u)
+  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, end your reply with one line: "Desk can contribute measurement data about your finished tasks to ourostack\/factory-intake; want the details\?" Ask nothing else and ask once\. If they say yes, follow "Factory consent" in .*skills.session-start.details\.md; the script is `node [^`]*mcp.scripts.factory\.js`\.$/u)
   assert.doesNotMatch(plain.join("\n"), /consent --store|Contribute\? \(yes or no\)|account_found/u, "the script is behind the pointer")
   assert.ok(result.instructions.some((line) => /consent --store ourostack\/factory-intake --contribute yes/u.test(line)), "--json keeps the script")
   const printed = formatBootText(result)

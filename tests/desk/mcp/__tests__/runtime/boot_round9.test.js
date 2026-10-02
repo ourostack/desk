@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
-import { AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint, deferredToolsLoadHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 
@@ -241,12 +241,12 @@ test("formatBootText leads with the work: one status line, then the tasks by sta
   assert.doesNotMatch(text, /- degraded: sync: /u, "the status line already says why the sync failed")
   assert.match(text, /- degraded: card: bad\n/u)
   assert.doesNotMatch(text, /Push routes:|Desk: \/work\/desk|\nHost: /u, "the push routes sit on their tasks, and desk and host are on the status line")
-  assert.match(text, /\nprocessing \(1\)\n- ops\/flash-valves "Flash valves" \(updated 2026-09-28\)\n  next: Wire the relay, then run the suite\.\n  push: acme\/valves: push as ari \(route direct\)\.\n  push: acme\/plain: push as ari\.\n  push: acme\/x: no signed-in account can push\. Do not push; ask the operator which account to use, or fork\.\n  push: acme\/slow: push route not checked in time/u)
+  assert.match(text, /\nprocessing \(1\)\n- ops\/flash-valves "Flash valves" \(updated 2026-09-28\)\n  next: Wire the relay, then run the suite\.\n  push: acme\/x: no signed-in account can push\. Do not push; ask the operator which account to use, or fork\. Say this route in one line when you report on the task\.\n  push: acme\/slow: push route not checked in time/u)
   assert.match(text, /  push: acme\/odd: push access could not be checked \(gh_failed\); verify with `gh auth status` before pushing\.\n/u)
   assert.doesNotMatch(text, /no GitHub remote/u, "a repo with no GitHub remote has no route to print")
-  assert.equal(text.split("push: acme/valves: push as ari").length, 2, "a store's route is printed once per task")
+  assert.doesNotMatch(text, /acme\/valves|acme\/plain/u, "a plain direct push by the active account has no line")
   assert.match(text, /\nno status \(1\)\n- ops\/same\n  next: no next step recorded\n/u)
-  assert.match(text, /\ndrafting \(1\)\n- crew\/<redacted segment>\/<redacted segment> \(handle task-3\)\n  next: no next step recorded\n  push: acme\/forked: push as me via fork me\/forked\. Push your branch to the fork and open the pull request from it; never push to acme\/forked itself\.\n/u)
+  assert.match(text, /\ndrafting \(1\)\n- crew\/<redacted segment>\/<redacted segment> \(handle task-3\)\n  next: no next step recorded\n  push: acme\/forked: push as me via fork me\/forked\. Push your branch to the fork and open the pull request from it; never push to acme\/forked itself\. Say this route in one line when you report on the task\.\n/u)
   assert.match(text, /- acme\/w#4 Fix it \(draft\), REVIEW_REQUIRED: https:\/\/github\.com\/acme\/w\/pull\/4\n/u)
   assert.match(text, /- acme\/w#5 Plain: /u)
   assert.match(text, /- valves \(ops\/flash-valves\): branch main, uncommitted changes, fetched\n/u)
@@ -380,4 +380,32 @@ test("plain-text boot with no named task tells the agent to report every task un
   assert.doesNotMatch(text, /active_tasks|open_prs|repo_states/u)
   // The structured result keeps the field names for JSON consumers.
   assert.match(NO_TASK_INSTRUCTION, /active_tasks, open_prs and repo_states/u)
+})
+
+test("the named task is always shown first with its push route, even when it ranks below the cap", () => {
+  const rows = Array.from({ length: 20 }, (_, index) => ({ slug: `t${index}`, title: `t${index}`, status: "processing", updated: `2026-09-${String(10 + index).padStart(2, "0")}T00:00:00Z`, next_step: "n" }))
+  const named = { ...rows[0], slug: "oldest" }
+  rows[0] = named
+  const result = {
+    status: "ready",
+    active_tasks: { task_count: 20, tracks: [{ track: "ops", tasks: rows }] },
+    task: { status: "resolved", task: { track: "ops", slug: "oldest", status: "processing", card: "ops/oldest/task.md" } },
+    push_accounts: [{ track: "ops", slug: "oldest", repo: "r", store: "acme/r", result: "account_found", account: "me", route: "fork", accounts: [{ account: "me" }] }],
+  }
+  const text = formatBootText(result)
+  const order = [...text.matchAll(/^- ops\/(\S+)/gmu)].map((match) => match[1])
+  assert.equal(order[0], "oldest")
+  assert.equal(order.length, TASKS_SHOWN_CAP)
+  assert.match(text, /- ops\/oldest [^\n]*\n  next: n\n  push: acme\/r: push as me via fork me\/r\./u)
+  assert.match(text, /\n\.\.\.and 5 more active tasks/u)
+  const unnamed = formatBootText({ ...result, task: null })
+  assert.ok(!unnamed.includes("- ops/oldest"), "without a name the oldest task falls under the cap")
+  const last = formatBootText({ ...result, task: { status: "resolved", task: { track: "ops", slug: "t19", card: "c" } } })
+  assert.equal([...last.matchAll(/^- ops\/(\S+)/gmu)][0][1], "t19")
+})
+
+test("a sync call that threw keeps its error on the status line, and a thrown reason replaces 'it did not run'", () => {
+  const text = formatBootText({ status: "degraded", degraded: ["sync: spawn git ENOENT"], sync_summary: "sync failed: it did not run; nothing was pulled or pushed; local desk is as of unknown" })
+  assert.match(text, /^Desk boot: degraded \| Desk could not sync: spawn git ENOENT; local state shown\n/u)
+  assert.doesNotMatch(text, /- degraded: sync/u)
 })

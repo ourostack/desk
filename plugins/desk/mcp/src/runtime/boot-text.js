@@ -171,17 +171,21 @@ function pushNote(entry) {
     const route = pushRoute(entry)
     const active = Array.isArray(entry.accounts) ? entry.accounts[0]?.account : undefined
     const fork = entry.route === "fork" ? ` Push your branch to the fork and open the pull request from it; never push to ${store} itself.` : ""
+    // A direct push by the account gh already has active needs no line.
+    if (entry.route !== "fork" && (typeof active !== "string" || active === entry.account)) return null
     const login = typeof active === "string" && active !== entry.account ? ` For git and gh calls use \`GH_TOKEN=$(gh auth token --user ${entry.account})\`, and name ${entry.account}, never ${active}, as the push account in any note.` : ""
-    return `${store}: ${route}${route.endsWith(".") ? "" : "."}${fork}${login}`
+    return `${store}: ${route}${route.endsWith(".") ? "" : "."}${fork}${login} ${SAY_ROUTE}`
   }
   if (entry.result === "no_account_can_deliver") {
     const reasons = Array.isArray(entry.accounts) && entry.accounts.length > 0 ? ` (${entry.accounts.map((item) => `${item.account}: ${item.reason}`).join("; ")})` : ""
-    return `${store}: no signed-in account can push${reasons}. Do not push; ask the operator which account to use, or fork.`
+    return `${store}: no signed-in account can push${reasons}. Do not push; ask the operator which account to use, or fork. ${SAY_ROUTE}`
   }
   if (entry.result === "not_a_github_repo") return null
   if (entry.result === "pending") return `${store}: push route not checked in time; run \`gh auth status\` and check before pushing.`
   return `${store}: push access could not be checked (${entry.result}); verify with \`gh auth status\` before pushing.`
 }
+
+const SAY_ROUTE = "Say this route in one line when you report on the task."
 
 const taskKey = (desk, track, slug) => `${desk ?? ""}|${track}|${slug}`
 
@@ -277,8 +281,13 @@ function taskSection(result, lines) {
   const everyTask = tracks
     .flatMap((track) => track.tasks.map((task) => ({ track, task })))
     .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
+  // The task the operator named is always shown, first, whatever its rank: its push route is printed nowhere else.
+  const named = result.task?.status === "resolved" ? result.task.task : null
+  const pinnedAt = named === null ? -1 : everyTask.findIndex(({ track, task }) => track.track === named.track && task.slug === named.slug && (track.desk ?? "") === (named.desk ?? ""))
+  const pinned = pinnedAt === -1 ? [] : everyTask.splice(pinnedAt, 1)
   const groups = new Map()
-  for (const entry of everyTask.slice(0, TASKS_SHOWN_CAP)) {
+  const shownTasks = [...pinned, ...everyTask.slice(0, TASKS_SHOWN_CAP - pinned.length)]
+  for (const entry of shownTasks) {
     const status = entry.task.status ?? "no status"
     groups.set(status, [...(groups.get(status) ?? []), entry])
   }
@@ -287,7 +296,8 @@ function taskSection(result, lines) {
     lines.push("", groupHeading(status, entries.length))
     for (const { track, task } of entries) lines.push(...taskLines(track, task, pushNotes))
   }
-  if (everyTask.length > TASKS_SHOWN_CAP) lines.push("", `...and ${everyTask.length - TASKS_SHOWN_CAP} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
+  const hidden = everyTask.length + pinned.length - shownTasks.length
+  if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
 }
 
 /**
@@ -299,7 +309,10 @@ function taskSection(result, lines) {
  * a result without them prints `instructions`.
  */
 export function formatBootText(result) {
-  const sync = syncWords(result.sync_summary)
+  // A sync call that threw has no summary reason but "it did not run"; its error message is in `degraded`, so say that.
+  const thrown = (result.degraded ?? []).find((line) => line.startsWith("sync: "))
+  const raw = syncWords(result.sync_summary)
+  const sync = raw !== null && thrown !== undefined ? raw.replace("Desk could not sync: it did not run;", () => `Desk could not sync: ${thrown.slice("sync: ".length)};`) : raw
   const status = [`Desk boot: ${result.status}`]
   if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
   if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
