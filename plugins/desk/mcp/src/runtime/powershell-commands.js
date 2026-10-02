@@ -69,6 +69,8 @@ function withoutSubexpressions(text) {
 
 // Commands that run a string argument as code, which the walker inspects.
 const EVALUATORS = new Set([...SHELLS, "iex", "invoke-expression", "[scriptblock]::create"])
+// Commands that only show, measure or store what is piped into them.
+const TEXT_SINKS = /^(?:out-string|out-null|out-host|out-file|select-string|select-object|measure-object|sort-object|write-output|write-host|echo|tee-object|set-content|add-content|convertto-json|format-[a-z]+)$/iu
 const programName = (word) => (word?.parts ? wordText(word).split(/[\\/]/u).at(-1).replace(/\.exe$/iu, "").toLowerCase() : "")
 
 // A statement's own text: what is left outside its ( ) and { } groups and its $( ) subexpressions, and outside the
@@ -299,7 +301,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   const functions = new Map()
 
   // A variable's value; null for $null, which PowerShell passes to a program as no argument at all.
-  function lookup(name) {
+  function lookup(name, source = variables) {
     const scoped = name.replace(/^(?:global|local|private|script|using):/iu, "")
     if (/^env:/iu.test(scoped)) return variable(environment, scoped.slice(4)) ?? UNKNOWN
     const lower = scoped.toLowerCase()
@@ -307,7 +309,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     if (lower === "true" || lower === "false") return lower === "true" ? "True" : "False"
     if (lower === "pwd") return directory
     // Unset here, the value may come from the session or an automatic variable.
-    return opaqueVariables ? UNKNOWN : variables[lower] ?? UNKNOWN
+    return opaqueVariables ? UNKNOWN : source[lower] ?? UNKNOWN
   }
 
   function set(name, value) {
@@ -415,11 +417,11 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   }
 
   // An assigned value: a plain variable, a wholly quoted string or an integer is data; anything else runs.
-  async function assignedValue(words) {
+  async function assignedValue(words, before = variables) {
     const [word] = words
     if (words.length === 1 && word.parts) {
       const simple = !word.quoted && SIMPLE_VARIABLE.exec(wordText(word))
-      if (simple) return lookup(simple[1] ?? simple[2]) ?? ""
+      if (simple) return lookup(simple[1] ?? simple[2], before) ?? ""
       if (word.quoted && word.parts.every((part) => part.quoted || part.text === "")) return expand(word)
       if (/^[-+]?\d+$/u.test(wordText(word))) return wordText(word)
     }
@@ -531,6 +533,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   // One pipeline element without Git. `input` is the element before it, for a shell reading its script from stdin.
   async function run(words, redirects, input) {
     await budget.step()
+    // `$x = $x` reads the value $x had before this statement, so the targets are made unknown only after it is kept.
+    const before = { ...variables }
     for (const match of tokensText(words).matchAll(ASSIGNED)) set(match[1] ?? match[2] ?? match[3] ?? match[4], UNKNOWN)
     // A background job runs elsewhere, perhaps not at all.
     if (words.at(-1) === "&") return maybe(() => run(words.slice(0, -1), redirects, input))
@@ -540,7 +544,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     const assigned = call ? null : assignment(words)
     if (assigned) {
       if (!assigned.lead.every((word) => word.parts)) await groups(assigned.lead)
-      const value = await assignedValue(assigned.value)
+      const value = await assignedValue(assigned.value, before)
       const simple = SIMPLE_TARGET.exec(assigned.targets)
       if (simple && !assigned.compound) set(simple[1] ?? simple[2], value)
       else for (const match of assigned.targets.matchAll(NAMES)) set(match[1] ?? match[2], UNKNOWN)
@@ -636,6 +640,11 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       status = null
       return
     }
+    // A string Desk knows, piped to anything that may run it (`$z | Invoke-Command { iex $input }`), is read as `iex` reads it.
+    if (input && !EVALUATORS.has(name) && !TEXT_SINKS.test(name)) {
+      const piped = await pipedScript(input)
+      if (typeof piped === "string" && namesGit(piped)) await maybe(() => evaluated(piped))
+    }
     if (["iex", "invoke-expression"].includes(name)) {
       // Invoke-Expression runs in the caller's scope. With no argument it runs the single literal string piped into it
       // (an assignment such as `$x = 'git stash' | iex` reaches here without the statement-level check).
@@ -651,8 +660,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     if (SHELLS.has(name)) {
       const script = shellScript(name, args)
       // An encoded script is not decoded (shellScript gives it no source): unreadable code passes, as in Bash.
-      const literal = script.stdin && input ? literalInput(input) : null
-      const piped = script.stdin && input ? (literal ? await expand(literal) : UNKNOWN) : undefined
+      const piped = script.stdin && input ? await pipedScript(input) ?? UNKNOWN : undefined
       const source = script.command ?? piped
       // A script with an unknown part is inspected only when the part Desk can read names Git or runs code.
       if (source !== undefined && !(source.includes(UNKNOWN) && !mayInvokeGit(known(source)))) {

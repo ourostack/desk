@@ -36,12 +36,12 @@ test("an argument PowerShell would not pass to git as written is single-quoted",
 })
 
 test("git output piped into a cmdlet outside the allowlist is held in a variable first", () => {
-  assert.equal(rewritePowerShell("git status | Format-Table"), "$deskGitOutput = git status; $deskGitOutput | Format-Table")
-  assert.equal(rewritePowerShell("git status 2>&1 | Tee-Object x"), "$deskGitOutput = git status 2>&1; $deskGitOutput | Tee-Object x")
-  assert.equal(rewritePowerShell("git log HEAD..@{u} | Format-Table"), "$deskGitOutput = git log 'HEAD..@{u}'; $deskGitOutput | Format-Table")
-  assert.equal(rewritePowerShell("git log | Select-Object -First 3 | Format-Table"), "$deskGitOutput = git log; $deskGitOutput | Select-Object -First 3 | Format-Table")
-  assert.equal(rewritePowerShell("git status | % { $_ }"), "$deskGitOutput = git status; $deskGitOutput | % { $_ }")
-  assert.equal(rewritePowerShell("git -C 'a b' status | Out-File \"x y\""), "$deskGitOutput = git -C 'a b' status; $deskGitOutput | Out-File \"x y\"")
+  assert.equal(rewritePowerShell("git status | Format-Table"), "$__deskGitOut = git status; $__deskGitOut | Format-Table")
+  assert.equal(rewritePowerShell("git status -sb | Tee-Object x"), "$__deskGitOut = git status -sb; $__deskGitOut | Tee-Object x")
+  assert.equal(rewritePowerShell("git log HEAD..@{u} | Format-Table"), "$__deskGitOut = git log 'HEAD..@{u}'; $__deskGitOut | Format-Table")
+  assert.equal(rewritePowerShell("git log | Select-Object -First 3 | Format-Table"), "$__deskGitOut = git log; $__deskGitOut | Select-Object -First 3 | Format-Table")
+  assert.equal(rewritePowerShell("git status | % { $_ }"), "$__deskGitOut = git status; $__deskGitOut | % { $_ }")
+  assert.equal(rewritePowerShell("git -C 'a b' status | Out-File \"x y\""), "$__deskGitOut = git -C 'a b' status; $__deskGitOut | Out-File \"x y\"")
 })
 
 test("a statement it cannot rewrite with certainty is left alone", () => {
@@ -49,6 +49,11 @@ test("a statement it cannot rewrite with certainty is left alone", () => {
     "git status |", "git status | ", "git (git rev-parse HEAD) | Format-Table", "git {x} | Format-Table", "Write-Output x | Format-Table", "& git status | Format-Table",
     "git status; echo 'unterminated", "git log 'a", "git log (a", "", "echo hi", "git status # c\n git log | Format-Table",
   ]) assert.equal(rewritePowerShell(text), null, text)
+  // A native program reads raw bytes from a pipe, not the text lines a variable holds, so the split is not offered for it.
+  for (const text of ["git -C P archive HEAD | tar -x", "git log | sh", "git ls-files | xargs rm", "git log | more", "git log | Format-Table | tar -x", "git log | grep x", "git log | Format-Table |"]) assert.equal(rewritePowerShell(text), null, text)
+  // A redirect on the Git command would be moved off the pipe by the split.
+  for (const text of ["git log > o.txt | Format-Table", "git log 2>&1 | Format-Table", "git log < in.txt | Format-Table"]) assert.equal(rewritePowerShell(text), null, text)
+  assert.equal(rewritePowerShell("git log '>' | Format-Table"), "$__deskGitOut = git log '>'; $__deskGitOut | Format-Table", "a quoted > is not a redirect")
   assert.equal(rewritePowerShell("git status`"), null, "a trailing backtick leaves no change to make")
 })
 
@@ -56,7 +61,7 @@ test("a statement after && or || is not moved, because it would change when it r
   assert.equal(rewritePowerShell("git status && git log | Format-Table"), null)
   assert.equal(rewritePowerShell("git status || git log HEAD..@{u}"), null)
   assert.equal(rewritePowerShell("git log HEAD..@{u} && git status"), "git log 'HEAD..@{u}' && git status", "the statement before it still can be")
-  assert.equal(rewritePowerShell("git status | Format-Table && git fetch"), "$deskGitOutput = git status; $deskGitOutput | Format-Table && git fetch")
+  assert.equal(rewritePowerShell("git status | Format-Table && git fetch"), "$__deskGitOut = git status; $__deskGitOut | Format-Table && git fetch")
 })
 
 test("the guard offers a rewrite only when the guard allows it", async (t) => {
@@ -64,8 +69,8 @@ test("the guard offers a rewrite only when the guard allows it", async (t) => {
   const deny = async (command, extra = {}) => guardShellCommand({ command, cwd: f.prot, env: f.env, powershell: true, ...extra })
   // The exact command, in the first line.
   const split = await deny("git status | Format-Table")
-  assert.match(split.reason, /^Run this instead: \$deskGitOutput = git status; \$deskGitOutput \| Format-Table\nRun each git command as its own plain statement/u)
-  assert.equal((await deny("$deskGitOutput = git status; $deskGitOutput | Format-Table")).deny, false, "the suggestion passes")
+  assert.match(split.reason, /^Run this instead: \$__deskGitOut = git status; \$__deskGitOut \| Format-Table\nRun each git command as its own plain statement/u)
+  assert.equal((await deny("$__deskGitOut = git status; $__deskGitOut | Format-Table")).deny, false, "the suggestion passes")
   const quoted = await deny("git log HEAD..@{u}")
   assert.match(quoted.reason, /^Run this instead: git log 'HEAD\.\.@\{u\}'\n/u)
   assert.equal((await deny("git log 'HEAD..@{u}'")).deny, false, "the suggestion passes")

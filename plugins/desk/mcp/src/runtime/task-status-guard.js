@@ -266,26 +266,50 @@ function changedFrontmatter(existing, proposed) {
   }
 }
 
-/** The `task_update` fields that carry what an edit tried to set: its changed frontmatter, else the text it appended, else a note to fill in. */
+/** The text a card's body gained, or null when the body was not only added to. */
+function appendedBody(existing, proposed) {
+  if (existing === null || proposed === null) return null
+  const body = (text) => text.replace(FRONTMATTER, "")
+  const before = body(existing), after = body(proposed)
+  return after.length > before.length && after.startsWith(before) ? after.slice(before.length) : null
+}
+
+/** The `task_update` fields that carry what an edit tried to set: its changed frontmatter and appended text, else a note to fill in. */
 function updateFields({ change, existing, proposed, via }) {
   const note = { note: "<one line of what actually happened>" }
   if (via !== null) return note
-  const fields = { ...changedFrontmatter(existing, proposed) }
-  if (change !== null && change.to !== null) fields.status = change.to
-  if (Object.keys(fields).length > 0) return fields.status === "done" ? { frontmatter: fields, evidence: { kind: "pr", ref: "<PR URL>" } } : { frontmatter: fields }
-  if (existing !== null && proposed !== null && proposed.length > existing.length && proposed.startsWith(existing)) return { body_append: proposed.slice(existing.length) }
-  return note
+  const frontmatter = { ...changedFrontmatter(existing, proposed) }
+  if (change !== null && change.to !== null) frontmatter.status = change.to
+  const fields = {}
+  if (Object.keys(frontmatter).length > 0) fields.frontmatter = frontmatter
+  if (frontmatter.status === "done") fields.evidence = { kind: "pr", ref: "<PR URL>" }
+  const appended = appendedBody(existing, proposed)
+  if (appended !== null) fields.body_append = appended
+  return Object.keys(fields).length > 0 ? fields : note
+}
+
+// A suggested call longer than this is shown with placeholders for what the edit carried: a denial must stay readable.
+const CALL_LIMIT = 400
+
+/** The suggested call as JSON, with a placeholder for text too long to repeat, and whether one was used. */
+function suggestedCall(coordinates, fields) {
+  const whole = JSON.stringify({ ...coordinates, ...fields })
+  if (whole.length <= CALL_LIMIT) return { call: whole, shortened: false }
+  const short = { ...fields }
+  if (short.body_append !== undefined) short.body_append = "<your appended text>"
+  if (JSON.stringify({ ...coordinates, ...short }).length > CALL_LIMIT && short.frontmatter !== undefined) short.frontmatter = "<the fields you changed>"
+  return { call: JSON.stringify({ ...coordinates, ...short }), shortened: true }
 }
 
 function denyReason(card, change, via, host, { existing = null, proposed = null } = {}) {
   const { track, slug } = taskCoordinates(card)
   const target = `{ track: "${track}", slug: "${slug}"`
   const tool = deskToolName(host, "task_update")
-  const call = JSON.stringify({ track, slug, ...updateFields({ change, existing, proposed, via }) })
+  const { call, shortened } = suggestedCall({ track, slug }, updateFields({ change, existing, proposed, via }))
   const instead = via === null ? "editing the card" : "writing the card from the shell"
   // The first sentence is the fix; when the exact call is too long for it, the call follows in the next one.
   const first = `Call ${tool} with ${call}.`
-  const opening = first.length <= 120 ? first : `Call ${tool} instead of ${instead}. The call: ${call}.`
+  const opening = (first.length <= 120 ? first : `Call ${tool} instead of ${instead}. The call: ${call}.`) + (shortened ? " Pass your text in the placeholder fields; the call is shortened." : "")
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
   const statusPart = change === null
     ? ""

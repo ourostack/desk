@@ -29,13 +29,15 @@ Push, pull, rebase, fetch and merge trust Git's configuration, so they are denie
 
 The state branch is `desk.stateBranch` from the marker file, written when the host names one (`--state-branch` or `desk.state_branch`); when none is recorded, the current branch is the state branch. `-h` and `--help` are always allowed. The [option parser](../mcp/src/runtime/git-guard-options.js) follows Git 2.54's full option lists (hidden options included): unambiguous abbreviations such as `--sour`, `--forc` for `branch` and `--autost`, negations such as `--no-source`, and option values such as `branch --format -f`. When one mode option overrides another (`reset --hard --mixed`, `merge --ff-only --no-ff`), the last one wins, as in Git. Force-removal checks the checkout being removed with its own Git identity, without the issuing command's location overrides.
 
-Every denial names the checkout and says what to do instead. Only a real HEAD move, rewind or discard names a worktree; ordinary desk writes are never sent to one. For example:
+Every denial opens with what to do instead (the first sentence is at most 120 characters, because hosts show only about the first line), then the reason, then the checkout last. Only a real HEAD move, rewind or discard names a worktree; ordinary desk writes are never sent to one. For example:
 
 ```text
-Desk protected checkout /path/to/desk: this would move HEAD off the checkout's branch. To leave the state branch, use your own worktree: git worktree add --detach "$HOME/<new directory>" <ref>
-Desk protected checkout /path/to/desk: git stash takes other sessions' uncommitted work out of the shared checkout. Commit only your own paths (git commit <paths>), and pull with git pull --rebase --autostash
-Desk protected checkout /path/to/desk: this would discard uncommitted changes in every file, including other sessions' work. Restore only your own files by name (git restore <paths>)
+Use your own worktree: git worktree add --detach "$HOME/<new directory>" <ref>. This would move HEAD off the checkout's branch. Desk protects this checkout: /path/to/desk
+Commit only your own paths with git commit <paths>, and pull with git pull --rebase --autostash. git stash takes other sessions' uncommitted work out of the shared checkout. Desk protects this checkout: /path/to/desk
+Restore only your own files by name: git restore <paths>. This would discard uncommitted changes in every file, including other sessions' work. Desk protects this checkout: /path/to/desk
 ```
+
+In PowerShell, a denial that Desk can fix mechanically starts with the fixed command, for example `Run this instead: $__deskGitOut = git status; $__deskGitOut | Format-Table`. Desk offers it only after the guard itself allows it, and only when it is certain to mean the same thing: it quotes an argument such as `HEAD..@{u}` that PowerShell would split, and it splits a pipe into a known PowerShell command (never a native program such as `tar`, which reads raw bytes) when the Git command has no redirect.
 
 Credentials are replaced with `<redacted>` in every denial and in the hook's own error message: a URL's user information (`https://user:token@host`), the user part of a `url.<user>@host:` key or of an scp-style address whose user looks like a token (`ghp_…@github.com:`, anything with a `:` or longer than 23 characters; `git@github.com:` stays readable), `Authorization` header values, and bare tokens with a known prefix (`ghp_`, `github_pat_`, `glpat-`, `sk-`, `xoxb-`). A `url.<base>.insteadOf` override whose base only adds credentials to the same URL (`url.https://x-access-token:<token>@github.com/.insteadOf=https://github.com/`) is not treated as an override, because the command reaches the same remote.
 

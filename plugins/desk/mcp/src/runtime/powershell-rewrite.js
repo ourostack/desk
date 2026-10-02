@@ -2,14 +2,19 @@
 // name the exact command to run instead of describing it. The rewrite is text-only and conservative: it touches only
 // a top-level statement that starts with `git` and either (1) has an argument PowerShell would not pass to Git as
 // written (`HEAD..@{u}` is `HEAD..@` followed by a script block `{u}`), which it single-quotes, or (2) pipes Git's
-// output into something outside the guard's pipeline allowlist, which it splits into `$deskGitOutput = git ...` and
-// `$deskGitOutput | ...`. `guardShellCommand` offers a rewrite only after the guard itself allows it, so a suggestion
+// output into something outside the guard's pipeline allowlist, which it splits into `$__deskGitOut = git ...` and
+// `$__deskGitOut | ...`. `guardShellCommand` offers a rewrite only after the guard itself allows it, so a suggestion
 // is never one the guard would deny. It returns null whenever it cannot read the text with certainty.
 
 const PLAIN_GIT = /^git(?:\.exe)?$/iu
 const NEEDS_QUOTES = /^[^\s'"`$]*@[{(][^\s'"`$]*$/u
 const GROUPING = /[(){}]/u
-const OUTPUT_VARIABLE = "$deskGitOutput"
+const OUTPUT_VARIABLE = "$__deskGitOut"
+const QUOTED = /'(?:[^']|'')*'|"(?:[^"`]|`.|"")*"/gu
+const REDIRECTION = /[<>]/u
+// The PowerShell commands that read a pipe as the text lines Git's output becomes in a variable. A native program
+// (tar, sh, xargs, more) reads raw bytes instead, so a pipe into anything else is never split.
+const TEXT_COMMANDS = /^(?:out-string|out-null|out-host|out-file|select-string|select-object|where-object|foreach-object|measure-object|sort-object|group-object|tee-object|set-content|add-content|write-output|write-host|convertto-json|convertfrom-json|select|where|foreach|sort|measure|group|tee|\?|%|format-[a-z]+|ft|fl|fw)$/iu
 
 /** `text` cut at the top-level statement separators (`;`, new lines, `&&`, `||`), or null for text it cannot read with certainty. */
 export function splitStatements(text) {
@@ -69,6 +74,13 @@ function splitWords(text) {
   return words
 }
 
+/** The words cut at each `|` into the stages of the rest of a pipeline. */
+function splitStages(words) {
+  const stages = [[]]
+  for (const word of words) word === "|" ? stages.push([]) : stages.at(-1).push(word)
+  return stages
+}
+
 const singleQuoted = (word) => `'${word.replaceAll("'", "''")}'`
 
 /** One statement's rewrite, or null when it needs none or cannot be rewritten with certainty. */
@@ -80,7 +92,10 @@ function rewriteStatement(core) {
   const tail = bar < 0 ? [] : words.slice(bar + 1)
   const changed = head.join(" ") !== words.slice(0, head.length).join(" ")
   if (bar < 0) return changed ? head.join(" ") : null
-  if (tail.length === 0 || GROUPING.test(head.join(" ").replace(/'(?:[^']|'')*'|"(?:[^"`]|`.|"")*"/gu, ""))) return null
+  const unquoted = head.join(" ").replace(QUOTED, "")
+  if (tail.length === 0 || GROUPING.test(unquoted) || REDIRECTION.test(unquoted)) return null
+  // Every stage after the first pipe must be a known PowerShell command, or the split would change what it reads.
+  if (!splitStages(tail).every((stage) => TEXT_COMMANDS.test(stage[0] ?? ""))) return null
   return `${OUTPUT_VARIABLE} = ${head.join(" ")}; ${OUTPUT_VARIABLE} | ${tail.join(" ")}`
 }
 

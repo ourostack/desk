@@ -44,3 +44,17 @@ test("the call carries the changed fields, the appended text, or a note to fill 
   // Text added after the card's end is a body_append.
   assert.equal(call(deny("Write", { content: `${CARD}more\n` })), '{"track":"t","slug":"s","body_append":"more\\n"}')
 })
+
+test("a status change and appended text are both in the call, and a long call is shortened", (t) => {
+  const { deny } = deskWith(t, CARD)
+  const call = (reason) => /(?:with|The call:) (\{.*?\})\. (?:Pass|Desk denies)/u.exec(reason)?.[1]
+  assert.equal(call(deny("Write", { content: `${CARD.replace("processing", "validating")}more\n` })), '{"track":"t","slug":"s","frontmatter":{"status":"validating"},"body_append":"more\\n"}')
+  const big = "x".repeat(50000)
+  const reason = deny("Write", { content: `${CARD}${big}\n` })
+  assert.ok(reason.length < 5000)
+  assert.equal(call(reason), '{"track":"t","slug":"s","body_append":"<your appended text>"}')
+  assert.match(reason, /Pass your text in the placeholder fields/u)
+  const fields = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`field_${i}`, "value ".repeat(5)]))
+  const many = deny("Write", { content: `---\ntitle: T\nstatus: processing\n${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("\n")}\n---\n\nbody\n${big}\n` })
+  assert.equal(call(many), '{"track":"t","slug":"s","frontmatter":"<the fields you changed>","body_append":"<your appended text>"}')
+})

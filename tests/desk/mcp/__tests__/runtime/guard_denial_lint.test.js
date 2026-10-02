@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -198,7 +198,9 @@ test("the pre-commit card guard's refusal opens with the fix, naming the staged 
   const result = git("commit", "-qm", "edit")
   assert.notEqual(result.status, 0)
   assertActionable(assert, result.stderr, "pre-commit")
-  assert.match(firstSentence(result.stderr), /^Run git restore --staged "greenhouse\/watering-api\/task\.md" and call task_update for it/u)
+  // The command names the repository root, so it opens the line when it fits and follows it when the root is long.
+  assert.match(result.stderr, /git -C "[^"]+" restore --staged "greenhouse\/watering-api\/task\.md"/u)
+  assert.match(firstSentence(result.stderr), /^Run (?:git -C .* restore --staged .* and call task_update for it|the command below, then call task_update for the card)/u)
 })
 
 test("the test-isolation refusals open with the fix", () => {
@@ -209,17 +211,35 @@ test("the test-isolation refusals open with the fix", () => {
 
 // ---- the registry: a new denial must be added to this file ----
 
-test("every file that emits a denial is accounted for in this test", () => {
-  const sites = /new GuardDenial\(|[^.\w]unresolved\(|decision: "block"|permissionDecision: "deny"|permissionDecisionReason: |^\s+reason: [`"]|echo "Run git restore|new Error\(\s*`Resolve state/gmu
+test("every file under plugins/desk that emits a denial is accounted for in this test", () => {
+  const sites = /new GuardDenial\(|[^.\w]unresolved\(|decision: "block"|permissionDecision: "deny"|permissionDecisionReason: |copilotDeny|unstage="git -C|echo "Desk refused this commit|new Error\(\s*`Resolve state/gmu
+  // Files that build a denial's own text, with how many sites each has. A new guard adds its messages to the tests above
+  // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
     "mcp/src/runtime/ask-gate.js": 2, "mcp/src/runtime/done-claim-gate.js": 1, "mcp/src/runtime/guard-unknowns.js": 4,
     "mcp/src/runtime/host-enforcement.js": 7, "mcp/src/runtime/powershell-commands.js": 4, "mcp/src/runtime/protected-checkout.js": 12,
-    "mcp/src/runtime/task-status-guard.js": 4, "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
+    "mcp/src/runtime/task-status-guard.js": 6, "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2, "hooks/protected-checkout.cjs": 2,
+    // Carries the reason a guard built to the host in its own shape; it writes none of its own.
+    "mcp/src/runtime/copilot-hook-payload.js": 3,
+    // Its `unresolved` is a sync outcome, not a denial.
+    "mcp/src/runtime/session-sync.js": 6,
   }
-  const found = {}
+  // Where a denial's text is a literal `reason:` property (elsewhere `reason:` is a status code, not a message).
+  const reasonLiterals = new Set(["mcp/src/runtime/host-enforcement.js", "hooks/protected-checkout.cjs"])
+  const literal = /^\s+reason: [`"]/gmu
   // Comment lines do not emit anything.
   const code = (file) => readFileSync(path.join(plugin, file), "utf8").split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/u.test(line)).join("\n")
-  for (const file of Object.keys(expected)) found[file] = [...code(file).matchAll(sites)].length
+  const files = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : files(full)
+    return /\.(?:js|cjs|mjs)$/u.test(entry.name) ? [full] : []
+  })
+  const found = {}
+  for (const file of files(plugin)) {
+    const relative = path.relative(plugin, file).split(path.sep).join("/")
+    const count = [...code(relative).matchAll(sites)].length + (reasonLiterals.has(relative) ? [...code(relative).matchAll(literal)].length : 0)
+    if (count > 0) found[relative] = count
+  }
   assert.deepEqual(found, expected, "a file gained or lost a denial site: add its message to guard_denial_lint.test.js and update this table")
 })

@@ -31,7 +31,7 @@ export const MESSAGES = {
   worktreeRemove: "Remove only worktrees you created, without --force. git worktree remove --force would delete a protected checkout and its uncommitted work.",
   unstage: "Unstage only your own paths: git restore --staged <paths>, or commit them with git commit <paths>. Unstaging everything changes the shared index, which can hold other sessions' staged work.",
   fetch: "Fetch into remote-tracking refs instead: git fetch origin. Fetching into the checkout's own branch rewrites it like a reset.",
-  uploadPack: "Run git fetch origin without --upload-pack. A custom --upload-pack runs a program of your choosing as part of the fetch, which Desk cannot inspect.",
+  uploadPack: "Run the same git command without --upload-pack or --exec. They run a program of your choosing as part of the transfer, which Desk cannot inspect.",
   upstream: "Keep the upstream's name the same as the branch: git branch -u <remote>/<branch>. Another name would point the branch at a different history, so a later git pull --rebase could rewrite pushed commits.",
   config: (key) => `Leave ${key} as it is. Changing it decides what push, pull, rebase, aliases or this guard do in the shared checkout.`,
   override: (key, operation) => `Run git ${operation} without the configuration override ${key}. It changes what this git ${operation} does.`,
@@ -218,6 +218,7 @@ function pullRebases(parsed, ctx, branch) {
 
 function pull(args) {
   const parsed = parseGitOptions(SPECS.pull, args)
+  if (hasOption(parsed, "upload-pack")) return fixed(MESSAGES.uploadPack)
   const [remote, ...refspecs] = parsed.operands
   const check = async (ctx) => {
     // A merge adds history and moves nothing off the branch; only a rebase onto another base rewrites pushed commits.
@@ -259,6 +260,14 @@ function push(args) {
     if (isTrue(ctx.config(`remote.${name}.mirror`))) return MESSAGES.pushForce
     return !refspecs.length && ctx.configAll(`remote.${name}.push`).some(forcedRefspec) ? MESSAGES.pushForce : null
   })
+}
+
+// `git ls-remote --upload-pack=<program>` (or its --exec spelling, or an abbreviation Git accepts) runs the program.
+const prefixes = (name, shortest) => Array.from({ length: name.length - shortest + 1 }, (_, i) => name.slice(0, shortest + i))
+const PROGRAM_OPTION = new RegExp(`^--(?:${[...prefixes("upload-pack", 1), ...prefixes("uploadpack", 1), ...prefixes("exec", 3)].join("|")})(?:=|$)`, "u")
+function lsRemote(args) {
+  const end = args.indexOf("--")
+  return (end < 0 ? args : args.slice(0, end)).some((arg) => PROGRAM_OPTION.test(arg)) ? fixed(MESSAGES.uploadPack) : null
 }
 
 function fetch(args) {
@@ -363,6 +372,7 @@ const RULES = {
   merge: () => null,
   push,
   fetch,
+  "ls-remote": lsRemote,
   config,
   commit,
   worktree,

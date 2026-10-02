@@ -1090,6 +1090,84 @@
   "launcher_ok": "the script iex runs is not Git, or unreadable code the 2026-09-27 replay ruling allows"
  },
  {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git checkout topic'; $z | sh",
+  "expect": "deny",
+  "why": "a variable holding a git script piped to a POSIX shell is that shell's script"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git checkout topic'; $z | powershell -c -",
+  "expect": "deny",
+  "why": "powershell -c - reads its script from stdin, here the variable's value"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git checkout topic'; $z | Invoke-Command { iex $input }",
+  "expect": "deny",
+  "why": "the piped string reaches iex inside the script block"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$x = 'git checkout topic'; $x = $x; $x | iex",
+  "expect": "deny",
+  "why": "reassigning a variable to itself keeps its value"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$x = 'git checkout topic'; $y = $x; $y | iex",
+  "expect": "deny",
+  "why": "a copy keeps the value"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} pull --upload-pack='git checkout topic' origin",
+  "expect": "deny",
+  "why": "pull --upload-pack runs the given program as part of the fetch"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote --upload-pack='git checkout topic' origin",
+  "expect": "deny",
+  "why": "ls-remote --upload-pack runs the given program"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote --exec 'git checkout topic' origin",
+  "expect": "deny",
+  "why": "--exec is ls-remote's other spelling of --upload-pack"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote --upload-pa=x origin",
+  "expect": "deny",
+  "why": "Git accepts the unambiguous abbreviation"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git status'; $z | Out-String",
+  "expect": "allow",
+  "why": "Out-String only formats text, nothing runs"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote origin",
+  "expect": "allow",
+  "why": "a plain ls-remote only reads the remote"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote origin -- --upload-pack=x",
+  "expect": "allow",
+  "why": "after -- the text is an operand, not an option"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} pull --ff-only",
+  "expect": "allow",
+  "why": "a pull with no program option is judged by its usual rule"
+ },
+ {
   "group": "bypass: fetch --upload-pack runs a program",
   "command": "git -C {{PROT}} fetch --upload-pack='git checkout topic' origin",
   "expect": "deny",

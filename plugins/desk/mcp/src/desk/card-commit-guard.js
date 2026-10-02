@@ -45,7 +45,7 @@ import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
 export const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 /** The first marker line of the hook Desk writes. */
 export const HOOK_MARKER = "# desk-card-commit-guard"
-export const HOOK_VERSION = 3
+export const HOOK_VERSION = 4
 export const CHAINED_NAME = "pre-commit.desk-chained"
 /** Set by the hook while it runs; a second entry (the pre-commit framework's `pre-commit.legacy` chain) exits 0 instead of looping. */
 export const RUNNING_ENV = "DESK_CARD_GUARD_RUNNING"
@@ -104,7 +104,8 @@ desk_card_guard() {
   [ -n "$refused" ] || return 0
   {
     first=$(echo "$refused" | head -n 1)
-    echo "Run git restore --staged \\"$first\\" and call task_update for it."
+    unstage="git -C \\"$top\\" restore --staged \\"$first\\""
+    if [ "\${#unstage}" -le 100 ]; then echo "Run $unstage and call task_update for it."; else echo "Run the command below, then call task_update for the card."; echo "$unstage"; fi
     echo "Desk refused this commit because it changes a task card, and a card is written only through Desk's tools, which commit it for you:"
     echo "$refused" | sed 's/^/  /'
     echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_move or task_archive: each writes the card and commits it for you."
