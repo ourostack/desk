@@ -511,6 +511,9 @@ test("bad local state files are warnings, not failures", () => scratch(async (co
   await writeFile(path.join(root, "delivered", "ourostack__factory.json"), junk)
   await mkdir(path.join(root, "outbox", "ourostack__factory"), { recursive: true })
   await writeFile(path.join(root, "outbox", "ourostack__factory", `claude-code-${sessionId(1)}.json`), junk)
+  // The same file kept in retracted-copies is one file, read once.
+  await mkdir(path.join(root, "retracted-copies", "ourostack__factory"), { recursive: true })
+  await writeFile(path.join(root, "retracted-copies", "ourostack__factory", `claude-code-${sessionId(1)}.json`), junk)
   await mkdir(path.join(root, "markers"), { recursive: true })
   await writeFile(path.join(root, "markers", `claude-code-${sessionId(2)}.json`), junk)
   await writeFile(path.join(root, "markers", "notes.txt"), "ignored")

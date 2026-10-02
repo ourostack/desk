@@ -50,7 +50,7 @@ import { validatePublishedBytes } from "./published-schema.js"
 import { REFUSALS, keyedJobId } from "./publish.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
-import { derivedStoreOf, deskRootOf, markerRoute, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
+import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, markerRoute, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -233,9 +233,14 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   const sessionsByJob = new Map()
   const withFacts = new Set() // outbox file names, in any store
   const localSessions = new Map() // published-comparable session id -> { start, end }
-  for (const slug of listNames(path.join(dir, "outbox")).filter((name) => STORE_SLUG.test(name))) {
-    for (const name of listNames(path.join(dir, "outbox", slug)).filter((item) => OUTBOX_NAME.test(item))) {
-      const facts = readState(path.join(dir, "outbox", slug, name), null)
+  // A retracted session's kept copy (`retracted-copies/`, see `session-route.js`) is evidence like any outbox file, and what `route_changed` reports.
+  const seen = new Set()
+  const slugs = new Set([...listNames(path.join(dir, "outbox")), ...listNames(path.join(dir, RETRACTED_COPIES))].filter((name) => STORE_SLUG.test(name)))
+  for (const [slug, folder] of [...slugs].sort().flatMap((slug) => [[slug, "outbox"], [slug, RETRACTED_COPIES]])) {
+    for (const name of listNames(path.join(dir, folder, slug)).filter((item) => OUTBOX_NAME.test(item))) {
+      if (seen.has(`${slug}/${name}`)) continue
+      seen.add(`${slug}/${name}`)
+      const facts = readState(path.join(dir, folder, slug, name), null)
       const start = msOf(facts?.session?.started_at)
       const end = msOf(facts?.session?.derived_through)
       if (facts === null || !PATTERNS.sessionId.test(String(facts?.session?.id)) || start === null || end === null || !Array.isArray(facts.jobs)) {

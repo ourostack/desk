@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
-  factoryStateRoot, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
+  factoryStateRoot, keepRetractedCopies, pendingFiles, pendingLabels, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
@@ -75,6 +75,7 @@ const dataFiles = (github) => [...github.mainFiles().keys()].sort()
 const names = async (ctx, which = "blobs") => Object.keys((await readDelivered(ctx.env, STORE))[which]).sort()
 const retractingFile = async (ctx) => path.join(await factoryStateRoot(ctx.env), "retracting", "ourostack__factory.json")
 const outboxFile = async (ctx, n) => path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", nameOf(n))
+const keptFile = async (ctx, n) => path.join(await factoryStateRoot(ctx.env), "retracted-copies", "ourostack__factory", nameOf(n))
 const lastFlush = async (ctx) => (await readStatus(ctx.env)).last_flush[STORE]
 // A flush that makes no GitHub call at all: the idle fast path.
 async function offline(ctx, github) {
@@ -376,8 +377,8 @@ test("a pushed delete moves the session to retracting and is retried while open;
   // Merged and still routed elsewhere: done. Only the record goes; the local files stay (I3), and are never published while away (I1).
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.deepEqual(await names(ctx, "retracting"), [])
-  assert.equal((await fs.stat(path.join(root, "outbox", "ourostack__factory", nameOf(1)))).isFile(), true)
-  assert.equal((await fs.stat(path.join(root, "labels", "ourostack__factory", LABELS.job, `${sessionId(1)}.json`))).isFile(), true)
+  assert.equal((await fs.stat(path.join(root, "retracted-copies", "ourostack__factory", nameOf(1)))).isFile(), true)
+  assert.equal((await fs.stat(path.join(root, "retracted-copies", "ourostack__factory", "labels", LABELS.job, `${sessionId(1)}.json`))).isFile(), true)
   await offline(ctx, github)
   assert.equal(github.pullCount(), 2)
   assert.deepEqual(dataFiles(github), [])
@@ -486,7 +487,7 @@ test("F2: a finished retraction keeps the local file, and a later flush that goe
   github.mergeOpenPr()
   await run(ctx.env, github)
   assert.deepEqual(await names(ctx, "retracting"), [])
-  assert.equal((await fs.stat(await outboxFile(ctx, 1))).isFile(), true)
+  assert.equal((await fs.stat(await keptFile(ctx, 1))).isFile(), true)
   await another(ctx)
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
   assert.deepEqual([...github.headFiles(STORE, await branchOf(ctx.env)).keys()], [`facts/${nameOf(9)}`])

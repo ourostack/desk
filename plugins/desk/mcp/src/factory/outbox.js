@@ -27,6 +27,9 @@
 //   delivered-paths/<store-slug>.json  name -> the { path, blob } it was delivered at
 //   retracting/<store-slug>.json       name -> { path, blob } of a file whose delete has been pushed, or
 //                                      { path, blob, done: true }, a tombstone once the delete is done
+//   retracted-copies/<store-slug>/<name>.json, retracted-copies/<store-slug>/labels/<job>/<session>.json
+//                                      the local facts and labels of a session whose delete was pushed, kept
+//                                      outside outbox/ so an older Desk's flush never lists them (never deleted)
 //   quarantine/<store-slug>/<name>     { reason, at, blob? } (blob: the
 //                                      published blob sha the store refused),
 //                                      and for labels
@@ -85,8 +88,9 @@ import {
   realpathExistingPrefix,
 } from "./os-protect.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
-import { validateLabels } from "./label-schema.js"
-import { ENUMS, LIMITS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
+import { LABELS_SCHEMA, validateLabels } from "./label-schema.js"
+import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
+import { RETRACTED_COPIES } from "./session-route.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
@@ -111,6 +115,19 @@ const LABELS_NAME_PATTERN = new RegExp(`^${SESSION_ID_SRC}\\.json$`, "u")
 const LABELS_KEY_PATTERN = new RegExp(`^labels/[0-9a-f]{32}/${SESSION_ID_SRC}\\.json$`, "u")
 const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
 const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
+
+// A file written by a newer Desk: it declares a newer schema version, or it parses and fails local validation only with `unknown_key` (a newer
+// Desk added optional keys). This Desk leaves it in place and never quarantines it; the Desk that wrote it publishes it.
+const schemaVersion = (value) => Number(/\/(\d+)$/u.exec(value)?.[1])
+function isNewerFormat(value, schema, validate) {
+  if (!isPlainObject(value)) return false
+  const declared = typeof value.schema === "string" && value.schema.startsWith(schema.slice(0, schema.lastIndexOf("/") + 1)) ? schemaVersion(value.schema) : Number.NaN
+  if (declared > schemaVersion(schema)) return true
+  const { ok, errors } = validate(value)
+  return !ok && errors.every((error) => error.code === "unknown_key")
+}
+const newerFacts = (value) => isNewerFormat(value, LOCAL_SCHEMA, validateLocalFacts)
+const newerLabels = (value) => isNewerFormat(value, LABELS_SCHEMA, validateLabels)
 
 // `store.js` uses one `naming` per caller (`desk_feedback`); this is the
 // factory outbox's, also passed as `protectWindowsPaths`'s `label`.
@@ -653,13 +670,15 @@ export async function writeLocalFacts(env, store, localFacts, { platform = proce
  * outbox name shape are considered. With `includeQuarantined`, quarantined
  * files are candidates too, each entry gaining `quarantine`, its parsed
  * record or `null`; a record that is not a regular file or does not parse
- * still keeps its file out.
+ * still keeps its file out. A file written by a newer Desk (`newerFacts`) is
+ * skipped, not quarantined, and its name goes to `onNewerFormat`. With `kept`,
+ * the folder listed is the kept copies of retracted sessions instead.
  */
-export async function pendingFiles(env, store, { publishedBytesFor, includeQuarantined = false }, { platform = process.platform, runner = undefined } = {}) {
+export async function pendingFiles(env, store, { publishedBytesFor, includeQuarantined = false, onNewerFormat = undefined, kept = false }, { platform = process.platform, runner = undefined } = {}) {
   if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
-  const outboxDir = path.join(root, "outbox", slug)
+  const outboxDir = kept ? keptFolders(root, slug).facts : path.join(root, "outbox", slug)
   const delivered = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, platform)
   const quarantineDir = path.join(root, "quarantine", slug)
   const quarantined = new Set(await listRegularFiles(quarantineDir, OUTBOX_NAME_PATTERN))
@@ -682,6 +701,10 @@ export async function pendingFiles(env, store, { publishedBytesFor, includeQuara
     } catch {
       // A quarantined file that still does not parse keeps its record.
       if (held === null) await quarantine(env, store, name, "invalid", { platform, runner })
+      continue
+    }
+    if (newerFacts(localFacts)) {
+      onNewerFormat?.(name)
       continue
     }
     const publishedBytes = publishedBytesFor(localFacts)
@@ -1225,11 +1248,11 @@ export async function writeLocalLabels(env, store, labels) {
  * fails to parse and one that is quarantined. Only regular files of the
  * labels shape under a job folder are considered.
  */
-export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
+export async function pendingLabels(env, store, { publishedBytesFor, onNewerFormat = undefined, kept = false } = {}) {
   if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env)
-  const dir = path.join(root, "labels", slug)
+  const dir = kept ? keptFolders(root, slug).labels : path.join(root, "labels", slug)
   const delivered = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, process.platform)
   const pending = []
   for (const job of await listDirSafe(dir)) {
@@ -1243,13 +1266,97 @@ export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
       } catch {
         continue
       }
+      const name = `labels/${job}/${file}`
+      if (newerLabels(localLabels)) {
+        onNewerFormat?.(name)
+        continue
+      }
       const publishedBytes = publishedBytesFor(localLabels)
       if (publishedBytes === null) continue
-      const name = `labels/${job}/${file}`
       if (delivered[name] !== gitBlobSha(publishedBytes)) pending.push({ name, localBytes })
     }
   }
   return pending
+}
+
+// ---------------------------------------------------------------------------
+// Kept copies of retracted sessions.
+// ---------------------------------------------------------------------------
+
+// The relative names of `session`'s copies under a pair of folders: facts `<host>-<session>.json` in `factsDir`, labels
+// `labels/<job>/<session>.json` under `labelsDir`. Only regular, unlinked files are listed.
+async function copiesOf(factsDir, labelsDir, session) {
+  const found = []
+  for (const host of ENUMS.host) found.push(...(await listRegularFiles(factsDir, new RegExp(`^${host}-${session}\\.json$`, "u"))))
+  for (const job of await listDirSafe(labelsDir)) {
+    if (PATTERNS.jobId.test(job)) found.push(...(await listRegularFiles(path.join(labelsDir, job), new RegExp(`^${session}\\.json$`, "u"))).map((file) => `labels/${job}/${file}`))
+  }
+  return found
+}
+
+const liveFolders = (root, slug) => ({ facts: path.join(root, "outbox", slug), labels: path.join(root, "labels", slug) })
+const keptFolders = (root, slug) => ({ facts: path.join(root, RETRACTED_COPIES, slug), labels: path.join(root, RETRACTED_COPIES, slug, "labels") })
+const pathOf = (folders, rel) => (rel.startsWith("labels/") ? path.join(folders.labels, rel.slice("labels/".length)) : path.join(folders.facts, rel))
+
+// Moves one copy as a write then an unlink, so every guard `writeAtomic` and `readProtectedBytes` apply holds and a crash leaves both copies,
+// never none. A copy is never overwritten and never lost: at the kept side a different file already there keeps its place and the incoming one
+// is written beside it (`<name>.kept-<n>`); at the live side an existing file wins and the kept copy stays.
+async function moveCopy(root, from, to, rel, { keep, platform, env, runner }) {
+  const source = pathOf(from, rel)
+  const target = pathOf(to, rel)
+  const bytes = await readProtectedBytes(source)
+  const present = (await lstatIfPresent(target, NAMING)) !== null
+  if (present && !keep) return false
+  if (!present) await writeAtomic(root, target, bytes, { platform, env, runner })
+  else if (!bytes.equals(await readProtectedBytes(target))) await writeAtomic(root, await nextSiblingPath(target, "kept"), bytes, { platform, env, runner })
+  await fsp.unlink(source)
+  return true
+}
+
+async function moveSessions(env, store, sessions, { keep, platform, runner }) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform, runner })
+  const [from, to] = keep ? [liveFolders(root, slug), keptFolders(root, slug)] : [keptFolders(root, slug), liveFolders(root, slug)]
+  const moved = []
+  for (const session of [...new Set(sessions)].sort()) {
+    requirePattern(session, SESSION_ID_PATTERN, "session")
+    for (const rel of await copiesOf(from.facts, from.labels, session)) if (await moveCopy(root, from, to, rel, { keep, platform, env, runner })) moved.push(rel)
+  }
+  return moved
+}
+
+/**
+ * `keepRetractedCopies(env, store, sessions) -> string[]`: moves the local facts and labels of each session (a bare session id) out of the
+ * outbox and the labels folder to `retracted-copies/<store-slug>/`, mirroring their names, and returns the names moved. It is idempotent, so
+ * it is also the migration that adopts a copy left in the outbox by an older Desk, and every copy already in the kept folder (the facts flat,
+ * labels under `labels/<job>/`, as a person may have moved them) is checked and made owner-only. Nothing is ever deleted: a copy leaves its
+ * old place only after it is written to the new one.
+ */
+export async function keepRetractedCopies(env, store, sessions, { platform = process.platform, runner = undefined } = {}) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform, runner })
+  const kept = keptFolders(root, slug)
+  if ((await lstatIfPresent(kept.facts, NAMING)) !== null) {
+    await ensureDirChain(kept.facts, root, platform)
+    for (const name of await listRegularFiles(kept.facts, OUTBOX_NAME_PATTERN)) await protectLeafFile(path.join(kept.facts, name), platform, NAMING)
+  }
+  return moveSessions(env, store, sessions, { keep: true, platform, runner })
+}
+
+/** `keptSessions(env, store) -> string[]`: the session ids that have a kept copy, whether or not a retracting record names them. */
+export async function keptSessions(env, store, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const kept = keptFolders(root, storeSlug(store))
+  const found = new Set((await listRegularFiles(kept.facts, OUTBOX_NAME_PATTERN)).map((name) => name.slice(-41, -5)))
+  for (const job of await listDirSafe(kept.labels)) {
+    if (PATTERNS.jobId.test(job)) for (const file of await listRegularFiles(path.join(kept.labels, job), LABELS_NAME_PATTERN)) found.add(file.slice(0, -5))
+  }
+  return [...found].sort()
+}
+
+/** `restoreRetractedCopies(env, store, sessions) -> string[]`: the route is back, so the kept copies of `sessions` return to the outbox and the labels folder, unless a file is already there. */
+export async function restoreRetractedCopies(env, store, sessions, { platform = process.platform, runner = undefined } = {}) {
+  return moveSessions(env, store, sessions, { keep: false, platform, runner })
 }
 
 /**
