@@ -1,0 +1,78 @@
+name: Browser catalog snapshot check
+
+# Desk's browser (plugins/desk/mcp/web.cjs) answers a host's first tools/list from a snapshot of @playwright/mcp's own tool list (plugins/desk/mcp/web-catalog.json) while the browser installs, so the host sees one catalog for the whole connection. Desk tracks @playwright/mcp@latest, so the snapshot can fall behind.
+# Once a day this installs the latest release, asks it for its tools and compares them with the snapshot (plugins/desk/mcp/scripts/refresh-web-catalog.mjs --check). A difference fails the run and keeps one open issue current with what changed and how to refresh it; the next clean run closes the issue. The check opens no pull request, because a pull request made with the workflow token starts no CI runs.
+
+on:
+  schedule:
+    - cron: "52 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: web-catalog-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Compare the browser catalog snapshot with the latest release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Only to open, update and close the "Browser catalog snapshot is out of date" issue.
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_TITLE: Browser catalog snapshot is out of date
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Compare the snapshot with the latest @playwright/mcp
+        id: check
+        run: |
+          set +e
+          node plugins/desk/mcp/scripts/refresh-web-catalog.mjs --check > "$RUNNER_TEMP/catalog-report.txt" 2> "$RUNNER_TEMP/catalog-error.txt"
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Browser catalog snapshot check: exit $code"
+            echo
+            cat "$RUNNER_TEMP/catalog-report.txt" "$RUNNER_TEMP/catalog-error.txt"
+          } > "$RUNNER_TEMP/catalog-summary.md"
+          cat "$RUNNER_TEMP/catalog-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # One open issue at a time: a later failing run rewrites its body with the current report instead of adding another.
+      - name: Open or update the snapshot issue
+        if: ${{ steps.check.outputs.code != '0' }}
+        run: |
+          body="$(cat "$RUNNER_TEMP/catalog-summary.md")
+
+          Latest run: $RUN_URL. Exit 1 means the latest @playwright/mcp lists different tools than \`plugins/desk/mcp/web-catalog.json\`; exit 2 means the check could not install or start it. To refresh, run \`node plugins/desk/mcp/scripts/refresh-web-catalog.mjs\`, then update \`BROWSER_TOOL_NAMES\` in \`plugins/desk/mcp/web.cjs\` and the \`names\` list in \`plugins/desk/.mcp.json\` if a tool was added or removed, and open a pull request. This issue closes after a clean run."
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"
+          fi
+          echo "::error::The browser catalog snapshot check exited ${{ steps.check.outputs.code }}; see the \"$ISSUE_TITLE\" issue."
+          exit 1
+
+      - name: Close the snapshot issue after a clean run
+        if: ${{ steps.check.outputs.code == '0' }}
+        run: |
+          for number in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[].number"); do
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Resolved: $RUN_URL found the snapshot in step with the latest release."
+          done

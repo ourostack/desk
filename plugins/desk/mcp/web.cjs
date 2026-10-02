@@ -1,7 +1,7 @@
 // Desk's default browser: starts the Playwright MCP server from a copy installed in Desk's per-user state folder, and keeps that copy on the `@playwright/mcp@latest` channel, so every fresh Desk install has a working browser with no setup.
 //
 // - Session start never waits on the network once a copy is installed. The launcher starts the installed copy at once and then starts a detached refresher, which asks npm for the channel's current release and, when it differs, installs it into a new folder and switches the `current.json` pointer with an atomic rename. The next launch uses the new release, so a session is at most one launch behind the channel. There is no pinned version or commit.
-// - The first launch on a machine installs the copy in the foreground, with a time limit below the host's connection timeout. Every npm call runs with no fetch retries and a short fetch timeout, so an unreachable registry fails in seconds with a message naming the registry, instead of after minutes.
+// - The first launch on a machine answers the host's handshake at once and installs the copy meanwhile; web-proxy.cjs holds browser calls until the install finishes and then passes them to Playwright MCP, so a first call waits instead of failing and the tool catalog never changes under the host. Every npm call runs with no fetch retries and a short fetch timeout, so an unreachable registry fails in seconds with a message naming the registry, instead of after minutes.
 // - Installs and refreshes run under one lock file, so sessions that start together never race: one installs while the others wait for it or, with a copy already installed, skip the refresh.
 // - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npm that ships next to that Node and puts that Node first on the child's PATH.
 // - Desk's own browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
@@ -18,6 +18,7 @@ var fs = require("fs");
 var os = require("os");
 var path = require("path");
 var bootstrap = require("./bootstrap.cjs");
+var proxy = require("./web-proxy.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
@@ -48,8 +49,9 @@ var NPM_ENV = {
   npm_config_update_notifier: "false",
   npm_config_loglevel: "error"
 };
-// The first install must finish before the host gives up on the server (Claude Code waits 30 seconds).
-var FIRST_INSTALL_MS = 25000;
+// How long the first install may take. A launch with no installed copy answers the host's handshake at once and holds browser calls meanwhile (web-proxy.cjs), so this is not bound by the host's connection timeout; it stays below the proxy's hold time for a call, so a call that arrives at start still gets the browser before it gives up.
+var FIRST_INSTALL_MS = 110000;
+var CATALOG_FILE = path.join(__dirname, "web-catalog.json");
 var REFRESH_MS = 180000;
 var REGISTRY_MS = 5000;
 var WAIT_STEP_MS = 250;
@@ -208,16 +210,21 @@ function npm(tools, args, timeoutMs) {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      tools.children = tools.children.filter(function (other) {
+        return other !== child;
+      });
       resolve({ code: code, stdout: out, stderr: err });
     }
     var child;
     try {
-      child = tools.spawn(tools.node, [tools.npmCli].concat(args), { env: tools.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      // On POSIX npm leads its own process group, so a stop signal can end npm and everything it started.
+      child = tools.spawn(tools.node, [tools.npmCli].concat(args), { env: tools.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: tools.platform !== "win32" });
     } catch (error) {
       err = describe(error);
       finish(null);
       return;
     }
+    tools.children.push(child);
     timer = setTimeout(function () {
       err = "npm " + args[0] + " timed out after " + timeoutMs / 1000 + " seconds\n";
       child.kill("SIGKILL");
@@ -236,6 +243,18 @@ function npm(tools, args, timeoutMs) {
     child.on("close", function (code) {
       finish(code);
     });
+  });
+}
+
+// End every npm run still going, with the processes it started: on POSIX the whole process group, elsewhere the npm process.
+function stopInstalls(tools) {
+  tools.children.forEach(function (child) {
+    try {
+      if (tools.platform === "win32") child.kill("SIGTERM");
+      else process.kill(-child.pid, "SIGTERM");
+    } catch (error) {
+      child.kill("SIGTERM");
+    }
   });
 }
 
@@ -408,7 +427,7 @@ function ensureInstalled(tools, root, deadline) {
       throw error;
     });
   }
-  if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it" });
+  if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it", retry: true });
   return wait(WAIT_STEP_MS).then(function () {
     return ensureInstalled(tools, root, deadline);
   });
@@ -424,7 +443,7 @@ function refresh(o) {
   var clock = either(o.clock, Date.now);
   var root = stateDir(env, either(o.homeDir, either(either(env.HOME, env.USERPROFILE), os.homedir())));
   var lock = path.join(root, "refresh.lock");
-  var tools = { spawn: either(o.spawn, childProcess.spawn), node: node, npmCli: o.npmCli, env: npmEnv(env, node, platform), clock: clock };
+  var tools = { spawn: either(o.spawn, childProcess.spawn), node: node, npmCli: o.npmCli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   var held = false;
   function record(result) {
     try {
@@ -476,6 +495,16 @@ function degraded(code, summary, fix) {
   return { status: "degraded", state: "degraded:" + code, code: code, summary: summary, fix: fix };
 }
 
+function placeholderTools() {
+  return BROWSER_TOOL_NAMES.map(function (name) {
+    return {
+      name: name,
+      description: "Unavailable: the browser could not start. Call this tool for the code and the fix.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: true }
+    };
+  });
+}
+
 function respond(stdout, id, body) {
   var message = { jsonrpc: "2.0", id: id };
   Object.keys(body).forEach(function (key) {
@@ -510,13 +539,7 @@ function answer(stdout, payload, line) {
   } else if (message.method === "ping") {
     respond(stdout, message.id, { result: {} });
   } else if (message.method === "tools/list") {
-    respond(stdout, message.id, { result: { tools: BROWSER_TOOL_NAMES.map(function (name) {
-      return {
-        name: name,
-        description: "Unavailable: the browser could not start. Call this tool for the code and the fix.",
-        inputSchema: { type: "object", properties: {}, additionalProperties: true }
-      };
-    }) } });
+    respond(stdout, message.id, { result: { tools: placeholderTools() } });
   } else if (message.method === "tools/call") {
     respond(stdout, message.id, { result: { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true } });
   } else {
@@ -559,9 +582,20 @@ function serveDegraded(options) {
 // Writes one stderr line naming what went wrong, then keeps the process alive serving the degraded handshake above
 // until the host closes stdin -- never exit(1), which left an agent with a failed server and no message it could
 // read.
-function fail(io, code, summary, fix) {
+function failure(io, code, summary, fix) {
   io.stderr.write("[web] " + summary + "; serving degraded:" + code + "\n");
-  return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: degraded(code, summary, fix) });
+  return degraded(code, summary, fix);
+}
+
+function fail(io, code, summary, fix) {
+  return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: failure(io, code, summary, fix) });
+}
+
+// The tool list a first launch answers with before Playwright MCP is installed, and the Playwright MCP release it came from: a snapshot of Playwright MCP's own list, so the names and input schemas are the ones it exposes. Without a usable snapshot the degraded list stands in.
+function catalog(file) {
+  var snapshot = readJson(file);
+  if (snapshot && Array.isArray(snapshot.tools) && snapshot.tools.length > 0) return { tools: snapshot.tools, version: String(snapshot.playwrightMcpVersion) };
+  return { tools: placeholderTools(), version: "unknown" };
 }
 
 function start(o, io) {
@@ -597,36 +631,93 @@ function start(o, io) {
   }
   var root = stateDir(env, homeDir);
   mkdirp(root);
-  var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock };
-  return ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS)).then(function (got) {
+  var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
+  function spawnFailure(error) {
+    return failure(io, "node_spawn_failed",
+      "Desk found Node " + selection.node.version + " at " + node + " but could not start it: " + describe(error) + ", so the browser is unavailable",
+      reconnectFix("Check that this Node runs, or reinstall it"));
+  }
+  // Resolves { launch } when Playwright MCP is installed and can start, or { payload } with the degraded answer when it cannot; rejects only when the state folder itself fails.
+  function prepare(got) {
     if (!got.installed) {
       return npm(tools, ["config", "get", "registry"], REGISTRY_MS).then(function (answer) {
         var registry = answer.code === 0 && lastLine(answer.stdout) ? lastLine(answer.stdout) : "the configured npm registry";
-        return fail(io, "install_failed",
+        return { retry: got.retry === true, payload: failure(io, "install_failed",
           "Desk could not install " + PACKAGE + " from " + registry + " (" + got.error + "), so the browser is unavailable",
-          reconnectFix("Check that this machine can reach " + registry + ", or point npm at one it can reach (npm config set registry <url>)"));
+          reconnectFix("Check that this machine can reach " + registry + ", or point npm at one it can reach (npm config set registry <url>)")) };
       });
     }
     var installed = got.installed;
     io.stderr.write("[web] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + "\n");
     // A copy installed just now is already the channel's current release.
     if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
-    return bootstrap.reexec({
+    return Promise.resolve({ launch: {
       node: node,
       indexFile: installed.cli,
       args: launchArgs(args, platform, env, fileExists, root),
-      env: withNodeFirst(env, node, platform),
-      stderr: io.stderr,
-      spawn: either(o.spawn, childProcess.spawn),
-      signals: either(o.signals, process),
-      exit: io.exit,
-      kill: either(o.kill, process.kill),
-      onSpawnError: function (error) {
-        return fail(io, "node_spawn_failed",
-          "Desk found Node " + selection.node.version + " at " + node + " but could not start it: " + describe(error) + ", so the browser is unavailable",
-          reconnectFix("Check that this Node runs, or reinstall it"));
-      }
+      env: withNodeFirst(env, node, platform)
+    } });
+  }
+  var spawn = either(o.spawn, childProcess.spawn);
+  var signals = either(o.signals, process);
+  var kill = either(o.kill, process.kill);
+  var present = readInstalled(root) !== null;
+  function installing() {
+    return ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS)).then(prepare);
+  }
+  if (present) {
+    // An installed copy answers the host's handshake itself, so the host sees its real tool list and nothing is swapped later.
+    return installing().then(function (outcome) {
+      return bootstrap.reexec({
+        node: node,
+        indexFile: outcome.launch.indexFile,
+        args: outcome.launch.args,
+        env: outcome.launch.env,
+        stderr: io.stderr,
+        spawn: spawn,
+        signals: signals,
+        exit: io.exit,
+        kill: kill,
+        onSpawnError: function (error) {
+          return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: spawnFailure(error) });
+        }
+      });
     });
+  }
+  var snapshot = catalog(either(o.catalogFile, CATALOG_FILE));
+  function ready() {
+    return installing().then(null, function (error) {
+      return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
+    });
+  }
+  // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
+  return proxy.serve({
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    catalog: snapshot.tools,
+    catalogVersion: snapshot.version,
+    ready: ready(),
+    retry: ready,
+    abort: function () {
+      stopInstalls(tools);
+    },
+    progressMs: o.progressMs,
+    spawn: spawn,
+    signals: signals,
+    kill: kill,
+    exit: io.exit,
+    holdMs: o.holdMs,
+    closeMs: o.closeMs,
+    timeoutPayload: degraded("browser_not_ready", "Desk is still installing the browser and it did not finish in time",
+      reconnectFix("Call the browser tool again in a minute, or check that this machine can reach the npm registry")),
+    spawnPayload: function (error) {
+      return spawnFailure(error);
+    },
+    exitPayload: function (code, signal) {
+      return degraded("browser_exited", "The browser ended (" + (signal ? "signal " + signal : "exit code " + code) + ")",
+        reconnectFix("Call the browser tool again after reconnecting"));
+    }
   });
 }
 
@@ -660,6 +751,7 @@ module.exports = {
   run: run,
   serveDegraded: serveDegraded,
   startRefresh: startRefresh,
+  stopInstalls: stopInstalls,
   stateDir: stateDir,
   takeLock: takeLock,
   withNodeFirst: withNodeFirst
