@@ -6,6 +6,7 @@
 // `fakeGh` convention — nothing here reaches a real `gh`, `jq` or network.
 
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { asksForConsent } from "../../../../../evals/boot-acceptance/scenarios.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -1653,7 +1654,10 @@ test("bootOnce: the text boot gives undecided factory consent as one short line 
   const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
   const plain = result.text_instructions
   assert.equal(plain.filter((line) => /[Ff]actory consent/u.test(line)).length, 1, "one consent line in the text boot")
-  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, end your reply with one line: "Desk can contribute measurement data about your finished tasks to ourostack\/factory-intake; want the details\?" Ask nothing else and ask once\. If they say yes, follow "Factory consent" in .*skills.session-start.details\.md; the script is `node [^`]*mcp.scripts.factory\.js`\.$/u)
+  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, end your reply with this one plain sentence, as a statement and never a question: "Desk can contribute measurement data about finished tasks to ourostack\/factory-intake; say 'factory details' to see what it sends\." Say it once, and ask nothing\. Only if they then say 'factory details' \(or ask what is sent\), follow "Factory consent" in .*skills.session-start.details\.md; the script is `node [^`]*mcp.scripts.factory\.js`\.$/u)
+  const sentence = /"(Desk can contribute[^"]*)"/u.exec(plain.at(-1))[1]
+  assert.doesNotMatch(sentence, /\?|want the details|yes or no/iu, "the sentence relayed to the operator is a statement, not a question")
+  assert.equal(asksForConsent(sentence), false, "the harness does not read it as an ask")
   assert.doesNotMatch(plain.join("\n"), /consent --store|Contribute\? \(yes or no\)|account_found/u, "the script is behind the pointer")
   assert.ok(result.instructions.some((line) => /consent --store ourostack\/factory-intake --contribute yes/u.test(line)), "--json keeps the script")
   const printed = formatBootText(result)

@@ -974,7 +974,7 @@ function remoteRepoInstruction(names, root) {
 function factoryTextLine(factory, pluginRoot) {
   const store = factory.store
   const details = path.join(pluginRoot, "skills", "session-start", "details.md")
-  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, end your reply with one line: "Desk can contribute measurement data about your finished tasks to ${store}; want the details?" Ask nothing else and ask once. If they say yes, follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
+  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, end your reply with this one plain sentence, as a statement and never a question: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." Say it once, and ask nothing. Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
 }
 
 // The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot

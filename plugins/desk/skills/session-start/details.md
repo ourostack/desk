@@ -110,7 +110,7 @@ a missing or failed evaluation never reopens a task, and `done` never waits for 
 
 ## Factory consent
 
-Applies only after the boot's last instruction said consent is undecided for a store, you ended the reply with its one line, and the operator said yes to hearing the details. Never run it first, never in a noninteractive session, and never ask more than once. `<store>` is the store the boot named, and `<Desk plugin folder>` is the folder `session-start` runs the boot script from.
+Applies only after the boot's last instruction said consent is undecided for a store, you ended the reply with its one line, and the operator then said "factory details" (or asked what is sent). Never run it first, never in a noninteractive session, and never ask more than once. `<store>` is the store the boot named, and `<Desk plugin folder>` is the folder `session-start` runs the boot script from.
 
 1. Find the account that would open the intake pull requests: `node <Desk plugin folder>/mcp/scripts/factory.js account --store <store>`. Never assume gh's active account.
 2. With result `account_found`, ask this, naming that account as the login: "Desk can contribute measurement data about your finished tasks to `<store>`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. `<store>` is a public repository, and your GitHub account `<login>` appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)"

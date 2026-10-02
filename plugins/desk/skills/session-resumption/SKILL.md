@@ -66,7 +66,7 @@ Before claiming unattended recovery, exercise two consecutive actual interruptio
 
 The two cycles include graceful handover and abrupt mid-batch interruption, with actual uncommitted source and an externally visible operation whose response is uncertain. Record the operation identity or idempotency key before issue; use destination read-back instead of blind replay. Prove refusal of a surviving delegated writer, intentional-stop/disarm behavior, the exhausted recovery budget and an incomplete latest checkpoint. Each replacement must perform the next expected work step; two idle restarts cannot satisfy the requirement.
 
-## Step 1 — Read the task card
+## Read the task card
 
 ```
 $DESK/<track>/<task>/task.md
@@ -74,13 +74,13 @@ $DESK/<track>/<task>/task.md
 
 note: `status`, `planning_complete` (if set), `repos[]`, any `collaborating`/`blocked` reason fields. the card is the memory of what was happening; read it before reaching for anything else.
 
-## Step 2 — Check repo workspaces
+## Check the repo workspaces
 
 For each `mode: local` repo, inspect `git status`, the current branch, local-only commits and the recorded publication ref through `git-hygiene`. Compare with the mapped progress record and protected checkpoint, not an assumed `doing.md` or upstream branch. A missing upstream is not proof of publication. Preserve and reconcile any unexpected source or ownership before resuming.
 
-A repo recorded as `mode: remote`, or with no local clone, stays uncloned unless the next step needs its code. When it does, clone it into the operator's code location (`defaults.clone_root` in `$DESK/.machine-local.yml`, default `~/code/`), never `/tmp` or another shared temp folder, then record the clone on the card through `task_update` (`local_path`, `mode: local`). `repo-handling` has the flow.
+A repo that is not on this machine (a `mode: remote` repo, or a recorded clone missing at its path) is handled by the instruction the boot output gives for it: follow that, and run no clone procedure of your own. `repo-handling` has the flow once boot says to clone.
 
-## Step 2.5 — Required MCPs hard-gate
+## Stop when a required MCP is not loaded
 
 If the resumption target's mapped progress record or referenced active iteration doc (an existing `doing.md`, `investigation.md` or per-iteration doc named in the task card's `iterations.active`) declares `required_mcps:` in frontmatter, treat that list as a **hard requirement** for resuming, not a recommendation. Consume all applicable declared requirements; an explicit provider progress path does not erase the iteration's requirements.
 
@@ -93,10 +93,10 @@ required_mcps:
 
 **check**: for each entry in `required_mcps`, consult the runtime's loaded-MCP registry to confirm the key is currently loaded — engine-specific. (implementations may probe the harness's own loaded-MCP listing, an introspection MCP, or a tool-name-prefix scan; encode the principle, not the API.)
 
-**hard-stop**: if any required MCP key isn't loaded, **STOP at the resumption prompt before proceeding to Step 3**. don't start the phase, don't begin tool work, don't silently continue. print:
+**hard-stop**: if any required MCP key isn't loaded, **STOP at the resumption prompt before re-entering the phase**. don't start the phase, don't begin tool work, don't silently continue. print:
 
 1. the list of required MCP keys that are missing.
-2. the likely root cause: the runtime's workspace MCP config link absent, broken, or pointing somewhere else; or the MCP isn't declared in the workspace MCP config. reference session-start Step 4.7's link check.
+2. the likely root cause: the runtime's workspace MCP config link absent, broken, or pointing somewhere else; or the MCP isn't declared in the workspace MCP config. reference session-start's MCP link check.
 3. a note that the agent will not proceed with this resumption until restarted with the required MCPs loaded.
 
 example stop message:
@@ -114,9 +114,9 @@ Resumption paused until the required MCPs are available.
 
 **why hard-stop, not recommendation**: when an iteration doc declares `required_mcps`, the planning pass already determined the work cannot proceed without those tools. letting the agent continue and discover the missing tool mid-investigation wastes operator time and contaminates the iteration's audit trail with abandoned work. session-start's Step 4.7 is the soft self-healing path (creates the symlink so MCPs auto-load next time); this gate is the hard requirement at the resumption boundary.
 
-if the iteration doc has no `required_mcps:` field, this step is a no-op — proceed to Step 3.
+if the iteration doc has no `required_mcps:` field, there is nothing to check here — go on and re-enter the phase.
 
-## Step 3 — Re-enter the right phase
+## Re-enter the right phase
 
 Only after writer release, source and effect reconciliation, current authority and required capabilities are established, invoke the adapter once at `reconciled-resume` for an authorized active task. Pass the same mapped progress/rulings and next expected step; do not invoke it again at each state row. A paused, blocked or human-gated task does not enter until its specific gate is satisfied. Resume scheduling through `desk:work-orchestration` and review through `superpowers:requesting-code-review`, consuming their existing ready-set, current-candidate, finding-disposition and affected re-review contract without resetting attempts or opening another fix loop.
 
@@ -132,6 +132,6 @@ Only after writer release, source and effect reconciliation, current authority a
 
 full transition rules and state machine live in the `task-lifecycle` skill.
 
-## Step 4 — Commit any state changes
+## Commit any state changes
 
 if resuming caused a status transition (e.g., `drafting` → `processing` because `planning_complete: true`), follow the state-change protocol in `task-lifecycle`: update the `updated` timestamp, commit, push, and trigger any downstream actions (status tweet, archive) as applicable.
