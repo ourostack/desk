@@ -272,7 +272,7 @@ function otherTaskSlug(part, slug) {
 
 /** `text` without the parts that are not the reply speaking: fenced code and `>` quoted lines. */
 function withoutBlockQuotes(text) {
-  return String(text ?? "").replace(/```[\s\S]*?(?:```|$)/gu, " ").replace(/^[ \t]*>.*$/gmu, " ")
+  return String(text).replace(/```[\s\S]*?(?:```|$)/gu, " ").replace(/^[ \t]*>.*$/gmu, " ")
 }
 
 /**
