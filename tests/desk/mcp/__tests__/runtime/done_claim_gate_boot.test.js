@@ -202,3 +202,36 @@ test("a plain claim that it, or the task, is done is still a claim", () => {
   assert.equal(taskLevelClaims("It's done.", "x").length, 1)
   assert.equal(taskLevelClaims("The task is done.", "x").length, 1)
 })
+
+// ---- the exemption is narrow: only a request, a condition on the operator, or an operator imperative ----
+
+test("six real claims that a loose 'then / after that / say / confirm' once let through are blocked, as task-level or work-level claims", () => {
+  for (const text of [
+    "I implemented the check and ran the tests, then the task is done.",
+    "Wired it up, ran the suite, and then it's done.",
+    "As I say, the task is done.",
+    "To confirm: the task is done.",
+    "I fixed the boundary test. After that, the task is done.",
+    "Tests pass. Then I marked it — the task is done.",
+  ]) {
+    assert.ok(taskLevelClaims(text, "watering-schedule-api").length > 0 || doneClaims(text).length > 0, text)
+    const stateDir = fresh()
+    recordTouchedTask({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_input: { command: COMMAND }, tool_response: { stdout: BOOT_TEXT } }, { stateDir, root: null })
+    assert.equal(stop(stateDir, text).decision, "block", text)
+  }
+})
+
+test("the three shapes are exempt: a request, a condition on the operator or future work, and an operator imperative linked by then; a bare 'After that it's done' only after no account of the agent's own work", () => {
+  for (const text of [
+    "Say it's done.", "Tell me when it's done.", "Let me know once the task is done.", "Please confirm the task is done.", "Reply that the task is complete when you have pushed.", "Push it from the other laptop, then say it's done.",
+    "Once you push it, it's done.", "After that's merged, the task is done.", "When you merge it, the task is done.",
+    "Push it, then the task is done.", "Run the tests, then it's done.", "Merge it and then the task is done.",
+    "After that it's done and I can move on.", "Push it. After that it's done.",
+  ]) {
+    assert.deepEqual(taskLevelClaims(text, "watering-schedule-api"), [], text)
+    assert.deepEqual(doneClaims(text), [], text)
+  }
+  for (const text of ["I pushed it. After that it's done.", "I fixed the boundary test. After that, the task is done.", "After that, the task is done.", "I say the task is done.", "We confirm the task is done.", "Then the task is done."]) {
+    assert.ok(taskLevelClaims(text, "watering-schedule-api").length + doneClaims(text).length > 0, text)
+  }
+})

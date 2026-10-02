@@ -213,8 +213,27 @@ export function clearTouchedTasks(payload, { env = process.env, stateDir = resol
 // A claim is negated or conditional only by a word in a short window just before its verb, as in the acceptance harness.
 const NEGATION = /\b(?:not|never|nothing|none|neither|fail(?:ed|s|ure)?|unable|unreachable|couldn'?t|can'?t|cannot|didn'?t|doesn'?t|don'?t|wasn'?t|isn'?t|aren'?t|hasn'?t|haven'?t|won'?t|without|still needs?|yet to)\b|n['’]t\b/iu
 const CONDITIONAL = /\b(?:until|once|when|if|will|would|should|ready to)\b/iu
-// Words just before a claim that make it an instruction to the operator or a prediction, never the reply's own claim: "then say it's done", "tell me when it's done", "let me know it is done", "after that's done", "Push it, then the task is done".
-const PROSPECTIVE = /\b(?:then|after (?:that|this|which|you)|tell me|let me know|say|answer|reply|confirm)\b/iu
+// A done phrase that is addressed to the operator, or that depends on something the operator does, is no claim of the reply's own. Exactly three shapes (a bare "then", "after that", "say" or "confirm"
+// somewhere before the phrase is not enough: "I ran the tests, then the task is done." and "As I say, the task is done." are claims):
+//   (a) a request with the done phrase as its object: a request verb opening the clause ("say it's done", "tell me when it's done", "let me know once the task is done", "please confirm the task is done");
+//   (b) a condition on the operator or on future work, with a predicate, in the same sentence ("once you push it, it's done", "after that's merged, the task is done"); a bare "After that, ..." is not one,
+//       and a bare "After that it's done" is one only when the sentence before it is not the agent's own account of what it did;
+//   (c) a sentence that opens with an imperative addressed to the operator and links to the done phrase with "then" ("Push it, then the task is done.").
+const REQUEST_CLAUSE = /^(?:please\s+)?(?:say|tell me|let me know|reply|answer|confirm|report)\b(?:\s+\S+){0,3}$/iu
+const CONDITION_CLAUSE = /^(?:when|once|until|after|as soon as|if)\s+(?:you|that|this|it|they)\b\S*(?:\s+\S+)+$/iu
+const BARE_AFTER = /^(?:after|once|when|until|as soon as)\s+(?:that|this)\s*$/iu
+const OPERATOR_IMPERATIVE = /^[\s*_`"'(\d.)-]*(?:please\s+)?(?:push|pull|run|merge|approve|review|open|check|deploy|test|try|fetch|confirm|rebase)\b/iu
+const REQUEST_OPENING = /^[\s*_`"'(\d.)-]*(?:please\s+)?(?:say|tell me|let me know|reply|answer|confirm|report)\b/iu
+
+function addressedToOperator(sentence, matchIndex, previous) {
+  const prefix = sentence.slice(0, matchIndex)
+  const segments = prefix.split(/[,;:\u2014\u2013]|\s-\s/u).map((part) => part.trim())
+  const last = segments.at(-1).replace(/^(?:(?:and|then|also|so)\s+)+/iu, "")
+  if (REQUEST_CLAUSE.test(last)) return true
+  if (segments.some((segment) => CONDITION_CLAUSE.test(segment))) return true
+  if (OPERATOR_IMPERATIVE.test(sentence) && /\bthen\s*$/iu.test(prefix)) return true
+  return !/[,;:\u2014\u2013]/u.test(prefix) && BARE_AFTER.test(prefix.trim()) && (previous === "" || OPERATOR_IMPERATIVE.test(previous) || REQUEST_OPENING.test(previous))
+}
 const WINDOW_CHARS = 30
 const DONE_WORD = "(?:done|complete[d]?|finished)"
 
@@ -272,20 +291,21 @@ export function withoutQuotedText(text) {
     .replace(/(?<=\S\s)["“][^"”\n]*["”]/gu, " ")
 }
 
-function standing(sentence, patterns) {
+function standing(sentence, patterns, previous = "") {
   return patterns.some((pattern) => {
     const match = pattern.exec(sentence)
     if (match === null) return false
+    if (addressedToOperator(sentence, match.index, previous)) return false
     const before = sentence.slice(Math.max(0, match.index - WINDOW_CHARS), match.index + match[0].length)
     // A condition may also follow: "complete once the PR merges".
     const after = sentence.slice(match.index + match[0].length, match.index + match[0].length + WINDOW_CHARS)
-    return !NEGATION.test(before) && !CONDITIONAL.test(before) && !PROSPECTIVE.test(before) && !CONDITIONAL.test(after)
+    return !NEGATION.test(before) && !CONDITIONAL.test(before) && !CONDITIONAL.test(after)
   })
 }
 
 /** The sentences of `text` that say the task or the work is done or complete (code, quotations, negated, conditional and explicit status clauses left out). */
 export function doneClaims(text) {
-  return sentencesOf(withoutQuotedText(text)).filter((sentence) => standing(STATUS_CLAUSES.reduce((rest, clause) => rest.replace(clause, " "), sentence), [...DONE_CLAIM_PATTERNS, COMPLETED_WORK_HEADING]))
+  return sentencesOf(withoutQuotedText(text)).filter((sentence, index, all) => standing(STATUS_CLAUSES.reduce((rest, clause) => rest.replace(clause, " "), sentence), [...DONE_CLAIM_PATTERNS, COMPLETED_WORK_HEADING], all[index - 1] ?? ""))
 }
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
@@ -358,11 +378,11 @@ const TASK_LEVEL_WORK_EXEMPT = TASK_LEVEL_PATTERNS.slice(4)
  */
 export function taskLevelClaims(text, slug) {
   const body = withoutQuotedText(withoutBlockQuotes(text))
-  return sentencesOf(body).flatMap((sentence) => sentence.split(";")).filter((part) => {
+  return sentencesOf(body).flatMap((sentence) => sentence.split(";")).filter((part, index, all) => {
     if (otherTaskSlug(part, slug) !== null && !(typeof slug === "string" && new RegExp(`(?<![\\w-])${escapeRegExp(slug)}(?![\\w-])`, "iu").test(part))) return false
     const rest = STATUS_CLAUSES.reduce((remaining, clause) => remaining.replace(clause, " "), part)
     const patterns = [...TASK_CLAIM_PATTERNS, ...TASK_LEVEL_PATTERNS.filter((pattern) => !TASK_LEVEL_WORK_EXEMPT.includes(pattern) || !WORK_SUBJECT.test(rest))]
-    return standing(rest, patterns)
+    return standing(rest, patterns, all[index - 1] ?? "")
   })
 }
 
