@@ -901,6 +901,8 @@ test("auth: a token GitHub revoked, or a bad GH_TOKEN, passes the offline check 
   assert.match(pending[0], /^auth: GitHub rejected the sign-in gh uses \(gh said: gh: Bad credentials \(HTTP 401\)\); pushes will fail until you run `gh auth login --hostname github\.com`, or unset or replace GH_TOKEN if it is set$/u)
   const limited = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1, stdout: "", stderr: "HTTP 403: API rate limit exceeded" }), now: Date.now, deadline })
   assert.deepEqual(limited.pending, [], "a rate limit is not a rejected token")
+  const silent = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1 }), now: Date.now, deadline })
+  assert.deepEqual(silent.pending, [], "a failure with no output says nothing about the token")
 })
 
 test("auth: a stored token rejected while the push routes were checked is a warning naming the account and the fix", async () => {
