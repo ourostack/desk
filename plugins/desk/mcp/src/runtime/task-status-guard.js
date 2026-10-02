@@ -329,6 +329,7 @@ function denyReason(card, change, via, host, { existing = null, proposed = null 
     `Other fields (repos, iterations, a repo's url): ${target}, frontmatter: { ... } }; more text: ${target}, body_append: "<markdown>" }. ` +
     "If the card's frontmatter is corrupted so that it no longer parses, a direct edit is allowed so it can be repaired; this card parses, so it is not that case." +
     " A note is only a note: a task is finished by its pull request or check, and a card that says otherwise without one is not true. " +
+    `${tool} is a tool you can call now (${host === "copilot" ? "it is in your tool list" : "it is loaded if ToolSearch returned it"}), not a script or a file edit. ` +
     deferredToolsLoadHint(host)
   )
 }

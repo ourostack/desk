@@ -31,9 +31,12 @@ export function deferredToolsLoadHint(host) {
   return GENERIC_HINT
 }
 
-/** `deferredToolsLoadHint` plus the repair rule boot gives. */
+// Boot acceptance round S: a Haiku agent found and loaded the tool, then tried Bash scripts, a Node require and file edits instead of calling it, and overclaimed.
+const CALL_IT = " Once a lookup returns a Desk tool it is loaded: call it directly as a tool, never through Bash, Node or file edits. If the card cannot be updated, say so in your reply and give the task's real status."
+
+/** `deferredToolsLoadHint` plus the repair rule and the call-it rule boot gives. */
 export function deferredToolsHint(host) {
-  return `${deferredToolsLoadHint(host)}${REPAIR}`
+  return `${deferredToolsLoadHint(host)}${REPAIR}${CALL_IT}`
 }
 
 // Hostless callers (the git pre-commit hook text) give both names.

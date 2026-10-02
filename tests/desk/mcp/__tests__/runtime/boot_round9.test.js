@@ -74,6 +74,18 @@ test("boot carries AGENTS.md in its result, and nothing orders the agent to read
   assert.equal(throwing.agents_md, null)
 })
 
+const CALL_IT = " Once a lookup returns a Desk tool it is loaded: call it directly as a tool, never through Bash, Node or file edits. If the card cannot be updated, say so in your reply and give the task's real status."
+
+test("boot's tool-naming instruction, on both hosts, says a looked-up tool is loaded and is called directly, never through Bash, Node or file edits, and that an unupdated card is said so with the real status", () => {
+  for (const host of ["claude", "copilot", "unknown"]) {
+    const hint = deferredToolsHint(host)
+    assert.ok(hint.endsWith(CALL_IT), host)
+    assert.match(hint, /Once a lookup returns a Desk tool it is loaded: call it directly as a tool, never through Bash, Node or file edits/u)
+    assert.match(hint, /If the card cannot be updated, say so in your reply and give the task's real status/u)
+    assert.ok(CALL_IT.length < 260, "short")
+  }
+})
+
 test("the deferred-tools hint names the exact Desk tools for the host it runs on", () => {
   assert.match(deferredToolsLoadHint("claude"), /^If your host defers tools.*\(Claude Code: ToolSearch `select:/su)
   assert.match(deferredToolsLoadHint("claude"), /mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status/u)
@@ -90,7 +102,7 @@ test("the deferred-tools hint names the exact Desk tools for the host it runs on
     assert.match(deferredToolsLoadHint(host), /`desk-<name>`, such as `desk-task_update`/u)
   }
   assert.equal(DEFERRED_TOOLS_LOAD_HINT, deferredToolsLoadHint("unknown"))
-  assert.equal(deferredToolsHint("copilot"), `${copilot} If a Desk tool is still absent after that, repair first (see the session-start skill) and never continue silently in local-only mode.`)
+  assert.equal(deferredToolsHint("copilot"), `${copilot} If a Desk tool is still absent after that, repair first (see the session-start skill) and never continue silently in local-only mode.${CALL_IT}`)
   assert.ok(DEFERRED_TOOLS_HINT.startsWith(DEFERRED_TOOLS_LOAD_HINT))
   assert.match(DEFERRED_TOOLS_HINT, /never continue silently in local-only mode/u)
 })

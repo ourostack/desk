@@ -113,6 +113,30 @@ function parseJson(text) {
   }
 }
 
+// The boot script run through the shell, and the line or the JSON it answers with when the operator named a task. Boot cannot know the session id (no host gives it to a
+// script), but the host's PostToolUse hook for the shell call does: so the hook reads the boot's answer and records the named task as touched, in the same file `task_update` uses
+// (round S: a reply claimed the named task was done, the agent never called task_update, and the gate had nothing to check). Only a run of `session-boot.js` counts.
+const SHELL_TOOL = /^(?:bash|powershell)$/iu
+const NAMED_TASK_LINE = /^Named task: (\S+) \(([^)]*)\), card (\S+)\s*$/mu
+
+/** The task a `session-boot.js` run resolved from the operator's name, in the shape `touchedTask` answers with, or null: not a boot run, no task named, or one that matched none or several. */
+export function bootNamedTask(toolName, input, response) {
+  if (!SHELL_TOOL.test(String(toolName ?? "")) || !/session-boot\.js\b/u.test(String(input?.command ?? "")) || !/(?:^|\s)--task\b/u.test(String(input?.command ?? ""))) return null
+  const text = responseText(response)
+  let named = null
+  const json = parseJson(text.trim())
+  if (json?.task?.status === "resolved" && typeof json.task.task?.card === "string") named = { card: json.task.task.card, status: json.task.task.status }
+  else {
+    const line = NAMED_TASK_LINE.exec(text)
+    if (line !== null) named = { card: line[3], status: line[2] }
+  }
+  if (named === null || !named.card.endsWith("/task.md")) return null
+  const key = path.posix.dirname(named.card)
+  const slug = path.posix.basename(key)
+  if (slug === "") return null
+  return { key, slug, status: typeof named.status === "string" && named.status !== "" && named.status !== "null" ? named.status : null, reportAs: null, path: named.card, oldKey: null }
+}
+
 /**
  * What one task tool call says about the task it touched: `{ key, slug, status, reportAs, path, oldKey }`, or null when the call failed or names no task.
  * `key` is the card's folder under the desk (`track/slug`, from the result path), so a moved or archived card is a different key; `oldKey` is the key a `task_move` or `task_archive` left behind (from the call's own track and slug), or null.
@@ -120,7 +144,7 @@ function parseJson(text) {
  */
 export function touchedTask(toolName, input, response) {
   const kind = TASK_TOOL.exec(String(toolName ?? ""))?.[1]
-  if (kind === undefined) return null
+  if (kind === undefined) return bootNamedTask(toolName, input, response)
   const result = parseJson(responseText(response))
   if (result === null || result.status === "failed" || result.error !== undefined) return null
   const cardPath = typeof result.path === "string" && result.path !== "" ? result.path : null

@@ -154,3 +154,12 @@ test("a Copilot tool Desk has never heard of is denied when it edits a live card
   assert.deepEqual(guard(pre("read_file", { file_path: CARD_PATH })), {})
   assert.deepEqual(guard(pre("write", { path: path.join(SCRATCH, "notes.md"), new_str: "x" })), {}, "a file that is not a card")
 })
+
+test("a denied card edit says the Desk tool is callable now: loaded if ToolSearch returned it on Claude, in the tool list on Copilot, and never a script or a file edit", () => {
+  const edit = { path: CARD_PATH, old_str: "Next: write the test.", new_str: "Next: celebrate." }
+  const copilot = denied(guard(pre("edit", edit)))
+  assert.match(copilot, /desk-task_update is a tool you can call now \(it is in your tool list\), not a script or a file edit\./u)
+  const claude = taskStatusGuardHook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: CARD_PATH, old_string: "Next: write the test.", new_string: "Next: celebrate." }, cwd: DESK }, "claude", undefined, { root: DESK }).hookSpecificOutput.permissionDecisionReason
+  assert.match(claude, /mcp__plugin_desk_desk__task_update is a tool you can call now \(it is loaded if ToolSearch returned it\), not a script or a file edit\./u)
+  assert.ok(claude.split(/(?<=\.)\s/u)[0].length <= 120 || /^Call \S+ instead of editing the card\.$/u.test(claude.split(/(?<=\.)\s/u)[0]), "the first sentence stays short")
+})
