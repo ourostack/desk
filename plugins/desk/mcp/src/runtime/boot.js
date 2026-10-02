@@ -640,7 +640,14 @@ export function resolveTaskQuery(query, cards, root) {
     handle: folderHandle("task", root, path.dirname(card.file)),
   })
   let matches = open.filter((card) => keys(card).includes(needle))
-  if (matches.length === 0) matches = open.filter((card) => keys(card).some((key) => key.includes(needle)))
+  // `--task` takes whatever the operator typed ("resume valve-firmware-flasher"): one open task whose slug or track/slug stands in the phrase as a whole token is the task;
+  // two make it ambiguous. A partial slug ("flasher") never matches.
+  if (matches.length === 0) {
+    const whole = (key) => new RegExp(`(?<![\\w-])${key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?![\\w-])`, "u").test(needle)
+    matches = open.filter((card) => [card.slug, `${card.track}/${card.slug}`].some((key) => key !== "" && whole(key.toLowerCase())))
+  }
+  // What is left is a partial match on a title only; a partial slug or handle is never a match.
+  if (matches.length === 0) matches = open.filter((card) => typeof card.data.title === "string" && card.data.title.toLowerCase().includes(needle))
   if (matches.length === 0) return { status: "not_found" }
   if (matches.length > 1) return { status: "ambiguous", candidates: matches.map(summary) }
   return { status: "resolved", task: { ...summary(matches[0]), card: `${cardLocation({ desk: matches[0].desk, track: matches[0].track, slug: matches[0].slug })}/task.md`, file: matches[0].file } }
@@ -829,6 +836,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     prereqs: null,
     sync: null,
     sync_summary: null,
+    needs_operator: null,
     agents_md: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
@@ -966,11 +974,29 @@ function missingCloneInstruction(missing) {
 
 // A missing clone with no source to clone from blocks the hand-off: the agent has to ask first. So the hand-off and the question are ONE instruction, in
 // the order they happen, never two parallel steps (boot acceptance round O: "I can't hand off to session-resumption if I first need to ask about the missing repo").
+// The one question boot makes the agent ask before any work, or null when nothing blocks. The text boot prints it right after the headline and
+// `--json` carries it as `needs_operator`; the consent line is left out of that boot (the operator has one question to answer first).
+function needsOperator(ctx) {
+  const { taskQuery, task, repoStateList } = ctx
+  if (taskQuery === null || task?.status !== "resolved") return null
+  const blockers = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state))
+  if (blockers.length === 0) return null
+  const names = blockers.map((missing) => missing.repo)
+  // The headline names at most three repos; the question may name them all but stays within 400 characters.
+  const summary = `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""} not on this machine`
+  const each = names.map((name) => `Where is ${name} cloned, or what URL should I clone it from?`).join(" ")
+  if (each.length <= 400) return { question: each, summary }
+  let listed = names
+  const together = (list) => `Where are ${list.join(", ")}${list.length < names.length ? ` and ${names.length - list.length} more` : ""} cloned, or what URLs should I clone them from?`
+  while (listed.length > 1 && together(listed).length > 400) listed = listed.slice(0, -1)
+  return { question: together(listed), summary }
+}
+
 function askThenHandOff(blockers, task) {
   const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${blockers[0].local_path}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${missing.local_path}`).join("; ")})`
   const questions = blockers.map((missing) => `"Where is ${missing.repo} cloned, or what URL should I clone it from?"`).join(" and ")
   const finish = blockers.map((missing) => `clone ${missing.repo} to ${missing.local_path} (or record the path they give)`).join(" and ")
-  return `The operator named a task (${task.card}, handle ${task.handle}), but ${named}, and the card records no usable clone url for ${blockers.length === 1 ? "it" : "them"}. Do not invent the repo or any progress in it. Before anything else, ask the operator one question and stop until they answer: ${questions} Once they answer, ${finish}, save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask, and only then hand off to desk:session-resumption for ${task.card} (handle ${task.handle}), skipping the status block. Every check above still applies.`
+  return `The operator named a task (${task.card}, handle ${task.handle}), but ${named}, and the card records no usable clone url for ${blockers.length === 1 ? "it" : "them"}. Do not invent the repo or any progress in it. Before anything else, ask the operator one question and stop until they answer: ${questions} Once they answer, ${finish}, save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask, and only then hand off to desk:session-resumption for ${task.card} (handle ${task.handle}), skipping the status block. Every other instruction below still applies.`
 }
 
 // A repo the card records as remote-only, or with no local path: it is read through the hosting service, and cloned only
@@ -993,6 +1019,9 @@ function buildInstructionItems(ctx) {
   const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
   const out = []
   const add = (text, plain = text) => out.push({ text, plain })
+  // A question for the operator comes first, before the desk path and the tool names: the agent must not start anything until it is asked.
+  const namedBlockers = taskQuery !== null && task?.status === "resolved" ? repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state)) : []
+  if (namedBlockers.length > 0) add(askThenHandOff(namedBlockers, task.task))
   for (const entry of migrationEntries) {
     add(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
   }
@@ -1018,9 +1047,7 @@ function buildInstructionItems(ctx) {
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
       const named = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)
-      const blockers = named.filter((state) => !hasCloneSource(state))
-      if (blockers.length > 0) add(askThenHandOff(blockers, task.task))
-      else add(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
+      if (namedBlockers.length === 0) add(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
       for (const missing of named.filter(hasCloneSource)) add(missingCloneInstruction(missing))
       if (task.task.remote_repos.length > 0) add(remoteRepoInstruction(task.task.remote_repos, root))
       if (task.host_line_changed) add(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
@@ -1032,9 +1059,10 @@ function buildInstructionItems(ctx) {
   } else {
     add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
   }
-  const consent = factoryInstructions(factory, pluginRoot, { noninteractive })
+  // An ask-and-stop blocker means the operator has one question to answer first: no consent line on this boot.
+  const consent = needsOperator(ctx) === null ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
   consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
-  add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.", null)
+  add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
   return out
@@ -1045,7 +1073,7 @@ function buildInstructions(ctx) {
 }
 
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
-const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
+const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.
@@ -1316,6 +1344,7 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
   }

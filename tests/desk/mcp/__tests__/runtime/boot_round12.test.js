@@ -34,7 +34,7 @@ const boot = (root, extra = {}) =>
     ...extra,
   })
 
-const MISSING = "If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it."
+const MISSING = "If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives."
 
 test("every boot says to stop and name what is missing instead of recreating or simulating it, once, before the status line", async () => {
   const root = await desk()

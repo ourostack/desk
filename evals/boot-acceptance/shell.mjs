@@ -154,11 +154,44 @@ function rawCommands(command) {
   return out
 }
 
-// The text inside every `$(...)` (balanced) and backtick pair of `text`.
-function substitutions(text) {
+// The text inside every `$(...)` (balanced) and backtick pair of `text` that the shell would run. Not run: anything inside single quotes, and the body of a
+// heredoc whose delimiter is quoted (`<< 'EOF'`), which is plain text (a reply's prose with `$DESK/<track>/<task>/task.md` in backticks is no command).
+// The body of an unquoted heredoc is expanded, so its substitutions still count.
+function substitutions(text, { quotes = true } = {}) {
   const found = []
+  const heredocs = []
+  let single = false
+  let double = false
   for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === "$" && text[index + 1] === "(" && text[index + 2] !== "(") {
+    const char = text[index]
+    if (single) {
+      if (char === "'") single = false
+    } else if (char === "'" && quotes && !double) {
+      single = true
+    } else if (char === '"' && quotes && text[index - 1] !== "\\") {
+      double = !double
+    } else if (char === "\n" && heredocs.length > 0) {
+      let at = index + 1
+      for (const { delimiter, quoted } of heredocs.splice(0)) {
+        const bodyStart = at
+        while (at < text.length) {
+          const stop = text.indexOf("\n", at)
+          const line = text.slice(at, stop === -1 ? text.length : stop)
+          at = stop === -1 ? text.length : stop + 1
+          if (line.trim() === delimiter) break
+        }
+        if (!quoted) found.push(...substitutions(text.slice(bodyStart, at), { quotes: false }))
+      }
+      index = at - 1
+    } else if (char === "<" && text.startsWith("<<", index) && text[index + 2] !== "<") {
+      let at = index + 2
+      if (text[at] === "-") at += 1
+      while (text[at] === " " || text[at] === "\t") at += 1
+      const [delimiter, next] = readWord(text, at)
+      const spelled = text.slice(at, next)
+      heredocs.push({ delimiter, quoted: /['"\\]/u.test(spelled) })
+      index = next - 1
+    } else if (char === "$" && text[index + 1] === "(" && text[index + 2] !== "(") {
       let depth = 1
       let end = index + 2
       while (end < text.length && depth > 0) {
@@ -167,7 +200,7 @@ function substitutions(text) {
         end += 1
       }
       found.push(text.slice(index + 2, depth === 0 ? end - 1 : end))
-    } else if (text[index] === "`") {
+    } else if (char === "`") {
       const end = text.indexOf("`", index + 1)
       if (end === -1) break
       found.push(text.slice(index + 1, end))

@@ -125,6 +125,12 @@ export function ceiling(text, limit = TEXT_CEILING) {
 // A task's next step or blocker is printed whole: a cut line made agents guess the rest or open the card. A blocked
 // task shows the card's blocker reason (falling back to its next step); a card that records neither says so, so no
 // agent invents filler.
+// A next step or blocker that says the thing lives only on another machine: the agent must ask, never clone or fetch to look for it (boot acceptance round Q:
+// an agent cloned a fork into the desk folder to find a branch the card says is only on the other laptop).
+const MACHINE = String.raw`(?:laptop|machine|mac|computer|desktop|pc)(?![\w'-])(?!\s+(?:vision|learning|readable)\b)`
+const ELSEWHERE = new RegExp(String.raw`\b(?:my|the|our) (?:other|another|old|work|home|personal) ${MACHINE}|\bon (?:my|the other) (?:laptop|desktop|mac)(?![\w'-])|\bonly on (?:the|my) ${MACHINE}|\bnot on this (?:machine|laptop|computer|mac)(?![\w'-])`, "i")
+export const ELSEWHERE_NOTE = "not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
+
 function stepLines(task) {
   const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
   const blocker = typeof task.blocker === "string" && task.blocker !== "" ? task.blocker : null
@@ -209,7 +215,8 @@ function taskLines(track, task, pushNotes) {
   const hidden = /redacted/u.test(named) ? ` (handle ${task.handle})` : ""
   const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
   const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
-  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...push]
+  const elsewhere = ELSEWHERE.test(`${task.next_step ?? ""} ${task.blocker ?? ""}`) ? [`  ${ELSEWHERE_NOTE}`] : []
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...elsewhere, ...push]
 }
 
 function repoLine(state) {
@@ -323,13 +330,16 @@ export function formatBootText(result) {
     if (failing.length < 3 && line.length <= 80) inHeadline.add(line)
     failing.push(line.length > 80 ? `${line.slice(0, 77)}...` : line)
   }
-  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})` : `Desk boot: ${result.status}`
+  const waiting = typeof result.needs_operator?.question === "string"
+  const waitingWords = waiting ? `, waiting on you (${result.needs_operator.summary})` : ""
+  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})${waitingWords}` : `Desk boot: ${result.status}${waitingWords}`
   const status = [headline]
   if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
   if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
   // The headline already says a failed sync; the sync words follow only for a sync that did not fail (it worked, or there was nothing to sync).
   if (sync !== null && !syncFailed) status.push(sync)
   const lines = [status.join(" | ")]
+  if (waiting) lines.push(`Needs you first: ${result.needs_operator.question}`)
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
   // The headline already says why the sync failed and what else failed (up to three short entries), so those entries would only repeat it.
   for (const line of result.degraded ?? []) if (!inHeadline.has(line) && (sync === null || !line.startsWith("sync: "))) lines.push(`- degraded: ${line}`)
