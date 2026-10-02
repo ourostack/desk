@@ -458,3 +458,69 @@ test("a failing status write never stops a sweep", () => scratch(async (ctx) => 
   await fs.mkdir(path.join(await factoryStateRoot(ctx.env), "status.json"), { recursive: true })
   assert.equal((await sweep(ctx.env)).held, 0)
 }))
+
+test("quiet wait recreates nothing when the state root is removed while it waits", () => scratch(async (ctx) => {
+  const { deriveFile } = await runner()
+  const marker = await session(ctx, "copilot-cli")
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, marker)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  await fs.utimes(marker.log_path, new Date(), new Date())
+  const waiting = deriveFile(ctx.env, file, { quietMs: 1500, maxWaitMs: 5000 })
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  await fs.rm(ctx.base, { recursive: true, force: true })
+  assert.equal((await waiting).result, "invalid")
+  assert.equal(existsSync(ctx.base), false, "no directory of the removed home may be recreated")
+}))
+
+test("a derive process whose home is removed while it waits exits and leaves nothing behind", async () => {
+  const { spawn } = await import("node:child_process")
+  const { waitForNoProcessesUnder, reapProcessesUnder } = await import("../_process_hygiene.js")
+  await scratch(async (ctx) => {
+    const { deriveFile } = await runner()
+    const marker = await session(ctx, "copilot-cli")
+    await setConsent(ctx.env, { store: STORE, contribute: true })
+    await writeMarker(ctx.env, marker)
+    const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+    assert.equal(typeof deriveFile, "function")
+    await fs.utimes(marker.log_path, new Date(), new Date())
+    const script = new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url).pathname
+    const child = spawn(process.execPath, [script, "derive", "--marker", file, "--wait-quiet", "3000"], { cwd: ctx.desk, env: ctx.env, stdio: "ignore", detached: true })
+    const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })))
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      await fs.rm(ctx.base, { recursive: true, force: true })
+      const timer = setTimeout(() => process.kill(-child.pid, "SIGKILL"), 15000)
+      const { signal } = await exited
+      clearTimeout(timer)
+      assert.equal(signal, null, "the worker must exit on its own once its home is gone")
+      assert.equal(existsSync(ctx.base), false, "the worker must not recreate the removed home")
+      assert.deepEqual(await waitForNoProcessesUnder(ctx.base, 2000), [])
+    } finally {
+      try { process.kill(-child.pid, "SIGKILL") } catch { /* already gone */ }
+      await reapProcessesUnder(ctx.base)
+    }
+  })
+})
+
+test("the derive command ends itself at its hard deadline and clears the timer when it finishes first", () => scratch(async (ctx) => {
+  const { runDeriveCommand } = await import("../../../../../plugins/desk/mcp/scripts/factory.js")
+  const marker = await session(ctx, "copilot-cli")
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, marker)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  await fs.utimes(marker.log_path, new Date(), new Date())
+  const exits = []
+  await runDeriveCommand({ argv: ["--marker", file, "--wait-quiet", "400"], env: ctx.env, deadlineMs: 20, exit: (code) => exits.push(code) })
+  assert.deepEqual(exits, [0])
+  await runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", "0"], env: ctx.env, deadlineMs: 150, exit: (code) => exits.push(code) })
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.deepEqual(exits, [0], "a finished worker must not fire its deadline")
+}))
+
+test("derive refuses a file that exists but is not a marker in the markers folder", () => scratch(async (ctx) => {
+  const { deriveFile } = await runner()
+  const stray = path.join(ctx.base, "stray.json")
+  await fs.writeFile(stray, "{}")
+  assert.deepEqual(await deriveFile(ctx.env, stray), { result: "invalid", store: null })
+}))

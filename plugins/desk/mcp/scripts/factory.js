@@ -78,7 +78,9 @@ export function parseOptions(argv) {
   return options
 }
 
-export async function runDeriveCommand({ argv, env }) {
+const DERIVE_HARD_DEADLINE_MS = 360000
+
+export async function runDeriveCommand({ argv, env, deadlineMs = DERIVE_HARD_DEADLINE_MS, exit = process.exit }) {
   const options = parseOptions(argv)
   if (options === null || !options.has("marker") || [...options.keys()].some((key) => !["marker", "wait-quiet"].includes(key))) {
     throw new Error("Usage: factory.js derive --marker <file> [--wait-quiet <milliseconds>]")
@@ -86,7 +88,14 @@ export async function runDeriveCommand({ argv, env }) {
   const raw = options.get("wait-quiet") ?? "0"
   if (!/^\d{1,6}$/u.test(raw) || Number(raw) > 30000) throw new Error("factory.js derive: wait-quiet must be 0..30000")
   const { deriveFile } = await import("../src/factory/derive-run.js")
-  return deriveFile(env, options.get("marker"), { quietMs: Number(raw) })
+  // A hard ceiling on the detached worker's life: the quiet wait is capped at five minutes, and derivation after it gets one more minute. A worker still alive then is stuck, so it ends itself.
+  const ceiling = setTimeout(() => exit(0), deadlineMs)
+  ceiling.unref()
+  try {
+    return await deriveFile(env, options.get("marker"), { quietMs: Number(raw) })
+  } finally {
+    clearTimeout(ceiling)
+  }
 }
 
 /** `flush --store <owner/repo>`: one delivery attempt; prints `{ result, pr?, stale_retries?, rejections_unmatched? }`. */

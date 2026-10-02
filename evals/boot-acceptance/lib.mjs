@@ -472,13 +472,34 @@ export function freshTempDir(prefix) {
   return mkdtempSync(path.join(os.tmpdir(), prefix))
 }
 
+/** The pids of processes (never this one) whose command line names `dir`: the agent's detached helpers, such as Desk's factory `derive --wait-quiet` worker, that outlive the session. */
+export function processesNaming(dir, { list = () => spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).stdout ?? "", self = process.pid } = {}) {
+  const found = []
+  for (const line of list().split("\n")) {
+    const match = /^\s*(\d+)\s+(.*)$/u.exec(line)
+    if (match && Number(match[1]) !== self && new RegExp(`${dir.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?:[/\\s]|$)`, "u").test(match[2])) found.push(Number(match[1]))
+  }
+  return found
+}
+
+/** Kills every process still naming the run's folder, so none can recreate state under a HOME that is about to be deleted, and waits briefly for them to be gone. */
+export async function reapRunProcesses(dir, { find = processesNaming, kill = (pid) => process.kill(pid, "SIGKILL"), pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), attempts = 20 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const pids = find(dir)
+    if (pids.length === 0) return
+    for (const pid of pids) { try { kill(pid) } catch { /* already gone */ } }
+    await pause(50)
+  }
+}
+
 /**
  * Removes a run's temp folder, retrying when the folder is briefly busy, and never throws: a cleanup that fails (round C died on
  * `ENOTEMPTY` while a child process was still writing) leaves the folder behind with a warning instead of ending the round and
  * losing the runs still to come. `remove` and `warn` are for tests. Returns whether the folder was removed.
  */
-export async function cleanupRunDir(dir, { remove = rm, warn = (message) => console.warn(message) } = {}) {
+export async function cleanupRunDir(dir, { remove = rm, warn = (message) => console.warn(message), reap = reapRunProcesses } = {}) {
   try {
+    await reap(dir)
     await remove(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
     return true
   } catch (error) {

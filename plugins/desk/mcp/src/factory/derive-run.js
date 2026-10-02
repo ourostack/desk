@@ -196,8 +196,20 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
   return summary
 }
 
+// Whether the marker file is still there. `readMarker` and `deriveMarker` create Desk's state folders on the way, so a worker that waited while its home or state root was deleted must look first, with a plain stat that creates nothing.
+async function markerPresent(file) {
+  try {
+    await fs.lstat(file)
+    return true
+  } catch {
+    // Missing, or its folder is gone, or unreadable: in each case there is nothing for this worker to continue.
+    return false
+  }
+}
+
 export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } = {}) {
   try {
+    if (!(await markerPresent(file))) return { result: "invalid", store: null }
     let marker = await readMarker(env, file)
     if (marker === null) return { result: "invalid", store: null }
     const deadline = Date.now() + maxWaitMs
@@ -207,6 +219,8 @@ export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } 
       if (remaining <= 0) break
       if (Date.now() + remaining > deadline) return { result: "skipped", store: null }
       await sleep(remaining)
+      // The home, desk or state root may be gone by now (a throwaway profile, a removed desk): write nothing, create nothing.
+      if (!(await markerPresent(file))) return { result: "invalid", store: null }
       marker = await readMarker(env, file)
       if (marker === null) return { result: "invalid", store: null }
     }

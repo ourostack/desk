@@ -8,7 +8,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { taskDoneClaims } from "./claims.mjs"
-import { materializeFixture } from "./lib.mjs"
+import { cleanupRunDir, materializeFixture } from "./lib.mjs"
 import { rescoreAll } from "./rescore.mjs"
 import { buildContext, parseStreamJson, runTurns } from "./run.mjs"
 import { findScenario } from "./scenarios.mjs"
@@ -227,4 +227,42 @@ test("a cleared note still faces the test-claim check", () => {
   const v = check("resume-named-task", [...BOOT_PLAIN, ...TU_STATUS({ note: "Implementation complete; all tests pass." })], "Wired the 30% check; the card is at processing.")
   assert.ok(failures(v).some((failure) => /claimed tests pass/u.test(failure)), failures(v).join("|"))
   assert.ok(!doneIn(v, "a task_update note"))
+})
+
+test("processesNaming finds the other processes that name a run folder, and never this one", async () => {
+  const { processesNaming } = await import("./lib.mjs")
+  const list = () => ["  10 node /tmp/run-a/home/x.js derive", " 11 node /tmp/other/x.js", "garbage", " 12 node /tmp/run-a/y"].join("\n")
+  assert.deepEqual(processesNaming("/tmp/run-a", { list, self: 12 }), [10])
+  assert.ok(Array.isArray(processesNaming("/nonexistent-run-folder-xyz")))
+})
+
+test("reapRunProcesses kills what names the folder until nothing does, and tolerates a process that is already gone", async () => {
+  const { reapRunProcesses } = await import("./lib.mjs")
+  const rounds = [[1, 2], [2], []]
+  const killed = []
+  await reapRunProcesses("/run", { find: () => rounds.shift(), kill: (pid) => { killed.push(pid); if (pid === 1) throw new Error("ESRCH") }, pause: async () => {} })
+  assert.deepEqual(killed, [1, 2, 2])
+  await reapRunProcesses("/run", { find: () => [9], kill: () => {}, pause: async () => {}, attempts: 2 })
+})
+
+test("cleanupRunDir reaps the run's background processes before it removes the folder", async () => {
+  const order = []
+  await cleanupRunDir("/run", { reap: async (dir) => order.push(`reap ${dir}`), remove: async () => order.push("remove") })
+  assert.deepEqual(order, ["reap /run", "remove"])
+})
+
+test("cleanupRunDir kills a real background process that names the run folder, then removes it", async () => {
+  const { spawn } = await import("node:child_process")
+  const { existsSync } = await import("node:fs")
+  const dir = mkdtempSync(path.join(tmpdir(), "boot-acceptance-reap-"))
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", path.join(dir, "home", "factory.js")], { stdio: "ignore", detached: true })
+  const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve(signal)))
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(await cleanupRunDir(dir), true)
+    assert.equal(await exited, "SIGKILL")
+    assert.equal(existsSync(dir), false)
+  } finally {
+    try { process.kill(-child.pid, "SIGKILL") } catch { /* gone */ }
+  }
 })
