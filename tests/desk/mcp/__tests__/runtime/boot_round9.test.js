@@ -406,11 +406,13 @@ test("the named task is always shown first with its push route, even when it ran
     push_accounts: [{ track: "ops", slug: "oldest", repo: "r", store: "acme/r", result: "account_found", account: "me", route: "fork", accounts: [{ account: "me" }] }],
   }
   const text = formatBootText(result)
-  const order = [...text.matchAll(/^- ops\/(\S+)/gmu)].map((match) => match[1])
-  assert.equal(order[0], "oldest")
-  assert.equal(order.length, TASKS_SHOWN_CAP)
+  assert.deepEqual([...text.matchAll(/^- ops\/(\S+)/gmu)].map((match) => match[1]), ["oldest"], "a named task is shown alone, with one line for the rest")
   assert.match(text, /- ops\/oldest [^\n]*\n  next: n\n  push: acme\/r: push as me via fork me\/r\./u)
-  assert.match(text, /\n\.\.\.and 5 more active tasks/u)
+  assert.match(text, /\nOther active tasks: 19 \(say 'where were we' to list them\)/u)
+  // Ambiguous and unmatched names keep the full capped list.
+  const full = formatBootText({ ...result, task: { status: "ambiguous", candidates: [{ track: "ops", slug: "a" }, { track: "ops", slug: "b" }] } })
+  assert.equal([...full.matchAll(/^- ops\/(\S+)/gmu)].length, TASKS_SHOWN_CAP)
+  assert.match(full, /\n\.\.\.and 5 more active tasks/u)
   const unnamed = formatBootText({ ...result, task: null })
   assert.ok(!unnamed.includes("- ops/oldest"), "without a name the oldest task falls under the cap")
   const last = formatBootText({ ...result, task: { status: "resolved", task: { track: "ops", slug: "t19", card: "c" } } })

@@ -1075,12 +1075,16 @@ function buildInstructions(ctx) {
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
 const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
+const SYNC_FAILED_RULE = "Desk could not sync: report it as \"Desk could not sync with origin (<reason>); working from local state\" and never use \"synced\" for it."
+
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.
 function buildTextInstructions(ctx) {
   const plain = buildInstructionItems(ctx).map((item) => item.plain).filter((line) => line !== null)
   const factoryAt = plain.findIndex((line) => line.startsWith("Factory consent is undecided"))
-  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, CLOSING_RULES)
+  // A boot degraded by a failed sync adds how to say it (round S2: the headline said "sync failed" and the reply said "Desk synced locally").
+  const syncFailed = typeof ctx.syncSummaryText === "string" && ctx.syncSummaryText.startsWith("sync failed:")
+  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, syncFailed ? `${CLOSING_RULES} ${SYNC_FAILED_RULE}` : CLOSING_RULES)
   return plain
 }
 
@@ -1319,7 +1323,7 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
