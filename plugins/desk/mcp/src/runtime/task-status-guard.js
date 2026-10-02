@@ -297,7 +297,7 @@ function suggestedCall(coordinates, fields) {
   if (whole.length <= CALL_LIMIT) return { call: whole, shortened: false }
   const short = { ...fields }
   if (short.body_append !== undefined) short.body_append = "<your appended text>"
-  if (JSON.stringify({ ...coordinates, ...short }).length > CALL_LIMIT && short.frontmatter !== undefined) short.frontmatter = "<the fields you changed>"
+  if (JSON.stringify({ ...coordinates, ...short }).length > CALL_LIMIT) short.frontmatter = "<the fields you changed>"
   return { call: JSON.stringify({ ...coordinates, ...short }), shortened: true }
 }
 

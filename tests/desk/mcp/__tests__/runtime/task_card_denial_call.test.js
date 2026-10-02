@@ -57,4 +57,7 @@ test("a status change and appended text are both in the call, and a long call is
   const fields = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`field_${i}`, "value ".repeat(5)]))
   const many = deny("Write", { content: `---\ntitle: T\nstatus: processing\n${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("\n")}\n---\n\nbody\n${big}\n` })
   assert.equal(call(many), '{"track":"t","slug":"s","frontmatter":"<the fields you changed>","body_append":"<your appended text>"}')
+  // Changed fields alone can be long too.
+  const onlyFields = deny("Write", { content: `---\ntitle: T\nstatus: processing\n${Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join("\n")}\n---\n\nbody\n` })
+  assert.equal(call(onlyFields), '{"track":"t","slug":"s","frontmatter":"<the fields you changed>"}')
 })
