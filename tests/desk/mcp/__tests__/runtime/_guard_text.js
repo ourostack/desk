@@ -10,7 +10,7 @@ export function firstSentence(reason) {
   return end === null ? line : line.slice(0, end.index + 1)
 }
 
-const VERBS = /^(?:Ask|Use|Run|Write|Split|Retry|Call|Commit|Restore|Delete|Create|Rebase|Pull|Fetch|Make|Add|Leave|Unstage|Remove|Set|Keep|Converse|Record|Restate|Report|Resolve|Say|Quote)\b/u
+const VERBS = /^(?:Stop|Ask|Use|Run|Write|Split|Retry|Call|Commit|Restore|Delete|Create|Rebase|Pull|Fetch|Make|Add|Leave|Unstage|Remove|Set|Keep|Converse|Record|Restate|Report|Resolve|Say|Quote)\b/u
 const COMMANDS = /^(?:git |task_update|mcp__|desk-|\$)/u
 
 /**
