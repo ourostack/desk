@@ -46,6 +46,8 @@ function removeFixture(t, root) {
 
 // ---- fixtures ----
 
+const fixtureProbes = new Map()
+
 /** A fake `node` (a POSIX sh script, whatever its name) that answers the bootstrap's probe and, when run, prints its label and arguments. */
 function fakeNode(file, version, abi, { label = file, broken = false, exitCode = 0 } = {}) {
   mkdirSync(path.dirname(file), { recursive: true })
@@ -59,13 +61,24 @@ function fakeNode(file, version, abi, { label = file, broken = false, exitCode =
     "",
   ].join("\n"))
   chmodSync(file, 0o755)
+  fixtureProbes.set(realpathSync(file), broken || !/^\d+\.\d+\.\d+$/u.test(version) || !/^\d+$/u.test(abi) ? null : { version, abi })
   return file
+}
+
+function probeFixtureNode(file, env, timeoutMs) {
+  if (process.platform !== "win32") return bootstrap.probeNode(file, env, timeoutMs)
+  try {
+    return fixtureProbes.get(realpathSync(file)) ?? null
+  } catch (error) {
+    if (error.code === "ENOENT") return null
+    throw error
+  }
 }
 
 // Selection tests check which Node is chosen, not how fast a probe runs, so their probes are not raced against the real clock. A freshly written fake node usually answers in milliseconds, but on a loaded machine one has taken more than the whole 3 s probe budget. The budget itself is tested with a controlled clock.
 const FAKE_PROBE_TIMEOUT_MS = 30000
 
-/** Options for selectNode on a fixture machine: nothing from this host is visible, the probe budget's clock stands still, and each probe runs the real probeNode with a generous timeout. */
+/** Options for a fixture machine. POSIX probes execute the shell fixture; Windows uses its declared metadata because it cannot execute a shebang file. A separate native test probes the real Node on every host. */
 function machine(root, overrides = {}) {
   const env = overrides.env ?? { PATH: "" }
   return {
@@ -77,10 +90,17 @@ function machine(root, overrides = {}) {
     current: { path: path.join(root, "current", "node"), version: "v16.20.2", abi: "93" },
     systemPrefix: path.join(root, "sysroot"),
     now: () => 0,
-    probe: (file) => bootstrap.probeNode(file, env, FAKE_PROBE_TIMEOUT_MS),
+    probe: (file) => probeFixtureNode(file, env, FAKE_PROBE_TIMEOUT_MS),
     ...overrides,
   }
 }
+
+test("native: the running Node answers the production version and ABI probe", () => {
+  assert.deepEqual(bootstrap.probeNode(process.execPath, process.env, FAKE_PROBE_TIMEOUT_MS), {
+    version: process.versions.node,
+    abi: process.versions.modules,
+  })
+})
 
 function collect(output) {
   const chunks = []
@@ -175,7 +195,9 @@ test("the bootstrap reads engines.node and the runtime pack ABIs from the same f
 
 // ---- discovery ----
 
-test("POSIX discovery covers PATH, nvm, fnm, Volta, asdf, mise, Homebrew and the system", async () => {
+test("POSIX discovery covers PATH, nvm, fnm, Volta, asdf, mise, Homebrew and the system", {
+  skip: process.platform === "win32" ? "POSIX PATH and execute-bit fixture; Windows discovery has its own test" : false,
+}, async () => {
   const root = await mkTempRoot("desk-bootstrap-posix-")
   const home = path.join(root, "home")
   const prefix = path.join(root, "sysroot")
@@ -312,7 +334,7 @@ test("selection prefers the newest Node whose ABI has a runtime pack, then the n
   // A major the bootstrap has no ABI for, and a path with no version, are asked.
   const unknown = fakeNode(path.join(root, "path-bin", "node"), "26.0.0", "127")
   selection = bootstrap.selectNode(machine(root, { env: { PATH: path.join(root, "path-bin") } }))
-  assert.equal(selection.node.path, unknown)
+  assert.equal(realpathSync.native(selection.node.path), realpathSync.native(unknown))
   assert.equal(selection.node.abi, "127")
 })
 
@@ -338,10 +360,10 @@ test("the same binary reached through two paths is considered once, and a probe 
   const probes = []
   const selection = bootstrap.selectNode(machine(root, {
     env: { PATH: [path.join(root, "link-bin"), path.join(root, "odd-bin")].join(":") },
-    probe: (file, timeoutMs) => { probes.push(file); assert.ok(timeoutMs > 0 && timeoutMs <= 3000); return bootstrap.probeNode(file, {}, FAKE_PROBE_TIMEOUT_MS) },
+    probe: (file, timeoutMs) => { probes.push(file); assert.ok(timeoutMs > 0 && timeoutMs <= 3000); return probeFixtureNode(file, {}, FAKE_PROBE_TIMEOUT_MS) },
   }))
-  assert.equal(selection.node.path, path.join(root, "link-bin", "node"))
-  assert.deepEqual(probes, [path.join(root, "odd-bin", "node"), path.join(root, "link-bin", "node")])
+  assert.equal(realpathSync.native(selection.node.path), realpathSync.native(path.join(root, "link-bin", "node")))
+  assert.deepEqual(probes.map((file) => realpathSync.native(file)), [path.join(root, "odd-bin", "node"), path.join(root, "link-bin", "node")].map((file) => realpathSync.native(file)))
   assert.equal(bootstrap.probeNode(path.join(root, "missing-node"), {}, 1000), null)
 })
 
@@ -382,16 +404,17 @@ test("the install command installs the Node major Desk ships a runtime pack for,
   const nvmDir = path.join(root, "nvm dir")
   mkdirSync(nvmDir)
   writeFileSync(path.join(nvmDir, "nvm.sh"), "# nvm\n")
-  assert.equal(bootstrap.installCommand({ platform: "linux", env: { NVM_DIR: nvmDir, PATH: brewBin }, homeDir: root, major: "22" }), `. "${nvmDir}/nvm.sh" && nvm install 22`)
+  assert.equal(bootstrap.installCommand({ platform: "linux", env: { NVM_DIR: nvmDir, PATH: brewBin }, homeDir: root, major: "22" }), `. "${path.posix.join(nvmDir, "nvm.sh")}" && nvm install 22`)
   assert.equal(bootstrap.installCommand({ platform: "darwin", env: { PATH: brewBin }, homeDir: root, major: "22" }), "brew install node@22")
   assert.equal(bootstrap.installCommand({ platform: "darwin", env: { PATH: brewBin }, homeDir: root, major: null }), "brew install node")
   mkdirSync(path.join(root, ".nvm"))
   writeFileSync(path.join(root, ".nvm", "nvm.sh"), "# nvm\n")
-  assert.equal(bootstrap.installCommand({ platform: "linux", env: {}, homeDir: root, major: null }), `. "${path.join(root, ".nvm", "nvm.sh")}" && nvm install --lts`)
+  assert.equal(bootstrap.installCommand({ platform: "linux", env: {}, homeDir: root, major: null }), `. "${path.posix.join(root, ".nvm", "nvm.sh")}" && nvm install --lts`)
   assert.match(
     bootstrap.installCommand({ platform: "linux", env: {}, homeDir: path.join(root, "nobody"), major: "22" }),
     /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/nvm-sh\/nvm\/v[0-9.]+\/install\.sh \| bash && \. "\$HOME\/\.nvm\/nvm\.sh" && nvm install 22$/u,
   )
+  assert.match(bootstrap.installCommand({ platform: "linux", env: {}, homeDir: "", major: null }), /nvm install --lts$/u)
 })
 
 // ---- the degraded responder ----
@@ -858,12 +881,12 @@ test("probes share a 3 s budget and version-manager shims on PATH are never run"
   const selection = bootstrap.selectNode(machine(root, {
     env: { PATH: ["a", "b", "c"].map((name) => path.join(root, name)).join(":") },
     now: () => clock,
-    probe: (file, timeoutMs) => { probed.push([file, timeoutMs]); clock += 2000; return bootstrap.probeNode(file, {}, FAKE_PROBE_TIMEOUT_MS) },
+    probe: (file, timeoutMs) => { probed.push([file, timeoutMs]); clock += 2000; return probeFixtureNode(file, {}, FAKE_PROBE_TIMEOUT_MS) },
   }))
   assert.deepEqual(probed.map(([file]) => path.basename(path.dirname(file))), ["a", "b"])
   assert.deepEqual(probed.map(([, timeoutMs]) => timeoutMs), [3000, 1000])
   // Once the budget is spent, the choice is not probed again.
-  assert.equal(selection.node.path, path.join(root, "a", "node"))
+  assert.equal(realpathSync.native(selection.node.path), realpathSync.native(path.join(root, "a", "node")))
 
   const shims = await mkTempRoot("desk-bootstrap-shims-")
   const home = path.join(shims, "home")

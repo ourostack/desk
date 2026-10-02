@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { spawnNpmSync } from "../_npm.js"
 
 import { admitInProcess } from "../runtime/_in_process_desk.js"
 import {
@@ -264,8 +265,7 @@ async function seedIndexedDesk({ deskRoot, docPath = "trackA/task-1/task.md", bo
 }
 
 function runNpmScript(scriptName, args = []) {
-  return spawnSync(
-    "npm",
+  return spawnNpmSync(
     ["--prefix", "plugins/desk/mcp", "run", scriptName, "--", ...args],
     {
       cwd: repoRoot,

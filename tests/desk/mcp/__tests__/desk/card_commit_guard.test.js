@@ -84,13 +84,13 @@ test("install writes an executable hook once and is idempotent", () => {
     const first = installCardGuard(root)
     assert.equal(first.state, "installed")
     assert.equal(first.path, path.join(root, ".git", "hooks", "pre-commit"))
-    assert.equal(statSync(first.path).mode & 0o111, 0o111)
+    if (process.platform !== "win32") assert.equal(statSync(first.path).mode & 0o111, 0o111)
     assert.equal(readFileSync(first.path, "utf8"), hookScript())
     const second = installCardGuard(root)
     assert.deepEqual(second, { state: "current", path: first.path })
     chmodSync(first.path, 0o644)
     assert.equal(installCardGuard(root).state, "current")
-    assert.equal(statSync(first.path).mode & 0o111, 0o111, "an installed hook that lost its execute bit gets it back")
+    if (process.platform !== "win32") assert.equal(statSync(first.path).mode & 0o111, 0o111, "an installed hook that lost its execute bit gets it back")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

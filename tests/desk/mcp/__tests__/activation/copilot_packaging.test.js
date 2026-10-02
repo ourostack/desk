@@ -5,6 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync 
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { spawnNpmSync } from "../_npm.js"
 import {
   buildCopilotBundle,
   generateCopilotBundleArtifact,
@@ -656,8 +657,7 @@ test("the bundle writer resolves its destination from an explicit root, the envi
     // …and the operator's actual command runs end to end: the package script, through the package manager,
     // with the repository-root redirect pointing at the scratch tree.
     rmSync(path.join(scratchRoot, ...copilotBundlePath.split("/")))
-    const scripted = spawnSync(
-      process.platform === "win32" ? "npm.cmd" : "npm",
+    const scripted = spawnNpmSync(
       ["--silent", "run", "activation:copilot-bundle:generate"],
       {
         cwd: path.join(repoRoot, "plugins", "desk", "mcp"),
@@ -665,7 +665,7 @@ test("the bundle writer resolves its destination from an explicit root, the envi
         env: { ...process.env, DESK_COPILOT_BUNDLE_REPO_ROOT: scratchRoot },
       },
     )
-    assert.equal(scripted.status, 0, scripted.stderr)
+    assert.equal(scripted.status, 0, scripted.error?.message ?? scripted.stderr)
     assert.equal(scripted.stdout.trim(), `wrote ${copilotBundlePath}`)
     assert.deepEqual(
       JSON.parse(readFileSync(path.join(scratchRoot, ...copilotBundlePath.split("/")), "utf8")),

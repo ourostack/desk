@@ -353,7 +353,9 @@ function installCommand(options) {
     return "winget install --id " + winget + " --exact --accept-source-agreements --accept-package-agreements";
   }
   var nvmVersion = either(major, "--lts");
-  var scripts = [under(env.NVM_DIR, "nvm.sh"), under(options.homeDir, ".nvm", "nvm.sh")];
+  var scripts = [];
+  if (env.NVM_DIR) scripts.push(path.posix.join(env.NVM_DIR, "nvm.sh"));
+  if (options.homeDir) scripts.push(path.posix.join(options.homeDir, ".nvm", "nvm.sh"));
   for (var index = 0; index < scripts.length; index += 1) {
     if (scripts[index] && isExecutableFile(scripts[index], true)) return ". \"" + scripts[index] + "\" && nvm install " + nvmVersion;
   }

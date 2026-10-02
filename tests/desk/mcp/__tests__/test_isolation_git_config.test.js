@@ -3,8 +3,9 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawnSync } from "node:child_process"
+import { writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { mkTempRoot } from "./_temp_roots.js"
 import { GUARDED_CHECKOUT } from "./_isolated_env.mjs"
 
@@ -16,13 +17,27 @@ async function repository(prefix) {
   return root
 }
 
+test("test processes never inherit system Git line-ending policy", async () => {
+  const root = await mkTempRoot("desk-system-git-config-")
+  const systemConfig = path.join(root, "system.gitconfig")
+  writeFileSync(systemConfig, "[core]\n\tautocrlf = true\n\tsafecrlf = true\n")
+  const env = { ...process.env, GIT_CONFIG_SYSTEM: systemConfig }
+  delete env.GIT_CONFIG_NOSYSTEM
+  const result = spawnSync(process.execPath, [
+    "--import", pathToFileURL(preload).href,
+    "-e", 'const r = require("node:child_process").spawnSync("git", ["config", "--get", "core.safecrlf"], { encoding: "utf8" }); process.stdout.write(JSON.stringify({ status: r.status, stdout: r.stdout }));',
+  ], { cwd: root, env, encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), { status: 1, stdout: "" })
+})
+
 // A process that preloads the guard, standing in for the checkout at `guarded`, and runs `git config` with `args` in `target`.
 function runWithGuard({ guarded, target, args, underRunner = false }) {
   const env = { ...process.env, [GUARDED_CHECKOUT]: guarded }
   delete env.NODE_TEST_CONTEXT
   if (underRunner) env.NODE_TEST_CONTEXT = "child-v8"
   const script = args ? `require("node:child_process").execFileSync("git", ${JSON.stringify(["-C", target, "config", ...args])})` : ""
-  return spawnSync(process.execPath, ["--import", preload, "-e", script], { env, encoding: "utf8" })
+  return spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, "-e", script], { env, encoding: "utf8" })
 }
 
 test("a test run that writes the checkout's Git configuration fails and names what changed", async () => {
