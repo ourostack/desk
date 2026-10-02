@@ -951,16 +951,26 @@ function pushLines(pushAccounts, namedTask) {
 // What to do about a recorded local clone that is not on this machine: the exact clone command when the card carries
 // the repo's `url` (or its name is owner/repo), otherwise exactly what to ask the operator (boot acceptance round A:
 // "no remote" left the agent guessing between inventing a repo and asking an open question).
+function hasCloneSource(missing) {
+  return typeof missing.url === "string" || (typeof missing.repo === "string" && /^[\w.-]+\/[\w.-]+$/u.test(missing.repo))
+}
+
 function missingCloneInstruction(missing) {
   const where = shellQuotePath(missing.local_path)
   const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}`
   if (typeof missing.url === "string") {
     return `${lead}: only if the next step needs its code, clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url); otherwise do not clone it.`
   }
-  if (typeof missing.repo === "string" && /^[\w.-]+\/[\w.-]+$/u.test(missing.repo)) {
-    return `${lead}: only if the next step needs its code, clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`; otherwise do not clone it.`
-  }
-  return `${lead}, and the card records no usable clone url for it. Do not invent the repo or any progress in it. Ask the operator one question: "Where is ${missing.repo} cloned, or what URL should I clone it from?" Then clone it to ${missing.local_path} (or record the path they give) and save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask.`
+  return `${lead}: only if the next step needs its code, clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`; otherwise do not clone it.`
+}
+
+// A missing clone with no source to clone from blocks the hand-off: the agent has to ask first. So the hand-off and the question are ONE instruction, in
+// the order they happen, never two parallel steps (boot acceptance round O: "I can't hand off to session-resumption if I first need to ask about the missing repo").
+function askThenHandOff(blockers, task) {
+  const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${blockers[0].local_path}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${missing.local_path}`).join("; ")})`
+  const questions = blockers.map((missing) => `"Where is ${missing.repo} cloned, or what URL should I clone it from?"`).join(" and ")
+  const finish = blockers.map((missing) => `clone ${missing.repo} to ${missing.local_path} (or record the path they give)`).join(" and ")
+  return `The operator named a task (${task.card}, handle ${task.handle}), but ${named}, and the card records no usable clone url for ${blockers.length === 1 ? "it" : "them"}. Do not invent the repo or any progress in it. Before anything else, ask the operator one question and stop until they answer: ${questions} Once they answer, ${finish}, save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask, and only then hand off to desk:session-resumption for ${task.card} (handle ${task.handle}), skipping the status block. Every check above still applies.`
 }
 
 // A repo the card records as remote-only, or with no local path: it is read through the hosting service, and cloned only
@@ -1007,10 +1017,11 @@ function buildInstructionItems(ctx) {
   add(deferredToolsHint(agentHost))
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
-      add(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
-      for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
-        add(missingCloneInstruction(missing))
-      }
+      const named = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)
+      const blockers = named.filter((state) => !hasCloneSource(state))
+      if (blockers.length > 0) add(askThenHandOff(blockers, task.task))
+      else add(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
+      for (const missing of named.filter(hasCloneSource)) add(missingCloneInstruction(missing))
       if (task.task.remote_repos.length > 0) add(remoteRepoInstruction(task.task.remote_repos, root))
       if (task.host_line_changed) add(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
     } else if (task?.status === "ambiguous") {

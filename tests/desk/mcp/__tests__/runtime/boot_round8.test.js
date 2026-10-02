@@ -1,4 +1,5 @@
 // Round 8 boot fixes: a missing clone says exactly what to run or what to ask, and a card's repo `url` is the source.
+import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -58,6 +59,33 @@ test("a missing clone with no url and no owner/repo name says exactly what to as
   assert.match(line, /task_update/u)
   const unnamed = missingLine(await bootNamed(root, [state({ repo: null })]))
   assert.match(unnamed, /card records no usable clone url/u)
+})
+
+test("a named task whose repo cannot be cloned from anywhere gets ONE instruction: ask first, stop, then clone, record, and only then hand off", async () => {
+  const root = await deskWithTask("  - name: valve-firmware\n    local_path: ~/code/valve-firmware\n    mode: local")
+  const result = await bootNamed(root, [state({})])
+  for (const list of [result.instructions, result.text_instructions]) {
+    const handOffs = list.filter((line) => line.includes("hand off to desk:session-resumption"))
+    assert.equal(handOffs.length, 1, "one hand-off, not a hand-off beside a blocker")
+    const line = handOffs[0]
+    assert.ok(line.includes("is not at its recorded path"), "the same instruction carries the blocker")
+    const order = ["ask the operator one question and stop until they answer", "Where is valve-firmware cloned", "Once they answer", "task_update", "only then hand off to desk:session-resumption"].map((piece) => line.indexOf(piece))
+    assert.ok(order.every((at, index) => at > (order[index - 1] ?? -1)), `question, answer, record, then hand-off: ${order}`)
+    assert.ok(!list.some((entry) => entry !== line && /is not at its recorded path/u.test(entry)), "no second, parallel missing-repo instruction")
+    assert.ok(!list.some((entry) => entry.startsWith("The operator named a task: hand off")), "the unconditional hand-off is not emitted")
+  }
+  const printed = formatBootText(result)
+  assert.ok(printed.indexOf("Where is valve-firmware cloned") < printed.indexOf("only then hand off"), "in the boot text the question comes before the hand-off")
+})
+
+test("with two repos that cannot be cloned from anywhere, one instruction asks for both before the hand-off; a repo with a clone source keeps its conditional line after a plain hand-off", async () => {
+  const root = await deskWithTask("  - name: valve-firmware\n    local_path: ~/code/valve-firmware\n    mode: local")
+  const two = await bootNamed(root, [state({}), state({ repo: "relay", local_path: "~/code/relay" })])
+  const line = two.instructions.find((entry) => entry.includes("hand off to desk:session-resumption"))
+  assert.match(line, /not at their recorded paths \(valve-firmware at ~\/code\/valve-firmware; relay at ~\/code\/relay\).*"Where is valve-firmware cloned.*" and "Where is relay cloned.*".*clone valve-firmware to ~\/code\/valve-firmware .* and clone relay to ~\/code\/relay .*only then hand off/u)
+  const sourced = await bootNamed(root, [state({ url: "https://example.com/a/v.git" })])
+  const at = (needle) => sourced.instructions.findIndex((entry) => entry.includes(needle))
+  assert.ok(at("The operator named a task: hand off") !== -1 && at("hand off") < at("is not at its recorded path"), "a clone that can be made is optional, so it follows the hand-off")
 })
 
 test("repoStates reports a card's clone url on a missing clone, without credentials embedded in it", () => {

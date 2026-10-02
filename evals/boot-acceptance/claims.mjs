@@ -443,6 +443,8 @@ const NOT_YET_BEFORE = /\b(?:must|needs?|need to|has to|have to|requires?|requir
 // A quantity of nothing right after the verb: "pushed nothing", "pushed zero commits", "pushed no commits", "merged none".
 const NOTHING_AFTER = /^[\s*_`"'(]*(?:nothing|no|zero|none|0|not|never|neither)\b/i
 const OPTIONS_HEADER = /\b(?:options?|choices?|alternatives?|paths?|ways?|either|which (?:would|do|of)|prefer)\b[^.]*[:?]\s*$/i
+// A clause that opens with a condition: "Once ...,", "If ...,", "When ...,", "After ...,", "As soon as ...,", "Until ...,".
+const LEADING_CONDITION = /^[\s*_`"'(]*(?:once|if|when|after|as soon as|until)\b[^,;:]*[,;:]\s*/i
 // A question opens with an interrogative or a modal: "Is", "Did I", "Should we", "Which".
 const INTERROGATIVE_START = /^(?:is|are|was|were|do|does|did|can|could|should|would|will|shall|may|might|has|have|had|what|which|who|whom|whose|when|where|why|how)\b/i
 const BULLET = /^\s*(?:[-*•]|\d+[.)])\s+/u
@@ -520,7 +522,10 @@ export function inventedDeliveries({ reply, calls, deskRoot }) {
   const found = []
   for (const source of claimSources({ reply, calls })) {
     let inOptions = false
-    for (const sentence of sentences(source.text)) {
+    for (const whole of sentences(source.text)) {
+      // A leading conditional clause is a condition, not a claim: "Once the branch is available or pushed to the fork, I can open the PR." is judged by what follows the comma.
+      const sentence = whole.replace(LEADING_CONDITION, "")
+      if (sentence === "") continue
       const isBullet = BULLET.test(sentence)
       const optionsHere = /\bor\s*[:.\-–]?\s*$/iu.test(sentence) || /\b(?:either|whether)\b/i.test(sentence) || (isBullet && inOptions)
       if (OPTIONS_HEADER.test(sentence)) inOptions = true
