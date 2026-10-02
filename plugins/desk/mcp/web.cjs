@@ -111,7 +111,12 @@ function hasOption(args, names) {
 // Where Playwright itself looks for the chrome and msedge channels, per platform.
 function browserPaths(browser, platform, env) {
   if (platform === "win32") {
-    var roots = [env.LOCALAPPDATA, env.PROGRAMFILES, env["PROGRAMFILES(X86)"]].filter(Boolean);
+    var roots = ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"].map(function (name) {
+      var key = Object.keys(env).filter(function (candidate) {
+        return candidate.toUpperCase() === name;
+      })[0];
+      return env[key];
+    }).filter(Boolean);
     var tail = browser === "chrome" ? ["Google", "Chrome", "Application", "chrome.exe"] : ["Microsoft", "Edge", "Application", "msedge.exe"];
     return roots.map(function (root) {
       return path.win32.join.apply(path.win32, [root].concat(tail));
@@ -129,7 +134,7 @@ function macBundle(browser) {
 // Per-user install locations Playwright does not look in; a browser found only there is passed by path.
 function userBrowserPaths(browser, platform, env) {
   if (platform !== "darwin" || !env.HOME) return [];
-  return [path.join(env.HOME, "Applications", macBundle(browser))];
+  return [path.posix.join(env.HOME, "Applications", macBundle(browser))];
 }
 
 function firstExisting(files, fileExists) {

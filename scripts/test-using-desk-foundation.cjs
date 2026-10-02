@@ -195,7 +195,7 @@ function checkStartupHooks(skill) {
     fs.copyFileSync(skillPath, path.join(bare, "skills", "using-desk", "SKILL.md"));
     const bareClaude = runClaudeHook({ env: { ...env, CLAUDE_PLUGIN_ROOT: bare }, cwd: codeRepo, projectDir: codeRepo });
     assert.match(startupLine(bareClaude), couldNot, "claude must say it could not resolve the root");
-    assert.ok(bareClaude.includes(`\nDesk RFC: ${bare}/docs/agentic-engineering-v2-rfc.md\n`), "claude RFC line uses the plugin root");
+    assert.ok(bareClaude.includes(`\nDesk RFC: ${path.join(bare, "docs", "agentic-engineering-v2-rfc.md")}\n`), "claude RFC line uses the plugin root");
     const bareCopilot = runCopilotHook({ env: { ...env, PLUGIN_ROOT: bare }, cwd: codeRepo, sessionCwd: codeRepo });
     assert.match(startupLine(bareCopilot), couldNot, "copilot must say it could not resolve the root");
     const windowsRoot = "C:\\Users\\someone\\.claude\\plugins\\cache\\ourostack\\desk\\3.2.0";
@@ -205,7 +205,28 @@ function checkStartupHooks(skill) {
 
     // A host that leaves stdin open must not stall startup: the hook stops waiting and uses the process folder.
     const started = Date.now();
-    const open = spawnSync("bash", ["-c", `exec "${process.execPath}" "${path.join(pluginRoot, "hooks", "copilot-session-start.cjs")}" < <(exec sleep 8 </dev/null 2>/dev/null)`], { cwd: crew, encoding: "utf8", env });
+    const openStdinHost = `
+      const { spawn } = require("node:child_process");
+      const child = spawn(process.execPath, [process.argv[1]], {
+        stdio: ["pipe", "inherit", "inherit"],
+      });
+      const timeout = setTimeout(() => {
+        console.error("Copilot startup hook did not finish with stdin open");
+        child.kill();
+      }, 4000);
+      child.on("error", (error) => {
+        clearTimeout(timeout);
+        child.stdin.destroy();
+        console.error(error);
+        process.exitCode = 1;
+      });
+      child.on("exit", (code) => {
+        clearTimeout(timeout);
+        child.stdin.destroy();
+        process.exitCode = code ?? 1;
+      });
+    `;
+    const open = spawnSync(process.execPath, ["-e", openStdinHost, path.join(pluginRoot, "hooks", "copilot-session-start.cjs")], { cwd: crew, encoding: "utf8", env, timeout: 6000 });
     const elapsed = Date.now() - started;
     assert.equal(open.status, 0, open.stderr);
     assert.ok(elapsed < 4000, `copilot hook must stop waiting for stdin; took ${elapsed} ms`);

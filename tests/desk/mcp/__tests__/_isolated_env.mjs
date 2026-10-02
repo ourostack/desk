@@ -54,6 +54,9 @@ for (const [name, dir] of Object.entries(locations)) {
 }
 // os.homedir() reads USERPROFILE on Windows.
 if (process.platform === "win32") process.env.USERPROFILE = home
+// Git for Windows commonly sets autocrlf and safecrlf in its system config.
+// Fixture repositories must not inherit the machine's line-ending or hook policy.
+process.env.GIT_CONFIG_NOSYSTEM = "1"
 
 // Every spelling of each folder: as given, resolved, and (on Windows) with 8.3 short names such as RUNNER~1 expanded, which only the native resolver does.
 const spellings = (target) => [...new Set([target, safeRealpath(target, fs.realpathSync), safeRealpath(target, fs.realpathSync.native)])]

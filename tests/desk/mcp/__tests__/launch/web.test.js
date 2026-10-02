@@ -191,6 +191,18 @@ test("browser locations follow Playwright's chrome and msedge channels on each p
   assert.deepEqual(browser.browserPaths("msedge", "linux", {}), ["/opt/microsoft/msedge/msedge"])
 })
 
+test("Windows browser locations accept the environment's original variable casing", () => {
+  assert.deepEqual(browser.browserPaths("msedge", "win32", {
+    LocalAppData: "C:\\Users\\a\\AppData\\Local",
+    ProgramFiles: "C:\\Program Files",
+    "ProgramFiles(x86)": "C:\\Program Files (x86)",
+  }), [
+    "C:\\Users\\a\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  ])
+})
+
 test("the launcher keeps Playwright's Chrome default, passes Chrome from ~/Applications, falls back to Edge, and never overrides the caller", () => {
   const env = { PROGRAMFILES: "C:\\Program Files" }
   const edgeOnly = (file) => file.endsWith("msedge.exe")
@@ -298,10 +310,23 @@ test("the lock admits one owner and replaces an owner that died or went stale", 
   writeFileSync(lock, JSON.stringify({ pid: Number(dead.stdout) }))
   assert.equal(browser.takeLock(lock, Date.now), true, "its owner exited")
   assert.equal(JSON.parse(readFileSync(lock, "utf8")).pid, process.pid)
-  writeFileSync(lock, JSON.stringify({ pid: 1 }))
-  assert.equal(browser.takeLock(lock, Date.now), false, "pid 1 is alive, even when signalling it is not permitted")
+  writeFileSync(lock, JSON.stringify({ pid: process.pid }))
+  assert.equal(browser.takeLock(lock, Date.now), false, "the recorded owner is still alive")
   assert.equal(browser.takeLock(lock, () => Date.now() + 11 * 60 * 1000), true, "older than ten minutes")
   assert.throws(() => browser.takeLock(path.join(root, "missing", "refresh.lock"), Date.now), /ENOENT/u)
+})
+
+test("the lock keeps an owner whose liveness probe is not permitted", async (t) => {
+  const root = await mkTempRoot("desk-web-lock-permission-")
+  const lock = path.join(root, "refresh.lock")
+  writeFileSync(lock, JSON.stringify({ pid: process.pid }))
+  t.mock.method(process, "kill", (pid, signal) => {
+    assert.equal(pid, process.pid)
+    assert.equal(signal, 0)
+    throw Object.assign(new Error("not permitted"), { code: "EPERM" })
+  })
+  assert.equal(browser.takeLock(lock, Date.now), false)
+  assert.equal(JSON.parse(readFileSync(lock, "utf8")).pid, process.pid)
 })
 
 test("a lock that vanishes while it is replaced is decided by the next create", async () => {
