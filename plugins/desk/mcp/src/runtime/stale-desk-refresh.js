@@ -76,7 +76,7 @@ export function claudeMarketplace({ pluginRoot, name = "desk" }) {
 }
 
 /** `{ host, command, args, done }` for the host's own refresh, or null when none can be derived and the manual step stands. */
-export function refreshPlan({ env = process.env, pluginRoot, agentHost, running, latest, homeDir = os.homedir(), readFile }) {
+export function refreshPlan({ env, pluginRoot, agentHost, running, latest, homeDir, readFile }) {
   if (isAgencySession({ env, pluginRoot })) {
     const spec = deriveAgencySpec({ env, pluginRoot, running, homeDir, readFile })
     return spec === null ? null : { host: "agency", command: "agency", args: ["plugin", "cache", "remove", "-f", spec], done: `refreshed the Agency plugin cache, so a new session will run ${latest}` }
