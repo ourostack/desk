@@ -112,7 +112,7 @@ the agent.
 Resumption paused until the required MCPs are available.
 ```
 
-**why hard-stop, not recommendation**: when an iteration doc declares `required_mcps`, the planning pass already determined the work cannot proceed without those tools. letting the agent continue and discover the missing tool mid-investigation wastes operator time and contaminates the iteration's audit trail with abandoned work. session-start's Step 4.7 is the soft self-healing path (creates the symlink so MCPs auto-load next time); this gate is the hard requirement at the resumption boundary.
+**why hard-stop, not recommendation**: when an iteration doc declares `required_mcps`, the planning pass already determined the work cannot proceed without those tools. letting the agent continue and discover the missing tool mid-investigation wastes operator time and contaminates the iteration's audit trail with abandoned work. session-start's MCP link check is the soft self-healing path (creates the symlink so MCPs auto-load next time); this gate is the hard requirement at the resumption boundary.
 
 if the iteration doc has no `required_mcps:` field, there is nothing to check here — go on and re-enter the phase.
 
