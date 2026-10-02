@@ -12,6 +12,7 @@ import * as path from "node:path"
 import { PassThrough } from "node:stream"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot, pluginRoot, toolPayload } from "./_mcp_handshake.js"
+import { openSession } from "./_mcp_session.js"
 
 const require = createRequire(import.meta.url)
 const browserPath = path.join(mcpRoot, "web.cjs")
@@ -33,6 +34,49 @@ function touch(file, contents = "") {
   return file
 }
 
+// The browser a fake install leaves behind: a stub MCP server. It answers initialize, and answers tools/call with the options it was started with. FAKE_CLI_MODE picks a behavior: list_changed (a tools/list_changed notification, a log notification, noise and an answer to a request nobody made before each answer), rpcerror (answers a call with a JSON-RPC error), crash (exits 3 on a call), slow (never answers a call; logs a cancel to stderr), stubborn (ignores stdin closing), badinit (answers initialize with an error), dieearly (exits 4 a moment after initialize arrives), roots (asks the host for roots before answering initialize).
+const STUB_CLI = `
+const args = process.argv.slice(2)
+const mode = process.env.FAKE_CLI_MODE || "ok"
+let buffered = ""
+function send(message) { process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n") }
+process.stdin.setEncoding("utf8")
+process.stdin.on("data", (chunk) => {
+  buffered += chunk
+  let newline
+  while ((newline = buffered.indexOf("\\n")) >= 0) {
+    const line = buffered.slice(0, newline)
+    buffered = buffered.slice(newline + 1)
+    const message = JSON.parse(line)
+    if (message.method === "initialize") {
+      if (mode === "badinit") { send({ id: message.id, error: { code: -32000, message: "no handshake today" } }); continue }
+      if (mode === "dieearly") { setTimeout(() => process.exit(4), 300); continue }
+      if (mode === "roots") send({ id: 99, method: "roots/list" })
+      send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "Playwright", version: "stub" } } })
+    } else if (message.method === "tools/list") {
+      send({ id: message.id, result: { tools: [{ name: "stub_tool", inputSchema: { type: "object" } }] } })
+    } else if (message.method === "notifications/cancelled") {
+      process.stderr.write("cancelled " + message.params.requestId + "\\n")
+    } else if (message.method === "tools/call") {
+      if (mode === "crash") process.exit(3)
+      if (mode === "rpcerror") { send({ id: message.id, error: { code: -32602, message: "bad arguments" } }); continue }
+      if (mode === "slow") { process.stderr.write("slow call " + message.id + "\\n"); continue }
+      if (mode === "list_changed") {
+        send({ method: "notifications/tools/list_changed" })
+        send({ method: "notifications/message", params: { level: "info", data: "log line" } })
+        process.stdout.write("not json at all\\n42\\n")
+        send({ id: 777, result: {} })
+      }
+      send({ id: message.id, result: { content: [{ type: "text", text: "ran " + message.params.name + " " + JSON.stringify(message.params.arguments) + " " + JSON.stringify(args) }] } })
+    } else if (message.id !== undefined && message.method === undefined) {
+      process.stderr.write("host answered " + message.id + " " + JSON.stringify(message.error) + "\\n")
+    }
+  }
+})
+process.stdin.on("end", () => { if (mode !== "stubborn") process.exit(0) })
+if (mode === "stubborn") setInterval(() => {}, 1000)
+`
+
 // A fake npm: `install` writes a stub @playwright/mcp (and playwright-core) into --prefix, `view` prints a version, `config get registry` prints a registry. FAKE_NPM_MODE picks a failure, FAKE_NPM_VERSION the version, FAKE_NPM_DELAY_MS a pause, and FAKE_NPM_LOG receives one JSON line per call.
 const FAKE_NPM = `
 const fs = require("fs"), path = require("path")
@@ -52,7 +96,7 @@ function main() {
   fs.mkdirSync(pkg, { recursive: true })
   const bin = mode === "stringbin" ? "cli.js" : mode === "nobin" ? {} : { "playwright-mcp": "cli.js" }
   fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "@playwright/mcp", version, bin }))
-  if (mode !== "nocli") fs.writeFileSync(path.join(pkg, "cli.js"), "process.stdout.write('ran ' + process.argv.slice(2).map((a) => '[' + a + ']').join(' ') + '\\\\n')\\n")
+  if (mode !== "nocli") fs.writeFileSync(path.join(pkg, "cli.js"), ${JSON.stringify(STUB_CLI)})
   if (mode !== "nocore") {
     fs.mkdirSync(path.join(modules, "playwright-core"), { recursive: true })
     fs.writeFileSync(path.join(modules, "playwright-core", "package.json"), JSON.stringify({ version: "1.64.0-test" }))
@@ -98,10 +142,10 @@ function npmCalls(log) {
 }
 
 /** Install a stub copy into a state folder, as a finished install would leave it. */
-function preinstall(state, version = "0.0.81", id = "installs/1-1-a") {
+function preinstall(state, version = "0.0.81", id = "installs/1-1-a", cli = "process.stdout.write('ran ' + process.argv.slice(2).map((a) => '[' + a + ']').join(' ') + '\\n')\n") {
   const modules = path.join(state, id, "node_modules")
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version, bin: { "playwright-mcp": "cli.js" } }))
-  touch(path.join(modules, "@playwright", "mcp", "cli.js"), "process.stdout.write('ran ' + process.argv.slice(2).map((a) => '[' + a + ']').join(' ') + '\\n')\n")
+  touch(path.join(modules, "@playwright", "mcp", "cli.js"), cli)
   touch(path.join(state, "current.json"), JSON.stringify({ version, dir: id, previous: null }))
   return path.join(modules, "@playwright", "mcp", "cli.js")
 }
@@ -158,6 +202,53 @@ async function launchDegraded(options, requests = []) {
   input.end()
   await running
   return { errors, exits, responses: read() }
+}
+
+/** Waits until `check()` returns something truthy, or fails after `ms`. */
+async function until(check, what, ms = 15000) {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const found = check()
+    if (found) return found
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+/** A host talking to the launcher in this process over a pair of streams, with the real stub browser behind it (the fake npm installs it). Every option of the launcher can be overridden; `exits` and `kills` record how the launcher ended the process. */
+function host(options) {
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const read = collect(stdout)
+  const errors = []
+  const exits = []
+  const kills = []
+  const signals = new EventEmitter()
+  const running = browser.run({
+    stderr: { write: (text) => errors.push(text) },
+    exit: (code) => exits.push(code),
+    kill: (pid, signal) => kills.push(signal),
+    signals,
+    ...options,
+    stdin,
+    stdout,
+  })
+  const session = {
+    running, errors, exits, kills, signals, stdin, stdout, read,
+    send: (message) => stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`),
+    reply: (id) => until(() => read().find((message) => message.id === id), `the answer to ${id}`),
+    async ask(id, method, params) {
+      session.send({ id, method, params })
+      return session.reply(id)
+    },
+    handshake: async () => {
+      await session.ask(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test-host", version: "1" } })
+      session.send({ method: "notifications/initialized" })
+    },
+    call: (id, name = "browser_navigate", args = { url: "https://example.com" }) => session.ask(id, "tools/call", { name, arguments: args }),
+    close: () => { stdin.end(); return running },
+  }
+  return session
 }
 
 // ---- the package follows its channel ----
@@ -316,30 +407,38 @@ test("a lock that vanishes while it is replaced is decided by the next create", 
 
 // ---- run: the first launch installs, later launches start at once ----
 
-test("the first launch installs the channel in the foreground, names the version and starts it under the chosen Node", posixOnly, async () => {
-  const m = await machine("desk-web-first-", { env: { FAKE_NPM_VERSION: "0.0.90" } })
-  const l = launch({ ...m.options, args: ["--caps", "vision"] })
-  await l.ready
+test("the first launch answers the handshake at once, installs meanwhile, then passes the first call to the installed browser under the chosen Node", posixOnly, async () => {
+  const m = await machine("desk-web-first-", { env: { FAKE_NPM_VERSION: "0.0.90", FAKE_NPM_DELAY_MS: "600" } })
+  const spawns = []
+  const h = host({ ...m.options, args: ["--caps", "vision"], spawn: (file, argv, spawnOptions) => { spawns.push({ file, argv, stdio: spawnOptions.stdio, env: spawnOptions.env }); return spawn(file, argv, spawnOptions) } })
+  const started = Date.now()
+  await h.handshake()
+  const list = await h.ask(2, "tools/list")
+  assert.ok(Date.now() - started < 500, "the handshake and the tool list never wait for the install")
+  assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
+  assert.equal(spawns.length, 0, "the browser has not started while npm installs")
+  const answer = await h.call(3)
+  assert.ok(Date.now() - started >= 500, "the call waited for the install")
+  assert.equal(answer.result.isError, undefined)
   const installed = browser.readInstalled(m.state)
   assert.equal(installed.version, "0.0.90")
-  assert.deepEqual(l.spawns.map(({ file, argv, stdio }) => ({ file, argv, stdio })), [{
+  assert.deepEqual(spawns.map(({ file, argv, stdio }) => ({ file, argv, stdio })), [{
     file: m.install.node,
     argv: [installed.cli, "--headless", "--isolated", "--output-dir", path.join(m.state, "output"), "--caps", "vision"],
-    stdio: "inherit",
+    stdio: ["pipe", "pipe", "pipe"],
   }])
-  assert.equal(l.spawns[0].env.PATH, `${path.dirname(m.install.node)}:/usr/bin`)
-  assert.equal(l.spawns[0].env.npm_config_fetch_retries, undefined, "npm settings stay out of the browser's environment")
-  assert.match(l.errors.join(""), /^\[web\] @playwright\/mcp 0\.0\.90 \(playwright-core 1\.64\.0-test\) from .*installs/u)
+  assert.equal(spawns[0].env.PATH, `${path.dirname(m.install.node)}:/usr/bin`)
+  assert.equal(spawns[0].env.npm_config_fetch_retries, undefined, "npm settings stay out of the browser's environment")
+  assert.match(answer.result.content[0].text, /^ran browser_navigate \{"url":"https:\/\/example\.com"\} \["--headless"/u)
+  assert.match(h.errors.join(""), /^\[web\] @playwright\/mcp 0\.0\.90 \(playwright-core 1\.64\.0-test\) from .*installs/u)
   const [call] = m.calls()
   assert.deepEqual(call.args.slice(0, 1).concat(call.args.slice(-3)), ["install", "--no-save", "--no-package-lock", "@playwright/mcp@latest"])
   assert.equal(call.retries, "0")
   assert.equal(call.timeout, "10000")
   assert.equal(existsSync(path.join(m.state, "refresh.lock")), false, "the lock is released")
-  l.signals.emit("SIGTERM")
-  assert.deepEqual(l.child.killed, ["SIGTERM"])
-  l.child.emit("exit", 0, null)
-  await l.running
-  assert.deepEqual(l.exits, [0])
+  assert.equal(h.read().filter((message) => message.method !== undefined).length, 0, "the host is never told the tool list changed")
+  await h.close()
+  assert.deepEqual(h.exits, [0])
 })
 
 test("a later launch starts the installed copy with no npm call, then starts the refresh", posixOnly, async () => {
@@ -381,10 +480,11 @@ test("an install that npm reports as done but left incomplete is an error, not a
     assert.match(errors.join(""), /serving degraded:install_failed/u)
   }
   const m = await machine("desk-web-stringbin-", { env: { FAKE_NPM_MODE: "stringbin" } })
-  const l = launch(m.options)
-  await l.ready
-  assert.equal(l.spawns.length, 1)
-  l.child.emit("exit", 0, null)
+  const h = host(m.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
+  await h.close()
 })
 
 test("a registry that hangs is cut off at the first-install time limit", posixOnly, async () => {
@@ -414,18 +514,20 @@ test("npm that cannot be spawned, or fails to start, is reported like any other 
   assert.match(errorsK.join(""), /\(spawn ENOENT\)/u)
 })
 
-test("a launch that finds another session installing waits for it, then starts that copy", posixOnly, async () => {
+test("a launch that finds another session installing waits for it, holds the first call, then starts that copy", posixOnly, async () => {
   const refreshes = []
   const m = await machine("desk-web-wait-", { startRefresh: (o) => refreshes.push(o) })
   mkdirSync(m.state, { recursive: true })
   writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
-  setTimeout(() => { preinstall(m.state, "0.0.85"); require("node:fs").unlinkSync(path.join(m.state, "refresh.lock")) }, 300)
-  const l = launch(m.options)
-  await l.ready
-  assert.match(l.errors.join(""), /@playwright\/mcp 0\.0\.85/u)
+  setTimeout(() => { preinstall(m.state, "0.0.85", "installs/1-1-a", STUB_CLI); require("node:fs").unlinkSync(path.join(m.state, "refresh.lock")) }, 300)
+  const h = host(m.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
+  assert.match(h.errors.join(""), /@playwright\/mcp 0\.0\.85/u)
   assert.deepEqual(m.calls(), [])
   assert.equal(refreshes.length, 1)
-  l.child.emit("exit", 0, null)
+  await h.close()
 })
 
 test("a launch gives up when another session's install outlasts the time limit", posixOnly, async () => {
@@ -724,6 +826,283 @@ test("the Claude and Copilot configs declare the web server beside Desk, never a
   assert.deepEqual(copilot["desk-web"], { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"], env: {} })
 })
 
+// ---- the tool catalog never changes under the host ----
+
+test("the inline launcher's degraded tool names, the degraded catalog and the first-use catalog all list the browser's tools in one order", () => {
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
+  const inline = /var names = (\[[^\]]*\]);/u.exec(claude.args[1])
+  assert.ok(inline, "the inline launcher declares its own list of browser tool names")
+  assert.deepEqual(JSON.parse(inline[1].replace(/'/gu, '"')), browser.BROWSER_TOOL_NAMES)
+  const snapshot = JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8")).tools
+  assert.deepEqual(snapshot.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
+  for (const tool of snapshot) {
+    assert.equal(typeof tool.description, "string", tool.name)
+    assert.equal(tool.inputSchema.type, "object", tool.name)
+  }
+})
+
+test("a first launch answers tools/list with the same snapshot every time, and with the degraded list when no usable snapshot exists", posixOnly, async () => {
+  const m = await machine("desk-web-catalog-", { env: { FAKE_NPM_MODE: "fail" } })
+  const h = host(m.options)
+  await h.handshake()
+  const first = await h.ask(2, "tools/list")
+  const second = await h.ask(3, "tools/list")
+  assert.deepEqual(first.result, second.result)
+  assert.deepEqual(first.result.tools, JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8")).tools)
+  assert.ok(first.result.tools.some((tool) => tool.name === "browser_navigate" && tool.inputSchema.properties.url), "real input schemas, not placeholders")
+  await h.close()
+
+  const dir = await mkTempRoot("desk-web-nocatalog-")
+  for (const [name, text] of [["missing.json", null], ["empty.json", JSON.stringify({ tools: [] })], ["junk.json", "not json"]]) {
+    if (text !== null) writeFileSync(path.join(dir, name), text)
+    const n = await machine("desk-web-nocatalog-", { env: { FAKE_NPM_MODE: "fail" }, catalogFile: path.join(dir, name) })
+    const g = host(n.options)
+    await g.handshake()
+    const list = await g.ask(2, "tools/list")
+    assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
+    assert.deepEqual(list.result.tools[0].inputSchema, { type: "object", properties: {}, additionalProperties: true })
+    await g.close()
+  }
+})
+
+test("a host that calls the browser while the install still runs gets the answer, never an error and never a list_changed", posixOnly, async () => {
+  const fixture = await fixturePlugin("desk-web-hostflow-")
+  const session = await openSession({ command: process.execPath, args: [path.join(fixture.plugin, "mcp", "web.cjs")], cwd: fixture.root, env: { ...fixture.env, FAKE_NPM_DELAY_MS: "1500" } })
+  assert.doesNotMatch(session.stderr(), /@playwright\/mcp 0/u, "the install is still running when the host sends the call")
+  const sent = Date.now()
+  const answer = await session.request("tools/call", { name: "browser_navigate", arguments: { url: "https://example.com" } }, { timeout: 30000 })
+  assert.ok(Date.now() - sent > 500, "the call waited for the install")
+  assert.equal(answer.error, undefined)
+  assert.equal(answer.result.isError, undefined)
+  assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
+  assert.deepEqual(session.notifications, [])
+  await session.close()
+})
+
+test("an install that fails answers held and later calls with the code and the fix, and keeps the tool list", posixOnly, async () => {
+  const m = await machine("desk-web-installfail-", { env: { FAKE_NPM_MODE: "fail" } })
+  const h = host(m.options)
+  await h.handshake()
+  const held = await h.call(2)
+  assert.equal(held.result.isError, true)
+  assert.equal(toolPayload(held).state, "degraded:install_failed")
+  assert.match(toolPayload(held).fix, /reconnect the desk-web MCP server/u)
+  const later = await h.call(3)
+  assert.equal(toolPayload(later).code, "install_failed")
+  assert.equal((await h.ask(4, "tools/list")).result.tools.length, browser.BROWSER_TOOL_NAMES.length)
+  await h.close()
+})
+
+test("a call that waits longer than the hold limit is answered with a retry hint, and the next call gets the browser the install finished", posixOnly, async () => {
+  const m = await machine("desk-web-holdlimit-", { env: { FAKE_NPM_DELAY_MS: "1200" }, holdMs: 100 })
+  const h = host(m.options)
+  await h.handshake()
+  const early = await h.call(2)
+  assert.equal(toolPayload(early).code, "browser_not_ready")
+  assert.equal(early.result.isError, true)
+  assert.match(toolPayload(early).fix, /again in a minute/u)
+  await until(() => /@playwright\/mcp 0/u.test(h.errors.join("")), "the install to finish")
+  assert.match((await h.call(3)).result.content[0].text, /^ran browser_navigate/u)
+  await h.close()
+})
+
+test("the first-use server answers the protocol itself: ping, initialize with and without a version, unknown methods, bad lines", posixOnly, async () => {
+  const m = await machine("desk-web-protocol-", { env: { FAKE_NPM_MODE: "fail" } })
+  const h = host(m.options)
+  const init = await h.ask(1, "initialize", { protocolVersion: "2025-03-26" })
+  assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } })
+  assert.equal(init.result.protocolVersion, "2025-03-26")
+  assert.equal((await h.ask(2, "initialize")).result.protocolVersion, "2025-06-18")
+  assert.deepEqual((await h.ask(3, "ping")).result, {})
+  assert.equal((await h.ask(4, "prompts/list")).error.code, -32601)
+  h.stdin.write("\n   \nnot json\n[1]\nnull\n7\n")
+  await until(() => h.read().filter((message) => message.id === null).length === 4, "four error answers")
+  assert.deepEqual(h.read().filter((message) => message.id === null).map((message) => message.error.code), [-32700, -32600, -32600, -32600])
+  h.send({ method: "notifications/unknown" })
+  h.send({ method: "notifications/cancelled", params: { requestId: "nothing" } })
+  assert.equal((await h.ask(5, "ping")).id, 5)
+  // A request whose params are not a call still reaches the held-call path with a name.
+  await h.close()
+})
+
+test("a held call can be cancelled by the host: it is dropped and never answered", posixOnly, async () => {
+  const m = await machine("desk-web-cancelheld-", { env: { FAKE_NPM_MODE: "fail", FAKE_NPM_DELAY_MS: "300" } })
+  const h = host(m.options)
+  await h.handshake()
+  h.send({ id: 7, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  h.send({ method: "notifications/cancelled", params: { requestId: 7 } })
+  h.send({ id: 8, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  assert.equal(toolPayload(await h.reply(8)).code, "install_failed")
+  assert.equal(h.read().some((message) => message.id === 7), false)
+  await h.close()
+})
+
+test("a running call can be cancelled: the browser hears the cancel under its own request id", posixOnly, async () => {
+  const m = await machine("desk-web-cancelrun-", { env: { FAKE_CLI_MODE: "slow" } })
+  const h = host(m.options)
+  await h.handshake()
+  h.send({ id: 9, method: "tools/call", params: { name: "browser_wait_for", arguments: {} } })
+  await until(() => /slow call 1/u.test(h.errors.join("")), "the browser to take the call")
+  h.send({ method: "notifications/cancelled", params: { requestId: 9, reason: "user" } })
+  h.send({ method: "notifications/cancelled", params: { requestId: 123 } })
+  await until(() => /cancelled 1/u.test(h.errors.join("")), "the browser to hear the cancel")
+  await h.close()
+})
+
+test("the browser's own notices pass through, but its tools/list_changed never reaches the host and its requests are refused", posixOnly, async () => {
+  const m = await machine("desk-web-notices-", { env: { FAKE_CLI_MODE: "list_changed" } })
+  const h = host(m.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.equal(answer.result.isError, undefined)
+  const notices = h.read().filter((message) => message.id === undefined)
+  assert.deepEqual(notices.map((message) => message.method), ["notifications/message"])
+  assert.equal(notices[0].params.data, "log line")
+  await h.close()
+
+  const n = await machine("desk-web-roots-", { env: { FAKE_CLI_MODE: "roots" } })
+  const g = host(n.options)
+  await g.handshake()
+  await g.call(2)
+  await until(() => /host answered 99 .*Method not found: roots\/list/u.test(g.errors.join("")), "the refusal of the browser's request")
+  await g.close()
+})
+
+test("an error the browser gives for a call reaches the host unchanged", posixOnly, async () => {
+  const m = await machine("desk-web-rpcerror-", { env: { FAKE_CLI_MODE: "rpcerror" } })
+  const h = host(m.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.deepEqual(answer.error, { code: -32602, message: "bad arguments" })
+  await h.close()
+})
+
+test("a browser that ends during a call answers it with the reason, then ends the launcher with the same exit code or signal", posixOnly, async () => {
+  const m = await machine("desk-web-crash-", { env: { FAKE_CLI_MODE: "crash" } })
+  const h = host(m.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.equal(toolPayload(answer).code, "browser_exited")
+  assert.match(toolPayload(answer).summary, /exit code 3/u)
+  await h.running
+  assert.deepEqual(h.exits, [3])
+
+  const n = await machine("desk-web-sig-", {})
+  const children = []
+  const g = host({ ...n.options, spawn: (...argv) => { const child = spawn(...argv); children.push(child); return child } })
+  await g.handshake()
+  await g.call(2)
+  g.signals.emit("SIGTERM")
+  await g.running
+  assert.deepEqual(g.kills, ["SIGTERM"])
+  assert.deepEqual(g.exits, [])
+})
+
+test("a browser that cannot start answers calls with the reason instead of failing the server", posixOnly, async () => {
+  const missing = await machine("desk-web-nostart-", { spawn: () => { throw new Error("spawn EAGAIN") } })
+  const h = host(missing.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.equal(toolPayload(answer).code, "node_spawn_failed")
+  assert.match(toolPayload(answer).summary, /spawn EAGAIN/u)
+  assert.equal(toolPayload(await h.call(3)).code, "node_spawn_failed")
+  await h.close()
+
+  const gone = await machine("desk-web-enoent-", { spawn: (file, argv, options) => spawn(path.join(path.dirname(file), "no-such-node"), argv, options) })
+  const g = host(gone.options)
+  await g.handshake()
+  assert.equal(toolPayload(await g.call(2)).code, "node_spawn_failed")
+  await g.close()
+
+  const refused = await machine("desk-web-badinit-", { env: { FAKE_CLI_MODE: "badinit" } })
+  const r = host(refused.options)
+  await r.handshake()
+  const refusal = await r.call(2)
+  assert.equal(toolPayload(refusal).code, "node_spawn_failed")
+  assert.match(toolPayload(refusal).summary, /no handshake today/u)
+  await r.close()
+})
+
+test("an error on a running browser is noted on stderr and does not fail its calls", posixOnly, async () => {
+  const m = await machine("desk-web-childerror-")
+  const children = []
+  const h = host({ ...m.options, spawn: (...argv) => { const child = spawn(...argv); children.push(child); return child } })
+  await h.handshake()
+  await h.call(2)
+  children[0].emit("error", new Error("kill failed"))
+  assert.match(h.errors.join(""), /\[web\] kill failed/u)
+  assert.equal((await h.call(3)).result.isError, undefined)
+  await h.close()
+})
+
+test("a host that goes away before the install finishes starts no browser, and one that goes away later stops it, by force if it ignores that", posixOnly, async () => {
+  const m = await machine("desk-web-hostgone-", { env: { FAKE_NPM_DELAY_MS: "300" } })
+  const spawns = []
+  const early = host({ ...m.options, spawn: (...argv) => { spawns.push(argv); return spawn(...argv) } })
+  await early.handshake()
+  early.send({ id: 5, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await early.close()
+  assert.equal(spawns.length, 0)
+  assert.equal(browser.readInstalled(m.state).version, "0.0.82", "the install still finishes, so the next launch has its browser")
+
+  const failed = await machine("desk-web-hostgone-fail-", { env: { FAKE_NPM_MODE: "fail" } })
+  const gone = host(failed.options)
+  gone.stdin.end()
+  await gone.running
+
+  const stubborn = await machine("desk-web-stubborn-", { env: { FAKE_CLI_MODE: "stubborn" }, closeMs: 100 })
+  const h = host(stubborn.options)
+  await h.handshake()
+  await h.call(2)
+  await h.close()
+  assert.deepEqual(h.kills, ["SIGTERM"], "the browser was ended by signal because it ignored its closed stdin")
+})
+
+/** A child that never started: no pid, and streams a launcher can write to. */
+function unstartedChild() {
+  const child = fakeChild()
+  child.stdin = new PassThrough()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  return child
+}
+
+test("a browser that fails while the host is already gone ends the launcher quietly", posixOnly, async () => {
+  const early = await machine("desk-web-gonedie-", { env: { FAKE_CLI_MODE: "dieearly" } })
+  const spawned = []
+  const h = host({ ...early.options, spawn: (...argv) => { const child = spawn(...argv); spawned.push(child); return child } })
+  await h.handshake()
+  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await until(() => spawned.length > 0, "the browser to start")
+  h.stdin.end()
+  await h.running
+  assert.equal(toolPayload(await h.reply(2)).code, "browser_exited")
+
+  const noExit = await machine("desk-web-gonenoexit-")
+  const fake = unstartedChild()
+  const g = host({ ...noExit.options, spawn: () => fake })
+  await g.handshake()
+  g.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await until(() => fake.stdin.readableLength > 0, "the handshake to reach the browser")
+  g.stdin.end()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  fake.stdin.emit("error", new Error("EPIPE"))
+  fake.emit("exit", 4, null)
+  await g.running
+
+  const noStart = await machine("desk-web-gonenostart-")
+  const never = unstartedChild()
+  const k = host({ ...noStart.options, spawn: () => never })
+  await k.handshake()
+  k.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await until(() => never.stdin.readableLength > 0, "the handshake to reach the browser")
+  k.stdin.end()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  never.emit("error", new Error("spawn ENOENT"))
+  await k.running
+  assert.equal(toolPayload(await k.reply(2)).code, "node_spawn_failed")
+})
+
 // ---- spawned: the real entry points against a fixture plugin ----
 
 /** A fixture plugin with the real launcher files, whose only compatible Node is a wrapper that answers the version probe and otherwise runs this Node, with the fake npm beside it. */
@@ -732,7 +1111,7 @@ async function fixturePlugin(prefix) {
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  copyFileSync(path.join(mcpRoot, "bootstrap.cjs"), path.join(plugin, "mcp", "bootstrap.cjs"))
+  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
   writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
   const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")
@@ -749,14 +1128,28 @@ async function fixturePlugin(prefix) {
   return { root, plugin, state, log, env }
 }
 
-test("the Claude inline launcher finds the plugin through DESK_PLUGIN_ROOT or the working directory", posixOnly, async () => {
+/** Drive a spawned launcher the way a host does (initialize, initialized, tools/list) and send the first browser call at once, while the install is still running. */
+async function firstCall({ command = process.execPath, args, env, cwd }) {
+  const session = await openSession({ command, args, env, cwd })
+  const first = await session.request("tools/call", { name: "browser_navigate", arguments: { url: "https://example.com" } }, { timeout: 8000 }).catch((error) => { throw new Error(error.message + "\n" + session.stderr()) })
+  return { session, first }
+}
+
+test("the Claude inline launcher finds the plugin through DESK_PLUGIN_ROOT or the working directory, and the first call after a slow install succeeds", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-claude-")
   const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
-  const viaEnv = spawnSync(process.execPath, claude.args, { cwd: fixture.root, encoding: "utf8", env: { ...fixture.env, DESK_PLUGIN_ROOT: fixture.plugin } })
-  assert.match(viaEnv.stdout, /^ran \[--headless\] \[--isolated\]( \[--browser\] \[msedge\]| \[--executable-path\] \[[^\]]+\])? \[--output-dir\] \[[^\]]+state\/output\]\n$/u, viaEnv.stderr)
-  assert.match(viaEnv.stderr, /\[web\] @playwright\/mcp 0\.0\.82 \(playwright-core 1\.64\.0-test\) from /u)
-  const viaCwd = spawnSync(process.execPath, claude.args, { cwd: fixture.plugin, encoding: "utf8", env: { ...fixture.env, DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" } })
-  assert.match(viaCwd.stdout, /^ran \[--headless\] \[--isolated\]/u, viaCwd.stderr)
+  const { session, first } = await firstCall({ args: claude.args, cwd: fixture.root, env: { ...fixture.env, DESK_PLUGIN_ROOT: fixture.plugin, FAKE_NPM_DELAY_MS: "1500" } })
+  assert.ok(session.handshakeMs < 1200, `the handshake took ${session.handshakeMs} ms, so it waited for the install`)
+  assert.equal(first.error, undefined)
+  assert.equal(first.result.isError, undefined)
+  assert.match(first.result.content[0].text, /^ran browser_navigate \{"url":"https:\/\/example\.com"\} \["--headless","--isolated"(,"--browser","msedge"|,"--executable-path","[^"]+")?,"--output-dir","[^"]+state\/output"\]$/u)
+  assert.deepEqual(session.notifications, [], "the host never hears that the tool list changed")
+  assert.deepEqual((await session.request("tools/list")).result.tools, session.tools.result.tools, "the tool list is the same after the browser took over")
+  assert.match(session.stderr(), /\[web\] @playwright\/mcp 0\.0\.82 \(playwright-core 1\.64\.0-test\) from /u)
+  await session.close()
+  const viaCwd = await openSession({ command: process.execPath, args: claude.args, cwd: fixture.plugin, env: { ...fixture.env, DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" } })
+  assert.match((await viaCwd.request("tools/call", { name: "browser_snapshot", arguments: {} })).result.content[0].text, /^ran browser_snapshot/u)
+  await viaCwd.close()
 })
 
 test("the Claude inline launcher still completes a handshake on this Node when it cannot find the plugin", async () => {
@@ -790,28 +1183,29 @@ test("the Claude inline launcher still completes a handshake on this Node when i
   assert.equal(bare.result.protocolVersion, "2025-06-18")
 })
 
-test("the Copilot entry point runs the launcher with its own arguments", posixOnly, async () => {
+test("the Copilot entry point runs the launcher with its own arguments, and its first call waits for the install instead of failing", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-copilot-")
-  const result = spawnSync(process.execPath, [path.join(fixture.plugin, "mcp", "web.cjs"), "--caps", "pdf"], { cwd: fixture.root, encoding: "utf8", env: fixture.env })
-  assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /^ran \[--headless\] \[--isolated\].*\[--output-dir\] \[[^\]]+\] \[--caps\] \[pdf\]\n$/u)
+  const { session, first } = await firstCall({ args: [path.join(fixture.plugin, "mcp", "web.cjs"), "--caps", "pdf"], cwd: fixture.root, env: { ...fixture.env, FAKE_NPM_DELAY_MS: "1200" } })
+  assert.equal(first.result.isError, undefined)
+  assert.match(first.result.content[0].text, /--output-dir","[^"]+","--caps","pdf"\]$/u)
+  assert.deepEqual(session.notifications, [])
+  assert.deepEqual(session.tools.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
+  await session.close()
+  // With the copy installed, the next launch lets the browser answer the handshake itself.
+  const later = await openSession({ command: process.execPath, args: [path.join(fixture.plugin, "mcp", "web.cjs")], cwd: fixture.root, env: fixture.env })
+  assert.equal(later.initialize.result.serverInfo.name, "Playwright")
+  await later.close()
 })
 
-test("sessions that start together install once and every one gets its browser", posixOnly, async () => {
+test("sessions that start together install once and every one gets its first call answered", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-concurrent-")
   const env = { ...fixture.env, FAKE_NPM_DELAY_MS: "400" }
-  const runs = await Promise.all(Array.from({ length: 5 }, () => new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(fixture.plugin, "mcp", "web.cjs")], { cwd: fixture.root, env })
-    let stdout = ""
-    let stderr = ""
-    child.stdout.on("data", (chunk) => { stdout += chunk })
-    child.stderr.on("data", (chunk) => { stderr += chunk })
-    child.on("close", (code) => resolve({ code, stdout, stderr }))
-  })))
-  for (const run of runs) {
-    assert.equal(run.code, 0, run.stderr)
-    assert.match(run.stdout, /^ran \[--headless\]/u)
-  }
+  const runs = await Promise.all(Array.from({ length: 5 }, async () => {
+    const { session, first } = await firstCall({ args: [path.join(fixture.plugin, "mcp", "web.cjs")], cwd: fixture.root, env })
+    await session.close()
+    return first
+  }))
+  for (const answer of runs) assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
   assert.equal(npmCalls(fixture.log).filter((call) => call.args[0] === "install").length, 1)
   assert.equal(readdirSync(path.join(fixture.state, "installs")).length, 1)
 })
