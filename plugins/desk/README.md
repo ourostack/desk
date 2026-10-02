@@ -146,6 +146,7 @@ Run `node -e 'import("<desk plugin>/mcp/src/desk/card-commit-guard.js").then(m=>
 | Guard | Claude Code | Copilot CLI | Codex |
 | --- | --- | --- | --- |
 | protected-checkout (shell) | `PreToolUse` | `preToolUse` | not wired |
+| process-kill guard (`pkill`, `pgrep` or `killall` with an option after the first pattern or a short or generic pattern, `kill` of a process group, `Stop-Process -Name` or `taskkill /IM` of a common name; the 2026-10-02 BSD option-trap incident) | `PreToolUse` on `Bash` and `PowerShell` | `preToolUse` | not wired |
 | card guard (direct `Write`/`Edit`/`apply_patch` of a live card, shell card writes) | `PreToolUse` | `preToolUse`: `create`, `edit`, `apply_patch`, `bash`, `powershell` mapped onto the same logic | not wired |
 | done-claim gate | `Stop` | `agentStop` (reply read from the session transcript) | not wired |
 | ask gate | `PreToolUse`, only when `CLAUDE_CODE_SESSION_ATTENDED=0` | not possible: Copilot hooks carry no attended-or-not signal | not wired |
