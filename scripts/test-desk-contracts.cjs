@@ -1047,7 +1047,7 @@ contract("boot prints the bound desk's AGENTS.md, and no step orders a read of i
   const source = text(bootSource);
   assert.doesNotMatch(source, /Read \$\{path\.join\(root\.path, "AGENTS\.md"\)\} now/u, "boot no longer orders a read of AGENTS.md");
   assert.doesNotMatch(source, /Confirm this session can call the Desk MCP/u);
-  assert.match(source, /out\.push\(deferredToolsHint\(agentHost\)\)/u);
+  assert.match(source, /add\(deferredToolsHint\(agentHost\)\)/u);
   const text9 = text("plugins/desk/mcp/src/runtime/boot-text.js");
   assert.match(text9, /AGENTS_MD_CAP_BYTES = 16 \* 1024/u);
   assert.match(text9, /read the rest at/u);

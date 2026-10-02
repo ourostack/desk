@@ -77,7 +77,7 @@ import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
+import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
@@ -897,7 +897,7 @@ function pushLines(pushAccounts, namedTask) {
   }
   const lines = [...groups.values()].map(({ entry, locations }) => pushInstruction(entry, taskList(locations)))
   if (lines.length <= PUSH_LINE_CAP) return lines
-  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: read the Push routes section of this output (the \`push_accounts\` field with \`--json\`) before pushing anywhere.`]
+  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: read each task's \`push:\` line in the plain-text boot (the \`push_accounts\` field with \`--json\`) before pushing anywhere.`]
 }
 
 // What to do about a recorded local clone that is not on this machine: the exact clone command when the card carries
@@ -921,48 +921,80 @@ function remoteRepoInstruction(names, root) {
   return `The named task's remote-only repos (no local clone): ${names.join(", ")}. Do not clone any of them unless the next step needs its code. If it does, clone into the operator's code location (\`defaults.clone_root\` in ${root.path}/.machine-local.yml, default ~/code/), never /tmp, and record the clone on the card with task_update (the repo's \`local_path\`, with \`mode: local\`).`
 }
 
-function buildInstructions(ctx) {
+// The factory consent line the plain-text boot prints in place of the three long instructions `--json` keeps: one short
+// line, after the work, with the pointer to the script that runs only if the operator says yes.
+function factoryTextLine(factory, pluginRoot) {
+  const store = factory.store
+  const details = path.join(pluginRoot, "skills", "session-start", "details.md")
+  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, end your reply with one line: "Desk can contribute measurement data about your finished tasks to ${store}; want the details?" Ask nothing else and ask once. If they say yes, follow "Factory consent" in ${details}.`
+}
+
+// The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot
+// prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all.
+function buildInstructionItems(ctx) {
   const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
   const out = []
+  const add = (text, plain = text) => out.push({ text, plain })
   for (const entry of migrationEntries) {
-    out.push(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
+    add(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
   }
-  out.push(`Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`)
+  add(
+    `Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`,
+    `Use ${root.path} as the desk path in every command and tool call; where a Desk skill says \`$DESK\`, it means this path.`,
+  )
   for (const [name, check] of Object.entries(prereqResults)) {
     if (check.ok || check.reason.endsWith("_timeout")) continue
-    out.push(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
+    add(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
   }
   const syncLine = syncInstruction(sync, root)
-  if (syncLine !== null) out.push(syncLine)
-  if (sync?.state === "quarantined") out.push(`Sync moved stray untracked paths to _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.`)
+  if (syncLine !== null) add(syncLine)
+  if (sync?.state === "quarantined") add(`Sync moved stray untracked paths to _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.`)
   for (const entry of cardValidationResult) {
-    out.push(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
+    add(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
   }
-  // The named task's repos when the operator named one, every active task's otherwise.
+  // The named task's repos when the operator named one, every active task's otherwise. The text boot prints each push
+  // route on its task instead, so these are `--json`-only.
   const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
-  out.push(...pushLines(pushAccounts, namedTask))
-  out.push(deferredToolsHint(agentHost))
+  for (const line of pushLines(pushAccounts, namedTask)) add(line, null)
+  add(deferredToolsHint(agentHost))
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
-      out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
+      add(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
       for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
-        out.push(missingCloneInstruction(missing))
+        add(missingCloneInstruction(missing))
       }
-      if (task.task.remote_repos.length > 0) out.push(remoteRepoInstruction(task.task.remote_repos, root))
-      if (task.host_line_changed) out.push(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
+      if (task.task.remote_repos.length > 0) add(remoteRepoInstruction(task.task.remote_repos, root))
+      if (task.host_line_changed) add(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
     } else if (task?.status === "ambiguous") {
-      out.push(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
+      add(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
     } else {
-      out.push(UNMATCHED_TASK_INSTRUCTION)
+      add(UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT)
     }
   } else {
-    out.push(NO_TASK_INSTRUCTION)
+    add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
   }
-  out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
-  out.push("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.")
-  out.push("When you report on a task, say its real status; say 'done' only for a task whose status is done.")
-  out.push(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`)
+  const consent = factoryInstructions(factory, pluginRoot, { noninteractive })
+  consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
+  add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.", null)
+  add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
+  add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
   return out
+}
+
+function buildInstructions(ctx) {
+  return buildInstructionItems(ctx).map((item) => item.text)
+}
+
+// The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
+const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
+
+// The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
+// factory line, so the factory question never comes before the work.
+function buildTextInstructions(ctx) {
+  const plain = buildInstructionItems(ctx).map((item) => item.plain).filter((line) => line !== null)
+  const factoryAt = plain.findIndex((line) => line.startsWith("Factory consent is undecided"))
+  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, CLOSING_RULES)
+  return plain
 }
 
 function withinBudget(promise, ms, timeoutValue) {
@@ -1192,7 +1224,8 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList }
+  const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
     status,
@@ -1216,6 +1249,8 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
+    text_instructions: buildTextInstructions(instructionContext),
   }
 }
 
@@ -1257,7 +1292,8 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
     const started = prepared.state === "ready"
     result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started ? startedLine(finding, prepared.plan) : finding.line } }
   }
-  io.stdout.write(json ? `${JSON.stringify(result)}\n` : formatBootText(result))
+  const { text_instructions: _textOnly, ...structured } = result
+  io.stdout.write(json ? `${JSON.stringify(structured)}\n` : formatBootText(result))
   if (prepared.state === "ready") startStaleRefresh({ ...options, prepared })
   return 0
 }

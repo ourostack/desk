@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
-import { AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint, deferredToolsLoadHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 
@@ -191,7 +191,7 @@ test("repoStates marks a clone with no remote at all as local-only, and nothing 
 function sampleResult(extra = {}) {
   return {
     status: "degraded",
-    degraded: ["sync: unresolved (unreachable)"],
+    degraded: ["sync: unresolved (unreachable)", "card: bad"],
     pending: ["repo state for r: boot_budget_exceeded"],
     instructions: ["First thing.", "Second thing."],
     root: { path: "/work/desk", source: "env" },
@@ -199,7 +199,7 @@ function sampleResult(extra = {}) {
     push_accounts: [
       { track: "ops", slug: "flash-valves", repo: "valves", store: "acme/valves", result: "account_found", account: "ari", route: "direct" },
       { track: "ops", slug: "other-task", repo: "valves", store: "acme/valves", result: "account_found", account: "ari", route: "direct" },
-      { desk: "crew", track: "t", slug: "s", repo: "forked", store: "acme/forked", result: "account_found", account: "me", route: "fork" },
+      { desk: "crew", track: "<redacted segment>", slug: "<redacted segment>", repo: "forked", store: "acme/forked", result: "account_found", account: "me", route: "fork" },
       { track: "ops", slug: "flash-valves", repo: "valves-again", store: "acme/valves", result: "account_found", account: "ari", route: "direct" },
       { track: "ops", slug: "flash-valves", repo: "plain", store: "acme/plain", result: "account_found", account: "ari" },
       { track: "ops", slug: "flash-valves", repo: "x", store: "acme/x", result: "no_account_can_deliver" },
@@ -229,25 +229,24 @@ function sampleResult(extra = {}) {
   }
 }
 
-test("formatBootText leads with the status and the numbered instructions, then the data and the desk's AGENTS.md", () => {
+test("formatBootText leads with the work: one status line, then the tasks by state, then the instructions and the desk's AGENTS.md", () => {
   const text = formatBootText(sampleResult())
-  const order = ["Desk boot: degraded", "- degraded: sync: unresolved (unreachable)", "- pending (not finished in time, carry it): repo state", "Desk: /work/desk (bound by env)", "Host: mac / ari / claude", "Instructions, in order:", "1. First thing.", "2. Second thing.", "sync failed: remote unreachable", "Active tasks (2):", "Open pull requests:", "Repos of open tasks:", "Push routes:", "## The desk's AGENTS.md (/work/desk/AGENTS.md)"]
+  const order = ["Desk boot: degraded | desk /work/desk (bound by env) | host mac / ari / claude | Desk could not sync: remote unreachable; local state shown", "- pending (not finished in time, carry it): repo state", "Active tasks (2):", "Open pull requests:", "Repos of open tasks:", "Instructions, in order:", "1. First thing.", "2. Second thing.", "## The desk's AGENTS.md (/work/desk/AGENTS.md)"]
   let at = -1
   for (const piece of order) {
     const next = text.indexOf(piece)
     assert.ok(next > at, `${piece} comes after the previous section`)
     at = next
   }
-  assert.match(text, /- ops\/flash-valves "Flash valves": processing, updated 2026-09-28\n  next: Wire the relay, then run the suite\.\n/u)
-  assert.match(text, /- acme\/valves: push as ari \(route direct\) \(ops\/flash-valves, ops\/other-task\)\n/u)
-  assert.match(text, /- acme\/plain: push as ari \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- acme\/forked: push as me via fork me\/forked \(crew\/t\/s\)\n/u)
-  assert.match(text, /- acme\/x: no signed-in account can push \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- local: no GitHub remote, so no push route to check \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- acme\/slow: not checked \(pending: boot_budget_exceeded\) \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- acme\/odd: not checked \(gh_failed\) \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- ops\/same: no status\n  next: no next step recorded\n/u)
-  assert.match(text, /- crew\/<redacted segment>\/<redacted segment>: drafting \(handle task-3\)\n/u)
+  assert.doesNotMatch(text, /- degraded: sync: /u, "the status line already says why the sync failed")
+  assert.match(text, /- degraded: card: bad\n/u)
+  assert.doesNotMatch(text, /Push routes:|Desk: \/work\/desk|\nHost: /u, "the push routes sit on their tasks, and desk and host are on the status line")
+  assert.match(text, /\nprocessing \(1\)\n- ops\/flash-valves "Flash valves" \(updated 2026-09-28\)\n  next: Wire the relay, then run the suite\.\n  push: acme\/valves: push as ari \(route direct\)\.\n  push: acme\/plain: push as ari\.\n  push: acme\/x: no signed-in account can push\. Do not push; ask the operator which account to use, or fork\.\n  push: acme\/slow: push route not checked in time/u)
+  assert.match(text, /  push: acme\/odd: push access could not be checked \(gh_failed\); verify with `gh auth status` before pushing\.\n/u)
+  assert.doesNotMatch(text, /no GitHub remote/u, "a repo with no GitHub remote has no route to print")
+  assert.equal(text.split("push: acme/valves: push as ari").length, 2, "a store's route is printed once per task")
+  assert.match(text, /\nno status \(1\)\n- ops\/same\n  next: no next step recorded\n/u)
+  assert.match(text, /\ndrafting \(1\)\n- crew\/<redacted segment>\/<redacted segment> \(handle task-3\)\n  next: no next step recorded\n  push: acme\/forked: push as me via fork me\/forked\. Push your branch to the fork and open the pull request from it; never push to acme\/forked itself\.\n/u)
   assert.match(text, /- acme\/w#4 Fix it \(draft\), REVIEW_REQUIRED: https:\/\/github\.com\/acme\/w\/pull\/4\n/u)
   assert.match(text, /- acme\/w#5 Plain: /u)
   assert.match(text, /- valves \(ops\/flash-valves\): branch main, uncommitted changes, fetched\n/u)
@@ -260,15 +259,36 @@ test("formatBootText leads with the status and the numbered instructions, then t
   assert.doesNotMatch(text, /Cut at/u)
 })
 
+test("syncWords says the sync in plain words and passes any other wording through", () => {
+  assert.equal(syncWords("sync ok"), "Desk synced with origin")
+  assert.equal(syncWords("sync ok: moved 2 stray untracked paths to /d/_cache/stray-x/ first, then pulled"), "Desk synced with origin (moved 2 stray untracked paths to /d/_cache/stray-x/ first)")
+  assert.equal(syncWords("sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of unknown"), "Desk could not sync: remote unreachable; local state shown")
+  assert.equal(syncWords("sync failed: git timed out; nothing was pulled or pushed; local desk is as of 2026-09-30T10:00:00.000Z (1 stray untracked path had been moved to /d/_cache/stray-d/ first)"), "Desk could not sync: git timed out; local state shown, as of 2026-09-30T10:00:00.000Z (1 stray untracked path had been moved to /d/_cache/stray-d/ first)")
+  assert.equal(syncWords("no remote; nothing to sync"), "Desk has no remote; nothing to sync")
+  assert.equal(syncWords("no upstream branch; nothing to sync"), "Desk has no upstream branch; nothing to sync")
+  assert.equal(syncWords("sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in (conflicted: a.md); nothing was pushed; resolve them before changing the desk"), "Desk pulled from origin, but the desk's uncommitted local changes conflict with what came in (conflicted: a.md); nothing was pushed; resolve them before changing the desk")
+  assert.equal(syncWords("something else"), "something else")
+  assert.equal(syncWords(null), null)
+  assert.equal(syncWords(""), null)
+})
+
+test("blocked tasks sit under their own marked heading, ahead of the other states, and every state is a heading", () => {
+  const text = formatBootText({ status: "ready", active_tasks: { task_count: 3, tracks: [{ track: "ops", tasks: [
+    { slug: "a", title: "a", status: "processing", updated: "2026-09-28T00:00:00Z", next_step: "go" },
+    { slug: "b", title: "b", status: "blocked", updated: "2026-09-01T00:00:00Z", blocker: "the key" },
+    { slug: "c", title: "c", status: "drafting", updated: "2026-09-27T00:00:00Z" },
+  ] }] } })
+  assert.match(text, /Active tasks \(3\):\n\nBLOCKED \(1\): these cannot move until the blocker clears\n- ops\/b \(updated 2026-09-01\)\n  blocker: the key\n\nprocessing \(1\)\n- ops\/a \(updated 2026-09-28\)\n  next: go\n\ndrafting \(1\)\n- ops\/c \(updated 2026-09-27\)\n  next: no next step recorded\n/u)
+})
+
 test("formatBootText marks a cut AGENTS.md with the path to the rest, and skips what it does not have", () => {
   const cut = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "start\n-----\nmiddle", truncated: true, bytes: 30000, shownBytes: 20 } }))
   assert.match(cut, /\[Cut after 20 of 30000 bytes \(limit 16 KB\): read the rest at \/work\/desk\/AGENTS\.md\]\n$/u)
   assert.match(cut, /start\n-----\nmiddle\n\n\[Cut/u, "a rule line inside the file is just text")
   const bare = formatBootText({ status: "ready" })
-  assert.equal(bare, "Desk boot: ready\n\nInstructions, in order:\n\nActive tasks: unavailable (see degraded)\n")
+  assert.equal(bare, "Desk boot: ready\n\nActive tasks: unavailable (see degraded)\n")
   const empty = formatBootText({ status: "ready", active_tasks: { task_count: 0, tracks: [] }, root: { path: "/d" }, host: {} })
-  assert.match(empty, /Desk: \/d\n/u)
-  assert.match(empty, /Host: unknown \/ unknown \/ unknown\n/u)
+  assert.match(empty, /^Desk boot: ready \| desk \/d \| host unknown \/ unknown \/ unknown\n/u)
   assert.match(empty, /Active tasks \(0\):\n- none\n/u)
 })
 
@@ -290,12 +310,14 @@ test("runBootCli prints readable text by default and the one-line JSON with --js
     return written
   }
   const text = await run([])
-  assert.match(text, /^Desk boot: ready\n/u)
-  assert.match(text, /Instructions, in order:\n1\. Use the absolute path /u)
+  assert.match(text, /^Desk boot: ready \| desk /u)
+  assert.match(text, /Instructions, in order:\n1\. Use \S+ as the desk path in every command/u)
   assert.match(text, /Be brief\./u)
   assert.throws(() => JSON.parse(text))
   const json = JSON.parse(await run(["--json"]))
   assert.equal(json.status, "ready")
+  assert.equal(Object.hasOwn(json, "text_instructions"), false, "the text-only wording stays out of --json")
+  assert.ok(Array.isArray(json.instructions))
   assert.equal(json.agents_md.text, "Be brief.\n")
   const failing = []
   await runBootCli({ env: {}, io: { stdout: { write: (text) => failing.push(text) } }, bootFn: async () => { throw new Error("kaput") } })
@@ -307,7 +329,7 @@ test("the shipped script prints text by default and JSON with --json", async () 
   const home = await mkTempRoot("desk-boot-text-home-")
   const env = { ...process.env, HOME: home, DESK: "", CLAUDE_PROJECT_DIR: "", DESK_ACTIVATION_CONFIG: "", CODEX_HOME: "", CLAUDE_PLUGIN_DATA: "" }
   const text = execFileSync(process.execPath, [script], { encoding: "utf8", cwd: home, env })
-  assert.match(text, /^Desk boot: setup_required\n/u)
+  assert.match(text, /^Desk boot: setup_required\b/u)
   assert.match(text, /1\. No desk is bound on this host/u)
   assert.equal(JSON.parse(execFileSync(process.execPath, [script, "--json"], { encoding: "utf8", cwd: home, env })).status, "setup_required")
 })
@@ -352,9 +374,9 @@ test("active_tasks carries each task's next step on one line, whole and redacted
 test("plain-text boot with no named task tells the agent to report every task under Active tasks, without the JSON field names; --json keeps them", () => {
   const noTask = { status: "ready", instructions: [NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION] }
   const text = formatBootText(noTask)
-  assert.match(text, /1\. No task was named: report every task under "Active tasks" below, each with its status and its next step or blocker/u)
+  assert.match(text, /1\. No task was named: report every task under "Active tasks" above, each with its status and its next step or blocker/u)
   assert.match(text, /then ask which one to resume or whether to start new\./u)
-  assert.match(text, /2\. The name matches no open task: report every task under "Active tasks" below/u)
+  assert.match(text, /2\. The name matches no open task: report every task under "Active tasks" above/u)
   assert.doesNotMatch(text, /active_tasks|open_prs|repo_states/u)
   // The structured result keeps the field names for JSON consumers.
   assert.match(NO_TASK_INSTRUCTION, /active_tasks, open_prs and repo_states/u)

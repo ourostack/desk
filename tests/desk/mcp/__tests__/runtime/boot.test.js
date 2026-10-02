@@ -1361,7 +1361,7 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   // Plain text names the printed section; the structured instructions keep the field names.
   assert.ok(result.instructions.some((line) => /active_tasks, open_prs and repo_states/u.test(line)))
   const printed = formatBootText(result)
-  assert.match(printed, /No task was named: report every task under "Active tasks" below/u)
+  assert.match(printed, /No task was named: report every task under "Active tasks" above/u)
   assert.doesNotMatch(printed, /active_tasks, open_prs|repo_states/u)
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)
@@ -1510,6 +1510,33 @@ test("bootOnce: undecided factory consent, interactive, is raised only after the
   const handoff = result.instructions.findIndex((line) => line.includes("desk:session-resumption"))
   const consent = result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided"))
   assert.ok(handoff !== -1 && consent > handoff, "the resume hand-off comes before any consent instruction")
+})
+
+test("bootOnce: the text boot gives undecided factory consent as one short line last, pointing at the script; --json keeps the long instructions", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
+  const plain = result.text_instructions
+  assert.equal(plain.filter((line) => /[Ff]actory consent/u.test(line)).length, 1, "one consent line in the text boot")
+  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, end your reply with one line: "Desk can contribute measurement data about your finished tasks to ourostack\/factory-intake; want the details\?" Ask nothing else and ask once\. If they say yes, follow "Factory consent" in .*skills.session-start.details\.md\.$/u)
+  assert.doesNotMatch(plain.join("\n"), /consent --store|Contribute\? \(yes or no\)|account_found/u, "the script is behind the pointer")
+  assert.ok(result.instructions.some((line) => /consent --store ourostack\/factory-intake --contribute yes/u.test(line)), "--json keeps the script")
+  const printed = formatBootText(result)
+  assert.equal(printed.split("Factory consent is undecided").length, 2)
+  const decided = await healthyBoot(root)
+  assert.ok(!decided.text_instructions.some((line) => /[Ff]actory consent/u.test(line)))
+})
+
+test("bootOnce: the text boot folds the rules into short closing wording, drops the host list, and keeps the tool hint", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const result = await healthyBoot(root, { env: { DESK: root, COPILOT_AGENT_SESSION_ID: "s" } })
+  const plain = result.text_instructions
+  assert.ok(plain.length < result.instructions.length, "fewer instructions in the text boot")
+  assert.match(plain[0], new RegExp(`^Use ${root.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} as the desk path in every command and tool call`, "u"))
+  assert.ok(plain.some((line) => /`desk-task_update`/u.test(line)), "the host's tool names stay")
+  assert.ok(!plain.some((line) => /hosts/u.test(line)))
+  assert.match(plain.at(-1), /^In every reply: if the next step needs something that is not on this machine .* say what is missing and stop, and never recreate or simulate it; .* say 'done' only for a task whose status is done; do not print Desk skill step headings\.$/u)
 })
 
 test("bootOnce: undecided factory consent in a noninteractive session emits no consent instruction at all", async () => {

@@ -1,6 +1,7 @@
 // The boot script's readable output. Agents read the boot result straight off a Bash call, and round B's critiques
 // all said the same thing: the instructions sat buried in a JSON array among fields they did not need. By default the
-// script now prints plain text (a status line, the desk's path, the numbered instructions, then the data), and
+// script now prints plain text (one status line, the work grouped by state with each task's push route, then only the
+// instructions that apply to this boot), and
 // `--json` keeps the structured result for tools and tests. This module also holds the two pieces of desk state the
 // text shows that are not part of the scan itself: the desk's own AGENTS.md (included, size-capped, so no agent has
 // to be told to go and read it) and when the local desk was last in sync with its remote.
@@ -124,29 +125,14 @@ export function ceiling(text, limit = TEXT_CEILING) {
 // A task's next step or blocker is printed whole: a cut line made agents guess the rest or open the card. A blocked
 // task shows the card's blocker reason (falling back to its next step); a card that records neither says so, so no
 // agent invents filler.
-function stepLine(task) {
+function stepLines(task) {
   const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
   const blocker = typeof task.blocker === "string" && task.blocker !== "" ? task.blocker : null
   if (task.status === "blocked") {
-    if (blocker !== null) return `\n  blocked: ${ceiling(blocker)}${next === null ? "" : `\n  next: ${ceiling(next)}`}`
-    return `\n  blocked: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`
+    if (blocker !== null) return [`  blocker: ${ceiling(blocker)}`, ...(next === null ? [] : [`  next: ${ceiling(next)}`])]
+    return [`  blocker: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`]
   }
-  return `\n  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`
-}
-
-function taskLine(track, task) {
-  const named = `${track.desk ? `${track.desk}/` : ""}${track.track}/${task.slug}`
-  const title = typeof task.title === "string" && task.title !== task.slug ? ` "${task.title}"` : ""
-  const hidden = /redacted/u.test(named) ? ` (handle ${task.handle})` : ""
-  const updated = typeof task.updated === "string" ? `, updated ${task.updated.slice(0, 10)}` : ""
-  return `- ${named}${title}: ${task.status ?? "no status"}${updated}${hidden}${stepLine(task)}`
-}
-
-function repoLine(state) {
-  const where = `${state.desk ? `${state.desk}/` : ""}${state.track}/${state.slug}`
-  if (state.present === false) return `- ${state.repo} (${where}): not at ${state.local_path}${state.url ? `; clone url ${state.url}` : ""}`
-  const sync = state.local_only ? "no remote configured" : state.fetched ? "fetched" : "fetch failed"
-  return `- ${state.repo} (${where}): branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
+  return [`  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`]
 }
 
 // What Desk's own access check found for the active account, in words that claim nothing the check did not show.
@@ -176,26 +162,57 @@ export function pushRoute(entry) {
   return `push as ${entry.account}${via}. The active gh account is ${active}; Desk routes this repo's pushes through ${fork ? "the fork" : entry.account} and ${checked}.`
 }
 
-// One line per distinct store, outcome, account and route, naming the task(s) it is for: the full list behind the few
-// push-route notes among the numbered instructions.
-function pushRouteLines(accounts) {
-  const groups = new Map()
-  for (const entry of accounts) {
-    const how =
-      entry.result === "account_found"
-        ? pushRoute(entry)
-        : entry.result === "no_account_can_deliver"
-          ? "no signed-in account can push"
-          : entry.result === "not_a_github_repo"
-            ? "no GitHub remote, so no push route to check"
-            : `not checked (${entry.result}${entry.reason ? `: ${entry.reason}` : ""})`
-    const key = `${entry.store ?? entry.repo}|${how}`
-    const group = groups.get(key) ?? { subject: entry.store ?? entry.repo, how, where: [] }
-    const where = `${entry.desk ? `${entry.desk}/` : ""}${entry.track}/${entry.slug}`
-    if (!group.where.includes(where)) group.where.push(where)
-    groups.set(key, group)
+// The one push-route line for a repo of a task, or null when there is nothing to say (no GitHub remote, or a check that
+// has not finished). It is the whole route: where to push, which account, and what never to do, so no second
+// instruction repeats it.
+function pushNote(entry) {
+  const store = entry.store ?? entry.repo
+  if (entry.result === "account_found") {
+    const route = pushRoute(entry)
+    const active = Array.isArray(entry.accounts) ? entry.accounts[0]?.account : undefined
+    const fork = entry.route === "fork" ? ` Push your branch to the fork and open the pull request from it; never push to ${store} itself.` : ""
+    const login = typeof active === "string" && active !== entry.account ? ` For git and gh calls use \`GH_TOKEN=$(gh auth token --user ${entry.account})\`, and name ${entry.account}, never ${active}, as the push account in any note.` : ""
+    return `${store}: ${route}${route.endsWith(".") ? "" : "."}${fork}${login}`
   }
-  return [...groups.values()].map((group) => `- ${group.subject}: ${group.how} (${group.where.join(", ")})`)
+  if (entry.result === "no_account_can_deliver") {
+    const reasons = Array.isArray(entry.accounts) && entry.accounts.length > 0 ? ` (${entry.accounts.map((item) => `${item.account}: ${item.reason}`).join("; ")})` : ""
+    return `${store}: no signed-in account can push${reasons}. Do not push; ask the operator which account to use, or fork.`
+  }
+  if (entry.result === "not_a_github_repo") return null
+  if (entry.result === "pending") return `${store}: push route not checked in time; run \`gh auth status\` and check before pushing.`
+  return `${store}: push access could not be checked (${entry.result}); verify with \`gh auth status\` before pushing.`
+}
+
+const taskKey = (desk, track, slug) => `${desk ?? ""}|${track}|${slug}`
+
+// Each task's push-route lines, keyed by the task, one per distinct repo and route.
+function pushNotesByTask(accounts) {
+  const byTask = new Map()
+  for (const entry of accounts ?? []) {
+    const note = pushNote(entry)
+    if (note === null) continue
+    const key = taskKey(entry.desk, entry.track, entry.slug)
+    const notes = byTask.get(key) ?? new Set()
+    notes.add(note)
+    byTask.set(key, notes)
+  }
+  return byTask
+}
+
+function taskLines(track, task, pushNotes) {
+  const named = `${track.desk ? `${track.desk}/` : ""}${track.track}/${task.slug}`
+  const title = typeof task.title === "string" && task.title !== task.slug ? ` "${task.title}"` : ""
+  const hidden = /redacted/u.test(named) ? ` (handle ${task.handle})` : ""
+  const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
+  const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...push]
+}
+
+function repoLine(state) {
+  const where = `${state.desk ? `${state.desk}/` : ""}${state.track}/${state.slug}`
+  if (state.present === false) return `- ${state.repo} (${where}): not at ${state.local_path}${state.url ? `; clone url ${state.url}` : ""}`
+  const sync = state.local_only ? "no remote configured" : state.fetched ? "fetched" : "fetch failed"
+  return `- ${state.repo} (${where}): branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
 }
 
 function prLine(pr) {
@@ -216,9 +233,9 @@ function namedTaskLines(task) {
 // the plain-text boot prints it as the "Active tasks" section, and an agent reading plain text cannot map a field name
 // to a section (boot acceptance rounds F, H and J: "where were we?" reported one task). So the text boot says the section.
 export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new."
-export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" below, each with its status and its next step or blocker (and any open pull requests or repo state that matter), then ask which one to resume or whether to start new."
+export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests or repo state that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it."
 export const UNMATCHED_TASK_INSTRUCTION = "The name matches no open task: show the active_tasks status block and ask what to resume or start."
-export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report every task under \"Active tasks\" below, each with its status and its next step or blocker, then ask what to resume or start."
+export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report every task under \"Active tasks\" above, each with its status and its next step or blocker, then ask what to resume or start."
 
 const PLAIN_TEXT_INSTRUCTIONS = new Map([
   [NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT],
@@ -226,39 +243,78 @@ const PLAIN_TEXT_INSTRUCTIONS = new Map([
 ])
 
 /**
- * The boot result as readable text: status, desk, numbered instructions, then data sections and the desk's
- * AGENTS.md. Every section is omitted when it has nothing to say, so a healthy boot stays short.
+ * The sync summary in the words the status line uses: "Desk synced with origin", or "Desk could not sync: <why>; local
+ * state shown". `summary` is `syncSummary`'s sentence, which `--json` keeps as it is; any other wording passes through.
+ */
+export function syncWords(summary) {
+  if (typeof summary !== "string" || summary === "") return null
+  if (summary === "sync ok") return "Desk synced with origin"
+  const moved = /^sync ok: moved (.+) first, then pulled$/u.exec(summary)
+  if (moved) return `Desk synced with origin (moved ${moved[1]} first)`
+  const failed = /^sync failed: (.+?); nothing was pulled or pushed; local desk is as of (\S+)(.*)$/u.exec(summary)
+  if (failed) return `Desk could not sync: ${failed[1]}; local state shown${failed[2] === "unknown" ? "" : `, as of ${failed[2]}`}${failed[3]}`
+  const nothing = /^no (remote|upstream branch); nothing to sync$/u.exec(summary)
+  if (nothing) return `Desk has no ${nothing[1]}; nothing to sync`
+  if (summary.startsWith("sync: the pull succeeded, but ")) return `Desk pulled from origin, but ${summary.slice("sync: the pull succeeded, but ".length)}`
+  return summary
+}
+
+// The state groups, blocked first, then the others in the order their most recently updated task appears.
+function groupHeading(status, count) {
+  return status === "blocked" ? `BLOCKED (${count}): these cannot move until the blocker clears` : `${status} (${count})`
+}
+
+function taskSection(result, lines) {
+  const tracks = result.active_tasks?.tracks
+  if (!Array.isArray(tracks)) {
+    if (result.status !== "setup_required") lines.push("", "Active tasks: unavailable (see degraded)")
+    return
+  }
+  lines.push("", `Active tasks (${result.active_tasks.task_count}):`)
+  if (tracks.length === 0) lines.push("- none")
+  // Blocked tasks first, then the most recently updated, before the cap cuts the list.
+  const rank = ({ task }) => (task.status === "blocked" ? 0 : 1)
+  const everyTask = tracks
+    .flatMap((track) => track.tasks.map((task) => ({ track, task })))
+    .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
+  const groups = new Map()
+  for (const entry of everyTask.slice(0, TASKS_SHOWN_CAP)) {
+    const status = entry.task.status ?? "no status"
+    groups.set(status, [...(groups.get(status) ?? []), entry])
+  }
+  const pushNotes = pushNotesByTask(result.push_accounts)
+  for (const [status, entries] of groups) {
+    lines.push("", groupHeading(status, entries.length))
+    for (const { track, task } of entries) lines.push(...taskLines(track, task, pushNotes))
+  }
+  if (everyTask.length > TASKS_SHOWN_CAP) lines.push("", `...and ${everyTask.length - TASKS_SHOWN_CAP} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
+}
+
+/**
+ * The boot result as readable text, leading with the work: one status line (status, desk, host, sync in plain words),
+ * the stale-Desk line when there is one, the active tasks grouped by state with each task's push route, the open pull
+ * requests and repos, then only the instructions that apply to this boot, and the desk's AGENTS.md. Every section is
+ * omitted when it has nothing to say, so a healthy boot stays short. `result.text_instructions`, when the boot made
+ * them, are the plain-text wording of the instructions (shorter, with the push routes and the factory script moved out);
+ * a result without them prints `instructions`.
  */
 export function formatBootText(result) {
-  const lines = [`Desk boot: ${result.status}`]
+  const sync = syncWords(result.sync_summary)
+  const status = [`Desk boot: ${result.status}`]
+  if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
+  if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
+  if (sync !== null) status.push(sync)
+  const lines = [status.join(" | ")]
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
-  for (const line of result.degraded ?? []) lines.push(`- degraded: ${line}`)
+  // The status line already says why the sync failed, so its degraded entry would only repeat it.
+  for (const line of result.degraded ?? []) if (sync === null || !line.startsWith("sync: ")) lines.push(`- degraded: ${line}`)
   for (const line of result.pending ?? []) lines.push(`- pending (not finished in time, carry it): ${line}`)
-  lines.push("")
-  if (result.root?.path) lines.push(`Desk: ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
-  if (result.host) lines.push(`Host: ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
-  if (lines.at(-1) !== "") lines.push("")
-  lines.push("Instructions, in order:")
-  ;(result.instructions ?? []).forEach((instruction, index) => lines.push(`${index + 1}. ${PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction}`))
-  if (result.sync_summary) lines.push("", result.sync_summary)
-  const tracks = result.active_tasks?.tracks
-  if (Array.isArray(tracks)) {
-    lines.push("", `Active tasks (${result.active_tasks.task_count}):`)
-    if (tracks.length === 0) lines.push("- none")
-    // Blocked tasks first, then the most recently updated, before the cap cuts the list.
-    const rank = ({ task }) => (task.status === "blocked" ? 0 : 1)
-    const everyTask = tracks
-      .flatMap((track) => track.tasks.map((task) => ({ track, task })))
-      .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
-    for (const { track, task } of everyTask.slice(0, TASKS_SHOWN_CAP)) lines.push(taskLine(track, task))
-    if (everyTask.length > TASKS_SHOWN_CAP) lines.push(`- ...and ${everyTask.length - TASKS_SHOWN_CAP} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
-  } else if (result.status !== "setup_required") {
-    lines.push("", "Active tasks: unavailable (see degraded)")
-  }
+  lines.push(...namedTaskLines(result.task))
+  taskSection(result, lines)
   if ((result.open_prs ?? []).length > 0) lines.push("", "Open pull requests:", ...result.open_prs.map(prLine))
   if ((result.repo_states ?? []).length > 0) lines.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
-  if ((result.push_accounts ?? []).length > 0) lines.push("", "Push routes:", ...pushRouteLines(result.push_accounts))
-  lines.push(...namedTaskLines(result.task))
+  const instructions = result.text_instructions ?? (result.instructions ?? []).map((instruction) => PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction)
+  if (instructions.length > 0) lines.push("", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`))
   if (result.agents_md) {
     // A heading, not a fence: the file's own text may hold any fence or rule line.
     lines.push("", `## The desk's AGENTS.md (${result.agents_md.path}); its rules bind this session`, "", result.agents_md.text.replace(/\n+$/u, ""))
