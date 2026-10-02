@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.185 — 2026-10-02
+
+Desk's `task_update` note now says it is about the desk card only: "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded." Three Copilot boot-acceptance runs read the old note ("No git needed: Desk already committed this card and is pushing it in the background...") as their own project commit having been pushed and reported "Commit 4c90a44 pushed to the branch" with no push run.
+
+Desk's shell guard (`protected-checkout.cjs`, Claude and Copilot) now denies a `git clone`, `git fetch` or `gh repo clone` of a repository that a task card marks as living on another machine, with "Ask the operator to push <branch> from the other machine; do not clone or fetch to look for it." It uses the same detection as boot's "not here" note, now in `elsewhere-note.js`, over the desk's active task cards, and reads the cards only for a command that names `clone` or `fetch` together with a repository URL, so every other command pays one regular-expression test. The denial also gives the way out: if the operator says the work is pushed now, record that with `task_update` (rewrite the next step so it no longer says the work is on another machine) and retry. The guard looks only at the operands of `git clone`, `git fetch`, `git pull` and `gh repo clone` in each simple command, so a repository URL given to `gh pr view` or `curl` beside a fetch is not a clone; it fails open on any error of its own; and a clone of any other repository passes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.184 — 2026-10-02
 
 An agent that found and loaded Desk's `task_update` tool never called it: it tried Bash scripts, a Node require and file edits, was denied, and then claimed the task done. Boot's tool-naming instruction now says that once a lookup returns a Desk tool it is loaded and is called directly as a tool, never through Bash, Node or file edits, and that a card that cannot be updated is said so in the reply with the task's real status. A denied card edit now also says the Desk tool is callable now. The done-claim gate now watches the task the boot resolved from the operator's name: a PostToolUse hook on the shell call that ran `session-boot.js --task` records it as touched in the session's gate state (Claude through a new `Bash` matcher in `hooks.json`, Copilot through its existing `postToolUse` hook), so a final reply that says the named task is done is blocked even when `task_update` was never called.
