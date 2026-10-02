@@ -1067,6 +1067,22 @@ function unstartedChild() {
   return child
 }
 
+test("a browser that ends before it takes any call answers the held call with the reason and keeps serving", posixOnly, async () => {
+  const m = await machine("desk-web-dieearly-")
+  const fake = unstartedChild()
+  const h = host({ ...m.options, spawn: () => fake })
+  await h.handshake()
+  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await until(() => fake.stdin.readableLength > 0, "the handshake to reach the browser")
+  fake.emit("exit", 4, null)
+  const answer = await h.reply(2)
+  assert.equal(toolPayload(answer).code, "browser_exited")
+  assert.match(toolPayload(answer).summary, /exit code 4/u)
+  assert.equal(toolPayload(await h.call(3)).code, "browser_exited")
+  assert.deepEqual(h.exits, [])
+  await h.close()
+})
+
 test("a browser that fails while the host is already gone ends the launcher quietly", posixOnly, async () => {
   const early = await machine("desk-web-gonedie-", { env: { FAKE_CLI_MODE: "dieearly" } })
   const spawned = []
