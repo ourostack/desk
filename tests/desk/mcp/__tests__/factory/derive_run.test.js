@@ -517,3 +517,10 @@ test("the derive command ends itself at its hard deadline and clears the timer w
   await new Promise((resolve) => setTimeout(resolve, 400))
   assert.deepEqual(exits, [0], "a finished worker must not fire its deadline")
 }))
+
+test("derive refuses a file that exists but is not a marker in the markers folder", () => scratch(async (ctx) => {
+  const { deriveFile } = await runner()
+  const stray = path.join(ctx.base, "stray.json")
+  await fs.writeFile(stray, "{}")
+  assert.deepEqual(await deriveFile(ctx.env, stray), { result: "invalid", store: null })
+}))

@@ -224,7 +224,6 @@ export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } 
       marker = await readMarker(env, file)
       if (marker === null) return { result: "invalid", store: null }
     }
-    if (!(await markerPresent(file))) return { result: "invalid", store: null }
     return deriveMarker(env, marker, { quietMs, requireQuiet: true, requireStored: true })
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store: null }
