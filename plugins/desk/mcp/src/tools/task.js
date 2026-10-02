@@ -41,7 +41,8 @@ import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
-const DESK_COMMIT_NOTE = "No git needed: Desk already committed this card and is pushing it in the background. Do not run git add, git commit or git push for it."
+// It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
+const DESK_COMMIT_NOTE = "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
