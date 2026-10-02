@@ -18,6 +18,7 @@ import {
   bootOnce as realBootOnce,
   cardProblems,
   cardValidation,
+  checkAuth,
   checkPrereqs,
   detectAgentHost,
   isNoninteractive,
@@ -814,6 +815,16 @@ test("auth: an offline check that timed out or could not run falls through to th
     const gh = ghWith((args) => (args[1] === "token" ? offline : { code: 0, stdout: "Logged in\n", stderr: "" }))
     assert.deepEqual((await checkPrereqs({ gh, jq: jqOk })).auth, { ok: true })
   }
+})
+
+test("checkAuth: callable with no options, and with a custom backoff on the real timer", async () => {
+  const signedIn = ghWith((args) => (args[1] === "token" ? { code: 0, stdout: "tok\n", stderr: "" } : { code: 1, stdout: "", stderr: "unused" }))
+  assert.deepEqual(await checkAuth(signedIn), { ok: true })
+  const flaky = ghWith((args) => (args[1] === "token" ? { code: 1, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr: "HTTP 429" }))
+  const started = Date.now()
+  const verdict = await checkAuth(flaky, { backoffMs: 20 })
+  assert.equal(verdict.why, "rate limited")
+  assert.ok(Date.now() - started >= 15, "it waited the backoff before the retry")
 })
 
 test("auth: a transient online failure is retried once after a backoff, and a recovery is ok", async () => {
