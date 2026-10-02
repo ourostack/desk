@@ -275,3 +275,12 @@ test("taskDoneClaims: an opening 'Done:' or 'Completed.' claims it; a bare '**Co
   assert.equal(taskDoneClaims("Completed. Tests pass.").length, 1)
   assert.equal(taskDoneClaims("Finished!").length, 1)
 })
+
+// Round M (copilot-m2, resume-named-task run 2): the reply opens "The implementation is complete" and then says, in bold, where the task really is.
+test("taskDoneClaims: a 'complete' opener is cleared when the reply states the status Desk reported, bold or not", () => {
+  const reply = "The implementation is complete and tests pass. However, task watering-schedule-api is **at validating, not done**. The next required step is to open a pull request from `feature/rain-delay` into `main`."
+  assert.equal(taskDoneClaims(reply, { statuses: ["validating"] }).length, 0)
+  assert.equal(taskDoneClaims("Finished the work. The task is **at blocked (not done)**.", { statuses: ["blocked"] }).length, 0)
+  assert.equal(taskDoneClaims(reply, { statuses: ["processing"] }).length, 1, "a status the reply does not state clears nothing")
+  assert.equal(taskDoneClaims("The implementation is complete and tests pass.", { statuses: ["validating"] }).length, 1)
+})

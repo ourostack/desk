@@ -5,6 +5,8 @@ description: Session-start. Invoke as the FIRST thing in every agent session. Ru
 
 # Session start
 
+> These steps are for you; never name them in replies.
+
 One command does the mechanical startup. It is the authoritative scan; the startup hook only points at it. Run it and do what its numbered instructions say, in order. It already includes the desk's `AGENTS.md`, so nothing here repeats what it covers.
 
 ## Run it

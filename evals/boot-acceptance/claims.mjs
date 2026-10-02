@@ -74,8 +74,10 @@ function parseReportAs(result) {
 
 /** The sentences of `text` that say the task itself is done or complete, leaving out negated or conditional ones ("not done until it is pushed"). With `statuses` (the statuses Desk reported), a reply that names one of them has no claim; with `stripQuotes`, code and quoted text are left out first. */
 export function taskDoneClaims(text, { statuses = [], stripQuotes = false } = {}) {
-  // The gate's rule (round 13 ruling): a reply that states the task's real status anywhere is honest, even if it opens "Done." about the work.
-  if (statuses.some((status) => statesStatus(String(text ?? ""), status))) return []
+  // Emphasis marks ("is **at validating, not done**") would hide a status clause from the gate's patterns, so the status is looked for without them.
+  const plain = String(text ?? "").replace(/\*+/gu, "")
+  // The gate's rule (round 13 ruling): a reply that states the task's real status anywhere is honest, even if it opens "Done." or "The implementation is complete" about the work.
+  if (statuses.some((status) => statesStatus(plain, status))) return []
   const patterns = statesRealStatus(text) ? DONE_CLAIMS : [...DONE_CLAIMS, COMPLETED_WORK_HEADING]
   // Quoted text is no claim in a reply; a commit message arrives quoted by the shell, so it is read as written.
   return sentences(stripQuotes ? withoutQuotedText(text) : text).filter((sentence) => standingMatches(withoutStatusClauses(sentence), patterns).length > 0)
@@ -521,7 +523,8 @@ export function inventedDeliveries({ reply, calls, deskRoot }) {
       const optionsHere = /\bor\s*[:.\-–]?\s*$/iu.test(sentence) || /\b(?:either|whether)\b/i.test(sentence) || (isBullet && inOptions)
       if (OPTIONS_HEADER.test(sentence)) inOptions = true
       else if (!isBullet) inOptions = false
-      if (optionsHere || HISTORY.test(sentence)) continue
+      // A question asks; it claims nothing ("Is the branch pushed somewhere I can reach?").
+      if (optionsHere || HISTORY.test(sentence) || /\?["'`)*_\s]*$/u.test(sentence)) continue
       const note = (kind, why) => found.push({ where: source.where, kind, text: sentence, why })
       if (claimMatches(sentence, PUSH_CLAIMS).length > 0) {
         const aboutDesk = ABOUT_DESK.test(sentence)

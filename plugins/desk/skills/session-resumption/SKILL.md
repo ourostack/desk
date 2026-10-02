@@ -5,6 +5,8 @@ description: Checkpoint and resume an authorized non-terminal task, including a 
 
 # Session resumption
 
+> These steps are for you; never name them in replies.
+
 > Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
 
 Desk owns checkpoint and recovery admission here. Reconcile the canonical task, current authority, actual source, writer ownership and uncertain effects before entering `desk:using-superpowers-with-desk` at `reconciled-resume`. Consume the existing approval and explicit artifact map; do not start another lifecycle or repeat go-ahead.

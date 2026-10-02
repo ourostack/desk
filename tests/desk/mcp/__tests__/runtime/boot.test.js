@@ -358,9 +358,10 @@ test("checkPrereqs: a nonzero gh or jq exit with empty stderr falls back to stdo
 test("checkPrereqs: an auth-status result missing stdout and stderr entirely is still read without throwing", async () => {
   const gh = fixedRunner({ "--version": { code: 0, stdout: "gh version 2.54.0\n", stderr: "" }, "auth status": { code: 1 } })
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
-  const result = await checkPrereqs({ gh, jq })
+  const result = await checkPrereqs({ gh, jq, authOptions: NO_WAIT })
   assert.equal(result.auth.ok, false)
-  assert.equal(result.auth.reason, "auth_error")
+  assert.equal(result.auth.reason, "auth_unverified", "gh gave no reason, so the sign-in is unverified, not refused")
+  assert.equal(result.auth.soft, true)
 })
 
 test("checkPrereqs: called bare, the real gh and jq runners report missing binaries off an empty PATH", async () => {
@@ -376,7 +377,9 @@ test("checkPrereqs: called bare, the real gh and jq runners report missing binar
   }
 })
 
-test("checkPrereqs: a stale token is caught even with exit code 0; a plain nonzero without the phrase is auth_error", async () => {
+const NO_WAIT = { sleep: async () => {} }
+
+test("checkPrereqs: a stale token is caught even with exit code 0; a rate limit, a timeout or a plain nonzero is only unverified", async () => {
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
   const stale = fixedRunner({
     "--version": { code: 0, stdout: "gh version 2.54.0\n", stderr: "" },
@@ -391,10 +394,12 @@ test("checkPrereqs: a stale token is caught even with exit code 0; a plain nonze
     "auth status": { code: 1, stdout: "", stderr: "rate limited\n" },
   })
   const timeout = fixedRunner({ "--version": { code: 0, stdout: "gh version 2.54.0\n", stderr: "" }, "auth status": { code: null, stdout: "", stderr: "", timedOut: true } })
-  assert.equal((await checkPrereqs({ gh: stale, jq })).auth.reason, "auth_stale")
-  assert.equal((await checkPrereqs({ gh: loggedOut, jq })).auth.reason, "auth_stale")
-  assert.equal((await checkPrereqs({ gh: otherFailure, jq })).auth.reason, "auth_error")
-  assert.equal((await checkPrereqs({ gh: timeout, jq })).auth.reason, "auth_timeout")
+  assert.equal((await checkPrereqs({ gh: stale, jq, authOptions: NO_WAIT })).auth.reason, "auth_stale")
+  assert.equal((await checkPrereqs({ gh: loggedOut, jq, authOptions: NO_WAIT })).auth.reason, "auth_stale")
+  const limited = (await checkPrereqs({ gh: otherFailure, jq, authOptions: NO_WAIT })).auth
+  assert.deepEqual([limited.reason, limited.soft, limited.why], ["auth_unverified", true, "rate limited"])
+  const slow = (await checkPrereqs({ gh: timeout, jq, authOptions: NO_WAIT })).auth
+  assert.deepEqual([slow.reason, slow.soft, slow.why], ["auth_unverified", true, "timed out"])
 })
 
 // ── cardProblems ─────────────────────────────────────────────────────────
@@ -777,6 +782,77 @@ test("bootOnce: every other named prereq remediation — an old gh, a missing jq
     jq: fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } }),
   })
   assert.ok(staleAuth.instructions.some((line) => line.includes("gh auth login")))
+})
+
+const AUTH_BOOT = { factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }), syncFn: async () => ({ state: "synced" }), authOptions: NO_WAIT }
+const ghWith = (auth) => async (args) => {
+  if (args[0] === "--version") return { code: 0, stdout: "gh version 2.54.0\n", stderr: "" }
+  if (args[0] === "auth") return auth(args)
+  return { code: 1, stdout: "", stderr: "unexpected call" }
+}
+const jqOk = async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" })
+
+test("auth: an offline token check that succeeds skips the online check, so a rate limit cannot fail it", async () => {
+  const calls = []
+  const gh = ghWith((args) => {
+    calls.push(args[1])
+    return args[1] === "token" ? { code: 0, stdout: "gho_secretvalue\n", stderr: "" } : { code: 1, stdout: "", stderr: "HTTP 429: rate limit exceeded" }
+  })
+  const result = await checkPrereqs({ gh, jq: jqOk })
+  assert.deepEqual(result.auth, { ok: true })
+  assert.deepEqual(calls, ["token"], "the online status call never ran")
+  assert.ok(!JSON.stringify(result).includes("gho_secretvalue"), "the token is never kept")
+})
+
+test("auth: a transient online failure is retried once after a backoff, and a recovery is ok", async () => {
+  let statusCalls = 0
+  const waits = []
+  const gh = ghWith((args) => {
+    if (args[1] === "token") return { code: 1, stdout: "", stderr: "no token" }
+    statusCalls += 1
+    return statusCalls === 1 ? { code: 1, stdout: "", stderr: "error connecting to api.github.com: dial tcp: i/o timeout" } : { code: 0, stdout: "Logged in\n", stderr: "" }
+  })
+  const result = await checkPrereqs({ gh, jq: jqOk, authOptions: { sleep: async (ms) => { waits.push(ms) } } })
+  assert.deepEqual(result.auth, { ok: true })
+  assert.equal(statusCalls, 2)
+  assert.deepEqual(waits, [750])
+})
+
+test("auth: a failure that persists is a warning with its reason, never a hard stop", async () => {
+  for (const [stderr, why] of [["HTTP 403: API rate limit exceeded", "rate limited"], ["dial tcp: lookup api.github.com: no such host", "network error"], ["something odd", "unrecognised gh error"]]) {
+    const root = await mkDeskWorkspace()
+    const gh = ghWith((args) => (args[1] === "token" ? { code: 1, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr }))
+    const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: jqOk, ...AUTH_BOOT })
+    assert.ok(!result.instructions.some((line) => /Hard stop|never fall back/u.test(line)), stderr)
+    assert.ok(result.pending.includes(`auth: Could not verify GitHub sign-in (${why}); continuing; pushes may fail until it clears`), result.pending.join("|"))
+    assert.ok(!result.degraded.some((line) => line.startsWith("auth")))
+    assert.equal(result.status, "ready")
+  }
+})
+
+test("auth: real 'not logged in' output still hard-stops, naming what gh said and the fix", async () => {
+  const root = await mkDeskWorkspace()
+  const gh = ghWith((args) => (args[1] === "token" ? { code: 1, stdout: "", stderr: "no oauth token found for github.com" } : { code: 1, stdout: "", stderr: "You are not logged into any GitHub hosts. To log in, run: gh auth login\n" }))
+  const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: jqOk, ...AUTH_BOOT })
+  const stop = result.instructions.find((line) => line.startsWith("Hard stop"))
+  assert.match(stop, /gh auth login --hostname github\.com\b.*gh said: You are not logged into any GitHub hosts/u)
+  assert.ok(result.degraded.includes("auth: auth_stale"))
+})
+
+test("auth: concurrent boots against a gh that rate limits or fails transiently never hard-stop", async () => {
+  const roots = await Promise.all(Array.from({ length: 24 }, () => mkDeskWorkspace()))
+  let seq = 0
+  const gh = ghWith((args) => {
+    if (args[1] === "token") return { code: 1, stdout: "", stderr: "" }
+    seq += 1
+    return seq % 3 === 0 ? { code: null, stdout: "", stderr: "", timedOut: true } : { code: 1, stdout: "", stderr: seq % 3 === 1 ? "HTTP 429: rate limit exceeded" : "connection reset by peer" }
+  })
+  const results = await Promise.all(roots.map((root) => bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: jqOk, ...AUTH_BOOT })))
+  assert.equal(results.length, 24)
+  for (const result of results) {
+    assert.ok(!result.instructions.some((line) => /Hard stop|never fall back/u.test(line)))
+    assert.notEqual(result.status, "degraded")
+  }
 })
 
 test("bootOnce: a corrupted task card degrades status and names the task, file location and handle in one action", async () => {

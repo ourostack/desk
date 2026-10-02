@@ -231,7 +231,7 @@ function sampleResult(extra = {}) {
 
 test("formatBootText leads with the work: one status line, then the tasks by state, then the instructions and the desk's AGENTS.md", () => {
   const text = formatBootText(sampleResult())
-  const order = ["Desk boot: degraded | desk /work/desk (bound by env) | host mac / ari / claude | Desk could not sync: remote unreachable; local state shown", "- pending (not finished in time, carry it): repo state", "Active tasks (2):", "Open pull requests:", "Repos of open tasks:", "Instructions, in order:", "1. First thing.", "2. Second thing.", "## The desk's AGENTS.md (/work/desk/AGENTS.md)"]
+  const order = ["Desk boot: degraded (sync failed: remote unreachable; showing local state and card: bad) | desk /work/desk (bound by env) | host mac / ari / claude", "- pending (not finished in time, carry it): repo state", "Active tasks (2):", "Open pull requests:", "Repos of open tasks:", "Instructions, in order:", "1. First thing.", "2. Second thing.", "## The desk's AGENTS.md (/work/desk/AGENTS.md)"]
   let at = -1
   for (const piece of order) {
     const next = text.indexOf(piece)
@@ -239,7 +239,8 @@ test("formatBootText leads with the work: one status line, then the tasks by sta
     at = next
   }
   assert.doesNotMatch(text, /- degraded: sync: /u, "the status line already says why the sync failed")
-  assert.match(text, /- degraded: card: bad\n/u)
+  assert.doesNotMatch(text, /- degraded: card: bad\n/u, "the headline already names it")
+  assert.doesNotMatch(text, /Desk synced|Desk could not sync/u, "a failed sync is never worded as a sync")
   assert.doesNotMatch(text, /Push routes:|Desk: \/work\/desk|\nHost: /u, "the push routes sit on their tasks, and desk and host are on the status line")
   assert.match(text, /\nprocessing \(1\)\n- ops\/flash-valves "Flash valves" \(updated 2026-09-28\)\n  next: Wire the relay, then run the suite\.\n  push: acme\/x: no signed-in account can push\. Do not push; ask the operator which account to use, or fork\. Say this route in one line when you report on the task\.\n  push: acme\/slow: push route not checked in time/u)
   assert.match(text, /  push: acme\/odd: push access could not be checked \(gh_failed\); verify with `gh auth status` before pushing\.\n/u)
@@ -321,7 +322,7 @@ test("runBootCli prints readable text by default and the one-line JSON with --js
   assert.equal(json.agents_md.text, "Be brief.\n")
   const failing = []
   await runBootCli({ env: {}, io: { stdout: { write: (text) => failing.push(text) } }, bootFn: async () => { throw new Error("kaput") } })
-  assert.match(failing[0], /^Desk boot: degraded\n- degraded: boot: kaput\n/u)
+  assert.match(failing[0], /^Desk boot: degraded \(boot: kaput\)\n\nActive tasks: unavailable/u)
 })
 
 test("the shipped script prints text by default and JSON with --json", async () => {
@@ -406,6 +407,16 @@ test("the named task is always shown first with its push route, even when it ran
 
 test("a sync call that threw keeps its error on the status line, and a thrown reason replaces 'it did not run'", () => {
   const text = formatBootText({ status: "degraded", degraded: ["sync: spawn git ENOENT"], sync_summary: "sync failed: it did not run; nothing was pulled or pushed; local desk is as of unknown" })
-  assert.match(text, /^Desk boot: degraded \| Desk could not sync: spawn git ENOENT; local state shown\n/u)
+  assert.match(text, /^Desk boot: degraded \(sync failed: spawn git ENOENT; showing local state\)\n/u)
   assert.doesNotMatch(text, /- degraded: sync/u)
+})
+
+test("the headline names what failed, caps itself, and lists a long entry below; an auth warning prints as a warning", () => {
+  const long = `auth: ${"x".repeat(90)}`
+  const text = formatBootText({ status: "degraded", degraded: ["a: 1", "b: 2", "c: 3", "d: 4", long], pending: ["auth: Could not verify GitHub sign-in (rate limited); continuing; pushes may fail until it clears"] })
+  assert.match(text, /^Desk boot: degraded \(a: 1 and b: 2 and c: 3 and 2 more\)\n/u)
+  assert.match(text, /\n- degraded: d: 4\n- degraded: auth: x{90}\n/u)
+  assert.match(text, /\n- warning: Could not verify GitHub sign-in \(rate limited\); continuing; pushes may fail until it clears\n/u)
+  assert.match(formatBootText({ status: "degraded", sync_summary: "sync: the pull succeeded, but local changes conflict" }), /^Desk boot: degraded \| Desk pulled from origin, but local changes conflict\n/u)
+  assert.match(formatBootText({ status: "ready", sync_summary: "sync ok" }), /^Desk boot: ready \| Desk synced with origin\n/u)
 })

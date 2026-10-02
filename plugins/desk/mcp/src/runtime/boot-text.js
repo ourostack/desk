@@ -313,15 +313,27 @@ export function formatBootText(result) {
   const thrown = (result.degraded ?? []).find((line) => line.startsWith("sync: "))
   const raw = syncWords(result.sync_summary)
   const sync = raw !== null && thrown !== undefined ? raw.replace("Desk could not sync: it did not run;", () => `Desk could not sync: ${thrown.slice("sync: ".length)};`) : raw
-  const status = [`Desk boot: ${result.status}`]
+  // A failed sync leads the headline, so "degraded" never reads as a success: "Desk boot: degraded (sync failed: <why>; showing local state)".
+  const syncFailed = sync !== null && sync.startsWith("Desk could not sync: ")
+  const failing = []
+  if (syncFailed) failing.push(`sync failed: ${sync.slice("Desk could not sync: ".length).replace(/; local state shown/u, "; showing local state")}`)
+  const inHeadline = new Set()
+  for (const line of result.degraded ?? []) {
+    if (line.startsWith("sync: ")) continue
+    if (failing.length < 3 && line.length <= 80) inHeadline.add(line)
+    failing.push(line.length > 80 ? `${line.slice(0, 77)}...` : line)
+  }
+  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})` : `Desk boot: ${result.status}`
+  const status = [headline]
   if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
   if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
-  if (sync !== null) status.push(sync)
+  // The headline already says a failed sync; the sync words follow only for a sync that did not fail (it worked, or there was nothing to sync).
+  if (sync !== null && !syncFailed) status.push(sync)
   const lines = [status.join(" | ")]
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
-  // The status line already says why the sync failed, so its degraded entry would only repeat it.
-  for (const line of result.degraded ?? []) if (sync === null || !line.startsWith("sync: ")) lines.push(`- degraded: ${line}`)
-  for (const line of result.pending ?? []) lines.push(`- pending (not finished in time, carry it): ${line}`)
+  // The headline already says why the sync failed and what else failed (up to three short entries), so those entries would only repeat it.
+  for (const line of result.degraded ?? []) if (!inHeadline.has(line) && (sync === null || !line.startsWith("sync: "))) lines.push(`- degraded: ${line}`)
+  for (const line of result.pending ?? []) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...namedTaskLines(result.task))
   taskSection(result, lines)
   if ((result.open_prs ?? []).length > 0) lines.push("", "Open pull requests:", ...result.open_prs.map(prLine))

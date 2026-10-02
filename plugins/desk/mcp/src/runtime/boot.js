@@ -250,15 +250,49 @@ function evaluateJq(result) {
   return { ok: true }
 }
 
-const AUTH_STALE = /no longer valid|not logged into|you are not logged/iu
+// gh says the host has no usable sign-in: the one answer that is a hard stop.
+const AUTH_STALE = /no longer valid|not logged into|you are not logged|no accounts? (?:are |is )?(?:logged|found|configured)|gh auth login/iu
+const RATE_LIMITED = /rate limit|\bHTTP 429\b|\bHTTP 403\b|\b(?:429|403)\b|secondary rate|abuse detection/iu
+const NETWORK_ERROR = /timed? ?out|timeout|dial tcp|no such host|connection (?:refused|reset)|ECONN|ENOTFOUND|EAI_AGAIN|network|TLS|EOF|temporary failure|unreachable|HTTP 5\d\d/iu
+
+/** Why `gh auth status` could not tell, in words for a warning line. */
+function authTransientWhy(result) {
+  if (result.timedOut) return "timed out"
+  const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
+  if (RATE_LIMITED.test(text)) return "rate limited"
+  if (NETWORK_ERROR.test(text)) return "network error"
+  return "unrecognised gh error"
+}
 
 function evaluateAuth(result) {
   if (result.spawnError) return { ok: false, reason: "gh_missing", detail: "the `gh` binary was not found on PATH" }
-  if (result.timedOut) return { ok: false, reason: "auth_timeout", detail: "`gh auth status` did not respond in time" }
   const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
-  if (AUTH_STALE.test(text)) return { ok: false, reason: "auth_stale", detail: trimmed(text, 500) }
-  if (result.code !== 0) return { ok: false, reason: "auth_error", detail: trimmed(text, 500) }
-  return { ok: true }
+  // Not logged in is judged on gh's own words, even after a timeout or an exit 0: the output says what gh found.
+  if (AUTH_STALE.test(text) && (result.code === 0 || !RATE_LIMITED.test(text))) return { ok: false, reason: "auth_stale", detail: trimmed(text, 500) }
+  if (result.code === 0 && result.timedOut !== true) return { ok: true }
+  // Anything else (a timeout, the network, a rate limit, an exit gh gave no reason for) is a failure to check, not a failure to sign in.
+  const why = authTransientWhy(result)
+  return { ok: false, reason: "auth_unverified", soft: true, detail: `${why}${trimmed(text, 300) === "" ? "" : `: ${trimmed(text, 300)}`}`, why }
+}
+
+const AUTH_RETRY_BACKOFF_MS = 750
+const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Whether gh is signed in for github.com. The offline check comes first (`gh auth token`, which reads the stored token
+ * and asks GitHub nothing, so a rate limit or a bad network cannot fail it); only when that does not show a token does
+ * `gh auth status` (an online check) run. A failure that is not "not logged in" gets one retry after a short backoff, then
+ * resolves as `auth_unverified` (a warning, never a hard stop). The token itself is never read into the result.
+ */
+export async function checkAuth(ghAuth, { timeoutMs = 8000, sleep = sleepFor, backoffMs = AUTH_RETRY_BACKOFF_MS } = {}) {
+  const offline = await ghAuth(["auth", "token", "--hostname", "github.com"], { timeoutMs: Math.min(timeoutMs, 3000) })
+  if (offline.spawnError === undefined && offline.code === 0 && offline.timedOut !== true && String(offline.stdout ?? "").trim() !== "") return { ok: true }
+  let verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs }))
+  if (verdict.soft === true) {
+    await sleep(backoffMs)
+    verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs: Math.min(timeoutMs, 4000) }))
+  }
+  return verdict
 }
 
 /**
@@ -268,16 +302,16 @@ function evaluateAuth(result) {
  * a nonzero exit all come back as `{ ok: false, reason, detail }`, never a
  * thrown error.
  */
-export async function checkPrereqs({ gh = ghRunner(), jq = commandRunner("jq"), ghAuth = gh, timeoutMs = 8000 } = {}) {
+export async function checkPrereqs({ gh = ghRunner(), jq = commandRunner("jq"), ghAuth = gh, timeoutMs = 8000, authOptions = {} } = {}) {
   // `ghAuth` runs with the ambient environment: `gh` itself honors GH_TOKEN,
   // so a host signed in only through that variable is healthy. (`gh`, the
   // factory's runner, strips ambient tokens on purpose.)
-  const [ghVersion, jqVersion, authStatus] = await Promise.all([
+  const [ghVersion, jqVersion, auth] = await Promise.all([
     gh(["--version"], { timeoutMs }),
     jq(["--version"], { timeoutMs }),
-    ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs }),
+    checkAuth(ghAuth, { timeoutMs, ...authOptions }),
   ])
-  return { gh: evaluateGh(ghVersion), jq: evaluateJq(jqVersion), auth: evaluateAuth(authStatus) }
+  return { gh: evaluateGh(ghVersion), jq: evaluateJq(jqVersion), auth }
 }
 
 // ── Task-card frontmatter validation ────────────────────────────────────
@@ -758,7 +792,7 @@ function prereqAction(name, check) {
     return "Install jq: `brew install jq`, `winget install jqlang.jq`, or `sudo apt install jq`."
   }
   if (name === "auth" && check.reason === "auth_stale") {
-    return "Re-authenticate: run `gh auth login --hostname github.com`."
+    return `Re-authenticate: run \`gh auth login --hostname github.com\`${check.detail ? ` (gh said: ${check.detail.replace(/\s+/gu, " ")})` : ""}.`
   }
   return `Fix the ${name} prerequisite (${check.reason}) before continuing.`
 }
@@ -943,7 +977,7 @@ function buildInstructionItems(ctx) {
     `Use ${root.path} as the desk path in every command and tool call; where a Desk skill says \`$DESK\`, it means this path.`,
   )
   for (const [name, check] of Object.entries(prereqResults)) {
-    if (check.ok || check.reason.endsWith("_timeout")) continue
+    if (check.ok || check.soft === true || check.reason.endsWith("_timeout")) continue
     add(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
   }
   const syncLine = syncInstruction(sync, root)
@@ -1023,6 +1057,7 @@ export async function bootOnce({
   homeDir = env.HOME || os.homedir(),
   gh: ghArg,
   ghAuth: ghAuthArg,
+  authOptions = {},
   jq = commandRunner("jq"),
   pluginRoot = DESK_PLUGIN_ROOT,
   migrationsFn = pendingMigrations,
@@ -1099,10 +1134,12 @@ export async function bootOnce({
     degraded.push(`card guard: ${error.message}`)
   }
 
-  const prereqs = await checkPrereqs({ gh, jq, ghAuth })
+  const prereqs = await checkPrereqs({ gh, jq, ghAuth, authOptions })
   for (const [name, check] of Object.entries(prereqs)) {
     if (check.ok) continue
-    if (check.reason.endsWith("_timeout")) {
+    if (check.soft === true) {
+      pending.push(`${name}: Could not verify GitHub sign-in (${check.why}); continuing; pushes may fail until it clears`)
+    } else if (check.reason.endsWith("_timeout")) {
       pending.push(`${name}: ${check.reason}`)
     } else {
       degraded.push(`${name}: ${check.reason}`)
