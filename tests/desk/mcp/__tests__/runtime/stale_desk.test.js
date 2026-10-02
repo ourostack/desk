@@ -274,3 +274,17 @@ test("a cached version that is not semver, or a plugin.json whose version is not
   assert.equal(await checkStaleDesk({ env: {}, pluginRoot: odd.pluginRoot, stateDir: odd.stateDir, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172", calls) }), null)
   assert.equal(calls.length, 1)
 })
+
+test("a remote version is capped at 64 characters, 4 KB of body and safe integers", async () => {
+  const run = async (body) => {
+    const { pluginRoot, stateDir } = await fixture("3.2.0-alpha.153")
+    return checkStaleDesk({ env: {}, pluginRoot, stateDir, agentHost: "claude", fetchFn: async () => ({ ok: true, text: async () => body }) })
+  }
+  assert.equal((await run(JSON.stringify({ version: "3.2.0-alpha.172" }))).behind, 19)
+  assert.equal(await run(JSON.stringify({ version: `3.2.0-alpha.${"9".repeat(60)}` })), null)
+  assert.equal(await run(JSON.stringify({ version: "3.2.0-alpha.172", description: "x".repeat(5000) })), null)
+  assert.equal(await run(JSON.stringify({ version: "99999999999999999999.0.0" })), null)
+  assert.equal(await run(JSON.stringify({ version: "3.2.0-alpha.99999999999999999999" })), null)
+  assert.equal(parseVersion("9007199254740991.0.0").core[0], Number.MAX_SAFE_INTEGER)
+  assert.equal(parseVersion("9007199254740992.0.0"), null)
+})

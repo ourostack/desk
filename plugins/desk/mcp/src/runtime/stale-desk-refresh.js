@@ -1,16 +1,22 @@
 // Refreshing a stale Desk on the host that cached it, so the next session runs the newer version. Boot's stale-Desk check
-// (`./stale-desk.js`) finds that the running Desk is behind `main`; this module picks the host's own refresh command,
-// runs it once, in the background of the boot (after the boot text is written), with a hard timeout, and reports one line.
-// A failed or unavailable command falls back to the manual step in the finding's line and is logged to Desk's repair log,
-// never to the agent. At most one attempt per hour per machine, whatever its outcome.
+// (`./stale-desk.js`) finds that the running Desk is behind `main`; this module picks the host's own refresh command and
+// starts it fully detached, after boot has written its output, so boot never waits for it.
+//
+// - One attempt an hour per machine. The attempt is claimed atomically (`wx` create of a claim file) and stamped before anything
+//   is spawned, so agents that boot together start one refresh, not twenty. A claim older than 30 s is stale (the runner's own
+//   limit is 8 s) and can be taken over.
+// - A tiny detached runner (a `node -e` script) runs the host's command in its own process group, kills the whole group at the
+//   8 s deadline, so no grandchild from a launcher shim survives, then records the outcome in the stamp and `repairs.log` and
+//   releases the claim. The limit holds without the boot process, which has exited by then.
+// - Boot reports what it started. A failure shows in the next boot, from the stamp, as the manual step; it is never shown as an error.
 //
 // Per host (verified against `agency plugin cache remove --help`, `copilot plugin update --help` and `claude plugin update --help`):
-// - Agency: `agency plugin cache remove -f <spec>`, where the spec is derived from Agency's own cache index, never hard-coded.
-// - Copilot run directly: `copilot plugin update desk`.
-// - Claude Code: `claude plugin update desk@<marketplace>`, with the marketplace read from where this Desk is installed.
+// - Agency: `agency plugin cache remove -f <spec>`, the spec read from Agency's own cache index.
+// - Copilot run directly (Desk under Copilot's installed-plugins directory): `copilot plugin update desk`.
+// - Claude Code: `claude plugin update desk@<marketplace>`, the marketplace read from where this Desk is installed.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { appendRepairLog, resolveDeskStateDir } from "./last-start.js"
@@ -19,7 +25,9 @@ import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-sta
 
 export const REFRESH_TIMEOUT_MS = 8000
 export const REFRESH_TTL_MS = 60 * 60 * 1000
+export const REFRESH_CLAIM_STALE_MS = 30 * 1000
 export const REFRESH_STAMP_FILE = "desk-refresh.json"
+export const REFRESH_CLAIM_FILE = "desk-refresh.claim"
 export const REFRESH_SWITCH = "DESK_BOOT_AUTO_REFRESH"
 
 // Only plain spec and plugin names ever reach a command line.
@@ -44,24 +52,19 @@ export function isAgencySession({ env, pluginRoot }) {
 }
 
 /**
- * The Agency cache spec this Desk was loaded from, from Agency's own cache index: the entry for this engine, for a plugin
- * folder named `desk`, whose cached copy has the running version. One match is the answer; none or several is null.
+ * The Agency cache spec this Desk was loaded from, from Agency's own cache index: the `ourostack/desk` plugin on `@main` for
+ * this session's engine (`AGENCY_ENGINE`, else the agent host: Claude under Agency has its own `claude:` entries), whose cached
+ * copy has the running version. Anything else is null.
  */
-export function deriveAgencySpec({ env, pluginRoot, running, homeDir, readFile = (file) => readFileSync(file, "utf8") }) {
+export function deriveAgencySpec({ env, agentHost, pluginRoot, running, homeDir, readFile = (file) => readFileSync(file, "utf8") }) {
   try {
-    const engine = text(env.AGENCY_ENGINE) ? env.AGENCY_ENGINE.trim() : "copilot"
+    const engine = text(env.AGENCY_ENGINE) ? env.AGENCY_ENGINE.trim() : agentHost
+    if (engine !== "copilot" && engine !== "claude") return null
+    const spec = `${engine}:github:ourostack/desk:plugins/desk@main`
     const cacheDir = path.join(agencyPluginsDir({ pluginRoot, homeDir }), "cache")
-    const entries = JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {}
-    const own = new RegExp(`^${engine.replace(/[^A-Za-z0-9_-]/gu, "")}:github:[^:]+:(?:[^@:]*/)?desk(?:@[^:]*)?$`, "u")
-    const matches = Object.entries(entries).filter(([spec, entry]) => {
-      if (!own.test(spec) || !SAFE_ARG.test(spec) || !text(entry?.dir_name)) return false
-      try {
-        return JSON.parse(readFile(path.join(cacheDir, "entries", entry.dir_name, "plugin.json"))).version === running
-      } catch {
-        return false
-      }
-    })
-    return matches.length === 1 ? matches[0][0] : null
+    const entry = (JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {})[spec]
+    if (!text(entry?.dir_name)) return null
+    return JSON.parse(readFile(path.join(cacheDir, "entries", entry.dir_name, "plugin.json"))).version === running ? spec : null
   } catch {
     return null
   }
@@ -75,48 +78,62 @@ export function claudeMarketplace({ pluginRoot, name = "desk" }) {
   return SAFE_ARG.test(parts[at + 1]) ? parts[at + 1] : null
 }
 
-/** `{ host, command, args, done }` for the host's own refresh, or null when none can be derived and the manual step stands. */
-export function refreshPlan({ env, pluginRoot, agentHost, running, latest, homeDir, readFile }) {
+/** True when `pluginRoot` is inside Copilot's installed-plugins directory (`$COPILOT_HOME`, else `~/.copilot`), not a `--plugin-dir` or a dev checkout. */
+export function copilotInstalled({ env, pluginRoot, homeDir }) {
+  const base = path.resolve(text(env.COPILOT_HOME) ? env.COPILOT_HOME : path.join(homeDir, ".copilot"), "installed-plugins")
+  const relative = path.relative(base, path.resolve(pluginRoot))
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+}
+
+/** `{ host, command, args, doing }` for the host's own refresh, or null when none can be derived and the manual step stands. */
+export function refreshPlan({ env, pluginRoot, agentHost, running, homeDir, readFile }) {
   if (isAgencySession({ env, pluginRoot })) {
-    const spec = deriveAgencySpec({ env, pluginRoot, running, homeDir, readFile })
-    return spec === null ? null : { host: "agency", command: "agency", args: ["plugin", "cache", "remove", "-f", spec], done: `refreshed the Agency plugin cache, so a new session will run ${latest}` }
+    const spec = deriveAgencySpec({ env, agentHost, pluginRoot, running, homeDir, readFile })
+    return spec === null ? null : { host: "agency", command: "agency", args: ["plugin", "cache", "remove", "-f", spec], doing: "refreshing the Agency plugin cache" }
   }
-  if (agentHost === "copilot") return { host: "copilot", command: "copilot", args: ["plugin", "update", "desk"], done: `ran copilot plugin update desk, so a new session will run ${latest}` }
+  if (agentHost === "copilot") return copilotInstalled({ env, pluginRoot, homeDir }) ? { host: "copilot", command: "copilot", args: ["plugin", "update", "desk"], doing: "running copilot plugin update desk" } : null
   if (agentHost === "claude") {
     const marketplace = claudeMarketplace({ pluginRoot })
-    return marketplace === null ? null : { host: "claude", command: "claude", args: ["plugin", "update", `desk@${marketplace}`], done: `ran claude plugin update desk@${marketplace}, so a new session will run ${latest}` }
+    return marketplace === null ? null : { host: "claude", command: "claude", args: ["plugin", "update", `desk@${marketplace}`], doing: `running claude plugin update desk@${marketplace}` }
   }
   return null
 }
 
-/** Runs one command with no stdin and a hard timeout; resolves `{ ok, code, reason }` and never rejects. */
-export function runCommand(command, args, { spawn = nodeSpawn, timeoutMs = REFRESH_TIMEOUT_MS, env = process.env } = {}) {
-  return new Promise((resolve) => {
-    let settled = false
-    let child
-    const finish = (result) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve(result)
-    }
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL")
-      } catch {
-        // The child is already gone.
-      }
-      finish({ ok: false, code: null, reason: "timeout" })
-    }, timeoutMs)
-    try {
-      child = spawn(command, args, { stdio: "ignore", env, windowsHide: true })
-      child.once("error", (error) => finish({ ok: false, code: null, reason: error.code === "ENOENT" ? "not_installed" : "spawn_failed" }))
-      child.once("close", (code) => finish({ ok: code === 0, code, reason: code === 0 ? "ok" : "nonzero_exit" }))
-    } catch {
-      finish({ ok: false, code: null, reason: "spawn_failed" })
-    }
-  })
+// The detached runner. It is a string, run with `node -e`, so it needs no file beside the plugin and nothing of Desk loaded.
+// argv[1] is its JSON config. The command gets its own process group (POSIX), and the group is killed at the deadline and after
+// the command exits, so no grandchild survives; then the stamp and the log line are written and the claim is released.
+const RUNNER_SOURCE = `
+const fs = require("node:fs"), cp = require("node:child_process"), path = require("node:path")
+const cfg = JSON.parse(process.argv[1])
+const posix = process.platform !== "win32"
+let finished = false, child, timer
+function killGroup() {
+  try { if (posix) process.kill(-child.pid, "SIGKILL"); else child.kill() } catch (e) {}
 }
+function finish(ok, reason, code) {
+  if (finished) return
+  finished = true
+  clearTimeout(timer)
+  const now = new Date().toISOString()
+  try {
+    const stamp = JSON.stringify({ schema_version: 1, attempted_at: cfg.attemptedAt, finished_at: now, host: cfg.host, running: cfg.running, latest: cfg.latest, ok, reason })
+    fs.writeFileSync(cfg.stamp + ".run.tmp", stamp + "\\n", { mode: 0o600 })
+    fs.renameSync(cfg.stamp + ".run.tmp", cfg.stamp)
+  } catch (e) {}
+  try {
+    const line = ok ? "stale Desk refresh ran (" + cfg.host + ": " + cfg.shown + "); " + cfg.running + " -> " + cfg.latest : "stale Desk refresh failed (" + cfg.host + ": " + cfg.shown + "): " + reason + (code == null ? "" : " exit " + code)
+    fs.appendFileSync(cfg.log, now + " " + cfg.root + " " + line + "\\n", { mode: 0o600 })
+  } catch (e) {}
+  try { fs.unlinkSync(cfg.claim) } catch (e) {}
+  process.exit(0)
+}
+timer = setTimeout(() => { killGroup(); finish(false, "timeout", null) }, cfg.timeoutMs)
+try {
+  child = cp.spawn(cfg.command, cfg.args, { stdio: "ignore", detached: posix, windowsHide: true })
+  child.once("error", (error) => finish(false, error.code === "ENOENT" ? "not_installed" : "spawn_failed", null))
+  child.once("exit", (code) => { killGroup(); finish(code === 0, code === 0 ? "ok" : "nonzero_exit", code) })
+} catch (e) { finish(false, "spawn_failed", null) }
+`
 
 function readStamp(file) {
   try {
@@ -127,64 +144,91 @@ function readStamp(file) {
   }
 }
 
-function writeStamp(stateDir, file, record, env) {
-  try {
-    assertNotRealStateUnderTest(stateDir, { env })
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-    const temp = `${file}.${process.pid}.tmp`
-    writeFileSync(temp, `${JSON.stringify(record)}\n`, { mode: 0o600 })
-    renameSync(temp, file)
-  } catch {
-    // Without a stamp the next boot may try again; that is the only cost.
-  }
+function freshStamp(stamp, now) {
+  const age = stamp === null ? Infinity : now() - Date.parse(stamp.attempted_at)
+  return age >= 0 && age < REFRESH_TTL_MS
 }
 
-function logLine({ stateDir, line, root, now, env }) {
-  try {
-    appendRepairLog({ stateDir, line, root: root ?? "-", now: () => new Date(now()) })
-  } catch {
-    // The log is for later diagnosis only; a boot never depends on it.
-  }
+function writeFileAtomic(file, record) {
+  const temp = `${file}.${process.pid}.tmp`
+  writeFileSync(temp, `${JSON.stringify(record)}\n`, { mode: 0o600 })
+  renameSync(temp, file)
 }
 
 /**
- * Decides, without running anything, whether a refresh would be attempted now: `{ state: "ready", plan, ... }`, or a
- * state that means the manual step stands (`disabled`, `skipped` for an attempt in the last hour, `unavailable` when the
- * host's command cannot be derived). Never throws.
+ * Decides, without changing anything, what a boot should say and do about a stale finding: `{ state: "ready", plan, dir }`, or
+ * a state meaning the manual step stands: `disabled`, `skipped` (an attempt in the last hour), `failed` (that attempt failed),
+ * `unavailable` (no command can be derived). Never throws. `allowInTest` lifts the node:test off switch.
  */
-export function planStaleRefresh({ finding, env, pluginRoot, agentHost, homeDir, now = Date.now, runner = runCommand, stateDir, readFile }) {
+export function planStaleRefresh({ finding, env, pluginRoot, agentHost, homeDir, now = Date.now, stateDir, readFile, allowInTest = false }) {
   try {
     if (String(env[REFRESH_SWITCH] ?? "").trim() === "0") return { state: "disabled" }
-    if (runner === runCommand && looksLikeNodeTestRunner(env)) return { state: "disabled" }
+    if (!allowInTest && looksLikeNodeTestRunner(env)) return { state: "disabled" }
     const dir = stateDir ?? resolveDeskStateDir({ env })
-    const file = path.join(dir, REFRESH_STAMP_FILE)
-    const stamp = readStamp(file)
-    const age = stamp === null ? Infinity : now() - Date.parse(stamp.attempted_at)
-    if (age >= 0 && age < REFRESH_TTL_MS) return { state: "skipped" }
-    const plan = refreshPlan({ env, pluginRoot, agentHost, running: finding.running, latest: finding.latest, homeDir: homeDir ?? os.homedir(), readFile })
-    return plan === null ? { state: "unavailable" } : { state: "ready", plan, dir, file }
+    const stamp = readStamp(path.join(dir, REFRESH_STAMP_FILE))
+    if (freshStamp(stamp, now)) return { state: stamp.ok === false ? "failed" : "skipped" }
+    const plan = refreshPlan({ env, pluginRoot, agentHost, running: finding.running, homeDir: homeDir ?? os.homedir(), readFile })
+    return plan === null ? { state: "unavailable" } : { state: "ready", plan, dir }
   } catch {
     return { state: "unavailable" }
   }
 }
 
-/**
- * Runs a ready plan (at most one attempt an hour, stamped whatever its outcome) and returns `{ state, plan, line }`:
- * `refreshed` with the one-line outcome, or `failed` with the finding's own line (the manual step). Never throws.
- * `runner` is the command runner (`runCommand`, or a test's stub).
- */
-export async function runStaleRefresh({ prepared, finding, env, root, now = Date.now, runner, timeoutMs = REFRESH_TIMEOUT_MS }) {
-  const { plan, dir, file } = prepared
+/** The finding's line for a refresh that has started: what boot reports, in place of the manual step. */
+export function startedLine(finding, plan) {
+  return `Desk ${finding.running} is ${behindText(finding.behind)} main (${finding.latest}); ${plan.doing} in the background, so a new session will run ${finding.latest}.`
+}
+
+// Creates the claim, or reports that another boot holds a live one. A claim older than REFRESH_CLAIM_STALE_MS belongs to a runner
+// that died and is taken over. If two boots take the same stale claim over, the one that loses the create throws here and
+// the caller reports its start as failed, which only means it does not start a second refresh.
+function claim(file, now) {
   try {
-    const result = await runner(plan.command, plan.args, { timeoutMs, env })
-    writeStamp(dir, file, { schema_version: 1, attempted_at: new Date(now()).toISOString(), host: plan.host, running: finding.running, latest: finding.latest, ok: result.ok === true }, env)
-    if (result.ok !== true) {
-      logLine({ stateDir: dir, root, now, env, line: `stale Desk refresh failed (${plan.host}: ${plan.command} ${plan.args.join(" ")}): ${result.reason}${result.code === null ? "" : ` exit ${result.code}`}` })
-      return { state: "failed", plan, line: finding.line }
-    }
-    logLine({ stateDir: dir, root, now, env, line: `stale Desk refresh ran (${plan.host}: ${plan.command} ${plan.args.join(" ")}); ${finding.running} -> ${finding.latest}` })
-    return { state: "refreshed", plan, line: `Desk ${finding.running} is ${behindText(finding.behind)} main (${finding.latest}); ${plan.done}.` }
+    closeSync(openSync(file, "wx", 0o600))
+    return true
   } catch {
-    return { state: "failed", plan, line: finding.line }
+    // Held by someone: live or stale, below.
+  }
+  if (now() - statSync(file).mtimeMs < REFRESH_CLAIM_STALE_MS) return false
+  unlinkSync(file)
+  closeSync(openSync(file, "wx", 0o600))
+  return true
+}
+
+/**
+ * Starts a ready plan, detached, and returns at once: `{ state: "started" }`, `{ state: "claimed_elsewhere" }` when another boot
+ * holds the attempt, or `{ state: "failed" }` when it could not start. Claims the attempt and stamps it before spawning, so
+ * concurrent boots start one refresh. Never throws and never waits; the runner outlives this process. `spawn` is for tests.
+ */
+export function startStaleRefresh({ prepared, finding, env, root, now = Date.now, spawn = nodeSpawn, timeoutMs = REFRESH_TIMEOUT_MS }) {
+  const { plan, dir } = prepared
+  const stamp = path.join(dir, REFRESH_STAMP_FILE)
+  const claimFile = path.join(dir, REFRESH_CLAIM_FILE)
+  const attemptedAt = new Date(now()).toISOString()
+  let held = false
+  try {
+    assertNotRealStateUnderTest(dir, { env })
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if (!claim(claimFile, now)) return { state: "claimed_elsewhere" }
+    held = true
+    // Re-read after winning the claim: a boot that finished its attempt between our plan and our claim has stamped it already.
+    if (freshStamp(readStamp(stamp), now)) {
+      unlinkSync(claimFile)
+      return { state: "claimed_elsewhere" }
+    }
+    writeFileAtomic(stamp, { schema_version: 1, attempted_at: attemptedAt, host: plan.host, running: finding.running, latest: finding.latest, ok: null })
+    const config = { command: plan.command, args: plan.args, timeoutMs, stamp, claim: claimFile, log: path.join(dir, "repairs.log"), root: root ?? "-", host: plan.host, running: finding.running, latest: finding.latest, attemptedAt, shown: `${plan.command} ${plan.args.join(" ")}` }
+    const child = spawn(process.execPath, ["-e", RUNNER_SOURCE, JSON.stringify(config)], { cwd: dir, detached: true, stdio: "ignore", env, windowsHide: true })
+    child.unref()
+    return { state: "started" }
+  } catch (error) {
+    // A start that failed releases its own claim; the stamp stays, so a broken host is not retried every boot.
+    if (held) unlinkSync(claimFile)
+    try {
+      appendRepairLog({ stateDir: dir, line: `stale Desk refresh could not start (${plan.host}): ${error.message}`, root: root ?? "-", now: () => new Date(now()) })
+    } catch {
+      // The log is for later diagnosis only.
+    }
+    return { state: "failed" }
   }
 }

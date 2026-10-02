@@ -79,7 +79,7 @@ import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
-import { planStaleRefresh, runCommand, runStaleRefresh } from "./stale-desk-refresh.js"
+import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
 
 const parseFrontmatter = loadFrontmatterParser()
@@ -1250,23 +1250,14 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
     })
   }
   const finding = result.stale_desk ?? null
-  // A stale Desk is refreshed on its own host after the boot text is out, once an hour, with a hard timeout; failures go to Desk's repair log.
-  const options = { finding, env, pluginRoot: DESK_PLUGIN_ROOT, agentHost: result.host?.agent, root: result.root?.path ?? null, runner: runCommand, ...refreshOptions }
+  // A stale Desk is refreshed on its own host, but only after the boot output is written, and by a detached runner: boot never waits for it.
+  const options = { finding, env, pluginRoot: DESK_PLUGIN_ROOT, agentHost: result.host?.agent, root: result.root?.path ?? null, ...refreshOptions }
   const prepared = finding === null ? { state: "unavailable" } : planStaleRefresh(options)
-  const refresh = () => runStaleRefresh({ ...options, prepared })
-  if (json) {
-    if (prepared.state === "ready") {
-      const outcome = await refresh()
-      result = { ...result, stale_desk: { ...finding, auto_refresh: outcome.state, line: outcome.line } }
-    } else if (finding !== null) result = { ...result, stale_desk: { ...finding, auto_refresh: prepared.state } }
-    io.stdout.write(`${JSON.stringify(result)}\n`)
-    return 0
+  if (finding !== null) {
+    const started = prepared.state === "ready"
+    result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started ? startedLine(finding, prepared.plan) : finding.line } }
   }
-  if (prepared.state !== "ready") {
-    io.stdout.write(formatBootText(result))
-    return 0
-  }
-  io.stdout.write(formatBootText({ ...result, stale_desk: null }))
-  io.stdout.write(`${(await refresh()).line}\n`)
+  io.stdout.write(json ? `${JSON.stringify(result)}\n` : formatBootText(result))
+  if (prepared.state === "ready") startStaleRefresh({ ...options, prepared })
   return 0
 }

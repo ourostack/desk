@@ -23,14 +23,20 @@ export const AGENCY_CACHE_COMMAND = 'agency plugin cache remove "copilot:github:
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/u
 
-/** `{ core: [major, minor, patch], pre: [identifiers] }` for a semver string, or null. */
-export function parseVersion(text) {
-  const match = typeof text === "string" ? SEMVER.exec(text.trim()) : null
-  if (match === null) return null
-  return { core: [Number(match[1]), Number(match[2]), Number(match[3])], pre: match[4] === undefined ? [] : match[4].split(".") }
-}
+export const MAX_VERSION_LENGTH = 64
+export const MAX_RESPONSE_BYTES = 4096
 
 const isNumeric = (id) => /^\d+$/u.test(id)
+
+/** `{ core: [major, minor, patch], pre: [identifiers] }` for a semver string of at most 64 characters whose numbers all fit a safe integer, or null. */
+export function parseVersion(text) {
+  const match = typeof text === "string" && text.length <= MAX_VERSION_LENGTH ? SEMVER.exec(text.trim()) : null
+  if (match === null) return null
+  const core = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const pre = match[4] === undefined ? [] : match[4].split(".")
+  if (core.some((n) => n > Number.MAX_SAFE_INTEGER) || pre.some((id) => isNumeric(id) && Number(id) > Number.MAX_SAFE_INTEGER)) return null
+  return { core, pre }
+}
 
 /** Semver precedence: negative when `a` is older than `b`, 0 when equal, positive when newer; null when either is not semver. */
 export function compareVersions(a, b) {
@@ -137,7 +143,9 @@ async function fetchLatest(fetchFn, budgetMs) {
   try {
     const response = await fetchFn(LATEST_PLUGIN_URL, { signal: controller.signal, redirect: "follow", credentials: "omit" })
     if (!response.ok) return null
-    const version = JSON.parse(await response.text()).version
+    const body = await response.text()
+    if (body.length > MAX_RESPONSE_BYTES) return null
+    const version = JSON.parse(body).version
     return parseVersion(version) === null ? null : version
   } catch {
     return null
