@@ -323,13 +323,15 @@ export function formatBootText(result) {
     if (failing.length < 3 && line.length <= 80) inHeadline.add(line)
     failing.push(line.length > 80 ? `${line.slice(0, 77)}...` : line)
   }
-  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})` : `Desk boot: ${result.status}`
+  const waiting = typeof result.needs_operator?.question === "string"
+  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})` : `Desk boot: ${result.status}${waiting ? `, waiting on you (${result.needs_operator.summary})` : ""}`
   const status = [headline]
   if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
   if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
   // The headline already says a failed sync; the sync words follow only for a sync that did not fail (it worked, or there was nothing to sync).
   if (sync !== null && !syncFailed) status.push(sync)
   const lines = [status.join(" | ")]
+  if (waiting) lines.push(`Needs you first: ${result.needs_operator.question}`)
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
   // The headline already says why the sync failed and what else failed (up to three short entries), so those entries would only repeat it.
   for (const line of result.degraded ?? []) if (!inHeadline.has(line) && (sync === null || !line.startsWith("sync: "))) lines.push(`- degraded: ${line}`)

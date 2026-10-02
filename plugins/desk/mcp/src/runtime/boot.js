@@ -829,6 +829,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     prereqs: null,
     sync: null,
     sync_summary: null,
+    needs_operator: null,
     agents_md: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
@@ -966,6 +967,19 @@ function missingCloneInstruction(missing) {
 
 // A missing clone with no source to clone from blocks the hand-off: the agent has to ask first. So the hand-off and the question are ONE instruction, in
 // the order they happen, never two parallel steps (boot acceptance round O: "I can't hand off to session-resumption if I first need to ask about the missing repo").
+// The one question boot makes the agent ask before any work, or null when nothing blocks. The text boot prints it right after the headline and
+// `--json` carries it as `needs_operator`; the consent line is left out of that boot (the operator has one question to answer first).
+function needsOperator(ctx) {
+  const { taskQuery, task, repoStateList } = ctx
+  if (taskQuery === null || task?.status !== "resolved") return null
+  const blockers = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state))
+  if (blockers.length === 0) return null
+  return {
+    question: blockers.map((missing) => `Where is ${missing.repo} cloned, or what URL should I clone it from?`).join(" "),
+    summary: `${blockers.map((missing) => missing.repo).join(", ")} not on this machine`,
+  }
+}
+
 function askThenHandOff(blockers, task) {
   const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${blockers[0].local_path}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${missing.local_path}`).join("; ")})`
   const questions = blockers.map((missing) => `"Where is ${missing.repo} cloned, or what URL should I clone it from?"`).join(" and ")
@@ -1032,7 +1046,8 @@ function buildInstructionItems(ctx) {
   } else {
     add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
   }
-  const consent = factoryInstructions(factory, pluginRoot, { noninteractive })
+  // An ask-and-stop blocker means the operator has one question to answer first: no consent line on this boot.
+  const consent = needsOperator(ctx) === null ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
   consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
@@ -1316,6 +1331,7 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
   }

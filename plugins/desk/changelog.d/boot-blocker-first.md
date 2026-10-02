@@ -1,0 +1,1 @@
+Boot now leads with a blocker it needs the operator to clear: when a named task's repo is missing and has no clone source, the plain-text boot says `waiting on you` in the headline and prints `Needs you first: <the one question>` right after it, `--json` carries the same as a top-level `needs_operator` field, and that boot leaves out the factory consent line.
