@@ -201,9 +201,9 @@ async function markerPresent(file) {
   try {
     await fs.lstat(file)
     return true
-  } catch (error) {
-    if (error.code === "ENOENT" || error.code === "ENOTDIR") return false
-    throw error
+  } catch {
+    // Missing, or its folder is gone, or unreadable: in each case there is nothing for this worker to continue.
+    return false
   }
 }
 
