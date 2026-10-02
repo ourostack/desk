@@ -589,3 +589,38 @@ test("a reply that says the task is done without stating its real status is stil
     "Work is done. The task was in validating before, but it's done now.",
   ]) assert.ok(blocks(stop(validating(), reply)), reply)
 })
+
+// ---- review round: hyphenated words are not slugs, and a status statement never clears a claim about the task itself ----
+
+test("a hyphenated word that is no task reference does not make the status someone else's", () => {
+  for (const reply of [
+    "The work is done. The task is in validating state (the pre-existing lint failure is unrelated).",
+    "The work is done. Status: validating, with a follow-up PR still to open.",
+    "The work is done. The task is in validating state, so the code-review step is next.",
+    "The work is done. The task is in validating state — the cancelled-task cleanup is next.",
+    "The work is done.\n\n- watering-schedule-api: validating\n- soil-sensor: processing",
+    "The work is done.\n\n| task | status |\n| --- | --- |\n| watering-schedule-api | validating |",
+    "The work is done. Status:\nvalidating",
+  ]) assert.deepEqual(stop(validating(), reply), {}, reply)
+})
+
+test("a claim that the task itself is done blocks whatever status the reply states", () => {
+  for (const reply of [
+    "Done. The task is in validating state, effectively done.",
+    "Status: validating. Actually the task is done.",
+    "The work is done. The task is in validating state. Task watering-schedule-api is done.",
+    "Status: validating — no, done.",
+    "Status: validating. Status: done.",
+    "Task watering-schedule-api was validating, now done.",
+    "The task is in validating state, which means it is finished.",
+    "The task is in validating (complete).",
+    "All done. The task is in validating state and complete.",
+    "The work is done. The task is in the validating stage, meaning finished.",
+  ]) assert.ok(blocks(stop(validating(), reply)), reply)
+  // A status quoted with > or fenced is not the reply's own statement.
+  assert.ok(blocks(stop(validating(), "The work is done.\n\n> The task is in validating state.\n```\nStatus: validating\n```")))
+  // Another task's claim, named explicitly, is not this task's.
+  assert.deepEqual(stop(validating(), "Task soil-sensor is done. The work is done and watering-schedule-api: validating."), {})
+  // Work-level claims stay cleared by the status.
+  for (const reply of ["The code is effectively done but the task is at validating.", "I'm done for now. Status: validating."]) assert.deepEqual(stop(validating(), reply), {}, reply)
+})

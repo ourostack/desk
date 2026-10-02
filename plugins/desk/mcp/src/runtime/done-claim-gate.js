@@ -189,7 +189,7 @@ const DONE_WORD = "(?:done|complete[d]?|finished)"
  * The ways a reply says the task, or the work, is done. The acceptance harness uses these same patterns (and adds a few of its own), so the two agree.
  * Deliberately not claims: "Done reading the card", "I'm done for now", "done with step 2", "I'm done with the task review", "All tests are done running", "The fix is done", "Shipped."
  */
-export const DONE_CLAIM_PATTERNS = [
+const TASK_CLAIM_PATTERNS = [
   // "the task is complete", "this job has been finished"; a bare "the task done" or "the task was done" is not one.
   new RegExp(`\\b(?:the|this|my|our)\\s+(?:task|job|ticket)\\s+(?:is|has been|is now|is all)\\s+${DONE_WORD}\\b`, "iu"),
   // "Task watering-schedule-api is done": the task named by its slug (a word with a hyphen or an underscore in it).
@@ -198,6 +198,10 @@ export const DONE_CLAIM_PATTERNS = [
   new RegExp(`(?:^|[\\n"'\`(:]|\\.\\s)\\s*(?:task|job|ticket)\\s+(?:is\\s+)?(?:now\\s+)?${DONE_WORD}\\b`, "iu"),
   // "completed the task", "done with the task and pushed"; "done with the task review" names a part of the task.
   new RegExp(`\\b(?:completed|finished|done with)\\s+(?:all\\s+of\\s+)?(?:(?:the|this|my|our)\\s+)?(?:task|job|ticket)\\b(?!\\s+(?!and\\b|then\\b|but\\b)\\w)`, "iu"),
+]
+
+export const DONE_CLAIM_PATTERNS = [
+  ...TASK_CLAIM_PATTERNS,
   /\b(?:finished|completed)\s+(?:all\s+(?:of\s+)?)?(?:the|this|my|our)\s+work\b/iu,
   new RegExp(`\\b(?:the|this|my|our|all(?:\\s+the)?)\\s+work\\s+(?:is|was|has been)\\s+(?:now\\s+|all\\s+)?${DONE_WORD}\\b`, "iu"),
   new RegExp(`(?:^|[\\n"'\`(:]|\\.\\s)\\s*work\\s+(?:is\\s+|was\\s+)?(?:now\\s+)?${DONE_WORD}\\b`, "iu"),
@@ -255,8 +259,21 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
 // A status clause that is taken back in its own sentence is no statement: "Done! (status: validating - just kidding, it's done)", "validating -> done".
 const RETRACTION = /\b(?:just\s+kidding|jk|psych|scratch\s+that|never\s*mind|on\s+second\s+thought|ignore\s+that)\b|(?:\u2192|->|=>|\u21d2)\s*[`*"']*(?:done|complete[d]?|finished)\b|\bbut\s+(?:it|the\s+task|task\s+\S+)\s*(?:is|['\u2019]s)\s+(?:actually\s+|really\s+)?(?:done|complete[d]?|finished)\b/iu
-// A word with a hyphen inside names a task slug (or something like one): a status clause that names another slug is about that one.
-const SLUG_LIKE = /(?<![\w/-])[a-z0-9]+(?:-[a-z0-9]+)+(?![\w/-])/giu
+// A task slug: a word with a hyphen inside. Only an explicit task reference makes one the subject of a status clause: "task other-task is ...", or "other-task: ..." / "| other-task | ..." / "- other-task is ..." at the start of a statement. A hyphenated word elsewhere ("pre-existing", "code-review") is just a word.
+const SLUG = "[a-z0-9]+(?:-[a-z0-9]+)+"
+const TASK_REFERENCE = new RegExp(`\\btask\\s+[\`*"']*(${SLUG})[\`*"']*\\s*(?::|\\b(?:is|was|remains|stays|at|has)\\b)`, "iu")
+const LEADING_REFERENCE = new RegExp(`^[\\s|>*\u2022\\-]*[\`*"']*(${SLUG})[\`*"']*\\s*(?::|\\||\\b(?:is|was|remains|stays)\\b)`, "iu")
+
+/** The slug another task is referred to by in `part`, in an explicit task-reference form, or null. */
+function otherTaskSlug(part, slug) {
+  const found = TASK_REFERENCE.exec(part)?.[1] ?? LEADING_REFERENCE.exec(part)?.[1] ?? null
+  return found !== null && found.toLowerCase() !== String(slug).toLowerCase() ? found : null
+}
+
+/** `text` without the parts that are not the reply speaking: fenced code and `>` quoted lines. */
+function withoutBlockQuotes(text) {
+  return String(text ?? "").replace(/```[\s\S]*?(?:```|$)/gu, " ").replace(/^[ \t]*>.*$/gmu, " ")
+}
 
 /**
  * Whether `text` states `status` as the task's real status: in a status clause ("status: validating", "is at validating", "at validating (not done)", "moved to validating", "the task is validating", "the task is now in validating state"), or in a sentence that names the task's slug.
@@ -274,11 +291,46 @@ export function statesStatus(text, status, slug) {
   ].map((clause) => new RegExp(clause, "iu"))
   const named = typeof slug === "string" && slug !== "" ? new RegExp(`(?<![\\w-])${escapeRegExp(slug)}(?![\\w-])`, "iu") : null
   const bare = new RegExp(`(?<!\\bnot\\s)(?<![\\w-])${word}(?![\\w-])`, "iu")
-  // A semicolon ends a statement as a full stop does: "status: processing; soil-sensor is at validating" is two.
-  return sentencesOf(text).some((sentence) => !RETRACTION.test(sentence) && sentence.split(";").some((part) => {
-    if (named !== null && !named.test(part) && part.match(SLUG_LIKE) !== null) return false
+  // A semicolon ends a statement as a full stop does: "status: processing; soil-sensor is at validating" is two. A status on the line after "Status:" counts as beside it.
+  const own = withoutBlockQuotes(text).replace(/(\bstatus\b[\s*_]*:[ \t*_]*)\n+[ \t]*/giu, "$1")
+  return sentencesOf(own).some((sentence) => !RETRACTION.test(sentence) && sentence.split(";").some((part) => {
+    if (named !== null && !named.test(part) && otherTaskSlug(part, slug) !== null) return false
     return clauses.some((clause) => clause.test(part)) || (named !== null && named.test(part) && bare.test(part))
   }))
+}
+
+// The words of a task-level claim beyond "the task is done" itself. A sentence about the work ("the code is effectively done") is a work-level claim and stays with the status rule.
+const WORK_SUBJECT = /\b(?:code|work|implementation|fix|fixes|change|changes|tests?|build|patch|feature|PR|pull request|branch|step|steps)\b/iu
+const TASK_LEVEL_PATTERNS = [
+  // Status: done / complete
+  new RegExp(`\\bstatus\\s*(?:is|:)\\s*[\`*"']*${DONE_WORD}\\b`, "iu"),
+  // "validating (complete)"
+  new RegExp(`\\([\`*"']*${DONE_WORD}[\`*"']*\\)`, "iu"),
+  // "validating -> done", "validating, no, done"
+  new RegExp(`(?:\u2192|->|=>|\u21d2)\\s*[\`*"']*${DONE_WORD}\\b`, "iu"),
+  new RegExp(`\\bno[,.:\u2014\u2013-]*\\s+(?:it['\u2019]s\\s+|it\\s+is\\s+)?${DONE_WORD}\\b`, "iu"),
+  // "which means it is finished", "it's done"
+  new RegExp(`\\bit(?:\\s+is|['\u2019]s)\\s+(?:now\\s+|all\\s+)?${DONE_WORD}\\b`, "iu"),
+  // "in validating state and complete", "validating, meaning finished"
+  new RegExp(`\\b(?:and|aka|meaning)\\s+(?:also\\s+)?${DONE_WORD}\\b`, "iu"),
+  // "effectively done", "now done", "actually complete"
+  new RegExp(`\\b(?:effectively|essentially|basically|actually|really|now|already)\\s+${DONE_WORD}\\b`, "iu"),
+]
+const TASK_LEVEL_WORK_EXEMPT = TASK_LEVEL_PATTERNS.slice(4)
+
+/**
+ * The sentences of `text` that claim the task itself is done: "Task x is done", "the task is complete", "Status: done", "validating (complete)", "validating -> done", "no, done", "it is finished", "effectively done".
+ * These are not cleared by a status statement elsewhere in the reply, unlike "the work is done". With the task's `slug`, a sentence that refers to another task by an explicit task-reference form is that task's claim and does not count here.
+ * Quoted text, code and `>` quotes, negated and conditional claims are left out.
+ */
+export function taskLevelClaims(text, slug) {
+  const body = withoutQuotedText(withoutBlockQuotes(text))
+  return sentencesOf(body).flatMap((sentence) => sentence.split(";")).filter((part) => {
+    if (otherTaskSlug(part, slug) !== null && !(typeof slug === "string" && new RegExp(`(?<![\\w-])${escapeRegExp(slug)}(?![\\w-])`, "iu").test(part))) return false
+    const rest = STATUS_CLAUSES.reduce((remaining, clause) => remaining.replace(clause, " "), part)
+    const patterns = [...TASK_CLAIM_PATTERNS, ...TASK_LEVEL_PATTERNS.filter((pattern) => !TASK_LEVEL_WORK_EXEMPT.includes(pattern) || !WORK_SUBJECT.test(rest))]
+    return standing(rest, patterns)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +393,8 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
       if (status !== null && !TERMINAL.has(status)) open.push({ ...task, status })
     }
     const reply = open.length === 0 ? null : finalReply(payload)
-    const unstated = reply === null || doneClaims(reply).length === 0 ? [] : open.filter((task) => !statesStatus(reply, task.status, task.slug))
+    // A claim that the task itself is done stands whatever status the reply states; a claim about the work is cleared by an honest status statement.
+    const unstated = reply === null ? [] : open.filter((task) => taskLevelClaims(reply, task.slug).length > 0 || (doneClaims(reply).length > 0 && !statesStatus(reply, task.status, task.slug)))
     if (unstated.length === 0) {
       removeFile(file)
       return {}
