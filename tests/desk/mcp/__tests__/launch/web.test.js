@@ -34,12 +34,20 @@ function touch(file, contents = "") {
   return file
 }
 
-// The browser a fake install leaves behind: a stub MCP server. It answers initialize, and answers tools/call with the options it was started with. FAKE_CLI_MODE picks a behavior: list_changed (a tools/list_changed notification, a log notification, noise and an answer to a request nobody made before each answer), rpcerror (answers a call with a JSON-RPC error), crash (exits 3 on a call), slow (never answers a call; logs a cancel to stderr), stubborn (ignores stdin closing), badinit (answers initialize with an error), dieearly (exits 4 a moment after initialize arrives), roots (asks the host for roots before answering initialize).
+// The browser a fake install leaves behind: a stub MCP server. It answers initialize, and answers tools/call with the options it was started with. FAKE_CLI_MODE picks a behavior: list_changed (a tools/list_changed notification, a log notification, noise and an answer to a request nobody made before each answer), rpcerror (answers a call with a JSON-RPC error), crash (exits 3 on a call), slow (never answers a call; logs a cancel to stderr), stubborn (ignores stdin closing), badinit (answers initialize with an error), dieearly (exits 4 a moment after initialize arrives), extra (lists one more tool), badlist (answers tools/list with an error), ping (pings the host before answering initialize), chunky (writes each answer in two pieces), roots (asks the host for roots before answering initialize).
 const STUB_CLI = `
 const args = process.argv.slice(2)
 const mode = process.env.FAKE_CLI_MODE || "ok"
 let buffered = ""
-function send(message) { process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n") }
+let chain = Promise.resolve()
+function send(message) {
+  const text = JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n"
+  if (mode !== "chunky") { process.stdout.write(text); return }
+  chain = chain.then(() => new Promise((resolve) => {
+    process.stdout.write(text.slice(0, 10))
+    setTimeout(() => { process.stdout.write(text.slice(10)); resolve() }, 20)
+  }))
+}
 process.stdin.setEncoding("utf8")
 process.stdin.on("data", (chunk) => {
   buffered += chunk
@@ -52,9 +60,11 @@ process.stdin.on("data", (chunk) => {
       if (mode === "badinit") { send({ id: message.id, error: { code: -32000, message: "no handshake today" } }); continue }
       if (mode === "dieearly") { setTimeout(() => process.exit(4), 300); continue }
       if (mode === "roots") send({ id: 99, method: "roots/list" })
+      if (mode === "ping") send({ id: 55, method: "ping" })
       send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "Playwright", version: "stub" } } })
     } else if (message.method === "tools/list") {
-      send({ id: message.id, result: { tools: [{ name: "stub_tool", inputSchema: { type: "object" } }] } })
+      if (mode === "badlist") { send({ id: message.id, error: { code: -32603, message: "no list" } }); continue }
+      send({ id: message.id, result: { tools: [{ name: "stub_tool", inputSchema: { type: "object" } }].concat(mode === "extra" ? [{ name: "new_tool", inputSchema: { type: "object" } }] : []) } })
     } else if (message.method === "notifications/cancelled") {
       process.stderr.write("cancelled " + message.params.requestId + "\\n")
     } else if (message.method === "tools/call") {
@@ -69,7 +79,7 @@ process.stdin.on("data", (chunk) => {
       }
       send({ id: message.id, result: { content: [{ type: "text", text: "ran " + message.params.name + " " + JSON.stringify(message.params.arguments) + " " + JSON.stringify(args) }] } })
     } else if (message.id !== undefined && message.method === undefined) {
-      process.stderr.write("host answered " + message.id + " " + JSON.stringify(message.error) + "\\n")
+      process.stderr.write("host answered " + message.id + " " + JSON.stringify(message.error || message.result) + "\\n")
     }
   }
 })
@@ -77,7 +87,7 @@ process.stdin.on("end", () => { if (mode !== "stubborn") process.exit(0) })
 if (mode === "stubborn") setInterval(() => {}, 1000)
 `
 
-// A fake npm: `install` writes a stub @playwright/mcp (and playwright-core) into --prefix, `view` prints a version, `config get registry` prints a registry. FAKE_NPM_MODE picks a failure, FAKE_NPM_VERSION the version, FAKE_NPM_DELAY_MS a pause, and FAKE_NPM_LOG receives one JSON line per call.
+// A fake npm: `install` writes a stub @playwright/mcp (and playwright-core) into --prefix, `view` prints a version, `config get registry` prints a registry. FAKE_NPM_MODE picks a failure (grandchild starts a second process and hangs, writing its pid to FAKE_NPM_GRANDCHILD), FAKE_NPM_VERSION the version, FAKE_NPM_DELAY_MS a pause, and FAKE_NPM_LOG receives one JSON line per call.
 const FAKE_NPM = `
 const fs = require("fs"), path = require("path")
 const args = process.argv.slice(2)
@@ -86,6 +96,12 @@ const version = process.env.FAKE_NPM_VERSION || "0.0.82"
 if (process.env.FAKE_NPM_LOG) fs.appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ args, retries: process.env.npm_config_fetch_retries, timeout: process.env.npm_config_fetch_timeout, path: process.env.PATH }) + "\\n")
 function main() {
   if (mode === "hang") { setInterval(() => {}, 1000); return }
+  if (mode === "grandchild") {
+    const grandchild = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+    fs.writeFileSync(process.env.FAKE_NPM_GRANDCHILD, String(grandchild.pid))
+    setInterval(() => {}, 1000)
+    return
+  }
   if (mode === "failall" || (mode === "fail" && args[0] !== "config")) { process.stderr.write("npm error code ENOTCONN\\nnpm error network unreachable\\n"); process.exit(1) }
   if (args[0] === "config") { process.stdout.write("https://registry.example/\\n"); return }
   if (mode === "steal") fs.writeFileSync(path.join(process.env.DESK_BROWSER_STATE_DIR, "refresh.lock"), JSON.stringify({ pid: 1 }))
@@ -1117,6 +1133,208 @@ test("a browser that fails while the host is already gone ends the launcher quie
   never.emit("error", new Error("spawn ENOENT"))
   await k.running
   assert.equal(toolPayload(await k.reply(2)).code, "node_spawn_failed")
+})
+
+// ---- the snapshot is checked against the installed browser ----
+
+async function snapshotFile(tools, version = "9.9.9") {
+  const dir = await mkTempRoot("desk-web-snapshot-")
+  const file = path.join(dir, "web-catalog.json")
+  writeFileSync(file, JSON.stringify({ playwrightMcpVersion: version, tools }))
+  return file
+}
+
+test("the snapshot records the Playwright MCP release it came from", () => {
+  const snapshot = JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8"))
+  assert.match(snapshot.playwrightMcpVersion, /^\d+\.\d+\.\d+/u)
+})
+
+test("when the installed browser lists different tools, one stderr line names what was added, removed and changed, and the snapshot is still served", posixOnly, async () => {
+  const catalogFile = await snapshotFile([{ name: "stub_tool", description: "older text", inputSchema: { type: "object" } }, { name: "old_tool", inputSchema: { type: "object" } }])
+  const m = await machine("desk-web-drift-", { env: { FAKE_CLI_MODE: "extra" }, catalogFile })
+  const h = host(m.options)
+  await h.handshake()
+  await h.call(2)
+  await until(() => /differs from the snapshot/u.test(h.errors.join("")), "the comparison")
+  assert.match(h.errors.join(""), /\[web\] the installed browser's tool list differs from the snapshot \(Playwright MCP 9\.9\.9\) this session keeps serving: added new_tool; removed old_tool; changed stub_tool\n/u)
+  assert.deepEqual((await h.ask(3, "tools/list")).result.tools.map((tool) => tool.name), ["stub_tool", "old_tool"])
+  assert.equal(h.read().filter((message) => message.method === "notifications/tools/list_changed").length, 0)
+  await h.close()
+})
+
+test("an installed browser whose tools match the snapshot, whatever the key order, or that cannot list them, produces no comparison line", posixOnly, async () => {
+  for (const [mode, tools] of [["ok", [{ inputSchema: { type: "object" }, name: "stub_tool" }]], ["badlist", [{ name: "other" }]]]) {
+    const catalogFile = await snapshotFile(tools)
+    const m = await machine("desk-web-nodrift-", { env: { FAKE_CLI_MODE: mode }, catalogFile })
+    const h = host(m.options)
+    await h.handshake()
+    await h.call(2)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.doesNotMatch(h.errors.join(""), /differs from the snapshot/u)
+    await h.close()
+  }
+})
+
+// ---- the hold keeps the host waiting, and recovers ----
+
+test("a held call with a progress token gets progress notices while it waits, and none once it is answered", posixOnly, async () => {
+  const m = await machine("desk-web-progress-", { env: { FAKE_NPM_DELAY_MS: "700" }, progressMs: 100 })
+  const h = host(m.options)
+  await h.handshake()
+  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {}, _meta: { progressToken: 0 } } })
+  h.send({ id: 3, method: "tools/call", params: { name: "browser_snapshot", arguments: {} } })
+  const answer = await h.reply(2)
+  await h.reply(3)
+  assert.equal(answer.result.isError, undefined)
+  const notices = h.read().filter((message) => message.method === "notifications/progress")
+  assert.ok(notices.length >= 2, `${notices.length} progress notices`)
+  assert.deepEqual(notices.map((message) => message.params.progressToken), notices.map(() => 0))
+  assert.deepEqual(notices.map((message) => message.params.progress), notices.map((_, index) => index + 1))
+  const count = notices.length
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(h.read().filter((message) => message.method === "notifications/progress").length, count)
+  await h.close()
+})
+
+test("a call cancelled or timed out while held stops its progress notices", posixOnly, async () => {
+  const m = await machine("desk-web-progressstop-", { env: { FAKE_NPM_DELAY_MS: "900" }, progressMs: 50, holdMs: 200 })
+  const h = host(m.options)
+  await h.handshake()
+  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {}, _meta: { progressToken: "a" } } })
+  h.send({ method: "notifications/cancelled", params: { requestId: 2 } })
+  h.send({ id: 3, method: "tools/call", params: { name: "browser_navigate", arguments: {}, _meta: { progressToken: "b" } } })
+  assert.equal(toolPayload(await h.reply(3)).code, "browser_not_ready")
+  const seen = h.read().filter((message) => message.method === "notifications/progress")
+  assert.deepEqual([...new Set(seen.map((message) => message.params.progressToken))], ["b"])
+  const count = seen.length
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(h.read().filter((message) => message.method === "notifications/progress").length, count)
+  await h.close()
+})
+
+test("a call that follows a lock-wait timeout starts the install again, so it succeeds once the other session is done", posixOnly, async () => {
+  const m = await machine("desk-web-retry-", { firstInstallMs: 0, startRefresh: () => {} })
+  mkdirSync(m.state, { recursive: true })
+  const lock = path.join(m.state, "refresh.lock")
+  writeFileSync(lock, JSON.stringify({ pid: process.pid }))
+  const h = host(m.options)
+  await h.handshake()
+  const first = await h.call(2)
+  assert.equal(toolPayload(first).code, "install_failed")
+  assert.match(toolPayload(first).summary, /another Desk session was still installing it/u)
+  preinstall(m.state, "0.0.88", "installs/1-1-a", STUB_CLI)
+  require("node:fs").unlinkSync(lock)
+  const second = await h.call(3)
+  assert.equal(second.result.isError, undefined)
+  assert.match(second.result.content[0].text, /^ran browser_navigate/u)
+  await h.close()
+})
+
+test("a real install error stays the answer for every later call, with no second install", posixOnly, async () => {
+  const m = await machine("desk-web-sticky-", { env: { FAKE_NPM_MODE: "fail" } })
+  const h = host(m.options)
+  await h.handshake()
+  assert.equal(toolPayload(await h.call(2)).code, "install_failed")
+  assert.equal(toolPayload(await h.call(3)).code, "install_failed")
+  assert.equal(m.calls().filter((call) => call.args[0] === "install").length, 1)
+  await h.close()
+})
+
+// ---- stop signals end the install ----
+
+test("a stop signal during the first install ends npm and everything it started, then ends the launcher with that signal", posixOnly, async () => {
+  const grandchildFile = path.join(await mkTempRoot("desk-web-grand-"), "pid")
+  const m = await machine("desk-web-signal-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile } })
+  const npms = []
+  const h = host({ ...m.options, npmSpawn: (...argv) => { const child = spawn(...argv); npms.push(child); return child } })
+  await h.handshake()
+  const grandchild = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
+  const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+  assert.equal(alive(grandchild), true)
+  h.signals.emit("SIGHUP")
+  await h.running
+  assert.deepEqual(h.kills, ["SIGHUP"])
+  await until(() => npms[0].exitCode !== null || npms[0].signalCode !== null, "npm to end")
+  await until(() => !alive(grandchild), "the helper to end")
+  assert.equal(h.signals.listenerCount("SIGHUP"), 0, "the handlers are removed")
+})
+
+test("stopping installs falls back to the npm process when it has no process group, and on Windows", () => {
+  const killed = []
+  const child = { pid: undefined, kill: (signal) => killed.push(signal) }
+  browser.stopInstalls({ platform: "linux", children: [child] })
+  browser.stopInstalls({ platform: "win32", children: [child] })
+  assert.deepEqual(killed, ["SIGTERM", "SIGTERM"])
+})
+
+// ---- small protocol details ----
+
+test("a ping from the browser is answered, and lines that arrive in pieces are put together on both sides", posixOnly, async () => {
+  const m = await machine("desk-web-pieces-", { env: { FAKE_CLI_MODE: "ping" } })
+  const h = host(m.options)
+  await h.handshake()
+  await h.call(2)
+  await until(() => /host answered 55 \{\}/u.test(h.errors.join("")), "the answer to the browser's ping")
+  await h.close()
+
+  const n = await machine("desk-web-chunky-", { env: { FAKE_CLI_MODE: "chunky" } })
+  const g = host(n.options)
+  const line = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })
+  g.stdin.write(line.slice(0, 12))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  g.stdin.write(line.slice(12, 30))
+  g.stdin.write(`${line.slice(30)}\n`)
+  await g.reply(1)
+  const call = await g.call(2)
+  assert.match(call.result.content[0].text, /^ran browser_navigate/u)
+  await g.close()
+})
+
+// ---- the refresh script ----
+
+test("the catalog script installs the latest release, lists its tools, and rewrites or checks the snapshot", posixOnly, async () => {
+  const { run } = await import("../../../../../plugins/desk/mcp/scripts/refresh-web-catalog.mjs")
+  const m = await machine("desk-web-script-", { env: { FAKE_NPM_VERSION: "0.0.90" } })
+  const catalogFile = await snapshotFile([{ name: "stub_tool", inputSchema: { type: "object" } }, { name: "gone_tool", inputSchema: { type: "object" } }], "0.0.80")
+  const output = []
+  const io = { out: (text) => output.push(text), err: (text) => output.push(`ERR ${text}`) }
+  const args = ["--file", catalogFile, "--npm-cli", m.install.cli]
+  const saved = { ...process.env }
+  Object.assign(process.env, m.options.env)
+  try {
+    assert.equal(await run([...args, "--check"], io), 1)
+    assert.match(output.join(""), /@playwright\/mcp 0\.0\.90 lists tools that differ from the snapshot \(0\.0\.80\): removed gone_tool/u)
+    assert.equal(JSON.parse(readFileSync(catalogFile, "utf8")).playwrightMcpVersion, "0.0.80", "check never writes")
+    assert.equal(await run(args, io), 0)
+    assert.deepEqual(JSON.parse(readFileSync(catalogFile, "utf8")), { playwrightMcpVersion: "0.0.90", tools: [{ name: "stub_tool", inputSchema: { type: "object" } }] })
+    assert.equal(await run([...args, "--check"], io), 0)
+    assert.match(output.join(""), /lists the same tools as the snapshot \(0\.0\.90\)/u)
+    writeFileSync(catalogFile, JSON.stringify({ playwrightMcpVersion: "0.0.1", tools: [{ name: "stub_tool", inputSchema: { type: "object" } }] }))
+    assert.equal(await run([...args, "--check"], io), 0, "a new version with the same tools passes the check")
+    assert.equal(await run(args, io), 0)
+    assert.equal(JSON.parse(readFileSync(catalogFile, "utf8")).playwrightMcpVersion, "0.0.90", "a rewrite records the new version")
+    process.env.FAKE_NPM_MODE = "fail"
+    output.length = 0
+    assert.equal(await run([...args, "--check"], io), 2)
+    assert.match(output.join(""), /ERR npm install @playwright\/mcp@latest failed/u)
+    process.env.FAKE_NPM_MODE = "ok"
+    process.env.FAKE_CLI_MODE = "badlist"
+    output.length = 0
+    assert.equal(await run([...args, "--check"], io), 2)
+    assert.match(output.join(""), /ERR tools\/list failed: no list/u)
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]
+    Object.assign(process.env, saved)
+  }
+})
+
+test("the snapshot workflow runs daily and reports a difference as one issue", () => {
+  const workflow = readFileSync(path.join(pluginRoot, "..", "..", ".github", "workflows", "web-catalog-check.yml"), "utf8")
+  assert.match(workflow, /^name: Browser catalog snapshot check$/mu)
+  assert.match(workflow, /cron: "52 6 \* \* \*"/u)
+  assert.match(workflow, /refresh-web-catalog\.mjs --check/u)
+  assert.match(workflow, /issues: write/u)
+  assert.doesNotMatch(workflow, /pull-requests: write|contents: write/u)
 })
 
 // ---- spawned: the real entry points against a fixture plugin ----

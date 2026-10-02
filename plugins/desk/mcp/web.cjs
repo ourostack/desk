@@ -205,16 +205,21 @@ function npm(tools, args, timeoutMs) {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      tools.children = tools.children.filter(function (other) {
+        return other !== child;
+      });
       resolve({ code: code, stdout: out, stderr: err });
     }
     var child;
     try {
-      child = tools.spawn(tools.node, [tools.npmCli].concat(args), { env: tools.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      // On POSIX npm leads its own process group, so a stop signal can end npm and everything it started.
+      child = tools.spawn(tools.node, [tools.npmCli].concat(args), { env: tools.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: tools.platform !== "win32" });
     } catch (error) {
       err = describe(error);
       finish(null);
       return;
     }
+    tools.children.push(child);
     timer = setTimeout(function () {
       err = "npm " + args[0] + " timed out after " + timeoutMs / 1000 + " seconds\n";
       child.kill("SIGKILL");
@@ -233,6 +238,18 @@ function npm(tools, args, timeoutMs) {
     child.on("close", function (code) {
       finish(code);
     });
+  });
+}
+
+// End every npm run still going, with the processes it started: on POSIX the whole process group, elsewhere the npm process.
+function stopInstalls(tools) {
+  tools.children.forEach(function (child) {
+    try {
+      if (tools.platform === "win32") child.kill("SIGTERM");
+      else process.kill(-child.pid, "SIGTERM");
+    } catch (error) {
+      child.kill("SIGTERM");
+    }
   });
 }
 
@@ -405,7 +422,7 @@ function ensureInstalled(tools, root, deadline) {
       throw error;
     });
   }
-  if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it" });
+  if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it", retry: true });
   return wait(WAIT_STEP_MS).then(function () {
     return ensureInstalled(tools, root, deadline);
   });
@@ -421,7 +438,7 @@ function refresh(o) {
   var clock = either(o.clock, Date.now);
   var root = stateDir(env, either(o.homeDir, either(either(env.HOME, env.USERPROFILE), os.homedir())));
   var lock = path.join(root, "refresh.lock");
-  var tools = { spawn: either(o.spawn, childProcess.spawn), node: node, npmCli: o.npmCli, env: npmEnv(env, node, platform), clock: clock };
+  var tools = { spawn: either(o.spawn, childProcess.spawn), node: node, npmCli: o.npmCli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   var held = false;
   function record(result) {
     try {
@@ -569,11 +586,11 @@ function fail(io, code, summary, fix) {
   return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: failure(io, code, summary, fix) });
 }
 
-// The tool list a first launch answers with before Playwright MCP is installed: a snapshot of Playwright MCP's own list, so the names and input schemas are the ones it exposes. Without a usable snapshot the degraded list stands in.
+// The tool list a first launch answers with before Playwright MCP is installed, and the Playwright MCP release it came from: a snapshot of Playwright MCP's own list, so the names and input schemas are the ones it exposes. Without a usable snapshot the degraded list stands in.
 function catalog(file) {
   var snapshot = readJson(file);
-  if (snapshot && Array.isArray(snapshot.tools) && snapshot.tools.length > 0) return snapshot.tools;
-  return placeholderTools();
+  if (snapshot && Array.isArray(snapshot.tools) && snapshot.tools.length > 0) return { tools: snapshot.tools, version: String(snapshot.playwrightMcpVersion) };
+  return { tools: placeholderTools(), version: "unknown" };
 }
 
 function start(o, io) {
@@ -609,7 +626,7 @@ function start(o, io) {
   }
   var root = stateDir(env, homeDir);
   mkdirp(root);
-  var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock };
+  var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
     return failure(io, "node_spawn_failed",
       "Desk found Node " + selection.node.version + " at " + node + " but could not start it: " + describe(error) + ", so the browser is unavailable",
@@ -620,7 +637,7 @@ function start(o, io) {
     if (!got.installed) {
       return npm(tools, ["config", "get", "registry"], REGISTRY_MS).then(function (answer) {
         var registry = answer.code === 0 && lastLine(answer.stdout) ? lastLine(answer.stdout) : "the configured npm registry";
-        return { payload: failure(io, "install_failed",
+        return { retry: got.retry === true, payload: failure(io, "install_failed",
           "Desk could not install " + PACKAGE + " from " + registry + " (" + got.error + "), so the browser is unavailable",
           reconnectFix("Check that this machine can reach " + registry + ", or point npm at one it can reach (npm config set registry <url>)")) };
       });
@@ -640,10 +657,12 @@ function start(o, io) {
   var signals = either(o.signals, process);
   var kill = either(o.kill, process.kill);
   var present = readInstalled(root) !== null;
-  var installing = ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS)).then(prepare);
+  function installing() {
+    return ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS)).then(prepare);
+  }
   if (present) {
     // An installed copy answers the host's handshake itself, so the host sees its real tool list and nothing is swapped later.
-    return installing.then(function (outcome) {
+    return installing().then(function (outcome) {
       return bootstrap.reexec({
         node: node,
         indexFile: outcome.launch.indexFile,
@@ -660,15 +679,25 @@ function start(o, io) {
       });
     });
   }
+  var snapshot = catalog(either(o.catalogFile, CATALOG_FILE));
+  function ready() {
+    return installing().then(null, function (error) {
+      return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
+    });
+  }
   // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return proxy.serve({
     stdin: io.stdin,
     stdout: io.stdout,
     stderr: io.stderr,
-    catalog: catalog(either(o.catalogFile, CATALOG_FILE)),
-    ready: installing.then(null, function (error) {
-      return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
-    }),
+    catalog: snapshot.tools,
+    catalogVersion: snapshot.version,
+    ready: ready(),
+    retry: ready,
+    abort: function () {
+      stopInstalls(tools);
+    },
+    progressMs: o.progressMs,
     spawn: spawn,
     signals: signals,
     kill: kill,
@@ -717,6 +746,7 @@ module.exports = {
   run: run,
   serveDegraded: serveDegraded,
   startRefresh: startRefresh,
+  stopInstalls: stopInstalls,
   stateDir: stateDir,
   takeLock: takeLock,
   withNodeFirst: withNodeFirst

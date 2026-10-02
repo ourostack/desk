@@ -1,5 +1,5 @@
 {
-  "_comment": "Snapshot of the @playwright/mcp tools/list answer (version 0.0.83), served by web-proxy.cjs before the browser is installed so the host sees one stable catalog.",
+  "playwrightMcpVersion": "0.0.83",
   "tools": [
     {
       "name": "browser_click",
