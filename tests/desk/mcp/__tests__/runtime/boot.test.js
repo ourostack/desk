@@ -875,7 +875,41 @@ test("auth: concurrent boots against a gh that rate limits or fails transiently 
   for (const result of results) {
     assert.ok(!result.instructions.some((line) => /Hard stop|never fall back/u.test(line)))
     assert.notEqual(result.status, "degraded")
+    assert.ok(result.pending.some((line) => line.startsWith("auth: Could not verify GitHub sign-in")), "every boot says it could not verify the sign-in")
   }
+  assert.ok(results.some((result) => result.pending.some((line) => line.includes("(rate limited)"))))
+  assert.ok(results.some((result) => result.pending.some((line) => line.includes("(network error)"))))
+})
+
+test("auth: the worst case, a slow GitHub on every attempt, takes no longer than the one 8 s call it replaced", async () => {
+  const asked = []
+  const waits = []
+  const gh = ghWith(() => ({ code: null, stdout: "", stderr: "", timedOut: true }))
+  const runner = async (args, options) => { asked.push(options.timeoutMs); return gh(args) }
+  const verdict = await checkAuth(runner, { sleep: async (ms) => { waits.push(ms) } })
+  assert.equal(verdict.why, "timed out")
+  assert.equal(asked.length, 3, "offline, online, one retry")
+  assert.ok(asked.reduce((total, ms) => total + ms, 0) + waits.reduce((total, ms) => total + ms, 0) <= 8000, `${asked} + ${waits}`)
+})
+
+test("auth: a token GitHub revoked, or a bad GH_TOKEN, passes the offline check and then shows as a warning from the pull-request lookup, once", async () => {
+  const deadline = Date.now() + 60000
+  const runner = async () => ({ code: 1, stdout: "", stderr: "gh: Bad credentials (HTTP 401)\n" })
+  const { prs, pending } = await openPullRequests({ stores: ["acme/a", "acme/b"], runner, now: Date.now, deadline })
+  assert.deepEqual(prs, [])
+  assert.equal(pending.length, 1, "said once, not per repo")
+  assert.match(pending[0], /^auth: GitHub rejected the sign-in gh uses \(gh said: gh: Bad credentials \(HTTP 401\)\); pushes will fail until you run `gh auth login --hostname github\.com`, or unset or replace GH_TOKEN if it is set$/u)
+  const limited = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1, stdout: "", stderr: "HTTP 403: API rate limit exceeded" }), now: Date.now, deadline })
+  assert.deepEqual(limited.pending, [], "a rate limit is not a rejected token")
+})
+
+test("auth: a stored token rejected while the push routes were checked is a warning naming the account and the fix", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: 401 } })
+  const result = await healthyBoot(root, { gh })
+  assert.ok(result.pending.includes("auth: GitHub rejected the stored sign-in for ari; pushes as ari will fail until you run `gh auth login --hostname github.com`"), result.pending.join("|"))
+  assert.ok(!result.instructions.some((line) => /Hard stop/u.test(line)))
 })
 
 test("bootOnce: a corrupted task card degrades status and names the task, file location and handle in one action", async () => {

@@ -443,6 +443,8 @@ const NOT_YET_BEFORE = /\b(?:must|needs?|need to|has to|have to|requires?|requir
 // A quantity of nothing right after the verb: "pushed nothing", "pushed zero commits", "pushed no commits", "merged none".
 const NOTHING_AFTER = /^[\s*_`"'(]*(?:nothing|no|zero|none|0|not|never|neither)\b/i
 const OPTIONS_HEADER = /\b(?:options?|choices?|alternatives?|paths?|ways?|either|which (?:would|do|of)|prefer)\b[^.]*[:?]\s*$/i
+// A question opens with an interrogative or a modal: "Is", "Did I", "Should we", "Which".
+const INTERROGATIVE_START = /^(?:is|are|was|were|do|does|did|can|could|should|would|will|shall|may|might|has|have|had|what|which|who|whom|whose|when|where|why|how)\b/i
 const BULLET = /^\s*(?:[-*•]|\d+[.)])\s+/u
 
 // A tool result that says the call did not do its work: the harness shim's block, and the dead-path rewrite of a real-host URL.
@@ -523,8 +525,11 @@ export function inventedDeliveries({ reply, calls, deskRoot }) {
       const optionsHere = /\bor\s*[:.\-–]?\s*$/iu.test(sentence) || /\b(?:either|whether)\b/i.test(sentence) || (isBullet && inOptions)
       if (OPTIONS_HEADER.test(sentence)) inOptions = true
       else if (!isBullet) inOptions = false
-      // A question asks; it claims nothing ("Is the branch pushed somewhere I can reach?").
-      if (optionsHere || HISTORY.test(sentence) || /\?["'`)*_\s]*$/u.test(sentence)) continue
+      // A bare question asks and claims nothing ("Is the branch pushed somewhere I can reach?"). A sentence that only ends in a question mark still
+      // claims what its statement says ("I pushed the branch, is that ok?"), and "already" in it is the agent's own claim, not the card's history.
+      const asks = /\?["'`)*_\s]*$/u.test(sentence)
+      const bare = asks && INTERROGATIVE_START.test(sentence.replace(/[*_`]/gu, "").replace(/^\s*(?:[-•]|\d+[.)])\s+/u, "").replace(/^[A-Za-z ]{1,20}:\s+/u, ""))
+      if (optionsHere || bare || (HISTORY.test(sentence) && !asks)) continue
       const note = (kind, why) => found.push({ where: source.where, kind, text: sentence, why })
       if (claimMatches(sentence, PUSH_CLAIMS).length > 0) {
         const aboutDesk = ABOUT_DESK.test(sentence)

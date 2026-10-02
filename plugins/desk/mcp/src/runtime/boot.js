@@ -285,12 +285,16 @@ const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * resolves as `auth_unverified` (a warning, never a hard stop). The token itself is never read into the result.
  */
 export async function checkAuth(ghAuth, { timeoutMs = 8000, sleep = sleepFor, backoffMs = AUTH_RETRY_BACKOFF_MS } = {}) {
-  const offline = await ghAuth(["auth", "token", "--hostname", "github.com"], { timeoutMs: Math.min(timeoutMs, 3000) })
+  // The three calls share the one budget the old single call had (`timeoutMs`), so a slow GitHub never makes boot slower than it was:
+  // the offline check gets a quarter, the online check half, and the retry what is left after the backoff.
+  const offlineMs = Math.floor(timeoutMs / 4)
+  const onlineMs = Math.floor(timeoutMs / 2)
+  const offline = await ghAuth(["auth", "token", "--hostname", "github.com"], { timeoutMs: offlineMs })
   if (offline.spawnError === undefined && offline.code === 0 && offline.timedOut !== true && String(offline.stdout ?? "").trim() !== "") return { ok: true }
-  let verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs }))
+  let verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs: onlineMs }))
   if (verdict.soft === true) {
     await sleep(backoffMs)
-    verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs: Math.min(timeoutMs, 4000) }))
+    verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs: Math.max(1, timeoutMs - offlineMs - onlineMs - backoffMs) }))
   }
   return verdict
 }
@@ -727,6 +731,9 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
   return { states, pending }
 }
 
+// What gh prints when GitHub refuses the credential itself (a revoked or expired token, a bad GH_TOKEN), as opposed to a rate limit or a network failure.
+const AUTH_REJECTED = /HTTP 401|bad credentials|requires authentication|token[^.\n]{0,40}(?:invalid|expired|revoked)|no longer valid/iu
+
 /** Open pull requests the signed-in account authored, one `gh pr list` per distinct GitHub repo, within the deadline. */
 export async function openPullRequests({ stores, runner, now, deadline }) {
   const prs = []
@@ -742,7 +749,14 @@ export async function openPullRequests({ stores, runner, now, deadline }) {
       pending.push(`open pull requests for ${store}: timeout`)
       continue
     }
-    if (result.code !== 0) continue
+    if (result.code !== 0) {
+      // The offline sign-in check cannot see a token GitHub has revoked, or an invalid GH_TOKEN; this call can, so say it once, as a warning.
+      const said = `${result.stderr ?? ""}\n${result.stdout ?? ""}`
+      if (AUTH_REJECTED.test(said) && !pending.some((line) => line.startsWith("auth: "))) {
+        pending.push(`auth: GitHub rejected the sign-in gh uses (gh said: ${redactCredentialLikeText(trimmed(said, 200).replace(/\s+/gu, " "))}); pushes will fail until you run \`gh auth login --hostname github.com\`, or unset or replace GH_TOKEN if it is set`)
+      }
+      continue
+    }
     let list
     try {
       list = JSON.parse(result.stdout)
@@ -1238,6 +1252,11 @@ export async function bootOnce({
     pending.push(...found.pending)
   } catch (error) {
     degraded.push(`open_prs: ${error.message}`)
+  }
+
+  // A stored token GitHub refused while the push routes were checked: say so once per account, as a warning.
+  for (const account of new Set(pushAccounts.flatMap((entry) => (Array.isArray(entry.accounts) ? entry.accounts.filter((item) => item.reason === "auth_failed").map((item) => item.account) : [])))) {
+    pending.push(`auth: GitHub rejected the stored sign-in for ${account}; pushes as ${account} will fail until you run \`gh auth login --hostname github.com\``)
   }
 
   let factory = null
