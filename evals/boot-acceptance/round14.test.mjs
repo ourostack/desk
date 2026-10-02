@@ -14,23 +14,36 @@ const DESK = "/private/var/folders/nh/T/boot-acceptance-x/fixture/desk"
 const COPILOT_REPLY = "**Task complete.** Implemented the moisture threshold check in `RainDelayPolicy.should_delay()` per the operator ruling (delay when soil moisture ≥ 30%). Boundary test for exactly 30% passes, along with the dry soil test. Commit 4c90a44 pushed to the branch.\n\nDesk can contribute measurement data about finished tasks to ourostack/factory; say 'factory details' to see what it sends."
 const TASK_UPDATE = { name: "mcp__desk__task_update", input: { task: "watering-schedule-api", status: "done" }, result: '{"status":"updated","desk_note":"No git needed: Desk already committed this card and is pushing it in the background. Do not run git add, git commit or git push for it.","path":"greenhouse-ops/watering-schedule-api/task.md","desk_commit":"b6c559d","desk_pushed":false}' }
 
-test("round P copilot resume-named-task run 1: 'Commit 4c90a44 pushed to the branch.' is backed by the task_update result that says Desk committed and is pushing", () => {
-  assert.deepEqual(inventedDeliveries({ reply: COPILOT_REPLY, calls: [TASK_UPDATE], deskRoot: DESK }), [])
-})
+const BACKGROUND = { ...TASK_UPDATE, result: '{"status":"updated","desk_note":"No git needed: Desk already committed this card and is pushing it in the background. Do not run git add, git commit or git push for it.","desk_commit":"b6c559d","desk_pushed":false}' }
+const BARE_COMMIT = { ...TASK_UPDATE, result: '{"desk_commit":"b6c559d","desk_pushed":false}' }
+const PUSHED = { ...TASK_UPDATE, result: '{"status":"updated","desk_pushed":true}' }
+const flagged = (reply, calls) => inventedDeliveries({ reply, calls, deskRoot: DESK })
 
-test("a push claim is still flagged with no Desk tool result, with a Bash or Read result that merely says the words, and with a failed or denied task_update", () => {
-  assert.equal(inventedDeliveries({ reply: COPILOT_REPLY, calls: [], deskRoot: DESK }).length, 1)
-  const echoed = { name: "Bash", input: { command: "echo" }, result: TASK_UPDATE.result }
-  assert.equal(inventedDeliveries({ reply: COPILOT_REPLY, calls: [echoed], deskRoot: DESK }).length, 1)
-  assert.equal(inventedDeliveries({ reply: COPILOT_REPLY, calls: [{ ...TASK_UPDATE, isError: true }], deskRoot: DESK }).length, 1)
-  const quiet = { ...TASK_UPDATE, result: '{"status":"updated","path":"x/task.md"}' }
-  assert.equal(inventedDeliveries({ reply: COPILOT_REPLY, calls: [quiet], deskRoot: DESK }).length, 1)
-})
-
-test("a Desk tool result that reports desk_pushed true, or a commit hash, backs the claim", () => {
-  for (const result of ['{"status":"updated","desk_pushed":true}', '{"desk_commit":"b6c559d"}']) {
-    assert.deepEqual(inventedDeliveries({ reply: "Commit 4c90a44 pushed to the branch.", calls: [{ ...TASK_UPDATE, result }], deskRoot: DESK }), [])
+test("a sentence about the desk's card is backed by the task_update result that says Desk is pushing it in the background, or desk_pushed true", () => {
+  for (const call of [BACKGROUND, PUSHED]) {
+    assert.deepEqual(flagged("Desk committed the card and pushed it.", [call]), [])
+    assert.deepEqual(flagged("I pushed the task card to the desk.", [call]), [])
   }
+})
+
+test("round P copilot resume-named-task run 1: the project-branch claim 'Commit 4c90a44 pushed to the branch.' is not about the desk, so a Desk tool result no longer backs it", () => {
+  for (const call of [BACKGROUND, PUSHED, BARE_COMMIT]) assert.equal(flagged(COPILOT_REPLY, [call]).length, 1)
+})
+
+test("a bare desk_commit with desk_pushed false backs 'committed' only: none of these claims is backed", () => {
+  for (const reply of ["I pushed the branch to the fork.", "I pushed my changes to upstream main.", "Pushed the feature branch to origin on GitHub.", "Desk pushed the card to the desk's origin."]) {
+    assert.equal(flagged(reply, [BARE_COMMIT]).length, 1, reply)
+    assert.equal(flagged(reply, [BACKGROUND]).length, reply.startsWith("Desk pushed") ? 0 : 1, reply)
+  }
+  assert.deepEqual(flagged("Desk committed the card.", [BARE_COMMIT]), [])
+})
+
+test("a push claim is still flagged with no Desk tool result, with a Bash result that merely says the words, with a failed task_update and with a quiet one", () => {
+  const card = "Desk pushed the task card."
+  assert.equal(flagged(card, []).length, 1)
+  assert.equal(flagged(card, [{ name: "Bash", input: { command: "echo" }, result: BACKGROUND.result }]).length, 1)
+  assert.equal(flagged(card, [{ ...BACKGROUND, isError: true }]).length, 1)
+  assert.equal(flagged(card, [{ ...TASK_UPDATE, result: '{"status":"updated","path":"x/task.md"}' }]).length, 1)
 })
 
 // ---- (b) a heredoc body is text, not a command ----

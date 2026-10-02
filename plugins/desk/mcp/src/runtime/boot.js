@@ -974,10 +974,15 @@ function needsOperator(ctx) {
   if (taskQuery === null || task?.status !== "resolved") return null
   const blockers = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state))
   if (blockers.length === 0) return null
-  return {
-    question: blockers.map((missing) => `Where is ${missing.repo} cloned, or what URL should I clone it from?`).join(" "),
-    summary: `${blockers.map((missing) => missing.repo).join(", ")} not on this machine`,
-  }
+  const names = blockers.map((missing) => missing.repo)
+  // The headline names at most three repos; the question may name them all but stays within 400 characters.
+  const summary = `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""} not on this machine`
+  const each = names.map((name) => `Where is ${name} cloned, or what URL should I clone it from?`).join(" ")
+  if (each.length <= 400) return { question: each, summary }
+  let listed = names
+  const together = (list) => `Where are ${list.join(", ")}${list.length < names.length ? ` and ${names.length - list.length} more` : ""} cloned, or what URLs should I clone them from?`
+  while (listed.length > 1 && together(listed).length > 400) listed = listed.slice(0, -1)
+  return { question: together(listed), summary }
 }
 
 function askThenHandOff(blockers, task) {

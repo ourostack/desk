@@ -127,7 +127,8 @@ export function ceiling(text, limit = TEXT_CEILING) {
 // agent invents filler.
 // A next step or blocker that says the thing lives only on another machine: the agent must ask, never clone or fetch to look for it (boot acceptance round Q:
 // an agent cloned a fork into the desk folder to find a branch the card says is only on the other laptop).
-const ELSEWHERE = /\b(?:lives?|exists?|stays?|is|are|kept|only)\b[^.\n]{0,40}\bonly\b[^.\n]{0,30}\b(?:on|at)\b|\bonly (?:on|exists on|lives on)\b|\b(?:other|another|second|old|work|home) (?:laptop|machine|computer|mac|pc|host)\b|\bnot on this (?:machine|laptop|computer|mac)\b/i
+const MACHINE = String.raw`(?:laptop|machine|mac|computer|desktop|pc)(?![\w'-])(?!\s+(?:vision|learning|readable)\b)`
+const ELSEWHERE = new RegExp(String.raw`\b(?:my|the|our) (?:other|another|old|work|home|personal) ${MACHINE}|\bon (?:my|the other) (?:laptop|desktop|mac)(?![\w'-])|\bonly on (?:the|my) ${MACHINE}|\bnot on this (?:machine|laptop|computer|mac)(?![\w'-])`, "i")
 export const ELSEWHERE_NOTE = "not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
 
 function stepLines(task) {
@@ -330,7 +331,8 @@ export function formatBootText(result) {
     failing.push(line.length > 80 ? `${line.slice(0, 77)}...` : line)
   }
   const waiting = typeof result.needs_operator?.question === "string"
-  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})` : `Desk boot: ${result.status}${waiting ? `, waiting on you (${result.needs_operator.summary})` : ""}`
+  const waitingWords = waiting ? `, waiting on you (${result.needs_operator.summary})` : ""
+  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})${waitingWords}` : `Desk boot: ${result.status}${waitingWords}`
   const status = [headline]
   if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
   if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)

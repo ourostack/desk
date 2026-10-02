@@ -68,7 +68,7 @@ test("needs_operator is null with no named task, an unmatched task, a present re
 test("a degraded boot keeps its degraded headline and still prints the Needs you first line", () => {
   const text = formatBootText({ status: "degraded", degraded: ["jq: missing"], needs_operator: { question: "Where is x cloned?", summary: "x not on this machine" } })
   assert.match(text.split("\n")[0], /^Desk boot: degraded/u)
-  assert.ok(!text.split("\n")[0].includes("waiting on you"))
+  assert.ok(text.split("\n")[0].includes("waiting on you"))
   assert.equal(text.split("\n")[1], "Needs you first: Where is x cloned?")
 })
 
@@ -87,7 +87,7 @@ test("a task whose next step or blocker says it lives only on another machine ge
   const tasks = (task) => ({ ...base, active_tasks: { task_count: 1, tracks: [{ track: "lighthouse-relay", desk: null, tasks: [{ slug: "push-check", handle: "h", status: "processing", ...task }] }] } })
   const note = "  not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
   const real = "Push relay-heartbeat-15s and open a pull request. The branch lives only on the other laptop, not on this machine. First confirm which GitHub account and route can deliver it from here, and tell me."
-  for (const task of [{ next_step: real }, { next_step: "the branch exists only on the work laptop" }, { next_step: "Wait", blocker: "branch is on another machine" }, { status: "blocked", blocker: "relay-heartbeat is not on this machine" }]) {
+  for (const task of [{ next_step: real }, { next_step: "the branch exists only on the work laptop" }, { next_step: "Wait", blocker: "branch is on the other machine" }, { status: "blocked", blocker: "relay-heartbeat is not on this machine" }]) {
     const lines = formatBootText(tasks(task)).split("\n")
     const at = lines.indexOf(note)
     assert.ok(at > 0, JSON.stringify(task))
@@ -102,4 +102,25 @@ test("every boot's closing rule says never to clone or fetch to look for what is
   const result = await bootNamed(root, [state({ present: true })])
   assert.ok(result.text_instructions.some((line) => line.startsWith("In every reply:") && line.includes("never clone or fetch to look for it, and never clone inside the desk folder")))
   assert.ok(result.instructions.some((line) => line.includes("never clone or fetch to look for it, and never clone inside the desk folder")))
+})
+
+test("the not-here rule matches an owner or pointer word with a machine noun and nothing else", () => {
+  const note = (next_step) => formatBootText({ status: "ready", degraded: [], pending: [], active_tasks: { task_count: 1, tracks: [{ track: "t", desk: null, tasks: [{ slug: "s", handle: "h", status: "processing", next_step }] }] } }).includes("not here:")
+  for (const text of ["The branch lives only on the other laptop, not on this machine.", "the branch is on my work laptop", "it's on my desktop", "not on this machine", "only on the old mac", "it is on the other desktop"]) assert.ok(note(text), text)
+  for (const text of ["only on weekdays", "run only on main", "test only on macOS", "this is only on Linux CI", "Ship is only on staging", "verify the flag exists only on Windows", "another machine-readable format", "not on this machine's PATH", "Test the home computer vision module", "old machine learning model", "the work machine-id file", "only on desktop widths"]) assert.ok(!note(text), text)
+})
+
+test("a waiting boot says so in a degraded headline too, and the headline names at most three repos while the question stays within 400 characters", async () => {
+  const text = formatBootText({ status: "degraded", degraded: ["jq: missing"], needs_operator: { question: "Q?", summary: "x not on this machine" } })
+  assert.match(text.split("\n")[0], /^Desk boot: degraded \(jq: missing\), waiting on you \(x not on this machine\)/u)
+  assert.equal(formatBootText({ status: "degraded", degraded: [], needs_operator: { question: "Q?", summary: "s" } }).split("\n")[0].startsWith("Desk boot: degraded, waiting on you (s)"), true)
+  const root = await deskWithTask(CARD)
+  const few = await bootNamed(root, ["a", "b", "c"].map((repo) => state({ repo, local_path: `~/code/${repo}` })))
+  assert.equal(few.needs_operator.summary, "a, b, c not on this machine")
+  const names = Array.from({ length: 40 }, (_, index) => `valve-firmware-${index}`)
+  const many = await bootNamed(root, names.map((repo) => state({ repo, local_path: `~/code/${repo}` })))
+  assert.equal(many.needs_operator.summary, "valve-firmware-0, valve-firmware-1, valve-firmware-2 and 37 more not on this machine")
+  assert.ok(many.needs_operator.question.length <= 400 && many.needs_operator.question.includes("valve-firmware-0") && /and \d+ more/u.test(many.needs_operator.question), many.needs_operator.question)
+  const four = await bootNamed(root, ["a", "b", "c", "d"].map((repo) => state({ repo, local_path: `~/code/${repo}` })))
+  assert.ok(four.needs_operator.question.includes("Where is d cloned"), "every repo is in a question that fits")
 })
