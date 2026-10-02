@@ -1,9 +1,11 @@
 ---
 name: adopt-inflight-work
-description: Six-step flow for bringing existing in-flight work (planning bundles, doing docs, prior-agent output, migrated project state) under worker's management. Use when the operator says "adopt this", "this is now yours", or picks Option 3 in the first-run bootstrap.
+description: Six-part flow for bringing existing in-flight work (planning bundles, doing docs, prior-agent output, migrated project state) under worker's management. Use when the operator says "adopt this", "this is now yours", or picks Option 3 in the first-run bootstrap.
 ---
 
 # Adopt in-flight work
+
+> These steps are for you; never name them in replies.
 
 > Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
 
@@ -19,11 +21,11 @@ The most common first-run scenario isn't greenfield — it's adoption. An operat
 
 > **Overlay users:** consumer overlays often ship tracker-specific extensions (e.g. an enterprise work-item tracker's per-team status / area / iteration schema and predecessor-split flow). The generic shape below is tracker-agnostic.
 
-## The six-step flow
+## The flow, in order
 
 Execute in this order. **Order matters — preservation precedes interpretation.** Skipping ahead loses signal.
 
-### Step 1: Preserve first, curate later
+### Preserve first, curate later
 
 Copy the **entire source bundle** into the new track directory verbatim:
 
@@ -58,7 +60,7 @@ Files in this directory are superseded or historical. Retained for provenance.
 
 **Do NOT drop anything on the floor during adoption.** You've just been handed the work. You don't have the context to decide what's stale. Preservation is the bar; curation is for later with more information.
 
-### Step 2: Snapshot the external-tracker state
+### Snapshot the external-tracker state
 
 If the work is tracked in an external system (issue tracker, work-item DB, Jira, Linear, GitHub Issues, an enterprise work-item tracker, etc.), capture what the target item looks like **at adoption time** — before you make any changes. This becomes the "before" reference.
 
@@ -93,7 +95,7 @@ Create `<track>/_planning/tracker-snapshot-YYYY-MM-DD.md`. Capture, at minimum, 
 
 This freezes "what we inherited" so we can diff against "what we changed." Consumer overlays may extend this snapshot with tracker-specific fields (e.g. status notes, area/iteration paths, assignee, target date for enterprise work-item trackers).
 
-### Step 3: Snapshot code-repo state
+### Snapshot code-repo state
 
 For each repo the source bundle references, capture current state — current branch, HEAD sha, remote, uncommitted-changes flag.
 
@@ -112,7 +114,7 @@ Create `<track>/_planning/code-snapshot-YYYY-MM-DD.md` with one block per repo:
 
 This captures the state of in-flight work (e.g., a PoC branch) that you're inheriting.
 
-### Step 4: Pin the source location in track.md frontmatter
+### Pin the source location in track.md frontmatter
 
 Record the exact source path and adoption metadata in `track.md`'s frontmatter:
 
@@ -130,7 +132,7 @@ adopted_from:
 
 The source path survives even if the source bundle gets cleaned up, moved, or deleted.
 
-### Step 5: Mark derivation explicitly
+### Mark derivation explicitly
 
 `track.md` and each `task.md` contain your interpretation of the source, not a verbatim copy. Mark which fields are authoritative (from the source) vs. inferred (your best guess at adoption).
 
@@ -155,7 +157,7 @@ In the track body, add a section:
 
 A future operator or auditor can then tell which parts are load-bearing and which are safe to adjust.
 
-### Step 6: Audit the predecessor (and the parent item) before creating new tracker work items
+### Audit the predecessor (and the parent item) before creating new tracker work items
 
 If the target tracker item has a predecessor or is newly split, audit it before creating any new child work items. Decide one item at a time: was it delivered, should it be reparented to the new item, reframed, or deferred?
 
@@ -165,7 +167,7 @@ After the triage completes, post a comment on the predecessor summarizing what w
 
 ## Track dashboard assembly
 
-Once steps 1-6 are done, assemble `<track>/track.md` as a working dashboard. The track card structure (frontmatter schema + body sections) lives in the `track-card-format` skill.
+Once the six parts above are done, assemble `<track>/track.md` as a working dashboard. The track card structure (frontmatter schema + body sections) lives in the `track-card-format` skill.
 
 ## Adopted task cards
 
@@ -192,7 +194,7 @@ Where `<YYYY-MM-DD>` is the adoption date (or the date the source bundle was cre
 
 If the source bundle already used the iteration-centric layout, copy the iteration directory whole into `<repo>/` — do not flatten or re-layer. Add `adopted_at:` and `adopted_from:` to the doing-doc frontmatter to disambiguate "when was this written" (iteration-directory date) from "when did this enter the desk workspace" (frontmatter).
 
-If the source bundle used a legacy flat layout (`YYYY-MM-DD-HHMM-doing-*.md` loose at `<repo>/` root), repackage into an iteration directory during step 1: create `<repo>/<YYYY-MM-DD>-adopted/`, move the planning and doing docs into it, rename to `planning.md` / `doing.md`, and move any sibling artifacts directory into `<YYYY-MM-DD>-adopted/artifacts/`.
+If the source bundle used a legacy flat layout (`YYYY-MM-DD-HHMM-doing-*.md` loose at `<repo>/` root), repackage into an iteration directory while preserving: create `<repo>/<YYYY-MM-DD>-adopted/`, move the planning and doing docs into it, rename to `planning.md` / `doing.md`, and move any sibling artifacts directory into `<YYYY-MM-DD>-adopted/artifacts/`.
 
 ## What's preserved, what's derived
 

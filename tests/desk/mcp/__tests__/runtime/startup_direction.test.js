@@ -235,7 +235,17 @@ test("the startup line gives the boot command by absolute path, says the boot ha
 
 test("the per-prompt boot direction is a short pointer that gives the exact command", () => {
   const line = promptBootDirection("node /x/session-boot.js")
-  assert.match(line, /^Desk boot is pending for this session: run `node \/x\/session-boot\.js` first \(one quick call\), then answer this message\. A child agent with a bounded brief skips this\.$/u)
+  assert.match(line, /^Desk boot is pending for this session: run `node \/x\/session-boot\.js` first \(one quick call\), then answer this message\. Do this before anything else, including any search of files or folders; nothing else counts as the boot\. A child agent with a bounded brief skips this\.$/u)
   assert.doesNotMatch(line, /has not run/u, "a pointer, not an unconditional claim")
   assert.ok(promptBootDirection().includes(bootCommand()))
+})
+
+test("both hosts' boot direction is an imperative first action: the exact command, before the first reply or any search, and nothing else counts", () => {
+  const claude = startDirection("node /x/session-boot.js")
+  assert.match(claude, /Run `node \/x\/session-boot\.js` now, before other work and before anything else, including your first reply and any search of files or folders/u)
+  assert.match(claude, /Nothing else counts as the boot: searching for the desk, a task or a repo yourself is not a substitute, and a reply before the boot has run is wrong\./u)
+  const copilot = promptBootDirection("node /x/session-boot.js")
+  assert.match(copilot, /run `node \/x\/session-boot\.js` first/u)
+  assert.match(copilot, /Do this before anything else, including any search of files or folders; nothing else counts as the boot\./u)
+  for (const line of [claude, copilot]) assert.match(line, /\bnothing else counts as the boot\b/iu, "both say it")
 })

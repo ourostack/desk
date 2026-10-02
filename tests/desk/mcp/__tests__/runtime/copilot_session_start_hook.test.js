@@ -57,7 +57,7 @@ test("the first prompt of a session gets the boot direction as context, in eithe
     return JSON.parse(result.stdout)
   }
   const first = prompt("sess-boot")
-  assert.match(first.additionalContext, /^Desk boot is pending for this session: run `node \S*session-boot\.js` first \(one quick call\), then answer this message\. A child agent with a bounded brief skips this\.$/u)
+  assert.match(first.additionalContext, /^Desk boot is pending for this session: run `node \S*session-boot\.js` first \(one quick call\), then answer this message\. Do this before anything else, including any search of files or folders; nothing else counts as the boot\. A child agent with a bounded brief skips this\.$/u)
   assert.deepEqual(prompt("sess-boot"), {})
   assert.deepEqual(prompt("sess-boot", null), {}, "a broken payload fails open")
 

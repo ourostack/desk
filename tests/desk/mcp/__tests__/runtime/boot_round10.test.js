@@ -25,28 +25,28 @@ test("a long next step is printed whole, never cut", () => {
 })
 
 test("a task whose card records no next step says so, instead of leaving the agent to fill it in", () => {
-  assert.match(textFor(task({ status: "drafting", next_step: null })), /- ops\/a-task: drafting, updated 2026-09-28\n  next: no next step recorded\n/u)
+  assert.match(textFor(task({ status: "drafting", next_step: null })), /drafting \(1\)\n- ops\/a-task \(updated 2026-09-28\)\n  next: no next step recorded\n/u)
   assert.match(textFor(task({ next_step: "" })), /next: no next step recorded/u)
 })
 
 test("a blocked task prints the card's blocker reason, then its next step when it has one", () => {
   const both = textFor(task({ status: "blocked", blocker: "Waiting on the ops team's paging-service key.", next_step: "Wire alert delivery once it arrives." }))
-  assert.match(both, /: blocked, updated 2026-09-28\n  blocked: Waiting on the ops team's paging-service key\.\n  next: Wire alert delivery once it arrives\.\n/u)
-  assert.match(textFor(task({ status: "blocked", blocker: "the key", next_step: null })), /\n  blocked: the key\n$/u)
+  assert.match(both, /BLOCKED \(1\): [^\n]*\n- ops\/a-task \(updated 2026-09-28\)\n  blocker: Waiting on the ops team's paging-service key\.\n  next: Wire alert delivery once it arrives\.\n/u)
+  assert.match(textFor(task({ status: "blocked", blocker: "the key", next_step: null })), /\n  blocker: the key\n$/u)
 })
 
 test("a blocked task with no blocker falls back to its next step, and with neither says so", () => {
-  assert.match(textFor(task({ status: "blocked", blocker: null, next_step: "Ask ops." })), /\n  blocked: no blocker recorded; next: Ask ops\.\n/u)
-  assert.match(textFor(task({ status: "blocked" })), /\n  blocked: no blocker or next step recorded\n/u)
-  assert.match(textFor(task({ status: "blocked", blocker: "", next_step: "" })), /blocked: no blocker or next step recorded/u)
+  assert.match(textFor(task({ status: "blocked", blocker: null, next_step: "Ask ops." })), /\n  blocker: no blocker recorded; next: Ask ops\.\n/u)
+  assert.match(textFor(task({ status: "blocked" })), /\n  blocker: no blocker or next step recorded\n/u)
+  assert.match(textFor(task({ status: "blocked", blocker: "", next_step: "" })), /blocker: no blocker or next step recorded/u)
 })
 
 test("the task list is capped by count, and says how many it left out", () => {
   const many = Array.from({ length: TASKS_SHOWN_CAP + 3 }, (_, index) => task({ slug: `t${index}`, title: `t${index}`, next_step: `step ${index} ${"x".repeat(300)}` }))
   const text = textFor(...many)
-  assert.equal((text.match(/^- ops\/t\d+:/gmu) ?? []).length, TASKS_SHOWN_CAP)
+  assert.equal((text.match(/^- ops\/t\d+ /gmu) ?? []).length, TASKS_SHOWN_CAP)
   assert.ok(text.includes(`step 0 ${"x".repeat(300)}\n`), "the tasks that are shown are whole")
-  assert.match(text, /- \.\.\.and 3 more active tasks \(all of them are in `active_tasks` with `--json`\)\n/u)
+  assert.match(text, /\n\.\.\.and 3 more active tasks \(all of them are in `active_tasks` with `--json`\)\n/u)
   assert.doesNotMatch(textFor(...many.slice(0, TASKS_SHOWN_CAP)), /more active tasks/u)
 })
 
@@ -99,12 +99,15 @@ test("pushRoute names the account, the fork it pushes to, and the active account
   assert.equal(pushRoute({ store: "weird", account: "ari", route: "fork" }), "push as ari via fork ari's fork of weird")
 })
 
-test("boot text's Push routes section carries the explicit line", () => {
+test("boot text prints a fork route once, on its task, with the account to push as and the one to leave out of notes", () => {
   const text = formatBootText({
     status: "ready",
+    active_tasks: { task_count: 1, tracks: [{ track: "lighthouse", tasks: [task({ slug: "push-check", title: "push-check", next_step: "push it" })] }] },
     push_accounts: [{ track: "lighthouse", slug: "push-check", repo: "anthropics/claude-code", store: "anthropics/claude-code", result: "account_found", account: "arimendelow", route: "fork", accounts: [{ account: "arimendelow_microsoft" }, { account: "arimendelow" }] }],
   })
-  assert.match(text, /- anthropics\/claude-code: push as arimendelow via fork arimendelow\/claude-code\. The active gh account is arimendelow_microsoft; Desk routes this repo's pushes through the fork and did not check that account's own access\. \(lighthouse\/push-check\)\n/u)
+  assert.match(text, /\n  push: anthropics\/claude-code: push as arimendelow via fork arimendelow\/claude-code\. The active gh account is arimendelow_microsoft; Desk routes this repo's pushes through the fork and did not check that account's own access\. Push your branch to the fork and open the pull request from it; never push to anthropics\/claude-code itself\. For git and gh calls use `GH_TOKEN=\$\(gh auth token --user arimendelow\)`, and name arimendelow, never arimendelow_microsoft, as the push account in any note\. Say this route in one line when you report on the task\.\n/u)
+  assert.equal(text.split("anthropics/claude-code").length - 1, 2, "the route is told once: on the task, naming the store twice")
+  assert.doesNotMatch(text, /Push routes:/u)
 })
 
 const VERSION_OK = "gh version 2.54.0 (2024-07-31)\n"
@@ -143,6 +146,28 @@ test("bootOnce: a fork route with a different active account says to push as the
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
   assert.match(line, /: push as \S+ via fork \S+\/widgets\. The active gh account is work; Desk routes this repo's pushes through the fork and its own access check could not see the repository\. Account \S+ cannot push to it directly\. Push your branch/u)
   assert.match(line, /Push as \S+ \(`GH_TOKEN=\$\(gh auth token --user \S+\)` for the git or gh call\), and write \S+, never work, as the push account in any note\./u)
+})
+
+test("bootOnce: the text boot prints a fork route on its task and not among the instructions; --json keeps the instruction", async () => {
+  const result = await bootWith(fakeGh({ accounts: [{ login: "work", active: true }, { login: "ari", active: false }], repos: { work: 404, ari: NO_PUSH } }))
+  assert.ok(result.instructions.some((entry) => entry.startsWith("Push route for acme/widgets")))
+  assert.ok(!result.text_instructions.some((entry) => /Push route|push as/u.test(entry)))
+  const text = formatBootText(result)
+  assert.equal(text.split("push as ari via fork ari/widgets").length, 2, "told once")
+  assert.match(text, /\n- ops\/one "One" \(updated 2026-01-02\)\n  next: no next step recorded\n  push: acme\/widgets: push as ari via fork ari\/widgets\./u)
+  assert.doesNotMatch(text, /Push routes:|no GitHub remote/u)
+})
+
+test("boot text names each signed-in account's reason when none can push, and a direct route by another account", () => {
+  const entry = (extra) => ({ track: "ops", slug: "a-task", repo: "acme/widgets", store: "acme/widgets", ...extra })
+  const text = formatBootText({
+    status: "ready",
+    active_tasks: { task_count: 1, tracks: [{ track: "ops", tasks: [task({ slug: "a-task", title: "a-task", next_step: "n" })] }] },
+    push_accounts: [entry({ result: "no_account_can_deliver", accounts: [{ account: "work", reason: "managed_account" }, { account: "ari", reason: "store_not_visible" }] }), entry({ repo: "acme/direct", store: "acme/direct", result: "account_found", account: "ari", route: "direct", accounts: [{ account: "work" }, { account: "ari" }] })],
+  })
+  assert.match(text, /\n  push: acme\/widgets: no signed-in account can push \(work: managed_account; ari: store_not_visible\)\. Do not push; ask the operator which account to use, or fork\. Say this route in one line when you report on the task\.\n/u)
+  assert.match(text, /\n  push: acme\/direct: push as ari \(route direct\)\. The active gh account is work; .* For git and gh calls use `GH_TOKEN=\$\(gh auth token --user ari\)`, and name ari, never work, as the push account in any note\. Say this route in one line when you report on the task\.\n/u)
+  assert.doesNotMatch(text, /never push to acme\/direct itself/u, "only a fork route says never push to the store")
 })
 
 test("bootOnce: a fork route by the active account adds no active-account sentence", async () => {
@@ -313,7 +338,7 @@ test("blocked tasks come first, then the most recently updated, before the cap a
     task({ slug: "no-date", title: "no-date", updated: undefined, next_step: "n" }),
   ]
   const text = formatBootText({ status: "ready", active_tasks: { task_count: rows.length, tracks: [{ track: "ops", tasks: rows }] } })
-  const order = [...text.matchAll(/^- ops\/(\S+?):/gmu)].map((match) => match[1])
+  const order = [...text.matchAll(/^- ops\/(\S+)/gmu)].map((match) => match[1])
   assert.equal(order[0], "old-blocked")
   assert.equal(order[1], `new${TASKS_SHOWN_CAP - 1}`, "then newest first")
   assert.ok(!order.includes("no-date"), "an undated task sorts last and falls under the cap")

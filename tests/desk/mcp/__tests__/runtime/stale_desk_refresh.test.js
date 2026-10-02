@@ -225,7 +225,7 @@ test("boot writes its text, with the started line near the top, before the refre
   assert.equal(written, 1, "the output was already written when the refresh started")
   assert.equal(io.chunks.length, 1)
   const lines = io.chunks[0].split("\n")
-  assert.match(lines[0], /^Desk boot: ok$/u)
+  assert.match(lines[0], /^Desk boot: ok \| desk \/desk \| host unknown \/ unknown \/ claude$/u)
   assert.equal(lines[1], "Desk 3.2.0-alpha.153 is 19 releases behind main (3.2.0-alpha.172); running claude plugin update desk@ourostack in the background, so a new session will run 3.2.0-alpha.172.")
   assert.equal(calls.length, 1)
 })
@@ -256,7 +256,7 @@ test("a recorded failure shows in the next boot as the manual step; an attempt w
   await fs.writeFile(path.join(stateDir, REFRESH_STAMP_FILE), JSON.stringify({ attempted_at: new Date().toISOString(), ok: true }))
   const again = out()
   await runBootCli({ argv: [], env: {}, io: again, bootFn: stale("claude"), refreshOptions })
-  assert.match(again.chunks[0], /^Desk boot: ok\nDesk 3\.2\.0-alpha\.153 is 19 releases behind main \(3\.2\.0-alpha\.172\); update it with \/plugin/u)
+  assert.match(again.chunks[0], /^Desk boot: ok \| desk \/desk \| host unknown \/ unknown \/ claude\nDesk 3\.2\.0-alpha\.153 is 19 releases behind main \(3\.2\.0-alpha\.172\); update it with \/plugin/u)
   assert.equal(calls.length, 0)
 })
 

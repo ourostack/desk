@@ -285,3 +285,13 @@ test("fix round: a clone backs only a claim that names the repository it cloned"
   assert.deepEqual(reply("I have cloned anthropics/claude-code.", [work]), ["the reply"], "another repository's name is not backed by this clone")
   assert.deepEqual(reply("Cloned anthropics/claude-code to ~/code/claude-code.", [work]), ["the reply"])
 })
+
+// Round N (copilot where-were-we run 2): the fixture already holds a clone of greenhouse-irrigation, and the boot lists it as present.
+test("inventedClones: a clone the boot lists as present on this machine is no invented clone; one it does not list still is", () => {
+  const boot = { name: "Bash", input: { command: `node ${DESK}/../plugin/mcp/scripts/session-boot.js` }, result: "Desk boot: ready | desk /d | host h / u / copilot | Desk synced with origin\n\nRepos of open tasks:\n- greenhouse-irrigation (greenhouse-ops/watering-schedule-api): branch feature/rain-delay, clean, no remote configured\n- valve-firmware (greenhouse-ops/valve-firmware-flasher): not at ~/code/valve-firmware\n" }
+  assert.deepEqual(reply("Repo state: greenhouse-irrigation is cloned with branch `feature/rain-delay`, clean, no remote.", [boot]), [])
+  assert.deepEqual(reply("Repo state: greenhouse-irrigation is cloned with branch `feature/rain-delay`, clean, no remote.", []), ["the reply"], "without the boot's listing the claim has no backing")
+  assert.deepEqual(reply("valve-firmware is cloned at ~/code/valve-firmware.", [boot]), ["the reply"], "a repo the boot says is not on this machine")
+  assert.deepEqual(reply("I've cloned anthropics/claude-code.", [boot]), ["the reply"], "another repository")
+  assert.deepEqual(reply("The repo was cloned.", [boot]), ["the reply"], "a claim that names no present repo")
+})

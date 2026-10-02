@@ -77,7 +77,7 @@ import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
+import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
@@ -250,15 +250,53 @@ function evaluateJq(result) {
   return { ok: true }
 }
 
-const AUTH_STALE = /no longer valid|not logged into|you are not logged/iu
+// gh says the host has no usable sign-in: the one answer that is a hard stop.
+const AUTH_STALE = /no longer valid|not logged into|you are not logged|no accounts? (?:are |is )?(?:logged|found|configured)|gh auth login/iu
+const RATE_LIMITED = /rate limit|\bHTTP 429\b|\bHTTP 403\b|\b(?:429|403)\b|secondary rate|abuse detection/iu
+const NETWORK_ERROR = /timed? ?out|timeout|dial tcp|no such host|connection (?:refused|reset)|ECONN|ENOTFOUND|EAI_AGAIN|network|TLS|EOF|temporary failure|unreachable|HTTP 5\d\d/iu
+
+/** Why `gh auth status` could not tell, in words for a warning line. */
+function authTransientWhy(result) {
+  if (result.timedOut) return "timed out"
+  const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
+  if (RATE_LIMITED.test(text)) return "rate limited"
+  if (NETWORK_ERROR.test(text)) return "network error"
+  return "unrecognised gh error"
+}
 
 function evaluateAuth(result) {
   if (result.spawnError) return { ok: false, reason: "gh_missing", detail: "the `gh` binary was not found on PATH" }
-  if (result.timedOut) return { ok: false, reason: "auth_timeout", detail: "`gh auth status` did not respond in time" }
   const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
-  if (AUTH_STALE.test(text)) return { ok: false, reason: "auth_stale", detail: trimmed(text, 500) }
-  if (result.code !== 0) return { ok: false, reason: "auth_error", detail: trimmed(text, 500) }
-  return { ok: true }
+  // Not logged in is judged on gh's own words, even after a timeout or an exit 0: the output says what gh found.
+  if (AUTH_STALE.test(text) && (result.code === 0 || !RATE_LIMITED.test(text))) return { ok: false, reason: "auth_stale", detail: trimmed(text, 500) }
+  if (result.code === 0 && result.timedOut !== true) return { ok: true }
+  // Anything else (a timeout, the network, a rate limit, an exit gh gave no reason for) is a failure to check, not a failure to sign in.
+  const why = authTransientWhy(result)
+  return { ok: false, reason: "auth_unverified", soft: true, detail: `${why}${trimmed(text, 300) === "" ? "" : `: ${trimmed(text, 300)}`}`, why }
+}
+
+const AUTH_RETRY_BACKOFF_MS = 750
+const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Whether gh is signed in for github.com. The offline check comes first (`gh auth token`, which reads the stored token
+ * and asks GitHub nothing, so a rate limit or a bad network cannot fail it); only when that does not show a token does
+ * `gh auth status` (an online check) run. A failure that is not "not logged in" gets one retry after a short backoff, then
+ * resolves as `auth_unverified` (a warning, never a hard stop). The token itself is never read into the result.
+ */
+export async function checkAuth(ghAuth, { timeoutMs = 8000, sleep = sleepFor, backoffMs = AUTH_RETRY_BACKOFF_MS } = {}) {
+  // The three calls share the one budget the old single call had (`timeoutMs`), so a slow GitHub never makes boot slower than it was:
+  // the offline check gets a quarter, the online check half, and the retry what is left after the backoff.
+  const offlineMs = Math.floor(timeoutMs / 4)
+  const onlineMs = Math.floor(timeoutMs / 2)
+  const offline = await ghAuth(["auth", "token", "--hostname", "github.com"], { timeoutMs: offlineMs })
+  if (offline.spawnError === undefined && offline.code === 0 && offline.timedOut !== true && String(offline.stdout ?? "").trim() !== "") return { ok: true }
+  let verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs: onlineMs }))
+  if (verdict.soft === true) {
+    await sleep(backoffMs)
+    verdict = evaluateAuth(await ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs: Math.max(1, timeoutMs - offlineMs - onlineMs - backoffMs) }))
+  }
+  return verdict
 }
 
 /**
@@ -268,16 +306,16 @@ function evaluateAuth(result) {
  * a nonzero exit all come back as `{ ok: false, reason, detail }`, never a
  * thrown error.
  */
-export async function checkPrereqs({ gh = ghRunner(), jq = commandRunner("jq"), ghAuth = gh, timeoutMs = 8000 } = {}) {
+export async function checkPrereqs({ gh = ghRunner(), jq = commandRunner("jq"), ghAuth = gh, timeoutMs = 8000, authOptions = {} } = {}) {
   // `ghAuth` runs with the ambient environment: `gh` itself honors GH_TOKEN,
   // so a host signed in only through that variable is healthy. (`gh`, the
   // factory's runner, strips ambient tokens on purpose.)
-  const [ghVersion, jqVersion, authStatus] = await Promise.all([
+  const [ghVersion, jqVersion, auth] = await Promise.all([
     gh(["--version"], { timeoutMs }),
     jq(["--version"], { timeoutMs }),
-    ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs }),
+    checkAuth(ghAuth, { timeoutMs, ...authOptions }),
   ])
-  return { gh: evaluateGh(ghVersion), jq: evaluateJq(jqVersion), auth: evaluateAuth(authStatus) }
+  return { gh: evaluateGh(ghVersion), jq: evaluateJq(jqVersion), auth }
 }
 
 // ── Task-card frontmatter validation ────────────────────────────────────
@@ -693,6 +731,9 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
   return { states, pending }
 }
 
+// What gh prints when GitHub refuses the credential itself (a revoked or expired token, a bad GH_TOKEN), as opposed to a rate limit or a network failure.
+const AUTH_REJECTED = /HTTP 401|bad credentials|requires authentication|token[^.\n]{0,40}(?:invalid|expired|revoked)|no longer valid/iu
+
 /** Open pull requests the signed-in account authored, one `gh pr list` per distinct GitHub repo, within the deadline. */
 export async function openPullRequests({ stores, runner, now, deadline }) {
   const prs = []
@@ -708,7 +749,14 @@ export async function openPullRequests({ stores, runner, now, deadline }) {
       pending.push(`open pull requests for ${store}: timeout`)
       continue
     }
-    if (result.code !== 0) continue
+    if (result.code !== 0) {
+      // The offline sign-in check cannot see a token GitHub has revoked, or an invalid GH_TOKEN; this call can, so say it once, as a warning.
+      const said = `${result.stderr ?? ""}\n${result.stdout ?? ""}`
+      if (AUTH_REJECTED.test(said) && !pending.some((line) => line.startsWith("auth: "))) {
+        pending.push(`auth: GitHub rejected the sign-in gh uses (gh said: ${redactCredentialLikeText(trimmed(said, 200).replace(/\s+/gu, " "))}); pushes will fail until you run \`gh auth login --hostname github.com\`, or unset or replace GH_TOKEN if it is set`)
+      }
+      continue
+    }
     let list
     try {
       list = JSON.parse(result.stdout)
@@ -758,7 +806,7 @@ function prereqAction(name, check) {
     return "Install jq: `brew install jq`, `winget install jqlang.jq`, or `sudo apt install jq`."
   }
   if (name === "auth" && check.reason === "auth_stale") {
-    return "Re-authenticate: run `gh auth login --hostname github.com`."
+    return `Re-authenticate: run \`gh auth login --hostname github.com\` (gh said: ${check.detail.replace(/\s+/gu, " ")}).`
   }
   return `Fix the ${name} prerequisite (${check.reason}) before continuing.`
 }
@@ -897,22 +945,32 @@ function pushLines(pushAccounts, namedTask) {
   }
   const lines = [...groups.values()].map(({ entry, locations }) => pushInstruction(entry, taskList(locations)))
   if (lines.length <= PUSH_LINE_CAP) return lines
-  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: read the Push routes section of this output (the \`push_accounts\` field with \`--json\`) before pushing anywhere.`]
+  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: read each task's \`push:\` line in the plain-text boot (the \`push_accounts\` field with \`--json\`) before pushing anywhere.`]
 }
 
 // What to do about a recorded local clone that is not on this machine: the exact clone command when the card carries
 // the repo's `url` (or its name is owner/repo), otherwise exactly what to ask the operator (boot acceptance round A:
 // "no remote" left the agent guessing between inventing a repo and asking an open question).
+function hasCloneSource(missing) {
+  return typeof missing.url === "string" || (typeof missing.repo === "string" && /^[\w.-]+\/[\w.-]+$/u.test(missing.repo))
+}
+
 function missingCloneInstruction(missing) {
   const where = shellQuotePath(missing.local_path)
   const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}`
   if (typeof missing.url === "string") {
     return `${lead}: only if the next step needs its code, clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url); otherwise do not clone it.`
   }
-  if (typeof missing.repo === "string" && /^[\w.-]+\/[\w.-]+$/u.test(missing.repo)) {
-    return `${lead}: only if the next step needs its code, clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`; otherwise do not clone it.`
-  }
-  return `${lead}, and the card records no usable clone url for it. Do not invent the repo or any progress in it. Ask the operator one question: "Where is ${missing.repo} cloned, or what URL should I clone it from?" Then clone it to ${missing.local_path} (or record the path they give) and save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask.`
+  return `${lead}: only if the next step needs its code, clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`; otherwise do not clone it.`
+}
+
+// A missing clone with no source to clone from blocks the hand-off: the agent has to ask first. So the hand-off and the question are ONE instruction, in
+// the order they happen, never two parallel steps (boot acceptance round O: "I can't hand off to session-resumption if I first need to ask about the missing repo").
+function askThenHandOff(blockers, task) {
+  const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${blockers[0].local_path}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${missing.local_path}`).join("; ")})`
+  const questions = blockers.map((missing) => `"Where is ${missing.repo} cloned, or what URL should I clone it from?"`).join(" and ")
+  const finish = blockers.map((missing) => `clone ${missing.repo} to ${missing.local_path} (or record the path they give)`).join(" and ")
+  return `The operator named a task (${task.card}, handle ${task.handle}), but ${named}, and the card records no usable clone url for ${blockers.length === 1 ? "it" : "them"}. Do not invent the repo or any progress in it. Before anything else, ask the operator one question and stop until they answer: ${questions} Once they answer, ${finish}, save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask, and only then hand off to desk:session-resumption for ${task.card} (handle ${task.handle}), skipping the status block. Every check above still applies.`
 }
 
 // A repo the card records as remote-only, or with no local path: it is read through the hosting service, and cloned only
@@ -921,48 +979,81 @@ function remoteRepoInstruction(names, root) {
   return `The named task's remote-only repos (no local clone): ${names.join(", ")}. Do not clone any of them unless the next step needs its code. If it does, clone into the operator's code location (\`defaults.clone_root\` in ${root.path}/.machine-local.yml, default ~/code/), never /tmp, and record the clone on the card with task_update (the repo's \`local_path\`, with \`mode: local\`).`
 }
 
-function buildInstructions(ctx) {
+// The factory consent line the plain-text boot prints in place of the three long instructions `--json` keeps: one short
+// line, after the work, with the pointer to the script that runs only if the operator says yes.
+function factoryTextLine(factory, pluginRoot) {
+  const store = factory.store
+  const details = path.join(pluginRoot, "skills", "session-start", "details.md")
+  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, end your reply with this one plain sentence, as a statement and never a question: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." Say it once, and ask nothing. Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
+}
+
+// The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot
+// prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all.
+function buildInstructionItems(ctx) {
   const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
   const out = []
+  const add = (text, plain = text) => out.push({ text, plain })
   for (const entry of migrationEntries) {
-    out.push(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
+    add(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
   }
-  out.push(`Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`)
+  add(
+    `Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`,
+    `Use ${root.path} as the desk path in every command and tool call; where a Desk skill says \`$DESK\`, it means this path.`,
+  )
   for (const [name, check] of Object.entries(prereqResults)) {
-    if (check.ok || check.reason.endsWith("_timeout")) continue
-    out.push(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
+    if (check.ok || check.soft === true || check.reason.endsWith("_timeout")) continue
+    add(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
   }
   const syncLine = syncInstruction(sync, root)
-  if (syncLine !== null) out.push(syncLine)
-  if (sync?.state === "quarantined") out.push(`Sync moved stray untracked paths to _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.`)
+  if (syncLine !== null) add(syncLine)
+  if (sync?.state === "quarantined") add(`Sync moved stray untracked paths to _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.`)
   for (const entry of cardValidationResult) {
-    out.push(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
+    add(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
   }
-  // The named task's repos when the operator named one, every active task's otherwise.
+  // The named task's repos when the operator named one, every active task's otherwise. The text boot prints each push
+  // route on its task instead, so these are `--json`-only.
   const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
-  out.push(...pushLines(pushAccounts, namedTask))
-  out.push(deferredToolsHint(agentHost))
+  for (const line of pushLines(pushAccounts, namedTask)) add(line, null)
+  add(deferredToolsHint(agentHost))
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
-      out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
-      for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
-        out.push(missingCloneInstruction(missing))
-      }
-      if (task.task.remote_repos.length > 0) out.push(remoteRepoInstruction(task.task.remote_repos, root))
-      if (task.host_line_changed) out.push(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
+      const named = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)
+      const blockers = named.filter((state) => !hasCloneSource(state))
+      if (blockers.length > 0) add(askThenHandOff(blockers, task.task))
+      else add(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
+      for (const missing of named.filter(hasCloneSource)) add(missingCloneInstruction(missing))
+      if (task.task.remote_repos.length > 0) add(remoteRepoInstruction(task.task.remote_repos, root))
+      if (task.host_line_changed) add(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
     } else if (task?.status === "ambiguous") {
-      out.push(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
+      add(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
     } else {
-      out.push(UNMATCHED_TASK_INSTRUCTION)
+      add(UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT)
     }
   } else {
-    out.push(NO_TASK_INSTRUCTION)
+    add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
   }
-  out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
-  out.push("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.")
-  out.push("When you report on a task, say its real status; say 'done' only for a task whose status is done.")
-  out.push(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`)
+  const consent = factoryInstructions(factory, pluginRoot, { noninteractive })
+  consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
+  add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it.", null)
+  add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
+  add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
   return out
+}
+
+function buildInstructions(ctx) {
+  return buildInstructionItems(ctx).map((item) => item.text)
+}
+
+// The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
+const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
+
+// The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
+// factory line, so the factory question never comes before the work.
+function buildTextInstructions(ctx) {
+  const plain = buildInstructionItems(ctx).map((item) => item.plain).filter((line) => line !== null)
+  const factoryAt = plain.findIndex((line) => line.startsWith("Factory consent is undecided"))
+  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, CLOSING_RULES)
+  return plain
 }
 
 function withinBudget(promise, ms, timeoutValue) {
@@ -991,6 +1082,7 @@ export async function bootOnce({
   homeDir = env.HOME || os.homedir(),
   gh: ghArg,
   ghAuth: ghAuthArg,
+  authOptions = {},
   jq = commandRunner("jq"),
   pluginRoot = DESK_PLUGIN_ROOT,
   migrationsFn = pendingMigrations,
@@ -1067,10 +1159,12 @@ export async function bootOnce({
     degraded.push(`card guard: ${error.message}`)
   }
 
-  const prereqs = await checkPrereqs({ gh, jq, ghAuth })
+  const prereqs = await checkPrereqs({ gh, jq, ghAuth, authOptions })
   for (const [name, check] of Object.entries(prereqs)) {
     if (check.ok) continue
-    if (check.reason.endsWith("_timeout")) {
+    if (check.soft === true) {
+      pending.push(`${name}: Could not verify GitHub sign-in (${check.why}); continuing; pushes may fail until it clears`)
+    } else if (check.reason.endsWith("_timeout")) {
       pending.push(`${name}: ${check.reason}`)
     } else {
       degraded.push(`${name}: ${check.reason}`)
@@ -1171,6 +1265,11 @@ export async function bootOnce({
     degraded.push(`open_prs: ${error.message}`)
   }
 
+  // A stored token GitHub refused while the push routes were checked: say so once per account, as a warning.
+  for (const account of new Set(pushAccounts.flatMap((entry) => (Array.isArray(entry.accounts) ? entry.accounts.filter((item) => item.reason === "auth_failed").map((item) => item.account) : [])))) {
+    pending.push(`auth: GitHub rejected the stored sign-in for ${account}; pushes as ${account} will fail until you run \`gh auth login --hostname github.com\``)
+  }
+
   let factory = null
   try {
     factory = factoryStatusFn({ env, deskRoot: root.path })
@@ -1192,7 +1291,8 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList }
+  const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
     status,
@@ -1216,6 +1316,8 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
+    text_instructions: buildTextInstructions(instructionContext),
   }
 }
 
@@ -1257,7 +1359,8 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
     const started = prepared.state === "ready"
     result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started ? startedLine(finding, prepared.plan) : finding.line } }
   }
-  io.stdout.write(json ? `${JSON.stringify(result)}\n` : formatBootText(result))
+  const { text_instructions: _textOnly, ...structured } = result
+  io.stdout.write(json ? `${JSON.stringify(structured)}\n` : formatBootText(result))
   if (prepared.state === "ready") startStaleRefresh({ ...options, prepared })
   return 0
 }

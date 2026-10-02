@@ -6,6 +6,7 @@
 // `fakeGh` convention — nothing here reaches a real `gh`, `jq` or network.
 
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { asksForConsent } from "../../../../../evals/boot-acceptance/scenarios.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
@@ -18,6 +19,7 @@ import {
   bootOnce as realBootOnce,
   cardProblems,
   cardValidation,
+  checkAuth,
   checkPrereqs,
   detectAgentHost,
   isNoninteractive,
@@ -358,9 +360,10 @@ test("checkPrereqs: a nonzero gh or jq exit with empty stderr falls back to stdo
 test("checkPrereqs: an auth-status result missing stdout and stderr entirely is still read without throwing", async () => {
   const gh = fixedRunner({ "--version": { code: 0, stdout: "gh version 2.54.0\n", stderr: "" }, "auth status": { code: 1 } })
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
-  const result = await checkPrereqs({ gh, jq })
+  const result = await checkPrereqs({ gh, jq, authOptions: NO_WAIT })
   assert.equal(result.auth.ok, false)
-  assert.equal(result.auth.reason, "auth_error")
+  assert.equal(result.auth.reason, "auth_unverified", "gh gave no reason, so the sign-in is unverified, not refused")
+  assert.equal(result.auth.soft, true)
 })
 
 test("checkPrereqs: called bare, the real gh and jq runners report missing binaries off an empty PATH", async () => {
@@ -376,7 +379,9 @@ test("checkPrereqs: called bare, the real gh and jq runners report missing binar
   }
 })
 
-test("checkPrereqs: a stale token is caught even with exit code 0; a plain nonzero without the phrase is auth_error", async () => {
+const NO_WAIT = { sleep: async () => {} }
+
+test("checkPrereqs: a stale token is caught even with exit code 0; a rate limit, a timeout or a plain nonzero is only unverified", async () => {
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
   const stale = fixedRunner({
     "--version": { code: 0, stdout: "gh version 2.54.0\n", stderr: "" },
@@ -391,10 +396,12 @@ test("checkPrereqs: a stale token is caught even with exit code 0; a plain nonze
     "auth status": { code: 1, stdout: "", stderr: "rate limited\n" },
   })
   const timeout = fixedRunner({ "--version": { code: 0, stdout: "gh version 2.54.0\n", stderr: "" }, "auth status": { code: null, stdout: "", stderr: "", timedOut: true } })
-  assert.equal((await checkPrereqs({ gh: stale, jq })).auth.reason, "auth_stale")
-  assert.equal((await checkPrereqs({ gh: loggedOut, jq })).auth.reason, "auth_stale")
-  assert.equal((await checkPrereqs({ gh: otherFailure, jq })).auth.reason, "auth_error")
-  assert.equal((await checkPrereqs({ gh: timeout, jq })).auth.reason, "auth_timeout")
+  assert.equal((await checkPrereqs({ gh: stale, jq, authOptions: NO_WAIT })).auth.reason, "auth_stale")
+  assert.equal((await checkPrereqs({ gh: loggedOut, jq, authOptions: NO_WAIT })).auth.reason, "auth_stale")
+  const limited = (await checkPrereqs({ gh: otherFailure, jq, authOptions: NO_WAIT })).auth
+  assert.deepEqual([limited.reason, limited.soft, limited.why], ["auth_unverified", true, "rate limited"])
+  const slow = (await checkPrereqs({ gh: timeout, jq, authOptions: NO_WAIT })).auth
+  assert.deepEqual([slow.reason, slow.soft, slow.why], ["auth_unverified", true, "timed out"])
 })
 
 // ── cardProblems ─────────────────────────────────────────────────────────
@@ -777,6 +784,135 @@ test("bootOnce: every other named prereq remediation — an old gh, a missing jq
     jq: fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } }),
   })
   assert.ok(staleAuth.instructions.some((line) => line.includes("gh auth login")))
+})
+
+const AUTH_BOOT = { factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }), syncFn: async () => ({ state: "synced" }), authOptions: NO_WAIT }
+const ghWith = (auth) => async (args) => {
+  if (args[0] === "--version") return { code: 0, stdout: "gh version 2.54.0\n", stderr: "" }
+  if (args[0] === "auth") return auth(args)
+  return { code: 1, stdout: "", stderr: "unexpected call" }
+}
+const jqOk = async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" })
+
+test("auth: an offline token check that succeeds skips the online check, so a rate limit cannot fail it", async () => {
+  const calls = []
+  const gh = ghWith((args) => {
+    calls.push(args[1])
+    return args[1] === "token" ? { code: 0, stdout: "gho_secretvalue\n", stderr: "" } : { code: 1, stdout: "", stderr: "HTTP 429: rate limit exceeded" }
+  })
+  const result = await checkPrereqs({ gh, jq: jqOk })
+  assert.deepEqual(result.auth, { ok: true })
+  assert.deepEqual(calls, ["token"], "the online status call never ran")
+  assert.ok(!JSON.stringify(result).includes("gho_secretvalue"), "the token is never kept")
+})
+
+test("auth: an offline check with no output is no proof of a sign-in, so the online check decides", async () => {
+  const gh = ghWith((args) => (args[1] === "token" ? { code: 0 } : { code: 0, stdout: "Logged in\n", stderr: "" }))
+  assert.deepEqual((await checkPrereqs({ gh, jq: jqOk })).auth, { ok: true })
+})
+
+test("auth: an offline check that timed out or could not run falls through to the online check", async () => {
+  for (const offline of [{ code: null, stdout: "", stderr: "", timedOut: true }, { code: null, stdout: "", stderr: "", spawnError: "ENOENT" }, { code: 0, stdout: "tok\n", stderr: "", timedOut: true }]) {
+    const gh = ghWith((args) => (args[1] === "token" ? offline : { code: 0, stdout: "Logged in\n", stderr: "" }))
+    assert.deepEqual((await checkPrereqs({ gh, jq: jqOk })).auth, { ok: true })
+  }
+})
+
+test("checkAuth: callable with no options, and with a custom backoff on the real timer", async () => {
+  const signedIn = ghWith((args) => (args[1] === "token" ? { code: 0, stdout: "tok\n", stderr: "" } : { code: 1, stdout: "", stderr: "unused" }))
+  assert.deepEqual(await checkAuth(signedIn), { ok: true })
+  const flaky = ghWith((args) => (args[1] === "token" ? { code: 1, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr: "HTTP 429" }))
+  const started = Date.now()
+  const verdict = await checkAuth(flaky, { backoffMs: 20 })
+  assert.equal(verdict.why, "rate limited")
+  assert.ok(Date.now() - started >= 15, "it waited the backoff before the retry")
+})
+
+test("auth: a transient online failure is retried once after a backoff, and a recovery is ok", async () => {
+  let statusCalls = 0
+  const waits = []
+  const gh = ghWith((args) => {
+    if (args[1] === "token") return { code: 1, stdout: "", stderr: "no token" }
+    statusCalls += 1
+    return statusCalls === 1 ? { code: 1, stdout: "", stderr: "error connecting to api.github.com: dial tcp: i/o timeout" } : { code: 0, stdout: "Logged in\n", stderr: "" }
+  })
+  const result = await checkPrereqs({ gh, jq: jqOk, authOptions: { sleep: async (ms) => { waits.push(ms) } } })
+  assert.deepEqual(result.auth, { ok: true })
+  assert.equal(statusCalls, 2)
+  assert.deepEqual(waits, [750])
+})
+
+test("auth: a failure that persists is a warning with its reason, never a hard stop", async () => {
+  for (const [stderr, why] of [["HTTP 403: API rate limit exceeded", "rate limited"], ["dial tcp: lookup api.github.com: no such host", "network error"], ["something odd", "unrecognised gh error"]]) {
+    const root = await mkDeskWorkspace()
+    const gh = ghWith((args) => (args[1] === "token" ? { code: 1, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr }))
+    const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: jqOk, ...AUTH_BOOT })
+    assert.ok(!result.instructions.some((line) => /Hard stop|never fall back/u.test(line)), stderr)
+    assert.ok(result.pending.includes(`auth: Could not verify GitHub sign-in (${why}); continuing; pushes may fail until it clears`), result.pending.join("|"))
+    assert.ok(!result.degraded.some((line) => line.startsWith("auth")))
+    assert.equal(result.status, "ready")
+  }
+})
+
+test("auth: real 'not logged in' output still hard-stops, naming what gh said and the fix", async () => {
+  const root = await mkDeskWorkspace()
+  const gh = ghWith((args) => (args[1] === "token" ? { code: 1, stdout: "", stderr: "no oauth token found for github.com" } : { code: 1, stdout: "", stderr: "You are not logged into any GitHub hosts. To log in, run: gh auth login\n" }))
+  const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: jqOk, ...AUTH_BOOT })
+  const stop = result.instructions.find((line) => line.startsWith("Hard stop"))
+  assert.match(stop, /gh auth login --hostname github\.com\b.*gh said: You are not logged into any GitHub hosts/u)
+  assert.ok(result.degraded.includes("auth: auth_stale"))
+})
+
+test("auth: concurrent boots against a gh that rate limits or fails transiently never hard-stop", async () => {
+  const roots = await Promise.all(Array.from({ length: 24 }, () => mkDeskWorkspace()))
+  let seq = 0
+  const gh = ghWith((args) => {
+    if (args[1] === "token") return { code: 1, stdout: "", stderr: "" }
+    seq += 1
+    return seq % 3 === 0 ? { code: null, stdout: "", stderr: "", timedOut: true } : { code: 1, stdout: "", stderr: seq % 3 === 1 ? "HTTP 429: rate limit exceeded" : "connection reset by peer" }
+  })
+  const results = await Promise.all(roots.map((root) => bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: jqOk, ...AUTH_BOOT })))
+  assert.equal(results.length, 24)
+  for (const result of results) {
+    assert.ok(!result.instructions.some((line) => /Hard stop|never fall back/u.test(line)))
+    assert.notEqual(result.status, "degraded")
+    assert.ok(result.pending.some((line) => line.startsWith("auth: Could not verify GitHub sign-in")), "every boot says it could not verify the sign-in")
+  }
+  assert.ok(results.some((result) => result.pending.some((line) => line.includes("(rate limited)"))))
+  assert.ok(results.some((result) => result.pending.some((line) => line.includes("(network error)"))))
+})
+
+test("auth: the worst case, a slow GitHub on every attempt, takes no longer than the one 8 s call it replaced", async () => {
+  const asked = []
+  const waits = []
+  const gh = ghWith(() => ({ code: null, stdout: "", stderr: "", timedOut: true }))
+  const runner = async (args, options) => { asked.push(options.timeoutMs); return gh(args) }
+  const verdict = await checkAuth(runner, { sleep: async (ms) => { waits.push(ms) } })
+  assert.equal(verdict.why, "timed out")
+  assert.equal(asked.length, 3, "offline, online, one retry")
+  assert.ok(asked.reduce((total, ms) => total + ms, 0) + waits.reduce((total, ms) => total + ms, 0) <= 8000, `${asked} + ${waits}`)
+})
+
+test("auth: a token GitHub revoked, or a bad GH_TOKEN, passes the offline check and then shows as a warning from the pull-request lookup, once", async () => {
+  const deadline = Date.now() + 60000
+  const runner = async () => ({ code: 1, stdout: "", stderr: "gh: Bad credentials (HTTP 401)\n" })
+  const { prs, pending } = await openPullRequests({ stores: ["acme/a", "acme/b"], runner, now: Date.now, deadline })
+  assert.deepEqual(prs, [])
+  assert.equal(pending.length, 1, "said once, not per repo")
+  assert.match(pending[0], /^auth: GitHub rejected the sign-in gh uses \(gh said: gh: Bad credentials \(HTTP 401\)\); pushes will fail until you run `gh auth login --hostname github\.com`, or unset or replace GH_TOKEN if it is set$/u)
+  const limited = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1, stdout: "", stderr: "HTTP 403: API rate limit exceeded" }), now: Date.now, deadline })
+  assert.deepEqual(limited.pending, [], "a rate limit is not a rejected token")
+  const silent = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1 }), now: Date.now, deadline })
+  assert.deepEqual(silent.pending, [], "a failure with no output says nothing about the token")
+})
+
+test("auth: a stored token rejected while the push routes were checked is a warning naming the account and the fix", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: 401 } })
+  const result = await healthyBoot(root, { gh })
+  assert.ok(result.pending.includes("auth: GitHub rejected the stored sign-in for ari; pushes as ari will fail until you run `gh auth login --hostname github.com`"), result.pending.join("|"))
+  assert.ok(!result.instructions.some((line) => /Hard stop/u.test(line)))
 })
 
 test("bootOnce: a corrupted task card degrades status and names the task, file location and handle in one action", async () => {
@@ -1361,7 +1497,7 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   // Plain text names the printed section; the structured instructions keep the field names.
   assert.ok(result.instructions.some((line) => /active_tasks, open_prs and repo_states/u.test(line)))
   const printed = formatBootText(result)
-  assert.match(printed, /No task was named: report every task under "Active tasks" below/u)
+  assert.match(printed, /No task was named: report every task under "Active tasks" above/u)
   assert.doesNotMatch(printed, /active_tasks, open_prs|repo_states/u)
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)
@@ -1510,6 +1646,36 @@ test("bootOnce: undecided factory consent, interactive, is raised only after the
   const handoff = result.instructions.findIndex((line) => line.includes("desk:session-resumption"))
   const consent = result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided"))
   assert.ok(handoff !== -1 && consent > handoff, "the resume hand-off comes before any consent instruction")
+})
+
+test("bootOnce: the text boot gives undecided factory consent as one short line last, pointing at the script; --json keeps the long instructions", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
+  const plain = result.text_instructions
+  assert.equal(plain.filter((line) => /[Ff]actory consent/u.test(line)).length, 1, "one consent line in the text boot")
+  assert.match(plain.at(-1), /^Factory consent is undecided for ourostack\/factory-intake\. Only after the operator's work is done, and only if they are in the conversation, end your reply with this one plain sentence, as a statement and never a question: "Desk can contribute measurement data about finished tasks to ourostack\/factory-intake; say 'factory details' to see what it sends\." Say it once, and ask nothing\. Only if they then say 'factory details' \(or ask what is sent\), follow "Factory consent" in .*skills.session-start.details\.md; the script is `node [^`]*mcp.scripts.factory\.js`\.$/u)
+  const sentence = /"(Desk can contribute[^"]*)"/u.exec(plain.at(-1))[1]
+  assert.doesNotMatch(sentence, /\?|want the details|yes or no/iu, "the sentence relayed to the operator is a statement, not a question")
+  assert.equal(asksForConsent(sentence), false, "the harness does not read it as an ask")
+  assert.doesNotMatch(plain.join("\n"), /consent --store|Contribute\? \(yes or no\)|account_found/u, "the script is behind the pointer")
+  assert.ok(result.instructions.some((line) => /consent --store ourostack\/factory-intake --contribute yes/u.test(line)), "--json keeps the script")
+  const printed = formatBootText(result)
+  assert.equal(printed.split("Factory consent is undecided").length, 2)
+  const decided = await healthyBoot(root)
+  assert.ok(!decided.text_instructions.some((line) => /[Ff]actory consent/u.test(line)))
+})
+
+test("bootOnce: the text boot folds the rules into short closing wording, drops the host list, and keeps the tool hint", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const result = await healthyBoot(root, { env: { DESK: root, COPILOT_AGENT_SESSION_ID: "s" } })
+  const plain = result.text_instructions
+  assert.ok(plain.length < result.instructions.length, "fewer instructions in the text boot")
+  assert.match(plain[0], new RegExp(`^Use ${root.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} as the desk path in every command and tool call`, "u"))
+  assert.ok(plain.some((line) => /`desk-task_update`/u.test(line)), "the host's tool names stay")
+  assert.ok(!plain.some((line) => /hosts/u.test(line)))
+  assert.match(plain.at(-1), /^In every reply: if the next step needs something that is not on this machine .* say what is missing and stop, and never recreate or simulate it; .* say 'done' only for a task whose status is done; do not print Desk skill step headings\.$/u)
 })
 
 test("bootOnce: undecided factory consent in a noninteractive session emits no consent instruction at all", async () => {
