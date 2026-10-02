@@ -17,6 +17,7 @@ import { clearTouchedTasks, doneClaimStopHook, recordTouchedTask } from "../../.
 import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { inspectionBudget, protectedDenial, unresolved } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
 import { DENIED_SURFACES, evaluateDeniedTool } from "../../../../../plugins/desk/mcp/src/runtime/host-enforcement.js"
+import { MESSAGES as PROCESS_KILL_MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/process-kill-guard.js"
 import { POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
 import { taskStatusGuardHook } from "../../../../../plugins/desk/mcp/src/runtime/task-status-guard.js"
 import { assertNotRealStateUnderTest as assertNotRealRuntimeState } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
@@ -182,6 +183,10 @@ test("the host enforcement and ask gate denials open with the fix", () => {
   return gated.then((result) => assertActionable(assert, result.hookSpecificOutput.permissionDecisionReason, "ask-gate"))
 })
 
+test("every process-kill denial opens with the fix", () => {
+  for (const [key, text] of Object.entries(PROCESS_KILL_MESSAGES)) assertActionable(assert, text, key)
+})
+
 test("the pre-commit card guard's refusal opens with the fix, naming the staged card", (t) => {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "lint-precommit-")))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -217,7 +222,7 @@ test("every file under plugins/desk that emits a denial is accounted for in this
   // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
     "mcp/src/runtime/ask-gate.js": 2, "mcp/src/runtime/done-claim-gate.js": 1, "mcp/src/runtime/guard-unknowns.js": 4,
-    "mcp/src/runtime/host-enforcement.js": 7, "mcp/src/runtime/powershell-commands.js": 4, "mcp/src/runtime/protected-checkout.js": 12,
+    "mcp/src/runtime/host-enforcement.js": 7, "mcp/src/runtime/powershell-commands.js": 4, "mcp/src/runtime/process-kill-guard.js": 4, "mcp/src/runtime/protected-checkout.js": 12,
     "mcp/src/runtime/task-status-guard.js": 6, "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2, "hooks/protected-checkout.cjs": 2,
     // Carries the reason a guard built to the host in its own shape; it writes none of its own.
