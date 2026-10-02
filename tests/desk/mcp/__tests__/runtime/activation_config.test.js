@@ -1,6 +1,5 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { spawn } from "node:child_process"
 import {
   chmodSync,
   existsSync,
@@ -15,6 +14,7 @@ import {
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { openSession } from "../launch/_mcp_session.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -943,7 +943,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -980,7 +980,7 @@ test("entrypoint stdio startup lets host/session root override activation config
       "conflicting DESK root must not receive writes when host/session root is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -1020,7 +1020,7 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")
     assert.equal(sourceMirrorCount(activationCache), 1, "repeated startup should reuse the same source mirror for unchanged MCP source")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -1029,10 +1029,10 @@ async function runTaskCreateThroughEntrypoint(fixture, {
   envOverrides = {},
   track = "activation-check",
 } = {}) {
-  const child = spawn(process.execPath, [
+  const session = await openSession({ command: process.execPath, args: [
     path.join(mcpRoot, "index.js"),
     ...args,
-  ], {
+  ],
     cwd: fixture.root,
     env: {
       ...process.env,
@@ -1042,94 +1042,24 @@ async function runTaskCreateThroughEntrypoint(fixture, {
       XDG_CACHE_HOME: fixture.xdgCache,
       ...envOverrides,
     },
-    stdio: ["pipe", "pipe", "pipe"],
-  })
-  let stdout = ""
-  let stderr = ""
-  const responses = []
-  let closed
-
-  child.stdout.on("data", (chunk) => {
-    const text = chunk.toString("utf8")
-    stdout += text
-    for (const line of text.split(/\r?\n/u)) {
-      if (line.trim() === "") continue
-      try {
-        responses.push(JSON.parse(line))
-      } catch {
-        // Keep raw stdout for assertion context.
-      }
-    }
-  })
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8")
-  })
-  const closePromise = new Promise((resolve) => {
-    child.once("close", (code, signal) => {
-      closed = { code, signal }
-      resolve(closed)
-    })
   })
   try {
-    child.stdin.write(JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: { name: "unit-8a", version: "1.0.0" },
-      },
-    }) + "\n")
-    const initialize = await waitForResponse({ closed: () => closed, id: 1, responses, stderr: () => stderr, stdout: () => stdout })
-    child.stdin.write(JSON.stringify({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    }) + "\n")
-    child.stdin.write(JSON.stringify({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: {
-        name: "task_create",
-        arguments: {
-          track,
-          slug: "from-server",
-          title: "From server",
-        },
-      },
-    }) + "\n")
-    const created = await waitForResponse({ closed: () => closed, id: 2, responses, stderr: () => stderr, stdout: () => stdout })
+    const status = await session.statusUntil((payload) => payload.state !== "admitting", { deadlineMs: 60000 })
+    assert.equal(status.state, "ready", JSON.stringify(status))
+    const created = await session.request("tools/call", {
+      name: "task_create",
+      arguments: { track, slug: "from-server", title: "From server" },
+    })
+    assert.notEqual(created.result?.isError, true, JSON.stringify(created))
     return {
-      initialize,
+      initialize: session.initialize,
       created,
-      stderr,
-      stdout,
+      stderr: session.stderr(),
+      stdout: JSON.stringify(created),
     }
   } finally {
-    child.kill("SIGTERM")
-    await closePromise
+    await session.close()
   }
-}
-
-function waitForResponse({ closed, id, responses, stderr, stdout, timeoutMs = 10000 }) {
-  return new Promise((resolve, reject) => {
-    const started = Date.now()
-    const timer = setInterval(() => {
-      const response = responses.find((message) => message.id === id)
-      if (response !== undefined) {
-        clearInterval(timer)
-        resolve(response)
-      } else if (closed() !== undefined) {
-        clearInterval(timer)
-        reject(new Error(`process exited before response ${id}: ${JSON.stringify(closed())}\nstdout:\n${stdout()}\nstderr:\n${stderr()}`))
-      } else if (Date.now() - started > timeoutMs) {
-        clearInterval(timer)
-        reject(new Error(`timed out waiting for response ${id}\nstdout:\n${stdout()}\nstderr:\n${stderr()}`))
-      }
-    }, 25)
-  })
 }
 
 function escapeRegExp(value) {
