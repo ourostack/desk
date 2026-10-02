@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.180 — 2026-10-02
+
+The factory's end-of-session derive worker no longer writes after its home is gone. The detached `factory.js derive --wait-quiet` process used to re-read its marker after each quiet wait through a call that creates Desk's factory state folders, so a session whose HOME, desk or state root was deleted during the wait (a throwaway profile, an evaluation run, a removed desk) got the empty `.local/state/ouroboros-skills/desk/factory/markers` skeleton back. The worker now checks that the marker file still exists, with a plain stat that creates nothing, before it reads the marker, after every wait and before it derives, and exits quietly with `invalid` when it is gone. The command also ends itself after six minutes at the latest (the wait is capped at five). The worker already runs in its own process group and is never a child the host waits on.
+
+The boot-acceptance harness now kills any process still naming a run's temp folder before it deletes that folder.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.179 — 2026-10-02
 
 ### Every Desk denial opens with the fix
