@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.175 — 2026-10-02
+
+Desk's MCP server declarations can no longer drift between hosts or use a name a model API reserves. A new test reads the real `.mcp.json`, `.mcp.copilot.json`, plugin manifests and activation manifest of every plugin in the repository and fails when the two host files declare different server names, types, commands or entry files, the failure behind `web-browser_click` surviving the first rename on Copilot. The same test rejects any server name on the reserved list (`web`, `functions`, `multi_tool_use`, `browser`, `python`, `container`, `file_search`, `computer`, `image_gen`, `tool`, `tools`, `default`, `api`, `mcp`), any name outside `^[a-z][a-z0-9-]*$`, and any name where `<server>-<longest tool>`, or Claude's `mcp__plugin_<plugin>_<server>__<tool>`, would pass 64 characters. The list is the exported `RESERVED_MCP_SERVER_NAMES`. No server or tool name changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.174 — 2026-10-02
 
 Several Desk versions often run at once against one factory state folder, and the factory now stays safe when an older Desk shares it. A retracted session's local copies move out of `outbox/<store-slug>/` into `retracted-copies/<store-slug>/` when the delete is pushed, so an older Desk's flush, which publishes everything it finds in the outbox, can no longer send retracted sessions back to the store. A route back moves the copies home before they publish, every flush migrates any copy of a retracting or retracted session still in the outbox, and files already placed in `retracted-copies/` by hand are adopted. Copies are never deleted.
