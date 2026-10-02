@@ -291,7 +291,7 @@ export function withoutQuotedText(text) {
     .replace(/(?<=\S\s)["“][^"”\n]*["”]/gu, " ")
 }
 
-function standing(sentence, patterns, previous = "") {
+function standing(sentence, patterns, previous) {
   return patterns.some((pattern) => {
     const match = pattern.exec(sentence)
     if (match === null) return false
