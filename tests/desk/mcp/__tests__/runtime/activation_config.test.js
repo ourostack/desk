@@ -943,7 +943,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -980,7 +980,7 @@ test("entrypoint stdio startup lets host/session root override activation config
       "conflicting DESK root must not receive writes when host/session root is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -1020,7 +1020,7 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")
     assert.equal(sourceMirrorCount(activationCache), 1, "repeated startup should reuse the same source mirror for unchanged MCP source")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
   }
 })
 
@@ -1044,7 +1044,7 @@ async function runTaskCreateThroughEntrypoint(fixture, {
     },
   })
   try {
-    const status = await session.statusUntil((payload) => payload.state !== "admitting")
+    const status = await session.statusUntil((payload) => payload.state !== "admitting", { deadlineMs: 60000 })
     assert.equal(status.state, "ready", JSON.stringify(status))
     const created = await session.request("tools/call", {
       name: "task_create",
