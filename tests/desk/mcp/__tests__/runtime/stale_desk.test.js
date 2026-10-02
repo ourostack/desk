@@ -77,7 +77,7 @@ test("the refresh step names the right command for each host", () => {
 test("the finding is one line, with a count when reliable and just behind otherwise", () => {
   const counted = staleDeskFinding({ running: "3.2.0-alpha.153", latest: "3.2.0-alpha.172", agentHost: "claude" })
   assert.equal(counted.line, "Desk 3.2.0-alpha.153 is 19 releases behind main (3.2.0-alpha.172); update it with /plugin, then start a new session.")
-  assert.deepEqual(Object.keys(counted), ["running", "latest", "behind", "channel", "refresh", "line"])
+  assert.deepEqual(Object.keys(counted), ["running", "latest", "behind", "channel", "refresh", "auto_refresh", "line"])
   assert.equal(counted.behind, 19)
   assert.equal(counted.channel, "main")
   assert.match(staleDeskFinding({ running: "3.2.0-alpha.171", latest: "3.2.0-alpha.172", agentHost: "claude" }).line, /is 1 release behind main/u)
@@ -247,4 +247,30 @@ test("a boot with no desk bound starts no lookup", async () => {
   const result = await bootOnce({ env: {}, cwd: await mkTempRoot("desk-stale-none-"), homeDir: await mkTempRoot("desk-stale-home-"), gh, jq, staleDeskFn: async () => { called = true; return null } })
   assert.equal(called, false)
   assert.equal(result.stale_desk, null)
+})
+
+test("the state directory comes from the environment when none is given, and an unwritable one only costs a second lookup", async () => {
+  const { pluginRoot } = await fixture("3.2.0-alpha.153")
+  const stateHome = await mkTempRoot("desk-stale-xdg-")
+  const calls = []
+  const env = { XDG_STATE_HOME: stateHome }
+  assert.equal((await checkStaleDesk({ env, pluginRoot, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172", calls) })).behind, 19)
+  assert.equal(existsSync(path.join(stateHome, "ouroboros-skills", "desk", VERSION_CACHE_FILE)), true)
+  await checkStaleDesk({ env, pluginRoot, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172", calls) })
+  assert.equal(calls.length, 1)
+  // A state directory that is a plain file cannot be written; the answer still comes back.
+  const file = path.join(await mkTempRoot("desk-stale-file-"), "not-a-dir")
+  writeFileSync(file, "x")
+  assert.equal((await checkStaleDesk({ env: {}, pluginRoot, stateDir: file, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172") })).behind, 19)
+})
+
+test("a cached version that is not semver, or a plugin.json whose version is not, is ignored", async () => {
+  const { pluginRoot, stateDir } = await fixture("3.2.0-alpha.153")
+  writeFileSync(path.join(stateDir, VERSION_CACHE_FILE), JSON.stringify({ checked_at: new Date().toISOString(), latest: "banana" }))
+  const calls = []
+  assert.equal((await checkStaleDesk({ env: {}, pluginRoot, stateDir, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172", calls) })).behind, 19)
+  assert.equal(calls.length, 1)
+  const odd = await fixture("not-a-version")
+  assert.equal(await checkStaleDesk({ env: {}, pluginRoot: odd.pluginRoot, stateDir: odd.stateDir, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172", calls) }), null)
+  assert.equal(calls.length, 1)
 })

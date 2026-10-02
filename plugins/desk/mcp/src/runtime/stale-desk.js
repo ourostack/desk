@@ -75,7 +75,12 @@ export function refreshStep(agentHost) {
   return "update the Desk plugin in this host, then start a new session"
 }
 
-/** The warning as `{ running, latest, behind, channel, refresh, line }`, or null when `running` is not behind `latest`. */
+/** "19 releases behind" when the count is reliable, otherwise "behind". */
+export function behindText(behind) {
+  return behind === null ? "behind" : `${behind} release${behind === 1 ? "" : "s"} behind`
+}
+
+/** The warning as `{ running, latest, behind, channel, refresh, auto_refresh, line }`, or null when `running` is not behind `latest`. */
 export function staleDeskFinding({ running, latest, agentHost }) {
   const order = compareVersions(running, latest)
   if (order === null || order >= 0) return null
@@ -87,7 +92,8 @@ export function staleDeskFinding({ running, latest, agentHost }) {
     behind,
     channel: "main",
     refresh,
-    line: `Desk ${running} is ${behind === null ? "behind" : `${behind} release${behind === 1 ? "" : "s"} behind`} main (${latest}); ${refresh}.`,
+    auto_refresh: null,
+    line: `Desk ${running} is ${behindText(behind)} main (${latest}); ${refresh}.`,
   }
 }
 
@@ -141,31 +147,27 @@ async function fetchLatest(fetchFn, budgetMs) {
 }
 
 /**
- * The stale-Desk finding for this boot, or null. Never throws and never takes longer than `budgetMs` (a cached answer
+ * The stale-Desk finding for this boot, or null. Never rejects (every step handles its own errors) and never takes longer than `budgetMs` (a cached answer
  * takes no time). `fetchFn` is for tests; passing one also lifts the node:test off switch.
  */
-export async function checkStaleDesk({ env = process.env, pluginRoot, agentHost, now = Date.now, fetchFn, budgetMs = VERSION_FETCH_BUDGET_MS, stateDir } = {}) {
-  try {
-    if (String(env[VERSION_CHECK_SWITCH] ?? "").trim() === "0") return null
-    if (fetchFn === undefined && looksLikeNodeTestRunner(env)) return null
-    const running = readRunningVersion(pluginRoot)
-    if (running === null) return null
-    const dir = stateDir ?? resolveDeskStateDir({ env })
-    const file = path.join(dir, VERSION_CACHE_FILE)
-    let latest = readCache(file, now)
-    if (latest === undefined) {
-      const doFetch = fetchFn ?? globalThis.fetch
-      if (typeof doFetch !== "function") return null
-      // The race is a second guard: a fetch that ignores the abort signal still cannot hold boot past the budget.
-      let timer
-      const hard = new Promise((resolve) => {
-        timer = setTimeout(() => resolve(null), budgetMs + 100)
-      })
-      latest = await Promise.race([fetchLatest(doFetch, budgetMs), hard]).finally(() => clearTimeout(timer))
-      writeCache(dir, file, latest, now, env)
-    }
-    return latest === null ? null : staleDeskFinding({ running, latest, agentHost })
-  } catch {
-    return null
+export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.now, fetchFn, budgetMs = VERSION_FETCH_BUDGET_MS, stateDir }) {
+  if (String(env[VERSION_CHECK_SWITCH] ?? "").trim() === "0") return null
+  if (fetchFn === undefined && looksLikeNodeTestRunner(env)) return null
+  const running = readRunningVersion(pluginRoot)
+  if (running === null) return null
+  const dir = stateDir ?? resolveDeskStateDir({ env })
+  const file = path.join(dir, VERSION_CACHE_FILE)
+  let latest = readCache(file, now)
+  if (latest === undefined) {
+    // The race is a second guard: a fetch that ignores the abort signal still cannot hold boot past the budget.
+    let timer
+    const hard = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), budgetMs + 100)
+    })
+    // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
+    const doFetch = fetchFn ?? globalThis.fetch
+    latest = await Promise.race([fetchLatest(doFetch, budgetMs), hard]).finally(() => clearTimeout(timer))
+    writeCache(dir, file, latest, now, env)
   }
+  return latest === null ? null : staleDeskFinding({ running, latest, agentHost })
 }
