@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url"
 
 const source = new URL("../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js", import.meta.url)
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
-const guidance = /^Desk protected checkout .+: .*git worktree add --detach "\$HOME\/<new directory>" <ref>/u
+const guidance = /^.*git worktree add --detach "\$HOME\/<new directory>" <ref>/u
 let root, protectedRoot, ordinary, child
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`
@@ -50,7 +50,7 @@ test("HEAD-moving and work-discarding operations alone are denied in a locally p
     "restore --source HEAD file", "restore -s HEAD file", "restore --staged --worktree file", "checkout HEAD -- file", "worktree prune",
   ]
   for (const args of deny) {
-    assert.match((await guard(`git ${args}`, protectedRoot)).reason, /^Desk protected checkout /u, args)
+    assert.match((await guard(`git ${args}`, protectedRoot)).reason, / Desk protects this checkout: /u, args)
     assert.equal((await guard(`git ${args}`, ordinary)).deny, false, `unprotected: ${args}`)
   }
   for (const args of allow) {

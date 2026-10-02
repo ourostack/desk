@@ -123,11 +123,10 @@ export async function askGateHook(input, host, env = process.env) {
     if (!shellCommandTargets(args.command)) return {}
   }
 
-  const reason = "Desk ask-gate: this session reports nobody attending "
-    + `(${ATTENDED_ENV}=${CONFIRMED_UNATTENDED}). `
+  const reason = "Report the desk-binding question to the human and stop; do not pick or bind a desk yourself. "
+    + `Desk ask-gate: this session reports nobody attending (${ATTENDED_ENV}=${CONFIRMED_UNATTENDED}). `
     + "Binding or rebinding a desk is the consequential, irreversible choice first-run-bootstrap's A3 step "
-    + "(and SETUP.md step 5) require asking a human about. Report that question, plus everything "
-    + "A1 and A2 found, and stop -- do not retry around this gate, pick a desk on your own, or "
-    + "report bootstrap as complete."
+    + "(and SETUP.md step 5) require asking a human about. Include everything A1 and A2 found, "
+    + "and do not retry around this gate or report bootstrap as complete."
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
 }

@@ -13,6 +13,8 @@ import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout } from "
 import { removeFixtureAfter, slowGit as sharedSlowGit } from "../_process_hygiene.js"
 import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
+import { protectedDenial } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { REWRITE_LINES } from "./_guard_text.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -219,22 +221,22 @@ test("A3b review: every probe row gets the expected decision", async (t) => {
 test("A3b review: the denial reasons name what the new rules protect", async (t) => {
   const f = await fixture(t)
   const reason = async (command, extra) => (await f.guard(command, extra)).reason
-  assert.equal(await reason("git -c remote.origin.mirror=true push -q origin"), `Desk protected checkout ${f.prot}: ${MESSAGES.override("remote.origin.mirror", "push")}`)
-  assert.equal(await reason(`git pull -q --rebase ${q(f.foreign)}`), `Desk protected checkout ${f.prot}: ${MESSAGES.pull}`)
-  assert.equal(await reason("git config remote.origin.mirror true"), `Desk protected checkout ${f.prot}: ${MESSAGES.config("remote.origin.mirror")}`)
-  assert.equal(await reason("git branch -u origin/other"), `Desk protected checkout ${f.prot}: ${MESSAGES.upstream}`)
-  assert.equal(await reason("git fetch origin other:main"), `Desk protected checkout ${f.prot}: ${MESSAGES.fetch}`)
-  assert.equal(await reason("git reset"), `Desk protected checkout ${f.prot}: ${MESSAGES.unstage}`)
-  assert.equal(await reason("$s = git stash", { powershell: true }), `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
+  assert.equal(await reason("git -c remote.origin.mirror=true push -q origin"), protectedDenial(f.prot, MESSAGES.override("remote.origin.mirror", "push")))
+  assert.equal(await reason(`git pull -q --rebase ${q(f.foreign)}`), protectedDenial(f.prot, MESSAGES.pull))
+  assert.equal(await reason("git config remote.origin.mirror true"), protectedDenial(f.prot, MESSAGES.config("remote.origin.mirror")))
+  assert.equal(await reason("git branch -u origin/other"), protectedDenial(f.prot, MESSAGES.upstream))
+  assert.equal(await reason("git fetch origin other:main"), protectedDenial(f.prot, MESSAGES.fetch))
+  assert.equal(await reason("git reset"), protectedDenial(f.prot, MESSAGES.unstage))
+  assert.equal(await reason("$s = git stash", { powershell: true }), protectedDenial(f.prot, MESSAGES.stash))
   // Saved configuration that turns a plain push into a mirror or forced push; non-force pushes of other refs pass.
   for (const [key, value, message] of [["remote.origin.mirror", "true", MESSAGES.pushForce], ["remote.origin.push", "+refs/heads/main:refs/heads/main", MESSAGES.pushForce], ["remote.origin.push", "refs/heads/main:refs/heads/other"], ["push.default", "matching"]]) {
     f.git(f.prot, "config", key, value)
-    assert.equal(await reason("git push -q"), message && `Desk protected checkout ${f.prot}: ${message}`, key)
+    assert.equal(await reason("git push -q"), message && protectedDenial(f.prot, message), key)
     f.git(f.prot, "config", "--unset-all", key)
   }
   // A saved pull.rebase makes a pull of another branch a rebase onto it; --no-rebase merges.
   f.git(f.prot, "config", "pull.rebase", "true")
-  assert.equal(await reason("git pull -q origin other"), `Desk protected checkout ${f.prot}: ${MESSAGES.pull}`)
+  assert.equal(await reason("git pull -q origin other"), protectedDenial(f.prot, MESSAGES.pull))
   assert.equal(await reason("git pull -q --no-rebase origin other"), undefined)
   assert.equal(await reason("git pull -q --rebase=false origin other"), undefined)
   f.git(f.prot, "config", "branch.main.rebase", "false")
@@ -325,7 +327,7 @@ test("A3b review: one inspection budget bounds the decision below the hosts' 10 
   const result = spawnSync(process.execPath, [hook, "claude"], { cwd: f.prot, env: { ...f.env, DESK_GUARD_DEADLINE_MS: "300" }, input: JSON.stringify(input), encoding: "utf8" })
   assert.ok(Date.now() - started < 5000)
   assert.equal(result.status, 0, result.stderr)
-  assert.match(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, /could not finish checking this command in time/u)
+  assert.match(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, /could not finish checking it in time/u)
 })
 
 test("A3b review: configuration sources, alias forms and stdin scripts cover every parser path", async (t) => {
@@ -343,8 +345,8 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
     // git config writes.
     // --file names another file, not the checkout's configuration (replay ruling, 2026-09-27).
     [`git config --file ${q(f.root + "/x.cfg")} --local remote.origin.url x`, "allow"],
-    ["git config set remote.origin.mirror true", /would change remote\.origin\.mirror/u],
-    ["git config --edit", /would change the configuration file/u],
+    ["git config set remote.origin.mirror true", /Leave remote\.origin\.mirror as it is/u],
+    ["git config --edit", /Leave the configuration file as it is/u],
     ["git config --unset user.name", "allow"],
     // Upstream changes to a branch that is not protected.
     ["git branch -u origin/other topic", "allow"],
@@ -373,7 +375,7 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
   assert.equal(await decide("git rebase main"), "allow")
   f.git(P, "config", "branch.main.remote", "origin")
   writeFileSync(path.join(P, ".git", "config"), `${(await import("node:fs")).readFileSync(path.join(P, ".git", "config"), "utf8")}[remote "origin"]\n\tmirror\n`)
-  assert.equal((await f.guard("git push -q")).reason, `Desk protected checkout ${P}: ${MESSAGES.pushForce}`)
+  assert.equal((await f.guard("git push -q")).reason, protectedDenial(P, MESSAGES.pushForce))
   f.git(P, "config", "--unset-all", "remote.origin.mirror")
   // desk.protected spellings Git accepts, and a policy Git cannot read.
   for (const [value, protectedValue] of [["false", false], ["0", false], ["2", true], ["", false], ["on", true]]) {
@@ -553,7 +555,7 @@ test("A3b re-review 2: every PowerShell group is its own command sequence and st
     const result = await f.guard(command, { cwd, powershell: true })
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
-  assert.equal((await f.guard("$a = @('stash'); git @a", { powershell: true })).reason, POWERSHELL_GIT_FORMS)
+  assert.equal((await f.guard("$a = @('stash'); git @a", { powershell: true })).reason.replace(REWRITE_LINES, ""), POWERSHELL_GIT_FORMS)
   if (!pwsh) { t.diagnostic("native PowerShell unavailable; decisions still checked"); return }
   // Real PowerShell: the checkout, stash and worktree-removal forms change the protected state.
   const checkout = await fixture(t)

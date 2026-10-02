@@ -55,7 +55,7 @@ test("a real Copilot run with an MCP call, a skill, an edit and a hook denial ma
   assert.equal(edit.input.new_string, "status: collaborating")
   // The hook-refused shell call is an error result worded the way Claude Code words a refusal, so `wasDenied` sees it.
   const denied = byName("Bash").find((t) => t.isError)
-  assert.match(denied.result, /^PreToolUse:Bash hook error: Denied by preToolUse hook: Desk protected checkout/)
+  assert.match(denied.result, /^PreToolUse:Bash hook error: Denied by preToolUse hook: Commit only your own paths/)
 })
 
 test("the saved form drops ephemeral events and reasoning blobs and keeps what the checks read", () => {

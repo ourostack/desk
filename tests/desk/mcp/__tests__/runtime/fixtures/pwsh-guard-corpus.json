@@ -1,0 +1,1280 @@
+[
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Get-Command git,node,yarn,python,agency,az -ErrorAction SilentlyContinue | Select-Object Name,Source; Write-Output \"HOST $env:COMPUTERNAME\"; Write-Output \"SELECTED yes\"",
+  "expect": "allow",
+  "why": "the operator's real probe (2026-10-01 screenshot): Get-Command only names git as an argument, Write-Output prints text"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Get-Command git",
+  "expect": "allow",
+  "why": "Get-Command looks a program up and runs nothing"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "gcm git.exe",
+  "expect": "allow",
+  "why": "gcm is Get-Command"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Get-Command -Name git -All",
+  "expect": "allow",
+  "why": "named parameter form of Get-Command"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Get-Command git -ErrorAction:Ignore -Syntax",
+  "expect": "allow",
+  "why": "colon-attached common parameter"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Get-Command git -CommandType Application | Format-List",
+  "expect": "allow",
+  "why": "Format-List only formats the lookup result"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "gcm git | Where-Object Source | Out-String",
+  "expect": "allow",
+  "why": "property-name Where-Object has no script block"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Write-Output git",
+  "expect": "allow",
+  "why": "Write-Output prints its argument"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Write-Host 'git'",
+  "expect": "allow",
+  "why": "Write-Host prints its argument"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "echo 'git is here'",
+  "expect": "allow",
+  "why": "echo is Write-Output"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Write-Output 'git checkout topic' | Out-String",
+  "expect": "allow",
+  "why": "a string is data until something evaluates it; Out-String does not"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Write-Host 'git checkout topic' | Out-Null",
+  "expect": "allow",
+  "why": "Out-Null discards the string"
+ },
+ {
+  "group": "false-positive: a git word that is not a command",
+  "command": "Get-Command git; git -C '{{PROT}}' status",
+  "expect": "allow",
+  "why": "read-only git next to a lookup"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "'git checkout topic' | iex",
+  "expect": "deny",
+  "why": "iex evaluates the piped string as code"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "\"git checkout topic\" | Invoke-Expression",
+  "expect": "deny",
+  "why": "Invoke-Expression evaluates the piped string"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git checkout topic' | iex",
+  "expect": "deny",
+  "why": "Write-Output re-emits the string and iex runs it"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git checkout topic' | Invoke-Expression",
+  "expect": "deny",
+  "why": "same through the long name"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "'git checkout topic' | cmd",
+  "expect": "deny",
+  "why": "cmd reads its script from stdin"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "'git checkout topic' | bash",
+  "expect": "deny",
+  "why": "bash reads its script from stdin"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "'git checkout topic' | sh",
+  "expect": "deny",
+  "why": "sh reads its script from stdin"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git checkout topic' | cmd",
+  "expect": "deny",
+  "why": "string piped through Write-Output into cmd"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git checkout topic' | bash",
+  "expect": "deny",
+  "why": "string piped through Write-Output into bash"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git checkout topic' | sh",
+  "expect": "deny",
+  "why": "string piped through Write-Output into sh"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git checkout topic' | pwsh",
+  "expect": "deny",
+  "why": "string piped into a nested pwsh"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Host 'git checkout topic' | powershell",
+  "expect": "deny",
+  "why": "string piped into a nested powershell"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Host 'git checkout topic' | wsl",
+  "expect": "deny",
+  "why": "string piped into wsl"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "echo 'git checkout topic' | unknown-tool",
+  "expect": "deny",
+  "why": "an unknown consumer of a git string could run it"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "[Diagnostics.Process]::Start('git','checkout topic')",
+  "expect": "deny",
+  "why": "starts git through .NET, outside every cmdlet"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "[System.Diagnostics.Process]::Start((New-Object System.Diagnostics.ProcessStartInfo('git','checkout topic')))",
+  "expect": "deny",
+  "why": "ProcessStartInfo form of the same"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "& (Get-Command git).Source checkout topic",
+  "expect": "deny",
+  "why": "call operator on a computed path to git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "& (gcm git).Source checkout topic",
+  "expect": "deny",
+  "why": "gcm alias form"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "(Get-Command git).Source",
+  "expect": "deny",
+  "why": "a member access on a git lookup is not a plain form"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "$g = (Get-Command git).Source; & $g checkout topic",
+  "expect": "deny",
+  "why": "path held in a variable, then called"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Set-Item alias:gg git; gg checkout topic",
+  "expect": "deny",
+  "why": "alias: drive redefines a command name to git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Set-Content alias:gg git; gg checkout topic",
+  "expect": "deny",
+  "why": "Set-Content on the alias: drive"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "New-Item -Path alias:gg -Value git; gg checkout topic",
+  "expect": "deny",
+  "why": "New-Item on the alias: drive"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Set-Item -Path alias:gg -Value git; gg checkout topic",
+  "expect": "deny",
+  "why": "named-parameter alias: form"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Set-Content function:gg 'git checkout topic'; gg",
+  "expect": "deny",
+  "why": "function: drive defines a function that runs git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Start-Process (Get-Command git) -Arg checkout,topic",
+  "expect": "deny",
+  "why": "Start-Process launches git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Invoke-Expression \"$((Get-Command git).Source) checkout topic\"",
+  "expect": "deny",
+  "why": "Invoke-Expression over an interpolated git path"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Set-Content x.ps1 'git checkout topic'; .\\x.ps1",
+  "expect": "deny",
+  "why": "writes a script that runs git, then runs it"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Start-Process git -ArgumentList 'checkout','topic'",
+  "expect": "deny",
+  "why": "Start-Process with literal git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "saps git checkout",
+  "expect": "deny",
+  "why": "saps is Start-Process"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "cmd /c git checkout topic",
+  "expect": "deny",
+  "why": "cmd launches git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "wsl git checkout topic",
+  "expect": "deny",
+  "why": "wsl launches git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "env git checkout topic",
+  "expect": "deny",
+  "why": "env launches git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Invoke-Command { git checkout topic }",
+  "expect": "deny",
+  "why": "script block run by Invoke-Command"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "docker-compose run app git checkout topic",
+  "expect": "deny",
+  "why": "a container tool launching git may mount the checkout"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "'git checkout topic'",
+  "expect": "deny",
+  "why": "a bare string naming git is not a plain form"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git | ForEach-Object { & $_.Source checkout topic }",
+  "expect": "deny",
+  "why": "script block calls the looked-up path"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git | & { git checkout topic }",
+  "expect": "deny",
+  "why": "script block after a lookup"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git > x.ps1",
+  "expect": "deny",
+  "why": "redirects a git lookup into a script file"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git checkout topic' > x.ps1",
+  "expect": "deny",
+  "why": "writes a git command into a script file"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command (git checkout topic)",
+  "expect": "deny",
+  "why": "a group runs git as a statement"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git -Name",
+  "expect": "deny",
+  "why": "a dangling parameter is not a plain lookup"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command -Foo git",
+  "expect": "deny",
+  "why": "an unknown parameter is not a plain lookup"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git -ErrorAction (git checkout topic)",
+  "expect": "deny",
+  "why": "git inside a parameter value group"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git/x",
+  "expect": "deny",
+  "why": "a path-like word is not a plain lookup"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output 'git' |",
+  "expect": "deny",
+  "why": "a trailing pipe leaves the consumer unknown"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git |",
+  "expect": "deny",
+  "why": "a trailing pipe leaves the consumer unknown"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git | Out-File x",
+  "expect": "deny",
+  "why": "Out-File writes a file"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "| Write-Output 'git'",
+  "expect": "deny",
+  "why": "a leading pipe is not a plain form"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command $x git",
+  "expect": "deny",
+  "why": "a computed argument"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output \"git $x\"",
+  "expect": "deny",
+  "why": "a double-quoted string with a variable naming git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": ". git checkout topic",
+  "expect": "deny",
+  "why": "dot-sourcing git"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output x | git checkout topic",
+  "expect": "deny",
+  "why": "git as a pipeline consumer"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Get-Command git; git checkout topic",
+  "expect": "deny",
+  "why": "a real checkout after a lookup"
+ },
+ {
+  "group": "bypass (PR #140 review): a statement that names git and could run it",
+  "command": "Write-Output git; & git checkout topic",
+  "expect": "deny",
+  "why": "a real checkout after Write-Output"
+ },
+ {
+  "group": "quoted -C path",
+  "command": "git -C '{{PROT}}' status --short; git -C '{{PROT}}' branch --show-current; git -C '{{PROT}}' fetch --quiet origin",
+  "expect": "allow",
+  "why": "the operator's quoted git -C status/branch/fetch statements, single-quoted: read-only"
+ },
+ {
+  "group": "quoted -C path",
+  "command": "git -C '{{PROT}}' checkout topic",
+  "expect": "deny",
+  "why": "quoting the path does not hide a real HEAD move (single)"
+ },
+ {
+  "group": "quoted -C path",
+  "command": "git -C \"{{PROT}}\" status --short; git -C \"{{PROT}}\" branch --show-current; git -C \"{{PROT}}\" fetch --quiet origin",
+  "expect": "allow",
+  "why": "the operator's quoted git -C status/branch/fetch statements, double-quoted: read-only"
+ },
+ {
+  "group": "quoted -C path",
+  "command": "git -C \"{{PROT}}\" checkout topic",
+  "expect": "deny",
+  "why": "quoting the path does not hide a real HEAD move (double)"
+ },
+ {
+  "group": "quoted -C path",
+  "command": "git -C {{PROT}} status --short; git -C {{PROT}} branch --show-current; git -C {{PROT}} fetch --quiet origin",
+  "expect": "allow",
+  "why": "the operator's quoted git -C status/branch/fetch statements, bare-quoted: read-only"
+ },
+ {
+  "group": "quoted -C path",
+  "command": "git -C {{PROT}} checkout topic",
+  "expect": "deny",
+  "why": "quoting the path does not hide a real HEAD move (bare)"
+ },
+ {
+  "group": "quoted -C path",
+  "command": "git -C 'C:\\Users\\arimendelow\\ms-desk' status --short; git -C 'C:\\Users\\arimendelow\\ms-desk' branch --show-current; git -C 'C:\\Users\\arimendelow\\ms-desk' fetch --quiet origin",
+  "expect": "allow",
+  "why": "the same statements from an unprotected checkout, with a Windows path that exists only as text",
+  "cwd": "own"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r status --short; git -C $r branch --show-current; git -C $r fetch --quiet origin }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C $unknownRepo status --short; git -C $unknownRepo branch --show-current; git -C $unknownRepo fetch --quiet origin",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r log --oneline -5; git -C $r show HEAD --stat; git -C $r diff --stat; git -C $r rev-parse HEAD; git -C $r remote -v }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C $unknownRepo log --oneline -5; git -C $unknownRepo show HEAD --stat; git -C $unknownRepo diff --stat; git -C $unknownRepo rev-parse HEAD; git -C $unknownRepo remote -v",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r config --get remote.origin.url; git -C $r ls-files; git -C $r describe --tags --always; git -C $r branch; git -C $r branch --list }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C $unknownRepo config --get remote.origin.url; git -C $unknownRepo ls-files; git -C $unknownRepo describe --tags --always; git -C $unknownRepo branch; git -C $unknownRepo branch --list",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C $unknownRepo fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*'",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r fetch --all --prune --tags }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C $unknownRepo fetch --all --prune --tags",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r stash list }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C $unknownRepo stash list",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r worktree list }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C $unknownRepo worktree list",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { Write-Output \"== $r\"; git -C $r status --short 2>&1 | Out-String }",
+  "expect": "allow",
+  "why": "read-only Git over a loop variable the guard cannot resolve"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "Write-Output \"== $unknownRepo\"; git -C $unknownRepo status --short 2>&1 | Out-String",
+  "expect": "allow",
+  "why": "read-only Git over an unset variable"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r checkout main }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r checkout topic }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r switch topic }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r stash }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r stash push -m x }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r reset --hard }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r push --force origin main }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r restore . }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r clean -fd }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r fetch origin main:main }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r fetch --update-head-ok origin }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r branch -D topic }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r status --short; git -C $r checkout main }",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on anything that moves HEAD, stashes, rewrites or discards"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C '{{PROT}}' fetch origin topic:topic",
+  "expect": "allow",
+  "why": "a fetch into a branch that is not the checkout's own"
+ },
+ {
+  "group": "unresolved checkout: a $roots loop",
+  "command": "git -C '{{PROT}}' fetch origin main:main",
+  "expect": "deny",
+  "why": "a fetch into the checkout's own branch rewrites it"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git -C '{{PROT}}' switch topic",
+  "expect": "deny",
+  "why": "moves HEAD off the state branch of the named checkout"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git -C '{{PROT}}' stash",
+  "expect": "deny",
+  "why": "takes other sessions' uncommitted work out of the named checkout"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git -C '{{PROT}}' reset --hard",
+  "expect": "deny",
+  "why": "discards uncommitted work in the named checkout"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git -C '{{PROT}}' push --force origin main",
+  "expect": "deny",
+  "why": "force pushes can discard pushed work"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git checkout topic",
+  "expect": "deny",
+  "why": "moves HEAD off the state branch of the current checkout"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "& git checkout topic",
+  "expect": "deny",
+  "why": "the call operator on git still moves HEAD"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git.exe checkout topic",
+  "expect": "deny",
+  "why": "the git.exe spelling is still git"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "& 'C:\\Program Files\\Git\\cmd\\git.exe' checkout topic",
+  "expect": "deny",
+  "why": "a full path to git.exe is still git"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "& git -C '{{PROT}}' checkout topic",
+  "expect": "deny",
+  "why": "the call operator with -C still moves HEAD of the named checkout"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git stash",
+  "expect": "deny",
+  "why": "takes other sessions' uncommitted work out of the current checkout"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git reset --hard",
+  "expect": "deny",
+  "why": "discards uncommitted work in the current checkout"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "git push --force",
+  "expect": "deny",
+  "why": "a force push can discard pushed work"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "$x = git checkout topic",
+  "expect": "deny",
+  "why": "assigning the output of a checkout still runs it"
+ },
+ {
+  "group": "protections that define the guard",
+  "command": "Write-Output x; & git stash",
+  "expect": "deny",
+  "why": "a stash after Write-Output still runs"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git status | Where-Object { git checkout topic }",
+  "expect": "deny",
+  "why": "a Where-Object script block runs per object"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git status | Where-Object { $_ -match 'x' -or (git checkout topic) }",
+  "expect": "deny",
+  "why": "git hidden in a group inside a filter"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git status | Select-Object @{n='x';e={ git checkout topic }}",
+  "expect": "deny",
+  "why": "a calculated property is a script block"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git status | Select-Object -Property @{Name='x';Expression={ git stash }}",
+  "expect": "deny",
+  "why": "long-form calculated property"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git status | Format-Table @{Expression={ git stash }}",
+  "expect": "deny",
+  "why": "Format-Table accepts calculated properties"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git log | ForEach-Object { git checkout topic }",
+  "expect": "deny",
+  "why": "ForEach-Object script block runs git"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git log | Sort-Object { git stash }",
+  "expect": "deny",
+  "why": "Sort-Object takes a script-block key"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git log | Measure-Object | ForEach-Object { git reset --hard }",
+  "expect": "deny",
+  "why": "git inside a later script block"
+ },
+ {
+  "group": "allowlist attacks: script blocks and calculated properties",
+  "command": "git status | Out-String | Invoke-Expression",
+  "expect": "deny",
+  "why": "Invoke-Expression after an allowlisted cmdlet"
+ },
+ {
+  "group": "allowlist attacks: interpolation in strings and here-strings",
+  "command": "Write-Output \"$(git checkout topic)\"",
+  "expect": "deny",
+  "why": "a subexpression in a double-quoted string runs"
+ },
+ {
+  "group": "allowlist attacks: interpolation in strings and here-strings",
+  "command": "Write-Output \"a $(git stash) b\"",
+  "expect": "deny",
+  "why": "a subexpression inside text runs"
+ },
+ {
+  "group": "allowlist attacks: interpolation in strings and here-strings",
+  "command": "git commit -m \"$(git checkout topic)\"",
+  "expect": "deny",
+  "why": "a subexpression as an argument runs first"
+ },
+ {
+  "group": "allowlist attacks: interpolation in strings and here-strings",
+  "command": "Write-Output @\"\n$(git checkout topic)\n\"@",
+  "expect": "deny",
+  "why": "a subexpression in an expandable here-string runs"
+ },
+ {
+  "group": "allowlist attacks: interpolation in strings and here-strings",
+  "command": "Write-Output @'\n$(git checkout topic)\n'@",
+  "expect": "deny",
+  "why": "denied conservatively: a literal here-string naming git is only data, but it is outside the plain forms"
+ },
+ {
+  "group": "allowlist attacks: interpolation in strings and here-strings",
+  "command": "$m = \"$(git stash)\"",
+  "expect": "deny",
+  "why": "a subexpression in an assigned string runs"
+ },
+ {
+  "group": "allowlist attacks: interpolation in strings and here-strings",
+  "command": "Write-Host \"`$(git checkout topic)\"",
+  "expect": "deny",
+  "why": "denied conservatively: an escaped dollar makes the text data, but it names git outside the plain forms"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "function Write-Output { git checkout topic }; Write-Output hi",
+  "expect": "deny",
+  "why": "a function shadows Write-Output"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "function echo { git stash }; echo hi",
+  "expect": "deny",
+  "why": "a function shadows echo"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "function Get-Command { git checkout topic }; Get-Command git",
+  "expect": "deny",
+  "why": "a function shadows Get-Command"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "Set-Alias Write-Output git; Write-Output checkout topic",
+  "expect": "deny",
+  "why": "an alias turns Write-Output into git"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "Set-Alias echo git; echo checkout topic",
+  "expect": "deny",
+  "why": "an alias turns echo into git"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "New-Alias gcm git; gcm checkout topic",
+  "expect": "deny",
+  "why": "an alias turns gcm into git"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "Set-Item function:Get-Command { git checkout topic }; Get-Command",
+  "expect": "deny",
+  "why": "function: drive redefines Get-Command"
+ },
+ {
+  "group": "allowlist attacks: redefining an allowlisted command",
+  "command": "sal echo git; echo stash",
+  "expect": "deny",
+  "why": "sal is Set-Alias"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status | Out-String; git checkout topic",
+  "expect": "deny",
+  "why": "a semicolon starts a new statement"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status && git checkout topic",
+  "expect": "deny",
+  "why": "&& runs the right side after success"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status || git checkout topic",
+  "expect": "deny",
+  "why": "|| runs the right side after failure"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status\ngit checkout topic",
+  "expect": "deny",
+  "why": "a new line starts a new statement"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "Write-Output ok; git stash",
+  "expect": "deny",
+  "why": "a stash after Write-Output"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "Get-Command git && git checkout topic",
+  "expect": "deny",
+  "why": "&& after a lookup"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status # harmless\ngit checkout topic",
+  "expect": "deny",
+  "why": "a comment ends at the line, the next line runs"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status <# x #>; git checkout topic",
+  "expect": "deny",
+  "why": "a block comment does not hide the next statement"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status `\n; git checkout topic",
+  "expect": "deny",
+  "why": "a backtick continuation keeps the statement going, and the semicolon still starts a new one"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status | Out-String `\n| ForEach-Object { git checkout topic }",
+  "expect": "deny",
+  "why": "a backtick continuation joins a later pipeline element"
+ },
+ {
+  "group": "allowlist attacks: chaining after an allowlisted statement",
+  "command": "git status 2>&1 | Out-String; & git checkout topic",
+  "expect": "deny",
+  "why": "a redirect then an allowlisted pipe, then a call"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git status",
+  "expect": "allow",
+  "why": "read-only: changes nothing"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git log --oneline -5",
+  "expect": "allow",
+  "why": "read-only: changes nothing"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git diff --stat",
+  "expect": "allow",
+  "why": "read-only: changes nothing"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "$b = git branch --show-current; git push origin $b",
+  "expect": "allow",
+  "why": "an ordinary push of the current branch"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git status --short 2>&1 | Out-String",
+  "expect": "allow",
+  "why": "an allowlisted pipe"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git log --oneline | Select-Object -First 3",
+  "expect": "allow",
+  "why": "an allowlisted pipe"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git status | Select-String 'modified'",
+  "expect": "allow",
+  "why": "an allowlisted pipe"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git fetch --quiet origin",
+  "expect": "allow",
+  "why": "fetch into remote-tracking refs"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git add file.txt; git commit -m 'note'",
+  "expect": "allow",
+  "why": "commit on the state branch"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git pull --rebase",
+  "expect": "allow",
+  "why": "pull onto the upstream"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "git worktree add --detach ../wt HEAD",
+  "expect": "allow",
+  "why": "own worktree"
+ },
+ {
+  "group": "rewritable denials (the denial names the exact command to run)",
+  "command": "git status | Format-Table",
+  "expect": "deny",
+  "why": "Format-Table is outside the pipeline allowlist; the denial splits it"
+ },
+ {
+  "group": "rewritable denials (the denial names the exact command to run)",
+  "command": "git log HEAD..@{u}",
+  "expect": "deny",
+  "why": "unquoted @{u} is passed to git as a script block; quoting passes the range"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "('git ' + 'checkout topic') | iex",
+  "expect": "deny",
+  "why": "the concatenation has a literal that names git"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = 'git checkout topic' | iex",
+  "expect": "deny",
+  "why": "an assignment hid the piped string from iex (fixed: the string is read)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = 'git checkout topic' | Invoke-Expression",
+  "expect": "deny",
+  "why": "same through the long name (fixed)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$y = 'git checkout topic' | cmd",
+  "expect": "deny",
+  "why": "an assignment hid the piped script from the guard (fixed: an assigned pipeline that pipes a string naming git is held to the same rule as a statement)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$y = 'git checkout topic' | bash",
+  "expect": "deny",
+  "why": "same into bash (fixed)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = 'git status' | iex",
+  "expect": "deny",
+  "why": "even read-only Git piped to iex is outside the plain forms, as it is without the assignment"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$s = 'git stash'; $y = $s | iex",
+  "expect": "deny",
+  "why": "a known variable piped to iex inside an assignment (fixed: the assigned value is what iex receives)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = 'git checkout topic'; $x | iex",
+  "expect": "deny",
+  "why": "a variable with a known value piped into iex (fixed: its value is read)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = 'git checkout topic'; $x | Invoke-Expression",
+  "expect": "deny",
+  "why": "same through the long name (fixed)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = 'git checkout topic'; $y = $x | iex",
+  "expect": "deny",
+  "why": "a variable piped into iex inside an assignment (fixed)"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = 'Get-Date' | iex",
+  "expect": "allow",
+  "why": "the piped script runs no Git",
+  "launcher_ok": "the script iex runs is not Git, or unreadable code the 2026-09-27 replay ruling allows"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "$x = Get-Content p.txt; $x | iex",
+  "expect": "allow",
+  "why": "unreadable code is allowed by the 2026-09-27 replay ruling",
+  "launcher_ok": "the script iex runs is not Git, or unreadable code the 2026-09-27 replay ruling allows"
+ },
+ {
+  "group": "bypass: a script string handed to Invoke-Expression",
+  "command": "\"git`ncheckout topic\" | iex",
+  "expect": "allow",
+  "why": "harmless: the escape `n is a newline, so this runs git with no arguments, then a command named checkout",
+  "launcher_ok": "the script iex runs is not Git, or unreadable code the 2026-09-27 replay ruling allows"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git checkout topic'; $z | sh",
+  "expect": "deny",
+  "why": "a variable holding a git script piped to a POSIX shell is that shell's script"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git checkout topic'; $z | powershell -c -",
+  "expect": "deny",
+  "why": "powershell -c - reads its script from stdin, here the variable's value"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git checkout topic'; $z | Invoke-Command { iex $input }",
+  "expect": "deny",
+  "why": "the piped string reaches iex inside the script block"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$x = 'git checkout topic'; $x = $x; $x | iex",
+  "expect": "deny",
+  "why": "reassigning a variable to itself keeps its value"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$x = 'git checkout topic'; $y = $x; $y | iex",
+  "expect": "deny",
+  "why": "a copy keeps the value"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} pull --upload-pack='git checkout topic' origin",
+  "expect": "deny",
+  "why": "pull --upload-pack runs the given program as part of the fetch"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote --upload-pack='git checkout topic' origin",
+  "expect": "deny",
+  "why": "ls-remote --upload-pack runs the given program"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote --exec 'git checkout topic' origin",
+  "expect": "deny",
+  "why": "--exec is ls-remote's other spelling of --upload-pack"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote --upload-pa=x origin",
+  "expect": "deny",
+  "why": "Git accepts the unambiguous abbreviation"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "$z='git status'; $z | Out-String",
+  "expect": "allow",
+  "why": "Out-String only formats text, nothing runs"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote origin",
+  "expect": "allow",
+  "why": "a plain ls-remote only reads the remote"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} ls-remote origin -- --upload-pack=x",
+  "expect": "allow",
+  "why": "after -- the text is an operand, not an option"
+ },
+ {
+  "group": "bypass: a known script string reaches an executor (fixed)",
+  "command": "git -C {{PROT}} pull --ff-only",
+  "expect": "allow",
+  "why": "a pull with no program option is judged by its usual rule"
+ },
+ {
+  "group": "bypass: fetch --upload-pack runs a program",
+  "command": "git -C {{PROT}} fetch --upload-pack='git checkout topic' origin",
+  "expect": "deny",
+  "why": "fetch --upload-pack runs the given program as part of the fetch (fixed: denied in a protected checkout)"
+ },
+ {
+  "group": "bypass: fetch --upload-pack runs a program",
+  "command": "git -C $r fetch --upload-pack 'sh x' origin",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on --upload-pack (fixed)"
+ },
+ {
+  "group": "bypass: fetch --upload-pack runs a program",
+  "command": "git -C {{OWN}} fetch --upload-pack 'x' origin",
+  "expect": "allow",
+  "why": "an unprotected checkout is not the guard's business",
+  "cwd": "own"
+ },
+ {
+  "group": "known gap",
+  "command": "(\"g\"+\"it checkout topic\") | iex",
+  "expect": "deny",
+  "why": "a string split across a concatenation is not read before iex runs it",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "iex (\"g\"+\"it checkout topic\")",
+  "expect": "deny",
+  "why": "the same split string as an argument",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "$a='gi'; $b='t checkout topic'; iex ($a+$b)",
+  "expect": "deny",
+  "why": "a command assembled from two variables",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "\"gi$()t checkout topic\" | iex",
+  "expect": "deny",
+  "why": "an empty subexpression splits the word git",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "\"gi{0} checkout topic\" -f 't' | iex",
+  "expect": "deny",
+  "why": "the format operator builds the word git",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "$x = 'git checkout topic'; Write-Output $x | iex",
+  "expect": "deny",
+  "why": "a variable passed through Write-Output into iex",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "$y = git status | Out-String | Invoke-Expression",
+  "expect": "deny",
+  "why": "Git's own output run as code inside an assignment (without the assignment the statement is denied)",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "pwsh -EncodedCommand Z2l0IGNoZWNrb3V0IHRvcGlj",
+  "expect": "deny",
+  "why": "an encoded script is not decoded, by the encoded-script ruling (unreadable code passes, as in Bash)",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='git checkout topic'}",
+  "expect": "deny",
+  "why": "WMI process creation is not modeled",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "$p = New-Object System.Diagnostics.Process; $p.StartInfo.FileName = 'git'; $p.StartInfo.Arguments = 'checkout topic'; $p.Start()",
+  "expect": "deny",
+  "why": "a Process object configured by assignment is not modeled",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r merge topic }",
+  "expect": "deny",
+  "why": "merge is allowed anywhere by ruling (2026-09-27), so an unresolved checkout is not stopped; it can add a merge to a non-state branch",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r commit -m x }",
+  "expect": "deny",
+  "why": "commit is allowed anywhere by ruling, so an unresolved checkout is not stopped",
+  "known_gap": true
+ },
+ {
+  "group": "known gap",
+  "command": "$roots = @('{{PROT}}', '{{OWN}}'); foreach ($r in $roots) { git -C $r cherry-pick topic }",
+  "expect": "deny",
+  "why": "cherry-pick has no rule, so an unresolved checkout is not stopped",
+  "known_gap": true
+ }
+]

@@ -12,27 +12,30 @@ import { posix } from "node:path"
 import { hasOption, parseGitOptions, SPECS } from "./git-guard-options.js"
 import { WORKTREE_COMMAND } from "./guard-unknowns.js"
 
+// Every message opens with what to do instead, in at most one short sentence: hosts cut a denial at about one line,
+// and the agent that never sees the fix wastes turns. The reason follows. `protectedDenial` appends the checkout.
 const WORKTREE = `use your own worktree: ${WORKTREE_COMMAND}`
 export const MESSAGES = {
-  leave: `this would move HEAD off the checkout's branch. To leave the state branch, ${WORKTREE}`,
-  discard: `this would discard other sessions' uncommitted work. Commit your own changes instead, or ${WORKTREE}`,
-  rewind: `this would move the checkout's branch to another commit. Add a new commit (for example git revert) instead, or ${WORKTREE}`,
-  restore: "this would discard uncommitted changes in every file, including other sessions' work. Restore only your own files by name (git restore <paths>)",
-  clean: "git clean deletes untracked files other sessions may own. Delete only files you created, by name",
-  stash: "git stash takes other sessions' uncommitted work out of the shared checkout. Commit only your own paths (git commit <paths>), and pull with git pull --rebase --autostash",
-  branch: `this would force-move, rename or delete the checkout's current or state branch. Create a new branch instead, or ${WORKTREE}`,
-  rebase: `a rebase onto anything but the branch's own upstream can rewrite pushed commits. Rebase onto the upstream (git rebase, or git pull --rebase), or for --onto, --root, --exec, --quit or another base, ${WORKTREE}`,
-  pull: `git pull --rebase from anything but the branch's own upstream can rewrite pushed commits. Pull the upstream (git pull --rebase), merge the other branch instead (git pull --no-rebase <remote> <branch>), or ${WORKTREE}`,
-  noUpstream: "this rebase has no upstream of the branch's own name (<remote>/<branch>) to replay onto, so it could rewrite pushed commits. If HEAD is detached, switch back first (git switch <state branch>); otherwise set the upstream (git branch -u <remote>/<branch>), or merge instead (git pull --no-rebase)",
-  pushForce: "force, mirror and prune pushes, and deleting the state branch on the remote, can discard pushed work. Fetch, rebase onto the upstream (git pull --rebase) and push without them",
-  amend: "the commit you would amend is already pushed; make a new commit instead",
-  worktreeRemove: "git worktree remove --force would delete a protected checkout and its uncommitted work. Remove only worktrees you created, without --force",
-  unstage: "unstaging everything changes the shared index, which can hold other sessions' staged work. Unstage only your own paths (git restore --staged <paths>), or commit only your own paths (git commit <paths>)",
-  fetch: "fetching into the checkout's own branch rewrites it like a reset; fetch into remote-tracking refs (git fetch origin) instead",
-  upstream: "this would point the checkout's branch at an upstream of another name, so a later git pull --rebase could rewrite pushed commits. Keep <remote>/<branch> (git branch -u <remote>/<branch>)",
-  config: (key) => `this would change ${key}, which decides what push, pull, rebase, aliases or this guard do in the shared checkout. Leave it`,
-  override: (key, operation) => `the configuration override ${key} changes what this git ${operation} does. Run it without the override`,
-  variable: `Desk cannot tell what a PowerShell variable or group passes to this Git command, and it can hold options such as --force or several arguments. Write the value literally`,
+  leave: `Use your own worktree: ${WORKTREE_COMMAND}. This would move HEAD off the checkout's branch.`,
+  discard: `Commit your own changes instead. This would discard other sessions' uncommitted work; to discard anyway, ${WORKTREE}.`,
+  rewind: `Add a new commit instead (for example git revert <commit>). This would move the checkout's branch to another commit; to do that anyway, ${WORKTREE}.`,
+  restore: "Restore only your own files by name: git restore <paths>. This would discard uncommitted changes in every file, including other sessions' work.",
+  clean: "Delete only the files you created, by name. git clean deletes untracked files other sessions may own.",
+  stash: "Commit only your own paths with git commit <paths>, and pull with git pull --rebase --autostash. git stash takes other sessions' uncommitted work out of the shared checkout.",
+  branch: `Create a new branch instead: git branch <new name>. This would force-move, rename or delete the checkout's current or state branch; to do that anyway, ${WORKTREE}.`,
+  rebase: `Rebase onto the upstream with git pull --rebase. A rebase onto anything but the branch's own upstream can rewrite pushed commits; for --onto, --root, --exec, --quit or another base, ${WORKTREE}.`,
+  pull: `Pull the upstream with git pull --rebase, or merge the other branch with git pull --no-rebase <remote> <branch>. A pull --rebase from anything but the branch's own upstream can rewrite pushed commits; to do that anyway, ${WORKTREE}.`,
+  noUpstream: "Set the upstream with git branch -u <remote>/<branch>, or merge with git pull --no-rebase. This rebase has no upstream of the branch's own name (<remote>/<branch>) to replay onto, so it could rewrite pushed commits; if HEAD is detached, switch back first (git switch <state branch>).",
+  pushForce: "Fetch, rebase onto the upstream (git pull --rebase) and push without force, mirror or prune. Force, mirror and prune pushes, and deleting the state branch on the remote, can discard pushed work.",
+  amend: "Make a new commit instead of amending. The commit you would amend is already pushed.",
+  worktreeRemove: "Remove only worktrees you created, without --force. git worktree remove --force would delete a protected checkout and its uncommitted work.",
+  unstage: "Unstage only your own paths: git restore --staged <paths>, or commit them with git commit <paths>. Unstaging everything changes the shared index, which can hold other sessions' staged work.",
+  fetch: "Fetch into remote-tracking refs instead: git fetch origin. Fetching into the checkout's own branch rewrites it like a reset.",
+  uploadPack: "Run the same git command without --upload-pack or --exec. They run a program of your choosing as part of the transfer, which Desk cannot inspect.",
+  upstream: "Keep the upstream's name the same as the branch: git branch -u <remote>/<branch>. Another name would point the branch at a different history, so a later git pull --rebase could rewrite pushed commits.",
+  config: (key) => `Leave ${key} as it is. Changing it decides what push, pull, rebase, aliases or this guard do in the shared checkout.`,
+  override: (key, operation) => `Run git ${operation} without the configuration override ${key}. It changes what this git ${operation} does.`,
+  variable: "Write the Git arguments literally instead of a PowerShell variable or group, as in git push origin main. Desk cannot tell what a variable passes to Git, and it can hold options such as --force or several arguments.",
 }
 
 // Keys whose value changes what the configuration-trusting rules decide, or what the guard reads.
@@ -215,6 +218,7 @@ function pullRebases(parsed, ctx, branch) {
 
 function pull(args) {
   const parsed = parseGitOptions(SPECS.pull, args)
+  if (hasOption(parsed, "upload-pack")) return fixed(MESSAGES.uploadPack)
   const [remote, ...refspecs] = parsed.operands
   const check = async (ctx) => {
     // A merge adds history and moves nothing off the branch; only a rebase onto another base rewrites pushed commits.
@@ -258,9 +262,19 @@ function push(args) {
   })
 }
 
+// `git ls-remote --upload-pack=<program>` (or its --exec spelling, or an abbreviation Git accepts) runs the program.
+const prefixes = (name, shortest) => Array.from({ length: name.length - shortest + 1 }, (_, i) => name.slice(0, shortest + i))
+const PROGRAM_OPTION = new RegExp(`^--(?:${[...prefixes("upload-pack", 1), ...prefixes("uploadpack", 1), ...prefixes("exec", 3)].join("|")})(?:=|$)`, "u")
+function lsRemote(args) {
+  const end = args.indexOf("--")
+  return (end < 0 ? args : args.slice(0, end)).some((arg) => PROGRAM_OPTION.test(arg)) ? fixed(MESSAGES.uploadPack) : null
+}
+
 function fetch(args) {
   const parsed = parseGitOptions(SPECS.fetch, args)
   if (hasOption(parsed, "update-head-ok")) return fixed(MESSAGES.fetch)
+  // A custom --upload-pack is a program the fetch runs, which Desk cannot inspect.
+  if (hasOption(parsed, "upload-pack")) return fixed(MESSAGES.uploadPack)
   // Only a destination that names a local branch can rewrite one; remote-tracking refs, tags and notes are safe to fetch into.
   const destinations = parsed.operands.slice(1).filter((spec) => spec.includes(":")).map((spec) => spec.slice(spec.indexOf(":") + 1)).filter((destination) => !/^refs\/(?:remotes|tags|notes)\//u.test(destination)).map((destination) => destination.replace(/^refs\/heads\//u, ""))
   if (!destinations.length) return null
@@ -358,6 +372,7 @@ const RULES = {
   merge: () => null,
   push,
   fetch,
+  "ls-remote": lsRemote,
   config,
   commit,
   worktree,

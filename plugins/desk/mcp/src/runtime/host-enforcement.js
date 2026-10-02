@@ -21,6 +21,8 @@
 // once an operator has named a surface in any message, that surface is
 // skipped by this deny layer for the rest of the session.
 
+import { deskToolName } from "./desk-tool-name.js"
+
 /**
  * One row per denied surface (spec §5's table). `reason` names the Desk
  * equivalent, following the same "what's blocked, then what to do instead"
@@ -45,26 +47,27 @@
  */
 export const DENIED_SURFACES = {
   "ask-user": {
-    reason: "Desk denies the ask-user tool: converse in normal chat, one decision group at a time -- see interaction-style.",
+    reason: "Converse in normal chat, one decision group at a time (see interaction-style). Desk denies the ask-user tool.",
     tools: { claude: ["AskUserQuestion"], copilot: [], codex: [] },
   },
   "host-memory": {
-    reason: "Desk denies host memory: durable context lives in the desk itself -- friction-management, task cards, _meta/.",
+    reason: "Record durable context in the desk itself: friction-management, task cards, _meta/. Desk denies host memory.",
     tools: { claude: [], copilot: [], codex: [] },
   },
   "plan-mode": {
-    reason: "Desk denies plan mode: use superpowers:writing-plans or superpowers:brainstorming, and the desk's own planning docs.",
+    reason: "Use superpowers:writing-plans or superpowers:brainstorming, and the desk's own planning docs. Desk denies plan mode.",
     tools: { claude: ["EnterPlanMode", "ExitPlanMode"], copilot: [], codex: [] },
   },
   "host-task": {
-    reason: "Desk denies host task tools that persist across sessions: use task_create/task_update, the desk's own task cards.",
+    // Only Claude Code lists host task tools to deny, so the reason names its spelling of the Desk tools.
+    reason: `Call ${deskToolName("claude", "task_create")} or ${deskToolName("claude", "task_update")}, the desk's own task cards. Desk denies host task tools that persist across sessions.`,
     // TaskStop and TaskOutput are deliberately not here: they manage a
     // background shell's or subagent's already-running process, which an
     // agent needs regardless of where its durable task state lives.
     tools: { claude: ["TaskCreate", "TaskGet", "TaskList", "TaskUpdate"], copilot: [], codex: [] },
   },
   artifact: {
-    reason: "Desk denies Artifacts and Claude Docs: use desk_save, or the task's own doc files, unless specifically asked for.",
+    reason: "Use desk_save, or the task's own doc files, unless specifically asked for Artifacts. Desk denies Artifacts and Claude Docs.",
     tools: { claude: ["Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck", "mcp__claude_ai_Claude_Docs__*"], copilot: [], codex: [] },
   },
 }

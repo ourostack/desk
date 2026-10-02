@@ -12,10 +12,11 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
-import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, WORKTREE_COMMAND } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, WORKTREE_COMMAND, protectedDenial } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
 import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
 import { expandBraces, inspectShell, shellScript } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
 import { removeFixtureAfter } from "../_process_hygiene.js"
+import { REWRITE_LINES } from "./_guard_text.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -97,13 +98,13 @@ test("round 4: PowerShell Git runs only as git <args>, $name = git <args> or git
     "git push origin 'main'--force", "git status &", "| git status", "git status |", "gIt status | Out-File x", "pwsh -c git status",
     "git -C $pwd.Path status", "git status $x[0]", "git show HEAD@{1}",
   ]
-  for (const command of forms) assert.equal((await f.guard(command)).reason, POWERSHELL_GIT_FORMS, command)
+  for (const command of forms) assert.equal((await f.guard(command)).reason.replace(REWRITE_LINES, ""), POWERSHELL_GIT_FORMS, command)
   // Narrowed 2026-09-27: an unprotected checkout never gets the allowlist denial, unless the text could reach another checkout.
   assert.equal((await f.guard("(git status)", { cwd: f.own })).deny, false)
   // A group runs its Git as a statement of its own, so reaching the protected checkout is judged by the policy.
   assert.equal((await f.guard(`(git -C ${psq(f.prot)} status)`, { cwd: f.own })).deny, false)
-  assert.equal((await f.guard(`(git -C ${psq(f.prot)} stash)`, { cwd: f.own })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
-  assert.equal((await f.guard(`git -C ${psq(f.prot)} status | Out-File y`, { cwd: f.own })).reason, POWERSHELL_GIT_FORMS)
+  assert.equal((await f.guard(`(git -C ${psq(f.prot)} stash)`, { cwd: f.own })).reason, protectedDenial(f.prot, MESSAGES.stash))
+  assert.equal((await f.guard(`git -C ${psq(f.prot)} status | Out-File y`, { cwd: f.own })).reason.replace(REWRITE_LINES, ""), POWERSHELL_GIT_FORMS)
   assert.equal(namesGit("Write-Output 'g`it'"), true)
   assert.equal(namesGit("Get-Content .git/config; cd github"), false)
 })
@@ -160,7 +161,7 @@ test("round 4 S5: subexpressions, background jobs, loops, launchers and opaque s
   for (const [command, reason] of [
     ["Start-Process \"git $x\"", /Desk allows Git in PowerShell/u],
     ["& $p iex", /could not resolve the program this command runs/u],
-    ["iex \"git stash $x\"", /^Desk protected checkout /u], ['"git stash $x" | pwsh -Command -', /^Desk protected checkout /u],
+    ["iex \"git stash $x\"", / Desk protects this checkout: /u], ['"git stash $x" | pwsh -Command -', / Desk protects this checkout: /u],
   ]) assert.match((await f.guard(command)).reason, reason, command)
   // Replay ruling, 2026-09-27: code Desk cannot read (a computed program, file or script whose readable text names no
   // Git) is allowed; only inline text Desk can read is inspected.
@@ -169,7 +170,7 @@ test("round 4 S5: subexpressions, background jobs, loops, launchers and opaque s
     '"echo $x" | bash', "[scriptblock]::Create('Set-' + 'Location x')", ". $script", "iex (Get-Content x.ps1 -Raw)", "pwsh -EncodedCommand ZQBjAGgAbwA=", "& (eval x) status",
   ]) assert.equal((await f.guard(command)).deny, false, command)
   // A hashtable entry's value runs, and a prefix increment changes its variable.
-  assert.equal((await f.guard(`$h = @{ a = $(Set-Location ${psq(f.prot)}); b=1; c= 2 }; git stash`, { cwd: f.own })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
+  assert.equal((await f.guard(`$h = @{ a = $(Set-Location ${psq(f.prot)}); b=1; c= 2 }; git stash`, { cwd: f.own })).reason, protectedDenial(f.prot, MESSAGES.stash))
   assert.equal((await f.guard(`$r = ${psq(f.own)}; ++$r; git -C $r stash`, { cwd: f.own })).deny, true)
   for (const command of [
     "'echo hi' | bash", "Start-Process notepad", "Write-Output ok &", `Set-Location ${psq(f.own)}; git stash`, "bash -c 'echo ok'",
@@ -182,10 +183,10 @@ test("round 4 S5: subexpressions, background jobs, loops, launchers and opaque s
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
   // A literal script piped into PowerShell's -Command - is inspected as PowerShell; a working directory moves it.
-  assert.equal((await guardShellCommand({ command: `pwsh -wd ${q(f.prot)} -c 'git stash'`, cwd: f.own, env: f.env })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
+  assert.equal((await guardShellCommand({ command: `pwsh -wd ${q(f.prot)} -c 'git stash'`, cwd: f.own, env: f.env })).reason, protectedDenial(f.prot, MESSAGES.stash))
   assert.match((await guardShellCommand({ command: `pwsh -WorkingDirectory "$(pick)" -c 'git stash'`, cwd: f.own, env: f.env })).reason, /could not resolve which checkout/u)
   assert.match((await guardShellCommand({ command: "pwsh -wd /definitely-missing -c 'git stash'", cwd: f.own, env: f.env })).reason, /could not resolve which checkout/u)
-  assert.equal((await guardShellCommand({ command: "pwsh -c git stash", cwd: f.prot, env: f.env })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
+  assert.equal((await guardShellCommand({ command: "pwsh -c git stash", cwd: f.prot, env: f.env })).reason, protectedDenial(f.prot, MESSAGES.stash))
   if (!pwsh) return
   for (const command of deny.slice(0, 2)) {
     const run = await fixture(t)
@@ -197,14 +198,14 @@ test("round 4 S5: subexpressions, background jobs, loops, launchers and opaque s
 
 test("round 4: an unknown PowerShell variable argument takes its most dangerous reading", async (t) => {
   const f = await fixture(t)
-  const variable = `Desk protected checkout ${f.prot}: ${MESSAGES.variable}`
+  const variable = protectedDenial(f.prot, MESSAGES.variable)
   for (const command of [
     "$x = Get-Content f; git commit $x", "$x = Get-Content f; git push origin main $x", "$x = Get-Content f; git branch $x topic",
     "$x = Get-Content f; git merge --ff-only $x", 'git commit "--$x"', "git worktree list $x",
   ]) assert.equal((await f.guard(command)).reason, variable, command)
   // An unknown victim is checked against every worktree of the repository; both of these have a protected one.
-  assert.equal((await f.guard("git worktree remove $wt")).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.worktreeRemove}`)
-  assert.equal((await f.guard("git worktree remove $wt", { cwd: f.own })).reason, `Desk protected checkout ${f.pwt}: ${MESSAGES.worktreeRemove}`)
+  assert.equal((await f.guard("git worktree remove $wt")).reason, protectedDenial(f.prot, MESSAGES.worktreeRemove))
+  assert.equal((await f.guard("git worktree remove $wt", { cwd: f.own })).reason, protectedDenial(f.pwt, MESSAGES.worktreeRemove))
   for (const [command, cwd] of [
     ["$x = Get-Content f; git commit $x", f.own], ["$m = Get-Content f; git commit -q --allow-empty -m $m", f.prot], ["git checkout -- $f", f.prot],
     ["git add $files", f.prot], ["$x = Get-Content f; git status $x", f.prot], ["git worktree add --detach $wt HEAD", f.own],
@@ -234,13 +235,13 @@ test("round 4 S2: one step and time budget bounds all inspection, and the hook's
   // Merged states keep a candidate that could be Git as could-be-Git.
   assert.equal(mergedValue("git", "ls"), UNKNOWN_GIT)
   assert.equal(mergedValue("a", undefined), UNKNOWN)
-  assert.equal((await f.guard(`if [ -n "$C" ]; then g=git; else g=ls; fi\n${bashForks(20)}\n$g stash`, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
+  assert.equal((await f.guard(`if [ -n "$C" ]; then g=git; else g=ls; fi\n${bashForks(20)}\n$g stash`, { powershell: false })).reason, protectedDenial(f.prot, MESSAGES.stash))
   assert.match((await f.guard(`if [ -n "$C" ]; then cd ${q(f.own)}; fi\n${bashForks(20)}\ngit stash`, { powershell: false })).reason, /could not resolve which checkout/u)
   // Running out of steps or time denies with a reason that names the budget.
-  await assert.rejects(inspectPowerShell({ command: forks(3), cwd: f.prot, env: f.env, visit() {}, budget: inspectionBudget({ steps: 5 }) }), /stopped inspecting this shell command after 5 steps/u)
+  await assert.rejects(inspectPowerShell({ command: forks(3), cwd: f.prot, env: f.env, visit() {}, budget: inspectionBudget({ steps: 5 }) }), /stopped inspecting it after 5 steps/u)
   let clock = 0
   const budget = inspectionBudget({ deadline: 10, now: () => clock++, budgetMs: 7000 })
-  await assert.rejects(inspectShell({ command: bashForks(10), cwd: f.prot, env: f.env, visit() {}, budget }), /could not finish inspecting this shell command within its 7 s budget/u)
+  await assert.rejects(inspectShell({ command: bashForks(10), cwd: f.prot, env: f.env, visit() {}, budget }), /could not finish inspecting it within its 7 s budget/u)
   assert.equal(INSPECTION_STEPS, 20000)
   // Inspection yields to the event loop, so a timer set before it (like the hook's 9 s deadline) fires during it.
   let fired = false
@@ -274,11 +275,11 @@ test("round 4 S3, narrowed on 2026-09-27: a script piped or redirected into a sh
     "pwsh -NoProfile -Command - <<'EOF'\ngit stash\nEOF", "echo 'git stash' | pwsh", "echo 'git stash' | pwsh -File -", "echo 'git stash' | { bash; }",
     "cat <<'EOF' | bash\ngit stash\nEOF", 'eval "git stash $(cat args)"', 'bash -c "cd $(pwd) && git stash"',
   ]) {
-    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`, command)
+    assert.equal((await f.guard(command, { powershell: false })).reason, protectedDenial(f.prot, MESSAGES.stash), command)
   }
   // A PowerShell string or here-string piped into a shell is its script, read like one (replay ruling, 2026-09-27).
   for (const command of ["@'\ngit stash\n'@ | bash", "'git stash' | bash", "@'\ngit stash\n'@ | pwsh -NoProfile -Command -"]) {
-    assert.equal((await f.guard(command)).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`, command)
+    assert.equal((await f.guard(command)).reason, protectedDenial(f.prot, MESSAGES.stash), command)
   }
   for (const command of ["@'\necho hi\n'@ | bash", '@"\necho $x\n"@ | bash']) assert.equal((await f.guard(command)).deny, false, command)
   assert.deepEqual(shellScript("pwsh", ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-com", "git", "status"]), { command: "git status", directory: undefined })
@@ -304,7 +305,7 @@ test("round 4 S6, narrowed on 2026-09-27: a non-force push of any name passes; f
     assert.equal((await f.guard(command, { powershell: false })).deny, false, command)
   }
   for (const command of ["git push -q origin +topic", "git push -q origin :main", "git push -q --delete origin main", "git push -q --force origin topic", "git push -q --prune origin"]) {
-    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.pushForce}`, command)
+    assert.equal((await f.guard(command, { powershell: false })).reason, protectedDenial(f.prot, MESSAGES.pushForce), command)
   }
   assert.equal((await f.guard("git tag v6; git push -q origin v6")).deny, false)
   // Git in a PowerShell block runs as its own statement (replay ruling, 2026-09-27), like the Bash row above.
@@ -386,13 +387,13 @@ test("round 4: ordinary desk writes pass on the state branch, and only HEAD move
   assert.equal((await f.guard('git -C "$(pick)" push -q origin main', { powershell: false })).deny, false)
   // Real HEAD moves and discards still name it.
   for (const command of ["git checkout topic", "git reset --hard", "git switch -c other", "git rebase --onto topic main"]) {
-    assert.ok((await f.guard(command, { powershell: false })).reason.endsWith(WORKTREE_COMMAND), command)
+    assert.ok((await f.guard(command, { powershell: false })).reason.includes(WORKTREE_COMMAND), command)
   }
 
   // Without an upstream of <remote>/<state branch>, pull and rebase ask for one instead of a worktree.
   f.git(f.prot, "branch", "--unset-upstream")
   for (const command of ["git pull -q --rebase origin main", "git rebase origin/main"]) {
-    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.noUpstream}`, command)
+    assert.equal((await f.guard(command, { powershell: false })).reason, protectedDenial(f.prot, MESSAGES.noUpstream), command)
   }
   // The suggested git branch -u passes (it is among the writes above); once it has run, the pull passes.
   f.git(f.prot, "branch", "-u", "origin/main")
@@ -421,9 +422,9 @@ test("round 4, 2026-09-27: the PowerShell allowlist never fires where the statem
   assert.equal((await own("git branch --show-current | Out-File ($b = 'x'); git -C $b stash")).deny, true, "the unmodeled assignment leaves $b unknown")
   // Anything that could move where Git runs keeps the allowlist denial, even from an unprotected checkout.
   for (const command of [`git -C ${psq(f.prot)} status | Out-File y`, "git --git-dir x status | Out-File y", "git worktree list | Out-File y", `Set-Location ${psq(f.prot)}; git status | Out-File y`, "$env:GIT_DIR = 'x'; git status | Out-File y"]) {
-    assert.equal((await own(command)).reason, POWERSHELL_GIT_FORMS, command)
+    assert.equal((await own(command)).reason.replace(REWRITE_LINES, ""), POWERSHELL_GIT_FORMS, command)
   }
-  assert.equal((await own("git status | Out-File y", { env: { ...f.env, GIT_WORK_TREE: f.prot } })).reason, POWERSHELL_GIT_FORMS)
+  assert.equal((await own("git status | Out-File y", { env: { ...f.env, GIT_WORK_TREE: f.prot } })).reason.replace(REWRITE_LINES, ""), POWERSHELL_GIT_FORMS)
   // A checkout whose protection cannot be read is treated as protected.
   const broken = path.join(f.root, "broken")
   execFileSync("git", ["init", "-q", broken], { env: f.env })
