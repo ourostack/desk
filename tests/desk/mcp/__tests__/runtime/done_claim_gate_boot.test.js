@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -105,4 +105,57 @@ test("the entry points record the boot's named task on Claude (the Bash matcher)
   assert.equal(existsSync(sessionFile(stateDir, "p1")), false, "Copilot: another shell call records nothing")
   assert.deepEqual(run("copilot", "track", copilot("bash", COMMAND, "p1")), {})
   assert.equal(existsSync(sessionFile(stateDir, "p1")), true, "Copilot: the boot run records the named task")
+})
+
+test("Claude Code's real Bash tool_response, an object with stdout, stderr and interrupted, is read: the boot's named task is recorded", () => {
+  const response = { stdout: BOOT_TEXT, stderr: "", interrupted: false, isImage: false, noOutputExpected: false }
+  const expected = { key: "greenhouse-ops/watering-schedule-api", slug: "watering-schedule-api", status: "processing", reportAs: null, path: "greenhouse-ops/watering-schedule-api/task.md", oldKey: null }
+  assert.deepEqual(bootNamedTask("Bash", { command: COMMAND }, response), expected)
+  assert.deepEqual(bootNamedTask("Bash", { command: "node s/session-boot.js --task foo" }, { stdout: "Named task: trk/x (processing), card trk/x/task.md" }).slug, "x")
+  assert.equal(bootNamedTask("Bash", { command: COMMAND }, { output: BOOT_TEXT }).slug, "watering-schedule-api", "a host that names the text `output`")
+  assert.equal(bootNamedTask("PowerShell", { command: COMMAND }, response).slug, "watering-schedule-api")
+  assert.equal(bootNamedTask("Bash", { command: COMMAND }, { stdout: "", stderr: BOOT_TEXT }), null, "stderr is not the boot's answer")
+  const stateDir = fresh()
+  recordTouchedTask(post("Bash", COMMAND, response), { stateDir, root: null })
+  assert.equal(stop(stateDir, ROUND_S_REPLY).decision, "block")
+})
+
+test("the command must actually run session-boot.js with --task: node or the script itself in the program position, in any part of a compound command", () => {
+  const yes = [
+    "node /p/mcp/scripts/session-boot.js --task x",
+    "node \"/p/mcp/scripts/session-boot.js\" --task \"resume x\"",
+    "cd /d && node /p/session-boot.js --task x",
+    "DESK=/d node --no-warnings /p/session-boot.js --task x | head -80",
+    "/usr/local/bin/node /p/session-boot.js --task x",
+    "/p/mcp/scripts/session-boot.js --task x",
+    "echo hi\nnode /p/session-boot.js --task x",
+  ]
+  const no = [
+    "cat /p/mcp/scripts/session-boot.js --task x",
+    "echo session-boot.js --task x",
+    "grep -n task session-boot.js",
+    "node /p/other.js session-boot.js --task x",
+    "node /p/session-boot.js",
+    "node /p/session-boot.js --json",
+    "ls session-boot.js; echo --task",
+  ]
+  for (const command of yes) assert.equal(bootNamedTask("Bash", { command }, BOOT_TEXT)?.slug, "watering-schedule-api", command)
+  for (const command of no) assert.equal(bootNamedTask("Bash", { command }, BOOT_TEXT), null, command)
+})
+
+test("hooks.json watches the PowerShell tool too, and the .cjs answers at once for a PowerShell call that is not the boot", () => {
+  const hooks = JSON.parse(readFileSync(path.join(path.dirname(hook), "hooks.json"), "utf8")).hooks
+  const group = hooks.PostToolUse.find((entry) => entry.hooks.some((item) => /done-claim-gate\.cjs" claude track$/u.test(item.command)) && !/task_/u.test(entry.matcher))
+  const matcher = new RegExp(`^(?:${group.matcher})$`, "u")
+  assert.ok(matcher.test("Bash") && matcher.test("PowerShell"))
+  assert.equal(matcher.test("Read"), false)
+  const home = fresh()
+  mkdirSync(home, { recursive: true })
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH }
+  const stateDir = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk")
+  const run = (input) => JSON.parse(spawnSync(process.execPath, [hook, "claude", "track"], { input: JSON.stringify(input), env, encoding: "utf8" }).stdout)
+  assert.deepEqual(run({ ...post("PowerShell", "Get-ChildItem", "x", "w1"), cwd: ROOT }), {})
+  assert.equal(existsSync(sessionFile(stateDir, "w1")), false)
+  assert.deepEqual(run({ ...post("PowerShell", COMMAND, { stdout: BOOT_TEXT, stderr: "", interrupted: false }, "w1"), cwd: ROOT }), {})
+  assert.equal(existsSync(sessionFile(stateDir, "w1")), true)
 })

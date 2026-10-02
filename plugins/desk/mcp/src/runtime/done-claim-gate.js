@@ -100,6 +100,9 @@ function responseText(response) {
   if (Array.isArray(response)) return response.map((part) => (typeof part === "string" ? part : responseText(part))).join("\n")
   if (response === null || typeof response !== "object") return ""
   if (typeof response.text === "string") return response.text
+  // Claude Code's Bash PostToolUse `tool_response` is `{ stdout, stderr, interrupted, ... }`; some hosts name the text `output`.
+  if (typeof response.stdout === "string") return response.stdout
+  if (typeof response.output === "string") return response.output
   if (response.content !== undefined) return responseText(response.content)
   return response.structuredContent === undefined ? "" : JSON.stringify(response.structuredContent)
 }
@@ -117,12 +120,15 @@ function parseJson(text) {
 // script), but the host's PostToolUse hook for the shell call does: so the hook reads the boot's answer and records the named task as touched, in the same file `task_update` uses
 // (round S: a reply claimed the named task was done, the agent never called task_update, and the gate had nothing to check). Only a run of `session-boot.js` counts.
 const SHELL_TOOL = /^(?:bash|powershell)$/iu
+// `session-boot.js` as the program that runs: `node [flags] <path>/session-boot.js ...` or the script itself, at the start of a command (after `VAR=x`, `;`, `&&`, `||`, `|` or a line break), with `--task` among its own arguments.
+const BOOT_RUN = /^(?:[A-Za-z_]\w*=\S*\s+)*(?:(?:\S*[\\/])?node(?:js)?(?:\.exe)?\s+(?:-\S+\s+)*)?["']?\S*session-boot\.js["']?(?<args>(?:\s[^\n]*)?)$/u
+const runsNamedBoot = (command) => command.split(/&&|\|\||[;|\n]/u).some((part) => { const hit = BOOT_RUN.exec(part.trim()); return hit !== null && /(?:^|\s)--task\b/u.test(hit.groups.args) })
 const NAMED_TASK_LINE = /^Named task: (\S+) \(([^)]*)\), card (\S+)\s*$/mu
 
 /** The task a `session-boot.js` run resolved from the operator's name, in the shape `touchedTask` answers with, or null: not a boot run, no task named, or one that matched none or several. */
 export function bootNamedTask(toolName, input, response) {
   const command = String(input?.command ?? "")
-  if (!SHELL_TOOL.test(String(toolName ?? "")) || !/session-boot\.js\b/u.test(command) || !/(?:^|\s)--task\b/u.test(command)) return null
+  if (!SHELL_TOOL.test(String(toolName ?? "")) || !runsNamedBoot(command)) return null
   const text = responseText(response)
   let named = null
   const json = parseJson(text.trim())

@@ -34,7 +34,7 @@ process.stdin.on("end", async () => {
       shaped = adapter.claudeShapedPayload(payload);
     }
     // Claude runs `track` for Bash too (hooks.json), so answer at once for a shell call that is not the boot script.
-    if (!copilot && mode === "track" && payload?.tool_name === "Bash" && !/session-boot\.js/u.test(String(payload?.tool_input?.command ?? ""))) {
+    if (!copilot && mode === "track" && /^(?:Bash|PowerShell)$/u.test(String(payload?.tool_name ?? "")) && !/session-boot\.js/u.test(String(payload?.tool_input?.command ?? ""))) {
       process.stdout.write("{}\n");
       return;
     }

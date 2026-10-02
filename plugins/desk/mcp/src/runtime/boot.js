@@ -1077,7 +1077,15 @@ function buildInstructions(ctx) {
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
 const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
-const SYNC_FAILED_RULE = "Desk could not sync: open your reply with \"Desk could not sync with origin (<reason>); working from local state\" before anything else, and never use \"synced\" for it."
+// What the reply must open with when the sync did not go cleanly, from the sync summary's own words (never a placeholder): a failed sync, or a pull that worked but left the desk's uncommitted changes in conflict.
+function syncOpening(summary) {
+  const failed = /^sync failed: (.+?); nothing was pulled or pushed;/u.exec(summary)
+  if (failed !== null) return { say: `Desk could not sync with origin (${failed[1]}); working from local state`, lead: "Desk could not sync" }
+  const conflict = /^sync: the pull succeeded, but (.+)$/u.exec(summary)
+  if (conflict !== null) return { say: `Desk pulled from origin, but ${conflict[1]}`, lead: "Desk pulled but could not finish syncing" }
+  return null
+}
+const syncRule = ({ say, lead }) => `${lead}: open your reply with \"${say}\" before anything else, and never use \"synced\" for it.`
 
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.
@@ -1085,8 +1093,8 @@ function buildTextInstructions(ctx) {
   const plain = buildInstructionItems(ctx).map((item) => item.plain).filter((line) => line !== null)
   const factoryAt = plain.findIndex((line) => line.startsWith("Factory consent is undecided"))
   // A boot degraded by a failed sync adds how to say it (round S2: the headline said "sync failed" and the reply said "Desk synced locally").
-  const syncFailed = typeof ctx.syncSummaryText === "string" && ctx.syncSummaryText.startsWith("sync failed:")
-  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, syncFailed ? `${CLOSING_RULES} ${SYNC_FAILED_RULE}` : CLOSING_RULES)
+  const opening = syncOpening(ctx.syncSummaryText)
+  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, opening === null ? CLOSING_RULES : `${CLOSING_RULES} ${syncRule(opening)}`)
   return plain
 }
 

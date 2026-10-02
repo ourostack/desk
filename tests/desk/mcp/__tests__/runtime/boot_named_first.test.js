@@ -71,10 +71,11 @@ test("a missing repo prints no mode line: boot says 'not at <path>' and never re
 
 test("a boot degraded by a failed sync tells the reply to open with the sync sentence, in the closing rule of the plain-text boot (the text both hosts read); a synced boot does not", async () => {
   const root = await desk(["flash-valves"])
-  const failed = await boot(root, null, { syncFn: async () => ({ state: "unresolved", cause: "remote_unreachable" }) })
+  const failed = await boot(root, null, { syncFn: async () => ({ state: "unresolved", cause: "unreachable" }) })
   const rule = failed.text_instructions.find((line) => line.startsWith("In every reply:"))
   assert.match(formatBootText(failed), /Desk boot: degraded \(sync failed/u)
-  assert.ok(rule.includes('Desk could not sync: open your reply with "Desk could not sync with origin (<reason>); working from local state" before anything else, and never use "synced" for it.'), rule)
+  assert.ok(rule.includes('Desk could not sync: open your reply with "Desk could not sync with origin (remote unreachable); working from local state" before anything else, and never use "synced" for it.'), rule)
+  assert.ok(!rule.includes("<reason>"), "the real reason, never a placeholder")
   assert.ok(!failed.instructions.some((line) => line.includes("never use \"synced\"")), "JSON instructions are unchanged")
   const ok = await boot(root, null)
   assert.ok(!ok.text_instructions.some((line) => line.includes("never use \"synced\"")))
@@ -115,4 +116,13 @@ test("a missing repo with no clone source asks with the expanded path, and clone
   const first = result.text_instructions[0]
   assert.ok(first.includes(`is not at its recorded path ${home}/code/valve-firmware (~/code/valve-firmware)`), first)
   assert.ok(first.includes(`clone valve-firmware to ${home}/code/valve-firmware (or record the path they give)`), first)
+})
+
+test("the sync rule carries the summary's own reason for each failure, and for a pull that worked but left the desk's changes in conflict", async () => {
+  const root = await desk(["flash-valves"])
+  const rule = async (sync) => (await boot(root, null, { syncFn: async () => sync })).text_instructions.find((line) => line.startsWith("In every reply:"))
+  assert.match(await rule({ state: "unresolved", cause: "auth_failed" }), /Desk could not sync with origin \(remote refused this host's credentials\); working from local state/u)
+  assert.match(await rule({ state: "unresolved", cause: "diverged" }), /\(the desk and its remote have diverged\)/u)
+  const conflict = await rule({ state: "unresolved", reason: "autostash_pop_conflict", conflicted: ["a/task.md"] })
+  assert.match(conflict, /Desk pulled but could not finish syncing: open your reply with "Desk pulled from origin, but the desk's uncommitted local changes conflict with what came in \(conflicted: a\/task\.md\); nothing was pushed; resolve them before changing the desk" before anything else, and never use "synced" for it\./u)
 })
