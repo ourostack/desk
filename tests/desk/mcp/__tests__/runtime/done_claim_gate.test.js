@@ -553,3 +553,39 @@ test("hooks.json wires the Stop gate beside the factory hook and the tracker on 
   assert.equal(matcher.test("mcp__plugin_desk_desk__desk_status"), false)
   assert.equal(matcher.test("Bash"), false)
 })
+
+// ---- a done claim about the work is honest when the reply states the task's real status (round M, Copilot resume-named-task run 2) ----
+
+const VALIDATING = "Task watering-schedule-api is at validating (not done): Open a pull request"
+const validating = () => touched("validating", VALIDATING)
+const ROUND_M = "The implementation is complete and tests pass. The task is now in **validating** state, ready for the pull request step. The changes:\n\n- Implemented `RainDelayPolicy.should_delay()` using the 30% operator-ruled threshold\n- All tests passing\n\nNext step: Open a pull request from `feature/rain-delay` into `main`."
+
+test("a reply that claims the work is done but states the task's real status is not blocked", () => {
+  for (const reply of [
+    ROUND_M,
+    "The implementation is complete. The task is now in validating state.",
+    "Implementation is complete and the task is in the validating stage, ready for the PR.",
+    "The code is done but the task is at validating.",
+    "Work complete. watering-schedule-api: validating (not done) until the PR is open.",
+    "All done with the code. Status: validating.",
+    "Finished the work. I moved the task to validating.",
+    "Done. The task remains in validating.",
+    "Everything is done; soil-sensor is at processing, and watering-schedule-api is at validating.",
+  ]) assert.deepEqual(stop(validating(), reply), {}, reply)
+})
+
+test("a reply that says the task is done without stating its real status is still blocked, and so is a status that is taken back or belongs elsewhere", () => {
+  for (const reply of [
+    "Task watering-schedule-api is done.",
+    "The task is complete.",
+    "Done.",
+    "Done! (status: validating - just kidding, it's done)",
+    "Complete. Status: validating -> done.",
+    "Work is done. The task is at validating → done now.",
+    "The work is done. other-task is at validating.",
+    "The work is complete. Task soil-sensor is validating.",
+    "The implementation is complete. I am not validating anything yet.",
+    "The implementation is complete and I was validating the build.",
+    "Work is done. The task was in validating before, but it's done now.",
+  ]) assert.ok(blocks(stop(validating(), reply)), reply)
+})

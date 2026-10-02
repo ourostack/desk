@@ -192,6 +192,8 @@ const DONE_WORD = "(?:done|complete[d]?|finished)"
 export const DONE_CLAIM_PATTERNS = [
   // "the task is complete", "this job has been finished"; a bare "the task done" or "the task was done" is not one.
   new RegExp(`\\b(?:the|this|my|our)\\s+(?:task|job|ticket)\\s+(?:is|has been|is now|is all)\\s+${DONE_WORD}\\b`, "iu"),
+  // "Task watering-schedule-api is done": the task named by its slug (a word with a hyphen or an underscore in it).
+  new RegExp(`\\b(?:task|job|ticket)\\s+[\`*"']*[\\w.]*[-_][\\w.-]*[\`*"']*\\s+(?:is|has been|is now|is all)\\s+${DONE_WORD}\\b`, "iu"),
   // "Task done." and "Task is done." at the start of a sentence or line.
   new RegExp(`(?:^|[\\n"'\`(:]|\\.\\s)\\s*(?:task|job|ticket)\\s+(?:is\\s+)?(?:now\\s+)?${DONE_WORD}\\b`, "iu"),
   // "completed the task", "done with the task and pushed"; "done with the task review" names a part of the task.
@@ -251,25 +253,32 @@ export function doneClaims(text) {
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
+// A status clause that is taken back in its own sentence is no statement: "Done! (status: validating - just kidding, it's done)", "validating -> done".
+const RETRACTION = /\b(?:just\s+kidding|jk|psych|scratch\s+that|never\s*mind|on\s+second\s+thought|ignore\s+that)\b|(?:\u2192|->|=>|\u21d2)\s*[`*"']*(?:done|complete[d]?|finished)\b|\bbut\s+(?:it|the\s+task|task\s+\S+)\s*(?:is|['\u2019]s)\s+(?:actually\s+|really\s+)?(?:done|complete[d]?|finished)\b/iu
+// A word with a hyphen inside names a task slug (or something like one): a status clause that names another slug is about that one.
+const SLUG_LIKE = /(?<![\w/-])[a-z0-9]+(?:-[a-z0-9]+)+(?![\w/-])/giu
+
 /**
- * Whether `text` states `status` as the task's real status: in a status clause ("status: validating", "is at validating", "at validating (not done)", "moved to validating", "the task is validating"), or in a sentence that names the task's slug.
- * The bare word does not count: "not validating", "still processing the logs" and "preprocessing" state nothing.
+ * Whether `text` states `status` as the task's real status: in a status clause ("status: validating", "is at validating", "at validating (not done)", "moved to validating", "the task is validating", "the task is now in validating state"), or in a sentence that names the task's slug.
+ * The bare word does not count: "not validating", "still processing the logs" and "preprocessing" state nothing. With the task's `slug`, a clause in a sentence that names another task is about that task and does not count, and neither does one the sentence takes back ("just kidding, it's done", "validating -> done").
  */
 export function statesStatus(text, status, slug) {
   const word = escapeRegExp(status)
   const quote = "[\\s*_`\"']*"
   const clauses = [
     `\\bstatus\\b[\\s*_:\`"'-]{0,8}(?:is\\s+|at\\s+)?${quote}${word}(?![\\w-])`,
-    `\\b(?:is|remains|stays|left|sits|stands)\\s+(?:now\\s+|still\\s+)?at\\s+${quote}${word}(?![\\w-])`,
+    `\\b(?:is|remains|stays|left|sits|stands)\\s+(?:now\\s+|still\\s+)?(?:at|in)\\s+(?:the\\s+)?${quote}${word}(?![\\w-])`,
     `\\bat\\s+${quote}${word}${quote}\\s*\\(not done\\)`,
     `\\b(?:moved|transitioned|set|updated|changed)\\s+(?:(?:the\\s+)?task\\s+|it\\s+)?to\\s+${quote}${word}(?![\\w-])`,
     `\\btask\\s+(?:\\S+\\s+)?(?:is|remains|stays)\\s+(?:now\\s+|still\\s+)?${quote}${word}(?![\\w-])`,
-  ]
-  if (clauses.some((clause) => new RegExp(clause, "iu").test(text))) return true
-  if (slug === undefined || slug === "") return false
-  const named = new RegExp(`(?<![\\w-])${escapeRegExp(slug)}(?![\\w-])`, "iu")
+  ].map((clause) => new RegExp(clause, "iu"))
+  const named = typeof slug === "string" && slug !== "" ? new RegExp(`(?<![\\w-])${escapeRegExp(slug)}(?![\\w-])`, "iu") : null
   const bare = new RegExp(`(?<!\\bnot\\s)(?<![\\w-])${word}(?![\\w-])`, "iu")
-  return sentencesOf(text).some((sentence) => named.test(sentence) && bare.test(sentence))
+  // A semicolon ends a statement as a full stop does: "status: processing; soil-sensor is at validating" is two.
+  return sentencesOf(text).some((sentence) => !RETRACTION.test(sentence) && sentence.split(";").some((part) => {
+    if (named !== null && !named.test(part) && part.match(SLUG_LIKE) !== null) return false
+    return clauses.some((clause) => clause.test(part)) || (named !== null && named.test(part) && bare.test(part))
+  }))
 }
 
 // ---------------------------------------------------------------------------

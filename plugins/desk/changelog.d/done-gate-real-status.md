@@ -1,0 +1,3 @@
+### Fixed
+
+The done-claim gate no longer blocks a reply that says the work is complete and also states the task's real status, such as "The implementation is complete. The task is now in **validating** state." A Copilot acceptance run lost a turn to that block even though the reply already named the status. The gate now counts "is now in validating state" and "in the validating stage" as a status statement. It still blocks a reply that calls the task itself done, and it no longer accepts a status that the same sentence takes back ("status: validating, just kidding, it's done", "validating -> done") or that names another task. "Task watering-schedule-api is done." now counts as a done claim.
