@@ -259,6 +259,13 @@ test("blocks a reply that says Done over a task at processing, naming the task, 
   assert.ok(result.reason.includes(`task_update returned report_as: ${JSON.stringify(REPORT)}`))
 })
 
+test("a claim that the task itself is done gets its own correction, even beside an honest status", () => {
+  const result = stop(touched(), "Status: processing. Task watering-schedule-api is done.")
+  assert.equal(result.decision, "block")
+  assert.match(result.reason, /^Restate your reply with task watering-schedule-api's real status: processing\./)
+  assert.match(result.reason, /Your reply says task watering-schedule-api itself is done, but it is at processing; you may say the work is done, not the task\./)
+})
+
 test("blocks when the status was recorded without a report_as, and names no report_as then", () => {
   const stateDir = freshState()
   recordTouchedTask(post("mcp__plugin_desk_desk__task_create", { track: "g", slug: "new-job" }, JSON.stringify({ status: "created", path: "g/new-job/task.md" })), { stateDir, root: null })

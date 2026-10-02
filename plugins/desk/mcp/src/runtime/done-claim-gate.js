@@ -404,7 +404,9 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
     // Fix first: the slug can be long, so the first sentence names it only when it fits.
     const first = `Restate your reply with task ${task.slug}'s real status: ${task.status}.`
     const opening = first.length <= 120 ? first : `Restate your reply with the task's real status: ${task.status}.`
-    return { decision: "block", reason: `${opening} Your reply says the work is done, but task ${task.slug} is at ${task.status}.${reportAs}` }
+    // A claim about the task itself needs a different correction from a claim about the work: the work may be done, the task is not.
+    const claim = taskLevelClaims(reply, task.slug).length > 0 ? `Your reply says task ${task.slug} itself is done, but it is at ${task.status}; you may say the work is done, not the task.` : `Your reply says the work is done, but task ${task.slug} is at ${task.status}.`
+    return { decision: "block", reason: `${opening} ${claim}${reportAs}` }
   } catch {
     return {}
   }
