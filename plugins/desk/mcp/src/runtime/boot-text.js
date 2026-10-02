@@ -219,11 +219,20 @@ function taskLines(track, task, pushNotes) {
   return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...elsewhere, ...push]
 }
 
+// A repo's path as boot prints it: already expanded against this machine's HOME, with the card's own spelling after it ("/home/me/code/x (~/code/x)"), so an agent never expands `~` itself
+// (round T: two agents guessed `/Users/aris/code/...` for `~/code/...` and edited files there).
+export function shownRepoPath(state) {
+  const recorded = state.local_path
+  const absolute = typeof state.path === "string" && state.path !== "" ? state.path : recorded
+  return absolute === recorded || typeof recorded !== "string" ? absolute : `${absolute} (${recorded})`
+}
+
 function repoLine(state) {
+  const place = shownRepoPath(state)
   const where = `${state.desk ? `${state.desk}/` : ""}${state.track}/${state.slug}`
-  if (state.present === false) return `- ${state.repo} (${where}): not at ${state.local_path}${state.url ? `; clone url ${state.url}` : ""}`
+  if (state.present === false) return `- ${state.repo} (${where}): not at ${place}${state.url ? `; clone url ${state.url}` : ""}`
   const sync = state.local_only ? "no remote configured" : state.fetched ? "fetched" : "fetch failed"
-  return `- ${state.repo} (${where}): branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
+  return `- ${state.repo} (${where}): ${place === undefined ? "" : `${place}, `}branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
 }
 
 function prLine(pr) {

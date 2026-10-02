@@ -77,7 +77,7 @@ import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
+import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
@@ -719,7 +719,7 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
       const fetched = spawnGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
       const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
       if (!status || status.status !== 0 || typeof status.stdout !== "string") {
-        states.push({ ...label, local_path: repo.local_path, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
+        states.push({ ...label, local_path: repo.local_path, path: dir, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
         continue
       }
       const lines = status.stdout.split("\n").filter((line) => line !== "")
@@ -728,6 +728,8 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
       states.push({
         ...label,
         present: true,
+        local_path: repo.local_path,
+        path: dir,
         branch: (lines[0] ?? "").replace(/^## (?:No commits yet on )?/u, "").split("...")[0] || null,
         dirty: lines.length > 1,
         fetched: Boolean(fetched) && fetched.status === 0,
@@ -964,8 +966,8 @@ function hasCloneSource(missing) {
 }
 
 function missingCloneInstruction(missing) {
-  const where = shellQuotePath(missing.local_path)
-  const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}`
+  const where = shellQuotePath(missing.path ?? missing.local_path)
+  const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${shownRepoPath(missing)}`
   if (typeof missing.url === "string") {
     return `${lead}: only if the next step needs its code, clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url); otherwise do not clone it.`
   }
@@ -993,9 +995,9 @@ function needsOperator(ctx) {
 }
 
 function askThenHandOff(blockers, task) {
-  const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${blockers[0].local_path}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${missing.local_path}`).join("; ")})`
+  const named = blockers.length === 1 ? `its local repo ${blockers[0].repo} is not at its recorded path ${shownRepoPath(blockers[0])}` : `its local repos are not at their recorded paths (${blockers.map((missing) => `${missing.repo} at ${shownRepoPath(missing)}`).join("; ")})`
   const questions = blockers.map((missing) => `"Where is ${missing.repo} cloned, or what URL should I clone it from?"`).join(" and ")
-  const finish = blockers.map((missing) => `clone ${missing.repo} to ${missing.local_path} (or record the path they give)`).join(" and ")
+  const finish = blockers.map((missing) => `clone ${missing.repo} to ${missing.path ?? missing.local_path} (or record the path they give)`).join(" and ")
   return `The operator named a task (${task.card}, handle ${task.handle}), but ${named}, and the card records no usable clone url for ${blockers.length === 1 ? "it" : "them"}. Do not invent the repo or any progress in it. Before anything else, ask the operator one question and stop until they answer: ${questions} Once they answer, ${finish}, save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask, and only then hand off to desk:session-resumption for ${task.card} (handle ${task.handle}), skipping the status block. Every other instruction below still applies.`
 }
 
@@ -1075,7 +1077,7 @@ function buildInstructions(ctx) {
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
 const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
-const SYNC_FAILED_RULE = "Desk could not sync: report it as \"Desk could not sync with origin (<reason>); working from local state\" and never use \"synced\" for it."
+const SYNC_FAILED_RULE = "Desk could not sync: open your reply with \"Desk could not sync with origin (<reason>); working from local state\" before anything else, and never use \"synced\" for it."
 
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.

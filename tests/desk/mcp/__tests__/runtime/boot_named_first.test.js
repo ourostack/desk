@@ -69,15 +69,50 @@ test("a missing repo prints no mode line: boot says 'not at <path>' and never re
   assert.ok(!/mode:/u.test(text.split("Instructions, in order:")[0]), "no mode line before the instructions")
 })
 
-test("a boot degraded by a failed sync adds the wording rule to the closing rule, text only; a synced boot does not", async () => {
+test("a boot degraded by a failed sync tells the reply to open with the sync sentence, in the closing rule of the plain-text boot (the text both hosts read); a synced boot does not", async () => {
   const root = await desk(["flash-valves"])
   const failed = await boot(root, null, { syncFn: async () => ({ state: "unresolved", cause: "remote_unreachable" }) })
   const rule = failed.text_instructions.find((line) => line.startsWith("In every reply:"))
   assert.match(formatBootText(failed), /Desk boot: degraded \(sync failed/u)
-  assert.ok(rule.includes('Desk could not sync: report it as "Desk could not sync with origin (<reason>); working from local state" and never use "synced" for it.'), rule)
+  assert.ok(rule.includes('Desk could not sync: open your reply with "Desk could not sync with origin (<reason>); working from local state" before anything else, and never use "synced" for it.'), rule)
   assert.ok(!failed.instructions.some((line) => line.includes("never use \"synced\"")), "JSON instructions are unchanged")
   const ok = await boot(root, null)
   assert.ok(!ok.text_instructions.some((line) => line.includes("never use \"synced\"")))
   const unrun = await boot(root, null, { syncFn: async () => null })
   assert.ok(unrun.text_instructions.some((line) => line.includes("never use \"synced\"")), "a sync that did not run is a failed sync too")
+})
+
+test("every repo path boot prints is already expanded against the real HOME, with the card's own spelling after it, so an agent never expands ~ itself", async () => {
+  const root = await desk(["flash-valves", "relay-check"])
+  const home = path.join(root, "a-home-that-is-not-the-users")
+  const present = path.join(home, "code", "valve-firmware")
+  const absent = "~/code/not-cloned"
+  await fs.mkdir(present, { recursive: true })
+  const { spawnSync } = await import("node:child_process")
+  spawnSync("git", ["init", "-q", present])
+  const card = path.join(root, "ops", "flash-valves", "task.md")
+  const text = await fs.readFile(card, "utf8")
+  await fs.writeFile(card, text.replace("mode: local", `mode: local\n  - name: not-cloned\n    local_path: ${absent}\n    mode: local`))
+  const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: home, gh, jq, taskQuery: "flash-valves", syncFn: async () => ({ state: "synced" }), factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }) })
+  const states = Object.fromEntries(result.repo_states.map((state) => [state.repo, state]))
+  assert.equal(states["valve-firmware"].path, present)
+  assert.equal(states["not-cloned"].path, path.join(home, "code", "not-cloned"))
+  const printed = formatBootText(result)
+  assert.ok(printed.includes(`- valve-firmware (ops/flash-valves): ${present} (~/code/valve-firmware), branch`), printed)
+  assert.ok(printed.includes(`not at ${path.join(home, "code", "not-cloned")} (~/code/not-cloned)`), printed)
+  assert.ok(!/not at ~\//u.test(printed), "no bare ~ path in the repo lines")
+  const lines = [...result.instructions, ...result.text_instructions].filter((line) => line.includes("not-cloned") || line.includes("not at its recorded path"))
+  assert.ok(lines.length > 0)
+  for (const line of lines) assert.ok(!line.includes("recorded path ~/"), line)
+  assert.ok(lines.some((line) => line.includes(`${path.join(home, "code", "not-cloned")} (~/code/not-cloned)`)))
+  assert.ok(lines.some((line) => line.includes(`gh repo clone`) ? line.includes(path.join(home, "code", "not-cloned")) : true))
+})
+
+test("a missing repo with no clone source asks with the expanded path, and clones to it", async () => {
+  const root = await desk(["flash-valves"])
+  const home = path.join(root, "other-home")
+  const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: home, gh, jq, taskQuery: "flash-valves", syncFn: async () => ({ state: "synced" }), factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }) })
+  const first = result.text_instructions[0]
+  assert.ok(first.includes(`is not at its recorded path ${home}/code/valve-firmware (~/code/valve-firmware)`), first)
+  assert.ok(first.includes(`clone valve-firmware to ${home}/code/valve-firmware (or record the path they give)`), first)
 })
