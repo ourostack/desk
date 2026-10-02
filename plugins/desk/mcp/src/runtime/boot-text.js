@@ -8,6 +8,7 @@
 
 import { closeSync, fstatSync, openSync, readSync } from "node:fs"
 import * as path from "node:path"
+import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
 
 /** How much of the desk's AGENTS.md boot prints; the rest stays in the file, named by its path. */
@@ -125,11 +126,8 @@ export function ceiling(text, limit = TEXT_CEILING) {
 // A task's next step or blocker is printed whole: a cut line made agents guess the rest or open the card. A blocked
 // task shows the card's blocker reason (falling back to its next step); a card that records neither says so, so no
 // agent invents filler.
-// A next step or blocker that says the thing lives only on another machine: the agent must ask, never clone or fetch to look for it (boot acceptance round Q:
-// an agent cloned a fork into the desk folder to find a branch the card says is only on the other laptop).
-const MACHINE = String.raw`(?:laptop|machine|mac|computer|desktop|pc)(?![\w'-])(?!\s+(?:vision|learning|readable)\b)`
-const ELSEWHERE = new RegExp(String.raw`\b(?:my|the|our) (?:other|another|old|work|home|personal) ${MACHINE}|\bon (?:my|the other) (?:laptop|desktop|mac)(?![\w'-])|\bonly on (?:the|my) ${MACHINE}|\bnot on this (?:machine|laptop|computer|mac)(?![\w'-])`, "i")
-export const ELSEWHERE_NOTE = "not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
+// A next step or blocker that says the thing lives only on another machine gets ELSEWHERE_NOTE (elsewhere-note.js, shared with the clone guard).
+export { ELSEWHERE_NOTE }
 
 function stepLines(task) {
   const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
@@ -215,7 +213,7 @@ function taskLines(track, task, pushNotes) {
   const hidden = /redacted/u.test(named) ? ` (handle ${task.handle})` : ""
   const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
   const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
-  const elsewhere = ELSEWHERE.test(`${task.next_step ?? ""} ${task.blocker ?? ""}`) ? [`  ${ELSEWHERE_NOTE}`] : []
+  const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
   return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...elsewhere, ...push]
 }
 

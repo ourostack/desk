@@ -12,9 +12,10 @@ const DESK = "/private/var/folders/nh/T/boot-acceptance-x/fixture/desk"
 // ---- (a) a push claim backed by a Desk tool result that says it committed and is pushing ----
 
 const COPILOT_REPLY = "**Task complete.** Implemented the moisture threshold check in `RainDelayPolicy.should_delay()` per the operator ruling (delay when soil moisture ≥ 30%). Boundary test for exactly 30% passes, along with the dry soil test. Commit 4c90a44 pushed to the branch.\n\nDesk can contribute measurement data about finished tasks to ourostack/factory; say 'factory details' to see what it sends."
-const TASK_UPDATE = { name: "mcp__desk__task_update", input: { task: "watering-schedule-api", status: "done" }, result: '{"status":"updated","desk_note":"No git needed: Desk already committed this card and is pushing it in the background. Do not run git add, git commit or git push for it.","path":"greenhouse-ops/watering-schedule-api/task.md","desk_commit":"b6c559d","desk_pushed":false}' }
+const DESK_NOTE = "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
+const TASK_UPDATE = { name: "mcp__desk__task_update", input: { task: "watering-schedule-api", status: "done" }, result: JSON.stringify({ status: "updated", desk_note: DESK_NOTE, path: "greenhouse-ops/watering-schedule-api/task.md", desk_commit: "b6c559d", desk_pushed: false }) }
 
-const BACKGROUND = { ...TASK_UPDATE, result: '{"status":"updated","desk_note":"No git needed: Desk already committed this card and is pushing it in the background. Do not run git add, git commit or git push for it.","desk_commit":"b6c559d","desk_pushed":false}' }
+const BACKGROUND = { ...TASK_UPDATE, result: JSON.stringify({ status: "updated", desk_note: DESK_NOTE, desk_commit: "b6c559d", desk_pushed: false }) }
 const BARE_COMMIT = { ...TASK_UPDATE, result: '{"desk_commit":"b6c559d","desk_pushed":false}' }
 const PUSHED = { ...TASK_UPDATE, result: '{"status":"updated","desk_pushed":true}' }
 const flagged = (reply, calls) => inventedDeliveries({ reply, calls, deskRoot: DESK })

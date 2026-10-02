@@ -6,6 +6,7 @@ import { rewritePowerShell } from "./powershell-rewrite.js"
 import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { existingDirectory, gitDirectory, processDirectory } from "./shell-paths.js"
+import { elsewhereCloneDenial } from "./elsewhere-clone.js"
 import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
 import { GuardDenial, inspectionBudget, protectedDenial, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
@@ -378,10 +379,11 @@ export async function protectedCheckoutHook(input, host) {
   let args = input.tool_input ?? input.toolArgs
   if (typeof args === "string") args = JSON.parse(args)
   if (typeof args?.command !== "string") return {}
-  const result = await guardShellCommand({
-    command: args.command, cwd: args.cwd ?? input.cwd ?? process.cwd(),
-    powershell: name === "powershell", env: process.env,
-  })
+  const cwd = args.cwd ?? input.cwd ?? process.cwd()
+  // A clone or fetch of a repository a task card says lives on another machine (one regular expression for every other command).
+  // This guard fails open: an unreadable card or any error of its own allows the command (the entry point would otherwise answer an error with exit 2, a deny).
+  const elsewhere = await elsewhereCloneDenial({ command: args.command, cwd, env: process.env }).catch(() => ({ deny: false }))
+  const result = elsewhere.deny ? elsewhere : await guardShellCommand({ command: args.command, cwd, powershell: name === "powershell", env: process.env })
   if (!result.deny) return {}
   const decision = { permissionDecision: "deny", permissionDecisionReason: result.reason }
   return host === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } } : decision
