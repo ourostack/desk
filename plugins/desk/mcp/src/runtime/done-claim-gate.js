@@ -213,6 +213,8 @@ export function clearTouchedTasks(payload, { env = process.env, stateDir = resol
 // A claim is negated or conditional only by a word in a short window just before its verb, as in the acceptance harness.
 const NEGATION = /\b(?:not|never|nothing|none|neither|fail(?:ed|s|ure)?|unable|unreachable|couldn'?t|can'?t|cannot|didn'?t|doesn'?t|don'?t|wasn'?t|isn'?t|aren'?t|hasn'?t|haven'?t|won'?t|without|still needs?|yet to)\b|n['’]t\b/iu
 const CONDITIONAL = /\b(?:until|once|when|if|will|would|should|ready to)\b/iu
+// Words just before a claim that make it an instruction to the operator or a prediction, never the reply's own claim: "then say it's done", "tell me when it's done", "let me know it is done", "after that's done", "Push it, then the task is done".
+const PROSPECTIVE = /\b(?:then|after (?:that|this|which|you)|tell me|let me know|say|answer|reply|confirm)\b/iu
 const WINDOW_CHARS = 30
 const DONE_WORD = "(?:done|complete[d]?|finished)"
 
@@ -277,7 +279,7 @@ function standing(sentence, patterns) {
     const before = sentence.slice(Math.max(0, match.index - WINDOW_CHARS), match.index + match[0].length)
     // A condition may also follow: "complete once the PR merges".
     const after = sentence.slice(match.index + match[0].length, match.index + match[0].length + WINDOW_CHARS)
-    return !NEGATION.test(before) && !CONDITIONAL.test(before) && !CONDITIONAL.test(after)
+    return !NEGATION.test(before) && !CONDITIONAL.test(before) && !PROSPECTIVE.test(before) && !CONDITIONAL.test(after)
   })
 }
 

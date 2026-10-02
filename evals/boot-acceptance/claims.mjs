@@ -808,11 +808,12 @@ function cloneBacked(sentence, backing) {
 /** The repos the boot output lists as on this machine ("Repos of open tasks": `- <repo> (<task>): branch <b>, ...`; a missing one reads "not at <path>"), so a clone the fixture already had. */
 function presentRepos(calls) {
   const repos = new Set()
-  for (const text of bootResults(calls)) for (const match of text.matchAll(/^- ([\w.-]+) \([^)\n]*\): branch /gmu)) repos.add(match[1].toLowerCase())
+  for (const text of bootResults(calls)) for (const match of text.matchAll(/^- ([\w.-]+) \([^)\n]*\): (?:[^\n,]*, )?branch /gmu)) repos.add(match[1].toLowerCase())
   return repos
 }
 
-const namesPresentRepo = (sentence, present) => [...present].some((name) => new RegExp(`(?<![\\w./-])${escapeRegExp(name)}(?![\\w-])`, "iu").test(sentence))
+// A repo is named by its own name, or as the last folder of a filesystem path (`~/code/greenhouse-irrigation`, `/home/me/code/x`), never as the repo half of an `owner/name` slug.
+const namesPresentRepo = (sentence, present) => [...present].some((name) => new RegExp(`(?<![\\w./-])${escapeRegExp(name)}(?![\\w-])|(?<=(?:^|[\\s\`'"(])[~/][\\w./~-]*\\/)${escapeRegExp(name)}(?![\\w-])`, "iu").test(sentence))
 
 /**
  * The claims of a clone in the reply, card notes and commit messages that no succeeded clone of a real repository backs, as `{ where, text, why }`. The run

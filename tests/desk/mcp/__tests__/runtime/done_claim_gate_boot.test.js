@@ -159,3 +159,46 @@ test("hooks.json watches the PowerShell tool too, and the .cjs answers at once f
   assert.deepEqual(run({ ...post("PowerShell", COMMAND, { stdout: BOOT_TEXT, stderr: "", interrupted: false }, "w1"), cwd: ROOT }), {})
   assert.equal(existsSync(sessionFile(stateDir, "w1")), true)
 })
+
+// ---- an instruction to the operator, or a prediction, is no done claim (round W, Claude stress wrong-push-account run 1) ----
+
+import { doneClaims, taskLevelClaims } from "../../../../../plugins/desk/mcp/src/runtime/done-claim-gate.js"
+
+const ROUND_W_REPLY = "**beacon-relay-push-check**: resuming from task card (status: processing).\n\nThe `relay-heartbeat-15s` branch exists only on your other laptop, not here. The boot has confirmed the push route: **push to fork `arimendelow/claude-code` (as arimendelow)** and open the PR from there into `anthropics/claude-code` main.\n\n**What I need**: Either push `relay-heartbeat-15s` from your other laptop to `arimendelow/claude-code`, or tell me where you've pushed it. Once the branch is on the fork or accessible, I'll open the PR.\n\nNext step — your choice:\n1. **Push from the other laptop**: `git push origin relay-heartbeat-15s` to `arimendelow/claude-code`, then say it's done.\n2. **It's already pushed**: Tell me the remote location."
+
+test("the real round W reply, which asks the operator to say it's done, makes no claim and the gate lets it through", () => {
+  assert.deepEqual(taskLevelClaims(ROUND_W_REPLY, "beacon-relay-push-check"), [])
+  assert.deepEqual(doneClaims(ROUND_W_REPLY), [])
+  const stateDir = fresh()
+  recordTouchedTask({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_input: { command: "node /p/session-boot.js --task beacon-relay-push-check" }, tool_response: { stdout: "Named task: lighthouse-relay/beacon-relay-push-check (processing), card lighthouse-relay/beacon-relay-push-check/task.md", stderr: "", interrupted: false } }, { stateDir, root: null })
+  assert.deepEqual(stop(stateDir, ROUND_W_REPLY), {})
+})
+
+test("an instruction to the operator, a request to be told, a condition or a prediction is not a claim that the task is done", () => {
+  for (const text of [
+    "Push it from the other laptop, then say it's done.",
+    "Tell me when it's done.",
+    "Once it's done I will open the PR.",
+    "Let me know when it is done.",
+    "Let me know it is done and I'll continue.",
+    "After that's done I'll continue.",
+    "After that it's done and I can move on.",
+    "When you're done, tell me.",
+    "I will wait until it's done.",
+    "Push it, then the task is done.",
+    "Push it, then it's done.",
+    "Please confirm the task is done.",
+    "Reply that the task is complete when you have pushed.",
+  ]) {
+    assert.deepEqual(taskLevelClaims(text, "beacon-relay-push-check"), [], text)
+    assert.deepEqual(doneClaims(text), [], text)
+  }
+})
+
+test("a plain claim that it, or the task, is done is still a claim", () => {
+  for (const text of ["It's done.", "The task is done.", "I pushed the branch. It's done.", "The task is complete and the PR is open.", "Done. Implemented the check."]) {
+    assert.ok(taskLevelClaims(text, "x").length + doneClaims(text).length > 0, text)
+  }
+  assert.equal(taskLevelClaims("It's done.", "x").length, 1)
+  assert.equal(taskLevelClaims("The task is done.", "x").length, 1)
+})
