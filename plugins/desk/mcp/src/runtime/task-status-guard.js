@@ -64,6 +64,7 @@ import { isDeskWorkspace } from "../util/paths.js"
 import { deferredToolsLoadHint } from "../util/deferred-tools.js"
 import { COPILOT_SESSION_ENV, readCopilotSession } from "./copilot-session.js"
 import { copilotDeny, copilotToolCalls } from "./copilot-hook-payload.js"
+import { deskToolName } from "./desk-tool-name.js"
 import { shellCardWrites } from "./shell-card-writes.js"
 
 const TASK_CARD_BASENAME = "task.md"
@@ -254,9 +255,37 @@ function taskCoordinates({ kind, segments }) {
   return { track: segments.at(kind === "archived" ? -4 : -3), slug: segments.at(-2) }
 }
 
-function denyReason(card, change, via, host) {
+/** The top-level frontmatter keys whose value differs between two card texts, or null when either does not parse. */
+function changedFrontmatter(existing, proposed) {
+  if (existing === null || proposed === null) return null
+  try {
+    const before = parseFrontmatter(existing).data, after = parseFrontmatter(proposed).data
+    return Object.fromEntries(Object.entries(after).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key])))
+  } catch {
+    return null
+  }
+}
+
+/** The `task_update` fields that carry what an edit tried to set: its changed frontmatter, else the text it appended, else a note to fill in. */
+function updateFields({ change, existing, proposed, via }) {
+  const note = { note: "<one line of what actually happened>" }
+  if (via !== null) return note
+  const fields = { ...changedFrontmatter(existing, proposed) }
+  if (change !== null && change.to !== null) fields.status = change.to
+  if (Object.keys(fields).length > 0) return fields.status === "done" ? { frontmatter: fields, evidence: { kind: "pr", ref: "<PR URL>" } } : { frontmatter: fields }
+  if (existing !== null && proposed !== null && proposed.length > existing.length && proposed.startsWith(existing)) return { body_append: proposed.slice(existing.length) }
+  return note
+}
+
+function denyReason(card, change, via, host, { existing = null, proposed = null } = {}) {
   const { track, slug } = taskCoordinates(card)
   const target = `{ track: "${track}", slug: "${slug}"`
+  const tool = deskToolName(host, "task_update")
+  const call = JSON.stringify({ track, slug, ...updateFields({ change, existing, proposed, via }) })
+  const instead = via === null ? "editing the card" : "writing the card from the shell"
+  // The first sentence is the fix; when the exact call is too long for it, the call follows in the next one.
+  const first = `Call ${tool} with ${call}.`
+  const opening = first.length <= 120 ? first : `Call ${tool} instead of ${instead}. The call: ${call}.`
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
   const statusPart = change === null
     ? ""
@@ -265,6 +294,7 @@ function denyReason(card, change, via, host) {
         ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them, a pushed commit from one of them, or a commit in a clone that has no remote at all) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
         : "")
   return (
+    `${opening} ` +
     (via === null
       ? "Desk denies a direct edit of an existing task card: "
       : `Desk denies a shell command that writes an existing task card (${via}; reading a card with cat, grep or git diff is fine): `) +
@@ -294,6 +324,12 @@ function claudeToolCalls(input) {
   return args && typeof args === "object" ? [{ toolName, args }] : []
 }
 
+/** The card text this Write or Edit would leave, or null when it cannot be worked out (an edit whose old text is not in the card). */
+function proposedText(toolName, args, existing) {
+  if (toolName === "Write") return String(args.content ?? "")
+  return existing === null ? null : applyEdits(existing, editsOf(toolName, args))
+}
+
 /** Claude's deny for one call, or null when the call may go ahead. */
 function decide({ toolName, args }, { root, cwd, home, read, host }) {
   if (toolName === "Bash" || toolName === "PowerShell") return shellDecision(args.command, { root, cwd, home, read, host })
@@ -310,7 +346,7 @@ function decide({ toolName, args }, { root, cwd, home, read, host }) {
     return null
   }
 
-  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, change, null, host) } }
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, change, null, host, { existing, proposed: proposedText(toolName, target, existing) }) } }
 }
 
 /**

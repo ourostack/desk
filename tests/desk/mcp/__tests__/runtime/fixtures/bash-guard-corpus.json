@@ -1,0 +1,453 @@
+[
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git checkout HEAD",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git switch topic",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git reset --hard",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git rebase topic",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git stash",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git clean -nd",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore --source HEAD .",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore --source=HEAD .",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore -s HEAD :/",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore -sHEAD .",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git checkout .",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore --staged --worktree .",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch -M renamed",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch -m renamed",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git reset",
+  "expect": "deny",
+  "why": "operation that moves HEAD or discards work in a protected checkout"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git status",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git diff",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git log -1",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git show HEAD",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git fetch",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git add file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git commit -m checkout",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git push",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git stash list",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore -- --source",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch --list",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch -f topic HEAD",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch --force topic",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch -fD topic",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch -d topic",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git branch -- topic-f",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git worktree list",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git worktree add --detach /tmp/new HEAD",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git merge topic",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git pull",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore --staged file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git reset -- file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git reset HEAD file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore --source HEAD file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore -s HEAD file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git restore --staged --worktree file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git checkout HEAD -- file",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: protected checkout operations",
+  "command": "git worktree prune",
+  "expect": "allow",
+  "why": "ordinary desk write or read-only operation"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "eval 'git checkout topic'",
+  "expect": "deny",
+  "why": "eval of a literal script"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "sh -c 'git checkout topic'",
+  "expect": "deny",
+  "why": "sh -c of a literal script"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "bash -c \"git stash\"",
+  "expect": "deny",
+  "why": "bash -c of a literal script"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "echo 'git checkout topic' | sh",
+  "expect": "deny",
+  "why": "a script piped into sh"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "echo 'git checkout topic' | bash",
+  "expect": "deny",
+  "why": "a script piped into bash"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "bash <<< 'git checkout topic'",
+  "expect": "deny",
+  "why": "a here-string into bash"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "bash <<EOF\ngit checkout topic\nEOF",
+  "expect": "deny",
+  "why": "a heredoc into bash"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "env git checkout topic",
+  "expect": "deny",
+  "why": "env launches git"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "command git checkout topic",
+  "expect": "deny",
+  "why": "command launches git"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "exec git checkout topic",
+  "expect": "deny",
+  "why": "exec replaces the shell with git"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git status; git checkout topic",
+  "expect": "deny",
+  "why": "a second command after a read"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git status && git stash",
+  "expect": "deny",
+  "why": "a second command after && is judged on its own"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git status || git stash",
+  "expect": "deny",
+  "why": "a second command after || is judged on its own"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "(git checkout topic)",
+  "expect": "deny",
+  "why": "a subshell"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "{ git checkout topic; }",
+  "expect": "deny",
+  "why": "a brace group"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "if true; then git checkout topic; fi",
+  "expect": "deny",
+  "why": "an if body"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "for i in 1; do git checkout topic; done",
+  "expect": "deny",
+  "why": "a loop body"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "f() { git checkout topic; }; f",
+  "expect": "deny",
+  "why": "a function body that is called"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "cd {{PROT}} && git checkout topic",
+  "expect": "deny",
+  "why": "cd into the checkout then act"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git -C {{PROT}} checkout topic",
+  "expect": "deny",
+  "why": "-C names the checkout"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "x=$(echo git); $x checkout topic",
+  "expect": "deny",
+  "why": "a computed program that reads as git"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git $(echo checkout) topic",
+  "expect": "deny",
+  "why": "a computed subcommand"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git -C \"$(pick)\" checkout main",
+  "expect": "deny",
+  "why": "an unresolved checkout fails closed on a HEAD move"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "for r in $(pick-repos); do git -C \"$r\" checkout main; done",
+  "expect": "deny",
+  "why": "an unresolved loop target fails closed on a HEAD move"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "for r in $(pick-repos); do git -C \"$r\" status --short; git -C \"$r\" fetch --quiet origin; done",
+  "expect": "allow",
+  "why": "read-only Git over an unresolved loop target"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "echo 'git checkout topic'",
+  "expect": "allow",
+  "why": "a string that is never run"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "printf '%s\\n' 'git stash'",
+  "expect": "allow",
+  "why": "a string that is never run"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git -C {{OWN}} checkout topic",
+  "expect": "allow",
+  "why": "an unprotected checkout"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git checkout topic",
+  "expect": "allow",
+  "why": "the same command in an unprotected checkout",
+  "cwd": "own"
+ },
+ {
+  "group": "bash: indirection and chaining",
+  "command": "git -C {{PROT}} fetch --upload-pack='git checkout topic' origin",
+  "expect": "deny",
+  "why": "fetch --upload-pack runs the given program as part of the fetch (fixed)"
+ }
+]

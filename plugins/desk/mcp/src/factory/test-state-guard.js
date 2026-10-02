@@ -92,8 +92,8 @@ export function assertNotRealStateUnderTest(dir, { env = process.env, platform =
   if (hasText(env[DESK_ALLOW_REAL_STATE_IN_TEST])) return
   if (isUnderOsTmpdir(path.resolve(dir), { platform })) return
   const error = new Error(
-    `test isolation: refused the real Desk factory state folder (${dir}) from what looks like a node:test run; ` +
-      `tests must resolve state under the OS temp directory (set ${DESK_ALLOW_REAL_STATE_IN_TEST}=1 to override)`,
+    `Resolve state under the OS temp directory in tests, or set ${DESK_ALLOW_REAL_STATE_IN_TEST}=1 to override. ` +
+      `Test isolation refused the real Desk factory state folder (${dir}) from what looks like a node:test run.`,
   )
   error.code = DESK_TEST_REAL_STATE
   throw error

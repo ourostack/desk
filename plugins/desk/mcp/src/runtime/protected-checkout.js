@@ -2,11 +2,12 @@ import { existsSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { inspectShell } from "./shell-commands.js"
+import { rewritePowerShell } from "./powershell-rewrite.js"
 import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { existingDirectory, gitDirectory, processDirectory } from "./shell-paths.js"
 import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
-import { GuardDenial, inspectionBudget, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
+import { GuardDenial, inspectionBudget, protectedDenial, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
 export { WORKTREE_COMMAND }
 
@@ -195,10 +196,13 @@ function gitEnvTarget(location, variables) {
 // Words that could run Git somewhere other than the statement's own directory.
 const RELOCATES = /(?<![\w-])(?:set-location|sl|cd|chdir|push-location|pushd|pop-location|popd|start-process|saps|start|invoke-command|icm|start-job|sajb|start-threadjob|enter-pssession|ssh|wsl|docker|worktree|submodule)(?![\w-])|--git-dir|--work-tree|git_dir|git_work_tree|git_common_dir|currentdirectory|-workingdirectory|(?<![\w-])-wd(?![\w-])/iu
 
+// A suggested rewrite longer than this is left out: it would bury the denial it is meant to shorten.
+const REWRITE_LIMIT = 600
+
 const quote = (arg) => `'${arg.replaceAll("'", "'\\''")}'`
 const GIT_LIKE = /^(?:-C|-c|--git-dir|--work-tree|--config-env)/u
 
-export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, budgetMs = GUARD_INSPECTION_BUDGET_MS, readGit = readInspectionGit, now = Date.now }) {
+export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, budgetMs = GUARD_INSPECTION_BUDGET_MS, readGit = readInspectionGit, now = Date.now, rewrite = true }) {
   const inspected = new Set()
   const deadline = now() + budgetMs
   // Inspection steps share this deadline with the Git reads, across Bash, PowerShell and nested scripts.
@@ -225,6 +229,10 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     // A relative GIT_WORK_TREE/GIT_DIR is relative to the directory Git runs in, never to the hook's own process.
     const target = invocation.cwd === UNKNOWN ? null : existingDirectory(knownEnvTarget === undefined ? invocation.cwd : path.resolve(invocation.cwd, knownEnvTarget))
     const where = "which checkout this Git command runs in"
+    // The agent's own operation and operands, as long as they are literal and short, make the example its own command.
+    const literal = [operation, ...operands].join(" ")
+    const example = literal.includes(UNKNOWN) || literal.length > 40 ? operation.slice(0, 40) : literal
+    const unresolvedCheckout = () => unresolved(where, `Write the checkout path literally: git -C <path> ${example}. Or cd there in a separate command first.`)
     if (target !== null && !existsSync(target)) return
     const key = JSON.stringify([invocation, gitRelevantEnv(variables)])
     if (inspected.has(key)) return
@@ -233,7 +241,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       const lower = operation.toLowerCase()
       let alias = aliasFrom(overrides, lower)
       if (alias === undefined) {
-        if (target === null) throw unresolved(where)
+        if (target === null) throw unresolvedCheckout()
         alias = (await read(target, [...location, "config", "--get", `alias.${lower}`], variables)).stdout
       }
       if (!alias) return
@@ -246,7 +254,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
         await inspectShell({ command: `git ${invocation.global.map(quote).join(" ")} ${alias} ${rest}`, cwd: directory, env: variables, powershell: false, visit, budget })
         return
       }
-      if (target === null) throw unresolved(where)
+      if (target === null) throw unresolvedCheckout()
       // A shell alias runs at the top level with the location and -c settings Git exports to it.
       const top = await read(target, [...location, "rev-parse", "--show-toplevel"], variables)
       const exported = { ...variables }
@@ -267,7 +275,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     if (target === null || location.some((option) => option.includes(UNKNOWN))) {
       // Adds, commits, pulls and rebases onto the upstream, and non-force pushes are safe in any checkout.
       if (rule.anywhere) return
-      throw unresolved(where)
+      throw unresolvedCheckout()
     }
     if (rule.victim !== undefined) {
       // Force-removal checks the removed checkout with its own identity, not the issuer's overrides.
@@ -277,13 +285,13 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       if (victim.includes(UNKNOWN)) {
         // An unknown victim is checked against every worktree of the repository: it passes when none is protected.
         for (const candidate of paths) {
-          if ((await readPolicy(read, candidate, [], {})).protected) throw new GuardDenial(`Desk protected checkout ${candidate}: ${MESSAGES.worktreeRemove}`)
+          if ((await readPolicy(read, candidate, [], {})).protected) throw new GuardDenial(protectedDenial(candidate, MESSAGES.worktreeRemove))
         }
         return
       }
       const resolved = canonicalPath(path.resolve(target, victim))
       const found = paths.find((p) => sameFolder(p, resolved)) ?? paths.find((p) => path.basename(p) === victim)
-      if (found && (await readPolicy(read, found, [], {})).protected) throw new GuardDenial(`Desk protected checkout ${found}: ${MESSAGES.worktreeRemove}`)
+      if (found && (await readPolicy(read, found, [], {})).protected) throw new GuardDenial(protectedDenial(found, MESSAGES.worktreeRemove))
       return
     }
     // The policy and the current branch are read together, so most checks take one round of reads.
@@ -293,7 +301,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     ])
     if (!policy.protected) return
     const reason = await rule(checkoutContext(read, target, location, variables, policy, head.ok && head.stdout ? head.stdout : null))
-    if (reason) throw new GuardDenial(`Desk protected checkout ${target}: ${reason}`)
+    if (reason) throw new GuardDenial(protectedDenial(target, reason))
   }
   async function guardedVisit(call) {
     try { await visit(call) } catch (error) {
@@ -301,8 +309,8 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       // A single slow Git read and a loop over more distinct targets than the budget can check both end up here;
       // simply retrying either answers nothing when the command has too many distinct targets, so the guard also
       // names the fix: fewer targets per command, or a script file so each target's check gets its own budget.
-      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. If it loops over many Git targets, split it into fewer targets per command, or run it as a script file so each target's check gets its own budget; otherwise, retry it.`)
-      throw new GuardDenial(`Desk could not inspect a Git command in this shell command (${error.message}), and it could change a protected checkout. Retry it, or split it into simpler commands.`)
+      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Retry the command, or split it into fewer Git targets or a script file. Desk could not finish checking it within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe; a script file gives each target's check its own budget.`)
+      throw new GuardDenial(`Retry the command, or split it into simpler commands. Desk could not inspect a Git command in it (${error.message}), and it could change a protected checkout.`)
     }
   }
   // A PowerShell statement outside the Git allowlist is allowed when it can only reach a known checkout that is not
@@ -313,16 +321,26 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     const target = existingDirectory(directory)
     try { return !(await readPolicy(read, target, [], variables)).protected } catch { return false }
   }
+  // A suggested rewrite is offered only after the guard itself, with what is left of the budget, allows it.
+  async function withRewrite(reason) {
+    const candidate = rewritePowerShell(command)
+    if (candidate === null || candidate.length > REWRITE_LIMIT) return reason
+    const verdict = await guardShellCommand({ command: candidate, cwd, env, powershell, budgetMs: Math.max(0, deadline - now()), readGit, now, rewrite: false })
+    if (verdict.deny) return reason
+    // The first line is all some hosts show: the command itself when it fits there, else a pointer to it.
+    const fits = candidate.length <= 100 && !candidate.includes("\n")
+    return fits ? `Run this instead: ${candidate}\n${reason}` : `Run the rewritten command below instead.\nRewrite: ${candidate}\n${reason}`
+  }
   try {
     await inspectShell({ command, cwd, env, powershell, visit: guardedVisit, budget })
   } catch (error) {
-    if (error instanceof GuardDenial) return { deny: true, reason: redact(error.reason) }
+    if (error instanceof GuardDenial) return { deny: true, reason: redact(rewrite && error.rewritable && powershell ? await withRewrite(error.reason) : error.reason) }
     // Text Desk cannot parse is judged from its words: it is denied only when it names a Git operation that a rule
     // would check anywhere but in a known unprotected checkout (fallbackOperation).
     const operation = fallbackOperation(command)
     if (operation === null) return { deny: false }
     if (await guardedVisit.unmodeled({ text: command, cwd, env })) return { deny: false }
-    return { deny: true, reason: redact(`Desk could not inspect this shell command (${error.message}), and its git ${operation} could change a protected checkout. Split it into simpler commands.`) }
+    return { deny: true, reason: redact(`Split the command into simpler commands. Desk could not inspect this shell command (${error.message}), and its git ${operation} could change a protected checkout.`) }
   }
   return { deny: false }
 }

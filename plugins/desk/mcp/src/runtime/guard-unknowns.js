@@ -11,10 +11,17 @@ export const WORKTREE_COMMAND = 'git worktree add --detach "$HOME/<new directory
 
 /** A decided denial: inspection stops and the hook reports `reason`. */
 export class GuardDenial extends Error {
-  constructor(reason) {
+  /** `rewritable` marks a denial whose command a PowerShell rewrite may fix (see `powershell-rewrite.js`). */
+  constructor(reason, { rewritable = false } = {}) {
     super(reason)
     this.reason = reason
+    this.rewritable = rewritable
   }
+}
+
+/** A denial for a rule of a protected checkout: the message opens with the fix, and the checkout comes last. */
+export function protectedDenial(target, message) {
+  return `${message} Desk protects this checkout: ${target}`
 }
 
 const GIT_WORD = /(?<![\w.-])git(?!\w)/iu
@@ -41,8 +48,8 @@ export function inspectionBudget({ steps = INSPECTION_STEPS, deadline = Infinity
   return {
     async step() {
       used++
-      if (used > steps) throw new GuardDenial(`Desk stopped inspecting this shell command after ${steps} steps, so it is denied to keep a protected checkout safe. Split it into shorter commands.`)
-      if (now() > deadline) throw new GuardDenial(`Desk could not finish inspecting this shell command within its ${budgetMs / 1000} s budget, so it is denied to keep a protected checkout safe. Split it into shorter commands.`)
+      if (used > steps) throw new GuardDenial(`Split the command into shorter commands. Desk stopped inspecting it after ${steps} steps, so it is denied to keep a protected checkout safe.`)
+      if (now() > deadline) throw new GuardDenial(`Split the command into shorter commands. Desk could not finish inspecting it within its ${budgetMs / 1000} s budget, so it is denied to keep a protected checkout safe.`)
       if (used % 256 === 0) await new Promise((resolve) => { setImmediate(resolve) })
     },
   }
@@ -58,6 +65,7 @@ export function unknownOutput(text) {
   return mayInvokeGit(text) ? UNKNOWN_GIT : UNKNOWN
 }
 
-export function unresolved(what) {
-  return new GuardDenial(`Desk could not resolve ${what}; write it literally or set it in a separate command first. It could run Git in a protected checkout; plain read-only Git (status, log, diff, fetch into remote-tracking refs) is not blocked.`)
+/** `fix` is the first sentence: what to write instead, with the agent's own operation where there is one. */
+export function unresolved(what, fix = "Write the value literally, or set it in a separate command first.") {
+  return new GuardDenial(`${fix} Desk could not resolve ${what}, and it could run Git in a protected checkout; plain read-only Git (status, log, diff, fetch into remote-tracking refs) is not blocked.`)
 }

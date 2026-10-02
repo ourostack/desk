@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 import { guardShellCommand, pathForms, protectCheckout, protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
-import { mayInvokeGit, UNKNOWN } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { mayInvokeGit, UNKNOWN, protectedDenial } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
 import { existingDirectory, lexicalDirectory, mktempPath, gitDirectoryFor, physicalDirectory, processDirectory, processDirectoryFor } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
 import { removeFixtureAfter } from "../_process_hygiene.js"
 
@@ -63,7 +63,7 @@ async function expectTable(f, rows) {
       const result = await f.guard(command, extra)
       const message = `${extra.powershell ? "PowerShell" : "Bash"}: ${command} -> ${result.reason ?? "allowed"}`
       if (expected === false) assert.equal(result.deny, false, message)
-      else assert.equal(result.reason, `Desk protected checkout ${f.shared}: ${expected}`, message)
+      else assert.equal(result.reason, protectedDenial(f.shared, expected), message)
     }
     // Unprotected checkouts are never affected.
     assert.equal((await f.guard(`git ${args}`)).deny, false, `unprotected: ${args}`)
@@ -157,28 +157,28 @@ test("A3b: pull, rebase and amend depend on the state branch and on what is alre
   f.git(f.shared, "commit", "-q", "--allow-empty", "-m", "local")
   assert.equal((await at("commit --amend -m local")).deny, false)
   f.git(f.shared, "reset", "-q", "--hard", "origin/main")
-  assert.equal((await at("commit --amend -m pushed")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.amend}`)
+  assert.equal((await at("commit --amend -m pushed")).reason, protectedDenial(f.shared, MESSAGES.amend))
   // Off the state branch, a merge-mode pull passes, a rebase with no upstream of its own is denied, and returning to the state branch passes.
   f.git(f.shared, "switch", "-q", "topic")
   for (const [args, reason] of [["pull", null], ["pull --no-rebase origin main", null], ["pull --rebase", MESSAGES.noUpstream], ["rebase", MESSAGES.noUpstream], ["checkout topic", null], ["switch main", null], ["checkout main", null], ["push origin topic", null], ["branch -f topic HEAD", MESSAGES.branch]]) {
     const result = await at(args)
-    assert.equal(result.reason, reason === null ? undefined : `Desk protected checkout ${f.shared}: ${reason}`, args)
+    assert.equal(result.reason, reason === null ? undefined : protectedDenial(f.shared, reason), args)
   }
   // An operator-set marker without a recorded state branch treats the current branch as the state branch.
   await protectCheckout({ root: f.shared })
   assert.equal(spawnSync("git", ["-C", f.shared, "config", "--includes", "--get", "desk.stateBranch"], { env: f.env }).status, 1)
   // topic has no upstream, so there is nothing of its own to pull or rebase onto.
   assert.equal((await at("pull")).deny, false, "a merge-mode pull moves no HEAD")
-  assert.equal((await at("pull --rebase")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`)
-  assert.equal((await at("rebase")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`)
-  assert.equal((await at("rebase origin/main")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`, "topic has no upstream")
-  assert.equal((await at("pull --rebase origin topic")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`, "topic has no upstream")
+  assert.equal((await at("pull --rebase")).reason, protectedDenial(f.shared, MESSAGES.noUpstream))
+  assert.equal((await at("rebase")).reason, protectedDenial(f.shared, MESSAGES.noUpstream))
+  assert.equal((await at("rebase origin/main")).reason, protectedDenial(f.shared, MESSAGES.noUpstream), "topic has no upstream")
+  assert.equal((await at("pull --rebase origin topic")).reason, protectedDenial(f.shared, MESSAGES.noUpstream), "topic has no upstream")
   assert.equal((await at("pull origin topic")).deny, false, "a merge-mode pull of any branch moves no HEAD")
   // A detached protected checkout pulls, rebases and pushes nothing by name.
   f.git(f.shared, "switch", "-q", "--detach", "HEAD")
   for (const [args, reason] of [["pull --rebase", MESSAGES.noUpstream], ["rebase", MESSAGES.noUpstream], ["push origin HEAD:main", null], ["push origin HEAD", null], ["push --force origin HEAD:main", MESSAGES.pushForce], ["checkout HEAD", MESSAGES.leave]]) {
     const result = await at(args)
-    assert.equal(result.reason, reason === null ? undefined : `Desk protected checkout ${f.shared}: ${reason}`, args)
+    assert.equal(result.reason, reason === null ? undefined : protectedDenial(f.shared, reason), args)
   }
 })
 
@@ -262,12 +262,12 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     ['git "$(pick)" main', /which Git command/u], ['git checkout "$(cat branch)"', /a Git revision/u], ['git branch -D "$(cat b)"', /a branch name/u],
     ['git push origin "$(cat r)"', /a push refspec/u], ['git rebase "$(cat base)"', /a Git revision/u], ['git reset "$(cat base)"', /a Git revision/u],
     ['git worktree remove --force "$(pick)"', /would delete a protected checkout/u],
-    [`wt=$(mktemp -d -p ${q(f.shared)}); cd "$wt"; git checkout topic`, /^Desk protected checkout /u],
-    [`TMPDIR=${q(f.shared)}; wt=$(mktemp -d); cd "$wt" && git stash`, /^Desk protected checkout /u],
-    [`wt=$(mktemp -d ${q(f.shared)}/x.XXXX); cd "$wt" && git stash`, /^Desk protected checkout /u],
+    [`wt=$(mktemp -d -p ${q(f.shared)}); cd "$wt"; git checkout topic`, / Desk protects this checkout: /u],
+    [`TMPDIR=${q(f.shared)}; wt=$(mktemp -d); cd "$wt" && git stash`, / Desk protects this checkout: /u],
+    [`wt=$(mktemp -d ${q(f.shared)}/x.XXXX); cd "$wt" && git stash`, / Desk protects this checkout: /u],
     ["git stash 'unterminated", /could not inspect this shell command \(unterminated shell quote\), and its git stash could change a protected checkout/u],
     ['cd "$(date; hostname)" && git stash', /which checkout/u], ['cd "$(mktemp -d -p /definitely-missing)" && git stash', /which checkout/u],
-    ["git co topic", /^Desk protected checkout .+: this would move HEAD off/u],
+    ["git co topic", /This would move HEAD off.* Desk protects this checkout: /u],
   ]
   for (const [command, reason] of deny) {
     const result = await f.guard(command, { cwd: f.shared, env })
@@ -292,15 +292,15 @@ test("A3b: PowerShell unknown values follow the same rule", async (t) => {
   }
   for (const [command, reason] of [
     ["$wt = New-Item -ItemType Directory x; Set-Location $wt; git checkout main", /which checkout/u],
-    ["Pop-Location; git stash", /which checkout/u], [`pushd ${psq(f.shared)}; git stash`, /^Desk protected checkout /u],
+    ["Pop-Location; git stash", /which checkout/u], [`pushd ${psq(f.shared)}; git stash`, / Desk protects this checkout: /u],
     // Round 4 ruling: Git named as an argument outside a plain form is denied.
-    ["$g = (Get-Command git).Source; & $g checkout main", /^Desk blocked this: run each git command/u], ["& $(Get-Command git) status", /^Desk blocked this: run each git command/u],
-    ["& (Get-Command git) checkout main", /^Desk blocked this: run each git command/u],
+    ["$g = (Get-Command git).Source; & $g checkout main", /^Run each git command as its own plain statement/u], ["& $(Get-Command git) status", /^Run each git command as its own plain statement/u],
+    ["& (Get-Command git) checkout main", /^Run each git command as its own plain statement/u],
     // Replay ruling, 2026-09-27: a script Desk can read is inspected; one it cannot read is allowed.
-    [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk protected checkout .+ this would move HEAD off/u], ["iex 'git status'", /^allowed$/u],
+    [`iex "git -C ${psq(f.shared)} checkout topic"`, /This would move HEAD off.* Desk protects this checkout: /u], ["iex 'git status'", /^allowed$/u],
     ["$script = Get-Content x; iex $script", /^allowed$/u], ["Invoke-Expression $(Get-Content x)", /^allowed$/u], [". $(Get-Item x)", /^allowed$/u],
     ["$script = Get-Content x; pwsh -Command $script", /^allowed$/u], ["$script = Get-Content x; bash -c $script", /^allowed$/u],
-    ["$g = -join ('g', 'i', 't'); & $g checkout topic", /^Desk protected checkout /u],
+    ["$g = -join ('g', 'i', 't'); & $g checkout topic", / Desk protects this checkout: /u],
   ]) {
     const result = await f.guard(command, { cwd: f.shared, powershell: true })
     assert.match(result.reason ?? "allowed", reason, command)
@@ -403,7 +403,7 @@ test("A3b: a command aimed at an unprotected worktree from a protected cwd is ju
     assert.equal(result.deny, false, `${command} -> ${result.reason}`)
   }
   // The same commands aimed at the protected cwd itself are still judged by it.
-  assert.equal((await f.guard("git stash", { cwd: f.shared })).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.stash}`)
+  assert.equal((await f.guard("git stash", { cwd: f.shared })).reason, protectedDenial(f.shared, MESSAGES.stash))
   assert.equal((await f.guard(`cd ${q(worktree)}; cd ${q(f.shared)} && git stash`, { cwd: f.shared })).deny, true)
   // A missing alias in the target is "no alias": `git log` and an unknown command both pass.
   assert.equal((await f.guard("{ git log -1; git frobnicate; } > /dev/null", { cwd: f.shared })).deny, false)

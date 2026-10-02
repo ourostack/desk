@@ -255,7 +255,7 @@ test("blocks a reply that says Done over a task at processing, naming the task, 
   const result = stop(touched(), "Done. The RainDelayPolicy implementation is complete.")
   assert.equal(result.decision, "block")
   assert.match(result.reason, /Your reply says the work is done, but task watering-schedule-api is at processing\./)
-  assert.match(result.reason, /Restate the reply with the task's real status/)
+  assert.match(result.reason, /^Restate your reply with task watering-schedule-api's real status: processing\./)
   assert.ok(result.reason.includes(`task_update returned report_as: ${JSON.stringify(REPORT)}`))
 })
 
@@ -263,7 +263,7 @@ test("blocks when the status was recorded without a report_as, and names no repo
   const stateDir = freshState()
   recordTouchedTask(post("mcp__plugin_desk_desk__task_create", { track: "g", slug: "new-job" }, JSON.stringify({ status: "created", path: "g/new-job/task.md" })), { stateDir, root: null })
   const result = stop(stateDir, "Work complete.")
-  assert.equal(result.reason, "Your reply says the work is done, but task new-job is at drafting. Restate the reply with the task's real status.")
+  assert.equal(result.reason, "Restate your reply with task new-job's real status: drafting. Your reply says the work is done, but task new-job is at drafting.")
 })
 
 test("the false positives pass: a step finished, a pause, a stated status, the status in a heading's reply", () => {
@@ -342,7 +342,7 @@ test("a task with a malformed entry in the state file is skipped", () => {
   mkdirSync(path.dirname(file), { recursive: true })
   writeFileSync(file, JSON.stringify({ tasks: { a: null, b: { slug: "b", status: "" }, c: { status: "processing" }, d: { slug: "d", status: "validating", report_as: "" } } }))
   const result = stop(stateDir, "Done.")
-  assert.equal(result.reason, "Your reply says the work is done, but task d is at validating. Restate the reply with the task's real status.")
+  assert.equal(result.reason, "Restate your reply with task d's real status: validating. Your reply says the work is done, but task d is at validating.")
 })
 
 test("with two open tasks the reply must state each one's status", () => {

@@ -120,7 +120,7 @@ test("replay: the denials the rulings keep still fire, with their reasons", asyn
     ["git stash pop", /git stash takes other sessions/u], ["git stash", /git stash takes other sessions/u],
     ["set -e\ngit branch -f main refs/remotes/origin/main\ngit read-tree --reset -u refs/remotes/origin/main", /force-move, rename or delete/u],
     ["git restore --source=HEAD --staged --worktree -- .", /every file/u], ["git checkout -- .", /every file/u], ["git restore --source HEAD", /every file/u],
-    ["git restore -W :/", /every file/u], ["git checkout HEAD -- {.,file.txt}", /every file/u], ["git restore --staged .", /unstaging everything/u],
+    ["git restore -W :/", /every file/u], ["git checkout HEAD -- {.,file.txt}", /every file/u], ["git restore --staged .", /Unstaging everything/u],
     ["git push origin --delete main", /deleting the state branch/u], ["git push origin :main", /deleting the state branch/u],
     ["git push --prune origin", /prune pushes/u], ["git push origin +topic", /force, mirror/u],
     // Readable inline code is inspected like any other command.
@@ -198,7 +198,7 @@ test("replay: the shell forms added for the replay classes, edge by edge", async
     'mkdir -p "$(pick)" && echo ok', `mkdir -m 755 ${dir} && cd ${dir} && git init -q && git checkout -q -b x`, `mkdir ${dir}2; cd ${dir}2 && git status`,
     "set -u; set -o pipefail; set +o errexit; echo ok",
   ])
-  await expectDenied(f, [["git reset -- .", /unstaging everything/u], ["git reset HEAD :/", /unstaging everything/u], ["set -e; set +o errexit; false; git stash", /git stash/u]])
+  await expectDenied(f, [["git reset -- .", /Unstaging everything/u], ["git reset HEAD :/", /Unstaging everything/u], ["set -e; set +o errexit; false; git stash", /git stash/u]])
   assert.deepEqual(expandBraces("{1..3..0}"), ["1", "2", "3"])
   // Unparseable text naming a denied operation passes in a known checkout that is not protected.
   await expectAllowed(f, ["git stash; echo 'unterminated"], { cwd: f.plain })
@@ -264,7 +264,7 @@ test("review 4: no credential reaches a denial, in the guard or through the hook
   assert.match((await f.guard("git -c 'url.ghp_FAKE0000SECRET@github.com:.insteadOf=https://github.com/' pull --rebase")).reason, /url\.<redacted>@github\.com:\.insteadOf/u)
   // The hook's own crash message (here, input that is not JSON) is redacted too.
   const crash = spawnSync(process.execPath, [hook, "claude"], { cwd: f.prot, env: f.env, input: '{"x": https://u:ghp_FAKE0000SECRET@h/', encoding: "utf8", timeout: 60000 })
-  assert.match(crash.stderr, /could not inspect this command/u)
+  assert.match(crash.stderr, /could not inspect it/u)
   assert.equal(crash.stderr.includes("ghp_FAKE0000SECRET"), false, crash.stderr)
   assert.equal(redact("url.git@github.com:.insteadof, git@github.com:o/r.git, ab:cd@host:x, Authorization: token abc123"), "url.<redacted>@github.com:.insteadof, git@github.com:o/r.git, <redacted>@host:x, Authorization: token <redacted>")
 })
@@ -280,7 +280,7 @@ test("review 4: a pathspec that covers the checkout root is a whole-tree discard
   ]
   await expectDenied(f, whole.map((command) => [command, /every file/u]))
   await expectDenied(f, [['git restore "$(git rev-parse --show-toplevel)"', /every file/u]], { cwd: sub })
-  await expectDenied(f, [["git reset -- ':!x'", /unstaging everything/u], [`git reset -q -- ${q(prot)}`, /unstaging everything/u], [`git restore --staged ${q(prot)}`, /unstaging everything/u]])
+  await expectDenied(f, [["git reset -- ':!x'", /Unstaging everything/u], [`git reset -q -- ${q(prot)}`, /Unstaging everything/u], [`git restore --staged ${q(prot)}`, /Unstaging everything/u]])
   await expectAllowed(f, [
     "git restore file.txt", `git restore ${q(`${prot}/file.txt`)}`, "git restore sub/s.txt", "git restore ':/sub/s.txt'", "git restore '*.txt'", "git restore 'sub/*'",
     `git checkout -- ${q(sub)}`, "git checkout-index -f -- file.txt", "git checkout-index -a", `git restore ${q("/definitely-missing/x")}`,

@@ -72,7 +72,7 @@ test("deadlineDecision's plain deny decision is unchanged, and no block is added
   for (let count = 1; count < REPEAT_TIMEOUT_THRESHOLD; count += 1) {
     const { decision, block } = await deadlineDecision({ rawInput, host: "claude", deadlineMs: 9000, env })
     assert.equal(decision.permissionDecision, "deny")
-    assert.match(decision.permissionDecisionReason, /could not finish checking this command in time/u)
+    assert.match(decision.permissionDecisionReason, /could not finish checking it in time/u)
     assert.equal(block, null)
   }
 })
@@ -86,7 +86,7 @@ test("deadlineDecision adds a Desk problem: protected-checkout block and queues 
     result = await deadlineDecision({ rawInput, host: "claude", deadlineMs: 9000, env, spawnFiler: (args) => calls.push(args) })
   }
   assert.equal(result.decision.permissionDecision, "deny")
-  assert.match(result.decision.permissionDecisionReason, /could not finish checking this command in time/u)
+  assert.match(result.decision.permissionDecisionReason, /could not finish checking it in time/u)
   assert.match(result.block, /^Desk problem: protected-checkout — the same command keeps timing out\n/u)
   assert.match(result.block, /file: filing in background/u)
   assert.equal(calls.length, 1)
@@ -160,12 +160,12 @@ test("the real hook process denies with the plain reason every time, and adds th
   for (let count = 1; count < REPEAT_TIMEOUT_THRESHOLD; count += 1) {
     const result = spawnSync(process.execPath, [hookPath, "claude"], { cwd: f.prot, env, input, encoding: "utf8" })
     assert.equal(result.status, 0, result.stderr)
-    assert.match(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, /could not finish checking this command in time/u)
+    assert.match(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, /could not finish checking it in time/u)
     assert.equal(result.stderr, "")
   }
   const last = spawnSync(process.execPath, [hookPath, "claude"], { cwd: f.prot, env, input, encoding: "utf8" })
   assert.equal(last.status, 0, last.stderr)
-  assert.match(JSON.parse(last.stdout).hookSpecificOutput.permissionDecisionReason, /could not finish checking this command in time/u)
+  assert.match(JSON.parse(last.stdout).hookSpecificOutput.permissionDecisionReason, /could not finish checking it in time/u)
   assert.match(last.stderr, /^Desk problem: protected-checkout — the same command keeps timing out\n/u)
   assert.match(last.stderr, /file: filing in background/u)
   // The hook exited at its own deadline while Git was still blocked on the FIFO; it must not leave that Git behind.

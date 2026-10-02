@@ -45,7 +45,7 @@ import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
 export const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 /** The first marker line of the hook Desk writes. */
 export const HOOK_MARKER = "# desk-card-commit-guard"
-export const HOOK_VERSION = 2
+export const HOOK_VERSION = 3
 export const CHAINED_NAME = "pre-commit.desk-chained"
 /** Set by the hook while it runs; a second entry (the pre-commit framework's `pre-commit.legacy` chain) exits 0 instead of looping. */
 export const RUNNING_ENV = "DESK_CARD_GUARD_RUNNING"
@@ -103,11 +103,13 @@ desk_card_guard() {
   done)
   [ -n "$refused" ] || return 0
   {
-    echo "Desk: this commit changes a task card, and a card is written only through Desk's tools:"
+    first=$(echo "$refused" | head -n 1)
+    echo "Run git restore --staged \\"$first\\" and call task_update for it."
+    echo "Desk refused this commit because it changes a task card, and a card is written only through Desk's tools, which commit it for you:"
     echo "$refused" | sed 's/^/  /'
     echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_move or task_archive: each writes the card and commits it for you."
     echo '${hint}'
-    echo "To commit your other work, take the card out of this commit first: git restore --staged <card path>, then use task_update for the card itself."
+    echo "To commit your other work, take each card out of this commit first (git restore --staged <card path>), then use task_update for the card itself."
     echo "Human, or repairing a card task_update cannot parse: ${TOOL_COMMIT_ENV}=1 git commit ..."
   } >&2
   return 1

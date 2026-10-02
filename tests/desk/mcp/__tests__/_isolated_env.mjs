@@ -88,7 +88,7 @@ export function isRealHomeWrite(target) {
 }
 
 function refuse(target) {
-  const error = new Error(`test isolation: refused a write under the real home (${String(target)}); tests write only under their temporary folders`)
+  const error = new Error(`Write under the test's own temporary folder instead. Test isolation refused a write under the real home (${String(target)}); tests write only under their temporary folders.`)
   error.code = REAL_HOME_WRITE
   return error
 }

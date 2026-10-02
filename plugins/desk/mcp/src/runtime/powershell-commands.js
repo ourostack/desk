@@ -8,7 +8,9 @@ import { inspectShell, shellScript, tokenizeShell } from "./shell-commands.js"
 import { GuardDenial, inspectionBudget, mayInvokeGit, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
 // The first sentence is the whole fix: hosts cut a denial at about one line, so the details come after it.
-export const POWERSHELL_GIT_FORMS = `Desk blocked this: run each git command as its own plain statement, e.g. git -C <path> status; git -C <path> fetch. Desk allows Git in PowerShell only as a plain command in its own statement: git <arguments>, $name = git <arguments>, or git <arguments> piped to Out-String, Select-String, Select-Object, Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output, where every argument is literal text or a plain $variable. Join the separate plain git commands with ; (for example $b = git branch --show-current; git push origin $b)`
+export const POWERSHELL_GIT_FORMS = `Run each git command as its own plain statement, for example git -C <path> status; git -C <path> fetch. Desk allows Git in PowerShell only as a plain command in its own statement: git <arguments>, $name = git <arguments>, or git <arguments> piped to Out-String, Select-String, Select-Object, Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output, where every argument is literal text or a plain $variable. Join the separate plain git commands with ; (for example $b = git branch --show-current; git push origin $b)`
+
+const PROGRAM_FIX = "Write the program name literally, as in git -C <path> status, or set it in a separate command first."
 
 const GIT_PROGRAM = /^(?:.*[\\/])?git(?:\.exe)?$/iu
 const READ_ONLY = new Set(["out-string", "select-string", "sls", "select-object", "select", "where-object", "where", "?", "foreach-object", "foreach", "%", "measure-object", "measure", "sort-object", "sort", "out-null", "write-output", "write", "echo"])
@@ -403,6 +405,15 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     return result
   }
 
+  // The script a pipeline element hands to `iex`: a single literal string, or a plain variable whose value is known.
+  async function pipedScript(element) {
+    const literal = literalInput(element)
+    if (literal) return expand(literal)
+    const [word] = element.words
+    const simple = element.words.length === 1 && !element.redirects.length && word.parts && !word.quoted && SIMPLE_VARIABLE.exec(wordText(word))
+    return simple ? lookup(simple[1] ?? simple[2]) : null
+  }
+
   // An assigned value: a plain variable, a wholly quoted string or an integer is data; anything else runs.
   async function assignedValue(words) {
     const [word] = words
@@ -462,10 +473,16 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       if (form) return gitCall(form)
       // Git named only inside groups and subexpressions, or in an assigned value, runs as statements of its own
       // under these same forms when the statement is walked.
-      if (!namesGit(outerText(words)) || assignment(words) || (top && namesGitWithoutRunningIt(words))) return walk(words)
+      // An assigned value that is a pipeline naming Git is held to the same rule as a statement of its own:
+      // `$y = 'git stash' | cmd` hands a script to cmd, whatever is assigned.
+      const assigned = assignment(words)
+      // (Git's own output piped on, `$y = git status | Format-Table`, stays as it was: Git is the first command there.)
+      const elements = assigned === null ? [] : pipeline(assigned.value)
+      const piped = elements.length > 1 && !GIT_PROGRAM.test(wordText(elements[0].words[0])) && namesGit(outerText(assigned.value)) && !(top && namesGitWithoutRunningIt(assigned.value))
+      if (!namesGit(outerText(words)) || (assigned !== null && !piped) || (top && namesGitWithoutRunningIt(words))) return walk(words)
       // The allowlist protects protected checkouts only: `visit.unmodeled` answers whether this statement can reach
       // one. When it cannot, the statement runs unchecked, and what it may assign becomes unknown.
-      if (!await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw new GuardDenial(POWERSHELL_GIT_FORMS)
+      if (!await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw new GuardDenial(POWERSHELL_GIT_FORMS, { rewritable: true })
       for (const match of text.matchAll(ASSIGNED)) set(match[1] ?? match[2] ?? match[3] ?? match[4], UNKNOWN)
       status = null
       return
@@ -475,7 +492,9 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
 
   async function walk(words) {
     const elements = pipeline(words)
-    for (const [index, element] of elements.entries()) await run(element.words, element.redirects, index ? elements[index - 1] : null)
+    // `$x = 'git stash' | iex` assigns what the pipeline yields, so the string is what reaches `iex`, not the assignment.
+    const output = (element) => { const assigned = assignment(element.words); return assigned ? { ...element, words: assigned.value } : element }
+    for (const [index, element] of elements.entries()) await run(element.words, element.redirects, index ? output(elements[index - 1]) : null)
     if (elements.length > 1) status = null
   }
 
@@ -498,7 +517,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   // runs code, where it fails closed in a checkout that could be protected. Its arguments are judged as Git when they
   // read like a checked Git command.
   async function unknownProgram(text, args) {
-    if (mayInvokeGit(text) && !await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw unresolved("the program this command runs")
+    if (mayInvokeGit(text) && !await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw unresolved("the program this command runs", PROGRAM_FIX)
     await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true, powershell: true })
   }
 
@@ -618,14 +637,16 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       return
     }
     if (["iex", "invoke-expression"].includes(name)) {
-      // Invoke-Expression runs in the caller's scope.
-      await evaluated(args.slice(1).join(" "))
+      // Invoke-Expression runs in the caller's scope. With no argument it runs the single literal string piped into it
+      // (an assignment such as `$x = 'git stash' | iex` reaches here without the statement-level check).
+      const piped = args.length === 1 && input ? await pipedScript(input) : null
+      await evaluated(piped ?? args.slice(1).join(" "))
       status = null
       return
     }
     // A computed file or program is code Desk cannot read, and is allowed unless the text Desk can read names Git.
     if ((name === "." || ["start-process", "saps", "start"].includes(name)) && args.slice(1).some((arg) => arg.includes(UNKNOWN)) && mayInvokeGit(known(args.slice(1).join(" ")))) {
-      throw unresolved(name === "." ? "the file this command dot-sources" : "the program this command runs")
+      throw name === "." ? unresolved("the file this command dot-sources", "Write the script path literally, or run its commands directly.") : unresolved("the program this command runs", PROGRAM_FIX)
     }
     if (SHELLS.has(name)) {
       const script = shellScript(name, args)

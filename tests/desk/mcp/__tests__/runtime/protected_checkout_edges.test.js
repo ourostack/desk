@@ -139,7 +139,7 @@ test("shell wrappers and positional arguments preserve Git's target", async (t) 
   ]) assert.equal((await guard(command)).deny, true, command)
   // Round 4 ruling: running out of the step budget fails closed, with or without Git.
   for (const command of ["again() { again; }; again", "again() { again; git status; }; again"]) {
-    assert.match((await guard(command)).reason, /^Desk stopped inspecting this shell command after 20000 steps/u, command)
+    assert.match((await guard(command)).reason, /Desk stopped inspecting it after 20000 steps/u, command)
   }
 })
 
@@ -185,7 +185,7 @@ test("a loop containing a dangerous Git call on the protected checkout is still 
   const countingGit = (cwd, args, env, options) => { reads++; return readInspectionGit(cwd, args, env, options) }
   const result = await guard(`for f in ${values}; do git reset --hard; done`, { readGit: countingGit })
   assert.equal(result.deny, true)
-  assert.match(result.reason, /this would discard other sessions' uncommitted work/u)
+  assert.match(result.reason, /This would discard other sessions' uncommitted work/u)
   assert.ok(reads <= 4, `expected the denial to short-circuit instead of walking all ${iterations} iterations, got ${reads} reads`)
 })
 
@@ -215,7 +215,7 @@ test("a loop over many distinct repositories costs reads proportional to its dis
   const tooSlow = await guard(command, { readGit: spentGit, now: () => clock })
   assert.equal(tooSlow.deny, true)
   assert.match(tooSlow.reason, new RegExp(`within its ${GUARD_INSPECTION_BUDGET_MS / 1000} s budget`, "u"))
-  assert.match(tooSlow.reason, /split it into fewer targets|run it as a script file/u)
+  assert.match(tooSlow.reason, /fewer Git targets or a script file/u)
 })
 
 // Review of the ourostack/factory#39 fix found this pre-existing gap: target resolution used only the
@@ -227,7 +227,7 @@ test("GIT_DIR/GIT_WORK_TREE name the real target even when the modeled cwd does 
   const missing = path.join(root, "does-not-exist-at-all")
   const result = await guard("git reset --hard", { cwd: missing, env: { ...process.env, GIT_DIR: path.join(root, ".git"), GIT_WORK_TREE: root } })
   assert.equal(result.deny, true, "GIT_DIR/GIT_WORK_TREE name a real, protected checkout; a nonexistent cwd must not hide it")
-  assert.match(result.reason, /this would discard other sessions' uncommitted work/u)
+  assert.match(result.reason, /This would discard other sessions' uncommitted work/u)
 })
 
 // GIT_DIR alone, without GIT_WORK_TREE, must still name the checkout: its parent directory for a plain ".git",
@@ -237,7 +237,7 @@ test("a relative GIT_DIR/GIT_WORK_TREE resolves against the directory the Git ca
   const { root } = fixture(t)
   const relDir = await guardShellCommand({ command: `cd "${root}" && GIT_DIR=.git git reset --hard`, cwd: tmpdir(), env: process.env })
   assert.equal(relDir.deny, true, "GIT_DIR=.git inside the protected checkout names that checkout")
-  assert.match(relDir.reason, /this would discard other sessions' uncommitted work/u)
+  assert.match(relDir.reason, /This would discard other sessions' uncommitted work/u)
   const relTree = await guardShellCommand({ command: `cd "${root}" && GIT_WORK_TREE=. git reset --hard`, cwd: tmpdir(), env: process.env })
   assert.equal(relTree.deny, true, "GIT_WORK_TREE=. inside the protected checkout names that checkout")
 })
@@ -249,7 +249,7 @@ test("GIT_DIR alone names the checkout, non-bare or bare", async (t) => {
 
   const nonBare = await guardShellCommand({ command: "git reset --hard", cwd: elsewhere, env: { ...process.env, GIT_DIR: path.join(root, ".git") } })
   assert.equal(nonBare.deny, true, "a plain .git GIT_DIR names its parent directory as the checkout")
-  assert.match(nonBare.reason, /this would discard other sessions' uncommitted work/u)
+  assert.match(nonBare.reason, /This would discard other sessions' uncommitted work/u)
 
   const bareRoot = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-bare-"))
   removeFixtureAfter(t, bareRoot)
@@ -257,7 +257,7 @@ test("GIT_DIR alone names the checkout, non-bare or bare", async (t) => {
   execFileSync("git", ["-C", bareRoot, "config", "desk.protected", "true"], { stdio: "ignore" })
   const bare = await guardShellCommand({ command: "git reset --hard", cwd: elsewhere, env: { ...process.env, GIT_DIR: bareRoot } })
   assert.equal(bare.deny, true, "a bare GIT_DIR names itself as the checkout")
-  assert.match(bare.reason, /this would discard other sessions' uncommitted work/u)
+  assert.match(bare.reason, /This would discard other sessions' uncommitted work/u)
 })
 
 // Mutation check named in review: replacing the cache key's environment filter with one that always returns
@@ -277,7 +277,7 @@ test("a loop that only changes GIT_DIR/GIT_WORK_TREE is checked once per distinc
   const command = `for d in "${safe}" "${danger}"; do GIT_DIR="$d/.git" GIT_WORK_TREE="$d" git reset --hard; done`
   const result = await guard(command, { cwd: safe, readGit: countingGit })
   assert.equal(result.deny, true, "the protected checkout's own GIT_DIR/GIT_WORK_TREE must still be checked, even though an earlier iteration's Git call looked identical")
-  assert.match(result.reason, /this would discard other sessions' uncommitted work/u)
+  assert.match(result.reason, /This would discard other sessions' uncommitted work/u)
   assert.equal(reads, 4, "two distinct GIT_DIR/GIT_WORK_TREE locations, two Git reads each: caching by target, not by iteration count")
 })
 

@@ -119,7 +119,7 @@ function defaultSpawnFiler({ mechanism, reason, host, env = process.env }) {
 async function deadlineDecision({ rawInput, host, deadlineMs, env = process.env, spawnFiler = defaultSpawnFiler } = {}) {
   const decision = {
     permissionDecision: "deny",
-    permissionDecisionReason: "Desk could not finish checking this command in time, so it is denied to keep a protected checkout safe. Retry it.",
+    permissionDecisionReason: "Retry the command. Desk could not finish checking it in time, so it is denied to keep a protected checkout safe.",
   };
   let block = null;
   try {
@@ -166,7 +166,7 @@ if (require.main === module) {
       // module itself cannot load, only the error's name is written.
       const detail = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/protected-checkout.js")).href)
         .then(({ redact }) => redact(String(error?.message ?? error)), () => String(error?.name ?? "Error"));
-      process.stderr.write(`Desk protected-checkout guard could not inspect this command: ${detail}\n`);
+      process.stderr.write(`Retry the command, or split it into simpler commands. Desk protected-checkout guard could not inspect it: ${detail}\n`);
       process.exitCode = 2;
     } finally {
       clearTimeout(deadline);

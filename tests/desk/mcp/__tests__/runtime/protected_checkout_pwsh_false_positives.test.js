@@ -4,40 +4,10 @@
 // passes, and anything that could move HEAD, stash, rewrite or discard is still denied. Denial messages put the fix first.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import * as path from "node:path"
-import { guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { unresolved } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { fixture, psq } from "./_guard_fixture.js"
+import { firstSentence } from "./_guard_text.js"
 import { POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
-
-const psq = (text) => `'${text.replaceAll("'", "''")}'`
-
-// A protected clone on main with a local branch `topic`, and an ordinary clone.
-async function fixture(t) {
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-fp-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
-  const home = path.join(root, "home")
-  mkdirSync(home)
-  writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n")
-  const env = { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: "1", GIT_EDITOR: "true" }
-  for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS|GLOBAL))/u.test(key)) delete env[key]
-  const git = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
-  const origin = path.join(root, "origin.git"), prot = path.join(root, "prot"), own = path.join(root, "own")
-  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env })
-  execFileSync("git", ["init", "-q", "-b", "main", prot], { env })
-  writeFileSync(path.join(prot, "file.txt"), "base\n")
-  git(prot, "add", "file.txt"); git(prot, "commit", "-qm", "first")
-  git(prot, "branch", "topic")
-  git(prot, "remote", "add", "origin", origin)
-  git(prot, "push", "-q", "-u", "origin", "main", "topic")
-  execFileSync("git", ["clone", "-q", origin, own], { env })
-  const saved = process.env.HOME
-  process.env.HOME = home
-  try { await protectCheckout({ root: prot, stateBranch: "main" }) } finally { process.env.HOME = saved }
-  return { root, env, prot, own, guard: (command, { cwd = prot, powershell = true } = {}) => guardShellCommand({ command, cwd, env, powershell }) }
-}
 
 test("Get-Command and Write-* statements that only name git run nothing and are allowed", async (t) => {
   const f = await fixture(t)
@@ -140,10 +110,9 @@ test("the protections that define the guard still deny", async (t) => {
 })
 
 test("denial messages put the fix in the first line", () => {
-  assert.match(POWERSHELL_GIT_FORMS, /^Desk blocked this: run each git command as its own plain statement, e\.g\. git -C <path> status; git -C <path> fetch\./u)
-  assert.ok(POWERSHELL_GIT_FORMS.indexOf("fetch.") + "fetch.".length <= 125, POWERSHELL_GIT_FORMS)
-  const reason = unresolved("which checkout this Git command runs in").reason
-  assert.match(reason, /^Desk could not resolve which checkout this Git command runs in; write it literally/u)
-  assert.ok(reason.split(". ")[0].length <= 130, reason)
-  assert.ok(reason.length < 260, reason)
+  assert.match(POWERSHELL_GIT_FORMS, /^Run each git command as its own plain statement, for example git -C <path> status; git -C <path> fetch\./u)
+  assert.ok(firstSentence(POWERSHELL_GIT_FORMS).length <= 120, POWERSHELL_GIT_FORMS)
+  const reason = unresolved("which checkout this Git command runs in", "Write the checkout path literally: git -C <path> status. Or cd there in a separate command first.").reason
+  assert.match(reason, /^Write the checkout path literally: git -C <path> status/u)
+  assert.ok(firstSentence(reason).length <= 120, reason)
 })

@@ -13,6 +13,7 @@ import * as path from "node:path"
 import { guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { removeFixtureAfter } from "../_process_hygiene.js"
+import { protectedDenial } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
 
 async function fixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-pwsh-allow-")))
@@ -59,17 +60,17 @@ test("replay ruling: PowerShell Git in groups, calls and control flow passes in 
 test("replay ruling: nested Git that moves HEAD, rewrites pushed history or discards work is still denied", async (t) => {
   const f = await fixture(t)
   for (const [command, message] of [
-    ["& git checkout topic", /this would move HEAD off/u], ["Invoke-Command { git checkout topic }", /this would move HEAD off/u],
-    ['iex "git checkout topic"', /this would move HEAD off/u], ["function Go { git checkout topic }; Go", /this would move HEAD off/u],
-    ["$null = $(git checkout topic)", /this would move HEAD off/u], ["try { git stash } finally { Write-Output done }", MESSAGES.stash],
-    ["if ($true) { git push --force origin main }", /force, mirror and prune pushes/u],
+    ["& git checkout topic", /This would move HEAD off/u], ["Invoke-Command { git checkout topic }", /This would move HEAD off/u],
+    ['iex "git checkout topic"', /This would move HEAD off/u], ["function Go { git checkout topic }; Go", /This would move HEAD off/u],
+    ["$null = $(git checkout topic)", /This would move HEAD off/u], ["try { git stash } finally { Write-Output done }", MESSAGES.stash],
+    ["if ($true) { git push --force origin main }", /Force, mirror and prune pushes/u],
     // A group used as a Git operand takes its most dangerous reading.
     ["git switch (Get-Content b.txt)", MESSAGES.variable], ["git reset --hard (Get-Content c.txt)", MESSAGES.variable],
     ["git branch -D (Get-Content b.txt)", MESSAGES.variable], ["git worktree remove (Get-Content w.txt)", /git worktree remove/u],
   ]) {
     const decision = await f.guard(command, f.prot)
     assert.equal(decision.deny, true, command)
-    if (typeof message === "string") assert.equal(decision.reason, `Desk protected checkout ${f.prot}: ${message}`, command)
+    if (typeof message === "string") assert.equal(decision.reason, protectedDenial(f.prot, message), command)
     else assert.match(decision.reason, message, command)
     assert.equal((await f.guard(command, f.ord)).deny, false, `${command} in the ordinary checkout`)
   }

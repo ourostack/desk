@@ -338,8 +338,11 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
       return {}
     }
     const [task] = unstated
-    const reportAs = typeof task.report_as === "string" && task.report_as !== "" ? ` (task_update returned report_as: ${JSON.stringify(task.report_as)})` : ""
-    return { decision: "block", reason: `Your reply says the work is done, but task ${task.slug} is at ${task.status}. Restate the reply with the task's real status${reportAs}.` }
+    const reportAs = typeof task.report_as === "string" && task.report_as !== "" ? ` task_update returned report_as: ${JSON.stringify(task.report_as)}; say that.` : ""
+    // Fix first: the slug can be long, so the first sentence names it only when it fits.
+    const first = `Restate your reply with task ${task.slug}'s real status: ${task.status}.`
+    const opening = first.length <= 120 ? first : `Restate your reply with the task's real status: ${task.status}.`
+    return { decision: "block", reason: `${opening} Your reply says the work is done, but task ${task.slug} is at ${task.status}.${reportAs}` }
   } catch {
     return {}
   }
