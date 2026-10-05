@@ -32,7 +32,7 @@ test("a late option is caught whatever shape the option before it has", async ()
 })
 
 test("a short or generic pattern is denied, a long specific one is allowed", async () => {
-  for (const command of ["pkill -f cat", "pkill -f node", "pkill -f claude", "pkill -f 'python3'", "pkill -f ^bash$", "pkill -f short", "pkill -f long-specific-pattern cat", "pkill sleep", "killall node", "killall Claude Chrome.exe"]) {
+  for (const command of ["pkill -f ''", "pkill -f cat", "pkill -f node", "pkill -f claude", "pkill -f 'python3'", "pkill -f ^bash$", "pkill -f short", "pkill -f long-specific-pattern cat", "pkill sleep", "killall node", "killall Claude Chrome.exe"]) {
     assert.equal(await sh(command), MESSAGES.broad, command)
   }
   for (const command of [
@@ -47,7 +47,7 @@ test("kill of a process group taken from a pattern is denied, a numeric pid list
   for (const command of ["kill -9 -1", "kill 0", "kill -TERM 0", "kill -- -1", "kill -s KILL -1", "kill -9 123 -456", "kill -n 9 0", "kill -9 -- -1", "kill 123 0"]) {
     assert.equal(await sh(command), MESSAGES.group, command)
   }
-  for (const command of ["kill 123", "kill 123 456 789", "kill -TERM 123", "kill -9 123", "kill -s TERM 123", "kill -l", "kill -1", "kill -L 9", "kill"]) {
+  for (const command of ["kill 123", "kill 123 456 789", "kill -TERM 123", "kill -9 123", "kill -s TERM 123", "kill -l", "kill -1", "kill -L 9", "kill", "kill -- 123", "kill -9 -- 123 456"]) {
     assert.equal(await sh(command), null, command)
   }
 })

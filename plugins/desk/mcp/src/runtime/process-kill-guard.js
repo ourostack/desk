@@ -46,8 +46,8 @@ function parseArguments(command, args) {
   let late = false
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
-    if (arg === "--") { operands.push(...args.slice(i + 1).filter((rest) => rest !== "")); break }
-    if (!arg.startsWith("-") || arg === "-") { if (arg !== "") operands.push(arg); continue }
+    if (arg === "--") { operands.push(...args.slice(i + 1)); break }
+    if (!arg.startsWith("-")) { operands.push(arg); continue }
     if (operands.length > 0) late = true
     if (arg.startsWith("--")) { if (LONG_VALUE.test(arg)) i++; continue }
     if (SIGNAL.test(arg)) continue
