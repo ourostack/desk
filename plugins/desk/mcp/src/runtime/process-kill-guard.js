@@ -19,6 +19,8 @@
 // CIM Terminate, `os.kill(-1)` and `process.kill(-1)` one-liners, and osascript quit. It reads Bash through the same inspector the protected-checkout guard uses, so compound commands, `bash -c`, pipelines
 // and substitutions are judged command by command; PowerShell is read by text. It never runs anything, and any error
 // fails open (the hook entry point allows the call).
+import { statSync } from "node:fs"
+import { homedir } from "node:os"
 import { inspectShell } from "./shell-commands.js"
 import { copilotDeny, copilotToolCalls } from "./copilot-hook-payload.js"
 
@@ -46,15 +48,28 @@ const COMMON = new Set([
 const lower = (text) => text.toLowerCase().replace(/\.exe$/u, "")
 const isCommon = (text) => COMMON.has(lower(text)) || COMMON.has(lower(text.replace(/\.[a-z0-9]+$/iu, "")))
 
-// A pkill pattern is safe when it has no regex syntax and at least one word is a full path whose basename is specific.
-const REGEX_SYNTAX = /[*?[\](){}|^$\\+]/u
-const PATH_WORD = /^[\w.@~-]*(?:\/[\w.@~ -]+)+$/u
+// A pkill pattern is safe only when it is ONE word naming a specific file: an absolute path (or ~/) with no regex syntax,
+// at least 3 segments below a home or temp root, a final segment that is a file (it has an extension or is a regular
+// file), outside shared-binary locations (app bundles, ~/.local/bin, versions folders) and with no segment named for a
+// shared tool (claude, copilot, codex, agency, cmux, code, node). `code` is allowed as the first folder below a home
+// (the operator's ~/code), because that is where projects live.
+const REGEX_SYNTAX = /[*?[\](){}|^$\\+\s]/u
+const SHARED_PLACE = /\/Applications\/|\.app\/Contents|Application Support|\/\.local\/bin\/|\/versions\//u
+const SHARED_SEGMENT = /^(?:claude|copilot|codex|agency|cmux|code|node)(?:\.[a-z0-9]+)?$/iu
+const ROOTS = [/^~/u, /^\/Users\/[^/]+/u, /^\/home\/[^/]+/u, /^\/private\/tmp/u, /^\/tmp/u, /^\/private\/var\/folders/u, /^\/var\/folders/u]
 function specificPath(pattern) {
-  if (REGEX_SYNTAX.test(pattern)) return false
-  return pattern.split(/\s+/u).some((word) => {
-    const base = PATH_WORD.test(word) ? word.split("/").at(-1) : ""
-    return base.length >= 3 && !isCommon(base)
-  })
+  if (REGEX_SYNTAX.test(pattern) || SHARED_PLACE.test(pattern) || !/^(?:\/|~\/)/u.test(pattern)) return false
+  const root = ROOTS.map((expression) => expression.exec(pattern)).find(Boolean)
+  if (!root) return false
+  const home = /^(?:~|\/Users\/[^/]+|\/home\/[^/]+)$/u.test(root[0])
+  const below = pattern.slice(root[0].length).split("/").filter(Boolean)
+  if (below.length < 3) return false
+  const base = below.at(-1)
+  if (isCommon(base) || !(/\.[A-Za-z0-9]+$/u.test(base) || isFile(pattern.replace(/^~/u, homedir())))) return false
+  return !below.some((segment, index) => SHARED_SEGMENT.test(segment) && !(home && index === 0 && segment.toLowerCase() === "code"))
+}
+function isFile(file) {
+  try { return statSync(file).isFile() } catch { return false }
 }
 
 // Options that take a value, for pkill and pgrep (a cluster such as -fU 502 or -U502 ends in one).
@@ -107,8 +122,8 @@ function judgeKill(args, viaXargs) {
     if (!rest && arg === "--") rest = true
     else if (!rest && (arg === "-s" || arg === "-n")) { i++; signal = true }
     else if (!rest && !signal && /^-(?:\d+|[A-Za-z][A-Za-z0-9]*)$/u.test(arg)) signal = true
-    else if (/^(?:[1-9]\d*|%(?:\d+|[+-])?|\$!)$/u.test(arg)) literal++
-    else if (arg === "0" || arg.startsWith("-")) return MESSAGES.group
+    else if (/^(?:[3-9]|[1-9]\d+|%(?:\d+|[+-])?)$/u.test(arg)) literal++
+    else if (/^[0-2]$/u.test(arg) || arg.startsWith("-")) return MESSAGES.group
     else if (arg.includes("\0")) unknown = true
     else return MESSAGES.source
   }
@@ -135,22 +150,39 @@ export function judgeCall(program, args, { feedsKill = false, viaXargs = false, 
   return reason
 }
 
-const portTarget = (command) => /\blsof\b[^|;&)]*-\w*i\s*(?:tcp:|udp:|:)?\d+\b/u.test(command) && !/\b(?:pgrep|pkill|ps|grep|awk)\b/u.test(command)
+/** Whether an lsof call is exactly `lsof -t -i :N` (or tcp:N, udp:N): one integer port and no other selector, because lsof ORs its selectors. */
+function lsofPort(args) {
+  let terse = false, specs = 0
+  for (let i = 0; i < args.length; i++) {
+    const match = /^-(t)?i(.*)$/u.exec(args[i])
+    if (args[i] === "-t") terse = true
+    else if (match) {
+      terse ||= match[1] === "t"
+      const spec = match[2] === "" ? args[++i] ?? "" : match[2]
+      if (!/^(?:tcp:|udp:)?:?\d{1,5}$/u.test(spec)) return false
+      specs++
+    } else return false
+  }
+  return terse && specs === 1
+}
 const OTHER_SOURCES = /\b(?:ps|grep|egrep|awk|sed|cut|pidof|top|lsof|xargs\s+-\w*\s*\S*\s*pgrep)\b/u
+const PID_FILE = /\$\(\s*cat\s+(?:"[^"]*\.pid"|'[^']*\.pid'|[^\s)"']+\.pid)\s*\)|`\s*cat\s+[^\s`]+\.pid\s*`/u
+const KILL_WITH_VARIABLE = /(?:^|[;&|({]\s*|\b(?:sudo|env|nice|nohup|command|exec|time|xargs)\s+(?:-\S+\s+|\w+=\S*\s+|\d+\s+)*)kill\b[^;&|\n)]*\$(?=[\w{!$@#?*])/u
 
 const taskkillArguments = (text) => {
   const tokens = text.trim().split(/\s+/u).filter(Boolean)
   let pids = 0
   for (let i = 0; i < tokens.length; i++) {
     if (/^[/-][ft]$/iu.test(tokens[i])) continue
-    if (/^[/-]pid$/iu.test(tokens[i]) && /^\d+$/u.test(tokens[i + 1] ?? "")) { pids++; i++; continue }
+    if (/^[/-]pid$/iu.test(tokens[i]) && /^(?!0$|4$)\d+$/u.test(tokens[i + 1] ?? "")) { pids++; i++; continue }
     return false
   }
   return pids > 0
 }
 const stopProcessArguments = (text) => {
   const rest = text.split("|")[0].replace(/[)}]\s*$/u, "").trim().split(/\s+/u).filter((token) => !/^-(?:force|passthru|whatif|confirm)(?::\S+)?$/iu.test(token)).join(" ")
-  return /^(?:-id\s+)?\d+(?:\s*,\s*\d+)*$/iu.test(rest)
+  const ids = /^(?:-id\s+)?(\d+(?:\s*,\s*\d+)*)$/iu.exec(rest)
+  return ids !== null && ids[1].split(",").every((id) => !/^\s*[0-2]\s*$/u.test(id))
 }
 
 /** The reason to deny a PowerShell (or Windows-from-Bash) command, read by text, or null. */
@@ -183,18 +215,23 @@ export async function judgeProcessKill(command, { cwd = process.cwd() } = {}) {
     if (reason !== null) return reason
     // A program named by a substitution or variable is not visited, so its name cannot be judged.
     if (/kill/iu.test(command) && /(?:^|[;&|({]\s*)(?:sudo\s+)?(?:\$\([^)]*\)|`[^`]*`|\$\{?\w+\}?)\s+[^\s;&|]/u.test(command)) return MESSAGES.source
+    if (KILL_WITH_VARIABLE.test(command)) return MESSAGES.source
     const feedsKill = /\bkill\b/u.test(command), context = {}
     let deferred = false
     await inspectShell({
       command, cwd, env: {}, powershell: false,
       visit: ({ name: program, args }) => {
         if (reason !== null) return
+        if (program.split("/").at(-1) === "lsof" && feedsKill) { if (lsofPort(args)) context.port = true; else context.badLsof = true; return }
         const verdict = judgeCall(program, args, { feedsKill, context })
         if (verdict === DEFER) deferred = true
         else reason ??= verdict
       },
     })
-    if (reason === null && deferred && !portTarget(command) && !(context.pgrep && !OTHER_SOURCES.test(command))) reason = MESSAGES.source
+    if (context.badLsof) return MESSAGES.source
+    const port = context.port && !/\b(?:pgrep|pkill|ps|grep|awk)\b/u.test(command)
+    const pidFile = PID_FILE.test(command) && !OTHER_SOURCES.test(command) && (command.match(/\$\(/gu) ?? []).length + (command.match(/`/gu) ?? []).length / 2 === 1
+    if (reason === null && deferred && !port && !pidFile && !(context.pgrep && !OTHER_SOURCES.test(command))) reason = MESSAGES.source
     return reason
   } catch {
     return null
