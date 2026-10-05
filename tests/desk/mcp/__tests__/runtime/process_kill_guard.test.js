@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { assertActionable } from "./_guard_text.js"
+import { assertActionable, firstSentence } from "./_guard_text.js"
 import { judgeCall, judgeProcessKill, MESSAGES, processKillGuardHook } from "../../../../../plugins/desk/mcp/src/runtime/process-kill-guard.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
@@ -33,7 +33,7 @@ test("a late option is caught whatever shape the option before it has", async ()
 
 test("every reviewed bypass is denied", async () => {
   const denied = {
-    broad: ["kill $(pgrep -f cat)", "kill -9 `pgrep node`", "kill $(pgrep -f /Users/x/a/b.js; pgrep -f cat)", "kill -9 $(pgrep -u 502)", "pkill -u 502", "pkill -U 502", "pkill -g 20", "pkill -t ttys001 x", "pkill -s 1", "pkill --uid 502", "pkill", "pkill -f 'claude.*'", 'pkill -f "Claude Helper"', 'pkill -f "node server"', "pkill -f cat", "pkill -f ''", "pkill -f /usr/bin/node", "pkill -f /usr/bin/", "pkill -f /Users/x/.*", 'pkill -f "cat foo"', `pkill -f ${SPECIFIC} second`, "pkill -P abc", "pkill -P 12 extra", "sudo pkill -f cat", "env X=1 pkill node", "/usr/bin/pkill -f cat", "nohup pkill claude", "xargs -n1 pkill cat", "pgrep -f cat | xargs kill", "pgrep -u 502 | xargs kill -9"],
+    broad: ["kill $(pgrep -f cat)", "kill -9 `pgrep node`", "kill $(pgrep -f /Users/x/a/b.js; pgrep -f cat)", "kill -9 $(pgrep -u 502)", "pkill -u 502", "pkill -U 502", "pkill -g 20", "pkill -t ttys001 x", "pkill -s 1", "pkill --uid 502", "pkill", "pkill -f 'claude.*'", 'pkill -f "Claude Helper"', 'pkill -f "node server"', "pkill -f cat", "pkill -f ''", "pkill -f /usr/bin/node", "pkill -f /usr/bin/", "pkill -f /Users/x/.*", 'pkill -f "cat foo"', `pkill -f ${SPECIFIC} second`, "pkill -P abc", "pkill -P", "pkill -P 12 extra", "sudo pkill -f cat", "env X=1 pkill node", "/usr/bin/pkill -f cat", "nohup pkill claude", "xargs -n1 pkill cat", "pgrep -f cat | xargs kill", "pgrep -u 502 | xargs kill -9"],
     killall: ["killall node", "killall -u microsoft", "killall -m '.*'", 'killall "Microsoft Edge"', "killall5", "killall Finder", "killall Foobarbaz", "command killall node", "killall"],
     source: ["$(which pkill) -f cat", "`which pkill` -f cat", "kill -9 $(ps aux | grep claude | awk '{print $2}')", "ps aux | xargs kill -9", "pgrep -f /Users/x/a/b.js | grep x | xargs kill", "kill foo", "kill $(ps -ax)", "ps aux | awk '{print $2}' | xargs kill"],
     group: ["kill -9 -1", "kill 0", "kill -TERM 0", "kill -- -1", "kill -s KILL -1", "kill -9 123 -456", "kill -n 9 0", "kill -9 -- -1", "kill 123 0", "kill -- -$$", "kill -9 -$(echo 1)", "kill -9 -$X"],
@@ -88,6 +88,7 @@ test("every denial opens with the fix in at most 120 characters", () => {
     assertActionable(assert, text, key)
     assert.match(text, /^Stop it by exact PID instead: find it with `/u)
   }
+  for (const text of Object.values(MESSAGES)) assert.match(firstSentence(text).length <= 120 ? text.split(". ")[1] : "", /^Stop only processes you started, by their exact PID, and ask the operator before stopping anything else on their machine, such as their terminals, sessions, apps or services/u)
   assert.match(MESSAGES.trap, /BSD/u)
   assert.match(MESSAGES.broad, /operator's other Claude and Copilot sessions/u)
 })

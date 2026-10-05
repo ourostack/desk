@@ -22,8 +22,9 @@
 import { inspectShell } from "./shell-commands.js"
 import { copilotDeny, copilotToolCalls } from "./copilot-hook-payload.js"
 
-const FIX = "Stop it by exact PID instead: find it with `ps -axo pid,command | grep <specific>` and run `kill <pid>`."
-const WINDOWS_FIX = "Stop it by exact PID instead: find it with `Get-Process <specific>*` and run `Stop-Process -Id <pid>`."
+const PRINCIPLE = " Stop only processes you started, by their exact PID, and ask the operator before stopping anything else on their machine, such as their terminals, sessions, apps or services."
+const FIX = `Stop it by exact PID instead: find it with \`ps -axo pid,command | grep <specific>\` and run \`kill <pid>\`.${PRINCIPLE}`
+const WINDOWS_FIX = `Stop it by exact PID instead: find it with \`Get-Process <specific>*\` and run \`Stop-Process -Id <pid>\`.${PRINCIPLE}`
 const SAFE = "A pkill pattern is allowed only as one full path with options first, such as `pkill -f /Users/me/code/app/server.js`."
 export const MESSAGES = {
   trap: `${FIX} On macOS/BSD, pkill, pgrep and killall stop reading options at the first pattern, so a later option such as -U or -n becomes another pattern and kills every process that matches it, including the operator's other sessions. ${SAFE}`,
