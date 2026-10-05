@@ -1264,7 +1264,8 @@
   "group": "plain statements the allowlist keeps allowing",
   "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='hostname'}",
   "expect": "allow",
-  "why": "WMI process creation that names no git is not stopped"
+  "why": "WMI process creation that names no git is not stopped",
+  "launcher_ok": "starts hostname, not git"
  },
  {
   "group": "bypass: process creation that is not the program itself (fixed)",
@@ -1276,7 +1277,8 @@
   "group": "plain statements the allowlist keeps allowing",
   "command": "$p = New-Object System.Diagnostics.Process; $p.StartInfo.FileName = 'hostname'; $p.Start()",
   "expect": "allow",
-  "why": "a Process object that starts a program other than git is not stopped"
+  "why": "a Process object that starts a program other than git is not stopped",
+  "launcher_ok": "starts hostname, not git"
  },
  {
   "group": "known gap",
