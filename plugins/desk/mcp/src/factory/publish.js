@@ -112,6 +112,7 @@ import { createHmac } from "node:crypto"
 
 import { publishedAgentType } from "./agent-types.js"
 import { validateLabels } from "./label-schema.js"
+import { intervalInSession } from "./pipeline/timeline.js"
 import { LIMITS, validateLocalFacts } from "./schema.js"
 import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
@@ -171,7 +172,7 @@ function publishIntervals(intervals, startedMs, durationMs, flag) {
   for (const interval of intervals) {
     const startMs = Date.parse(interval.start) - startedMs
     const endMs = Date.parse(interval.end) - startedMs
-    if (startMs < 0 || endMs > durationMs) {
+    if (!intervalInSession(startMs, endMs, durationMs)) {
       flag(INTERVAL_FIELD[interval.kind], "source_unreadable")
       continue
     }

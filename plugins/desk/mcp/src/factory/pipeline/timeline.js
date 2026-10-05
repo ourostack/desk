@@ -45,6 +45,30 @@ function jobParts(interval, binding) {
   })
 }
 
+/** Merges intervals (`{ start_ms, end_ms }`) into ascending, non-overlapping `[start, end]` pairs. */
+export function union(intervals) {
+  const sorted = intervals
+    .map((interval) => [interval.start_ms, interval.end_ms])
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1])
+  const merged = []
+  for (const [start, end] of sorted) {
+    const last = merged.at(-1)
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end)
+    else merged.push([start, end])
+  }
+  return merged
+}
+
+/** The total length of merged `[start, end]` pairs. */
+export function duration(intervals) {
+  return intervals.reduce((total, [start, end]) => total + end - start, 0)
+}
+
+/** Whether an interval lies inside a session of `durationMs`: publishing drops, never clamps, one that starts before it or ends after it. */
+export function intervalInSession(startMs, endMs, durationMs) {
+  return startMs >= 0 && endMs <= durationMs
+}
+
 /** The kinds of interval that are active time (a turn, a tool call, a subagent), as the formulas count them. */
 export const ACTIVE_KINDS = new Set(["turn", "tool", "subagent"])
 
@@ -66,15 +90,8 @@ function jobIntervals(session, binding) {
  */
 export function jobActiveMs(session, binding) {
   if (binding.session_offset_ms === null) return null
-  const inside = session.intervals.filter((interval) => interval.start_ms >= 0 && interval.end_ms <= session.duration_ms)
-  const parts = jobIntervals({ intervals: inside }, binding).filter((interval) => ACTIVE_KINDS.has(interval.kind)).sort((a, b) => a.start_ms - b.start_ms)
-  let total = 0
-  let reach = -Infinity
-  for (const part of parts) {
-    total += Math.max(0, part.end_ms - Math.max(part.start_ms, reach))
-    reach = Math.max(reach, part.end_ms)
-  }
-  return total
+  const inside = session.intervals.filter((interval) => intervalInSession(interval.start_ms, interval.end_ms, session.duration_ms))
+  return duration(union(jobIntervals({ intervals: inside }, binding).filter((interval) => ACTIVE_KINDS.has(interval.kind))))
 }
 
 // Whether two bindings of one session hold overlapping time. A binding with

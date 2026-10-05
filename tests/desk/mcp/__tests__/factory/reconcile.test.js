@@ -1,7 +1,7 @@
 // `factory reconcile`: a fixture desk with dated commits, a fixture factory state folder and a fixture store, all
 // under a temp folder. Every desk, card and session here is synthetic.
 
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -129,12 +129,23 @@ async function writeMarker(root, { name, host, id, desk, logPath, store, deskRoo
 }
 
 // The standard desk: one seed commit, then dated work on 2026-09-25.
-async function standardDesk(desk, slugs) {
-  const repo = await makeDesk(desk)
+async function standardDesk(desk, slugs, options = {}) {
+  const repo = await makeDesk(desk, options)
   const files = {}
   for (const [track, slug, options] of slugs) files[`${track}/${slug}/task.md`] = cardText(options)
   repo.commit("2026-09-20T00:00:00Z", files, "seed")
   return repo
+}
+
+// A measure that may lack a value: `{ state, value }`, with `value` only when measured. Totals add `of` and `not_recorded`.
+const got = (value, population = {}) => ({ state: "measured", value, ...population })
+const NOT_RECORDED = { state: "not_recorded" }
+const NOT_RECORDED_OF = (not_recorded) => ({ state: "not_recorded", of: 0, not_recorded })
+// A desk on GitHub whose visibility the factory has checked as private keeps job timing; any other desk withholds it.
+const REMOTE = "https://github.com/acme/desk.git"
+async function setVisibility(env, visibility) {
+  const root = await factoryStateRoot(env)
+  await writeFile(path.join(root, "visibility.json"), JSON.stringify({ "acme/desk": { visibility, checked_at: "2026-09-25T00:00:00.000Z" } }))
 }
 
 const mismatchOf = (result, slug) => result.mismatches.filter((item) => item.slug === slug)
@@ -813,7 +824,7 @@ test("a real commit made inside another task's session own_activity is mentioned
   assert.deepEqual(reasonsOf(result, "edge"), [])
   assert.deepEqual(reasonsOf(result, "edge0"), [])
   assert.deepEqual(reasonsOf(result, "dup"), [])
-  assert.deepEqual(result.counts.mentioned, { total: 3, recorded: 5, not_recorded: 0 }, "three commits (the 08:30 one touches two tasks and counts once), from five sessions that recorded their own activity")
+  assert.deepEqual(result.counts.mentioned, got(3, { of: 5, not_recorded: 0 }), "three commits (the 08:30 one touches two tasks and counts once), from five sessions that recorded their own activity")
   assert.ok(result.tasks.some((task) => task.slug === "other"), "a task with only mentioned commits is still real work")
 }))
 
@@ -833,15 +844,16 @@ test("placement uses a job's segments: a five-day session places the task on the
 
 test("each task's story lists its sessions by start with active time clipped to the job's segments, and how each was bound", () => scratch(async (context) => {
   const { desk, env } = context
-  await standardDesk(desk, [["t", "tale"]])
+  await standardDesk(desk, [["t", "tale"]], { remote: REMOTE })
+  await setVisibility(env, "private")
   // Session 2 starts at 07:00 and holds every interval; session 1 starts at 08:00 and holds only its first five minutes of worker 0.
-  await addSession(context, 1, "t", "tale", { agents: [0], segments: [{ start_ms: 0, end_ms: 300000 }], boundBy: "focus" })
-  await addSession(context, 2, "t", "tale", { span: { started_at: "2026-09-25T07:00:00.000Z" }, boundBy: "inferred" })
+  await addSession(context, 1, "t", "tale", { remote: REMOTE, agents: [0], segments: [{ start_ms: 0, end_ms: 300000 }], boundBy: "focus" })
+  await addSession(context, 2, "t", "tale", { remote: REMOTE, span: { started_at: "2026-09-25T07:00:00.000Z" }, boundBy: "inferred" })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   const task = result.tasks.find((item) => item.slug === "tale")
   assert.deepEqual(task.story, [
-    { session: sessionName(2), start: "2026-09-25T07:00:00.000Z", active_ms: 844000, bound_by: "inferred" },
-    { session: sessionName(1), start: "2026-09-25T08:00:00.000Z", active_ms: 249000, bound_by: "focus" },
+    { session: sessionName(2), start: "2026-09-25T07:00:00.000Z", active_ms: got(844000), bound_by: "inferred" },
+    { session: sessionName(1), start: "2026-09-25T08:00:00.000Z", active_ms: got(249000), bound_by: "focus" },
   ])
   assert.deepEqual(reasonsOf(result, "tale"), [])
   // Facts a file can no longer be read as intervals and segments give no active time, which is not zero.
@@ -851,7 +863,7 @@ test("each task's story lists its sessions by start with active time clipped to 
   facts.jobs[0].segments = "garbled"
   writeFileSync(file, JSON.stringify(facts))
   const garbled = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.equal(garbled.tasks.find((item) => item.slug === "tale").story.find((entry) => entry.session === sessionName(1)).active_ms, "not_recorded")
+  assert.deepEqual(garbled.tasks.find((item) => item.slug === "tale").story.find((entry) => entry.session === sessionName(1)).active_ms, NOT_RECORDED)
 }))
 
 test("bound_by is reported per story entry: focus, inferred, subagent only, and not recorded where the receipt cannot say", () => scratch(async (context) => {
@@ -881,15 +893,16 @@ test("the receipt's two measures are reported per session and as totals; a recei
   await addSession(context, 6, "t", "e", { receipt: null })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   const pick = ({ session, segments_capped_ms, repository_evidence_unavailable }) => [session, segments_capped_ms, repository_evidence_unavailable]
+  const [g, nr] = [got, NOT_RECORDED]
   assert.deepEqual(result.sessions.map(pick), [
-    [sessionName(1), 5000, 2], [sessionName(2), 0, 0], [sessionName(3), "not_recorded", "not_recorded"],
-    [sessionName(4), "not_recorded", "not_recorded"], [sessionName(5), 7, "not_recorded"], [sessionName(6), "not_recorded", "not_recorded"],
+    [sessionName(1), g(5000), g(2)], [sessionName(2), g(0), g(0)], [sessionName(3), nr, nr],
+    [sessionName(4), nr, nr], [sessionName(5), g(7), nr], [sessionName(6), nr, nr],
   ])
   assert.equal(result.sessions[0].start, "2026-09-25T08:00:00.000Z")
-  assert.deepEqual(result.counts.segments_capped_ms, { total: 5007, recorded: 3, not_recorded: 3 })
-  assert.deepEqual(result.counts.repository_evidence_unavailable, { total: 2, recorded: 2, not_recorded: 4 })
+  assert.deepEqual(result.counts.segments_capped_ms, got(5007, { of: 3, not_recorded: 3 }), "a floor while some sessions are not recorded")
+  assert.deepEqual(result.counts.repository_evidence_unavailable, got(2, { of: 2, not_recorded: 4 }))
   const none = reconcile({ deskRoot: desk, since: "2026-09-01T00:00:00.000Z", until: "2026-09-02T00:00:00.000Z", env })
-  assert.deepEqual(none.counts.segments_capped_ms, { total: null, recorded: 0, not_recorded: 0 }, "no sessions means no measurement, not zero")
+  assert.deepEqual(none.counts.segments_capped_ms, NOT_RECORDED_OF(0), "no sessions means no measurement, not zero")
 }))
 
 test("focus_disagrees is copied from the receipt", () => scratch(async (context) => {
@@ -953,7 +966,24 @@ test("a commit over a session whose receipt predates own_activity is receipt_too
   assert.deepEqual(reasonsOf(result, "gap"), ["not_bound"], "no session overlaps it, so none could have owned it")
   assert.deepEqual(reasonsOf(result, "mix"), ["not_bound", "receipt_too_old"], "each commit gets the reason that is true of it")
   assert.deepEqual(reasonsOf(result, "men"), [], "a recorded owner bound elsewhere mentions it, whatever an old receipt says")
-  assert.deepEqual(result.counts.mentioned, { total: 1, recorded: 1, not_recorded: 1 })
+  assert.deepEqual(result.counts.mentioned, got(1, { of: 1, not_recorded: 1 }), "a floor: one receipt could not say")
+}))
+
+test("an old-receipt session whose receipt names this desk is a captured session too old to say, even when it bound nothing; one with no desk in its receipt is not recognized", () => scratch(async (context) => {
+  const { desk, env } = context
+  const repo = await standardDesk(desk, ["mine", "nameless", "abroad"].map((slug) => ["t", slug]))
+  repo.commit("2026-09-25T08:45:00Z", { "t/mine/work.md": "x\n" })
+  repo.commit("2026-09-25T09:00:00Z", { "t/nameless/work.md": "x\n" })
+  repo.commit("2026-09-25T09:15:00Z", { "t/abroad/work.md": "x\n" })
+  // Three sessions that bound nothing and predate own_activity, one over each commit. Only the first one's receipt names this desk; the third's names another.
+  const over = (from, to) => ({ started_at: `2026-09-25T${from}:00.000Z`, ended_at: `2026-09-25T${to}:00.000Z`, derived_through: `2026-09-25T${to}:00.000Z` })
+  await addSession(context, 1, "t", "x", { noJobs: true, receipt: 4, span: over("08:40", "08:50"), receiptFields: { desk_root: desk } })
+  await addSession(context, 2, "t", "x", { noJobs: true, receipt: 4, span: over("08:55", "09:05") })
+  await addSession(context, 3, "t", "x", { noJobs: true, receipt: 4, span: over("09:10", "09:20"), receiptFields: { desk_root: "/nonexistent/other/desk" } })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(mismatchOf(result, "mine").map(({ reason, detail }) => ({ reason, detail })), [{ reason: "receipt_too_old", detail: "own_activity_not_recorded_1" }])
+  assert.deepEqual(reasonsOf(result, "nameless"), ["not_bound"], "a receipt with no desk cannot be recognized")
+  assert.deepEqual(reasonsOf(result, "abroad"), ["not_bound"], "a receipt naming another desk is not this desk's")
 }))
 
 test("with no receipt recording own_activity, mentioned is not recorded, never 0", () => scratch(async (context) => {
@@ -962,19 +992,20 @@ test("with no receipt recording own_activity, mentioned is not recorded, never 0
   repo.commit("2026-09-25T08:45:00Z", { "t/a/work.md": "x\n" })
   await addSession(context, 1, "t", "b", { receipt: 4 })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(result.counts.mentioned, { total: "not_recorded", recorded: 0, not_recorded: 1 })
+  assert.deepEqual(result.counts.mentioned, NOT_RECORDED_OF(1))
   const quiet = reconcile({ deskRoot: desk, since: "2026-09-01T00:00:00.000Z", until: "2026-09-02T00:00:00.000Z", env })
-  assert.deepEqual(quiet.counts.mentioned, { total: "not_recorded", recorded: 0, not_recorded: 0 }, "no session to say is not a measured zero")
+  assert.deepEqual(quiet.counts.mentioned, NOT_RECORDED_OF(0), "no session to say is not a measured zero")
 }))
 
 test("active_ms is the number the pipeline would publish: an interval outside the session is dropped, a job with no card time says not recorded, and a shared session splits by segments", () => scratch(async (context) => {
   const { desk, env } = context
-  await standardDesk(desk, ["skew", "nocard", "far", "one", "two"].map((slug) => ["t", slug]))
-  await addSession(context, 1, "t", "skew", { span: { started_at: "2026-09-25T07:00:00.000Z" } })
-  await addSession(context, 2, "t", "nocard", { created: null })
-  await addSession(context, 4, "t", "far", { created: "2010-01-01T00:00:00.000Z" })
+  await standardDesk(desk, ["skew", "nocard", "far", "one", "two"].map((slug) => ["t", slug]), { remote: REMOTE })
+  await setVisibility(env, "private")
+  await addSession(context, 1, "t", "skew", { remote: REMOTE, span: { started_at: "2026-09-25T07:00:00.000Z" } })
+  await addSession(context, 2, "t", "nocard", { remote: REMOTE, created: null })
+  await addSession(context, 4, "t", "far", { remote: REMOTE, created: "2010-01-01T00:00:00.000Z" })
   // One session, two jobs: worker 0's time is split at five minutes, and the subagent interval (08:10:05, agent 0) falls in the second.
-  await addSession(context, 3, "t", "one", { agents: [0], segments: [{ start_ms: 0, end_ms: 300000 }], alsoJobs: [{ slug: "two", agents: [0], segments: [{ start_ms: 600000, end_ms: 1200000 }] }] })
+  await addSession(context, 3, "t", "one", { remote: REMOTE, agents: [0], segments: [{ start_ms: 0, end_ms: 300000 }], alsoJobs: [{ slug: "two", agents: [0], segments: [{ start_ms: 600000, end_ms: 1200000 }] }] })
   const root = await factoryStateRoot(env)
   const file = path.join(root, "outbox", "ourostack__factory", `${sessionName(1)}.json`)
   const facts = JSON.parse(readFileSync(file, "utf8"))
@@ -983,19 +1014,36 @@ test("active_ms is the number the pipeline would publish: an interval outside th
   writeFileSync(file, JSON.stringify(facts))
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   const active = (slug) => result.tasks.find((task) => task.slug === slug).story.map((entry) => entry.active_ms)
-  assert.deepEqual(active("skew"), [844000], "a legacy job with no segments keeps every interval inside the session and drops the skewed ones")
-  assert.deepEqual(active("nocard"), ["not_recorded"], "the pipeline publishes nothing for a job whose card has no creation time")
-  assert.deepEqual(active("far"), ["not_recorded"], "a card created more than ten years before the session has no published offset either")
-  assert.deepEqual(active("one"), [249000])
-  assert.deepEqual(active("two"), [595000])
+  assert.deepEqual(active("skew"), [got(844000)], "a legacy job with no segments keeps every interval inside the session and drops the skewed ones")
+  assert.deepEqual(active("nocard"), [NOT_RECORDED], "the pipeline publishes nothing for a job whose card has no creation time")
+  assert.deepEqual(active("far"), [NOT_RECORDED], "a card created more than ten years before the session has no published offset either")
+  assert.deepEqual(active("one"), [got(249000)])
+  assert.deepEqual(active("two"), [got(595000)])
+}))
+
+test("a desk whose timing is withheld has no published timeline, so active_ms says withheld, never a number", () => scratch(async (context) => {
+  const { desk, env } = context
+  await standardDesk(desk, [["t", "w"]], { remote: REMOTE })
+  await addSession(context, 1, "t", "w", { remote: REMOTE, boundBy: "focus" })
+  const active = () => reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).tasks[0].story[0].active_ms
+  assert.deepEqual(active(), { state: "withheld" }, "no visibility record: not known to be private")
+  await setVisibility(env, "public")
+  assert.deepEqual(active(), { state: "withheld" })
+  const root = await factoryStateRoot(env)
+  await writeFile(path.join(root, "visibility.json"), "{ not json")
+  const broken = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(broken.tasks[0].story[0].active_ms, { state: "withheld" })
+  assert.equal(broken.warnings, undefined, "without a store the visibility file is not what this report is about")
+  await setVisibility(env, "private")
+  assert.equal(active().state, "measured")
 }))
 
 test("status_unobserved says not_checked with no store, and counts what it found with one", () => scratch(async (context) => {
   const { desk, env, base } = context
   const repo = await standardDesk(desk, [["t", "a"]])
   repo.commit("2026-09-25T10:00:00Z", { "t/a/work.md": "x\n" })
-  assert.equal(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).counts.status_unobserved, "not_checked")
-  assert.equal(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: path.join(base, "nostore"), env }).counts.status_unobserved, 0)
+  assert.deepEqual(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).counts.status_unobserved, { state: "not_checked" })
+  assert.deepEqual(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: path.join(base, "nostore"), env }).counts.status_unobserved, got(0))
 }))
 
 test("a Desk-Tidy trailer is read as git reads trailers: any case, and only in the last paragraph on its own", () => scratch(async ({ desk, env }) => {
@@ -1008,6 +1056,8 @@ test("a Desk-Tidy trailer is read as git reads trailers: any case, and only in t
   assert.deepEqual(result.tasks.map((task) => task.slug), ["later", "prose"])
 }))
 
-test("every reason in the fixed vocabulary was reached by a test above", () => {
-  assert.deepEqual(RECONCILE_REASONS.filter((reason) => !REACHED.has(reason)), [])
+// Every reason in the fixed vocabulary must have been reached by a test in this file. Only a whole-file run can say, so a name filter skips it.
+after(() => {
+  if (process.execArgv.some((arg) => arg.includes("test-name-pattern")) || process.argv.some((arg) => arg.includes("test-name-pattern"))) return
+  assert.deepEqual(RECONCILE_REASONS.filter((reason) => !REACHED.has(reason)), [], "reasons no test reached")
 })

@@ -14,15 +14,20 @@
 // session (a job with none holds the whole session). A task with neither is listed in `housekeeping_cards`
 // and in no mismatch, unless the store counted a session of it in the window (`store_only`).
 //
-// Story. Each listed task carries `story`: its bound sessions by start, each with `active_ms` (the session's
-// turn, tool and subagent time cut to the job as the pipeline cuts it, never a segment's wall span; `null`
-// when the facts cannot be read) and `bound_by`, from the local receipt: `focus`, `inferred`, `subagent_only`
-// (a current receipt with no entry for the job: only subagents worked it) or `not_recorded` (a receipt older
-// than BINDING_VERSION, or none). `counts.bound_by` counts the story entries each way. The top-level
-// `sessions` lists each story session once with the receipt's two measures, `segments_capped_ms` and
-// `repository_evidence_unavailable` (the receipt's `repo_unresolved`: directories that no longer exist); a
-// receipt written before a measure existed says `not_recorded`, never 0, and the `counts` totals give the
-// sum of the recorded ones with how many sessions were and were not recorded (`total: null` when none was).
+// Measures. A number that may be missing is never a bare number, 0, null or a string: it is `{ state, value }` (`measure`), `state` one of
+// `measured` (with `value`), `not_recorded` (the receipt or facts cannot say), `not_checked` (the check was not run, as `status_unobserved`
+// without `--store`) or `withheld` (the desk keeps no job timing, so the pipeline publishes no timeline). A total over several is
+// `{ state, value, of, not_recorded }`: `of` were measured, `not_recorded` were not, and `value` is a floor when `not_recorded` is above zero.
+//
+// Story. Each listed task carries `story`: its bound sessions by start, each with `active_ms` (a measure: the session's turn, tool and subagent
+// time cut to the job exactly as the pipeline publishes it, `jobActiveMs`, never a segment's wall span; `not_recorded` where the pipeline would
+// publish nothing or the facts cannot be read, `withheld` on a desk not known to be private) and `bound_by`, from the local receipt: `focus`,
+// `inferred`, `subagent_only` (a current receipt with no entry for the job: only subagents worked it) or `not_recorded` (a receipt older
+// than BINDING_VERSION, or none). `counts.bound_by` counts the story entries each way. The top-level `sessions` lists each story session once
+// with the receipt's two measures, `segments_capped_ms` and `repository_evidence_unavailable` (the receipt's `repo_unresolved`: directories
+// that no longer exist), each a measure that is `not_recorded` when the receipt predates it; `counts` gives their totals. `counts.mentioned`
+// is a total over the sessions that recorded their own activity for this desk (`of`; `not_recorded` counts this desk's sessions in the window
+// that did not, and sessions recorded for another desk are in neither); it is `not_recorded` when none did.
 //
 // Reasons, per task with real work (first that explains it wins; see the table in the task report):
 //   card_missing   no readable card (a task with no card is never a job)
@@ -32,6 +37,8 @@
 //                  the own activity of a session bound to another task is `counts.mentioned`, not a mismatch.
 //   not_opted_in, route_changed, held, log_missing   the bound session's marker, pipeline order
 //   stale_binding  receipt below BINDING_VERSION
+//   receipt_too_old  no bound session, and a real commit that no recorded own activity owns but a session of this desk overlaps whose receipt
+//                  predates `own_activity` (it names this desk, or binds one of its tasks): it may have made the commit, so `not_bound` would be untrue
 //   focus_disagrees  the receipt says a declared stretch held none of the job's own events (reported in addition)
 //   quarantined, not_delivered   the outbox file is held, or was never delivered
 //   pr_open        delivered, and the store's intake pull request is still open
@@ -86,7 +93,7 @@ const MIN_SECRET_BYTES = 32
 const GIT_TIMEOUT_MS = 120000
 // A commit is a tidy when its subject starts like this (history from before the `Desk-Tidy: true` trailer) or it carries the trailer.
 const TIDY_SUBJECT = /^(?:Tidy desk|Revert the desk tidy|Revert "Tidy desk)/u
-const NOT_RECORDED = "not_recorded"
+const NOT_RECORDED = "not_recorded" // a category (`bound_by`) with no value; a number that may be missing is a `measure`
 const BOUND_BY_VALUES = new Set(["focus", "inferred"])
 
 const rank = (reason) => RECONCILE_REASONS.indexOf(reason)
@@ -162,6 +169,20 @@ function realOf(file) {
   }
 }
 
+// The one way this report gives a number that may be missing: `{ state, value }`, `state` one of `measured`, `not_recorded` (the receipt
+// or facts cannot say), `not_checked` (the check was not run) or `withheld` (the desk withholds job timing), and `value` only when measured.
+// A total adds `of` (how many were measured) and `not_recorded` (how many were not), so a measured total is a floor when `not_recorded` is
+// above zero. A consumer reads `state` first and never sums a raw field.
+function measure(state, value, population = {}) {
+  return { state, ...(state === "measured" ? { value } : {}), ...population }
+}
+
+// The total of measures over a population: measured when any was, with how many were and were not.
+function totalOf(measures) {
+  const recorded = measures.filter((item) => item.state === "measured")
+  return measure(recorded.length === 0 ? "not_recorded" : "measured", recorded.reduce((sum, item) => sum + item.value, 0), { of: recorded.length, not_recorded: measures.length - recorded.length })
+}
+
 const isSpan = (item) => isPlainObject(item) && Number.isFinite(item.start_ms) && Number.isFinite(item.end_ms)
 
 // Where a job holds its session, as absolute `[start, end]` spans: its segments, or the whole session when it has none (a job with only
@@ -172,8 +193,8 @@ function jobSpans(binding, start, end) {
 }
 
 // The active time the pipeline would publish for this session and job (`jobActiveMs`, the pipeline's own rule, fed the session as publishing
-// would carry it: offsets in ms from the session's start, the job's offset from its card's creation time), or `not_recorded` where the
-// pipeline would publish nothing (no readable card creation time, an offset beyond the published limit) or the facts cannot be read as that.
+// would carry it: offsets in ms from the session's start, the job's offset from its card's creation time) as a measure, `not_recorded` where
+// the pipeline would publish nothing (no readable card creation time, an offset beyond the published limit) or the facts cannot be read as that.
 function activeMsOf(facts, binding, startedMs, created) {
   try {
     const offset = created === null ? null : startedMs - created
@@ -181,9 +202,9 @@ function activeMsOf(facts, binding, startedMs, created) {
       duration_ms: Date.parse(facts.session.derived_through) - startedMs,
       intervals: facts.intervals.map((interval) => ({ ...interval, start_ms: Date.parse(interval.start) - startedMs, end_ms: Date.parse(interval.end) - startedMs })),
     }, { ...binding, session_offset_ms: offset !== null && Math.abs(offset) <= PUBLISHED_LIMITS.maxOffsetMs ? offset : null })
-    return active === null ? NOT_RECORDED : active
+    return active === null ? measure("not_recorded") : measure("measured", active)
   } catch {
-    return NOT_RECORDED
+    return measure("not_recorded")
   }
 }
 
@@ -283,7 +304,8 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   const withFacts = new Set() // outbox file names, in any store
   const localSessions = new Map() // published-comparable session id -> { start, end, spans: job -> absolute spans }
   // outbox file name -> { start, end, jobs: the jobs it binds, kind, own }. `kind` is `here` (its receipt records its own activity for this desk, `own`
-  // as absolute spans), `elsewhere` (it records it for another desk) or `unrecorded` (its receipt predates `own_activity`, or there is none).
+  // as absolute spans), `elsewhere` (it records it for another desk) or `unrecorded` (its receipt predates `own_activity`, or there is none; `named` when
+  // the receipt still names this desk).
   const sessionInfo = new Map()
 
   // The receipt of a derived session, or `null`; a receipt is current from BINDING_VERSION on, and only a current one says how jobs were bound.
@@ -301,7 +323,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   }
   const measureOf = (name, field) => {
     const value = receiptOf(name)?.[field]
-    return Number.isSafeInteger(value) && value >= 0 ? value : NOT_RECORDED
+    return Number.isSafeInteger(value) && value >= 0 ? measure("measured", value) : measure("not_recorded")
   }
   const sameDesk = new Map()
   const isThisDesk = (deskRootOfReceipt) => {
@@ -311,8 +333,9 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   // A session's own activity counts here only when its receipt names this desk, so another desk's session never owns this desk's commit.
   const ownOf = (name, start) => {
     const receipt = receiptOf(name)
-    if (!Array.isArray(receipt?.own_activity)) return { kind: "unrecorded", own: [] }
-    if (typeof receipt.desk_root !== "string" || !isThisDesk(receipt.desk_root)) return { kind: "elsewhere", own: [] }
+    const named = typeof receipt?.desk_root === "string" && isThisDesk(receipt.desk_root)
+    if (!Array.isArray(receipt?.own_activity)) return { kind: "unrecorded", named, own: [] }
+    if (!named) return { kind: "elsewhere", own: [] }
     return { kind: "here", own: receipt.own_activity.filter((span) => Array.isArray(span) && Number.isFinite(span[0]) && Number.isFinite(span[1])).map(([from, to]) => [start + from, start + to]) }
   }
   // A retracted session's kept copy (`retracted-copies/`, see `session-route.js`) is evidence like any outbox file, and what `route_changed` reports.
@@ -391,12 +414,16 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
 
   // ---- the store ----
   const storeFacts = new Map() // store job id -> [{ id, start, end }]
-  let deskPrivate = true
+  // Whether the desk is known to be private: only then does the publisher keep job timing (`publish.js`), so only then is there a timeline.
+  const repo = GITHUB_REMOTE.exec(normalizeRemote(deskRemote))?.[1]?.toLowerCase() ?? null
+  let visibility = readState(path.join(dir, "visibility.json"), {})
+  if (visibility === null) {
+    if (storeDir !== null) warn("visibility_unreadable")
+    visibility = {}
+  }
+  const deskPrivate = repo !== null && PRIVATE_DESKS.has(visibility[Object.keys(visibility).find((name) => name.toLowerCase() === repo)]?.visibility)
   let secret = null
   if (storeDir !== null) {
-    const repo = GITHUB_REMOTE.exec(normalizeRemote(deskRemote))?.[1]?.toLowerCase() ?? null
-    const visibility = readState(path.join(dir, "visibility.json"), {}) ?? (warn("visibility_unreadable"), {})
-    deskPrivate = repo !== null && PRIVATE_DESKS.has(visibility[Object.keys(visibility).find((name) => name.toLowerCase() === repo)]?.visibility)
     if (!deskPrivate) {
       try {
         const bytes = readFileSync(path.join(dir, "machine-secret"))
@@ -520,7 +547,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   let deskJobs
   const unsaid = (info) => {
     deskJobs ??= deskJobSet()
-    return info.kind === "unrecorded" && [...info.jobs].some((job) => deskJobs.has(job))
+    return info.kind === "unrecorded" && (info.named || [...info.jobs].some((job) => deskJobs.has(job)))
   }
   const unsaidAt = (ms) => [...sessionInfo.entries()].filter(([, info]) => unsaid(info) && info.start <= ms && ms <= info.end).map(([name]) => name)
   const mentioned = new Set() // shas of real commits made by a session bound to another task
@@ -577,7 +604,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     for (const session of bound) {
       story.set(session.name, {
         session: session.name.slice(0, -5), start: new Date(session.start).toISOString(),
-        active_ms: activeMsOf(session.facts, session.binding, session.start, session.created), bound_by: boundByOf(session.name, task.job),
+        active_ms: deskPrivate ? activeMsOf(session.facts, session.binding, session.start, session.created) : measure("withheld"), bound_by: boundByOf(session.name, task.job),
       })
     }
     report.push({
@@ -628,11 +655,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   // Real commits made by a session bound to another task, which only a receipt that records own activity can say: not recorded where none does.
   const holding = [...sessionInfo.values()].filter((info) => overlaps(info.start, info.end))
   const recordedSessions = holding.filter((info) => info.kind === "here").length
-  const mentionedCount = { total: recordedSessions === 0 ? NOT_RECORDED : mentioned.size, recorded: recordedSessions, not_recorded: holding.filter(unsaid).length }
-  const totalOf = (field) => {
-    const recorded = sessions.map((session) => session[field]).filter((value) => value !== NOT_RECORDED)
-    return { total: recorded.length === 0 ? null : recorded.reduce((sum, value) => sum + value, 0), recorded: recorded.length, not_recorded: sessions.length - recorded.length }
-  }
+  const mentionedCount = measure(recordedSessions === 0 ? "not_recorded" : "measured", mentioned.size, { of: recordedSessions, not_recorded: holding.filter(unsaid).length })
   return {
     ok: true,
     window: { since, until },
@@ -644,8 +667,9 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     unbound_markers: deskMarkers.map(({ name, marker }) => ({ session: name.slice(0, -5), ...(markerProblem(name, marker) ?? { reason: null, detail: "marker_not_bound" }) })),
     counts: {
       tasks: report.length, matched: report.filter((item) => !item.mismatched).length, mismatched: mismatches.length, by_reason: byReason, mentioned: mentionedCount,
-      status_unobserved: storeDir === null ? "not_checked" : byReason.status_unobserved ?? 0,
-      bound_by: boundBy, segments_capped_ms: totalOf("segments_capped_ms"), repository_evidence_unavailable: totalOf("repository_evidence_unavailable"),
+      status_unobserved: measure(storeDir === null ? "not_checked" : "measured", byReason.status_unobserved ?? 0),
+      bound_by: boundBy, segments_capped_ms: totalOf(sessions.map((session) => session.segments_capped_ms)),
+      repository_evidence_unavailable: totalOf(sessions.map((session) => session.repository_evidence_unavailable)),
     },
     ...(warnings.size > 0 ? { warnings: [...warnings] } : {}),
   }

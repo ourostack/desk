@@ -1,6 +1,5 @@
-import { bindingsOverlap, overlappingBindings } from "./timeline.js"
+import { ACTIVE_KINDS, bindingsOverlap, duration, overlappingBindings, union } from "./timeline.js"
 
-const ACTIVE_KINDS = new Set(["turn", "tool", "subagent"])
 const WAIT_KINDS = Object.freeze(["human_wait", "permission_wait", "api_retry", "compaction"])
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const CONTRIBUTOR_ORDER = Object.freeze([
@@ -35,23 +34,6 @@ const unavailable = (reason, extra = {}) => ({ class: "unavailable", value: null
 
 function compareText(left, right) {
   return Number(left > right) - Number(left < right)
-}
-
-function union(intervals) {
-  const sorted = intervals
-    .map((interval) => [interval.start_ms, interval.end_ms])
-    .sort((left, right) => left[0] - right[0] || left[1] - right[1])
-  const merged = []
-  for (const [start, end] of sorted) {
-    const last = merged.at(-1)
-    if (last && start <= last[1]) last[1] = Math.max(last[1], end)
-    else merged.push([start, end])
-  }
-  return merged
-}
-
-function duration(intervals) {
-  return intervals.reduce((total, [start, end]) => total + end - start, 0)
 }
 
 // The parts of merged intervals that fall inside [start, end).
