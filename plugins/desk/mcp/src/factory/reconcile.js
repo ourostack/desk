@@ -7,20 +7,37 @@
 //
 // Desk side. `git log --since --until --name-status -M` on commit dates; `taskCommitRule` (binding.js, the same
 // rule the binder uses) classes each task a commit touches: `real`, `housekeeping` (a card edit limited to
-// title, track or updated, or a pure rename) or `mass` (a commit spanning more than three tasks). A task with
-// only housekeeping or mass commits is `mechanical_only` and not activity. Bound sessions in local facts whose
-// span touches the window are activity too.
+// title, track or updated, or a pure rename), `mass` (a commit spanning more than three tasks) or `tidy` (a
+// commit with a `Desk-Tidy: true` trailer, or, for history, a subject starting `Tidy desk`, `Revert the desk
+// tidy` or `Revert "Tidy desk`; the subject is matched and never kept). A task is real work in the window when
+// it has a real commit, or a bound session holds time in the window: a job holds its segments, not its whole
+// session (a job with none holds the whole session). A task with neither is listed in `housekeeping_cards`
+// and in no mismatch, unless the store counted a session of it in the window (`store_only`).
 //
-// Reasons, per task with activity (first that explains it wins; see the table in the task report):
+// Story. Each listed task carries `story`: its bound sessions by start, each with `active_ms` (the session's
+// turn, tool and subagent time cut to the job as the pipeline cuts it, never a segment's wall span; `null`
+// when the facts cannot be read) and `bound_by`, from the local receipt: `focus`, `inferred`, `subagent_only`
+// (a current receipt with no entry for the job: only subagents worked it) or `not_recorded` (a receipt older
+// than BINDING_VERSION, or none). `counts.bound_by` counts the story entries each way. The top-level
+// `sessions` lists each story session once with the receipt's two measures, `segments_capped_ms` and
+// `repository_evidence_unavailable` (the receipt's `repo_unresolved`: directories that no longer exist); a
+// receipt written before a measure existed says `not_recorded`, never 0, and the `counts` totals give the
+// sum of the recorded ones with how many sessions were and were not recorded (`total: null` when none was).
+//
+// Reasons, per task with real work (first that explains it wins; see the table in the task report):
 //   card_missing   no readable card (a task with no card is never a job)
-//   no_marker      no bound session in local facts; the detail counts the desk's unbound markers in the
-//                  window (`unbound_markers_<n>`). A task is never blamed on a marker: nothing ties an unbound
-//                  marker to a task.
+//   not_bound      no bound session, and a real commit no session's own activity (receipt `own_activity`) owns;
+//                  the detail counts the desk's unbound markers in the window (`unbound_markers_<n>`). A task
+//                  is never blamed on a marker: nothing ties an unbound marker to a task. A real commit inside
+//                  the own activity of a session bound to another task is `counts.mentioned`, not a mismatch.
 //   not_opted_in, route_changed, held, log_missing   the bound session's marker, pipeline order
 //   stale_binding  receipt below BINDING_VERSION
+//   focus_disagrees  the receipt says a declared stretch held none of the job's own events (reported in addition)
 //   quarantined, not_delivered   the outbox file is held, or was never delivered
 //   pr_open        delivered, and the store's intake pull request is still open
 //   invalid_status the card's status is outside the eight (reported in addition to any other reason)
+//   status_unobserved  with `--store`: the card's status differs from the latest status the store observed
+//                  for the job (a transition on a card outside a session's focus is not recorded)
 // `store_only`: a store job whose session falls in the window while the desk shows no real activity for it. A
 // job the desk cannot map to a task (unknown, or keyed and not known on this machine) prints `job: null`. On a
 // keyed (public) desk the store's job ids are keyed, so `store_only` fires only for jobs with local facts on this
@@ -48,6 +65,7 @@ import { createDeskReaders, gitEnv, parseNameStatus, readDeskRemote } from "./de
 import { readSmallText, validMarker } from "./marker.js"
 import { validatePublishedBytes } from "./published-schema.js"
 import { REFUSALS, keyedJobId } from "./publish.js"
+import { buildJobTimeline } from "./pipeline/timeline.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
 import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, markerRoute, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
@@ -66,6 +84,11 @@ const OPEN_PR_RESULTS = new Set(["delivered_pr_open", "intake_stale_retried"])
 const ELSEWHERE_DETAIL = Object.freeze({ __proto__: null, away: "routes_elsewhere", stale: "stale_copy", stalled: "retraction_stalled" })
 const MIN_SECRET_BYTES = 32
 const GIT_TIMEOUT_MS = 120000
+// A commit is a tidy when its subject starts like this (history from before the `Desk-Tidy: true` trailer) or it carries the trailer.
+const TIDY_SUBJECT = /^(?:Tidy desk|Revert the desk tidy|Revert "Tidy desk)/u
+const ACTIVE_KINDS = new Set(["turn", "tool", "subagent"])
+const NOT_RECORDED = "not_recorded"
+const BOUND_BY_VALUES = new Set(["focus", "inferred"])
 
 const rank = (reason) => RECONCILE_REASONS.indexOf(reason)
 const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
@@ -83,21 +106,23 @@ function msOf(value) {
   return exact === null ? null : Date.parse(exact)
 }
 
-// The commits of the window: `[{ sha, at, entries }]`, or `null` when Git failed.
+// The commits of the window: `[{ sha, at, tidy, entries }]`, or `null` when Git failed.
 function gitCommits({ git, root, since, until }) {
   const result = spawnSync(git, [
     "-C", root, "-c", "core.quotepath=off", "-c", "log.showSignature=false",
-    "log", `--since=${since}`, `--until=${until}`, "--name-status", "-M", "-z", "--format=%x1e%H%x1f%cI",
+    "log", `--since=${since}`, `--until=${until}`, "--name-status", "-M", "-z", "--format=%x1e%H%x1f%cI%x1f%s%x1f%(trailers:key=Desk-Tidy,valueonly)",
   ], { encoding: "utf8", env: gitEnv(), timeout: GIT_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
   if (result.error || result.status !== 0) return null
   const commits = []
   for (const record of result.stdout.split("\x1e")) {
     const headerEnd = record.indexOf("\0")
     if (headerEnd === -1) continue
-    const [sha, committed] = record.slice(0, headerEnd).split("\x1f")
+    const [sha, committed, subject = "", ...trailers] = record.slice(0, headerEnd).split("\x1f")
     const at = normalizeTimestamp(committed)
     if (!/^[0-9a-f]{40,64}$/u.test(sha) || at === null) continue
-    commits.push({ sha, at, entries: parseNameStatus(record.slice(headerEnd + 1).replace(/^\n/u, "")) })
+    // The subject and trailer are read to tell a tidy and are never kept.
+    const tidy = TIDY_SUBJECT.test(subject) || trailers.join("").split("\n").some((line) => line.trim().toLowerCase() === "true")
+    commits.push({ sha, at, tidy, entries: parseNameStatus(record.slice(headerEnd + 1).replace(/^\n/u, "")) })
   }
   return commits
 }
@@ -135,6 +160,40 @@ function realOf(file) {
     return realpathSync(file)
   } catch {
     return path.resolve(file)
+  }
+}
+
+const isSpan = (item) => isPlainObject(item) && Number.isFinite(item.start_ms) && Number.isFinite(item.end_ms)
+
+// Where a job holds its session, as absolute `[start, end]` spans: its segments, or the whole session when it has none (a job with only
+// subagents holds no controller time).
+function jobSpans(binding, start, end) {
+  if (!Array.isArray(binding.segments)) return [[start, end]]
+  return binding.segments.filter(isSpan).map((segment) => [start + segment.start_ms, start + segment.end_ms])
+}
+
+// The time the job's workers were active in the session: the session's turn, tool and subagent intervals cut to the job as the pipeline cuts
+// them (`buildJobTimeline`, which owns `jobParts`), unioned so overlapping workers count once. `null` when the facts cannot be read as that.
+function activeMsOf(facts, binding, startedMs) {
+  try {
+    const intervals = facts.intervals
+      .filter((interval) => ACTIVE_KINDS.has(interval.kind))
+      .map((interval) => ({ ...interval, start_ms: Date.parse(interval.start) - startedMs, end_ms: Date.parse(interval.end) - startedMs }))
+      .filter((interval) => interval.end_ms > interval.start_ms)
+    const { intervals: parts } = buildJobTimeline("job", [{
+      session: { host: "claude-code", id: "x", duration_ms: 0, ended: true }, plugins: [], models: [], agents: [], intervals,
+      counts: { tool_calls: {}, tool_failures: {} }, refs: { prs: [], commits: [] }, unavailable: [],
+      jobs: [{ ...binding, job: "job", basis: [], session_offset_ms: 0, transitions: [], observed: null }],
+    }])
+    let total = 0
+    let reach = -Infinity
+    for (const part of parts) { // sorted by start
+      total += Math.max(0, part.end_ms - Math.max(part.start_ms, reach))
+      reach = Math.max(reach, part.end_ms)
+    }
+    return total
+  } catch {
+    return null
   }
 }
 
@@ -210,11 +269,11 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const verdict = rule(commit.sha, judged)
     const classes = new Map()
     for (const task of verdict.touched) classes.set(`${task.track}/${task.slug}`, "housekeeping")
-    for (const task of verdict.real) classes.set(`${task.track}/${task.slug}`, verdict.mass ? "mass" : "real")
+    for (const task of verdict.real) classes.set(`${task.track}/${task.slug}`, commit.tidy ? "tidy" : verdict.mass ? "mass" : "real")
     for (const task of rule(commit.sha, moved).touched) {
       if (!classes.has(`${task.track}/${task.slug}`)) classes.set(`${task.track}/${task.slug}`, "housekeeping")
     }
-    for (const [key, kind] of classes) taskOf(key).commits.push({ at: commit.at, class: kind })
+    for (const [key, kind] of classes) taskOf(key).commits.push({ at: commit.at, ms: Date.parse(commit.at), class: kind })
   }
 
   // ---- local factory state ----
@@ -232,7 +291,32 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   // Outbox facts: the sessions bound to each job (local facts only; times are absolute).
   const sessionsByJob = new Map()
   const withFacts = new Set() // outbox file names, in any store
-  const localSessions = new Map() // published-comparable session id -> { start, end }
+  const localSessions = new Map() // published-comparable session id -> { start, end, spans: job -> absolute spans }
+  const sessionInfo = new Map() // outbox file name -> { start, jobs: the jobs it binds, own: its own activity as absolute spans }
+
+  // The receipt of a derived session, or `null`; a receipt is current from BINDING_VERSION on, and only a current one says how jobs were bound.
+  const receiptOf = (name) => (isPlainObject(status.derivations?.[name]) ? status.derivations[name] : null)
+  const isCurrent = (receipt) => receipt !== null && receipt.binding_version >= BINDING_VERSION
+  const boundByOf = (name, job) => {
+    const receipt = receiptOf(name)
+    if (!isCurrent(receipt) || !isPlainObject(receipt.bound_by)) return NOT_RECORDED
+    if (!Object.hasOwn(receipt.bound_by, job)) return "subagent_only"
+    return BOUND_BY_VALUES.has(receipt.bound_by[job]) ? receipt.bound_by[job] : NOT_RECORDED
+  }
+  const disagreesOn = (name, job) => {
+    const list = receiptOf(name)?.focus_disagrees
+    return Array.isArray(list) && list.includes(job)
+  }
+  const measureOf = (name, field) => {
+    const value = receiptOf(name)?.[field]
+    return Number.isSafeInteger(value) && value >= 0 ? value : NOT_RECORDED
+  }
+  // A session's own activity counts here only when its receipt names this desk, so another desk's session never owns this desk's commit.
+  const ownSpansOf = (name, start) => {
+    const receipt = receiptOf(name)
+    if (!Array.isArray(receipt?.own_activity) || typeof receipt.desk_root !== "string" || realOf(receipt.desk_root) !== root) return []
+    return receipt.own_activity.filter((span) => Array.isArray(span) && Number.isFinite(span[0]) && Number.isFinite(span[1])).map(([from, to]) => [start + from, start + to])
+  }
   // A retracted session's kept copy (`retracted-copies/`, see `session-route.js`) is evidence like any outbox file, and what `route_changed` reports.
   const seen = new Set()
   const slugs = new Set([...listNames(path.join(dir, "outbox")), ...listNames(path.join(dir, RETRACTED_COPIES))].filter((name) => STORE_SLUG.test(name)))
@@ -248,19 +332,24 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
         continue
       }
       withFacts.add(name)
-      localSessions.set(facts.session.id, { start, end })
+      const local = { start, end, spans: new Map() }
+      localSessions.set(facts.session.id, local)
+      if (!sessionInfo.has(name)) sessionInfo.set(name, { start, jobs: new Set(), own: ownSpansOf(name, start) })
       for (const binding of facts.jobs) {
         if (typeof binding?.job !== "string" || !PATTERNS.jobId.test(binding.job)) continue
         if (!sessionsByJob.has(binding.job)) sessionsByJob.set(binding.job, [])
-        sessionsByJob.get(binding.job).push({ slug, name, start, end, created: msOf(binding.task_created_at) })
+        const spans = jobSpans(binding, start, end)
+        local.spans.set(binding.job, spans)
+        sessionInfo.get(name).jobs.add(binding.job)
+        sessionsByJob.get(binding.job).push({ slug, name, start, end, spans, created: msOf(binding.task_created_at), facts, binding })
       }
     }
   }
 
-  // Bound sessions touching the window are activity too.
+  // Bound sessions holding time in the window are activity too: a job holds its segments, not the whole session.
+  const holdsWindow = (session) => session.spans.some(([from, to]) => overlaps(from, to))
   for (const [job, sessions] of sessionsByJob) {
-    const touching = sessions.filter((session) => overlaps(session.start, session.end))
-    if (touching.length === 0) continue
+    if (!sessions.some(holdsWindow)) continue
     const key = allJobs().get(job)
     if (key !== undefined) taskOf(key)
   }
@@ -337,24 +426,31 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       for (const job of published.jobs) {
         if (!storeFacts.has(job.job)) storeFacts.set(job.job, [])
         const local = localSessions.get(published.session.id)
-        storeFacts.get(job.job).push({ id: published.session.id, local, offset: job.session_offset_ms, duration: published.session.duration_ms })
+        storeFacts.get(job.job).push({ id: published.session.id, local, offset: job.session_offset_ms, duration: published.session.duration_ms, observed: job.observed === null ? null : job.observed.status })
       }
     }
   }
   const storeIdOf = (job) => (deskPrivate ? job : secret === null ? null : keyedJobId(job, secret))
-  // Where a store session sits in time: local facts when this machine has them, else the card's `created` plus the offset.
-  const placement = (session, created) => {
-    if (session.local !== undefined) return session.local
+  // Where a store session sits in time, as `[start, end]` spans: this machine's local facts when it has them (the job's segments, else the
+  // whole session), else the card's `created` plus the offset. `null` when nothing places it.
+  const placement = (session, created, plain) => {
+    if (session.local !== undefined) return session.local.spans.get(plain) ?? [[session.local.start, session.local.end]]
     if (created === null || created === undefined || session.offset === null) return null
     const start = created + session.offset
-    return { start, end: start + session.duration }
+    return [[start, start + session.duration]]
+  }
+  // When a store session ended, or -Infinity when nothing places it.
+  const endOf = (session, created) => {
+    if (session.local !== undefined) return session.local.end
+    const place = placement(session, created)
+    return place === null ? -Infinity : place[0][1]
   }
 
   // ---- reasons ----
   const createdMs = (card) => (card?.created ? Date.parse(card.created) : null)
-  const inWindow = (session, created) => {
-    const place = placement(session, created)
-    return place !== null && overlaps(place.start, place.end)
+  const inWindow = (session, created, plain) => {
+    const place = placement(session, created, plain)
+    return place !== null && place.some(([from, to]) => overlaps(from, to))
   }
   const mismatches = []
   const report = []
@@ -400,9 +496,8 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     return open === null ? null : { reason: "pr_open", detail: open }
   }
 
-  // The reason a task with real activity is not counted, or `null`: the best bound session's. No bound session is `no_marker`.
+  // The reason a task with a bound session is not counted, or `null`: the best bound session's.
   const taskProblem = (bound, inStore) => {
-    if (bound.length === 0) return { reason: "no_marker", detail: `unbound_markers_${deskMarkers.length}` }
     let furthest = null
     for (const session of bound) {
       const problem = sessionProblem(session, inStore)
@@ -420,24 +515,61 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     }
   }
 
+  // The sessions that own a commit: those whose receipt's own activity (a `git commit` window or a task-tool call's minute) holds its time.
+  const ownersOf = (ms) => [...sessionInfo.values()].filter((info) => info.own.some(([from, to]) => from <= ms && ms <= to))
+  let mentioned = 0
+  const housekeeping = []
+
   for (const task of [...tasks.values()].sort((a, b) => byKey(a.key, b.key))) {
     task.job = jobOfKey(task.key).job
-    const bound = (sessionsByJob.get(task.job) ?? []).filter((session) => overlaps(session.start, session.end))
-    const real = task.commits.some((commit) => commit.class === "real") || bound.length > 0
+    const bound = (sessionsByJob.get(task.job) ?? []).filter(holdsWindow)
+    // A real commit on this task made by a session bound to another task is mentioned; one no session owns leaves the task not bound.
+    let unowned = 0
+    const realCommits = task.commits.filter((commit) => commit.class === "real")
+    for (const commit of realCommits) {
+      const owners = ownersOf(commit.ms)
+      if (owners.some((owner) => owner.jobs.has(task.job))) continue
+      if (owners.some((owner) => owner.jobs.size > 0)) mentioned += 1
+      else unowned += 1
+    }
+    const real = realCommits.length > 0 || bound.length > 0
     const storeId = storeIdOf(task.job)
     const storeSessions = storeId === null ? null : storeFacts.get(storeId) ?? []
     const before = mismatches.length
 
-    if (!real) push(task, "mechanical_only", `commits_${task.commits.length}`)
-    else if (task.card === null) push(task, "card_missing", "no_card")
+    if (!real) {
+      // The factory counted a session in the window that the desk's history does not show as real work.
+      if (storeSessions === null || !storeSessions.some((session) => inWindow(session, createdMs(task.card), task.job))) {
+        housekeeping.push({ track: task.track, slug: task.slug })
+        continue
+      }
+      push(task, "store_only", "store_session_in_window")
+    } else if (task.card === null) push(task, "card_missing", "no_card")
     else {
-      const problem = taskProblem(bound, storeSessions !== null && storeSessions.length > 0)
-      if (problem !== null) push(task, problem.reason, problem.detail)
+      if (bound.length === 0) {
+        if (unowned > 0) push(task, "not_bound", `unbound_markers_${deskMarkers.length}`)
+      } else {
+        const problem = taskProblem(bound, storeSessions !== null && storeSessions.length > 0)
+        if (problem !== null) push(task, problem.reason, problem.detail)
+        // The receipt's own finding: a declared stretch in which inference found other work and none on this task.
+        if (bound.some((session) => disagreesOn(session.name, task.job))) push(task, "focus_disagrees", "declared_stretch_without_own_events")
+      }
       if (!ENUMS.jobStatus.includes(task.card.status)) push(task, "invalid_status", "status_outside_lifecycle")
+      else if (storeSessions !== null) {
+        // The latest status the store observed for the job, when the card has since moved on without a session seeing it.
+        const created = createdMs(task.card)
+        const seen = storeSessions.filter((session) => session.observed !== null).sort((a, b) => endOf(a, created) - endOf(b, created)).at(-1)
+        if (seen !== undefined && seen.observed !== task.card.status) push(task, "status_unobserved", "card_status_not_in_store")
+      }
     }
-    // The factory counted a session in the window that the desk's history does not show as real work.
-    if (!real && storeSessions !== null && storeSessions.some((session) => inWindow(session, createdMs(task.card)))) push(task, "store_only", "store_session_in_window")
 
+    const story = new Map() // by file name: a session copied in two outboxes tells its story once
+    for (const session of bound) {
+      story.set(session.name, {
+        session: session.name.slice(0, -5), start: new Date(session.start).toISOString(),
+        active_ms: activeMsOf(session.facts, session.binding, session.start), bound_by: boundByOf(session.name, task.job),
+      })
+    }
     report.push({
       track: task.track,
       slug: task.slug,
@@ -446,6 +578,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
         ...task.commits.map((commit) => ({ kind: "commit", at: commit.at, class: commit.class })),
         ...bound.map((session) => ({ kind: "session", session: session.name.slice(0, -5), start: new Date(session.start).toISOString(), end: new Date(session.end).toISOString() })),
       ],
+      story: [...story.values()].sort((a, b) => byKey(a.start, b.start) || byKey(a.session, b.session)),
       store: storeDir === null ? { checked: false } : { checked: true, sessions: storeSessions === null ? null : storeSessions.length },
       mismatched: mismatches.length > before,
     })
@@ -457,10 +590,10 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const key = plain === null ? null : allJobs().get(plain) ?? null
     if (key !== null && tasks.has(key)) continue
     const created = key === null ? sessionsByJob.get(plain)?.[0]?.created ?? null : createdMs(cards.get(key))
-    if (!sessions.some((session) => inWindow(session, created))) continue
+    if (!sessions.some((session) => inWindow(session, created, plain))) continue
     const [track, slug] = key === null ? [null, null] : key.split("/")
     mismatches.push({ track, slug, job: plain ?? (deskPrivate ? storeId : null), reason: "store_only", detail: "store_session_in_window" })
-    if (key !== null) report.push({ track, slug, job: plain, activity: [], store: { checked: true, sessions: sessions.length }, mismatched: true })
+    if (key !== null) report.push({ track, slug, job: plain, activity: [], story: [], store: { checked: true, sessions: sessions.length }, mismatched: true })
   }
 
   mismatches.sort((a, b) => byKey(`${a.track}/${a.slug}`, `${b.track}/${b.slug}`) || rank(a.reason) - rank(b.reason))
@@ -470,14 +603,35 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     if (count > 0) byReason[reason] = count
   }
   const outTasks = report.map(({ mismatched, ...rest }) => rest)
+  // Each session that tells a task's story, once, with the receipt's two measures: how much time the segment cap dropped, and how many
+  // directories no longer existed, so no repository evidence is available for them. A receipt that predates a measure says `not_recorded`.
+  const storied = new Map()
+  const boundBy = { focus: 0, inferred: 0, subagent_only: 0, not_recorded: 0 }
+  for (const entry of outTasks.flatMap((task) => task.story)) {
+    storied.set(entry.session, entry)
+    boundBy[entry.bound_by] += 1
+  }
+  const sessions = [...storied.values()].sort((a, b) => byKey(a.start, b.start) || byKey(a.session, b.session)).map((entry) => ({
+    session: entry.session, start: entry.start,
+    segments_capped_ms: measureOf(`${entry.session}.json`, "segments_capped_ms"), repository_evidence_unavailable: measureOf(`${entry.session}.json`, "repo_unresolved"),
+  }))
+  const totalOf = (field) => {
+    const recorded = sessions.map((session) => session[field]).filter((value) => value !== NOT_RECORDED)
+    return { total: recorded.length === 0 ? null : recorded.reduce((sum, value) => sum + value, 0), recorded: recorded.length, not_recorded: sessions.length - recorded.length }
+  }
   return {
     ok: true,
     window: { since, until },
     desk: { person: alias },
     tasks: outTasks,
+    housekeeping_cards: housekeeping,
+    sessions,
     mismatches,
     unbound_markers: deskMarkers.map(({ name, marker }) => ({ session: name.slice(0, -5), ...(markerProblem(name, marker) ?? { reason: null, detail: "marker_not_bound" }) })),
-    counts: { tasks: report.length, matched: report.filter((item) => !item.mismatched).length, mismatched: mismatches.length, by_reason: byReason },
+    counts: {
+      tasks: report.length, matched: report.filter((item) => !item.mismatched).length, mismatched: mismatches.length, by_reason: byReason, mentioned,
+      bound_by: boundBy, segments_capped_ms: totalOf("segments_capped_ms"), repository_evidence_unavailable: totalOf("repository_evidence_unavailable"),
+    },
     ...(warnings.size > 0 ? { warnings: [...warnings] } : {}),
   }
 }
