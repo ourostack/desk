@@ -25,7 +25,8 @@ New-Item -ItemType Directory -Force -Path $tmp, $LogDir | Out-Null
 foreach ($dir in @($workspace, $tmp, $LogDir)) {
   icacls $dir /grant "${userName}:(OI)(CI)M" /T /C /Q | Out-Null
 }
-# The checkout is owned by the runner account; let Git operate in it as another user.
+# A person owns their own checkout. Without this Git refuses the repository as 'dubious ownership' for the new user.
+icacls $workspace /setowner $userName /T /C /Q | Out-Null
 git config --system --add safe.directory '*'
 
 $nodeDir = Split-Path (Get-Command node).Source
