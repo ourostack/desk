@@ -83,9 +83,11 @@ Include the mapper's `briefRules` in **both the implementer brief and every revi
 
 > verify or validate in your own worktree; never in a checkout your task does not own
 
-The first `briefRules` entry is a `Desk-Task: <track>/<slug>` line, which must be copied verbatim, on its own line, into every implementer and reviewer brief so the factory can credit each subagent's work to its own task. The second entry, `Never call task_focus; your work is credited through the Desk-Task line.`, comes with it and is copied the same way: a child shares the session's Desk server, so a `task_focus` call from a child would move the controller's focus.
+The first `briefRules` entry is a `Desk-Task: <track>/<slug>` line, which must be copied verbatim, on its own line, into every implementer and reviewer brief so the factory can credit each subagent's work to its own task. The second entry, `Never call task_focus; your work is credited through the Desk-Task line.`, comes with it and is copied the same way: the factory ignores a child's `task_focus` call, and because a child shares the session's Desk server, the call could only change the controller's own focus and hint. A child never calls it.
 
 Also pass the mapper's close-out rule in both brief types: every child returns every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record. `task-lifecycle` owns that return inventory and `git-hygiene` owns its safety gates; the mapper does not infer cleanup paths.
+
+When the work is the factory itself, invoke factory-work first and put its review questions in every reviewer brief.
 
 This rule is passed through the adapter, not patched into the vendored Superpowers templates. A [protected-checkout denial](../../docs/protected-checkouts.md) applies to parent agents and subagents alike; it does not grant ownership of a different checkout.
 

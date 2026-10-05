@@ -54,7 +54,7 @@ Triggers: "start a new task: …", "work on …", "I need to add X to Y", "let's
    - `track: <track-slug>`
    - `initiated_by: operator`
    - `repos: []` — populate only if the description names code repos; otherwise leave empty for non-coding tasks.
-   - `focus: true` — you are starting this work now, so the same call declares the task; no separate `task_focus` call follows.
+   - `focus: true` — the main agent declares the task in this call, so no `task_focus` call follows.
 
    Do not pass `created`, `updated` or `schema_version`: `task_create` sets them itself.
 4. **Add the task's row** to the track's `## Tasks` table, then **commit and push** the task card and track card to the workspace repo.
@@ -64,7 +64,7 @@ Triggers: "start a new task: …", "work on …", "I need to add X to Y", "let's
 
 Triggers: the agent notices mid-conversation that it's doing something worth tracking ("I'm digging into Z — this is a real task, not a one-shot answer"), OR the operator mentions something in passing that's clearly task-shaped ("oh, worth tracking that").
 
-1. **Create it and announce it in one line.** Check it is a new task, name it and route it as above, create it with `focus: true` (you are working on it now; a parked follow-up you will not work on now is created without it), and tell the human in one line, for example "Tracking this as `flaky-login-test` in the `auth-hardening` track." Do not wait for a reply. An explicit instruction not to write overrides this path (`using-desk` "Authority").
+1. **Create it and announce it in one line.** Check it is a new task, name it and route it as above, create it with `focus: true` unless you will not work on it now, and tell the human in one line, for example "Tracking this as `flaky-login-test` in the `auth-hardening` track." Do not wait for a reply. An explicit instruction not to write overrides this path (`using-desk` "Authority").
 2. **Same task.md shape as Path A**, except:
    - `initiated_by: agent`
    - Include a one-line `origin_note:` field summarizing what the agent was doing when it noticed (e.g. "spawned from investigation in `<other-task>` on 2026-05-18").

@@ -970,6 +970,23 @@ contract("evaluate-release keeps public findings free of times of day and privat
   assert.match(skill, /`desk:content-routing`/u);
 });
 
+// The Lean and terrarium guard for factory work lives in a triggered skill, so an agent that was not told still meets it.
+const factoryWork = "plugins/desk/skills/factory-work/SKILL.md";
+contract("factory-work triggers on factory work and carries the Lean reading and review questions", () => {
+  const skill = text(factoryWork);
+  const frontmatter = skill.split(/\n---\n/u, 1)[0];
+  assert.match(frontmatter, /^name: factory-work$/mu);
+  for (const word of ["designing", "planning", "changing", "reviewing", "derive", "binding", "reconcile", "flush", "kaizen", "andon", "waste labels"]) {
+    assert.ok(frontmatter.includes(word), `description names ${word}`);
+  }
+  assert.ok(frontmatter.length < 700, "description stays short");
+  for (const phrase of ["terrarium", "Lean reading", "zero never stands in for", "does this add waste", "only discouraged", "need a hand", "read as a right one", "noticing or filing", "detect, fix the cause, verify, standardize, close"]) {
+    assert.ok(skill.toLowerCase().includes(phrase.toLowerCase()), `body says ${phrase}`);
+  }
+  assert.ok(skill.length < 2400, "body stays about 1 KB");
+  assert.match(text("plugins/desk/skills/using-superpowers-with-desk/SKILL.md"), /When the work is the factory itself, invoke factory-work first and put its review questions in every reviewer brief\./u);
+});
+
 // observer's waste labeling (spec §6 classification, milestone 5): the rubric is written for the evaluator, cites
 // evidence as exact fact intervals, writes no free text, and starts from done without the worker's context.
 const factoryEvaluator = "plugins/desk/skills/factory-evaluator/SKILL.md";

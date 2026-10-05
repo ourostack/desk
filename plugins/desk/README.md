@@ -172,6 +172,7 @@ It blocks at most once per stop (`stop_hook_active` ends the loop), never gates 
 
 ### engineering posture
 - `evidence-discipline` — fixtures-or-refusal, smoke-before-infinity, messages-over-models, etc.
+- `factory-work` — the Lean reading and terrarium checks for designing, changing or reviewing the factory
 - `preflight-actions` — preflight pattern before irreversible actions
 - `runtime-symptom-investigation` — narrow-the-hypothesis-space pattern for runtime issues
 
