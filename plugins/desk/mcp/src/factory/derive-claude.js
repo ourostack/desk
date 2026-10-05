@@ -99,13 +99,14 @@ import { toolKind } from "./tool-kinds.js"
 import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, sanitizePlugins, withRequestedModel } from "./derive-common.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
-import { gitCommitCwds } from "./shell-git.js"
+import { isTaskSegment } from "./binding.js"
+import { gitCommitCwds, shellEffects } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 
 const HOST = "claude-code"
 const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"])
 const SUBAGENT_SPAWN_TOOLS = new Set(["Agent", "Task"])
-const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive)$/u
+const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save)$/u
 const COMMIT_SHA_PATTERN = /\b[0-9a-f]{40}\b/gu
 const PR_URL_PATTERN = /github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/pull\/\d+/u
 const SYNTHETIC_MODEL = "<synthetic>"
@@ -155,6 +156,33 @@ function exitedNonZero(resultBlock) {
   if (Array.isArray(content)) text = content.find((block) => block?.type === "text")?.text ?? ""
   const match = /^Exit code (\d+)/u.exec(typeof text === "string" ? text : "")
   return match !== null && Number(match[1]) !== 0
+}
+
+// `task_update` carries its status at the top level or in `frontmatter.status`
+// (an object, or a JSON string). The frontmatter is read here and dropped.
+function frontmatterOf(input) {
+  let frontmatter = input.frontmatter
+  if (typeof frontmatter === "string") {
+    try {
+      frontmatter = JSON.parse(frontmatter)
+    } catch {
+      return null
+    }
+  }
+  return frontmatter !== null && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : null
+}
+
+const STATUS_ONLY_INPUT_KEYS = new Set(["track", "slug", "person", "frontmatter"])
+
+// Ruling P1: a status-only update has no input key beyond track, slug, person
+// and frontmatter, and its frontmatter holds no key but `status`.
+function deskCallStatus(input) {
+  const frontmatter = frontmatterOf(input)
+  const nested = frontmatter?.status
+  const status = input.status ?? (typeof nested === "string" ? nested : null)
+  const statusOnly = Object.keys(input).every((key) => STATUS_ONLY_INPUT_KEYS.has(key))
+    && frontmatter !== null && Object.keys(frontmatter).every((key) => key === "status")
+  return { status, statusOnly }
 }
 
 function mapEntrypoint(raw) {
@@ -277,12 +305,14 @@ function createAgentProcessor({ agentIndex }) {
   const modelOrder = []
   const pendingCalls = new Map() // tool_use id -> { name, kind, start, isSubagentCall }
   const pendingDeskCalls = new Map()
-  const pendingFileWrites = new Map()
-  const pendingGitCommits = new Map() // tool_use id -> { start, cwds }
+  const pendingFileWrites = new Map() // tool_use id -> [{ at, path }]
+  const pendingFocusCalls = new Map() // tool_use id -> { at, track, slug } | { at, clear }
+  const pendingGitCommits = new Map() // tool_use id -> { start, commits: [{ cwd, paths }] }
   const lastFinishedByKind = new Map() // kind -> { end, outcome, retried }
   const issuedIds = new Set()
   const spawnTaskById = new Map() // spawn tool_use id -> { track, slug } from its prompt
   const spawnSpanById = new Map() // spawn tool_use id -> { start, end } of the spawning call
+  const spawnStartById = new Map() // spawn tool_use id -> time of the spawning call, answered or not
   let firstPromptSeen = false
   let firstPromptTask = null
 
@@ -294,6 +324,7 @@ function createAgentProcessor({ agentIndex }) {
   const commitShas = new Set()
   const deskToolCalls = []
   const shellGitCommits = []
+  const focusCalls = []
   let toolRetries = 0
   let apiRetries = 0
   let compactions = 0
@@ -327,10 +358,12 @@ function createAgentProcessor({ agentIndex }) {
     if (!pending) return
     pendingCalls.delete(id)
     const deskCall = pendingDeskCalls.get(id)
-    const fileWrite = pendingFileWrites.get(id)
+    const writes = pendingFileWrites.get(id)
+    const focus = pendingFocusCalls.get(id)
     const gitCommit = pendingGitCommits.get(id)
     pendingDeskCalls.delete(id)
     pendingFileWrites.delete(id)
+    pendingFocusCalls.delete(id)
     pendingGitCommits.delete(id)
     if (ts === null) {
       // A result with no readable time: the call can't be measured, so it is
@@ -362,9 +395,10 @@ function createAgentProcessor({ agentIndex }) {
     }
 
     if (deskCall) deskToolCalls.push({ ...deskCall, agent: agentIndex, ok: outcome === "ok" })
-    if (fileWrite && outcome === "ok") fileWrites.push({ ...fileWrite, agent: agentIndex })
+    if (focus && outcome === "ok") focusCalls.push({ agent: agentIndex, ...focus })
+    if (writes && outcome === "ok") for (const write of writes) fileWrites.push({ ...write, agent: agentIndex })
     if (gitCommit && outcome === "ok" && !exitedNonZero(block)) {
-      for (const cwd of gitCommit.cwds) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd, agent: agentIndex })
+      for (const { cwd, paths } of gitCommit.commits) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd, paths, agent: agentIndex })
     }
   }
 
@@ -428,6 +462,7 @@ function createAgentProcessor({ agentIndex }) {
         // The prompt is matched here and dropped; only a validated pair is kept.
         const task = parseDeskTaskLine(block.input?.prompt)
         if (task !== null) spawnTaskById.set(block.id, task)
+        if (ts !== null) spawnStartById.set(block.id, ts)
       }
       if (ts === null) {
         // A call with no readable start can't be measured: dropped like an
@@ -446,21 +481,32 @@ function createAgentProcessor({ agentIndex }) {
       const input = block.input ?? {}
       if (FILE_WRITE_TOOLS.has(name)) {
         const filePath = name === "NotebookEdit" ? input.notebook_path : input.file_path
-        if (typeof filePath === "string") pendingFileWrites.set(block.id, { at: ts, path: filePath })
+        if (typeof filePath === "string") pendingFileWrites.set(block.id, [{ at: ts, path: filePath }])
       }
       if (name === "Bash" && typeof input.command === "string") {
-        // The command is matched here and dropped; only directories are kept.
+        // The command is matched here and dropped; only paths and directories are kept.
+        const effects = shellEffects({ command: input.command, cwd: line.cwd, home: os.homedir() })
         const cwds = gitCommitCwds({ command: input.command, cwd: line.cwd, home: os.homedir() })
-        if (cwds.length > 0) pendingGitCommits.set(block.id, { start: ts, cwds })
+        const operands = [...effects.adds, ...effects.commits]
+        const commits = cwds.map((cwd) => ({ cwd, paths: [...new Set(operands.filter((entry) => entry.cwd === cwd).flatMap((entry) => entry.paths))] }))
+        if (commits.length > 0) pendingGitCommits.set(block.id, { start: ts, commits })
+        if (effects.writes.length > 0) pendingFileWrites.set(block.id, effects.writes.map((written) => ({ at: ts, path: written })))
       }
-      if (typeof name === "string" && DESK_CALL_PATTERN.test(name)) {
+      const deskVerb = typeof name === "string" ? DESK_CALL_PATTERN.exec(name)?.[1] : undefined
+      if (deskVerb === "desk_save") {
+        const saved = Array.isArray(input.paths) ? input.paths.filter((entry) => typeof entry === "string") : []
+        if (saved.length > 0) pendingFileWrites.set(block.id, saved.map((savedPath) => ({ at: ts, path: savedPath })))
+      } else if (deskVerb === "task_focus") {
+        if (input.clear === true) pendingFocusCalls.set(block.id, { at: ts, clear: true })
+        else if (isTaskSegment(input.track) && isTaskSegment(input.slug)) pendingFocusCalls.set(block.id, { at: ts, track: input.track, slug: input.slug })
+      } else if (deskVerb !== undefined) {
         pendingDeskCalls.set(block.id, {
           at: ts,
           name,
           track: input.track,
           slug: input.slug,
           person: input.person ?? null,
-          status: input.status ?? null,
+          ...deskCallStatus(input),
         })
       }
     }
@@ -541,9 +587,11 @@ function createAgentProcessor({ agentIndex }) {
         commitShas,
         deskToolCalls,
         shellGitCommits,
+        focusCalls,
         issuedIds,
         spawnTaskById,
         spawnSpanById,
+        spawnStartById,
         firstPromptTask,
         hadUnresolvedCall,
         invalidModelSeen,
@@ -666,11 +714,14 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
 
   // Each spawned worker's task: its spawn prompt's line, else its own first prompt's.
   const spawnTasks = []
+  const spawns = []
   for (let index = 1; index < agents.length; index += 1) {
     const owner = spawnOwners[index]
     const task = (owner === -1 ? null : agentResults[owner].spawnTaskById.get(spawnIds[index]) ?? null) ?? agentResults[index].firstPromptTask
     // The spawning call's own span times the brief on its parent's clock.
     const span = owner === -1 ? undefined : agentResults[owner].spawnSpanById.get(spawnIds[index])
+    const at = (owner === -1 ? undefined : agentResults[owner].spawnStartById.get(spawnIds[index])) ?? agentResults[index].earliestTimestamp
+    spawns.push({ agent: index, parent: agents[index].parent, at, task })
     if (task !== null) spawnTasks.push({ agent: index, track: task.track, slug: task.slug, ...(span === undefined ? {} : span) })
   }
 
@@ -754,6 +805,9 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     shellGitCommits: agentResults.flatMap((result) => result.shellGitCommits),
     nativeCommitShas: [],
     spawnTasks,
+    focusCalls: agentResults.flatMap((result) => result.focusCalls),
+    spawns,
+    prRefs: agentResults.flatMap((result) => result.prRefs).map(({ agent, at, repo, created }) => ({ agent, at, repo, created })),
   }
 
   return { facts, events }

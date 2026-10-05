@@ -14,6 +14,8 @@ const CLAUDE_CASES = [
   ["Agent", "agent"], ["Task", "agent"], ["SendMessage", "agent"],
   // All 5 verbs the desk regex recognizes (task|track|friction|lesson|desk), one per test.
   ["mcp__plugin_desk_desk__task_create", "desk"],
+  ["mcp__plugin_desk_desk__task_focus", "desk"],
+  ["mcp__plugin_desk_desk__desk_save", "desk"],
   ["mcp__plugin_desk_desk__track_update", "desk"],
   ["mcp__plugin_desk_desk__friction_add", "desk"],
   ["mcp__plugin_desk_desk__lesson_add", "desk"],
@@ -44,6 +46,7 @@ const COPILOT_CASES = [
   ["desk-track_create", "desk"], ["desk-track_update", "desk"],
   ["desk-friction_add", "desk"], ["desk-lesson_add", "desk"],
   ["desk-desk_status", "desk"], ["desk-desk_search", "desk"], ["desk-desk_recall", "desk"],
+  ["desk-task_focus", "desk"], ["desk-desk_save", "desk"], ["desk-task_move", "desk"],
   ["skill", "skill"],
   ["some-server-tool", "mcp"],
   ["randomtool", "other"],

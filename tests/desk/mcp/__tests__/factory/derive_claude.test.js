@@ -531,7 +531,7 @@ function shellGitSession() {
 test("only a successful Bash git commit call becomes a shellGitCommits event, with its start, end and directory", async () => {
   const { facts, events } = await deriveLines(shellGitSession())
   const base = `/tmp/${SENTINEL}-cwd`
-  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd, agent: 0 })
+  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd, paths: [], agent: 0 })
   assert.deepEqual(events.shellGitCommits, [
     span("01", "02", base),
     span("03", "04", `/tmp/${SENTINEL}-desk`),
@@ -1029,4 +1029,184 @@ test("withRequestedModel sets the key only for a valid id that differs from the 
   assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, "bad model!"), { n: 1, model: "a" })
   assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, undefined), { n: 1, model: "a" })
   assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, 5), { n: 1, model: "a" })
+})
+
+// --- Declared focus: focus calls, spawns, own-commit paths, shell writes, PRs, status ---
+
+function focusSession() {
+  let second = 0
+  const line = (extra) => ({ sessionId: GIT_SESSION_ID, version: "2.1.282", cwd: "/w", timestamp: `2026-09-25T08:00:${String(second++).padStart(2, "0")}.000Z`, ...extra })
+  const call = (id, name, input, extra = {}) => line({ type: "assistant", message: { id: `m-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name, input }] }, ...extra })
+  const result = (id, isError = false, extra = {}) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: `done ${SENTINEL}` }] }, toolUseResult: { stdout: "", stderr: "" }, ...extra })
+  return { line, call, result }
+}
+
+const FOCUS_TOOL = "mcp__plugin_desk_desk__task_focus"
+const UPDATE_TOOL = "mcp__plugin_desk_desk__task_update"
+const SAVE_TOOL = "mcp__plugin_desk_desk__desk_save"
+
+test("a successful task_focus call becomes a focusCall with its time, and a failed one yields nothing", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("f1", FOCUS_TOOL, { track: "desk-plugin", slug: "some-task" }), // 01
+    result("f1"), // 02
+    call("f2", FOCUS_TOOL, { track: "other", slug: "failed" }),
+    result("f2", true),
+    call("f3", FOCUS_TOOL, { clear: true }), // 05
+    result("f3"),
+    call("f4", FOCUS_TOOL, { track: "..", slug: "bad" }),
+    result("f4"),
+    call("f5", FOCUS_TOOL, {}),
+    result("f5"),
+    call("f6", FOCUS_TOOL, { track: 4, slug: "x" }),
+    result("f6"),
+  ])
+  assert.deepEqual(events.focusCalls, [
+    { agent: 0, at: "2026-09-25T08:00:01.000Z", track: "desk-plugin", slug: "some-task" },
+    { agent: 0, at: "2026-09-25T08:00:05.000Z", clear: true },
+  ])
+  assert.deepEqual(events.deskToolCalls, [], "task_focus is not a deskToolCall")
+  assert.equal(JSON.stringify(facts).includes("some-task"), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
+  const { line, call, result } = focusSession()
+  const inputs = [
+    { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },
+    { track: "a", slug: "b", frontmatter: { status: "done" }, progress: "x" },
+    { track: "a", slug: "b", person: "p", frontmatter: { status: "doing" } },
+    { track: "a", slug: "b", status: "blocked" },
+    { track: "a", slug: "b", frontmatter: { status: "done", title: "t" } },
+    { track: "a", slug: "b", frontmatter: "not json" },
+    { track: "a", slug: "b", frontmatter: "[1]" },
+    { track: "a", slug: "b", frontmatter: 7 },
+    { track: "a", slug: "b", frontmatter: { status: 4 } },
+    { track: "a", slug: "b" },
+  ]
+  const lines = [line({ type: "user", message: { role: "user", content: "go" } })]
+  inputs.forEach((input, index) => lines.push(call(`u${index}`, UPDATE_TOOL, input), result(`u${index}`)))
+  const { events } = await deriveLines(lines)
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [
+    { status: "done", statusOnly: true },
+    { status: "done", statusOnly: false },
+    { status: "doing", statusOnly: true },
+    { status: "blocked", statusOnly: false },
+    { status: "done", statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: true },
+    { status: null, statusOnly: false },
+  ])
+})
+
+test("every subagent appears in spawns with its parent, its spawn call's time and its task; a meta with no toolUseId uses its first timestamp", async () => {
+  const { line, spawn, prompt, assistant } = workerLines()
+  const { events } = await deriveWithSubagents(
+    [
+      line({ type: "user", message: { role: "user", content: "go" } }), // 00
+      spawn("spawn-a", "Desk-Task: track-one/task-one"), // 01
+      spawn("spawn-b", "no line"), // 02
+      line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "spawn-a" }] } }),
+    ],
+    [
+      { stem: "agent-1", meta: { toolUseId: "spawn-a" }, lines: [assistant("s1", "claude-sonnet-5")] },
+      { stem: "agent-2", meta: { toolUseId: "spawn-b" }, lines: [prompt("hello")] },
+      { stem: "agent-3", meta: {}, lines: [{ sessionId: SUB_SESSION_ID, type: "user", timestamp: "2026-09-25T09:00:00.000Z", message: { role: "user", content: "Desk-Task: x/y" } }] },
+      { stem: "agent-4", lines: [{ sessionId: SUB_SESSION_ID, type: "system" }] },
+    ],
+  )
+  assert.deepEqual(events.spawns.map((spawnEvent) => spawnEvent.agent), [1, 2, 3, 4])
+  assert.deepEqual(events.spawns[0], { agent: 1, parent: 0, at: "2026-09-25T08:00:01.000Z", task: { track: "track-one", slug: "task-one" } })
+  assert.equal(events.spawns[1].at, "2026-09-25T08:00:02.000Z")
+  assert.equal(events.spawns[1].task, null)
+  assert.deepEqual(events.spawns[2], { agent: 3, parent: 0, at: "2026-09-25T09:00:00.000Z", task: { track: "x", slug: "y" } })
+  assert.deepEqual(events.spawns[3], { agent: 4, parent: 0, at: null, task: null })
+})
+
+test("an unanswered spawn call still times its subagent", async () => {
+  const { line, spawn, assistant } = workerLines()
+  const { events } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } }), spawn("spawn-a")],
+    [{ stem: "agent-1", meta: { toolUseId: "spawn-a" }, lines: [assistant("s1", "claude-sonnet-5")] }],
+  )
+  assert.equal(events.spawns[0].at, "2026-09-25T08:00:01.000Z")
+})
+
+test("a Bash git add and commit gives shellGitCommits paths, and a Bash redirect gives fileWrites, only when the call succeeded", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("g1", "Bash", { command: "git add t/s/task.md && git commit -qm x" }), // 01
+    result("g1"),
+    call("g2", "Bash", { command: "echo hi > out.txt" }), // 03
+    result("g2"),
+    call("g3", "Bash", { command: "echo no > failed.txt && git add f.md && git commit -m x" }),
+    result("g3", true),
+    call("g4", "Bash", { command: "git commit -m x" }),
+    result("g4"),
+  ])
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: "/w", paths: ["/w/t/s/task.md"] },
+    { cwd: "/w", paths: [] },
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+    { at: "2026-09-25T08:00:03.000Z", path: "/w/out.txt", agent: 0 },
+  ])
+  assert.equal(JSON.stringify(facts).includes("task.md"), false)
+})
+
+test("desk_save paths become fileWrites when the call succeeded, and a failed or pathless call gives none", async () => {
+  const { line, call, result } = focusSession()
+  const { events } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("d1", SAVE_TOOL, { paths: ["notes/a.md", "notes/b.md", 5] }), // 01
+    result("d1"),
+    call("d2", SAVE_TOOL, { paths: ["failed.md"] }),
+    result("d2", true),
+    call("d3", SAVE_TOOL, { content: "x" }),
+    result("d3"),
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+    { at: "2026-09-25T08:00:01.000Z", path: "notes/a.md", agent: 0 },
+    { at: "2026-09-25T08:00:01.000Z", path: "notes/b.md", agent: 0 },
+  ])
+})
+
+test("a gh pr create result becomes a prRefs event with created true; a link or other action has created false", async () => {
+  const { line, call } = focusSession()
+  const pr = (id, number, action) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/o/r/pull/${number}`, action } } } })
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("p1", "Bash", { command: "gh pr create" }), // 01
+    pr("p1", 1, "created"), // 02
+    call("p2", "Bash", { command: "gh pr merge 2" }),
+    pr("p2", 2, "merged"),
+    line({ type: "pr-link", prRepository: "o/r", prNumber: 3 }),
+  ])
+  assert.deepEqual(events.prRefs, [
+    { agent: 0, at: "2026-09-25T08:00:02.000Z", repo: "o/r", created: true },
+    { agent: 0, at: "2026-09-25T08:00:04.000Z", repo: "o/r", created: false },
+    { agent: 0, at: "2026-09-25T08:00:05.000Z", repo: "o/r", created: false },
+  ])
+  assert.equal("prRefs" in facts, false)
+})
+
+test("sentinel: the focus, spawn, path, write and PR events never carry prompt, command or content text, and facts stay clean", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("s1", FOCUS_TOOL, { track: "a", slug: "b", note: SENTINEL }),
+    result("s1"),
+    call("s2", "Bash", { command: `echo ${SENTINEL} > out.txt && git add x.md && git commit -m ${SENTINEL}` }),
+    result("s2"),
+    call("s3", SAVE_TOOL, { paths: ["p.md"], content: SENTINEL }),
+    result("s3"),
+    call("s4", undefined, { paths: ["nameless.md"] }),
+    result("s4"),
+  ])
+  for (const key of ["focusCalls", "spawns", "shellGitCommits", "fileWrites", "prRefs"]) assert.equal(JSON.stringify(events[key]).includes(SENTINEL), false, key)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
 })
