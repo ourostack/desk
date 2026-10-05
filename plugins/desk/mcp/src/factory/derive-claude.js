@@ -96,11 +96,9 @@ import { createInterface } from "node:readline"
 import * as path from "node:path"
 
 import { toolKind } from "./tool-kinds.js"
-import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, sanitizePlugins, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, deskCallStatus, deskSavePaths, focusTarget, sanitizePlugins, shellBinding, withRequestedModel } from "./derive-common.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
-import { isTaskSegment } from "./binding.js"
-import { gitCommitCwds, shellEffects } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 
 const HOST = "claude-code"
@@ -156,33 +154,6 @@ function exitedNonZero(resultBlock) {
   if (Array.isArray(content)) text = content.find((block) => block?.type === "text")?.text ?? ""
   const match = /^Exit code (\d+)/u.exec(typeof text === "string" ? text : "")
   return match !== null && Number(match[1]) !== 0
-}
-
-// `task_update` carries its status at the top level or in `frontmatter.status`
-// (an object, or a JSON string). The frontmatter is read here and dropped.
-function frontmatterOf(input) {
-  let frontmatter = input.frontmatter
-  if (typeof frontmatter === "string") {
-    try {
-      frontmatter = JSON.parse(frontmatter)
-    } catch {
-      return null
-    }
-  }
-  return frontmatter !== null && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : null
-}
-
-const STATUS_ONLY_INPUT_KEYS = new Set(["track", "slug", "person", "frontmatter"])
-
-// Ruling P1: a status-only update has no input key beyond track, slug, person
-// and frontmatter, and its frontmatter holds no key but `status`.
-function deskCallStatus(input) {
-  const frontmatter = frontmatterOf(input)
-  const nested = frontmatter?.status
-  const status = input.status ?? (typeof nested === "string" ? nested : null)
-  const statusOnly = Object.keys(input).every((key) => STATUS_ONLY_INPUT_KEYS.has(key))
-    && frontmatter !== null && Object.keys(frontmatter).every((key) => key === "status")
-  return { status, statusOnly }
 }
 
 function mapEntrypoint(raw) {
@@ -485,20 +456,17 @@ function createAgentProcessor({ agentIndex }) {
       }
       if (name === "Bash" && typeof input.command === "string") {
         // The command is matched here and dropped; only paths and directories are kept.
-        const effects = shellEffects({ command: input.command, cwd: line.cwd, home: os.homedir() })
-        const cwds = gitCommitCwds({ command: input.command, cwd: line.cwd, home: os.homedir() })
-        const operands = [...effects.adds, ...effects.commits]
-        const commits = cwds.map((cwd) => ({ cwd, paths: [...new Set(operands.filter((entry) => entry.cwd === cwd).flatMap((entry) => entry.paths))] }))
+        const { commits, writes } = shellBinding({ command: input.command, cwd: line.cwd, home: os.homedir() })
         if (commits.length > 0) pendingGitCommits.set(block.id, { start: ts, commits })
-        if (effects.writes.length > 0) pendingFileWrites.set(block.id, effects.writes.map((written) => ({ at: ts, path: written })))
+        if (writes.length > 0) pendingFileWrites.set(block.id, writes.map((written) => ({ at: ts, path: written })))
       }
       const deskVerb = typeof name === "string" ? DESK_CALL_PATTERN.exec(name)?.[1] : undefined
       if (deskVerb === "desk_save") {
-        const saved = Array.isArray(input.paths) ? input.paths.filter((entry) => typeof entry === "string") : []
+        const saved = deskSavePaths(input)
         if (saved.length > 0) pendingFileWrites.set(block.id, saved.map((savedPath) => ({ at: ts, path: savedPath })))
       } else if (deskVerb === "task_focus") {
-        if (input.clear === true) pendingFocusCalls.set(block.id, { at: ts, clear: true })
-        else if (isTaskSegment(input.track) && isTaskSegment(input.slug)) pendingFocusCalls.set(block.id, { at: ts, track: input.track, slug: input.slug })
+        const target = focusTarget(input)
+        if (target !== null) pendingFocusCalls.set(block.id, { at: ts, ...target })
       } else if (deskVerb !== undefined) {
         pendingDeskCalls.set(block.id, {
           at: ts,

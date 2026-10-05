@@ -1083,6 +1083,7 @@ test("task_update status comes from top-level status, frontmatter.status as an o
     { track: "a", slug: "b", frontmatter: "[1]" },
     { track: "a", slug: "b", frontmatter: 7 },
     { track: "a", slug: "b", frontmatter: { status: 4 } },
+    { track: "a", slug: "b", frontmatter: {} },
     { track: "a", slug: "b" },
   ]
   const lines = [line({ type: "user", message: { role: "user", content: "go" } })]
@@ -1097,7 +1098,8 @@ test("task_update status comes from top-level status, frontmatter.status as an o
     { status: null, statusOnly: false },
     { status: null, statusOnly: false },
     { status: null, statusOnly: false },
-    { status: null, statusOnly: true },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
     { status: null, statusOnly: false },
   ])
 })
@@ -1209,4 +1211,17 @@ test("sentinel: the focus, spawn, path, write and PR events never carry prompt, 
   ])
   for (const key of ["focusCalls", "spawns", "shellGitCommits", "fileWrites", "prRefs"]) assert.equal(JSON.stringify(events[key]).includes(SENTINEL), false, key)
   assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+})
+
+test("two commits in one directory give one shellGitCommits entry with every path they and their adds name, and a second directory its own", async () => {
+  const { line, call, result } = focusSession()
+  const { events } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("m1", "Bash", { command: "git add a.md && git commit -qm x && git add b.md a.md && git commit -qm y && git -C /elsewhere commit -qm z" }),
+    result("m1"),
+  ])
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: "/w", paths: ["/w/a.md", "/w/b.md"] },
+    { cwd: "/elsewhere", paths: [] },
+  ])
 })

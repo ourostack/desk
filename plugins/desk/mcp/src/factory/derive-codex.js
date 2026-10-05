@@ -75,6 +75,11 @@
 //     messages, through `./desk-task-line.js`) and PR refs (only from a
 //     successful `gh pr create` whose output holds the PR URL, with
 //     `created: true` for the worker that ran it, which outranks any other).
+//     The same session also yields the in-memory declared-focus events (never
+//     written to facts): `focusCalls` (a successful `task_focus`), `spawns` (each
+//     child with its parent, its `spawn_agent` call's time, else its own first
+//     record's, and its task), `prRefs`, and `paths` on each `shellGitCommits`
+//     entry plus shell redirect writes and `desk_save` paths in `fileWrites`.
 //   - A child rollout's records below its `subagent_history_start_ordinal`
 //     are inherited context and skipped, so a parent's calls are not counted
 //     twice.
@@ -94,15 +99,14 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
 
-import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, sanitizePlugins, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, deskCallStatus, deskSavePaths, focusTarget, sanitizePlugins, shellBinding, withRequestedModel } from "./derive-common.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject } from "./schema.js"
-import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
 
 const HOST = "codex-cli"
-const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive)$/u
+const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save)$/u
 const PR_URL_PATTERN = /github\.com\/([^/\s]+\/[^/\s]+?)(?:\.git)?\/pull\/(\d+)/u
 const PR_CREATE_PATTERN = /\bgh\s+pr\s+create\b/u
 const PATCH_PATH_PATTERN = /^\*\*\* (?:Add File|Update File|Move to): (.+)$/gmu
@@ -319,8 +323,8 @@ async function findChildren(root, sessionsDir, lastAt, limit = LIMITS.agents) {
 // ---------------------------------------------------------------------------
 
 function createThreadProcessor({ agentIndex, meta }) {
-  const pendingCalls = new Map() // call id -> { name, kind, start, isSpawn, isPrCreate, cwds, paths, desk }
-  const spawnByCall = new Map() // spawn call id -> { task, agentType }
+  const pendingCalls = new Map() // call id -> { name, kind, start, isSpawn, isPrCreate, commits, paths, desk, focus }
+  const spawnByCall = new Map() // spawn call id -> { at, task, agentType, model }
   const spawnedChildren = new Map() // child thread id -> { task, agentType }
   const lastFinishedByKind = new Map() // kind -> { end, outcome, retried }
   const modelCounts = new Map()
@@ -333,6 +337,7 @@ function createThreadProcessor({ agentIndex, meta }) {
   const fileWrites = []
   const deskToolCalls = []
   const shellGitCommits = []
+  const focusCalls = []
   let previousTotal = { input: 0, cached: 0, write: 0, output: 0, reasoning: 0 }
   let currentModel = null
   let currentCwd = meta.cwd
@@ -362,8 +367,10 @@ function createThreadProcessor({ agentIndex, meta }) {
     const patchText = [input, args.input, command].find((value) => typeof value === "string") ?? ""
     const isPatch = name === "apply_patch" || /^\s*apply_patch\b/u.test(command ?? "")
     const isSpawn = name === "spawn_agent"
-    if (isSpawn) spawnByCall.set(callId, { task: parseDeskTaskLine(args.message), agentType: matching(PATTERNS.agentType, args.agent_type), model: matching(PATTERNS.modelId, args.model) })
-    const cwds = kind === "shell" && command !== undefined ? gitCommitCwds({ command, cwd, home: os.homedir() }) : []
+    if (isSpawn) spawnByCall.set(callId, { at: ts, task: parseDeskTaskLine(args.message), agentType: matching(PATTERNS.agentType, args.agent_type), model: matching(PATTERNS.modelId, args.model) })
+    // The command is matched here and dropped; only paths and directories are kept.
+    const shell = kind === "shell" && command !== undefined ? shellBinding({ command, cwd, home: os.homedir() }) : { commits: [], writes: [] }
+    const deskVerb = DESK_CALL_PATTERN.exec(name)?.[1]
     const previous = lastFinishedByKind.get(kind)
     if (previous && previous.outcome !== "ok" && !previous.retried && ts > previous.end) {
       toolRetries += 1
@@ -375,11 +382,12 @@ function createThreadProcessor({ agentIndex, meta }) {
       start: ts,
       isSpawn,
       isPrCreate: command !== undefined && PR_CREATE_PATTERN.test(command),
-      cwds,
-      paths: isPatch ? patchPaths(patchText, cwd) : [],
-      desk: DESK_CALL_PATTERN.test(name)
-        ? { at: ts, name, track: args.track, slug: args.slug, person: args.person ?? null, status: args.status ?? null }
+      commits: shell.commits,
+      paths: [...(isPatch ? patchPaths(patchText, cwd) : []), ...shell.writes, ...(deskVerb === "desk_save" ? deskSavePaths(args) : [])],
+      desk: deskVerb !== undefined && deskVerb !== "task_focus" && deskVerb !== "desk_save"
+        ? { at: ts, name, track: args.track, slug: args.slug, person: args.person ?? null, ...deskCallStatus(args) }
         : null,
+      focus: deskVerb === "task_focus" ? focusTarget(args) : null,
     })
   }
 
@@ -402,12 +410,13 @@ function createThreadProcessor({ agentIndex, meta }) {
     lastFinishedByKind.set(pending.kind, { end: ts, outcome, retried: false })
     if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, agent: agentIndex, ok: credited })
     if (!credited) return
+    if (pending.focus !== null) focusCalls.push({ agent: agentIndex, at: pending.start, ...pending.focus })
     // A creation needs a recognised exit code of 0: a failed `gh pr create` can still print an existing PR URL.
     if (pending.isPrCreate && code === 0) {
       const ref = prRef(text, agentIndex)
       if (ref !== null) prRefs.push({ ...ref, at: ts })
     }
-    for (const cwd of pending.cwds) shellGitCommits.push({ start: pending.start, end: ts, cwd, agent: agentIndex })
+    for (const { cwd, paths } of pending.commits) shellGitCommits.push({ start: pending.start, end: ts, cwd, paths, agent: agentIndex })
     for (const file of pending.paths) fileWrites.push({ at: pending.start, path: file, agent: agentIndex })
   }
 
@@ -510,7 +519,7 @@ function createThreadProcessor({ agentIndex, meta }) {
         : modelOrder.reduce((best, candidate) => (modelCounts.get(candidate) > modelCounts.get(best) ? candidate : best), modelOrder[0])
       return {
         meta, model, firstModel: modelOrder[0] ?? null, usage, intervals, toolCallCounts, toolFailureCounts, toolRetries, compactions,
-        prRefs, fileWrites, deskToolCalls, shellGitCommits, spawnedChildren, firstPromptTask, earliest, latest,
+        prRefs, fileWrites, deskToolCalls, shellGitCommits, focusCalls, spawnedChildren, firstPromptTask, earliest, latest,
         hadUnresolvedCall, hadUnresolvedTurn, hadUnreadableTime, invalidModelSeen, tokensUnreadable,
       }
     },
@@ -595,6 +604,7 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
 
   const agents = []
   const spawnTasks = []
+  const spawns = []
   const intervals = []
   for (const [n, result] of results.entries()) {
     const agent = { n, parent: null, model: result.model }
@@ -608,6 +618,7 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
       if (agentType !== null) agent.agent_type = agentType
       const task = spawn?.task ?? result.firstPromptTask
       // The child's own span is the spawning call's subagent interval on its parent's clock.
+      spawns.push({ agent: n, parent, at: spawn?.at ?? result.earliest, task })
       if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug, start: result.earliest, end: result.latest })
       intervals.push({ kind: "subagent", agent: parent, start: result.earliest, end: result.latest })
     }
@@ -687,6 +698,9 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
     shellGitCommits: results.flatMap((result) => result.shellGitCommits),
     nativeCommitShas: [],
     spawnTasks,
+    focusCalls: results.flatMap((result) => result.focusCalls),
+    spawns,
+    prRefs: results.flatMap((result) => result.prRefs).map(({ agent, at, repo, created }) => ({ agent, at, repo, created })),
   }
 
   return { facts, events }
