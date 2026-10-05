@@ -95,9 +95,16 @@ Plugins and their MCP servers load when a session starts, so ask the operator to
 - the session runs as `desk:worker`, and the Desk foundation appears at startup;
 - `desk_status` reports the bound desk root and its source;
 - `desk:session-start` runs normally and offers work to resume or start;
-- the `desk-web` server's tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain". The browser is part of the default install, so a failure here is a setup failure, not an optional extra. The first call on a machine can wait up to two minutes while Desk installs `@playwright/mcp`. If a call answers with `status: degraded`, its `code` and `fix` say what is missing (usually Node, npm, the registry or Chrome or Edge); apply the fix, reconnect the `desk-web` server and retry.
+- the `desk-web` server's tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain".
 
-For a signed-in page, which `desk-web` cannot reach, `desk:cdp-headed-browser` shows how to make the browser context broker runnable from the installed plugin with one command. The broker also needs a provider that launches the signed-in browser, and a personal install has none yet, so on such an install use the Playwright MCP options that skill names.
+The browser is part of the default install, so check it here, but never let it block setup. The first call on a machine can wait up to two minutes while Desk installs `@playwright/mcp`. Two kinds of failure can follow:
+
+- A `status: degraded` answer carries a `code` and a `fix`. It means Node, npm or the npm registry is missing or unreachable, or the launcher could not start. Apply the fix and reconnect the `desk-web` server.
+- A plain Playwright error on a page call means neither Chrome nor Edge is installed. Install one (see step 1).
+
+Retry once after the fix. If it still fails, or `example.com` is unreachable, report the browser as not verified, with the error, in your setup report, and continue; the rest of setup does not depend on it.
+
+For a signed-in page, which `desk-web` cannot reach, `desk:cdp-headed-browser` shows how to make the browser context broker runnable from the installed plugin with a short copy-and-install sequence. The broker also needs a provider that launches the signed-in browser, and a personal install has none yet, so on such an install use the Playwright MCP options that skill names.
 
 If any of these fail, `desk_doctor` explains why. Desk never ends setup by being unavailable: with no desk bound it runs in setup mode and routes back to step 5.
 
