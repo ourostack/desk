@@ -38,6 +38,12 @@
       },
       {
         "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/process-kill-guard.cjs\" copilot",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/process-kill-guard.cjs\" copilot",
+        "timeoutSec": 10
+      },
+      {
+        "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
         "timeoutSec": 10
