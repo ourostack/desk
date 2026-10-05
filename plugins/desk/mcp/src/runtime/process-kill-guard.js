@@ -167,7 +167,8 @@ function lsofPort(args) {
 }
 const OTHER_SOURCES = /\b(?:ps|grep|egrep|awk|sed|cut|pidof|top|lsof|xargs\s+-\w*\s*\S*\s*pgrep)\b/u
 const PID_FILE = /\$\(\s*cat\s+(?:"[^"]*\.pid"|'[^']*\.pid'|[^\s)"']+\.pid)\s*\)|`\s*cat\s+[^\s`]+\.pid\s*`/u
-const KILL_WITH_VARIABLE = /(?:^|[;&|({]\s*|\b(?:sudo|env|nice|nohup|command|exec|time|xargs)\s+(?:-\S+\s+|\w+=\S*\s+|\d+\s+)*)kill\b[^;&|\n)]*\$(?=[\w{!$@#?*])/u
+// A quote before `kill` counts as a command start, so the `$` of a script inside `-c` or eval is read whatever quoting surrounds it.
+const KILL_WITH_VARIABLE = /(?:^|[;&|({'"]\s*|\b(?:sudo|env|nice|nohup|command|exec|time|xargs)\s+(?:-\S+\s+|\w+=\S*\s+|\d+\s+)*)kill\b[^;&|\n)]*\$(?=[\w{!$@#?*])/u
 
 const taskkillArguments = (text) => {
   const tokens = text.trim().split(/\s+/u).filter(Boolean)
