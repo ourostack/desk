@@ -18,7 +18,7 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", async () => {
   try {
-    if (!/pkill|pgrep|killall|kill|stop-process|spps|taskkill/i.test(input)) {
+    if (!/pkill|pgrep|kill|stop-process|spps|taskkill|wmic|terminate|osascript/i.test(input)) {
       process.stdout.write("{}\n");
       return;
     }

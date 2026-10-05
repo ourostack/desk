@@ -7,59 +7,58 @@ import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { assertActionable } from "./_guard_text.js"
-import { judgeCall, judgeProcessKill, judgeWindows, MESSAGES, processKillGuardHook } from "../../../../../plugins/desk/mcp/src/runtime/process-kill-guard.js"
+import { judgeCall, judgeProcessKill, MESSAGES, processKillGuardHook } from "../../../../../plugins/desk/mcp/src/runtime/process-kill-guard.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "process-kill-guard.cjs")
 const sh = (command) => judgeProcessKill(command)
-const ps = (command) => judgeProcessKill(command, { powershell: true })
+const ps = (command) => judgeProcessKill(command)
+const SPECIFIC = "/Users/x/code/project/server.js"
 
 test("the incident command is denied as the BSD option trap, with $(id -u) and with 502", async () => {
   assert.equal(await sh('pkill -f "cat" -U $(id -u) -n'), MESSAGES.trap)
   assert.equal(await sh('pkill -f "cat" -U 502 -n'), MESSAGES.trap)
   assert.equal(await sh("pgrep -f cat -U $(id -u) -n"), MESSAGES.trap)
   assert.equal(await sh("pgrep -f cat -U 502 -n"), MESSAGES.trap)
-  assert.equal(await sh("killall Foobarbaz -9"), MESSAGES.trap)
-  assert.equal(await sh("pkill -f long-specific-pattern -9"), MESSAGES.trap)
+  assert.equal(await sh(`pkill -f ${SPECIFIC} -9`), MESSAGES.trap)
 })
 
 test("a late option is caught whatever shape the option before it has", async () => {
-  assert.equal(await sh("pkill -fU 502 long-specific-pattern -n"), MESSAGES.trap, "a cluster ending in a value option")
-  assert.equal(await sh("pkill -U502 long-specific-pattern -n"), MESSAGES.trap, "an attached value")
-  assert.equal(await sh("pkill --uid 502 long-specific-pattern --newest"), MESSAGES.trap, "a long option with a separate value")
-  assert.equal(await sh("pkill --uid=502 long-specific-pattern --newest"), MESSAGES.trap)
-  assert.equal(await sh("pkill -TERM long-specific-pattern -n"), MESSAGES.trap, "a signal name")
+  assert.equal(await sh(`pkill -fU 502 ${SPECIFIC} -n`), MESSAGES.trap, "a cluster ending in a value option")
+  assert.equal(await sh(`pkill -U502 ${SPECIFIC} -n`), MESSAGES.trap, "an attached value")
+  assert.equal(await sh(`pkill --uid 502 ${SPECIFIC} --newest`), MESSAGES.trap, "a long option with a separate value")
+  assert.equal(await sh(`pkill --uid=502 ${SPECIFIC} --newest`), MESSAGES.trap)
+  assert.equal(await sh(`pkill -TERM ${SPECIFIC} -n`), MESSAGES.trap, "a signal name")
 })
 
-test("a short or generic pattern is denied, a long specific one is allowed", async () => {
-  for (const command of ["pkill -f ''", "pkill -f cat", "pkill -f node", "pkill -f claude", "pkill -f 'python3'", "pkill -f ^bash$", "pkill -f short", "pkill -f long-specific-pattern cat", "pkill sleep", "killall node", "killall Claude Chrome.exe"]) {
-    assert.equal(await sh(command), MESSAGES.broad, command)
+test("every reviewed bypass is denied", async () => {
+  const denied = {
+    broad: ["kill $(pgrep -f cat)", "kill -9 `pgrep node`", "kill $(pgrep -f /Users/x/a/b.js; pgrep -f cat)", "kill -9 $(pgrep -u 502)", "pkill -u 502", "pkill -U 502", "pkill -g 20", "pkill -t ttys001 x", "pkill -s 1", "pkill --uid 502", "pkill", "pkill -f 'claude.*'", 'pkill -f "Claude Helper"', 'pkill -f "node server"', "pkill -f cat", "pkill -f ''", "pkill -f /usr/bin/node", "pkill -f /usr/bin/", "pkill -f /Users/x/.*", 'pkill -f "cat foo"', `pkill -f ${SPECIFIC} second`, "pkill -P abc", "pkill -P 12 extra", "sudo pkill -f cat", "env X=1 pkill node", "/usr/bin/pkill -f cat", "nohup pkill claude", "xargs -n1 pkill cat", "pgrep -f cat | xargs kill", "pgrep -u 502 | xargs kill -9"],
+    killall: ["killall node", "killall -u microsoft", "killall -m '.*'", 'killall "Microsoft Edge"', "killall5", "killall Finder", "killall Foobarbaz", "command killall node", "killall"],
+    source: ["$(which pkill) -f cat", "`which pkill` -f cat", "kill -9 $(ps aux | grep claude | awk '{print $2}')", "ps aux | xargs kill -9", "pgrep -f /Users/x/a/b.js | grep x | xargs kill", "kill foo", "kill $(ps -ax)", "ps aux | awk '{print $2}' | xargs kill"],
+    group: ["kill -9 -1", "kill 0", "kill -TERM 0", "kill -- -1", "kill -s KILL -1", "kill -9 123 -456", "kill -n 9 0", "kill -9 -- -1", "kill 123 0", "kill -- -$$", "kill -9 -$(echo 1)", "kill -9 -$X"],
+    script: ['python3 -c "import os,signal; os.kill(-1, 9)"', 'node -e "process.kill(-1)"', 'node -e "process.kill(0)"', 'python3 -c "import os; os.killpg(1, 9)"'],
+    quit: ["osascript -e 'quit app \"cmux\"'", "osascript -e 'tell application \"Finder\" to quit'"],
+    windows: ["Stop-Process -Name node", "Stop-Process -ProcessName node", "Stop-Process -Name node,python -Force", "spps -name claude", "Stop-Process -Force -Name node", "Stop-Process", "Stop-Process -InputObject $p", "Stop-Process -Id $x",
+      "taskkill /IM node.exe /F", "taskkill /F /FI \"USERNAME eq ari\"", "taskkill.exe -IM copilot.exe", "taskkill /PID abc", "taskkill /PID", "taskkill", "taskkill /F", "cmd /c taskkill /IM node.exe",
+      "Get-Process | Stop-Process", "Get-Process node* | Stop-Process", "Get-Process | Where-Object { $_.CPU -gt 1 } | Stop-Process", "(Get-Process node) | Stop-Process", "gps node | spps", "Get-Process node | ForEach-Object { $_.Kill() }", "Get-Process | kill",
+      "wmic process where name='node.exe' delete", "wmic process where name='node.exe' call terminate", "Get-CimInstance Win32_Process | Invoke-CimMethod -MethodName Terminate", "Write-Host hi; Stop-Process -Name node", "if ($x) { Stop-Process -Name node }"],
   }
+  for (const [kind, commands] of Object.entries(denied)) {
+    for (const command of commands) assert.equal(await sh(command), MESSAGES[kind], `${kind}: ${command}`)
+  }
+})
+
+test("the safe shapes are allowed", async () => {
   for (const command of [
-    "pkill -f long-specific-pattern", "pkill -9 -f 'my-hung-server --port 8123'", "pkill -U 502 -f long-specific-pattern", "pkill -f -- long-specific-pattern", "pgrep -f long-specific-pattern",
-    "pgrep -f cat", "pgrep -U 502 -f cat", "killall Foobarbaz", "pkill", "killall", "ls -n", "pkillx -f cat -n",
+    "kill 123", "kill 123 456 789", "kill -9 123 456", "kill -TERM 123", "kill -s TERM 123", "kill -n 9 123", "kill -- 123", "kill -9 -- 123 456", "kill %1", "kill -9 %2", "kill -l", "kill -L 9", "kill", "kill -1", "sleep 5 & kill $!", "sudo kill 123", "sudo ls", "env X=1 true", "xargs echo hi",
+    `pkill -f ${SPECIFIC}`, `pkill -9 -f ${SPECIFIC}`, `pkill -f -- ${SPECIFIC}`, `pkill -f "node ${SPECIFIC}"`, `pkill -x -f ${SPECIFIC}`, "pkill -P 123", "pkill -9 -P 123", "pkill -P123", "pkill -f ~/code/app/server.js", "pkill -f ./bin/my-server",
+    `pgrep -f ${SPECIFIC} | xargs kill`, `kill $(pgrep -f ${SPECIFIC})`, `kill -9 $(pgrep -f ${SPECIFIC})`,
+    "lsof -t -i :3000 | xargs kill", "kill $(lsof -t -i :3000)", "kill -9 $(lsof -ti:8080)", "lsof -ti tcp:3000 | xargs kill -9",
+    "pgrep -f cat", "pgrep -U 502 -f cat", "pgrep -fl node", "ps aux", "ps -axo pid,command | grep server", "lsof -i :3000", "lsof -t -i :3000", "pgrep node | head",
+    "grep -n pkill README.md", 'echo "don\'t run pkill"', 'git commit -m "fix pkill guard"', "man pkill", "man killall", "man taskkill", "which pkill", "echo kill", "$(date) ; kill 123", "echo $(date) && kill 5", "git status",
+    "Stop-Process -Id 123", "Stop-Process -Id 123,456 -Force", "Stop-Process 123", "spps -Id 5 -Confirm:$false", "taskkill /PID 123", "taskkill /PID 123 /F", "taskkill /F /T /PID 123 /PID 456", "Get-Process node", "Get-Process | Format-Table", "Write-Host kill", "Stop-Process -Id 5 | Out-Null",
   ]) {
-    assert.equal(await sh(command), null, command)
-  }
-})
-
-test("kill of a process group taken from a pattern is denied, a numeric pid list is allowed", async () => {
-  for (const command of ["kill -9 -1", "kill 0", "kill -TERM 0", "kill -- -1", "kill -s KILL -1", "kill -9 123 -456", "kill -n 9 0", "kill -9 -- -1", "kill 123 0"]) {
-    assert.equal(await sh(command), MESSAGES.group, command)
-  }
-  for (const command of ["kill 123", "kill 123 456 789", "kill -TERM 123", "kill -9 123", "kill -s TERM 123", "kill -l", "kill -1", "kill -L 9", "kill", "kill -- 123", "kill -9 -- 123 456"]) {
-    assert.equal(await sh(command), null, command)
-  }
-})
-
-test("kill fed by a pgrep that would be denied is denied, in every spelling", async () => {
-  for (const command of [
-    "kill $(pgrep -f cat)", "kill -9 `pgrep node`", "pgrep -f cat | xargs kill", "pgrep -f cat -U 502 | xargs kill -9", "kill -9 $(pgrep -f cat -U $(id -u) -n)", "sudo pkill -f cat", "sudo -u root pkill -f long-specific-pattern -n",
-    "env X=1 pkill node", "xargs -n1 pkill cat", "/usr/bin/pkill -f cat", "command killall node", "nohup pkill claude",
-  ]) {
-    assert.notEqual(await sh(command), null, command)
-  }
-  for (const command of ["kill $(pgrep -f long-specific-pattern)", "pgrep -f long-specific-pattern | xargs kill", "sudo kill 123", "sudo ls", "env X=1 true", "xargs echo hi"]) {
     assert.equal(await sh(command), null, command)
   }
 })
@@ -72,23 +71,9 @@ test("compound commands, bash -c, subshells and groups are inspected", async () 
     assert.notEqual(await sh(command), null, command)
   }
   assert.equal(await sh('echo "pkill -f cat -n"'), null, "quoted text is data")
-  assert.equal(await sh("echo go && pkill -f long-specific-pattern"), null)
+  assert.equal(await sh(`echo go && pkill -f ${SPECIFIC}`), null)
   assert.equal(await sh("git status | grep pkill"), null)
-})
-
-test("PowerShell: Stop-Process, taskkill and Get-Process pipes", async () => {
-  for (const command of [
-    "Stop-Process -Name node", "Stop-Process -Name node,python -Force", "Stop-Process -Name 'chrome.exe'", "spps -name claude", "Stop-Process -Force -Name node", "taskkill /IM node.exe /F", "taskkill /F /im Code.exe", "taskkill.exe -IM copilot.exe",
-    "Get-Process | Stop-Process", "Get-Process node* | Stop-Process", "Get-Process -Name *claude* | Stop-Process -Force", "gps node | spps", "Get-Process -Name node | Stop-Process", "Stop-Process -Name *", "Stop-Process -Name c*", "Stop-Process -Name node*", "taskkill /IM * /F",
-    "Write-Host hi; Stop-Process -Name node",
-  ]) {
-    assert.equal(await ps(command), MESSAGES.windows, command)
-  }
-  for (const command of ["Stop-Process -Id 1234", "Stop-Process -Id 1234 -Force", "taskkill /PID 1234 /F", "taskkill /IM my-hung-server.exe", "Stop-Process -Name my-hung-server", "Get-Process -Id 1234 | Stop-Process", "Get-Process my-hung-server | Stop-Process", "Get-Process node", "Get-Process | Format-Table", "Write-Host kill"]) {
-    assert.equal(await ps(command), null, command)
-  }
-  assert.equal(await sh("taskkill /IM node.exe /F"), MESSAGES.windows, "the same Windows tools from a Bash shell")
-  assert.equal(judgeWindows("Stop-Process -Name node"), MESSAGES.windows)
+  assert.equal(await sh(`bash -c "pkill -f ${SPECIFIC}"`), null)
 })
 
 test("anything the guard cannot read is allowed", async () => {
@@ -120,7 +105,7 @@ test("the hook function answers in each host's shape", async () => {
   assert.equal((await processKillGuardHook(claude("PowerShell", "Stop-Process -Name node"), "claude")).hookSpecificOutput.permissionDecisionReason, MESSAGES.windows)
   assert.equal((await processKillGuardHook(copilot("powershell", "taskkill /IM node.exe"), "copilot")).permissionDecision, "deny")
   assert.deepEqual(await processKillGuardHook(claude("Bash", "kill 123"), "claude"), {})
-  assert.deepEqual(await processKillGuardHook(claude("Bash", "pkill -f long-specific-pattern"), "claude"), {})
+  assert.deepEqual(await processKillGuardHook(claude("Bash", `pkill -f ${SPECIFIC}`), "claude"), {})
   assert.deepEqual(await processKillGuardHook(copilot("bash", "kill -TERM 123"), "copilot"), {})
   assert.deepEqual(await processKillGuardHook(claude("Write", "pkill -f cat"), "claude"), {}, "a tool that is not a shell is not judged")
   assert.deepEqual(await processKillGuardHook(copilot("view", "pkill -f cat"), "copilot"), {})
@@ -140,7 +125,7 @@ test("the hook script denies on Claude and Copilot, allows other commands, and f
   for (const host of ["claude", "copilot"]) {
     const plain = run(host, host === "claude" ? claude("Bash", "git status") : copilot("bash", "git status"))
     assert.deepEqual([plain.status, plain.stdout], [0, "{}\n"], "a command with no kill word is answered without loading the guard")
-    const allowed = run(host, host === "claude" ? claude("Bash", "pkill -f long-specific-pattern") : copilot("bash", "pkill -f long-specific-pattern"))
+    const allowed = run(host, host === "claude" ? claude("Bash", `pkill -f ${SPECIFIC}`) : copilot("bash", `pkill -f ${SPECIFIC}`))
     assert.deepEqual([allowed.status, allowed.stdout], [0, "{}\n"])
   }
   // Fail open: a payload that names a kill command but is not JSON.
