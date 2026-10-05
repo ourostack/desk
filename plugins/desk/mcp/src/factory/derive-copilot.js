@@ -189,14 +189,14 @@ import { createInterface } from "node:readline"
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
-import { addNullable, compareByStart, comparePrRefs, countOrNull, deskCallStatus, deskSavePaths, focusTarget, shellBinding, withRequestedModel } from "./derive-common.js"
+import { addNullable, compareByStart, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, shellBinding, withRequestedModel } from "./derive-common.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
 
 const HOST = "copilot-cli"
 const DESK_TOOL = /(?:task_create|task_update|task_archive)$/u
-const FOCUS_TOOL = /task_focus$/u
+const FOCUS_TOOL = /(task_focus|task_create)$/u
 const SAVE_TOOL = /desk_save$/u
 const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$/gmu
 const PR_SHORT = /^([^/#\s]+\/[^/#\s]+)#(\d+)$/u
@@ -241,10 +241,11 @@ function deskCallOf(name, args, at) {
   return { at, name, track, slug, person: stringOrNull(args.person), status: stringOrNull(status), statusOnly }
 }
 
-// A successful `task_focus` call as `{ at, track, slug }` or `{ at, clear: true }`, else null.
+// The focus a `task_focus` call, or a `task_create` call with `focus: true`, declares, as `{ at, track, slug }` or `{ at, clear: true }`, else null.
 function focusOf(name, args, at) {
-  if (name === null || at === null || !FOCUS_TOOL.test(name) || !isObject(args)) return null
-  const target = focusTarget(args)
+  const verb = name === null ? undefined : FOCUS_TOOL.exec(name)?.[1]
+  if (verb === undefined || at === null || !isObject(args)) return null
+  const target = declaredFocus(verb, args)
   return target === null ? null : { at, ...target }
 }
 

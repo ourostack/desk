@@ -1504,3 +1504,103 @@ test("readDeskRemote never reads a Git call killed by its time limit or a signal
   assert.equal(readDeskRemote({ deskRoot: "/desk", spawn: ordinary([{ status: 0, signal: null, stdout: "\n" }, { status: 1, signal: null, stdout: "" }]) }), null, "an ordinary failure is still no remote")
   assert.equal(readDeskRemote({ deskRoot: "/desk", spawn: ordinary([{ status: 128, signal: null, stdout: "" }]) }), null)
 })
+
+// --- repoOfPath: the code repository a path outside the desk is in --------------
+
+// A desk and code repositories built for one test; `run` gets their folder and a git that logs each call it is given.
+function withRepos(run) {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "desk-repo-of-path-")))
+  try {
+    const repo = (name, remote) => {
+      const folder = path.join(root, name)
+      mkdirSync(folder, { recursive: true })
+      gitIn(folder, ["init", "-q", "-b", "main"])
+      if (remote !== null) gitIn(folder, ["remote", "add", "origin", remote])
+      return folder
+    }
+    const log = path.join(root, "git-calls.log")
+    const loggingGit = path.join(root, "logging-git.sh")
+    writeFileSync(loggingGit, `#!/bin/sh\necho "$*" >> '${log}'\nexec git "$@"\n`, { mode: 0o755 })
+    const gitCalls = () => spawnSync("cat", [log], { encoding: "utf8" }).stdout.split("\n").filter((line) => line !== "")
+    return run({ root, repo, loggingGit, gitCalls })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+test("repoOfPath names a path's repository as lowercase owner/name, for every remote form, from any depth, and for a file that is gone", () => withRepos(({ root, repo }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const { repoOfPath } = createDeskReaders({ deskRoot })
+  const scp = repo("scp", "git@github.com:OurOStack/Desk.git")
+  const https = repo("https", "https://user:token@GitHub.com/Spoonjoy/Spoonjoy-V2/")
+  const ssh = repo("ssh", "ssh://git@example.com:2222/Group/Sub/Tool.git")
+  mkdirSync(path.join(scp, "src", "deep"), { recursive: true })
+  writeFileSync(path.join(scp, "src", "deep", "file.js"), "x\n")
+  assert.equal(repoOfPath(scp), "ourostack/desk")
+  assert.equal(repoOfPath(path.join(scp, "src", "deep", "file.js")), "ourostack/desk")
+  assert.equal(repoOfPath(path.join(scp, "src", "deep")), "ourostack/desk")
+  // The nearest directory that still exists decides: a deleted file, in a folder that is gone too, is still in its repository.
+  assert.equal(repoOfPath(path.join(scp, "gone", "also-gone", "file.js")), "ourostack/desk")
+  assert.equal(repoOfPath(path.join(https, "README.md")), "spoonjoy/spoonjoy-v2")
+  assert.equal(repoOfPath(path.join(ssh, "a.txt")), "sub/tool", "the last two path parts of a longer remote path")
+  // A linked worktree's `.git` is a file; the path is still in the repository.
+  writeFileSync(path.join(scp, "a.txt"), "a\n")
+  commitIn(scp, "2026-09-25T08:00:00Z", "first")
+  const linked = path.join(root, "linked")
+  gitIn(scp, ["worktree", "add", "-q", linked, "-b", "side"])
+  assert.equal(repoOfPath(path.join(linked, "a.txt")), "ourostack/desk")
+}))
+
+test("repoOfPath answers null for no repository, no remote, a remote with no owner and name, a missing folder tree, and anything that is not an absolute path", () => withRepos(({ root, repo }) => {
+  const { repoOfPath } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const plain = path.join(root, "plain")
+  mkdirSync(plain)
+  assert.equal(repoOfPath(path.join(plain, "file.txt")), null, "not a repository")
+  assert.equal(repoOfPath(path.join(root, "never", "was", "here.txt")), null, "nothing exists there, and nothing above it is a repository")
+  assert.equal(repoOfPath(path.join(repo("no-remote", null), "a.txt")), null)
+  assert.equal(repoOfPath(path.join(repo("local-remote", path.join(root, "some", "origin.git")), "a.txt")), null, "a local path is no owner/name")
+  assert.equal(repoOfPath(path.join(repo("one-part", "https://example.com/solo.git"), "a.txt")), null)
+  assert.equal(repoOfPath(path.join(repo("file-url", "file:///srv/git/tool.git"), "a.txt")), null)
+  assert.equal(repoOfPath(path.join(repo("dots", "https://example.com/../tool"), "a.txt")), null, "an unsafe owner is no name")
+  for (const bad of ["relative/path.js", "", null, undefined, 7]) assert.equal(repoOfPath(bad), null)
+}))
+
+test("repoOfPath answers null when Git fails or is missing", () => withRepos(({ root, repo }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  const failing = path.join(root, "failing-git.sh")
+  writeFileSync(failing, "#!/bin/sh\nexit 3\n", { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot, git: failing }).repoOfPath(path.join(code, "a.txt")), null)
+  assert.equal(createDeskReaders({ deskRoot, git: path.join(root, "no-such-git") }).repoOfPath(path.join(code, "a.txt")), null)
+  assert.equal(createDeskReaders({ deskRoot }).repoOfPath(path.join(code, "a.txt")), "ourostack/desk")
+}))
+
+test("repoOfPath asks Git once per repository and remembers each directory", () => withRepos(({ repo, loggingGit, gitCalls }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  mkdirSync(path.join(code, "src"))
+  const { repoOfPath } = createDeskReaders({ deskRoot, git: loggingGit })
+  const before = gitCalls().length
+  for (const file of ["a.js", "b.js", "src/c.js", "src/d.js", "src/missing/e.js"]) assert.equal(repoOfPath(path.join(code, file)), "ourostack/desk")
+  const calls = gitCalls().slice(before).filter((line) => line.includes("remote.origin.url"))
+  // One call for the repository and one for the desk's own remote, however many paths and directories.
+  assert.deepEqual(calls.map((line) => line.split(" ")[1]), [code, deskRoot])
+  // A second set of readers has its own memory.
+  assert.equal(createDeskReaders({ deskRoot, git: loggingGit }).repoOfPath(path.join(code, "a.js")), "ourostack/desk")
+  assert.equal(gitCalls().slice(before).filter((line) => line.includes("remote.origin.url")).length, 4)
+}))
+
+test("repoOfPath answers null for the desk repository itself: a path inside the desk, and another clone of the desk's remote", () => withRepos(({ root, repo, loggingGit, gitCalls }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  mkdirSync(path.join(deskRoot, "track", "task"), { recursive: true })
+  const { repoOfPath } = createDeskReaders({ deskRoot, git: loggingGit })
+  assert.equal(repoOfPath(path.join(deskRoot, "track", "task", "notes.md")), null)
+  assert.equal(repoOfPath(deskRoot), null)
+  assert.deepEqual(gitCalls().filter((line) => line.includes("remote.origin.url")), [], "a path inside the desk needs no Git call")
+  // The same remote, spelled another way, checked out elsewhere (a second clone or a worktree of the desk).
+  assert.equal(repoOfPath(path.join(repo("desk-again", "https://github.com/me/my-desk"), "track", "x.md")), null)
+  // A desk with no remote still names other repositories, and a desk root that does not exist reads as no desk remote.
+  const local = createDeskReaders({ deskRoot: repo("local-desk", null) })
+  assert.equal(local.repoOfPath(path.join(repo("code", "git@github.com:OurOStack/Desk.git"), "a.js")), "ourostack/desk")
+  assert.equal(createDeskReaders({ deskRoot: path.join(root, "no-desk-here") }).repoOfPath(path.join(root, "code", "a.js")), "ourostack/desk")
+}))

@@ -822,6 +822,34 @@ test("a successful task_focus call becomes a focusCall at its call time; failed,
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 }))
 
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "c1", "task_create", { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }, "mcp__desk__"), // 1
+    output(2, "c1", "ok"),
+    call(3, "c2", "task_create", { track: "desk-plugin", slug: "parked", focus: false }, "mcp__desk__"),
+    output(4, "c2", "ok"),
+    call(5, "c3", "task_create", { track: "desk-plugin", slug: "truthy", focus: "true" }, "mcp__desk__"),
+    output(6, "c3", "ok"),
+    call(7, "c4", "task_create", { track: "desk-plugin", slug: "failed", focus: true }, "mcp__desk__"),
+    output(8, "c4", "Process exited with code 1"),
+    call(9, "c5", "task_create", { track: "..", slug: "bad", focus: true }, "mcp__desk__"),
+    output(10, "c5", "ok"),
+    call(11, "c6", "task_create", { track: "desk-plugin", focus: true }, "mcp__desk__"),
+    output(12, "c6", "ok"),
+    call(13, "c7", "task_create", { track: "desk-plugin", slug: "plain" }, "mcp__desk__"),
+    output(14, "c7", "ok"),
+    call(15, "c8", "task_update", { track: "desk-plugin", slug: "updated", focus: true }, "mcp__desk__"),
+    output(16, "c8", "ok"),
+  ]
+  const { facts, events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: at(1), track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], [undefined, true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
 test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", () => withHome(async (home) => {
   const inputs = [
     { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },

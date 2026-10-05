@@ -99,7 +99,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
 
-import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, deskCallStatus, deskSavePaths, focusTarget, sanitizePlugins, shellBinding, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, sanitizePlugins, shellBinding, withRequestedModel } from "./derive-common.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
@@ -387,7 +387,7 @@ function createThreadProcessor({ agentIndex, meta }) {
       desk: deskVerb !== undefined && deskVerb !== "task_focus" && deskVerb !== "desk_save"
         ? { at: ts, name, track: args.track, slug: args.slug, person: args.person ?? null, ...deskCallStatus(args) }
         : null,
-      focus: deskVerb === "task_focus" ? focusTarget(args) : null,
+      focus: deskVerb === undefined ? null : declaredFocus(deskVerb, args),
     })
   }
 

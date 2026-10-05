@@ -161,6 +161,13 @@ export function focusTarget(input) {
   return isTaskSegment(input.track) && isTaskSegment(input.slug) ? { track: input.track, slug: input.slug } : null
 }
 
+/** The focus a Desk tool call declares, as `{ track, slug }` or `{ clear: true }`, else `null`. `verb` is the tool's own name (`task_focus`, `task_create`, ...). A `task_focus` call declares its target; a `task_create` call declares the card it files only when its `focus` is the boolean `true`. */
+export function declaredFocus(verb, input) {
+  if (verb === "task_focus") return focusTarget(input)
+  if (verb !== "task_create" || input.focus !== true) return null
+  return isTaskSegment(input.track) && isTaskSegment(input.slug) ? { track: input.track, slug: input.slug } : null
+}
+
 /** The string entries of a `desk_save` input's `paths`. */
 export function deskSavePaths(input) {
   return Array.isArray(input.paths) ? input.paths.filter((entry) => typeof entry === "string") : []

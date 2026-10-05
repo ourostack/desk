@@ -34,7 +34,7 @@ function shuffled(list, seed) {
 }
 
 test("the thresholds live in one frozen constant", () => {
-  assert.deepEqual(FOCUS_RULES, { candidateEvents: 3, significantEvents: 3, significantSpanMs: 600000, episodeGapMs: 1800000 })
+  assert.deepEqual(FOCUS_RULES, { candidateEvents: 3, significantEvents: 3, significantSpanMs: 600000, episodeGapMs: 1800000, minSegmentMs: 60000 })
   assert.ok(Object.isFrozen(FOCUS_RULES))
   assert.equal(DISAGREE_EVENTS, 10)
 })
@@ -164,17 +164,24 @@ test("overlapping episodes: the overlap goes to the task with more events inside
   assert.deepEqual(keyed.segments, [seg(Z, 0, 100), seg(Y, 100, 150), seg(X, 150, 250), seg(Z, 250, 300)])
 })
 
-test("the main task is the candidate with most events, then the earliest first event, then key order", () => {
+test("the main task is the candidate with most timed events, then the earliest first event, then key order", () => {
   const three = (key, start) => [write(start, key), write(start + 1, key), write(start + 2, key)]
   assert.equal(infer([...three(Y, 10), ...three(X, 20), write(30, X)]).main, X, "more events")
   assert.equal(infer([...three(Y, 10), ...three(X, 20)]).main, Y, "the earlier first event")
   assert.equal(infer([...three(Y, 10), ...three(X, 10)]).main, X, "key order")
-  // Untimed events count toward candidacy and the main task, own no time, and never count as the earliest.
+  // Untimed events make a candidate and never rank it: four on Y do not outrank X's three timed ones, so Y gets no time.
   const untimed = infer([write(null, Y), write(null, Y), write(null, Y), write(null, Y), ...three(X, 10)])
-  assert.equal(untimed.main, Y)
-  assert.deepEqual(untimed.segments, [seg(Y, 0, 600)])
-  assert.equal(infer([write(null, Y), write(null, Y), write(null, Y), ...three(X, 10)]).main, X, "a timed first event is earlier than none")
-  assert.equal(infer([write(null, Y), write(null, Y), write(null, Y), write(null, X), write(null, X), write(null, X)]).main, X)
+  assert.equal(untimed.main, X)
+  assert.deepEqual(untimed.segments, [seg(X, 0, 600)])
+  assert.deepEqual([...untimed.counts], [[X, 3], [Y, 4]], "the counts still report them")
+  // Two untimed events lift a task with one timed event to candidacy, and it still ranks by that one event.
+  const lifted = infer([write(null, Y), write(null, Y), write(5, Y), ...three(X, 10)])
+  assert.equal(lifted.main, X)
+  assert.deepEqual(lifted.segments, [seg(X, 0, 600)])
+  // Where no candidate has a timed event, key order decides, and the stretch is that task's.
+  const none = infer([write(null, Y), write(null, Y), write(null, Y), write(null, X), write(null, X), write(null, X)])
+  assert.equal(none.main, X)
+  assert.deepEqual(none.segments, [seg(X, 0, 600)])
 })
 
 test("events outside the stretch are clamped to it", () => {
@@ -312,10 +319,107 @@ test("segment cap reassigns shortest to main", () => {
   capped.forEach((segment, index) => assert.ok(index === 0 || segment.start >= capped[index - 1].end))
 })
 
-test("the segment cap drops the shortest segments of the main task itself, or of any task when there is no main task", () => {
-  const segments = [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 13), seg(Y, 20, 21), seg(X, 21, 30)]
-  // X is the main task and over the cap: its shortest segment binds nothing.
-  assert.deepEqual(capSegments({ segments, main: X, cap: 2 }), [seg(X, 0, 10), seg(Y, 10, 12), seg(Y, 20, 21), seg(X, 21, 30)])
-  // A declared timeline has no main task: equal lengths drop the earliest first.
-  assert.deepEqual(capSegments({ segments: [seg(X, 0, 5), seg(Y, 5, 10), seg(X, 10, 15), seg(Y, 15, 20)], main: null, cap: 1 }), [seg(X, 10, 15), seg(Y, 15, 20)])
+// The time a list of segments covers, in milliseconds.
+const covered = (segments) => segments.reduce((total, segment) => total + segment.end - segment.start, 0)
+
+test("the segment cap never drops time: with no main task, or for the main task itself, the shortest segment joins its longer neighbour", () => {
+  const segments = [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 13), seg(Y, 13, 21), seg(X, 21, 30)]
+  // X is the main task and over the cap: its one-minute segment joins the longer neighbour, Y's eight minutes, and Y's two segments join through it.
+  assert.deepEqual(capSegments({ segments, main: X, cap: 2 }), [seg(X, 0, 10), seg(Y, 10, 21), seg(X, 21, 30)])
+  // A declared timeline has no main task. Equal lengths: the earliest segment goes first, and of two equal neighbours the earlier one takes it.
+  const even = [seg(X, 0, 5), seg(Y, 5, 10), seg(X, 10, 15), seg(Y, 15, 20)]
+  assert.deepEqual(capSegments({ segments: even, main: null, cap: 1 }), [seg(Y, 0, 10), seg(X, 10, 20)])
+  // Only a neighbour that touches can take a segment: here the one after a cleared gap cannot.
+  const gapped = [seg(X, 0, 5), seg(Y, 5, 6), seg(X, 6, 7), seg(Y, 10, 90), seg(X, 90, 95)]
+  assert.deepEqual(capSegments({ segments: gapped, main: null, cap: 2 }), [seg(X, 0, 5), seg(Y, 5, 7), seg(Y, 10, 90), seg(X, 90, 95)])
+  for (const [list, main, cap] of [[segments, X, 2], [segments, X, 1], [segments, null, 1], [even, null, 1], [gapped, null, 2], [gapped, Y, 1]]) {
+    const capped = capSegments({ segments: list, main, cap })
+    assert.equal(covered(capped), covered(list), "no time is lost")
+    capped.forEach((segment, index) => assert.ok(index === 0 || segment.start >= capped[index - 1].end))
+    for (const key of [X, Y]) assert.ok(capped.filter((segment) => segment.key === key).length <= cap)
+  }
 })
+
+test("500 alternating declarations keep all 90 declared minutes under the cap", () => {
+  // The reviewer's case: X and Y declared in turn every 10.8 seconds for 90 minutes.
+  const step = (90 * MIN) / 500
+  const segments = Array.from({ length: 500 }, (_, index) => ({ key: index % 2 === 0 ? X : Y, start: T0 + index * step, end: T0 + (index + 1) * step }))
+  const capped = capSegments({ segments, main: null, cap: 200 })
+  assert.equal(covered(capped), 90 * MIN)
+  assert.equal(capped[0].start, T0)
+  assert.equal(capped.at(-1).end, T0 + 90 * MIN)
+  capped.forEach((segment, index) => assert.ok(index === 0 || segment.start === capped[index - 1].end, "no gap and no overlap"))
+  for (const key of [X, Y]) assert.ok(capped.filter((segment) => segment.key === key).length <= 200)
+  // The same through the timeline: nothing the controller declared binds no job.
+  const calls = Array.from({ length: 500 }, (_, index) => ({ agent: 0, at: T0 + index * step, key: index % 2 === 0 ? X : Y }))
+  const declared = controllerTimeline({ events: { focusCalls: calls, evidence: [] }, startMs: T0, endMs: T0 + 90 * MIN, cards: new Map() })
+  assert.equal(covered(capSegments({ segments: declared.segments, main: declared.main, cap: 200 })), 90 * MIN)
+})
+
+test("a task over the cap with no touching neighbour anywhere loses its shortest segment, the one case where time cannot be kept", () => {
+  // Every X segment stands alone between cleared stretches, so no neighbour can take one without also taking cleared time.
+  const alone = [seg(X, 0, 5), seg(X, 10, 12), seg(X, 20, 25)]
+  assert.deepEqual(capSegments({ segments: alone, main: null, cap: 2 }), [seg(X, 0, 5), seg(X, 20, 25)])
+  assert.deepEqual(capSegments({ segments: alone, main: X, cap: 2 }), [seg(X, 0, 5), seg(X, 20, 25)])
+})
+
+// --- The one-minute floor on inferred segments -----------------------------------
+
+const SEC = 1000
+const tick = (seconds, key) => ({ at: T0 + seconds * SEC, key, kind: "write" })
+const sseg = (key, start, end) => ({ key, start: T0 + start * SEC, end: T0 + end * SEC })
+
+test("a main-task sliver between two episodes joins the longer neighbour", () => {
+  // The reviewer's case 9a: X works [0, 20 min], Y works [20.5, 40 min], and Z is the main task with no episode.
+  const events = [
+    ...[0, 600, 1200].map((seconds) => tick(seconds, X)),
+    ...[1230, 1800, 2400].map((seconds) => tick(seconds, Y)),
+    ...[100, 200, 300, 400].map((minutes) => write(minutes, Z)),
+  ]
+  const inferred = infer(events)
+  assert.equal(inferred.main, Z)
+  // Z's 30 seconds go to X (20 minutes), not Y (19.5 minutes).
+  assert.deepEqual(inferred.segments, [sseg(X, 0, 1230), sseg(Y, 1230, 2400), sseg(Z, 2400, 36000)])
+  for (let seed = 1; seed <= 20; seed += 1) assert.deepEqual(infer(shuffled(events, seed)).segments, inferred.segments)
+})
+
+test("slivers of a task around another task's nested episode join that episode", () => {
+  // The reviewer's case 9b: X at 0, 5 and 20 minutes; Y eight times from 0.5 to 19.5 minutes.
+  const events = [
+    ...[0, 300, 1200].map((seconds) => tick(seconds, X)),
+    ...[30, 180, 330, 480, 630, 780, 930, 1170].map((seconds) => tick(seconds, Y)),
+  ]
+  const inferred = infer(events, { end: 90 })
+  assert.deepEqual(inferred.segments, [sseg(Y, 0, 5400)])
+  for (const segment of inferred.segments) assert.ok(segment.end - segment.start >= FOCUS_RULES.minSegmentMs)
+  for (let seed = 1; seed <= 20; seed += 1) assert.deepEqual(infer(shuffled(events, seed), { end: 90 }).segments, inferred.segments)
+})
+
+test("a chain of three short segments is absorbed one at a time, shortest and earliest first", () => {
+  const V = "t/v"
+  const W = "t/w"
+  const events = [
+    ...[0, 300, 600, 900, 1182].map((seconds) => tick(seconds, V)), // V's episode [0, 19.7 min]
+    ...[0, 600, 1200].map((seconds) => tick(seconds, X)), // X's [0, 20 min] keeps only [19.7, 20)
+    ...[1218, 1800, 2400].map((seconds) => tick(seconds, Y)), // Y's [20.3, 40 min] keeps only [20.3, 20.6)
+    ...[1236, 1500, 1800, 2100, 2400].map((seconds) => tick(seconds, W)), // W's [20.6, 40 min]
+    ...[100, 200, 300, 400, 500, 590].map((minutes) => write(minutes, Z)), // the main task, [20, 20.3) between them
+  ]
+  const inferred = infer(events)
+  assert.equal(inferred.main, Z)
+  // X, then Z, then Y: each 18 seconds, each joining V, the longer neighbour at its turn.
+  assert.deepEqual(inferred.segments, [sseg(V, 0, 1236), sseg(W, 1236, 2400), sseg(Z, 2400, 36000)])
+  for (let seed = 1; seed <= 20; seed += 1) assert.deepEqual(infer(shuffled(events, seed)).segments, inferred.segments)
+})
+
+test("a short inferred segment at the edge of a declared stretch joins its inferred neighbour, and never the declared one", () => {
+  // Before the declaration at 30 minutes: Y's episode [0, 29.5 min], then four quick Z events that make Z the main task.
+  const evidence = [...[0, 600, 1770].map((seconds) => tick(seconds, Y)), ...[1776, 1782, 1788, 1794].map((seconds) => tick(seconds, Z))]
+  const result = timeline([focus(30, X)], evidence)
+  assert.deepEqual(result.segments, [seg(Y, 0, 30), seg(X, 30, 600)])
+  assert.deepEqual([...result.boundBy], [[Y, "inferred"], [X, "focus"]])
+  // A short inferred segment with no inferred neighbour stays, and so does a short declared stretch.
+  const lone = timeline([focus(0.5, X), focus(100, Y), focus(100.5, X)], [tick(1, Y), tick(2, Y), tick(3, Y)])
+  assert.deepEqual(lone.segments, [seg(Y, 0, 0.5), seg(X, 0.5, 100), seg(Y, 100, 100.5), seg(X, 100.5, 600)])
+})
+

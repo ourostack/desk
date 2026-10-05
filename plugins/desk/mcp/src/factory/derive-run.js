@@ -157,7 +157,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (derived.facts.session.id !== marker.session_id) return { result: "invalid", store }
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
-    const { jobs, boundBy, disagrees, ownActivity } = bindSession({
+    const { jobs, boundBy, disagrees, ownActivity, repoUnresolved } = bindSession({
       events: derived.events, agents: derived.facts.agents, session: derived.facts.session, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
@@ -166,9 +166,10 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
     await setJobsForFile(env, written.name, jobs.map((j) => j.job))
     // `desk_root` stays local: the flush reads the desk's declaration from it once the marker is pruned (`session-route.js`).
-    // So do `bound_by` (job ID -> "focus" | "inferred"), `own_activity` (spans in ms from the session's start) and `focus_disagrees` (job IDs),
-    // which `factory reconcile` reads because it cannot see transcripts; they are never written to facts.
-    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, ...before } } })
+    // So do `bound_by` (job ID -> "focus" | "inferred"), `own_activity` (spans in ms from the session's start), `focus_disagrees` (job IDs)
+    // and `repo_unresolved` (how many directories outside the desk named no repository), which `factory reconcile` reads because it
+    // cannot see transcripts; they are never written to facts.
+    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, repo_unresolved: repoUnresolved, ...before } } })
     return { result: "written", store }
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }

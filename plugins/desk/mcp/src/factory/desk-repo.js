@@ -1,5 +1,5 @@
-// The real readers `bindSession` is given: a task card's frontmatter and the
-// desk's Git history. Both are read-only.
+// The real readers `bindSession` is given: a task card's frontmatter, the
+// desk's Git history, and the name of a code repository. All are read-only.
 //
 // `readTask(track, slug)` reads `<deskRoot>/[<personPrefix>/]<track>/<slug>/
 // task.md`, else `<track>/_archive/<slug>/task.md`, else, for a whole
@@ -18,6 +18,13 @@
 // -M --diff-filter=R`, cached) where the task folder went, live or archived,
 // following chains; a deleted, never-renamed folder, a failed Git call and a
 // desk that is not its own repository all read as `null`.
+//
+// `repoOfPath(absolutePath)` names the code repository a path outside the
+// desk is in, as lowercase `owner/name`, from the `origin` remote of the
+// nearest folder at or above the path that still exists; `null` when there is
+// none to name and for the desk itself. It is asked once per repository
+// (`createDeskReaders` has the details). Only the name is returned, never the
+// path or the remote.
 //
 // `deskCommitsBetween(startIso, endIso)` lists the commits this clone made
 // in the window: the reflog entries of `HEAD` and every local branch whose
@@ -124,10 +131,10 @@
 // files.
 
 import { spawnSync } from "node:child_process"
-import { closeSync, openSync, readSync } from "node:fs"
+import { closeSync, existsSync, openSync, readSync, realpathSync, statSync } from "node:fs"
 import * as path from "node:path"
 
-import { checkPersonPrefix, isTaskSegment, relativeSegments, taskOfSegments } from "./binding.js"
+import { checkPersonPrefix, isTaskSegment, normalizeRemote, relativeSegments, taskOfSegments } from "./binding.js"
 import { ENUMS, PATTERNS } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -783,10 +790,45 @@ function isWindow(startIso, endIso) {
   return typeof startIso === "string" && typeof endIso === "string" && PATTERNS.timestamp.test(startIso) && PATTERNS.timestamp.test(endIso) && startIso <= endIso
 }
 
+// A normalized remote with a host and a path, such as `https://github.com/owner/name`.
+const HOSTED_REMOTE = /^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+)$/u
+
+// The `owner/name` of a normalized remote: the last two parts of its path, or null when it has no host or they are not two safe names.
+function repoOfRemote(normalized) {
+  const hosted = HOSTED_REMOTE.exec(normalized)
+  return hosted === null ? null : ownerName(hosted[1].split("/").slice(-2).join("/"))
+}
+
+function isDirectory(target) {
+  try {
+    return statSync(target).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+// The real path of a folder, or the folder as given when it cannot be resolved.
+function realFolder(folder) {
+  try {
+    return realpathSync(folder)
+  } catch {
+    return path.resolve(folder)
+  }
+}
+
+// The nearest folder at or above `directory` that holds a `.git` entry (a folder, or a linked worktree's file), or null.
+function repositoryRoot(directory) {
+  for (let current = directory; ; current = path.dirname(current)) {
+    if (existsSync(path.join(current, ".git"))) return current
+    if (path.dirname(current) === current) return null
+  }
+}
+
 /**
  * `createDeskReaders({ deskRoot, personPrefix, git, timeoutMs })` ->
  * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
- * resolveJobIdentity }` for `bindSession`.
+ * resolveJobIdentity, repoOfPath }`; `bindSession` takes all but
+ * `deskCommitsBetween`, which `factory reconcile` still reads.
  */
 export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("createDeskReaders: deskRoot must be an absolute path")
@@ -890,8 +932,52 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return isHousekeepingEdit(oldText, newText, substitutions)
   }
 
+  // `repoOfPath`: each directory asked about -> its answer, and each repository root -> its name. Both live for this one set of
+  // readers, so a session's many writes in one repository cost one Git call.
+  const repoByDirectory = new Map()
+  const repoByRoot = new Map()
+  const deskFolder = realFolder(deskRoot)
+  let deskOrigin
+  // A folder's `origin`, normalized, or null: no repository, no remote, or any Git failure.
+  const originOf = (folder) => {
+    const output = runGit({ ...options, deskRoot: folder }, ["config", "--get", "remote.origin.url"])
+    const remote = output === null ? "" : output.trim()
+    return remote === "" ? null : normalizeRemote(remote)
+  }
+  const repoOfRoot = (root) => {
+    const origin = originOf(root)
+    if (origin === null) return null
+    if (deskOrigin === undefined) deskOrigin = originOf(deskRoot)
+    // Another checkout of the desk's own remote is the desk, not a code repository.
+    return origin === deskOrigin ? null : repoOfRemote(origin)
+  }
+  /**
+   * `repoOfPath(absolutePath) -> "owner/name" | null`: the code repository a
+   * path is in, lowercase, from the `origin` remote of the nearest folder at
+   * or above it that still exists (a deleted file is still in its
+   * repository). null for a path that is not absolute, a folder in no
+   * repository, a repository with no remote or one that is not
+   * `host/…/owner/name`, any Git failure, and the desk itself: a path inside
+   * the desk root, or a checkout of the desk's own remote.
+   */
+  function repoOfPath(absolutePath) {
+    if (typeof absolutePath !== "string" || !path.isAbsolute(absolutePath)) return null
+    let directory = path.resolve(absolutePath)
+    while (!isDirectory(directory) && path.dirname(directory) !== directory) directory = path.dirname(directory)
+    if (repoByDirectory.has(directory)) return repoByDirectory.get(directory)
+    let repo = null
+    const inDesk = path.relative(deskFolder, realFolder(directory))
+    const root = inDesk === "" || (!inDesk.startsWith("..") && !path.isAbsolute(inDesk)) ? null : repositoryRoot(directory)
+    if (root !== null) {
+      if (!repoByRoot.has(root)) repoByRoot.set(root, repoOfRoot(root))
+      repo = repoByRoot.get(root)
+    }
+    repoByDirectory.set(directory, repo)
+    return repo
+  }
+
   return {
-    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
+    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath,
     resolveJobIdentity: (track, slug) => resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs }),
   }
 }

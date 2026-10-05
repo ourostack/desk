@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { factoryStateRoot, listMarkers, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -234,7 +235,7 @@ test("a status-only update alone binds no job", () => scratch(async (ctx) => {
   assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
   assert.deepEqual(await readJobsIndex(ctx.env), {})
   const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
-  assert.deepEqual([receipt.bound_by, receipt.focus_disagrees], [{}, []])
+  assert.deepEqual([receipt.bound_by, receipt.focus_disagrees, receipt.repo_unresolved], [{}, [], 0])
   assert.equal(receipt.own_activity.length, 1, "the call is still the session's own activity")
 }))
 
@@ -267,6 +268,45 @@ test("the receipt has binding_version: 5, bound_by, own_activity (at most 500) a
   // None of it reaches the facts.
   const bytes = await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "utf8")
   for (const key of ["bound_by", "own_activity", "focus_disagrees", "focusCalls"]) assert.equal(bytes.includes(key), false, key)
+  assert.equal(validateLocalFacts(JSON.parse(bytes)).ok, true)
+}))
+
+test("work in a card's listed repository binds through the real reader, and a directory in no repository is counted in the receipt as repo_unresolved", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  const card = path.join(ctx.desk, "track/task/task.md")
+  await fs.mkdir(path.dirname(card), { recursive: true })
+  await fs.writeFile(card, `---\nstatus: processing\ncreated: ${START}\nupdated: ${END}\nrepos: [ourostack/tool]\n---\n${SENTINEL}\n`)
+  await writeCard(ctx, "track/other")
+  // A code repository whose remote is the one the card lists, and a folder that is in no repository.
+  const code = path.join(ctx.base, "code")
+  await fs.mkdir(path.join(code, "src"), { recursive: true })
+  await fs.mkdir(path.join(ctx.base, "plain"))
+  for (const args of [["init", "-q", "-b", "main"], ["remote", "add", "origin", "git@github.com:OurOStack/Tool.git"]]) {
+    assert.equal(spawnSync("git", ["-C", code, ...args], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } }).status, 0)
+  }
+  await appendCalls(marker, [
+    ["Write", { file_path: path.join(ctx.desk, "track/task/notes.md"), content: SENTINEL }],
+    ["Write", { file_path: path.join(ctx.desk, "track/other/notes.md"), content: SENTINEL }],
+    ...[1, 2, 3].map((n) => ["Write", { file_path: path.join(code, "src", `${n}.js`), content: SENTINEL }]),
+    ["Write", { file_path: path.join(ctx.base, "plain", "out.txt"), content: SENTINEL }],
+    ["Write", { file_path: path.join(ctx.base, "plain", "again.txt"), content: SENTINEL }],
+  ])
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const name = `claude-code-${ID}.json`
+  const status = await readStatus(ctx.env)
+  const receipt = status.derivations[name]
+  // One desk write and three repository writes make the listing card the session's one job; the other card's single write binds nothing.
+  const jobs = Object.keys(await readJobsIndex(ctx.env))
+  assert.equal(jobs.length, 1)
+  assert.deepEqual(receipt.bound_by, { [jobs[0]]: "inferred" })
+  assert.equal(receipt.repo_unresolved, 1, "the two writes share one directory")
+  // The receipt holds a number, never the directory or the repository; the facts hold neither.
+  const text = JSON.stringify(status)
+  for (const secret of [code, path.join(ctx.base, "plain"), "ourostack/tool", SENTINEL]) assert.equal(text.includes(secret), false, secret)
+  const bytes = await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "utf8")
+  for (const secret of ["repo_unresolved", "ourostack/tool", "plain", SENTINEL]) assert.equal(bytes.includes(secret), false, secret)
   assert.equal(validateLocalFacts(JSON.parse(bytes)).ok, true)
 }))
 

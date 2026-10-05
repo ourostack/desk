@@ -96,7 +96,7 @@ import { createInterface } from "node:readline"
 import * as path from "node:path"
 
 import { toolKind } from "./tool-kinds.js"
-import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, deskCallStatus, deskSavePaths, focusTarget, sanitizePlugins, shellBinding, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, sanitizePlugins, shellBinding, withRequestedModel } from "./derive-common.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { normalizeTimestamp } from "./time.js"
@@ -464,11 +464,11 @@ function createAgentProcessor({ agentIndex }) {
       if (deskVerb === "desk_save") {
         const saved = deskSavePaths(input)
         if (saved.length > 0) pendingFileWrites.set(block.id, saved.map((savedPath) => ({ at: ts, path: savedPath })))
-      } else if (deskVerb === "task_focus") {
-        const target = focusTarget(input)
-        if (target !== null) pendingFocusCalls.set(block.id, { at: ts, ...target })
       } else if (deskVerb !== undefined) {
-        pendingDeskCalls.set(block.id, {
+        const target = declaredFocus(deskVerb, input)
+        if (target !== null) pendingFocusCalls.set(block.id, { at: ts, ...target })
+        // `task_focus` itself is no task tool call; a `task_create` that focuses is both.
+        if (deskVerb !== "task_focus") pendingDeskCalls.set(block.id, {
           at: ts,
           name,
           track: input.track,

@@ -9,8 +9,8 @@
 // updating another card is not working on it, and binds nothing.
 //
 // The controller's timeline (`focus.js` has the rules). Worker 0's
-// `task_focus` calls (`events.focusCalls`) cut the session into declared
-// stretches. A stretch with no declaration is inferred from the session
+// `task_focus` calls, and its `task_create` calls with `focus: true`
+// (`events.focusCalls` holds both), cut the session into declared stretches. A stretch with no declaration is inferred from the session
 // tree's evidence events:
 //   - `write`: a file write under a task's folder,
 //     `<deskRoot>/[<personPrefix>/]<track>/<task>/…` or
@@ -32,9 +32,16 @@
 //     runs binds nothing. A commit from the session's native refs
 //     (`events.nativeCommitShas`, Copilot's `session_refs`) that exists in the
 //     desk is the session's own too, and counts for the tasks it changed
-//     (`taskCommitRule`), with no time.
-//   - `repo`: a pull request the session created (`events.prRefs` with
-//     `created: true`) counts for the one card that lists its repository.
+//     (`taskCommitRule`). It has no time, so it counts toward candidacy only
+//     and never earns a task time over another.
+//   - `repo`: work in a code repository. A file write outside the desk, one of
+//     the session's `git … commit` calls that ran outside the desk or named a
+//     path there (one event for each repository the call touches, at its
+//     start), and a pull request the session created (`events.prRefs` with
+//     `created: true`). `repoOfPath` names the repository a path is in; a path
+//     it cannot name is no evidence, never a guess, and its directory is
+//     counted in `repoUnresolved`. A `repo` event counts only for the one card
+//     that lists the repository and has another event (`focus.js`).
 // Events of a subagent bound by a `Desk-Task:` line, and of the subagents
 // below it, are left out: that subtree has its own job. Reads never bind (no
 // deriver emits them). Paths outside the desk, and paths under `_meta/`,
@@ -53,7 +60,7 @@
 // subagent's own touches never create a job, and a subagent that keeps
 // running, or is resumed, after the controller moves on keeps its job.
 //
-// Output. `{ jobs, boundBy, disagrees, ownActivity }`.
+// Output. `{ jobs, boundBy, disagrees, ownActivity, repoUnresolved }`.
 //   - `jobs` is `LocalJob[]`, sorted by job ID: `{ job, basis, agents,
 //     task_created_at, transitions, observed, segments? }`, the hashed job ID
 //     only, never a track, slug, title or path. `agents` lists the job's
@@ -82,7 +89,10 @@
 //     session's `git commit` calls that ran in the desk and each successful
 //     task tool call widened by a minute each way, merged where they touch.
 //     `factory reconcile` matches desk commits to the session with it.
-// These three are local only (`derive-run.js` keeps them in the derivation
+//   - `repoUnresolved` is how many distinct directories outside the desk the
+//     session wrote or committed in that `repoOfPath` could not name: a
+//     number, never a path.
+// These four are local only (`derive-run.js` keeps them in the derivation
 // receipt) and never reach facts.
 //
 // Without the session's `started_at` and `derived_through` there is no
@@ -97,9 +107,9 @@
 // task renamed in the middle of a session is still one task and one job.
 //
 // Dependencies are injected so tests can fake them (`desk-repo.js` has the
-// real ones): `readTask(track, slug)`, `deskCommitsBetween(startIso,
-// endIso)` (kept in the signature, no longer called), `gitCommitTaskPaths(sha)`,
-// `isCardHousekeeping(sha, path)` and `resolveJobIdentity(track, slug)`. The
+// real ones): `readTask(track, slug)`, `gitCommitTaskPaths(sha)`,
+// `isCardHousekeeping(sha, path)`, `resolveJobIdentity(track, slug)` and
+// `repoOfPath(absolutePath)`, which answers `owner/name` or `null`. The
 // desk root is passed in rather than resolved here: `src/util/paths.js` is
 // outside `src/factory`, so the caller resolves it (with
 // `resolveDeskRootWithSource`) and hands it over.
@@ -310,21 +320,21 @@ function requireFunction(value, name) {
 
 /**
  * `bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix,
- * readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
- * resolveJobIdentity }) -> { jobs, boundBy, disagrees, ownActivity }`; the
+ * readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity,
+ * repoOfPath }) -> { jobs, boundBy, disagrees, ownActivity, repoUnresolved }`; the
  * header describes each. `agents` is the facts' `agents[]` (`{ n, parent }`),
  * used for ancestry. `session` is the facts' `session` (`started_at` and
  * `derived_through` are read). `deskRemote` is the desk's `origin` URL, or
  * empty when it has none (the job IDs then use `local:` plus the desk root).
  */
-export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity }) {
+export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoOfPath }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
-  requireFunction(deskCommitsBetween, "deskCommitsBetween")
   requireFunction(gitCommitTaskPaths, "gitCommitTaskPaths")
   requireFunction(isCardHousekeeping, "isCardHousekeeping")
   requireFunction(resolveJobIdentity, "resolveJobIdentity")
+  requireFunction(repoOfPath, "repoOfPath")
   if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
   // One unpublished desk reached through a symlink and through its real path is one desk.
   const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
@@ -362,12 +372,23 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     }
     return named.get(name)
   }
-  // The `{ track, slug }` a path names: inside a task folder, or (`folder`) the folder itself. A relative path is taken from the desk root.
-  const nameAt = (value, folder = false) => {
+  // Where a path an event names lies: `{ segments }`, its desk-relative segments, or `{ outside }`, its absolute path outside the
+  // desk; `null` for no path. A relative path is taken from the desk root.
+  const locate = (value) => {
     if (typeof value !== "string" || value === "") return null
-    const segments = segmentsInDesk(path.resolve(roots[0], expandDeskMarker(value, roots[0])), roots)
-    if (segments === null) return null
-    return taskOfSegments(folder ? [...segments, CARD_FILE] : segments, alias)
+    const absolute = path.resolve(roots[0], expandDeskMarker(value, roots[0]))
+    const segments = segmentsInDesk(absolute, roots)
+    return segments === null ? { outside: absolute } : { segments }
+  }
+  // The `{ track, slug }` desk segments name: a path inside a task folder, or (`folder`) the folder itself.
+  const nameOf = (segments, folder = false) => taskOfSegments(folder ? [...segments, CARD_FILE] : segments, alias)
+  // The repository holding an absolute path outside the desk, or `null`; `directory` is counted when it cannot be named.
+  const unresolved = new Set()
+  const repoAt = (absolute, directory) => {
+    const repo = repoOfPath(absolute)
+    if (typeof repo === "string" && repo !== "") return repo
+    unresolved.add(directory)
+    return null
   }
 
   // The session tree's evidence, `{ at, key, kind, agent }` (`at` in epoch ms, null when unknown), and its own activity spans in epoch ms.
@@ -392,7 +413,16 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     if (!filing && call.statusOnly !== true) evidence.push({ at, key: task.key, kind: "tool", agent: agentOf(call) })
   }
 
-  for (const write of asArray(source.fileWrites)) note(write, nameAt(write?.path), "write", msOf(write?.at))
+  for (const write of asArray(source.fileWrites)) {
+    const place = locate(write?.path)
+    if (place === null || !listed.has(agentOf(write))) continue
+    if (place.segments !== undefined) {
+      note(write, nameOf(place.segments), "write", msOf(write.at))
+      continue
+    }
+    const repo = repoAt(place.outside, path.dirname(place.outside))
+    if (repo !== null) evidence.push({ at: msOf(write.at), repo, kind: "repo", agent: agentOf(write) })
+  }
 
   // Each subagent's spawn time, and the task of its `Desk-Task:` line when that card exists.
   const spawnedAt = new Map()
@@ -413,11 +443,23 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
   for (const call of asArray(source.shellGitCommits)) {
     if (!isTime(call?.start) || !isTime(call.end) || call.end < call.start) continue
     if (segmentsInDesk(expandDeskMarker(call.cwd, roots[0]), roots) !== null) spans.push([Date.parse(floorToSecond(call.start)), Date.parse(call.end)])
+    if (!listed.has(agentOf(call))) continue
     const names = new Map()
+    const repos = new Set()
+    const cwd = locate(call.cwd)
+    // A directory that is not absolute says nothing about where the call ran.
+    if (cwd?.outside !== undefined && path.isAbsolute(call.cwd)) repos.add(repoAt(cwd.outside, cwd.outside))
     for (const entry of asArray(call.paths)) {
-      const name = nameAt(entry, true)
+      const place = locate(entry)
+      if (place === null) continue
+      if (place.segments === undefined) {
+        repos.add(repoAt(place.outside, path.dirname(place.outside)))
+        continue
+      }
+      const name = nameOf(place.segments, true)
       if (name !== null) names.set(`${name.track}/${name.slug}`, name)
     }
+    for (const repo of repos) if (repo !== null) evidence.push({ at: Date.parse(call.start), repo, kind: "repo", agent: agentOf(call) })
     if (names.size > MASS_COMMIT_TASKS) continue
     for (const name of names.values()) note(call, name, "commit", Date.parse(call.start))
   }
@@ -528,5 +570,5 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     if (last !== undefined && start - startedMs <= last[1]) last[1] = Math.max(last[1], end - startedMs)
     else ownActivity.push([start - startedMs, end - startedMs])
   }
-  return { jobs: jobs.slice(0, LIMITS.jobs), boundBy, disagrees, ownActivity: ownActivity.slice(0, OWN_ACTIVITY_SPANS) }
+  return { jobs: jobs.slice(0, LIMITS.jobs), boundBy, disagrees, ownActivity: ownActivity.slice(0, OWN_ACTIVITY_SPANS), repoUnresolved: unresolved.size }
 }

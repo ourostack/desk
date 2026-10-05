@@ -17,7 +17,7 @@
 //     `spawn` (a brief carrying the task's `Desk-Task:` line) and `commit` (a
 //     commit naming a path at or under the folder); or `{ at, repo, kind:
 //     "repo" }` for work in a code repository. `at` is `null` for evidence with
-//     no time: it counts, and owns no time.
+//     no time: it counts toward candidacy, and toward nothing else.
 //
 // Declared stretches. Worker 0's calls cut the session into stretches. One
 // that names a task is that task's, one that clears is no task's, and the
@@ -37,19 +37,26 @@
 //   - A task's episode is a maximal run of its events at most `episodeGapMs`
 //     apart. It is significant at `significantEvents` events spanning
 //     `significantSpanMs`, and then covers `[first, last]`.
-//   - The main task is the candidate with most events, then the earliest
-//     first event, then the key in byte order.
+//   - The main task is the candidate with most events that have a time, then
+//     the earliest first event, then the key in byte order. Evidence with no
+//     time (a native commit reference) counts toward candidacy only: it never
+//     ranks a task above another and never starts, ends or extends an episode.
 //   - Where significant episodes of different tasks overlap, the overlap goes
 //     to the task with more events inside it, then the main task, then key
 //     order. Time no significant episode covers goes to the main task.
 //     Adjacent segments of one task merge.
+//   - An inferred segment shorter than `minSegmentMs` then joins the longer of
+//     the inferred segments beside it in the same stretch (the earlier of two
+//     equals), the shortest and earliest such segment first, until none is
+//     short or one segment is left. A declared stretch never takes one and is
+//     never taken, whatever its length.
 //   - No candidate: the stretch binds nothing.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
 /** The inference thresholds, in one place so a replay can rule on them. */
-export const FOCUS_RULES = Object.freeze({ candidateEvents: 3, significantEvents: 3, significantSpanMs: 600000, episodeGapMs: 1800000 })
+export const FOCUS_RULES = Object.freeze({ candidateEvents: 3, significantEvents: 3, significantSpanMs: 600000, episodeGapMs: 1800000, minSegmentMs: 60000 })
 
 /** A declared stretch disagrees with the evidence at this many events on another task and none on its own. */
 export const DISAGREE_EVENTS = 10
@@ -69,6 +76,42 @@ function pushSegment(list, key, start, end) {
   const last = list.at(-1)
   if (last !== undefined && last.key === key && last.end === start) last.end = end
   else list.push({ key, start, end })
+}
+
+const lengthOf = (segment) => segment.end - segment.start
+
+// The index of the shortest segment that passes `eligible`, the earliest among equals, or -1.
+function shortestIndex(list, eligible) {
+  let pick = -1
+  list.forEach((segment, index) => {
+    if (eligible(segment, index) && (pick === -1 || lengthOf(segment) < lengthOf(list[pick]))) pick = index
+  })
+  return pick
+}
+
+// The index of the longer segment touching `list[index]`, the earlier of two equals, or -1 when none touches.
+function longerNeighbour(list, index) {
+  const before = index > 0 && list[index - 1].end === list[index].start ? index - 1 : -1
+  const after = index + 1 < list.length && list[index + 1].start === list[index].end ? index + 1 : -1
+  if (before === -1 || after === -1) return Math.max(before, after)
+  return lengthOf(list[after]) > lengthOf(list[before]) ? after : before
+}
+
+// A new list in which `list[index]` belongs to `key`, with adjacent segments of one task joined.
+function rekeyed(list, index, key) {
+  const merged = []
+  list.forEach((segment, at) => pushSegment(merged, at === index ? key : segment.key, segment.start, segment.end))
+  return merged
+}
+
+// One stretch's inferred segments (they tile it) with every segment under `minSegmentMs` joined to its longer neighbour.
+function withoutShortSegments(segments) {
+  let list = segments
+  for (;;) {
+    const pick = list.length < 2 ? -1 : shortestIndex(list, (segment) => lengthOf(segment) < FOCUS_RULES.minSegmentMs)
+    if (pick === -1) return list
+    list = rekeyed(list, pick, list[longerNeighbour(list, pick)].key)
+  }
 }
 
 // Worker 0's readable focus calls, clamped to the session and in a fixed order. At one instant a
@@ -167,8 +210,9 @@ export function inferFocus({ events, startMs, endMs, neverDeclares, cards }) {
 
   const timesOf = new Map(candidates.map((key) => [key, own.filter((event) => event.key === key && event.at !== null).map((event) => event.at).sort((a, b) => a - b)]))
   const firstOf = (key) => timesOf.get(key)[0] ?? Infinity
+  // Only events with a time rank the main task: evidence with no time makes a candidate and never earns time over another.
   // Infinity - Infinity is NaN, which `||` passes over like a tie.
-  const main = [...candidates].sort((a, b) => counts.get(b) - counts.get(a) || firstOf(a) - firstOf(b) || compareKeys(a, b))[0]
+  const main = [...candidates].sort((a, b) => timesOf.get(b).length - timesOf.get(a).length || firstOf(a) - firstOf(b) || compareKeys(a, b))[0]
   const episodes = candidates.flatMap((key) => significantEpisodes(key, timesOf.get(key)))
 
   const bounds = [...new Set([startMs, endMs, ...episodes.flatMap((episode) => [episode.start, episode.end])])].sort((a, b) => a - b)
@@ -187,7 +231,7 @@ export function inferFocus({ events, startMs, endMs, neverDeclares, cards }) {
     }
     pushSegment(segments, key, start, end)
   }
-  return { segments, main, counts }
+  return { segments: withoutShortSegments(segments), main, counts }
 }
 
 /**
@@ -240,11 +284,16 @@ export function controllerTimeline({ events, startMs, endMs, cards }) {
 
 /**
  * `capSegments({ segments, main, cap }) -> segments`: no task keeps more than
- * `cap` segments. A task over the cap gives its shortest segments (the
- * earliest among equals) to the main task, where they merge with its
- * neighbours. The main task itself, once no other task is over the cap, or
- * any task when there is no main task, loses its shortest segments instead,
- * and that time binds nothing. Segments
+ * `cap` segments, and no time is lost. A task over the cap gives its shortest
+ * segment (the earliest among equals) to the main task, where it joins the
+ * main task's neighbours. When there is no main task, or the main task is
+ * the one over the cap, the task's shortest segment that touches another
+ * joins the longer of the segments it touches (the earlier of two equals),
+ * whatever their task. Either way adjacent segments of one task then join,
+ * and this repeats until every task is at the cap. One case cannot keep its
+ * time: a task over the cap none of whose segments touches another (each
+ * stands alone between cleared stretches) loses its shortest segment, because
+ * joining across the gap would bind time the controller cleared. Segments
  * never overlap before or after. Returns a new list.
  */
 export function capSegments({ segments, main, cap }) {
@@ -254,14 +303,12 @@ export function capSegments({ segments, main, cap }) {
     const crowded = [...new Set(list.map((segment) => segment.key))].sort(compareKeys).filter((key) => list.filter((segment) => segment.key === key).length > cap)
     if (crowded.length === 0) return list
     const over = crowded.find((key) => key !== main) ?? main
-    let pick = -1
-    list.forEach((segment, index) => {
-      if (segment.key === over && (pick === -1 || segment.end - segment.start < list[pick].end - list[pick].start)) pick = index
-    })
-    if (main !== null && main !== over) list[pick].key = main
-    else list.splice(pick, 1)
-    const merged = []
-    for (const segment of list) pushSegment(merged, segment.key, segment.start, segment.end)
-    list = merged
+    if (main !== null && main !== over) {
+      list = rekeyed(list, shortestIndex(list, (segment) => segment.key === over), main)
+      continue
+    }
+    const pick = shortestIndex(list, (segment, index) => segment.key === over && longerNeighbour(list, index) !== -1)
+    if (pick === -1) list.splice(shortestIndex(list, (segment) => segment.key === over), 1)
+    else list = rekeyed(list, pick, list[longerNeighbour(list, pick)].key)
   }
 }

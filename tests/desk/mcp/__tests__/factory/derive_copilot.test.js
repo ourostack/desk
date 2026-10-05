@@ -1157,6 +1157,31 @@ test("a subagent's task_focus call carries the subagent's agent number", async (
   assert.deepEqual(events.focusCalls, [{ agent: 1, at: at(3), track: "a", slug: "b" }])
 })
 
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { facts, events } = await deriveText([
+    start(ev),
+    ...run("c1", 1, "desk-task_create", { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }), // 1
+    ...run("c2", 3, "desk-task_create", { track: "desk-plugin", slug: "parked", focus: false }),
+    ...run("c3", 5, "desk-task_create", { track: "desk-plugin", slug: "truthy", focus: "true" }),
+    ...run("c4", 7, "desk-task_create", { track: "desk-plugin", slug: "failed", focus: true }, { success: false }),
+    ...run("c5", 9, "desk-task_create", { track: "..", slug: "bad", focus: true }),
+    ...run("c6", 11, "desk-task_create", { track: "desk-plugin", focus: true }),
+    ...run("c7", 13, "desk-task_create", { track: "desk-plugin", slug: "plain" }),
+    ...run("c8", 15, "desk-task_update", { track: "desk-plugin", slug: "updated", focus: true }),
+    ...run("c9", 17, "desk-task_create", "not an object"),
+  ])
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: at(1), track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assertValid(facts)
+})
+
 test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
   const ev = eventWriter()
   const inputs = [

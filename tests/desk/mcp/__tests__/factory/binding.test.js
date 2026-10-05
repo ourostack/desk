@@ -29,18 +29,24 @@ const expectedId = (remote, prefix, track, slug) => createHash("sha256").update(
 
 const CARD = { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" }
 
-function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {} } = {}) {
-  const calls = { readTask: [], between: [], native: [], housekeeping: [], resolveJobIdentity: [] }
+function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {}, repos = {} } = {}) {
+  const calls = { readTask: [], between: [], native: [], housekeeping: [], resolveJobIdentity: [], repoOfPath: [] }
   return {
     calls,
     readTask(track, slug) {
       calls.readTask.push(`${track}/${slug}`)
       return Object.hasOwn(cards, `${track}/${slug}`) ? cards[`${track}/${slug}`] : CARD
     },
+    // Not a `bindSession` parameter any more. It is still handed over so a test can show desk history is never read by time.
     deskCommitsBetween(start, end) {
       calls.between.push([start, end])
-      // Everything, in or out of the span: binding itself matches each commit to a call.
       return commitsBetween
+    },
+    // `repos` maps a directory to the `owner/name` of the repository holding it and everything below it.
+    repoOfPath(absPath) {
+      calls.repoOfPath.push(absPath)
+      const root = Object.keys(repos).sort((a, b) => b.length - a.length).find((directory) => absPath === directory || absPath.startsWith(`${directory}/`))
+      return root === undefined ? null : repos[root]
     },
     gitCommitTaskPaths(sha) {
       calls.native.push(sha)
@@ -585,7 +591,8 @@ test("caller bugs throw a TypeError: a relative desk root, a bad person prefix, 
   assert.throws(() => bindSession({ events: {}, deskRoot: "desk", deskRemote: REMOTE, personPrefix: "", ...deps }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "people/ari", ...deps }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, readTask: null }), TypeError)
-  assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, deskCommitsBetween: undefined }), TypeError)
+  assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, repoOfPath: undefined }), TypeError)
+  assert.doesNotThrow(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, deskCommitsBetween: undefined }), "desk history is no longer a reader the binder needs")
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, gitCommitTaskPaths: 1 }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, isCardHousekeeping: undefined }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, resolveJobIdentity: null }), TypeError)
@@ -955,4 +962,122 @@ test("own activity is the session's desk commit windows and its task-tool calls 
   assert.equal(bind({ shellGitCommits: many }, { agents: tree() }).ownActivity.length, 500)
   // Without the session's start there is nothing to measure from.
   assert.deepEqual(bind(events, { agents: tree(), session: null }).ownActivity, [])
+})
+
+// --- Work in a code repository ---------------------------------------------------
+
+const CODE = "/work/code"
+const codeWrite = (n, file = "src/a.js", agent = 0) => ({ at: minute(n), path: `${CODE}/${file}`, agent })
+const listing = (...slugs) => Object.fromEntries(slugs.map((slug) => [`${TRACK}/${slug}`, { ...CARD, repos: ["ourostack/desk"] }]))
+
+test("file writes and commits in a card's listed repository count for that card", () => {
+  // The reviewer's case: X lists the repository and has two desk writes, forty writes and a commit in the repository; Y has three notes.
+  const events = {
+    fileWrites: [writeAt(1, X), writeAt(2, X), ...Array.from({ length: 40 }, (_, index) => codeWrite(5 + index * 2, `src/${index % 4}/file-${SENTINEL}.js`)), writeAt(3, Y), writeAt(4, Y), writeAt(5, Y)],
+    shellGitCommits: [{ start: minute(86), end: minute(87), cwd: CODE, paths: [`${CODE}/src`], agent: 0 }],
+  }
+  const result = bind(events, { agents: tree(), cards: listing(X), repos: { [CODE]: "OurOStack/Desk" } })
+  assert.deepEqual(shape(result.jobs), { [idOf(X)]: { agents: [0], segments: [span(0, 90)] } })
+  assert.deepEqual(result.boundBy, { [idOf(X)]: "inferred" })
+  assert.equal(result.repoUnresolved, 0)
+  assert.deepEqual(summary(result.jobs), [{ job: idOf(X), basis: ["file_write"], agents: [0] }])
+  assertValid(result.jobs)
+  // Without the repository evidence X has two events, and the session is Y's.
+  assert.deepEqual(Object.keys(shape(bind(events, { agents: tree(), cards: listing(X) }).jobs)), [idOf(Y)])
+  // A card that lists the repository by its bare name counts the same way.
+  const bare = { [`${TRACK}/${X}`]: { ...CARD, repos: ["desk"] } }
+  assert.deepEqual(Object.keys(shape(bind(events, { agents: tree(), cards: bare, repos: { [CODE]: "ourostack/desk" } }).jobs)), [idOf(X)])
+})
+
+test("a repository listed by two cards that both have events counts for neither", () => {
+  const events = { fileWrites: [writeAt(1, X), writeAt(2, Y), ...Array.from({ length: 12 }, (_, index) => codeWrite(5 + index * 2))] }
+  const result = bind(events, { agents: tree(), cards: listing(X, Y), repos: { [CODE]: "ourostack/desk" } })
+  assert.deepEqual(result.jobs, [])
+  assert.equal(result.repoUnresolved, 0)
+  // With one of the two cards untouched, the repository is the other's.
+  const one = bind({ fileWrites: events.fileWrites.filter((write) => write.path !== writeAt(2, Y).path) }, { agents: tree(), cards: listing(X, Y), repos: { [CODE]: "ourostack/desk" } })
+  assert.deepEqual(Object.keys(shape(one.jobs)), [idOf(X)])
+  // A repository no card lists is no evidence for anyone.
+  assert.deepEqual(bind(events, { agents: tree(), repos: { [CODE]: "ourostack/desk" } }).jobs, [])
+})
+
+test("a path outside the desk that resolves to no repository binds nothing and is counted by directory", () => {
+  const events = {
+    fileWrites: [
+      writeAt(1, X), writeAt(2, X), writeAt(3, Y),
+      ...Array.from({ length: 10 }, (_, index) => ({ at: minute(10 + index), path: `/tmp/scratch-${SENTINEL}/${index % 2}/out.txt`, agent: 0 })),
+      { at: minute(30), path: `/tmp/scratch-${SENTINEL}/0/other.txt`, agent: 0 },
+      // A subagent `agents` does not list is no evidence, and is not counted either.
+      { at: minute(31), path: "/tmp/unlisted/out.txt", agent: 9 },
+    ],
+    shellGitCommits: [
+      { start: minute(40), end: minute(41), cwd: "/tmp/not-a-repo", paths: ["/tmp/not-a-repo/a/b.txt", "/tmp/not-a-repo/a/c.txt", 7], agent: 0 },
+      // No directory, or one that is not absolute, is nothing to resolve.
+      { start: minute(42), end: minute(43), cwd: null, paths: [], agent: 0 },
+      { start: minute(44), end: minute(45), cwd: "relative/dir", paths: [], agent: 0 },
+      // An unlisted worker's commit call is no evidence, and its directory is not counted.
+      { start: minute(46), end: minute(47), cwd: "/tmp/unlisted", paths: ["/tmp/unlisted/a.txt"], agent: 9 },
+    ],
+  }
+  const result = bind(events, { agents: tree(), cards: listing(X) })
+  assert.deepEqual(result.jobs, [], "two desk writes beside another task's are not enough, and an unresolved path is never guessed")
+  // Two write directories, the commit's directory and the directory of the paths it named.
+  assert.equal(result.repoUnresolved, 4)
+  assert.equal(typeof result.repoUnresolved, "number")
+  // A reader that answers with something other than a name is unresolved too.
+  const odd = bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...fakes({ cards: listing(X) }), repoOfPath: () => "" })
+  assert.deepEqual([odd.jobs, odd.repoUnresolved], [[], 4])
+})
+
+test("a commit call in a repository is one event per repository it touches, at the call's start, and paths inside the desk are never asked about", () => {
+  const OTHER_CODE = "/work/other"
+  const commit = (n, cwd, paths = []) => ({ start: minute(n), end: minute(n + 1), cwd, paths, agent: 0 })
+  const events = {
+    fileWrites: [writeAt(1, X)],
+    // Three commit calls in the repository, ten minutes apart, one of which also names a file in another repository.
+    shellGitCommits: [commit(10, CODE, [`${CODE}/a.js`, `${CODE}/b.js`]), commit(20, `${CODE}/sub`), commit(30, CODE, [`${OTHER_CODE}/c.js`]), commit(40, DESK, [`${DESK}/${TRACK}/${X}/notes.md`]), commit(50, DESK_MARKER, [`${DESK_MARKER}/${TRACK}/${X}`])],
+  }
+  const result = bind(events, { agents: tree(), cards: listing(X), repos: { [CODE]: "ourostack/desk", [OTHER_CODE]: "someone/else" } })
+  assert.deepEqual(shape(result.jobs), { [idOf(X)]: { agents: [0], segments: [span(0, 90)] } })
+  assert.deepEqual(summary(result.jobs)[0].basis, ["file_write", "desk_commit"])
+  assert.equal(result.repoUnresolved, 0)
+  assert.ok(result.calls.repoOfPath.every((asked) => !asked.startsWith(DESK) && !asked.includes(DESK_MARKER)), "the desk is never resolved as a code repository")
+  // A subagent bound by its own Desk-Task line keeps its repository work out of the controller's inference.
+  const subagentWrites = [writeAt(1, X), ...Array.from({ length: 12 }, (_, index) => codeWrite(5 + index * 2, "src/a.js", 1))]
+  const options = { agents: tree(0), cards: listing(X), repos: { [CODE]: "ourostack/desk" } }
+  assert.deepEqual(shape(bind({ fileWrites: subagentWrites, spawns: [spawnAt(1, 2)] }, options).jobs), { [idOf(X)]: { agents: [0, 1], segments: [span(0, 90)] } })
+  assert.deepEqual(shape(bind({ fileWrites: subagentWrites, spawns: [spawnAt(1, 2, Y)] }, options).jobs), { [idOf(Y)]: { agents: [1], segments: "none" } })
+})
+
+test("task_create with focus declares the new card: the session is bound by declaration, not as one that never declared", () => {
+  const create = deskCall({ at: minute(10), name: "mcp__plugin_desk_desk__task_create", slug: X })
+  // The parser emits the focus call beside the create call; ten notes on Y would otherwise take the whole session.
+  const events = { deskToolCalls: [create], focusCalls: [focusAt(10, X)], fileWrites: Array.from({ length: 10 }, (_, index) => writeAt(20 + index * 5, Y)) }
+  const result = bind(events, { agents: tree() })
+  assert.deepEqual(shape(result.jobs)[idOf(X)], { agents: [0], segments: [span(0, 90)] })
+  assert.deepEqual(result.boundBy, { [idOf(X)]: "focus" })
+  assert.deepEqual(result.disagrees, [idOf(X)])
+  // Without the focus call the create is no evidence at all, and the session is Y's.
+  assert.deepEqual(Object.keys(shape(bind({ ...events, focusCalls: [] }, { agents: tree() }).jobs)), [idOf(Y)])
+})
+
+test("native commits count toward candidacy only, never toward time", () => {
+  const shas = ["1", "2", "3", "4", "5"].map((digit) => digit.repeat(40))
+  const nativeCommits = Object.fromEntries(shas.map((sha) => [sha, { exists: true, taskPaths: [`${TRACK}/${Y}/notes.md`] }]))
+  // X has three timed writes; Y has five native commits, which have no time.
+  const events = { fileWrites: [writeAt(10, X), writeAt(20, X), writeAt(30, X)], nativeCommitShas: shas.map((sha) => native(sha)) }
+  const result = bind(events, { agents: tree(), nativeCommits })
+  // Y is a candidate, but more untimed events do not make it the main task, so it gets none of the time X's episode leaves open.
+  assert.deepEqual(shape(result.jobs), { [idOf(X)]: { agents: [0], segments: [span(0, 90)] } })
+  assert.deepEqual(result.boundBy, { [idOf(X)]: "inferred" })
+  // Two native commits beside one timed write make Y a candidate (three events); X's three timed writes still hold every minute.
+  const lifted = bind({ fileWrites: [...events.fileWrites, writeAt(50, Y)], nativeCommitShas: shas.slice(0, 2).map((sha) => native(sha)) }, { agents: tree(), nativeCommits })
+  assert.deepEqual(shape(lifted.jobs), { [idOf(X)]: { agents: [0], segments: [span(0, 90)] } })
+  // Candidacy is what they do count toward: alone in a session that never declares, three native commits bind their task.
+  const alone = bind({ nativeCommitShas: shas.slice(0, 3).map((sha) => native(sha)) }, { agents: tree(), nativeCommits })
+  assert.deepEqual(shape(alone.jobs), { [idOf(Y)]: { agents: [0], segments: [span(0, 90)] } })
+  assert.deepEqual(summary(alone.jobs)[0].basis, ["desk_commit"])
+  // In a session that declares, evidence with no time counts for nothing.
+  const declared = bind({ ...events, focusCalls: [focusAt(40, X)] }, { agents: tree(), nativeCommits })
+  assert.deepEqual(Object.keys(shape(declared.jobs)), [idOf(X)])
 })

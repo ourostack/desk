@@ -1071,6 +1071,47 @@ test("a successful task_focus call becomes a focusCall with its time, and a fail
   assert.equal(validateLocalFacts(facts).ok, true)
 })
 
+test("a spawn call on a line with no readable time is still parsed, and records no spawn time", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("s1", "Agent", { prompt: `Desk-Task: a/b\n${SENTINEL}` }, { timestamp: "not a time" }),
+    result("s1"),
+  ])
+  assert.deepEqual(events.spawns, [], "no subagent transcript, so no spawn to report")
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", async () => {
+  const { line, call, result } = focusSession()
+  const CREATE_TOOL = "mcp__plugin_desk_desk__task_create"
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("c1", CREATE_TOOL, { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }), // 01
+    result("c1"),
+    call("c2", CREATE_TOOL, { track: "desk-plugin", slug: "parked", focus: false }),
+    result("c2"),
+    call("c3", CREATE_TOOL, { track: "desk-plugin", slug: "truthy", focus: "true" }),
+    result("c3"),
+    call("c4", CREATE_TOOL, { track: "desk-plugin", slug: "failed", focus: true }),
+    result("c4", true),
+    call("c5", CREATE_TOOL, { track: "..", slug: "bad", focus: true }),
+    result("c5"),
+    call("c6", CREATE_TOOL, { track: "desk-plugin", focus: true }),
+    result("c6"),
+    call("c7", CREATE_TOOL, { track: "desk-plugin", slug: "plain" }),
+    result("c7"),
+    call("c8", UPDATE_TOOL, { track: "desk-plugin", slug: "updated", focus: true }),
+    result("c8"),
+  ])
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: "2026-09-25T08:00:01.000Z", track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], [undefined, true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
 test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
   const { line, call, result } = focusSession()
   const inputs = [
