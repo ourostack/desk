@@ -19,7 +19,7 @@ if (-not (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue)) {
 if (Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*\$userName" }) {
   throw "$userName must not be an administrator"
 }
-$workspace = (Resolve-Path (Join-Path $WorkDir '..\..\..')).Path
+$workspace = (Resolve-Path $WorkDir).Path
 $tmp = 'C:\deskstd-tmp'
 New-Item -ItemType Directory -Force -Path $tmp, $LogDir | Out-Null
 foreach ($dir in @($workspace, $tmp, $LogDir)) {
