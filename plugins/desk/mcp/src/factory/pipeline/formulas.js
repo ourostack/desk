@@ -1,3 +1,5 @@
+import { bindingsOverlap, overlappingBindings } from "./timeline.js"
+
 const ACTIVE_KINDS = new Set(["turn", "tool", "subagent"])
 const WAIT_KINDS = Object.freeze(["human_wait", "permission_wait", "api_retry", "compaction"])
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
@@ -292,6 +294,7 @@ export function sharedSessions(timeline) {
     const split = segmented(own)
     if (split && own.segments.some((segment) => segment.shared === true)) return true
     const workers = split ? own.agents.filter((agent) => agent !== 0) : own.agents
+    if (split && session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.includes(0) && bindingsOverlap(own, other))) return true
     return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => workers.includes(agent)))
   }))
 }
@@ -391,7 +394,8 @@ export function calculateFormulas(timeline) {
   const sourceSessions = timeline.source_sessions
   const timedSessions = timeline.sessions.filter((session) => session.offset_ms !== null)
   const timedSources = sourceSessions.filter((_, index) => timeline.sessions[index].offset_ms !== null)
-  const otherJobs = new Set(sourceSessions.flatMap((session) => session.jobs.map((binding) => binding.job)).filter((job) => job !== timeline.job))
+  // Only jobs whose time really overlaps this job's in a session count as sharing with it.
+  const otherJobs = new Set(sourceSessions.flatMap((session) => overlappingBindings(session, bindingOf(session, timeline.job)).map((binding) => binding.job)).filter((job) => job !== timeline.job))
   const sessions = measured({
     bound: sourceSessions.length,
     timeline: timedSessions.length,

@@ -45,6 +45,20 @@ function jobParts(interval, binding) {
   })
 }
 
+// Whether two bindings of one session hold overlapping time. A binding with
+// no `segments` holds the whole session, so it overlaps every other binding;
+// two segmented bindings overlap only where a segment of one and a segment of
+// the other share time (segments are half-open).
+export function bindingsOverlap(left, right) {
+  if (!Object.hasOwn(left, "segments") || !Object.hasOwn(right, "segments")) return true
+  return left.segments.some((a) => right.segments.some((b) => a.start_ms < b.end_ms && b.start_ms < a.end_ms))
+}
+
+// The other bindings of the session whose time overlaps `binding`'s.
+export function overlappingBindings(session, binding) {
+  return session.jobs.filter((other) => other !== binding && bindingsOverlap(binding, other))
+}
+
 export function buildJobTimeline(job, inputSessions) {
   const sessions = inputSessions
     .map(normalizePublished)
@@ -62,7 +76,7 @@ export function buildJobTimeline(job, inputSessions) {
     ended: session.session.ended,
     offset_ms: binding.session_offset_ms,
     end_ms: binding.session_offset_ms === null ? null : binding.session_offset_ms + session.session.duration_ms,
-    shared_with: Math.max(0, session.jobs.length - 1),
+    shared_with: overlappingBindings(session, binding).length,
     basis: [...binding.basis],
   }))
 

@@ -432,3 +432,23 @@ test("the rollups Markdown shows the Pareto, the catalog per group, tool kinds a
   assert.match(emptyText, /No fully labeled finished job yet/u)
   assert.doesNotMatch(emptyText, /\bNaN\b|undefined|null/u)
 })
+
+test("sessions_shared counts a session only when two labeled jobs' segments overlap, or one has none", () => {
+  const sharedCount = (firstSegments, secondSegments) => {
+    const sessions = fixtureSessions().map((session) => {
+      if (session.session.id !== S(1)) return session
+      const first = { ...session.jobs[0], ...(firstSegments ? { segments: firstSegments } : {}) }
+      const second = { ...session.jobs[0], job: J("8"), ...(secondSegments ? { segments: secondSegments } : {}) }
+      return { ...session, jobs: [first, second] }
+    })
+    const labels = fixtureLabels()
+    const resolved = resolveLabels([...labels, { ...labels.find((entry) => entry.session === S(1)), job: J("8") }], sessions)
+    const records = buildTimelines(sessions).map((timeline) => jobRecord({ timeline, formulas: calculateFormulas(timeline) }, resolved.byJobSession))
+    return computeRollups({ records, sessions, labels: resolved }).muda.groupings.overall.all.sessions_shared
+  }
+  const early = [{ start_ms: 0, end_ms: 1000 }]
+  assert.equal(sharedCount(early, [{ start_ms: 1000, end_ms: 2000 }]), 0)
+  assert.equal(sharedCount(early, [{ start_ms: 500, end_ms: 2000 }]), 1)
+  assert.equal(sharedCount(early, null), 1)
+  assert.equal(sharedCount(null, null), 1)
+})

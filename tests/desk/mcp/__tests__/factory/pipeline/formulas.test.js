@@ -645,3 +645,86 @@ test("a job that shares workers in one session and not in another counts only th
   assert.equal(formulas.active_time_ms.uncovered_sessions, 1)
   assert.deepEqual(formulas.active_time_ms.partial_reasons, ["worker_shared"])
 })
+
+// Two jobs that both hold the controller (worker 0), each with its own segments.
+function segmentedSession(aSegments, bSegments, overrides = {}) {
+  const session = splitSession(overrides)
+  session.jobs[0].agents = [0, 1]
+  session.jobs[0].segments = aSegments
+  session.jobs[1].agents = [0, 2]
+  session.jobs[1].segments = bSegments
+  return session
+}
+const DISJOINT = [[{ start_ms: 0, end_ms: 10000 }], [{ start_ms: 10000, end_ms: 20000 }]]
+const OVERLAP = [[{ start_ms: 0, end_ms: 10000 }], [{ start_ms: 5000, end_ms: 20000 }]]
+
+test("two jobs with disjoint segments share nothing, and overlapping segments share", () => {
+  const disjoint = [segmentedSession(...DISJOINT)]
+  for (const job of [JOB_A, JOB_B]) {
+    const formulas = calculateFormulas(buildJobTimeline(job, disjoint))
+    assert.deepEqual(formulas.sessions.value, { bound: 1, timeline: 1, shared: 0, shared_with_jobs: 0 })
+    assert.equal(Object.hasOwn(formulas.active_time_ms, "partial_reasons"), false)
+  }
+  const overlap = [segmentedSession(...OVERLAP)]
+  for (const job of [JOB_A, JOB_B]) {
+    const formulas = calculateFormulas(buildJobTimeline(job, overlap))
+    assert.deepEqual(formulas.sessions.value, { bound: 1, timeline: 1, shared: 1, shared_with_jobs: 1 })
+    assert.deepEqual(formulas.active_time_ms.partial_reasons, ["worker_shared"])
+  }
+})
+
+test("an unsegmented job counts as overlapping every segmented one, and a legacy pair keeps one other job", () => {
+  const mixed = segmentedSession(...DISJOINT)
+  delete mixed.jobs[1].segments
+  mixed.jobs[1].agents = [2]
+  for (const job of [JOB_A, JOB_B]) {
+    assert.deepEqual(calculateFormulas(buildJobTimeline(job, [mixed])).sessions.value, { bound: 1, timeline: 1, shared: 1, shared_with_jobs: 1 })
+  }
+  const unsegmentedController = segmentedSession(...DISJOINT)
+  delete unsegmentedController.jobs[1].segments
+  assert.deepEqual(calculateFormulas(buildJobTimeline(JOB_A, [unsegmentedController])).active_time_ms.partial_reasons, ["worker_shared"])
+  const legacy = splitSession()
+  delete legacy.jobs[0].agents
+  delete legacy.jobs[1].agents
+  assert.equal(calculateFormulas(buildJobTimeline(JOB_A, [legacy])).sessions.value.shared, 1)
+})
+
+test("a pull request is flagged worker_shared only when it falls inside an overlap of segments", () => {
+  const prs = [
+    { repo: "ourostack/desk", number: 1, agent: 0, at_ms: 2000 },
+    { repo: "ourostack/desk", number: 2, agent: 0, at_ms: 15000 },
+    { repo: "ourostack/desk", number: 3, agent: 0, at_ms: 7000 },
+  ]
+  const withPrs = (segments) => [segmentedSession(...segments, { refs: REFS(prs) })]
+  const disjoint = withPrs(DISJOINT)
+  assert.deepEqual(prNumbers(JOB_A, disjoint), [1, 3])
+  assert.deepEqual(prNumbers(JOB_B, disjoint), [2])
+  for (const job of [JOB_A, JOB_B]) assert.equal(Object.hasOwn(referencesOf(job, disjoint), "partial_reasons"), false)
+  // With overlapping segments PR 3 (at 7000) is in the overlap: neither job gets it, and both say so.
+  const overlap = withPrs(OVERLAP)
+  assert.deepEqual(prNumbers(JOB_A, overlap), [1])
+  assert.deepEqual(prNumbers(JOB_B, overlap), [2])
+  for (const job of [JOB_A, JOB_B]) assert.deepEqual(referencesOf(job, overlap).partial_reasons, ["worker_shared"])
+  // A PR outside the overlap, with no other PR inside it, leaves the list unflagged.
+  const outside = [segmentedSession(...OVERLAP, { refs: REFS(prs.slice(0, 2)) })]
+  for (const job of [JOB_A, JOB_B]) assert.equal(Object.hasOwn(referencesOf(job, outside), "partial_reasons"), false)
+})
+
+test("idle inside a segment is not active time", () => {
+  const HOUR = 3600000
+  const MINUTE = 60000
+  const session = splitSession({
+    intervals: [
+      { kind: "turn", agent: 0, start_ms: 0, end_ms: 10 * MINUTE },
+      { kind: "turn", agent: 0, start_ms: 4 * HOUR, end_ms: 4 * HOUR + 10 * MINUTE },
+    ],
+    counts: { tool_calls: {}, tool_failures: {}, tool_retries: 0, api_retries: 0, compactions: 0 },
+  })
+  session.session.duration_ms = 5 * HOUR
+  session.jobs = [{ job: JOB_A, agents: [0], basis: ["desk_tool"], session_offset_ms: 0, segments: [{ start_ms: 0, end_ms: 5 * HOUR }], transitions: [], observed: { status: "processing", offset_ms: null } }]
+  const formulas = calculateFormulas(buildJobTimeline(JOB_A, [session]))
+  assert.equal(formulas.active_time_ms.value, 20 * MINUTE)
+  assert.equal(formulas.busy_time_ms.value, 20 * MINUTE)
+  // No figure of the job reads the segment's five-hour span as work or as a wait.
+  for (const wait of Object.values(formulas.waits)) assert.equal(wait.value, 0)
+})

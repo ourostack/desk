@@ -147,3 +147,34 @@ test("a per-worker binding keeps only its workers' intervals, and a binding with
   delete session.jobs[0].agents
   assert.deepEqual([...new Set(buildJobTimeline(CLOSED, [session]).intervals.map((item) => item.agent))], [0, 1])
 })
+
+function twoJobSession(aSegments, bSegments) {
+  const base = structuredClone(sessions[2])
+  const bindings = [
+    { job: CLOSED, agents: [0], basis: ["desk_tool"], session_offset_ms: 0, transitions: [], observed: null },
+    { job: OPEN, agents: [0], basis: ["desk_tool"], session_offset_ms: 0, transitions: [], observed: null },
+  ]
+  if (aSegments) bindings[0].segments = aSegments
+  if (bSegments) bindings[1].segments = bSegments
+  return { ...base, jobs: bindings }
+}
+const sharedWith = (job, session) => buildJobTimeline(job, [session]).sessions[0].shared_with
+
+test("shared_with counts the other bindings whose segments overlap, and only those", () => {
+  const first = [{ start_ms: 0, end_ms: 2000 }]
+  const second = [{ start_ms: 2000, end_ms: 4000 }]
+  const disjoint = twoJobSession(first, second)
+  assert.equal(sharedWith(CLOSED, disjoint), 0)
+  assert.equal(sharedWith(OPEN, disjoint), 0)
+  const overlapping = twoJobSession(first, [{ start_ms: 1000, end_ms: 4000 }])
+  assert.equal(sharedWith(CLOSED, overlapping), 1)
+  assert.equal(sharedWith(OPEN, overlapping), 1)
+})
+
+test("shared_with keeps jobs.length - 1 for a binding without segments, and an unsegmented one overlaps everything", () => {
+  const legacy = twoJobSession(null, null)
+  assert.equal(sharedWith(CLOSED, legacy), 1)
+  const mixed = twoJobSession([{ start_ms: 0, end_ms: 2000 }], null)
+  assert.equal(sharedWith(CLOSED, mixed), 1)
+  assert.equal(sharedWith(OPEN, mixed), 1)
+})
