@@ -29,8 +29,8 @@ const expectedId = (remote, prefix, track, slug) => createHash("sha256").update(
 
 const CARD = { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" }
 
-function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {}, repos = {}, gone = [] } = {}) {
-  const calls = { readTask: [], between: [], native: [], housekeeping: [], resolveJobIdentity: [], repoOfPath: [] }
+function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {}, repos = {}, unavailable = [] } = {}) {
+  const calls = { readTask: [], between: [], native: [], housekeeping: [], resolveJobIdentity: [], repoLookup: [] }
   return {
     calls,
     readTask(track, slug) {
@@ -42,15 +42,13 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeepi
       calls.between.push([start, end])
       return commitsBetween
     },
-    // `repos` maps a directory to the `owner/name` of the repository holding it and everything below it.
-    repoOfPath(absPath) {
-      calls.repoOfPath.push(absPath)
+    // `repos` maps a directory to the `owner/name` of the repository holding it and everything below it; `unavailable` lists directories
+    // (and everything below them) whose evidence cannot be read; anything else is a true none.
+    repoLookup(absPath) {
+      calls.repoLookup.push(absPath)
       const root = Object.keys(repos).sort((a, b) => b.length - a.length).find((directory) => absPath === directory || absPath.startsWith(`${directory}/`))
-      return root === undefined ? null : repos[root]
-    },
-    // `gone` lists directories (and everything below them) that no longer exist.
-    directoryGone(directory) {
-      return gone.some((prefix) => directory === prefix || directory.startsWith(`${prefix}/`))
+      if (root !== undefined) return { repo: repos[root] }
+      return unavailable.some((prefix) => absPath === prefix || absPath.startsWith(`${prefix}/`)) ? { unavailable: true } : { none: true }
     },
     gitCommitTaskPaths(sha) {
       calls.native.push(sha)
@@ -595,7 +593,7 @@ test("caller bugs throw a TypeError: a relative desk root, a bad person prefix, 
   assert.throws(() => bindSession({ events: {}, deskRoot: "desk", deskRemote: REMOTE, personPrefix: "", ...deps }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "people/ari", ...deps }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, readTask: null }), TypeError)
-  assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, repoOfPath: undefined }), TypeError)
+  assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, repoLookup: undefined }), TypeError)
   assert.doesNotThrow(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, deskCommitsBetween: undefined }), "desk history is no longer a reader the binder needs")
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, gitCommitTaskPaths: 1 }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, isCardHousekeeping: undefined }), TypeError)
@@ -1005,7 +1003,7 @@ test("a repository listed by two cards that both have events counts for neither"
   assert.deepEqual(bind(events, { agents: tree(), repos: { [CODE]: "ourostack/desk" } }).jobs, [])
 })
 
-test("a path outside the desk that resolves to no repository binds nothing, and only a directory that is gone is counted", () => {
+test("a path outside the desk that resolves to no repository binds nothing, and only a directory whose evidence is not available is counted", () => {
   const events = {
     fileWrites: [
       writeAt(1, X), writeAt(2, X), writeAt(3, Y),
@@ -1023,20 +1021,20 @@ test("a path outside the desk that resolves to no repository binds nothing, and 
       { start: minute(46), end: minute(47), cwd: "/tmp/unlisted", paths: ["/tmp/unlisted/a.txt"], agent: 9 },
     ],
   }
-  const result = bind(events, { agents: tree(), cards: listing(X), gone: ["/tmp"] })
+  const result = bind(events, { agents: tree(), cards: listing(X), unavailable: ["/tmp"] })
   assert.deepEqual(result.jobs, [], "two desk writes beside another task's are not enough, and an unresolved path is never guessed")
   // Two write directories, the commit's directory and the directory of the paths it named.
   assert.equal(result.repoUnresolved, 4)
   assert.equal(typeof result.repoUnresolved, "number")
-  // A reader that answers with something other than a name is unresolved too.
-  const odd = bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...fakes({ cards: listing(X), gone: ["/tmp"] }), repoOfPath: () => "" })
+  // A reader that answers with something other than one of its three answers is not available evidence either.
+  const odd = bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...fakes({ cards: listing(X), unavailable: ["/tmp"] }), repoLookup: () => ({ repo: "" }) })
   assert.deepEqual([odd.jobs, odd.repoUnresolved], [[], 4])
   // Directories that exist and are in no repository are a true none: nothing was lost, so nothing is counted.
   assert.equal(bind(events, { agents: tree(), cards: listing(X) }).repoUnresolved, 0)
-  // A repository that resolves is never counted, gone or not.
-  assert.equal(bind(events, { agents: tree(), cards: listing(X), gone: ["/tmp"], repos: { "/tmp": "someone/else" } }).repoUnresolved, 0)
-  // A caller that cannot tell a directory is gone is an error, never a silent zero.
-  const { directoryGone, ...blind } = fakes({ cards: listing(X) })
+  // A repository that resolves is never counted, available or not.
+  assert.equal(bind(events, { agents: tree(), cards: listing(X), unavailable: ["/tmp"], repos: { "/tmp": "someone/else" } }).repoUnresolved, 0)
+  // A caller that omits the reader is an error, never a silent zero.
+  const { repoLookup, ...blind } = fakes({ cards: listing(X) })
   assert.throws(() => bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...blind }), TypeError)
 })
 
@@ -1052,7 +1050,7 @@ test("a commit call in a repository is one event per repository it touches, at t
   assert.deepEqual(shape(result.jobs), { [idOf(X)]: { agents: [0], segments: [span(0, 90)] } })
   assert.deepEqual(summary(result.jobs)[0].basis, ["file_write", "desk_commit"])
   assert.equal(result.repoUnresolved, 0)
-  assert.ok(result.calls.repoOfPath.every((asked) => !asked.startsWith(DESK) && !asked.includes(DESK_MARKER)), "the desk is never resolved as a code repository")
+  assert.ok(result.calls.repoLookup.every((asked) => !asked.startsWith(DESK) && !asked.includes(DESK_MARKER)), "the desk is never resolved as a code repository")
   // A subagent bound by its own Desk-Task line keeps its repository work out of the controller's inference.
   const subagentWrites = [writeAt(1, X), ...Array.from({ length: 12 }, (_, index) => codeWrite(5 + index * 2, "src/a.js", 1))]
   const options = { agents: tree(0), cards: listing(X), repos: { [CODE]: "ourostack/desk" } }

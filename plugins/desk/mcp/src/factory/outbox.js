@@ -774,16 +774,17 @@ export async function outboxCopies(env, host) {
   return copies
 }
 
-/** `hasRetractionRecord(env, name) -> boolean`: whether any store has a retracting record or tombstone for facts file `name`, or keeps a retracted copy of it. */
-export async function hasRetractionRecord(env, name) {
+/** `retractionNames(env) -> Set<string>`: the facts file names that any store has a retracting record or tombstone for, or keeps a retracted copy of. */
+export async function retractionNames(env) {
   const root = await factoryStateRoot(env)
+  const names = new Set()
   for (const file of (await listDirSafe(path.join(root, "retracting"))).filter((entry) => /^[^.].*\.json$/u.test(entry))) {
-    if (Object.hasOwn(await readJsonFileSafe(path.join(root, "retracting", file), {}, process.platform), name)) return true
+    for (const name of Object.keys(await readJsonFileSafe(path.join(root, "retracting", file), {}, process.platform))) names.add(name)
   }
   for (const slug of await listDirSafe(path.join(root, RETRACTED_COPIES))) {
-    if ((await listRegularFiles(path.join(root, RETRACTED_COPIES, slug), OUTBOX_NAME_PATTERN)).includes(name)) return true
+    for (const name of await listRegularFiles(path.join(root, RETRACTED_COPIES, slug), OUTBOX_NAME_PATTERN)) names.add(name)
   }
-  return false
+  return names
 }
 
 /**

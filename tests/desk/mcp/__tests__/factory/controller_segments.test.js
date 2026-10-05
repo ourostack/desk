@@ -46,7 +46,7 @@ function bind(events, options = {}) {
   return bindSession({
     events, agents, session, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
     readTask: (track, slug) => (cards === null || cards.includes(slug) ? CARD : null),
-    repoOfPath: () => null, directoryGone: () => false,
+    repoLookup: () => ({ none: true }),
     gitCommitTaskPaths: (sha) => native[sha] ?? { exists: false, taskPaths: [] },
     isCardHousekeeping: () => false,
     resolveJobIdentity: (track, slug) => ({ track, slug }),
@@ -541,7 +541,7 @@ test("a Claude controller working three jobs: derive, bind, publish and build sp
     facts.jobs = bindSession({
       events, agents: facts.agents, session: facts.session, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
       readTask: () => ({ status: "processing", created_at: at(-60), updated_at: at(0) }),
-      repoOfPath: () => null, directoryGone: () => false, gitCommitTaskPaths: () => ({ exists: false }), isCardHousekeeping: () => false,
+      repoLookup: () => ({ none: true }), gitCommitTaskPaths: () => ({ exists: false }), isCardHousekeeping: () => false,
       resolveJobIdentity: (track, slug) => ({ track, slug }),
     }).jobs
     // Each declaration holds until the next; the minute before the first is the first job's.

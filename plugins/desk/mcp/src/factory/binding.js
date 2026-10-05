@@ -38,9 +38,9 @@
 //     the session's `git … commit` calls that ran outside the desk or named a
 //     path there (one event for each repository the call touches, at its
 //     start), and a pull request the session created (`events.prRefs` with
-//     `created: true`). `repoOfPath` names the repository a path is in; a path
+//     `created: true`). `repoLookup` names the repository a path is in; a path
 //     it cannot name is no evidence, never a guess, and its directory is
-//     counted in `repoUnresolved` only when it no longer exists. A `repo` event counts only for the one card
+//     counted in `repoUnresolved` only when the evidence was not available. A `repo` event counts only for the one card
 //     that lists the repository and has another event (`focus.js`).
 // Events of a subagent bound by a `Desk-Task:` line, and of the subagents
 // below it, are left out: that subtree has its own job. Reads never bind (no
@@ -90,9 +90,10 @@
 //     task tool call widened by a minute each way, merged where they touch.
 //     `factory reconcile` matches desk commits to the session with it.
 //   - `repoUnresolved` is how many distinct directories outside the desk the
-//     session wrote or committed in that no longer exist and that `repoOfPath`
-//     could not name: evidence that was lost. A directory that exists and is
-//     in no repository, or in one with no origin, is a true none and is not
+//     session wrote or committed in whose repository evidence was not
+//     available: the directory is gone (ENOENT, ENOTDIR), any other stat
+//     error, or Git failed or timed out. A directory that exists and is in no
+//     repository, or in one with no origin, is a true none and is not
 //     counted. A number, never a path.
 //   - `segmentsCappedMs` is the time the segment cap dropped (`capSegments`
 //     reports it): 0 only when nothing was dropped.
@@ -113,8 +114,8 @@
 // Dependencies are injected so tests can fake them (`desk-repo.js` has the
 // real ones): `readTask(track, slug)`, `gitCommitTaskPaths(sha)`,
 // `isCardHousekeeping(sha, path)`, `resolveJobIdentity(track, slug)` and
-// `repoOfPath(absolutePath)`, which answers `owner/name` or `null`, and
-// `directoryGone(directory)`, whether a directory no longer exists. The
+// `repoLookup(absolutePath)`, which answers `{ repo: "owner/name" }`,
+// `{ none: true }` (a true none) or `{ unavailable: true }`. The
 // desk root is passed in rather than resolved here: `src/util/paths.js` is
 // outside `src/factory`, so the caller resolves it (with
 // `resolveDeskRootWithSource`) and hands it over.
@@ -326,22 +327,21 @@ function requireFunction(value, name) {
 /**
  * `bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix,
  * readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity,
- * repoOfPath, directoryGone }) -> { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs }`; the
+ * repoLookup }) -> { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs }`; the
  * header describes each. `agents` is the facts' `agents[]` (`{ n, parent }`),
  * used for ancestry. `session` is the facts' `session` (`started_at` and
  * `derived_through` are read). `deskRemote` is the desk's `origin` URL, or
  * empty when it has none (the job IDs then use `local:` plus the desk root).
  */
-export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoOfPath, directoryGone }) {
+export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoLookup }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
   requireFunction(gitCommitTaskPaths, "gitCommitTaskPaths")
   requireFunction(isCardHousekeeping, "isCardHousekeeping")
   requireFunction(resolveJobIdentity, "resolveJobIdentity")
-  requireFunction(repoOfPath, "repoOfPath")
-  // Required, so a caller that cannot tell a gone directory from a bare one is an error, never a silent zero.
-  requireFunction(directoryGone, "directoryGone")
+  // One reader with three answers, so a caller cannot take evidence that is not available for a true none; a caller that omits it is an error.
+  requireFunction(repoLookup, "repoLookup")
   if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
   // One unpublished desk reached through a symlink and through its real path is one desk.
   const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
@@ -391,11 +391,11 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
   const nameOf = (segments, folder = false) => taskOfSegments(folder ? [...segments, CARD_FILE] : segments, alias)
   // The repository holding an absolute path outside the desk, or `null`; `directory` is counted when it cannot be named.
   const unresolved = new Set()
-  const repoAt = (absolute, directory) => {
-    const repo = repoOfPath(absolute)
-    if (typeof repo === "string" && repo !== "") return repo
-    // Only evidence that is lost counts: a directory that exists and names no repository is a true none.
-    if (directoryGone(directory)) unresolved.add(directory)
+  const repoAt = (directory) => {
+    const found = repoLookup(directory)
+    if (typeof found?.repo === "string" && found.repo !== "") return found.repo
+    // A true none is nothing lost. Anything else, including an answer that is none of the three, is evidence that was not available.
+    if (found?.none !== true) unresolved.add(directory)
     return null
   }
 
@@ -428,7 +428,7 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
       note(write, nameOf(place.segments), "write", msOf(write.at))
       continue
     }
-    const repo = repoAt(place.outside, path.dirname(place.outside))
+    const repo = repoAt(path.dirname(place.outside))
     if (repo !== null) evidence.push({ at: msOf(write.at), repo, kind: "repo", agent: agentOf(write) })
   }
 
@@ -456,12 +456,12 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     const repos = new Set()
     const cwd = locate(call.cwd)
     // A directory that is not absolute says nothing about where the call ran.
-    if (cwd?.outside !== undefined && path.isAbsolute(call.cwd)) repos.add(repoAt(cwd.outside, cwd.outside))
+    if (cwd?.outside !== undefined && path.isAbsolute(call.cwd)) repos.add(repoAt(cwd.outside))
     for (const entry of asArray(call.paths)) {
       const place = locate(entry)
       if (place === null) continue
       if (place.segments === undefined) {
-        repos.add(repoAt(place.outside, path.dirname(place.outside)))
+        repos.add(repoAt(path.dirname(place.outside)))
         continue
       }
       const name = nameOf(place.segments, true)

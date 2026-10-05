@@ -282,6 +282,7 @@ test("work in a card's listed repository binds through the real reader, and only
   const code = path.join(ctx.base, "code")
   await fs.mkdir(path.join(code, "src"), { recursive: true })
   await fs.mkdir(path.join(ctx.base, "plain"))
+  await fs.writeFile(path.join(ctx.base, "a-file"), "x")
   // A repository with no origin: a true none, like the folder in no repository.
   const bare = path.join(ctx.base, "no-origin")
   await fs.mkdir(bare)
@@ -298,6 +299,8 @@ test("work in a card's listed repository binds through the real reader, and only
     // A directory that no longer exists is lost evidence; two writes in it count once.
     ["Write", { file_path: path.join(ctx.base, "vanished", "out.txt"), content: SENTINEL }],
     ["Write", { file_path: path.join(ctx.base, "vanished", "more.txt"), content: SENTINEL }],
+    // A path under a file (ENOTDIR) is not available either.
+    ["Write", { file_path: path.join(ctx.base, "a-file", "child.txt"), content: SENTINEL }],
   ])
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
@@ -308,7 +311,7 @@ test("work in a card's listed repository binds through the real reader, and only
   const jobs = Object.keys(await readJobsIndex(ctx.env))
   assert.equal(jobs.length, 1)
   assert.deepEqual(receipt.bound_by, { [jobs[0]]: "inferred" })
-  assert.equal(receipt.repo_unresolved, 1, "only the vanished directory is lost: an existing folder in no repository, and a repository with no origin, are a true none")
+  assert.equal(receipt.repo_unresolved, 2, "the vanished directory and the path under a file are not available; an existing folder in no repository, and a repository with no origin, are a true none")
   assert.equal(receipt.segments_capped_ms, 0)
   // The receipt holds a number, never the directory or the repository; the facts hold neither.
   const text = JSON.stringify(status)
@@ -650,8 +653,9 @@ const staleReceipt = async (ctx, name, change) => {
   await fs.writeFile(file, JSON.stringify(status))
 }
 
-// A session that was derived once and whose marker is gone: its outbox copy, receipt and transcript remain.
-async function orphan(ctx, { declare = true, receiptRoot = true, cwd = ctx.desk, transcript = true } = {}) {
+// A session that was derived once and whose marker is gone: its outbox copy, receipt and transcript remain. `stale` lowers the receipt's
+// binding version so the sweep must rebuild it; without it the receipt is current.
+async function orphan(ctx, { declare = true, receiptRoot = true, cwd = ctx.desk, transcript = true, stale = true } = {}) {
   const plugins = [{ name: "desk", version: "1.0.0", source: "ourostack/desk" }, { name: "other-plugin", version: "1.0.0" }]
   const marker = { ...await session(ctx), end_reason: "complete", ended_at: END, plugins }
   if (declare) await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: STORE })
@@ -662,12 +666,36 @@ async function orphan(ctx, { declare = true, receiptRoot = true, cwd = ctx.desk,
   const { deriveMarker } = await runner()
   assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
   const name = `claude-code-${ID}.json`
-  await staleReceipt(ctx, name, (receipt) => {
-    if (!receiptRoot) delete receipt.desk_root
-    return receipt
-  })
+  if (stale || !receiptRoot) {
+    await staleReceipt(ctx, name, (receipt) => {
+      if (!receiptRoot) delete receipt.desk_root
+      if (!stale) receipt.binding_version = 5
+      return receipt
+    })
+  }
   if (!transcript) await fs.rm(marker.log_path)
   return { marker, name }
+}
+
+// A copy of an orphan under another session id: its outbox file, transcript and receipt.
+async function clone(ctx, { marker, name }, digit) {
+  const id = `${ID.slice(0, -1)}${digit}`
+  const copyName = `claude-code-${id}.json`
+  const swap = (text) => text.replaceAll(ID, id)
+  const log = path.join(path.dirname(marker.log_path), `${id}.jsonl`)
+  await fs.writeFile(log, swap(await fs.readFile(marker.log_path, "utf8")))
+  const outbox = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory")
+  await fs.writeFile(path.join(outbox, copyName), swap(await fs.readFile(path.join(outbox, name), "utf8")))
+  const file = path.join(await factoryStateRoot(ctx.env), "status.json")
+  const status = JSON.parse(await fs.readFile(file, "utf8"))
+  status.derivations[copyName] = { ...status.derivations[name] }
+  await fs.writeFile(file, JSON.stringify(status))
+  return copyName
+}
+
+const reasons = async (ctx) => {
+  const { orphans } = await readStatus(ctx.env)
+  return Object.fromEntries(Object.entries(orphans.frozen).filter(([, count]) => count > 0))
 }
 
 const rebuilt = async (ctx) => {
@@ -687,40 +715,111 @@ test("an orphan in a declared desk is rebuilt, takes end_reason from its outbox 
   assert.deepEqual(facts.plugins.map((plugin) => plugin.name), ["desk", "other-plugin"], "the plugins the outbox copy named are kept")
   assert.equal((await listMarkers(ctx.env)).length, 0, "no marker is invented")
   assert.deepEqual(await rebuilt(ctx), [0, 0], "a rebuilt orphan is current; the next sweep leaves it alone")
+  assert.equal((await readStatus(ctx.env)).orphans.current, 1)
 }))
 
-test("an orphan with no receipt desk_root is rebuilt from the transcript's first cwd when that is exactly a desk root", () => scratch(async (ctx) => {
+test("an orphan whose receipt is already current is not derived again", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx, { stale: false })
+  const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
+  const before = await fs.stat(file)
+  const { sweep } = await runner()
+  const summary = await sweep(ctx.env)
+  assert.deepEqual([summary.rebuilt, summary.frozen, summary.pending, summary.orphans.current], [0, 0, 0, 1])
+  const after = await fs.stat(file)
+  assert.deepEqual([after.mtimeMs, after.ino], [before.mtimeMs, before.ino], "the outbox copy was not rewritten")
+}))
+
+test("the orphan pass writes its result to status.json as counts keyed by a closed reason list, and the list is exported and frozen", () => scratch(async (ctx) => {
+  const { rebuildOrphans, ORPHAN_REASONS, ORPHAN_EXAMINE_CAP, ORPHAN_BUDGET_MS } = await runner()
+  assert.equal(Object.isFrozen(ORPHAN_REASONS), true)
+  assert.deepEqual([...ORPHAN_REASONS], ["no_facts", "no_transcript", "no_desk_root", "crew_desk", "route_unknown", "retracted", "not_opted_in", "derive_failed"])
+  assert.deepEqual([typeof ORPHAN_EXAMINE_CAP, typeof ORPHAN_BUDGET_MS], ["number", "number"])
+  await orphan(ctx, { declare: false })
+  const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-06T00:00:00.000Z") })
+  assert.deepEqual([result.rebuilt, result.current, result.pending, result.frozen], [0, 0, 0, 1])
+  const expected = { ran_at: "2026-10-06T00:00:00.000Z", rebuilt: 0, current: 0, pending: 0, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
+  assert.deepEqual((await readStatus(ctx.env)).orphans, expected)
+  assert.deepEqual(result.orphans, expected)
+  const text = JSON.stringify((await readStatus(ctx.env)).orphans)
+  for (const secret of [ctx.base, ctx.desk, ID, SENTINEL]) assert.equal(text.includes(secret), false, "counts only: no path or session name")
+}))
+
+test("an orphan whose receipt names its desk is judged before its transcript is read", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx, { transcript: false })
+  await fs.writeFile(path.join(ctx.desk, "_meta/desks.md"), "| alias | identity |\n| --- | --- |\n| ari | ari@example.com |\n")
+  assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { crew_desk: 1 }, "no transcript was needed to say why")
+  await fs.rm(path.join(ctx.desk, "_meta/desks.md"))
+  const { markRetracting: retract } = await import(new URL("../../../../../plugins/desk/mcp/src/factory/outbox.js", import.meta.url))
+  await retract(ctx.env, STORE, [{ name, path: `sessions/${name}`, blob: "a".repeat(40) }])
+  assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { retracted: 1 })
+}))
+
+test("an orphan with no receipt desk_root is rebuilt from the transcript's first cwd when that is exactly a desk root, also through a symlink", () => scratch(async (ctx) => {
   const { name } = await orphan(ctx, { receiptRoot: false })
   assert.deepEqual(await rebuilt(ctx), [1, 0])
   assert.equal((await readStatus(ctx.env)).derivations[name].desk_root, ctx.desk)
+  const link = path.join(ctx.base, "desk-link")
+  await fs.symlink(ctx.desk, link)
+  const second = await orphan(ctx, { receiptRoot: false, cwd: link })
+  assert.deepEqual(await rebuilt(ctx), [1, 0])
+  assert.equal((await readStatus(ctx.env)).derivations[second.name].desk_root, ctx.desk, "the symlink resolves to the real desk root")
 }))
 
-test("an orphan whose cwd is inside the desk but not the desk root stays frozen", () => scratch(async (ctx) => {
+test("an orphan whose cwd is inside the desk but not the desk root stays frozen, as no_desk_root", () => scratch(async (ctx) => {
   await fs.mkdir(path.join(ctx.desk, "track"))
   await orphan(ctx, { receiptRoot: false, cwd: path.join(ctx.desk, "track") })
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { no_desk_root: 1 })
 }))
 
-test("an orphan whose desk routes by default stays frozen", () => scratch(async (ctx) => {
+test("an orphan whose desk routes by default stays frozen as route_unknown", () => scratch(async (ctx) => {
   await orphan(ctx, { declare: false })
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { route_unknown: 1 })
 }))
 
 test("a retracted orphan stays frozen, whether the record is a retracting entry or a kept copy", () => scratch(async (ctx) => {
   const { name } = await orphan(ctx)
   await markRetracting(ctx.env, STORE, [{ name, path: `sessions/${name}`, blob: "a".repeat(40) }])
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { retracted: 1 })
   const root = await factoryStateRoot(ctx.env)
   await fs.rm(path.join(root, "retracting"), { recursive: true })
   await fs.mkdir(path.join(root, "retracted-copies", "ourostack__factory"), { recursive: true })
   await fs.writeFile(path.join(root, "retracted-copies", "ourostack__factory", name), "{}")
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { retracted: 1 })
 }))
 
-test("an orphan in a crew desk stays frozen", () => scratch(async (ctx) => {
+test("the derivation lock's own check refuses a write the earlier check allowed", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const { marker } = await orphan(ctx)
+  const before = await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `claude-code-${ID}.json`), "utf8")
+  await staleReceipt(ctx, `claude-code-${ID}.json`, (receipt) => receipt)
+  assert.deepEqual(await deriveMarker(ctx.env, marker, { admit: async () => "retracted" }), { result: "refused", store: STORE, reason: "retracted" })
+  assert.equal(await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `claude-code-${ID}.json`), "utf8"), before, "nothing was rewritten")
+  assert.equal((await deriveMarker(ctx.env, marker, { admit: async () => null })).result, "written")
+}))
+
+test("an orphan in a crew desk stays frozen as crew_desk, told by its roster, its desks folder, an unreadable roster or an unstattable desks entry", () => scratch(async (ctx) => {
   await orphan(ctx)
+  await fs.writeFile(path.join(ctx.desk, "_meta/desks.md"), "# Desks\n\nNo table here.\n| only | one |\n")
+  assert.deepEqual(await rebuilt(ctx), [1, 0], "prose and an unrelated table are no roster")
+  await staleReceipt(ctx, `claude-code-${ID}.json`, (receipt) => receipt)
   await fs.writeFile(path.join(ctx.desk, "_meta/desks.md"), "| alias | identity |\n| --- | --- |\n| ari | ari@example.com |\n")
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { crew_desk: 1 })
+  await fs.rm(path.join(ctx.desk, "_meta/desks.md"))
+  await fs.mkdir(path.join(ctx.desk, "_meta/desks.md"))
+  assert.deepEqual(await rebuilt(ctx), [0, 1], "a roster that cannot be read is a crew desk")
+  await fs.rm(path.join(ctx.desk, "_meta/desks.md"), { recursive: true })
+  await fs.mkdir(path.join(ctx.desk, "desks"))
+  assert.deepEqual(await rebuilt(ctx), [0, 1])
+  await fs.rm(path.join(ctx.desk, "desks"), { recursive: true })
+  await fs.symlink("desks", path.join(ctx.desk, "desks"))
+  assert.deepEqual(await rebuilt(ctx), [0, 1], "a desks entry that cannot be checked at all fails closed")
 }))
 
 test("an orphan whose cwd is a code repository, with no receipt desk_root, stays frozen", () => scratch(async (ctx) => {
@@ -728,33 +827,33 @@ test("an orphan whose cwd is a code repository, with no receipt desk_root, stays
   await fs.mkdir(path.join(code, "_meta"), { recursive: true })
   await orphan(ctx, { receiptRoot: false, cwd: code })
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { no_desk_root: 1 })
 }))
 
-test("an orphan with no transcript, or no outbox facts it can read, stays frozen", () => scratch(async (ctx) => {
+test("an orphan with no transcript stays frozen as no_transcript, with or without a Claude projects folder", () => scratch(async (ctx) => {
   await orphan(ctx, { transcript: false })
+  assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { no_transcript: 1 })
+  await fs.rm(path.join(ctx.base, ".claude"), { recursive: true })
   assert.deepEqual(await rebuilt(ctx), [0, 1])
 }))
 
-test("an orphan whose outbox copy is unreadable, or whose transcript names no cwd, stays frozen and is counted", () => scratch(async (ctx) => {
+test("an orphan whose outbox copy is unreadable stays frozen as no_facts, and one whose transcript names no cwd as no_desk_root", () => scratch(async (ctx) => {
   const { name, marker } = await orphan(ctx, { receiptRoot: false })
   const lines = (await fs.readFile(marker.log_path, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
   delete lines[0].cwd
   await fs.writeFile(marker.log_path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { no_desk_root: 1 })
   await fs.writeFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "not json")
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { no_facts: 1 })
 }))
 
 test("a session that still has its marker is not an orphan", () => scratch(async (ctx) => {
   const { marker } = await orphan(ctx)
   await writeMarker(ctx.env, marker)
   assert.deepEqual(await rebuilt(ctx), [0, 0])
-}))
-
-test("an orphan with no Claude projects folder at all stays frozen", () => scratch(async (ctx) => {
-  await orphan(ctx)
-  await fs.rm(path.join(ctx.base, ".claude"), { recursive: true })
-  assert.deepEqual(await rebuilt(ctx), [0, 1])
 }))
 
 test("the first cwd is read past a line that is not JSON; a relative cwd, or one whose folder is gone, leaves the orphan frozen", () => scratch(async (ctx) => {
@@ -785,30 +884,33 @@ test("outbox folders that name no store, and copies from other hosts, are not Cl
   assert.deepEqual(await rebuilt(ctx), [0, 0])
 }))
 
-test("an orphan whose retraction records cannot be read stays frozen and counted, and an outbox that cannot be listed never stops the sweep", () => scratch(async (ctx) => {
+test("an orphan pass that throws records a fixed failure class and reads as failed, never as an empty pass; the sweep goes on", () => scratch(async (ctx) => {
   await orphan(ctx)
   const root = await factoryStateRoot(ctx.env)
   await fs.writeFile(path.join(root, "retracting"), "not a folder")
-  assert.deepEqual(await rebuilt(ctx), [0, 1])
+  const { sweep, ORPHAN_PASS_FAILED } = await runner()
+  const summary = await sweep(ctx.env)
+  assert.deepEqual([summary.rebuilt, summary.frozen, summary.pending], [0, 0, 0])
+  const { ran_at: ranAt, ...failed } = (await readStatus(ctx.env)).orphans
+  assert.deepEqual(failed, { failed: ORPHAN_PASS_FAILED })
+  assert.equal(typeof ranAt, "string")
+  assert.deepEqual(Object.keys(summary.orphans).sort(), ["failed", "ran_at"])
+  assert.equal(JSON.stringify(failed).includes(root), false, "no message text or path")
   await fs.rm(path.join(root, "retracting"))
   await fs.rm(path.join(root, "outbox"), { recursive: true })
   await fs.writeFile(path.join(root, "outbox"), "not a folder")
-  const { sweep } = await runner()
-  const summary = await sweep(ctx.env)
-  assert.deepEqual([summary.rebuilt, summary.frozen], [0, 0])
+  assert.equal((await sweep(ctx.env)).orphans.failed, ORPHAN_PASS_FAILED)
 }))
 
-test("a crew desk is told by its desks folder or by an unreadable roster, and prose in the roster file is no roster", () => scratch(async (ctx) => {
-  await orphan(ctx)
-  await fs.writeFile(path.join(ctx.desk, "_meta/desks.md"), "# Desks\n\nNo table here.\n| only | one |\n")
-  assert.deepEqual(await rebuilt(ctx), [1, 0], "prose and an unrelated table are no roster")
-  await staleReceipt(ctx, `claude-code-${ID}.json`, (receipt) => receipt)
-  await fs.rm(path.join(ctx.desk, "_meta/desks.md"))
-  await fs.mkdir(path.join(ctx.desk, "_meta/desks.md"))
-  assert.deepEqual(await rebuilt(ctx), [0, 1], "a roster that cannot be read is a crew desk")
-  await fs.rm(path.join(ctx.desk, "_meta/desks.md"), { recursive: true })
-  await fs.mkdir(path.join(ctx.desk, "desks"))
-  assert.deepEqual(await rebuilt(ctx), [0, 1])
+test("an unexpected error on one orphan freezes it as derive_failed and the pass goes on", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async (ctx) => {
+  const { marker } = await orphan(ctx, { receiptRoot: false })
+  await fs.chmod(marker.log_path, 0)
+  try {
+    assert.deepEqual(await rebuilt(ctx), [0, 1])
+    assert.deepEqual(await reasons(ctx), { derive_failed: 1 })
+  } finally {
+    await fs.chmod(marker.log_path, 0o644)
+  }
 }))
 
 test("an orphan is looked for under CLAUDE_CONFIG_DIR, or the home folder when the environment names none", () => scratch(async (ctx) => {
@@ -816,15 +918,86 @@ test("an orphan is looked for under CLAUDE_CONFIG_DIR, or the home folder when t
   const moved = path.join(ctx.base, "elsewhere")
   await fs.rename(path.join(ctx.base, ".claude"), moved)
   const { rebuildOrphans } = await runner()
-  assert.deepEqual(await rebuildOrphans({ ...ctx.env, CLAUDE_CONFIG_DIR: moved }), { rebuilt: 1, frozen: 0 }, "markers are read when none are passed")
+  const first = await rebuildOrphans({ ...ctx.env, CLAUDE_CONFIG_DIR: moved })
+  assert.deepEqual([first.rebuilt, first.frozen], [1, 0])
   const { HOME, ...homeless } = ctx.env
   await staleReceipt(ctx, `claude-code-${ID}.json`, (receipt) => receipt)
   assert.equal((await rebuildOrphans({ ...homeless, CLAUDE_CONFIG_DIR: moved })).rebuilt, 1)
   assert.equal(typeof (await rebuildOrphans({ ...homeless, XDG_STATE_HOME: ctx.env.XDG_STATE_HOME })).frozen, "number")
 }))
 
-test("an orphan whose store no longer takes contributions stays frozen and is counted", () => scratch(async (ctx) => {
+test("an orphan whose store no longer takes contributions stays frozen as not_opted_in", () => scratch(async (ctx) => {
   await orphan(ctx)
   await setConsent(ctx.env, { store: STORE, contribute: false })
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { not_opted_in: 1 })
+}))
+
+test("an orphan whose derivation cannot read its transcript stays frozen as derive_failed", () => scratch(async (ctx) => {
+  const { marker } = await orphan(ctx)
+  await fs.writeFile(marker.log_path, "not a transcript\n")
+  const old = new Date(Date.now() - 700000)
+  await fs.utimes(marker.log_path, old, old)
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env)
+  assert.deepEqual([result.rebuilt, result.frozen], [0, 1])
+  assert.deepEqual(await reasons(ctx), { derive_failed: 1 })
+}))
+
+test("an orphan inside the quiet window, whose log is still being written, is pending, not frozen", () => scratch(async (ctx) => {
+  const { marker } = await orphan(ctx)
+  await fs.appendFile(marker.log_path, `${JSON.stringify({ type: "assistant", sessionId: ID, timestamp: "2026-09-26T08:05:00.000Z", message: { content: [] } })}\n`)
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env, { quietMs: 600000 })
+  assert.deepEqual([result.rebuilt, result.pending, result.frozen], [0, 1, 0])
+}))
+
+test("more orphans than the cap are pending, and the next sweep rebuilds them", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  await clone(ctx, first, "1")
+  await clone(ctx, first, "2")
+  const { rebuildOrphans } = await runner()
+  const one = await rebuildOrphans(ctx.env, { cap: 2 })
+  assert.deepEqual([one.rebuilt, one.pending, one.frozen], [2, 1, 0])
+  assert.equal((await readStatus(ctx.env)).orphans.pending, 1, "visible from outside")
+  const two = await rebuildOrphans(ctx.env, { cap: 2 })
+  assert.deepEqual([two.rebuilt, two.pending, two.current], [1, 0, 2])
+}))
+
+test("the pass stops at its time budget and leaves the rest pending", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  await clone(ctx, first, "1")
+  const times = [0, 0, 10]
+  const clock = () => times.shift() ?? 10
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env, { budgetMs: 5, clock })
+  assert.deepEqual([result.rebuilt, result.pending], [1, 1])
+  assert.deepEqual([(await rebuildOrphans(ctx.env)).rebuilt], [1], "the next pass finishes it")
+}))
+
+test("a desk root read from the transcript's cwd is checked for crew and declaration like a receipt's", () => scratch(async (ctx) => {
+  await orphan(ctx, { receiptRoot: false })
+  await fs.writeFile(path.join(ctx.desk, "_meta/desks.md"), "| alias | identity |\n| --- | --- |\n| ari | ari@example.com |\n")
+  assert.deepEqual(await rebuilt(ctx), [0, 1])
+  assert.deepEqual(await reasons(ctx), { crew_desk: 1 })
+}))
+
+test("a retraction that lands after the early check is caught inside the derivation lock", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx)
+  const { rebuildOrphans } = await runner()
+  const answers = [new Set(), new Set([name])]
+  const result = await rebuildOrphans(ctx.env, { retractions: async () => answers.shift() })
+  assert.deepEqual([result.rebuilt, result.frozen], [0, 1])
+  assert.deepEqual(await reasons(ctx), { retracted: 1 })
+}))
+
+test("an orphan whose session names a newer Desk than this one is pending, not frozen", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx)
+  const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
+  const facts = JSON.parse(await fs.readFile(file, "utf8"))
+  facts.plugins[0].version = "999.0.0"
+  await fs.writeFile(file, JSON.stringify(facts))
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env)
+  assert.deepEqual([result.rebuilt, result.pending, result.frozen], [0, 1, 0])
 }))

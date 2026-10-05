@@ -26,11 +26,12 @@
 // (`createDeskReaders` has the details). Only the name is returned, never the
 // path or the remote.
 //
-// `directoryGone(absolutePath)` is true when an absolute path names a folder
-// that no longer exists. `repoOfPath` answers `null` both for a folder that
-// exists and is in no repository (a true none) and for one whose evidence is
-// lost; this tells them apart for the session's receipt. A path that is not
-// absolute is not known to be lost, so it is false.
+// `repoLookup(absolutePath)` is the one reader `bindSession` uses. It answers
+// `{ repo }`, `{ none: true }` (the folder exists and is in no repository, or
+// in one with no origin) or `{ unavailable: true }` (the folder is gone, any
+// other stat error, a Git failure or a timeout), so a caller cannot take
+// evidence that could not be read for a true none. `repoOfPath` is its name
+// or `null`.
 //
 // `deskCommitsBetween(startIso, endIso)` lists the commits this clone made
 // in the window: the reflog entries of `HEAD` and every local branch whose
@@ -805,11 +806,16 @@ function repoOfRemote(normalized) {
   return hosted === null ? null : ownerName(hosted[1].split("/").slice(-2).join("/"))
 }
 
-function isDirectory(target) {
+const NONE = Object.freeze({ none: true })
+const UNAVAILABLE = Object.freeze({ unavailable: true })
+
+// What a path is: "directory", "missing" (ENOENT or ENOTDIR: it is gone), "other" (it exists and is not a directory) or "error" (any other
+// stat failure: a permission or I/O error, an unmounted volume).
+function folderKind(target) {
   try {
-    return statSync(target).isDirectory()
-  } catch {
-    return false
+    return statSync(target).isDirectory() ? "directory" : "other"
+  } catch (error) {
+    return error.code === "ENOENT" || error.code === "ENOTDIR" ? "missing" : "error"
   }
 }
 
@@ -833,7 +839,7 @@ function repositoryRoot(directory) {
 /**
  * `createDeskReaders({ deskRoot, personPrefix, git, timeoutMs })` ->
  * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
- * resolveJobIdentity, repoOfPath, directoryGone }`; `bindSession` takes all but
+ * resolveJobIdentity, repoOfPath, repoLookup }`; `bindSession` takes all but
  * `deskCommitsBetween`, which `factory reconcile` still reads.
  */
 export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
@@ -938,57 +944,71 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return isHousekeepingEdit(oldText, newText, substitutions)
   }
 
-  // `repoOfPath`: each directory asked about -> its answer, and each repository root -> its name. Both live for this one set of
+  // `repoLookup`: each directory asked about -> its answer, and each repository root -> its answer. Both live for this one set of
   // readers, so a session's many writes in one repository cost one Git call.
-  const repoByDirectory = new Map()
-  const repoByRoot = new Map()
+  const lookupByDirectory = new Map()
+  const lookupByRoot = new Map()
   const deskFolder = realFolder(deskRoot)
   let deskOrigin
-  // A folder's `origin`, normalized, or null: no repository, no remote, or any Git failure.
+  // A folder's `origin`, normalized: `{ origin }` (null when it has no remote), or `{ failed: true }` when Git itself failed.
+  // `git config --get` exits 1 when the key is not set, which is a clean "no origin"; any other exit, a signal or a timeout is a failure.
   const originOf = (folder) => {
-    const output = runGit({ ...options, deskRoot: folder }, ["config", "--get", "remote.origin.url"])
-    const remote = output === null ? "" : output.trim()
-    return remote === "" ? null : normalizeRemote(remote)
+    const result = spawnSync(git, ["-C", folder, "-c", "core.quotePath=false", "config", "--get", "remote.origin.url"], { encoding: "utf8", env: gitEnv(), timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"] })
+    if (result.error !== undefined || result.signal !== null || (result.status !== 0 && result.status !== 1)) return { failed: true }
+    const remote = result.status === 0 ? result.stdout.trim() : ""
+    return { origin: remote === "" ? null : normalizeRemote(remote) }
   }
-  const repoOfRoot = (root) => {
-    const origin = originOf(root)
-    if (origin === null) return null
-    if (deskOrigin === undefined) deskOrigin = originOf(deskRoot)
+  const lookupOfRoot = (root) => {
+    const found = originOf(root)
+    if (found.failed) return UNAVAILABLE
+    if (found.origin === null) return NONE
+    if (deskOrigin === undefined) deskOrigin = originOf(deskRoot).origin ?? null
     // Another checkout of the desk's own remote is the desk, not a code repository.
-    return origin === deskOrigin ? null : repoOfRemote(origin)
+    const repo = found.origin === deskOrigin ? null : repoOfRemote(found.origin)
+    return repo === null ? NONE : { repo }
   }
   /**
-   * `repoOfPath(absolutePath) -> "owner/name" | null`: the code repository a
-   * path is in, lowercase, from the `origin` remote of the nearest folder at
-   * or above it that still exists (a deleted file is still in its
-   * repository). null for a path that is not absolute, a folder in no
-   * repository, a repository with no remote or one that is not
-   * `host/…/owner/name`, any Git failure, and the desk itself: a path inside
-   * the desk root, or a checkout of the desk's own remote.
+   * `repoLookup(absolutePath)`: the code repository holding a path, as one of three answers a caller cannot confuse:
+   * `{ repo: "owner/name" }` (lowercase, from the `origin` remote of the nearest folder at or above the path that still exists: a deleted
+   * file is still in its repository); `{ none: true }` (the folder exists and Git cleanly reports no repository, or a repository with no
+   * origin or one that is not `host/…/owner/name`, or the desk itself: a path inside the desk root, or a checkout of the desk's own remote;
+   * also a path that is not absolute); and `{ unavailable: true }` (the evidence cannot be read: the folder is gone (ENOENT, ENOTDIR) or
+   * is not a folder and no repository above it names it, any other stat error such as a permission or I/O failure, a Git failure or a
+   * timeout). Only the name is ever returned, never the path or the remote.
    */
-  function repoOfPath(absolutePath) {
-    if (typeof absolutePath !== "string" || !path.isAbsolute(absolutePath)) return null
-    let directory = path.resolve(absolutePath)
-    while (!isDirectory(directory) && path.dirname(directory) !== directory) directory = path.dirname(directory)
-    if (repoByDirectory.has(directory)) return repoByDirectory.get(directory)
-    let repo = null
-    const inDesk = path.relative(deskFolder, realFolder(directory))
-    const root = inDesk === "" || (!inDesk.startsWith("..") && !path.isAbsolute(inDesk)) ? null : repositoryRoot(directory)
-    if (root !== null) {
-      if (!repoByRoot.has(root)) repoByRoot.set(root, repoOfRoot(root))
-      repo = repoByRoot.get(root)
+  function repoLookup(absolutePath) {
+    if (typeof absolutePath !== "string" || !path.isAbsolute(absolutePath)) return NONE
+    const start = path.resolve(absolutePath)
+    if (lookupByDirectory.has(start)) return lookupByDirectory.get(start)
+    let directory = start
+    let kind = folderKind(directory)
+    const lost = kind !== "directory"
+    // The filesystem root always exists, so the guard against walking past it is for a stat that fails there.
+    /* node:coverage ignore next */
+    while (kind === "missing" && path.dirname(directory) !== directory) {
+      directory = path.dirname(directory)
+      kind = folderKind(directory)
     }
-    repoByDirectory.set(directory, repo)
-    return repo
+    let answer
+    const inDesk = path.relative(deskFolder, realFolder(directory))
+    if (inDesk === "" || (!inDesk.startsWith("..") && !path.isAbsolute(inDesk))) answer = NONE
+    else if (kind === "error") answer = UNAVAILABLE
+    else {
+      const root = repositoryRoot(directory)
+      if (root !== null) {
+        if (!lookupByRoot.has(root)) lookupByRoot.set(root, lookupOfRoot(root))
+        answer = lookupByRoot.get(root)
+      } else answer = NONE
+      if (lost && answer.repo === undefined) answer = UNAVAILABLE
+    }
+    lookupByDirectory.set(start, answer)
+    return answer
   }
-
-  /** `directoryGone(absolutePath) -> boolean`: see the header. */
-  function directoryGone(absolutePath) {
-    return typeof absolutePath === "string" && path.isAbsolute(absolutePath) && !isDirectory(path.resolve(absolutePath))
-  }
+  /** `repoOfPath(absolutePath) -> "owner/name" | null`: `repoLookup`'s name, or `null` for either of its other answers. */
+  const repoOfPath = (absolutePath) => repoLookup(absolutePath).repo ?? null
 
   return {
-    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, directoryGone,
+    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, repoLookup,
     resolveJobIdentity: (track, slug) => resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs }),
   }
 }

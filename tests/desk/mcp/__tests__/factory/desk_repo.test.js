@@ -1565,24 +1565,65 @@ test("repoOfPath answers null for no repository, no remote, a remote with no own
   for (const bad of ["relative/path.js", "", null, undefined, 7]) assert.equal(repoOfPath(bad), null)
 }))
 
-test("directoryGone is true only for an absolute directory that no longer exists", () => withRepos(({ root, repo }) => {
-  const { directoryGone } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+test("repoLookup tells a repository, a true none and evidence that is not available apart", () => withRepos(({ root, repo }) => {
+  const { repoLookup, repoOfPath } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  assert.deepEqual(repoLookup(path.join(code, "a.txt")), { repo: "ourostack/desk" })
+  assert.deepEqual(repoLookup(path.join(code, "gone", "deep", "a.txt")), { repo: "ourostack/desk" }, "a deleted file is still in its repository")
   const plain = path.join(root, "plain")
   mkdirSync(plain)
-  assert.equal(directoryGone(plain), false, "an existing folder in no repository is a true none")
-  assert.equal(directoryGone(path.join(repo("no-remote", null), "src")), true, "a folder that never existed there")
-  assert.equal(directoryGone(path.join(root, "vanished")), true)
-  const file = path.join(plain, "file.txt")
+  assert.deepEqual(repoLookup(plain), { none: true }, "an existing folder in no repository is a true none")
+  assert.deepEqual(repoLookup(repo("no-origin", null)), { none: true }, "a repository with no origin is a true none")
+  assert.deepEqual(repoLookup(path.join(root, "desk", "sub")), { none: true }, "the desk itself, even for a folder not made yet")
+  for (const unknown of ["relative/dir", "", null, undefined, 7]) assert.deepEqual(repoLookup(unknown), { none: true })
+  assert.equal(repoOfPath(plain), null)
+  assert.equal(repoOfPath(path.join(code, "a.txt")), "ourostack/desk")
+}))
+
+test("repoLookup says unavailable for a folder that is gone (ENOENT), under a file (ENOTDIR), or not a folder", () => withRepos(({ root, repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  mkdirSync(path.join(root, "plain"))
+  assert.deepEqual(repoLookup(path.join(root, "vanished")), { unavailable: true }, "ENOENT")
+  assert.deepEqual(repoLookup(path.join(root, "vanished", "deeper", "out.txt")), { unavailable: true })
+  const file = path.join(root, "plain", "file.txt")
   writeFileSync(file, "x")
-  assert.equal(directoryGone(file), true, "a file is not a directory that exists")
-  for (const unknown of ["relative/dir", "", null, undefined, 7]) assert.equal(directoryGone(unknown), false, "not a directory path, so nothing is known to be lost")
+  assert.deepEqual(repoLookup(path.join(file, "child")), { unavailable: true }, "ENOTDIR")
+  assert.deepEqual(repoLookup(file), { unavailable: true }, "a file is not a folder")
+  assert.deepEqual(repoLookup(path.join(repo("no-remote", null), "src")), { unavailable: true }, "a folder that never existed in a repository with no origin")
+}))
+
+test("repoLookup says unavailable for a stat error that is not a missing folder, such as a permission error", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => withRepos(({ root, repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const locked = path.join(root, "locked")
+  mkdirSync(path.join(locked, "inner"), { recursive: true })
+  chmodSync(locked, 0)
+  try {
+    assert.deepEqual(repoLookup(path.join(locked, "inner")), { unavailable: true })
+    assert.deepEqual(repoLookup(path.join(locked, "inner", "gone", "x.txt")), { unavailable: true })
+  } finally {
+    chmodSync(locked, 0o755)
+  }
+}))
+
+test("repoLookup says unavailable when Git fails or times out, and none when Git cleanly reports no origin", () => withRepos(({ root, repo }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  const script = (name, body) => {
+    const file = path.join(root, name)
+    writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    return file
+  }
+  assert.deepEqual(createDeskReaders({ deskRoot, git: script("failing.sh", "exit 128") }).repoLookup(code), { unavailable: true })
+  assert.deepEqual(createDeskReaders({ deskRoot, git: path.join(root, "no-such-git") }).repoLookup(code), { unavailable: true })
+  assert.deepEqual(createDeskReaders({ deskRoot, git: script("slow.sh", "sleep 5"), timeoutMs: 100 }).repoLookup(code), { unavailable: true }, "a timeout")
+  assert.deepEqual(createDeskReaders({ deskRoot, git: script("unset.sh", "exit 1") }).repoLookup(code), { none: true }, "exit 1 is `config --get` reporting no origin")
 }))
 
 test("repoOfPath answers null when Git fails or is missing", () => withRepos(({ root, repo }) => {
   const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
   const code = repo("code", "git@github.com:OurOStack/Desk.git")
   const failing = path.join(root, "failing-git.sh")
-  writeFileSync(failing, "#!/bin/sh\nexit 3\n", { mode: 0o755 })
+  writeFileSync(failing, "#!/bin/sh\nexit 128\n", { mode: 0o755 })
   assert.equal(createDeskReaders({ deskRoot, git: failing }).repoOfPath(path.join(code, "a.txt")), null)
   assert.equal(createDeskReaders({ deskRoot, git: path.join(root, "no-such-git") }).repoOfPath(path.join(code, "a.txt")), null)
   assert.equal(createDeskReaders({ deskRoot }).repoOfPath(path.join(code, "a.txt")), "ourostack/desk")
