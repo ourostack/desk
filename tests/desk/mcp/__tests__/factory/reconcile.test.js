@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url"
 import { jobId, normalizeRemote, taskCommitRule } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { factoryStateRoot, markDelivered, quarantine, setConsent, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { deskTimingKept, deskVisibilityOf } from "../../../../../plugins/desk/mcp/src/factory/desk-visibility.js"
 import { keyedJobId, publishedFileName, serializePublished, toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/reconcile-reasons.js"
 import { reconcile as reconcileOnce } from "../../../../../plugins/desk/mcp/src/factory/reconcile.js"
@@ -63,8 +64,10 @@ async function makeDesk(desk, { remote = null } = {}) {
 
 // Every reason any test here sees; the last test checks the whole vocabulary was reached.
 const REACHED = new Set()
+// The visibility cache entries below were checked on the 25th; "now" is that evening, so they are fresh (a cached answer lasts 7 days).
+const NOW = "2026-09-25T12:00:00.000Z"
 function reconcile(options) {
-  const result = reconcileOnce(options)
+  const result = reconcileOnce({ now: () => NOW, ...options })
   for (const item of result.mismatches ?? []) REACHED.add(item.reason)
   return result
 }
@@ -143,9 +146,9 @@ const NOT_RECORDED = { state: "not_recorded" }
 const NOT_RECORDED_OF = (not_recorded) => ({ state: "not_recorded", of: 0, not_recorded })
 // A desk on GitHub whose visibility the factory has checked as private keeps job timing; any other desk withholds it.
 const REMOTE = "https://github.com/acme/desk.git"
-async function setVisibility(env, visibility) {
+async function setVisibility(env, visibility, checkedAt = "2026-09-25T00:00:00.000Z") {
   const root = await factoryStateRoot(env)
-  await writeFile(path.join(root, "visibility.json"), JSON.stringify({ "acme/desk": { visibility, checked_at: "2026-09-25T00:00:00.000Z" } }))
+  await writeFile(path.join(root, "visibility.json"), JSON.stringify({ "acme/desk": { visibility, checked_at: checkedAt } }))
 }
 
 const mismatchOf = (result, slug) => result.mismatches.filter((item) => item.slug === slug)
@@ -372,8 +375,8 @@ test("a store job in the window with no desk activity is store_only; a private d
   assert.equal(result.ok, true)
   assert.deepEqual(result.warnings, undefined)
   assert.deepEqual(result.mismatches.filter((item) => item.reason === "store_only").map((item) => item.slug), ["idle", "idle2"], "a store session before the window, or with no card time to place it by, is not store_only")
-  assert.equal(result.tasks.find((task) => task.slug === "idle").store.sessions, 1)
-  assert.equal(result.tasks.find((task) => task.slug === "busy").store.sessions, 2)
+  assert.deepEqual(result.tasks.find((task) => task.slug === "idle").store.sessions, got(1))
+  assert.deepEqual(result.tasks.find((task) => task.slug === "busy").store.sessions, got(2))
   assert.deepEqual(reasonsOf(result, "idle"), ["store_only"], "a card-only edit is no real work, so the store's session is the only mismatch")
   assert.ok(!result.housekeeping_cards.some((card) => card.slug === "idle"), "a card listed in tasks is not listed as housekeeping")
   assert.equal(result.tasks.find((task) => task.slug === "idle2").activity.length, 0)
@@ -436,7 +439,7 @@ test("a public desk's keyed store job matches its local job, and the secret neve
   // Another machine's session of an idle task: keyed, with no timing, and nothing here to place it by.
   publishTo(store, localFor(2, quiet), { deskVisibility: "public", machineSecret: new Uint8Array(secret) })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
-  assert.equal(result.tasks.find((task) => task.slug === "shared").store.sessions, 1)
+  assert.deepEqual(result.tasks.find((task) => task.slug === "shared").store.sessions, got(1))
   assert.deepEqual(reasonsOf(result, "shared"), [])
   assert.deepEqual(reasonsOf(result, "quiet"), [], "a keyed job with no timing and no local facts cannot be placed in the window")
   const text = JSON.stringify(result)
@@ -445,7 +448,7 @@ test("a public desk's keyed store job matches its local job, and the secret neve
   writeFileSync(path.join(root, "machine-secret"), Buffer.alloc(3))
   const blind = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
   assert.deepEqual(blind.warnings, ["machine_secret_unavailable"])
-  assert.deepEqual(blind.tasks.find((task) => task.slug === "shared").store, { checked: true, sessions: null })
+  assert.deepEqual(blind.tasks.find((task) => task.slug === "shared").store, { checked: true, sessions: NOT_RECORDED })
 }))
 
 test("a store checkout that is missing or holds a bad file warns and still reports", () => scratch(async (context) => {
@@ -1021,21 +1024,71 @@ test("active_ms is the number the pipeline would publish: an interval outside th
   assert.deepEqual(active("two"), [got(595000)])
 }))
 
-test("a desk whose timing is withheld has no published timeline, so active_ms says withheld, never a number", () => scratch(async (context) => {
+test("active_ms follows the one rule for whether a desk's timing is kept: fresh private gives a number, fresh public withholds, an expired or missing answer is not checked", () => scratch(async (context) => {
   const { desk, env } = context
   await standardDesk(desk, [["t", "w"]], { remote: REMOTE })
   await addSession(context, 1, "t", "w", { remote: REMOTE, boundBy: "focus" })
   const active = () => reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).tasks[0].story[0].active_ms
-  assert.deepEqual(active(), { state: "withheld" }, "no visibility record: not known to be private")
+  const unknown = { state: "not_checked", reason: "visibility_not_known" }
+  assert.deepEqual(active(), unknown, "no cached answer: it is not guessed, and the network is not asked")
+  await setVisibility(env, "private")
+  assert.equal(active().state, "measured")
+  await setVisibility(env, "internal")
+  assert.equal(active().state, "measured")
   await setVisibility(env, "public")
   assert.deepEqual(active(), { state: "withheld" })
+  await setVisibility(env, "unknown")
+  assert.deepEqual(active(), { state: "withheld" }, "a fresh answer of unknown is what the publisher withholds on")
+  await setVisibility(env, "private", "2026-09-17T00:00:00.000Z")
+  assert.deepEqual(active(), unknown, "eight days old: the publisher would ask again, so this does not guess")
+  await setVisibility(env, "public", "2026-09-17T00:00:00.000Z")
+  assert.deepEqual(active(), unknown)
+  await setVisibility(env, "private", "2026-09-18T12:00:00.000Z")
+  assert.equal(active().state, "measured", "exactly seven days is still fresh")
   const root = await factoryStateRoot(env)
   await writeFile(path.join(root, "visibility.json"), "{ not json")
   const broken = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(broken.tasks[0].story[0].active_ms, { state: "withheld" })
+  assert.deepEqual(broken.tasks[0].story[0].active_ms, unknown)
   assert.equal(broken.warnings, undefined, "without a store the visibility file is not what this report is about")
+}))
+
+test("a desk with no remote or a remote that is not on GitHub has no visibility to ask about, so its timing is withheld", () => scratch(async (context) => {
+  const { desk, env } = context
+  await standardDesk(desk, [["t", "w"]])
+  await addSession(context, 1, "t", "w", { boundBy: "focus" })
+  assert.deepEqual(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).tasks[0].story[0].active_ms, { state: "withheld" }, "no remote")
+}))
+
+test("a desk on another host is withheld, whatever the cache says", () => scratch(async (context) => {
+  const { desk, env } = context
+  const remote = "https://gitlab.com/acme/desk.git"
+  await standardDesk(desk, [["t", "w"]], { remote })
+  await addSession(context, 1, "t", "w", { remote, boundBy: "focus" })
   await setVisibility(env, "private")
-  assert.equal(active().state, "measured")
+  assert.deepEqual(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).tasks[0].story[0].active_ms, { state: "withheld" })
+}))
+
+test("the publisher and reconcile agree on whether a desk's timing is kept, because both call the one rule", () => scratch(async (context) => {
+  const { desk, env } = context
+  await standardDesk(desk, [["t", "w"]], { remote: REMOTE })
+  await addSession(context, 1, "t", "w", { remote: REMOTE, boundBy: "focus" })
+  const secret = new Uint8Array(32).fill(7)
+  for (const visibility of ["private", "internal", "public", "unknown"]) {
+    await setVisibility(env, visibility)
+    const published = toPublished(localFor(1, jobOf(desk, "t", "w", REMOTE)), { visibility: () => "public", storeVisibility: "public", deskVisibility: deskVisibilityOf("acme/desk", new Map([["acme/desk", visibility]])), machineSecret: secret }).published
+    const kept = published.jobs[0].session_offset_ms !== null
+    const state = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).tasks[0].story[0].active_ms.state
+    assert.equal(state, kept ? "measured" : "withheld", visibility)
+    assert.equal(deskTimingKept(visibility), kept, visibility)
+  }
+  // Neither the publisher, flush nor reconcile keeps a copy of the rule: each takes it from the shared module.
+  const src = (name) => readFileSync(fileURLToPath(new URL(`../../../../../plugins/desk/mcp/src/factory/${name}`, import.meta.url)), "utf8")
+  for (const name of ["publish.js", "flush.js", "reconcile.js"]) {
+    assert.ok(!/(?:const|let) (?:PRIVATE_DESKS|GITHUB_REMOTE)\b/u.test(src(name)), `${name} declares its own copy`)
+    assert.ok(src(name).includes("desk-visibility.js"), `${name} does not use the shared module`)
+  }
+  assert.ok(src("publish.js").includes("deskTimingKept(") && src("reconcile.js").includes("deskTimingKept(") && src("flush.js").includes("deskVisibilityOf("))
+  assert.ok(src("outbox.js").includes("freshVisibility("), "the cache reader and reconcile apply the same expiry")
 }))
 
 test("status_unobserved says not_checked with no store, and counts what it found with one", () => scratch(async (context) => {
@@ -1056,8 +1109,8 @@ test("a Desk-Tidy trailer is read as git reads trailers: any case, and only in t
   assert.deepEqual(result.tasks.map((task) => task.slug), ["later", "prose"])
 }))
 
-// Every reason in the fixed vocabulary must have been reached by a test in this file. Only a whole-file run can say, so a name filter skips it.
+// Every reason in the fixed vocabulary must have been reached by a test in this file. Only a whole-file run can say, so a name or skip filter skips it.
 after(() => {
-  if (process.execArgv.some((arg) => arg.includes("test-name-pattern")) || process.argv.some((arg) => arg.includes("test-name-pattern"))) return
+  if ([...process.execArgv, ...process.argv].some((arg) => /test-(?:name|skip)-pattern/u.test(arg))) return
   assert.deepEqual(RECONCILE_REASONS.filter((reason) => !REACHED.has(reason)), [], "reasons no test reached")
 })

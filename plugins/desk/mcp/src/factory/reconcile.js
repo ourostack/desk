@@ -31,7 +31,8 @@
 //
 // Reasons, per task with real work (first that explains it wins; see the table in the task report):
 //   card_missing   no readable card (a task with no card is never a job)
-//   not_bound      no bound session, and a real commit no session's own activity (receipt `own_activity`) owns;
+//   not_bound      no bound session, and a real commit that no session bound to another task owns by its receipt's `own_activity`
+//                  (a session that bound no task and recorded its activity does not explain it);
 //                  the detail counts the desk's unbound markers in the window (`unbound_markers_<n>`). A task
 //                  is never blamed on a marker: nothing ties an unbound marker to a task. A real commit inside
 //                  the own activity of a session bound to another task is `counts.mentioned`, not a mismatch.
@@ -65,9 +66,10 @@ import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 
-import { checkPersonPrefix, jobId, normalizeRemote, taskCommitRule } from "./binding.js"
+import { checkPersonPrefix, jobId, taskCommitRule } from "./binding.js"
 import { allTasks, consentDecision, consentRecords, factoryStateDir, readState } from "./boot-check.js"
 import { BINDING_VERSION } from "./derive-run.js"
+import { deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { createDeskReaders, gitEnv, parseNameStatus, readDeskRemote } from "./desk-repo.js"
 import { readSmallText, validMarker } from "./marker.js"
 import { PUBLISHED_LIMITS, validatePublishedBytes } from "./published-schema.js"
@@ -85,8 +87,6 @@ const STORE_SLUG = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}__[A-Za-z0-9._-]{1,100}$/u
 // The refusal codes the flush records in a quarantine record (`outbox.js`, `flush.js`, `publish.js`); any other
 // reason in a local file, including the open-ended gate and store-CI codes, is printed as `refused_other`.
 const REFUSAL_CODES = new Set(["invalid", "facts_quarantined", "private_plugins_missing", ...REFUSALS])
-const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
-const PRIVATE_DESKS = new Set(["private", "internal"])
 const OPEN_PR_RESULTS = new Set(["delivered_pr_open", "intake_stale_retried"])
 const ELSEWHERE_DETAIL = Object.freeze({ __proto__: null, away: "routes_elsewhere", stale: "stale_copy", stalled: "retraction_stalled" })
 const MIN_SECRET_BYTES = 32
@@ -221,7 +221,7 @@ export function reconcile(options) {
   }
 }
 
-function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, git = "git" }) {
+function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, git = "git", now = () => new Date().toISOString() }) {
   const warnings = new Set()
   const warn = (code) => warnings.add(code)
 
@@ -414,14 +414,18 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
 
   // ---- the store ----
   const storeFacts = new Map() // store job id -> [{ id, start, end }]
-  // Whether the desk is known to be private: only then does the publisher keep job timing (`publish.js`), so only then is there a timeline.
-  const repo = GITHUB_REMOTE.exec(normalizeRemote(deskRemote))?.[1]?.toLowerCase() ?? null
-  let visibility = readState(path.join(dir, "visibility.json"), {})
-  if (visibility === null) {
+  // Whether the desk keeps job timing, by the one rule the publisher and the flush use (`desk-visibility.js`), read from the same cache with the
+  // same seven-day expiry. No network call is made: a desk with a GitHub repository whose answer is expired or absent is `visibilityKnown: false`
+  // and nothing is guessed from it.
+  const deskRepo = githubRepoOfRemote(deskRemote)
+  let cached = readState(path.join(dir, "visibility.json"), {})
+  if (cached === null) {
     if (storeDir !== null) warn("visibility_unreadable")
-    visibility = {}
+    cached = {}
   }
-  const deskPrivate = repo !== null && PRIVATE_DESKS.has(visibility[Object.keys(visibility).find((name) => name.toLowerCase() === repo)]?.visibility)
+  const known = visibilityMap(freshVisibility(cached, Date.parse(now())))
+  const visibilityKnown = deskRepo === null || known.has(deskRepo.toLowerCase())
+  const deskPrivate = deskTimingKept(deskVisibilityOf(deskRepo, known))
   let secret = null
   if (storeDir !== null) {
     if (!deskPrivate) {
@@ -604,7 +608,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     for (const session of bound) {
       story.set(session.name, {
         session: session.name.slice(0, -5), start: new Date(session.start).toISOString(),
-        active_ms: deskPrivate ? activeMsOf(session.facts, session.binding, session.start, session.created) : measure("withheld"), bound_by: boundByOf(session.name, task.job),
+        active_ms: !visibilityKnown ? measure("not_checked", undefined, { reason: "visibility_not_known" }) : deskPrivate ? activeMsOf(session.facts, session.binding, session.start, session.created) : measure("withheld"), bound_by: boundByOf(session.name, task.job),
       })
     }
     report.push({
@@ -616,7 +620,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
         ...bound.map((session) => ({ kind: "session", session: session.name.slice(0, -5), start: new Date(session.start).toISOString(), end: new Date(session.end).toISOString() })),
       ],
       story: [...story.values()].sort((a, b) => byKey(a.start, b.start) || byKey(a.session, b.session)),
-      store: storeDir === null ? { checked: false } : { checked: true, sessions: storeSessions === null ? null : storeSessions.length },
+      store: storeDir === null ? { checked: false } : { checked: true, sessions: storeSessions === null ? measure("not_recorded") : measure("measured", storeSessions.length) },
       mismatched: mismatches.length > before,
     })
   }

@@ -112,6 +112,7 @@ import { createHmac } from "node:crypto"
 
 import { publishedAgentType } from "./agent-types.js"
 import { validateLabels } from "./label-schema.js"
+import { PRIVATE_VISIBILITIES, deskTimingKept } from "./desk-visibility.js"
 import { intervalInSession } from "./pipeline/timeline.js"
 import { LIMITS, validateLocalFacts } from "./schema.js"
 import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
@@ -123,10 +124,7 @@ export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_n
 export const EARLIEST_SESSION_START = "2025-01-01T00:00:00.000Z"
 
 // Desks whose remote is known not to be public keep their job timing.
-const PRIVATE_DESKS = new Set(["private", "internal"])
-
 // Stores known not to be public (a work store) keep every plugin's name.
-const PRIVATE_STORES = PRIVATE_DESKS
 
 const MIN_SECRET_BYTES = 32
 
@@ -258,7 +256,7 @@ function publishModels(models, flag) {
 // repository; the rest are counted. A store known not to be public names them all.
 // A name the published validator would refuse (a credential-shaped one) is hidden the same way.
 function publishPlugins(plugins, isPublic, storeVisibility) {
-  const privateStore = PRIVATE_STORES.has(storeVisibility)
+  const privateStore = PRIVATE_VISIBILITIES.has(storeVisibility)
   const kept = []
   const names = []
   let hidden = 0
@@ -294,7 +292,7 @@ function publishedSessionId(id, machineSecret, caller) {
 
 // Whether job timing is kept; a desk that withholds it needs the key for its job IDs.
 function deskIsPrivate(deskVisibility, machineSecret, caller) {
-  const deskPrivate = PRIVATE_DESKS.has(deskVisibility)
+  const deskPrivate = deskTimingKept(deskVisibility)
   if (!deskPrivate && !validSecret(machineSecret)) {
     throw new TypeError(`${caller}: a desk that is not private needs a machineSecret of at least 32 bytes`)
   }

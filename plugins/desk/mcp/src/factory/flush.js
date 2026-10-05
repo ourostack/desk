@@ -133,7 +133,7 @@ import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
-import { normalizeRemote } from "./binding.js"
+import { deskVisibilityOf, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { readDeskRemote } from "./desk-repo.js"
 import { BINDING_VERSION, deriveFile, sweep as sweepMarkers } from "./derive-run.js"
 import {
@@ -208,7 +208,6 @@ const HOSTS = Object.freeze(["claude-code", "copilot-cli", "codex-cli"])
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const RATE_LIMIT = /rate limit/iu
 const OFFLINE = /error connecting to|could not resolve|no such host|dial tcp|connection refused|connection reset|network is unreachable|i\/o timeout|TLS handshake timeout|timed out/iu
-const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
 const TIMEOUT = Symbol("timeout")
 // Everything `pendingFiles` is asked about in the listing pass: bytes no
 // delivered record can match, so every outbox file that is not quarantined
@@ -480,7 +479,6 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 // ---------------------------------------------------------------------------
 
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
-const githubRepoOfRemote = (remote) => (remote === null ? null : GITHUB_REMOTE.exec(normalizeRemote(remote))?.[1] ?? null)
 
 async function deskRepositories(markers, { deadline, now }) {
   const byName = new Map()
@@ -515,7 +513,7 @@ function referencedRepos(facts) {
 
 async function resolveVisibility(env, client, account, repos, nowIso) {
   const cache = await readVisibilityCache(env, { now: nowIso })
-  const known = new Map(Object.entries(cache).map(([repo, entry]) => [repo.toLowerCase(), entry.visibility]))
+  const known = visibilityMap(cache)
   const patch = {}
   for (const repo of [...new Set(repos.map((name) => name.toLowerCase()))].sort()) {
     if (known.has(repo)) continue
@@ -547,7 +545,7 @@ function publishOne(local, name, { transform, known, desk, store, secret }) {
     out = transform(local, {
       visibility: (repo) => known.get(repo.toLowerCase()) ?? "unknown",
       // Every GitHub desk remote was resolved with the references; anything else is unknown.
-      deskVisibility: desk ? known.get(desk.toLowerCase()) : "unknown",
+      deskVisibility: deskVisibilityOf(desk, known),
       // The store was resolved with them too; an unknown store is treated as public.
       storeVisibility: known.get(store.toLowerCase()) ?? "unknown",
       machineSecret: secret,
@@ -577,7 +575,7 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
   const desk = factsNamesOf(local.session).map((name) => desks.get(name)).find((repo) => typeof repo === "string")
   let out
   try {
-    out = toPublishedLabels(local, { deskVisibility: desk === undefined ? "unknown" : known.get(desk.toLowerCase()), machineSecret: secret })
+    out = toPublishedLabels(local, { deskVisibility: deskVisibilityOf(desk, known), machineSecret: secret })
   } catch {
     return { reason: "invalid" }
   }

@@ -87,6 +87,7 @@ import {
   protectLeafFile,
   realpathExistingPrefix,
 } from "./os-protect.js"
+import { freshVisibility } from "./desk-visibility.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { LABELS_SCHEMA, validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
@@ -97,7 +98,6 @@ import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
 const MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const VISIBILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
@@ -927,13 +927,7 @@ function assertVisibilityEntries(patch) {
 export async function readVisibilityCache(env, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   const cache = await readJsonFileSafe(path.join(root, "visibility.json"), {}, platform)
-  const nowMs = Date.parse(now())
-  const fresh = {}
-  for (const [key, entry] of Object.entries(cache)) {
-    if (!isPlainObject(entry)) continue
-    if (nowMs - Date.parse(entry.checked_at) <= VISIBILITY_TTL_MS) fresh[key] = entry
-  }
-  return fresh
+  return freshVisibility(cache, Date.parse(now()))
 }
 
 /** Merges validated `patch` entries into `visibility.json` (also holds the desk's own remote, keyed by its normalized form). Concurrent patches are serialized so none is lost. */
