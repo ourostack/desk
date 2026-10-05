@@ -4,18 +4,10 @@ name: desk MCP tests on Windows
 #   elevated  - the runner's own administrator account (GitHub's default).
 #   standard  - a new local user outside the Administrators group, which is what a managed Windows machine gives a person.
 # The two modes are compared to show that nothing in the suite depends on elevation. The main desk MCP tests workflow
-# covers Linux only. This workflow is report-only for now: it is not a required check and runs on demand or when Windows-relevant code changes.
+# covers Linux only. This workflow is report-only for now: it is not a required check and runs on demand (workflow_dispatch) only. It has no pull_request trigger because the scheduled Superpowers refresh waits on every pull-request workflow, and it must not wait on a Windows suite that is not yet clean.
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/desk-windows-suite.yml"
-      - ".github/scripts/run-as-standard-user.ps1"
-      - "plugins/desk/mcp/src/**"
-      - "plugins/desk/mcp/scripts/**"
-      - "plugins/desk/hooks/**"
-      - "tests/desk/mcp/**"
 
 permissions:
   contents: read
