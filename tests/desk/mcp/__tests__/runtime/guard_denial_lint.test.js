@@ -75,6 +75,7 @@ test("every denial the guard builds for a real command opens with the fix, in Ba
     ["& $p stash", {}], [". $f; git stash", {}], ["git stash; echo 'unterminated", { powershell: false }], ["git stash; $x = (", {}],
     ["git checkout topic", { readGit: slow }], ["git push --force", { readGit: broken }], ["cd \"$(pick)\" && git stash", { powershell: false }],
     ["git fetch --upload-pack=y origin", {}], ["$x = 'git checkout topic' | iex", {}], ["git config alias.co checkout", {}], ["git branch -D main", {}],
+    ["Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='git stash'}", {}],
   ]
   for (const [command, extra] of cases) {
     const result = await guardShellCommand({ command, cwd: f.prot, env: f.env, powershell: extra.powershell !== false, ...extra })
@@ -217,7 +218,7 @@ test("every file under plugins/desk that emits a denial is accounted for in this
   // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
     "mcp/src/runtime/ask-gate.js": 2, "mcp/src/runtime/done-claim-gate.js": 1, "mcp/src/runtime/guard-unknowns.js": 4,
-    "mcp/src/runtime/host-enforcement.js": 7, "mcp/src/runtime/powershell-commands.js": 4, "mcp/src/runtime/protected-checkout.js": 12,
+    "mcp/src/runtime/host-enforcement.js": 7, "mcp/src/runtime/powershell-commands.js": 5, "mcp/src/runtime/protected-checkout.js": 12,
     "mcp/src/runtime/task-status-guard.js": 6, "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2, "hooks/protected-checkout.cjs": 2,
     // Carries the reason a guard built to the host in its own shape; it writes none of its own.
