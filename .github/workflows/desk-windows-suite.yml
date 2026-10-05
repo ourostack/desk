@@ -1,0 +1,85 @@
+name: desk MCP tests on Windows
+
+# Runs the whole Desk unit suite (plugins/desk/mcp `npm test`) on a Windows runner two ways:
+#   elevated  - the runner's own administrator account (GitHub's default).
+#   standard  - a new local user outside the Administrators group, which is what a managed Windows machine gives a person.
+# The two modes are compared to show that nothing in the suite depends on elevation. The main desk MCP tests workflow
+# covers Linux only. This workflow is report-only for now: it is not a required check and runs on demand or when Windows-relevant code changes.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/desk-windows-suite.yml"
+      - ".github/scripts/run-as-standard-user.ps1"
+      - "plugins/desk/mcp/src/**"
+      - "plugins/desk/mcp/scripts/**"
+      - "plugins/desk/hooks/**"
+      - "tests/desk/mcp/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desk-windows-suite-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-suite:
+    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/6)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [elevated, standard]
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Install dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      - name: Show the account this job runs as
+        shell: pwsh
+        run: |
+          whoami
+          $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $admin = ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          "runner is administrator: $admin"
+
+      - name: Run the suite (elevated)
+        if: matrix.mode == 'elevated'
+        working-directory: plugins/desk/mcp
+        shell: cmd
+        run: >
+          npm test -- --test-shard=${{ matrix.shard }}/6 --test-timeout=180000
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=tap --test-reporter-destination=%RUNNER_TEMP%\suite.tap
+
+      - name: Run the suite (standard user)
+        if: matrix.mode == 'standard'
+        shell: pwsh
+        run: >
+          ./.github/scripts/run-as-standard-user.ps1
+          -WorkDir "$PWD\plugins\desk\mcp"
+          -Command 'npm test -- --test-shard=${{ matrix.shard }}/6 --test-timeout=180000 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=C:\deskstd-tmp\suite.tap'
+
+      - name: Keep the TAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.mode }}-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/suite.tap
+            C:/deskstd-tmp/suite.tap
+          if-no-files-found: warn
