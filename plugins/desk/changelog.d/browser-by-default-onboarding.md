@@ -1,0 +1,3 @@
+Browser access is now part of what first-run onboarding and `SETUP.md` verify, not an optional extra. Step 6 of `SETUP.md` and `first-run-bootstrap` both require the `desk-web` tools to be listed and `browser_navigate` to reach `https://example.com`, say that the first call can wait up to two minutes while Playwright MCP installs, and say what a `status: degraded` answer means.
+
+`desk:cdp-headed-browser` now has the commands that make the browser context broker runnable on a fresh install with no overlay: its package ships without the `ws` dependency, so running it in place failed with `ERR_MODULE_NOT_FOUND`. It also says plainly that without a provider `acquire` still fails closed, and points a personal install to Playwright MCP's own options for signed-in pages.

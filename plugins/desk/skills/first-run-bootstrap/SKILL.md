@@ -60,7 +60,7 @@ Make the binding survive new sessions and plugin updates:
 - **Codex:** use the activation adapter through `desk:codex-onboarding`.
 - **Other hosts:** set `DESK` in the host's environment.
 
-MCP servers resolve the desk when a session starts, so ask the operator to start a new session. In it, `desk_status` must report the chosen root and its source, and `desk:session-start` runs normally. Declare and activate the reviewed V2 plugin chain supplied by the selected runtime or overlay, verify the selected roots, confirm admitted MCPs and startup foundations are available, and route to the first real job.
+MCP servers resolve the desk when a session starts, so ask the operator to start a new session. In it, `desk_status` must report the chosen root and its source, and `desk:session-start` runs normally. Confirm the browser as well, because browser access is part of the default install and not an optional extra: the `desk-web` tools are listed, and `browser_navigate` to `https://example.com` returns the title "Example Domain". The first call on a machine can wait up to two minutes while Desk installs Playwright MCP. A `status: degraded` answer carries a `code` and a `fix`; apply the fix and retry before calling onboarding ready. Desk's browser is headless and signed out; signed-in pages go through `desk:cdp-headed-browser`. Declare and activate the reviewed V2 plugin chain supplied by the selected runtime or overlay, verify the selected roots, confirm admitted MCPs and startup foundations are available, and route to the first real job.
 
 ### Entrance B — existing V1 Desk
 
@@ -78,7 +78,7 @@ Entrance B must never route into Entrance A choices or initialize over the exist
 
 ### Converged endpoint
 
-Both entrances end at one Desk, one active plugin chain, admitted MCPs, startup foundations present, and the operator ready to resume or start the first real job from the same durable workspace. Later healthy sessions resume through ordinary `session-start` flow instead of replaying onboarding.
+Both entrances end at one Desk, one active plugin chain, admitted MCPs (the Desk server and the `desk-web` browser), startup foundations present, and the operator ready to resume or start the first real job from the same durable workspace. Later healthy sessions resume through ordinary `session-start` flow instead of replaying onboarding.
 
 At the endpoint, ask the factory contribution question once when `desk_status` with `{ detail: true }` reports `factory.consent` as `undecided`. Use the words and the recording commands that `desk:session-start`'s boot script puts in its `instructions` (`mcp/src/runtime/boot.js`): what is published, what never is, that the store is public, and that the contributor's GitHub account appears as the intake pull request's author. Record yes or no through `factory.js consent`, so the next session start does not ask again. Skip the question in a noninteractive session, and never block onboarding on it.
 
@@ -86,7 +86,7 @@ The public RFC stays optional and on demand. Use it when the operator wants desi
 
 ## Completion evidence
 
-Record which entrance ran, the source and destination state, the active V2 roots and declarations, MCP and startup readiness, the durable task resumed or first job started, and any explicitly retained legacy capability. For Entrance B, include the rollback ref and pre-migration inventory.
+Record which entrance ran, the source and destination state, the active V2 roots and declarations, MCP (including `desk-web`) and startup readiness, the durable task resumed or first job started, and any explicitly retained legacy capability. For Entrance B, include the rollback ref and pre-migration inventory.
 
 ## Cross-references
 

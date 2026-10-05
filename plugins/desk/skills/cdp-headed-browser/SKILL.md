@@ -35,6 +35,21 @@ The consuming overlay supplies:
 
 The released Desk package is the canonical plugin-relative source at `browser-context-broker/`. An ordinary Desk install does not place `browser-context-broker` on `PATH`. A host overlay that offers this optional capability owns a runtime installer: it copies or installs that plugin-relative package, installs production dependencies, and supplies the resulting executable path to its launcher as `BROWSER_CONTEXT_BROKER_BIN`.
 
+## Make the broker runnable on a fresh install
+
+The broker source ships inside Desk's plugin folder without its `ws` dependency, so running it in place fails with `ERR_MODULE_NOT_FOUND`. The plugin folder is the parent of `docs/` in the path on the `Desk RFC:` line printed at session start. Install a private runtime copy once, with no overlay:
+
+```bash
+DESK_PLUGIN_DIR="<plugin folder>"
+RUNTIME="${XDG_STATE_HOME:-$HOME/.local/state}/ouroboros-skills/desk/browser-context-broker"
+mkdir -p "$RUNTIME" && cp -R "$DESK_PLUGIN_DIR/browser-context-broker/." "$RUNTIME/"
+(cd "$RUNTIME" && npm ci --omit=dev --ignore-scripts)
+export BROWSER_CONTEXT_BROKER_BIN="$RUNTIME/bin/browser-context-broker.mjs"
+"$BROWSER_CONTEXT_BROKER_BIN" status --state-dir "$RUNTIME/state" --json
+```
+
+`status` answers `{"ok":true,...}` once the copy runs. Copy again after a Desk update. Without a provider, `acquire` still fails closed with `INVALID_PROVIDER_CONFIG`, so on a personal install this makes the broker's own diagnostics reachable but not a signed-in browser; use the Playwright MCP options above for that.
+
 Aliases are convenience only. The broker expands them to claims and applies the same exact, conjunctive comparison. Missing evidence, zero matches, and ambiguous matches fail closed.
 
 ## Normal launcher flow
