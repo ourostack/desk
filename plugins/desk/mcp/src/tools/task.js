@@ -39,6 +39,7 @@ import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
+import { focusNote } from "./task-focus.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -262,7 +263,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // OPTIONAL_RUNTIME_FIELDS is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
-export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
+export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", ...OPTIONAL_RUNTIME_FIELDS]
 export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
@@ -479,7 +480,7 @@ function splitAbsolutePath(candidate) {
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md", commit? }
  */
-export async function task_create({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_create({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -494,6 +495,9 @@ export async function task_create({ deskRoot, input, person = null, readiness, e
 
   if (values.status != null && !LIFECYCLE_STATES.includes(values.status)) {
     throw new Error(`task_create: ${invalidStatusMessage(values.status)}`)
+  }
+  if (values.focus !== undefined && typeof values.focus !== "boolean") {
+    throw new Error("task_create: `focus` must be true or false")
   }
 
   const filePath = await resolveWriteTarget({
@@ -542,6 +546,15 @@ export async function task_create({ deskRoot, input, person = null, readiness, e
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
+  // The focus moves only once the card exists: a create that threw above never reaches this line. A create without
+  // `focus` (a parked follow-up) leaves the focus alone and, with nothing focused, carries the one-time hint.
+  if (values.focus === true && statusContext.focus) {
+    statusContext.focus.set({ track, slug })
+    result.focused = true
+  } else if (values.focus !== true) {
+    const note = focusNote(statusContext)
+    if (note !== undefined) result.focus_note = note
+  }
   return result
 }
 
@@ -617,7 +630,7 @@ function requiredText(value, field) {
   return value
 }
 
-export async function task_update({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
@@ -756,6 +769,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     result.report_as = `Task ${slug} is at ${status} (not done): ${reportStep(currentStep)}`
     result.report_note = `Do not tell the operator this task is done; it is at ${status}.`
   }
+  const focus = focusNote(statusContext, { track, slug })
+  if (focus !== undefined) result.focus_note = focus
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
 }
@@ -775,6 +790,19 @@ async function archivedTaskStatus(archivedFile) {
   } catch {
     return null
   }
+}
+
+// An archive of the focused card ends the focus (the task is finished); an archive of any other card carries the hint
+// for a session that is still focused elsewhere, or the one-time no-focus hint.
+function withArchiveFocus(statusContext, target, result) {
+  const focus = statusContext.focus
+  const current = focus?.get() ?? null
+  if (current !== null && current.track === target.track && current.slug === target.slug) {
+    focus.set(null)
+    return result
+  }
+  const note = focusNote(statusContext, target)
+  return note === undefined ? result : { ...result, focus_note: note }
 }
 
 /**
@@ -824,7 +852,7 @@ async function archivedTaskStatus(archivedFile) {
  *
  * Returns: { status: "archived" | "already_archived", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -865,10 +893,10 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   if (!srcExists && dstExists) {
     const archivedStatus = await archivedTaskStatus(archivedFile)
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
-    return {
+    return withArchiveFocus(statusContext, { track, slug }, {
       status: "already_archived",
       path: relPath(deskRoot, archivedFile),
-    }
+    })
   }
   if (!srcExists && !dstExists) {
     throw new Error(
@@ -952,5 +980,5 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
   const result = { status: "archived", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
-  return result
+  return withArchiveFocus(statusContext, { track, slug }, result)
 }

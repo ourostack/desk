@@ -20,6 +20,7 @@ const EXPECTED_TOOLS = [
   "task_update",
   "task_archive",
   "task_move",
+  "task_focus",
   "track_create",
   "track_update",
   "track_rename",
@@ -45,7 +46,7 @@ function makeDesk(dir) {
   mkdirSync(path.join(dir, "_archive"), { recursive: true })
 }
 
-test("server scaffolds all 18 expected tool names", () => {
+test("server scaffolds all 19 expected tool names", () => {
   for (const name of EXPECTED_TOOLS) {
     assert.ok(
       TOOL_NAMES.includes(name),

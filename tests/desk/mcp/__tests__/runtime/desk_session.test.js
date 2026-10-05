@@ -982,3 +982,38 @@ test("desk_doctor requires repeated misses and reports a supervisor's refusal wi
   assert.equal(requests, 1)
   assert.equal(session.admission.snapshot().repair, null)
 })
+
+test("task_focus answers without write authority or a write gate, and one focus is held for the whole session", async (t) => {
+  const seen = []
+  const runtime = fakeRuntime({
+    callTool: async ({ name, statusContext }) => {
+      seen.push({ name, focus: statusContext.focus, admission: statusContext.admission })
+      return { content: [{ type: "text", text: JSON.stringify({ status: "ok", tool: name }) }] }
+    },
+  })
+  const { session } = await makeSession(t, { runtime, inputs: { policy: { ...unsupported, write_authority: "person" } } })
+  await session.admission.refresh()
+  assert.equal(requirementMet("write", session.context), false, "this session has no write authority")
+  assert.equal(payload(await session.callTool({ name: "task_focus", input: { clear: true } })).status, "ok")
+  await session.callTool({ name: "desk_search", input: {} })
+  await session.callTool({ name: "task_focus", input: { clear: true } })
+  const focusCalls = seen.filter((call) => call.name === "task_focus")
+  assert.equal(focusCalls.length, 2)
+  assert.equal(focusCalls[0].focus, focusCalls[1].focus, "the same holder reaches every call")
+  assert.equal(seen.find((call) => call.name === "desk_search").focus, focusCalls[0].focus)
+  assert.equal(focusCalls[0].admission, undefined)
+  assert.equal(focusCalls[0].focus.get(), null)
+})
+
+test("task_focus is refused at once, without waiting for admission, when the runtime is not loaded", async (t) => {
+  const { session } = await makeSession(t, {
+    runtime: fakeRuntime(),
+  })
+  session.context.runtimeServer = null
+  const started = Date.now()
+  const refused = payload(await session.callTool({ name: "task_focus", input: { clear: true } }))
+  assert.equal(refused.status, "degraded")
+  assert.equal(refused.tool, "task_focus")
+  assert.match(refused.summary, /the desk root and the Desk runtime/u)
+  assert.ok(Date.now() - started < 2000)
+})

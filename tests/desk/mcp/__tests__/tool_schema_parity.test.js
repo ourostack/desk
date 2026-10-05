@@ -37,6 +37,7 @@ import { TOOL_NAMES } from "../../../../plugins/desk/mcp/src/tool-names.js"
 import { NO_INPUT_TOOLS, TOOL_INPUT_SCHEMAS } from "../../../../plugins/desk/mcp/src/tool-schemas.js"
 
 import { TASK_CREATE_FIELDS, TASK_UPDATE_FIELDS, TASK_ARCHIVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task.js"
+import { TASK_FOCUS_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { TASK_MOVE_FIELDS, TRACK_RENAME_FIELDS } from "../../../../plugins/desk/mcp/src/tools/move.js"
 import { TRACK_CREATE_FIELDS, TRACK_UPDATE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/track.js"
 import { FRICTION_ADD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/friction.js"
@@ -60,6 +61,7 @@ const HANDLER_FIELDS = {
   task_update: TASK_UPDATE_FIELDS,
   task_archive: TASK_ARCHIVE_FIELDS,
   task_move: TASK_MOVE_FIELDS,
+  task_focus: TASK_FOCUS_FIELDS,
   track_create: TRACK_CREATE_FIELDS,
   track_update: TRACK_UPDATE_FIELDS,
   track_rename: TRACK_RENAME_FIELDS,

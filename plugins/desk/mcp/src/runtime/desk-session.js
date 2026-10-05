@@ -57,9 +57,35 @@ export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
   "identity_unavailable", "identity_not_emu", "identity_unregistered", "identity_ambiguous",
 ])
 
+/**
+ * The task this session's main agent declared it is working on, held in memory for the life of the session (module
+ * state in the runtime pack can reset when the pack is reloaded; this closure cannot). `get()` is `{ track, slug }` or
+ * null; `set(value)` replaces it (null clears) and counts as a declaration, so a session that has declared anything,
+ * `clear` included, never gets the no-focus hint; `firstNoFocusHint()` is true once, for the first caller. Never
+ * written to disk: the transcript is the record.
+ */
+export function createFocusHolder() {
+  let current = null
+  let hinted = false
+  return {
+    get: () => current,
+    set(value) {
+      current = value
+      hinted = true
+    },
+    firstNoFocusHint() {
+      const first = !hinted
+      hinted = true
+      return first
+    },
+  }
+}
+
 /** What a tool needs from admission: "status", "doctor", "read", "controller" or "write". */
 export function toolRequirement(name) {
   if (name === "desk_status" || name === "desk_doctor") return name.slice(5)
+  // Focus is held in this session and read from the card on disk: it needs the desk and the runtime, never write authority.
+  if (name === "task_focus") return "focus"
   if (READ_TOOLS.has(name)) return "read"
   if (name === "desk_reindex") return "controller"
   return "write"
@@ -69,7 +95,7 @@ export function toolRequirement(name) {
 export function requirementMet(requirement, context) {
   if (context.launcher?.mode === "refuse") return false
   const readable = Boolean(context.runtimeServer && context.root)
-  if (requirement === "read") return readable
+  if (requirement === "read" || requirement === "focus") return readable
   if (requirement === "controller") return readable && Boolean(context.admission?.controller)
   const authorized = readable && context.authorityAdmitted === true
   if (requirement === "authority") return authorized
@@ -106,6 +132,7 @@ export function createDeskSession(deps) {
   }
   const context = { pendingRepairs: [], exceptions: [], hung: { misses: 0 }, launcher }
   const lexicalViews = new WeakMap()
+  const focus = createFocusHolder()
   let headWatch = null
   let headTimer = null
   let disposed = false
@@ -469,6 +496,7 @@ export function createDeskSession(deps) {
       root: context.root,
       activation: context.activation,
       runtime: context.runtime,
+      focus,
       ...(admissionContext === null ? {} : { admission: admissionContext }),
     }
   }
@@ -499,6 +527,8 @@ export function createDeskSession(deps) {
     const requirement = toolRequirement(name)
     if (requirement === "status") return deskStatus(input, signal)
     if (requirement === "doctor") return deskDoctor(input, signal)
+    // Answered at once or refused at once: a focus call never waits for admission, and never needs a write.
+    if (requirement === "focus") return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null) : refusal(name, requirement)
     if (!requirementMet(requirement, context)) {
       // A Desk that is still admitting, or one a retry could fix now, gets one bounded chance before the tool is refused.
       await admission.refresh({ waitMs: GATE_WAIT_MS })
@@ -794,6 +824,7 @@ export function createDeskSession(deps) {
 const STATUS_BY_STATE = { no_desk_root: "setup_required" }
 const REQUIREMENT_TEXT = {
   read: "the desk root and the Desk runtime",
+  focus: "the desk root and the Desk runtime",
   controller: "the shared readiness controller",
   write: "admitted write authority and the checkout on its state branch",
 }

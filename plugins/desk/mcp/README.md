@@ -24,13 +24,16 @@ DESK=~/<your-workspace> node ./index.js
 
 Claude and Copilot end/stop hooks write protected local markers; detached derivation binds native session evidence to jobs and writes consent-gated local facts. Each session start runs the bounded boot-check registry and starts delivery detached: one sweep, then a flush of every consented store that sends only transformed published facts as one intake pull request per machine per store. Task completion queues finalization, which the end-of-turn hook and the boot check run as `finalize`. The factory CLI exposes `derive`, `status`, `flush` and `finalize`, validates store intake (published facts and waste labels) with `validate-pr`, builds deterministic reports and cross-job waste rollups with `build`, and derives a hashed report URL with `job-link`, which `task_update` and `task_archive` write into the task card as `factory_report` on the transition to `done` when the store has consent. `desk_status` and `desk_doctor` report the bound desk's store, consent per store, undelivered and quarantined counts and the last flush result code as `factory`, with no path, secret, account or content. `evaluate` prepares bounded briefs for the waste evaluator when a task reaches `done`, and `evaluate-accept` checks the evaluator's labels before they join the local outbox; delivering those labels is not wired yet. The live delivery proof against the public store is separate milestone work. See [the factory capture and pipeline contract](../docs/factory-local-capture.md) for privacy, commands, formulas and recovery boundaries.
 
-## Tools exposed (18)
+## Tools exposed (19)
 
 **Runtime CRUD:**
 - `task_create`, `task_update`, `task_archive`
 - `track_create`, `track_update` (on a Git desk, each stages the `track.md` it writes; `track_update` skips that when the file already held unstaged changes)
 - `friction_add`, `lesson_add`
 - `desk_save` — commit files written directly with Write/Edit rather than through a structured Desk tool; each path must resolve inside the resolved `--person` write prefix, or the call is refused
+
+**Declared focus:**
+- `task_focus` — the session's main agent declares the task it is working on, as a track and slug or with `clear: true`; the factory reads the call from the transcript to credit the session's time to that task. It returns the card's status and its last 5 progress entries (each cut to 300 characters; a card found only under the archive folder is marked archived), writes nothing and needs no write authority. `task_create` takes a focus flag to declare a new task in the same call. Desk holds the focus in memory for the session, never on disk, and adds a focus_note hint, worded for the main agent, to `task_update` and `task_archive` on another card and to the first task tool call while nothing is focused. Archiving the focused card clears the focus and `task_move` of it carries the focus to the new place.
 
 **Cheap moves:**
 - `task_move` — move a task to another track and/or rename it (live or archived); refuses a taken target or an invalid new name, and best-effort keeps both `track.md` "## Tasks" tables in sync; `unarchive: true` reopens an archived task into a live folder and restores its row, and `into_task: "<kept task>"` merges a duplicate task into the task that keeps the job as an iteration folder; on a Git desk it refuses a task, or a `track.md` it would edit, with unstaged changes or untracked files (another session may be working there), unless `allow_dirty: true`, and it stages every file it writes, so staged changes read as the current tidy's own work; merging with `into_task: "<kept task>"` never hides a live task inside a done one
@@ -48,7 +51,7 @@ Claude and Copilot end/stop hooks write protected local markers; detached deriva
 - `desk_thread` — provenance walk via refs_graph
 - `desk_reindex` — rebuild or repair the local search index
 
-All 18 tools are wired to real implementations. There is no work-measurement tool either: the factory accounts for each session when it ends and reports each finished job ([local capture](../docs/factory-local-capture.md)). There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
+All 19 tools are wired to real implementations. There is no work-measurement tool either: the factory accounts for each session when it ends and reports each finished job ([local capture](../docs/factory-local-capture.md)). There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
 
 ## How consumers wire this up
 
@@ -82,6 +85,7 @@ Nothing blocks the thread that answers the host. Admission starts only after the
 Admission runs in the background (`src/runtime/desk-session.js`, `src/runtime/admission.js`): root resolution, the activation config and its `desk_runtime` policy, the runtime restore, the state-branch check, write authority and the readiness controller. Its state is `admitting`, then `ready` or `degraded:<code>`:
 
 - A degraded session retries on its own after 1, 2, 5, 10 and 30 s, then every 60 s, and at once on every `desk_status` call and on a change to the checkout's `.git/HEAD`. A fix the agent makes in the session (creating the desk, correcting the activation config, pushing local commits) upgrades the same session to `ready` with no restart.
+- `task_focus` answers whenever the runtime and a root are available, with no write authority and no wait for admission.
 - `desk_status` always answers, with `state`, `code`, `fix`, the latest `repair` and an `admission` block (attempts, next retry, state branch, controller, a hung controller's missed checks and owner, whether writes are available, exceptions caught after the handshake, and the launcher mode).
 - Reads (`desk_search`, `desk_recall`, `desk_similar`, `desk_timeline`, `desk_thread`) need the runtime and a root. Without a readiness controller, lexical search and timeline read the files directly.
 - `desk_reindex` also needs the readiness controller.

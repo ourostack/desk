@@ -1,6 +1,6 @@
 // desk MCP server registration.
 //
-// Registers all 18 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
+// Registers all 19 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
 // tool to a real implementation:
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
@@ -33,6 +33,7 @@ import {
   task_update,
   task_archive,
 } from "./tools/task.js"
+import { taskFocus } from "./tools/task-focus.js"
 import { track_create, track_update } from "./tools/track.js"
 import { task_move, track_rename } from "./tools/move.js"
 import { friction_add } from "./tools/friction.js"
@@ -211,6 +212,7 @@ export const TOOL_IMPLS = {
   task_update,
   task_archive,
   task_move,
+  task_focus: taskFocus,
   track_create,
   track_update,
   track_rename,
@@ -252,7 +254,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   }
   const impl = TOOL_IMPLS[name]
   if (!impl) {
-    // All 18 tools wired; this branch only fires if a name exists in
+    // All 19 tools wired; this branch only fires if a name exists in
     // TOOL_NAMES but is missing from TOOL_IMPLS — i.e. a wiring bug.
     // Return a structured payload that points at the cause.
     return {

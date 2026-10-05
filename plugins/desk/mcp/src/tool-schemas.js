@@ -79,6 +79,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     title: text("The task title."),
     status: text("Initial status; defaults to drafting. Must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
+    focus: flag("Pass true to also declare this new task as the one this session is working on (as task_focus does), for work that starts now; leave it out for a parked follow-up. Only if you are the session's main agent."),
     category: text("general | reminder | coordination | infrastructure | another category."),
     cadence: text("Recurring cadence, such as 30m."),
     scheduledAt: text("One-time scheduled time (ISO 8601)."),
@@ -119,6 +120,11 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   }, ["track", "slug", "title"]),
   task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
+  task_focus: schema({
+    track: text("The track folder of the task you are working on; give it with `slug`."),
+    slug: text("The task folder name; give it with `track`."),
+    clear: flag("Pass true, alone, to declare no task: for a side conversation that belongs to none."),
+  }),
   task_move: schema({
     ...TASK_TARGET,
     handle: text("The task's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
