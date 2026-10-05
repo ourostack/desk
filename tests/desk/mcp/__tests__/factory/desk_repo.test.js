@@ -1580,7 +1580,7 @@ test("repoLookup tells a repository, a true none and evidence that is not availa
   assert.equal(repoOfPath(path.join(code, "a.txt")), "ourostack/desk")
 }))
 
-test("repoLookup says unavailable for a folder that is gone (ENOENT), under a file (ENOTDIR), or not a folder", () => withRepos(({ root, repo }) => {
+test("repoLookup says unavailable for a folder that is gone (ENOENT) or under a file (ENOTDIR)", () => withRepos(({ root, repo }) => {
   const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
   mkdirSync(path.join(root, "plain"))
   assert.deepEqual(repoLookup(path.join(root, "vanished")), { unavailable: true }, "ENOENT")
@@ -1588,8 +1588,21 @@ test("repoLookup says unavailable for a folder that is gone (ENOENT), under a fi
   const file = path.join(root, "plain", "file.txt")
   writeFileSync(file, "x")
   assert.deepEqual(repoLookup(path.join(file, "child")), { unavailable: true }, "ENOTDIR")
-  assert.deepEqual(repoLookup(file), { unavailable: true }, "a file is not a folder")
+  assert.deepEqual(repoLookup(file), { none: true }, "a file that exists is looked up by its folder")
   assert.deepEqual(repoLookup(path.join(repo("no-remote", null), "src")), { unavailable: true }, "a folder that never existed in a repository with no origin")
+}))
+
+test("repoLookup names a nested repository root itself, and a file by the repository that holds its folder", () => withRepos(({ repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const parent = repo("parent", "git@github.com:Some/Parent.git")
+  const nested = path.join(parent, "nested")
+  mkdirSync(nested)
+  gitIn(nested, ["init", "-q", "-b", "main"])
+  gitIn(nested, ["remote", "add", "origin", "git@github.com:Some/Nested.git"])
+  writeFileSync(path.join(nested, "a.txt"), "x")
+  assert.deepEqual(repoLookup(nested), { repo: "some/nested" })
+  assert.deepEqual(repoLookup(path.join(nested, "a.txt")), { repo: "some/nested" })
+  assert.deepEqual(repoLookup(parent), { repo: "some/parent" })
 }))
 
 test("repoLookup says unavailable for a stat error that is not a missing folder, such as a permission error", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => withRepos(({ root, repo }) => {

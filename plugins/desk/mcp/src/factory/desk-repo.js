@@ -970,10 +970,11 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   /**
    * `repoLookup(absolutePath)`: the code repository holding a path, as one of three answers a caller cannot confuse:
    * `{ repo: "owner/name" }` (lowercase, from the `origin` remote of the nearest folder at or above the path that still exists: a deleted
-   * file is still in its repository); `{ none: true }` (the folder exists and Git cleanly reports no repository, or a repository with no
+   * file is still in its repository; a path that is a folder is looked up as itself, so a nested repository root names its own repository,
+   * and an existing file by its folder); `{ none: true }` (the folder exists and Git cleanly reports no repository, or a repository with no
    * origin or one that is not `host/…/owner/name`, or the desk itself: a path inside the desk root, or a checkout of the desk's own remote;
    * also a path that is not absolute); and `{ unavailable: true }` (the evidence cannot be read: the folder is gone (ENOENT, ENOTDIR) or
-   * is not a folder and no repository above it names it, any other stat error such as a permission or I/O failure, a Git failure or a
+   * and no repository above it names it, any other stat error such as a permission or I/O failure, a Git failure or a
    * timeout). Only the name is ever returned, never the path or the remote.
    */
   function repoLookup(absolutePath) {
@@ -982,7 +983,13 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     if (lookupByDirectory.has(start)) return lookupByDirectory.get(start)
     let directory = start
     let kind = folderKind(directory)
-    const lost = kind !== "directory"
+    let lost = kind !== "directory"
+    // A file that exists is in its folder's repository; nothing is lost.
+    if (kind === "other") {
+      directory = path.dirname(start)
+      kind = folderKind(directory)
+      lost = false
+    }
     // The filesystem root always exists, so the guard against walking past it is for a stat that fails there.
     /* node:coverage ignore next */
     while (kind === "missing" && path.dirname(directory) !== directory) {

@@ -1058,6 +1058,17 @@ test("a commit call in a repository is one event per repository it touches, at t
   assert.deepEqual(shape(bind({ fileWrites: subagentWrites, spawns: [spawnAt(1, 2, Y)] }, options).jobs), { [idOf(Y)]: { agents: [1], segments: "none" } })
 })
 
+test("a commit path that is itself a nested repository root credits the nested repository, not its parent's", () => {
+  const nested = `${CODE}/nested`
+  const events = {
+    fileWrites: [writeAt(1, X), writeAt(2, X), writeAt(3, Y), writeAt(4, Y), writeAt(5, Y)],
+    shellGitCommits: [10, 20, 30].map((n) => ({ start: minute(n), end: minute(n + 1), cwd: DESK, paths: [nested], agent: 0 })),
+  }
+  const result = bind(events, { agents: tree(), cards: listing(X), repos: { [CODE]: "someone/else", [nested]: "OurOStack/Desk" } })
+  assert.ok(result.calls.repoLookup.includes(nested), "the entry itself is asked about, not only its folder")
+  assert.ok(Object.hasOwn(shape(result.jobs), idOf(X)), "the nested repository is the one the card lists")
+})
+
 test("task_create with focus declares the new card: the session is bound by declaration, not as one that never declared", () => {
   const create = deskCall({ at: minute(10), name: "mcp__plugin_desk_desk__task_create", slug: X })
   // The parser emits the focus call beside the create call; ten notes on Y would otherwise take the whole session.

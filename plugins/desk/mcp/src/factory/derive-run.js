@@ -1,3 +1,5 @@
+// `src/factory/**` imports only `node:` built-ins and other `src/factory/` files, with one exception: `../desk/crew-roster.js` (the one crew rule),
+// which itself imports only `node:` modules and says so in its header.
 import { createHash } from "node:crypto"
 import { readFileSync, realpathSync, statSync, promises as fs } from "node:fs"
 import * as os from "node:os"
@@ -70,9 +72,15 @@ function declaredDeskVersion(plugins) {
 // version fails open: proceed as before, as does an ambiguous declaration —
 // see declaredDeskVersion — and a hold older than STALE_DERIVER_HOLD_MS).
 function isStaleDeriver(ownVersion, plugins, updatedAt, now) {
+  if (now() - Date.parse(updatedAt) > STALE_DERIVER_HOLD_MS) return false
+  return newerDeskRecorded(ownVersion, plugins)
+}
+
+// Whether the declared "desk" plugin is newer than the code running (an unreadable or malformed own version, and an ambiguous or missing
+// declaration, are not: they fail open).
+function newerDeskRecorded(ownVersion, plugins) {
   const declared = declaredDeskVersion(plugins)
   if (declared === null) return false
-  if (now() - Date.parse(updatedAt) > STALE_DERIVER_HOLD_MS) return false
   let own
   try {
     own = ownVersion()
@@ -168,6 +176,9 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
+    // The decision that guards the write is made again right before it: the derivation above is long.
+    const late = admit === null ? null : await admit()
+    if (late !== null) return { result: "refused", store, reason: late }
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
     await setJobsForFile(env, written.name, jobs.map((j) => j.job))
@@ -262,14 +273,16 @@ async function cwdRoot(transcript) {
   return isFolder(path.join(real, "_meta")) && isFolder(path.join(real, "_archive")) ? real : null
 }
 
-/** The reasons an orphan stays frozen, a closed list: one for each condition of spec section 4 that can fail (`reconcile` reads it). */
-export const ORPHAN_REASONS = Object.freeze(["no_facts", "no_transcript", "no_desk_root", "crew_desk", "route_unknown", "retracted", "not_opted_in", "derive_failed"])
-/** The most orphans one sweep reads a transcript for (to find a desk root or to derive); the rest are `pending` for the next sweep. */
+/** The reasons an orphan stays frozen, a closed list: one for each condition of spec section 4 that can fail, and the one rule below (`reconcile` reads it). */
+export const ORPHAN_REASONS = Object.freeze(["no_facts", "no_transcript", "no_desk_root", "crew_desk", "route_unknown", "retracted", "not_opted_in", "recorded_by_newer_desk", "derive_failed"])
+/** The most orphans one sweep gives transcript work (facts, transcript, derive); the rest are `pending` and the next pass starts after the last one served. */
 export const ORPHAN_EXAMINE_CAP = 25
 /** The time one sweep's orphan pass may spend on transcript work, half of the 120 s the delivery deadline allows; the rest is `pending`. */
 export const ORPHAN_BUDGET_MS = 60000
 /** What a pass that threw records, instead of counts: a fixed class, never a message or a path. */
 export const ORPHAN_PASS_FAILED = "pass_failed"
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 // The reason the desk at `root` does not allow a rebuild into `store`, or null: a crew desk, or one that does not itself declare `store`.
 function rootRefusal(root, store) {
@@ -281,85 +294,125 @@ function rootRefusal(root, store) {
 const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, 0]))
 
 /**
- * `rebuildOrphans(env, { now, quietMs, markers, cap, budgetMs, clock, retractions }) -> { rebuilt, current, pending, frozen, orphans }`: Claude Code sessions
- * with an outbox copy and no marker (it was pruned after 30 days) are derived again, from their transcript, when all of these hold (spec
- * section 4): the desk root is known (the receipt's `desk_root`, or the transcript's first `cwd` when that is exactly a desk root); that
- * desk's own `_meta/factory.json` declares the store whose outbox holds the copy (a desk that routes by default is never rebuilt this way);
- * no store holds a retraction record or a kept copy of the session (checked again inside the derivation lock, which guards the write); and
- * the desk is not a crew desk. `end_reason` and `ended_at` come from the outbox copy. The session is derived as a marker would be, so its
- * receipt carries the same fields.
+ * `rebuildOrphans(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, write }) -> { rebuilt, current, pending, frozen,
+ * orphans }`: Claude Code sessions with an outbox copy and no marker (it was pruned after 30 days) are derived again, from their transcript,
+ * when all of these hold (spec section 4): the desk root is known (the receipt's `desk_root`, or the transcript's first `cwd` when that is
+ * exactly a desk root); that desk's own `_meta/factory.json` declares the store whose outbox holds the copy (a desk that routes by default is
+ * never rebuilt this way); no store holds a retraction record or a kept copy of the session (checked again inside the derivation lock and
+ * right before the write); and the desk is not a crew desk. `end_reason` and `ended_at` come from the outbox copy. The session is derived as
+ * a marker would be, so its receipt carries the same fields.
  *
- * Cheap checks (a marker, a retraction record, the receipt's desk root, roster and declaration) run before any transcript is read. At most
- * `cap` orphans get transcript work in a pass and it stops at `budgetMs` (`clock` is milliseconds); the rest are `pending` and the next
- * sweep takes them. `rebuilt` counts orphans written again, `current` those whose receipt and transcript are unchanged (nothing to do),
- * `pending` those not done yet (over the cap or the budget, inside the quiet window, source changed), and `frozen` (a total) those that fail a
- * condition, by reason in `orphans.frozen` (`ORPHAN_REASONS`). The result is also written to `status.json` as `orphans`
- * (`{ ran_at, rebuilt, current, pending, frozen: { <reason>: n } }`, counts only), or as `{ ran_at, failed: "pass_failed" }` when the pass
- * threw, so a pass that failed never reads as an empty one. `retractions(env)` lists the retracted session names (a test can change what it
- * answers between the early check and the one inside the lock).
+ * Orphans are taken in name order starting after the `cursor` the last pass recorded, and wrapping, so a stuck orphan cannot keep a later one
+ * from its turn. Cheap checks (a retraction, the receipt's desk root, roster and declaration) run for every orphan; the rest (facts, the
+ * transcript, its stat, the derive) only inside `cap` orphans and `budgetMs` (`clock` is milliseconds). The others are `pending`. An orphan
+ * whose outbox copy records a newer Desk than this one is held `pending` (taking no slot) for the seven days `STALE_DERIVER_HOLD_MS` allows,
+ * counted from the copy's `ended_at` (its file's mtime when there is none), then frozen as `recorded_by_newer_desk`.
+ *
+ * The record is written to `status.json` as `orphans` twice: `{ started_at, cursor }` before the work, and after it `{ started_at, ran_at,
+ * cursor, rebuilt, current, pending, oldest_pending_days, frozen: { <reason>: n } }`, or `{ started_at, ran_at, cursor, failed:
+ * "pass_failed" }` when the pass threw. A record with a start and no `ran_at` is a pass that was interrupted or could not report.
+ * `oldest_pending_days` is the age in whole days of the oldest orphan found waiting (null when none was): a queue that does not drain shows
+ * as a number that grows. `retractions(env)` lists the retracted session names; `ownVersion()` is this Desk's version; `write` is
+ * `writeStatus`.
  */
-export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames } = {}) {
-  const ranAt = new Date(now()).toISOString()
-  let orphans
+export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus } = {}) {
+  const startedAt = new Date(now()).toISOString()
+  let cursor = null
   try {
-    orphans = { ran_at: ranAt, ...(await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions })) }
+    const previous = (await readStatus(env)).orphans?.cursor
+    cursor = typeof previous === "string" ? previous : null
   } catch {
-    orphans = { ran_at: ranAt, failed: ORPHAN_PASS_FAILED }
+    // No cursor: the pass starts from the first orphan.
   }
   try {
-    await writeStatus(env, { orphans })
+    await write(env, { orphans: { started_at: startedAt, cursor } })
   } catch {
-    // The report is only a report; the pass's own work stands.
+    // The pass still runs; the closing record may still be written.
+  }
+  let orphans
+  try {
+    const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor })
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...pass }
+  } catch {
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), cursor, failed: ORPHAN_PASS_FAILED }
+  }
+  try {
+    await write(env, { orphans })
+  } catch {
+    // The start record stands, with no result: it reads as a pass that did not finish.
   }
   const counts = orphans.failed === undefined ? orphans : { rebuilt: 0, current: 0, pending: 0, frozen: zeroReasons() }
   return { rebuilt: counts.rebuilt, current: counts.current, pending: counts.pending, frozen: Object.values(counts.frozen).reduce((sum, count) => sum + count, 0), orphans }
 }
 
-async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions }) {
+async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor }) {
   const kept = new Set((markers ?? await listMarkers(env)).map((marker) => `${marker.host}-${marker.session_id}.json`))
   const receipts = (await readStatus(env)).derivations
-  const copies = (await outboxCopies(env, "claude-code")).filter(({ name }) => !kept.has(name))
-  // An orphan whose receipt names its desk can be judged without reading its transcript, so those go first.
-  copies.sort((a, b) => Number(deskRootOf(receipts, [b.name]) !== undefined) - Number(deskRootOf(receipts, [a.name]) !== undefined) || a.name.localeCompare(b.name))
+  const all = (await outboxCopies(env, "claude-code")).filter(({ name }) => !kept.has(name)).sort((a, b) => a.name.localeCompare(b.name))
+  // Start after the cursor and wrap.
+  const after = cursor === null ? 0 : all.findIndex(({ name }) => name.localeCompare(cursor) > 0)
+  const start = after === -1 ? 0 : after
+  const copies = [...all.slice(start), ...all.slice(0, start)]
   const retracted = await retractions(env)
   const find = transcriptFinder(env)
   const started = clock()
   let spent = 0
-  // Takes one of this pass's transcript-work slots, or says there is none left (the cap, or the time budget).
+  // Takes one of this pass's transcript-work slots, or says there is none left (the cap, or the time budget). `refund` gives one back.
   const room = () => {
     if (spent >= cap || clock() - started >= budgetMs) return false
     spent += 1
     return true
   }
+  const refund = () => {
+    spent -= 1
+  }
+  let oldestMs = null
+  const noteWaiting = (sinceMs) => {
+    const age = Math.max(0, now() - sinceMs)
+    oldestMs = oldestMs === null ? age : Math.max(oldestMs, age)
+  }
   const tally = { rebuilt: 0, current: 0, pending: 0, frozen: zeroReasons() }
+  let last = cursor
   for (const { store, name } of copies) {
     let outcome
+    const before = spent
     try {
-      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, now, quietMs })
+      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion })
     } catch {
       outcome = "derive_failed"
     }
+    if (spent > before) last = name
     if (ORPHAN_REASONS.includes(outcome)) tally.frozen[outcome] += 1
     else tally[outcome] += 1
   }
-  return tally
+  return { cursor: last, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
 }
 
 // One orphan: "rebuilt", "current", "pending", or the reason it stays frozen.
-async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, now, quietMs }) {
+async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion }) {
   if (retracted.has(name)) return "retracted"
   const receiptRoot = deskRootOf(receipts, [name])
   if (receiptRoot !== undefined) {
     const refusal = rootRefusal(receiptRoot, store)
     if (refusal !== null) return refusal
   }
+  if (!room()) return "pending"
   const facts = await readLocalFacts(env, store, name)
   if (facts === null || `claude-code-${facts.session.id}.json` !== name) return "no_facts"
+  const { end_reason: endReason, ended_at: endedAt } = facts.session
+  const plugins = facts.plugins.map(({ name: pluginName, version, source }) => (source === null ? { name: pluginName, version } : { name: pluginName, version, source }))
+  // The time the session's own record gives, for the hold below and for the marker, never now: so a hold can expire.
+  const recordedAt = endedAt !== null ? Date.parse(endedAt) : (await fs.stat(path.join(await factoryStateRoot(env), "outbox", store.replace("/", "__"), name))).mtimeMs
+  if (newerDeskRecorded(ownVersion, plugins)) {
+    refund()
+    if (now() - recordedAt > STALE_DERIVER_HOLD_MS) return "recorded_by_newer_desk"
+    noteWaiting(recordedAt)
+    return "pending"
+  }
   const transcript = await find(facts.session.id)
   if (transcript === null) return "no_transcript"
   const receipt = receipts?.[name]
   if (receipt?.store === store && receipt.binding_version >= BINDING_VERSION && sameSource(receipt, await sourceStamp(transcript))) return "current"
-  if (!room()) return "pending"
   let root = receiptRoot
   if (root === undefined) {
     root = await cwdRoot(transcript)
@@ -367,15 +420,18 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
     const refusal = rootRefusal(root, store)
     if (refusal !== null) return refusal
   }
-  const { end_reason: endReason, ended_at: endedAt } = facts.session
-  const plugins = facts.plugins.map(({ name: pluginName, version, source }) => (source === null ? { name: pluginName, version } : { name: pluginName, version, source }))
-  const marker = { schema_version: 1, host: "claude-code", session_id: facts.session.id, log_path: transcript, cwd: root, desk_root: root, end_reason: endReason, ended_at: endedAt, plugins, updated_at: new Date(now()).toISOString() }
+  const marker = { schema_version: 1, host: "claude-code", session_id: facts.session.id, log_path: transcript, cwd: root, desk_root: root, end_reason: endReason, ended_at: endedAt, plugins, updated_at: new Date(recordedAt).toISOString() }
   const admit = async () => ((await retractions(env)).has(name) ? "retracted" : null)
   const { result, reason } = await deriveMarker(env, marker, { quietMs, admit })
   if (result === "written") return "rebuilt"
-  // Inside the quiet window, or the source changed, or a newer Desk than this one is to derive it: not done yet, not frozen.
-  if (result === "skipped" || result === "held") return "pending"
+  // Inside the quiet window, or the source changed: not done yet.
+  if (result === "skipped") {
+    noteWaiting(recordedAt)
+    return "pending"
+  }
   if (result === "refused") return reason
+  // The desk no longer yields a store (or a root): nothing to wait for.
+  if (result === "held") return "route_unknown"
   return result === "not_opted_in" ? "not_opted_in" : "derive_failed"
 }
 

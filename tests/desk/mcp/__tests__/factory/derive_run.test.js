@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { existsSync, promises as fs } from "node:fs"
+import { existsSync, writeFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { factoryStateRoot, listMarkers, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
@@ -300,7 +300,7 @@ test("work in a card's listed repository binds through the real reader, and only
     ["Write", { file_path: path.join(ctx.base, "vanished", "out.txt"), content: SENTINEL }],
     ["Write", { file_path: path.join(ctx.base, "vanished", "more.txt"), content: SENTINEL }],
     // A path under a file (ENOTDIR) is not available either.
-    ["Write", { file_path: path.join(ctx.base, "a-file", "child.txt"), content: SENTINEL }],
+    ["Write", { file_path: path.join(ctx.base, "a-file", "sub", "child.txt"), content: SENTINEL }],
   ])
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
@@ -732,12 +732,12 @@ test("an orphan whose receipt is already current is not derived again", () => sc
 test("the orphan pass writes its result to status.json as counts keyed by a closed reason list, and the list is exported and frozen", () => scratch(async (ctx) => {
   const { rebuildOrphans, ORPHAN_REASONS, ORPHAN_EXAMINE_CAP, ORPHAN_BUDGET_MS } = await runner()
   assert.equal(Object.isFrozen(ORPHAN_REASONS), true)
-  assert.deepEqual([...ORPHAN_REASONS], ["no_facts", "no_transcript", "no_desk_root", "crew_desk", "route_unknown", "retracted", "not_opted_in", "derive_failed"])
+  assert.deepEqual([...ORPHAN_REASONS], ["no_facts", "no_transcript", "no_desk_root", "crew_desk", "route_unknown", "retracted", "not_opted_in", "recorded_by_newer_desk", "derive_failed"])
   assert.deepEqual([typeof ORPHAN_EXAMINE_CAP, typeof ORPHAN_BUDGET_MS], ["number", "number"])
   await orphan(ctx, { declare: false })
   const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-06T00:00:00.000Z") })
   assert.deepEqual([result.rebuilt, result.current, result.pending, result.frozen], [0, 0, 0, 1])
-  const expected = { ran_at: "2026-10-06T00:00:00.000Z", rebuilt: 0, current: 0, pending: 0, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
+  const expected = { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:00.000Z", cursor: null, rebuilt: 0, current: 0, pending: 0, oldest_pending_days: null, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
   assert.deepEqual((await readStatus(ctx.env)).orphans, expected)
   assert.deepEqual(result.orphans, expected)
   const text = JSON.stringify((await readStatus(ctx.env)).orphans)
@@ -891,10 +891,10 @@ test("an orphan pass that throws records a fixed failure class and reads as fail
   const { sweep, ORPHAN_PASS_FAILED } = await runner()
   const summary = await sweep(ctx.env)
   assert.deepEqual([summary.rebuilt, summary.frozen, summary.pending], [0, 0, 0])
-  const { ran_at: ranAt, ...failed } = (await readStatus(ctx.env)).orphans
-  assert.deepEqual(failed, { failed: ORPHAN_PASS_FAILED })
-  assert.equal(typeof ranAt, "string")
-  assert.deepEqual(Object.keys(summary.orphans).sort(), ["failed", "ran_at"])
+  const { ran_at: ranAt, started_at: startedAt, ...failed } = (await readStatus(ctx.env)).orphans
+  assert.deepEqual(failed, { failed: ORPHAN_PASS_FAILED, cursor: null })
+  assert.deepEqual([typeof ranAt, typeof startedAt], ["string", "string"])
+  assert.deepEqual(Object.keys(summary.orphans).sort(), ["cursor", "failed", "ran_at", "started_at"])
   assert.equal(JSON.stringify(failed).includes(root), false, "no message text or path")
   await fs.rm(path.join(root, "retracting"))
   await fs.rm(path.join(root, "outbox"), { recursive: true })
@@ -960,7 +960,7 @@ test("more orphans than the cap are pending, and the next sweep rebuilds them", 
   const one = await rebuildOrphans(ctx.env, { cap: 2 })
   assert.deepEqual([one.rebuilt, one.pending, one.frozen], [2, 1, 0])
   assert.equal((await readStatus(ctx.env)).orphans.pending, 1, "visible from outside")
-  const two = await rebuildOrphans(ctx.env, { cap: 2 })
+  const two = await rebuildOrphans(ctx.env, { cap: 3 })
   assert.deepEqual([two.rebuilt, two.pending, two.current], [1, 0, 2])
 }))
 
@@ -982,22 +982,139 @@ test("a desk root read from the transcript's cwd is checked for crew and declara
   assert.deepEqual(await reasons(ctx), { crew_desk: 1 })
 }))
 
-test("a retraction that lands after the early check is caught inside the derivation lock", () => scratch(async (ctx) => {
+test("a retraction that lands after the early check is caught inside the derivation lock, and again right before the facts are written", () => scratch(async (ctx) => {
   const { name } = await orphan(ctx)
+  const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
+  const before = await fs.readFile(file, "utf8")
   const { rebuildOrphans } = await runner()
-  const answers = [new Set(), new Set([name])]
-  const result = await rebuildOrphans(ctx.env, { retractions: async () => answers.shift() })
-  assert.deepEqual([result.rebuilt, result.frozen], [0, 1])
+  let answers = [new Set(), new Set([name])]
+  const early = await rebuildOrphans(ctx.env, { retractions: async () => answers.shift() })
+  assert.deepEqual([early.rebuilt, early.frozen], [0, 1])
   assert.deepEqual(await reasons(ctx), { retracted: 1 })
+  answers = [new Set(), new Set(), new Set([name])]
+  const late = await rebuildOrphans(ctx.env, { retractions: async () => answers.shift() })
+  assert.deepEqual([late.rebuilt, late.frozen], [0, 1])
+  assert.equal(await fs.readFile(file, "utf8"), before, "nothing was written after the late check refused")
 }))
 
-test("an orphan whose session names a newer Desk than this one is pending, not frozen", () => scratch(async (ctx) => {
-  const { name } = await orphan(ctx)
+const recordNewerDesk = async (ctx, name, change = (facts) => facts) => {
   const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
   const facts = JSON.parse(await fs.readFile(file, "utf8"))
   facts.plugins[0].version = "999.0.0"
-  await fs.writeFile(file, JSON.stringify(facts))
+  await fs.writeFile(file, JSON.stringify(change(facts)))
+  return file
+}
+
+test("an orphan recorded by a newer Desk waits as pending with its age, then freezes once the seven days pass, taking no transcript-work slot", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  const second = await clone(ctx, first, "1")
+  await recordNewerDesk(ctx, first.name)
   const { rebuildOrphans } = await runner()
-  const result = await rebuildOrphans(ctx.env)
-  assert.deepEqual([result.rebuilt, result.pending, result.frozen], [0, 1, 0])
+  const ended = Date.parse(END)
+  const own = { ownVersion: () => "1.0.0", cap: 1 }
+  const waiting = await rebuildOrphans(ctx.env, { ...own, now: () => ended + 2 * DAY })
+  assert.deepEqual([waiting.rebuilt, waiting.pending, waiting.frozen], [1, 1, 0], "the held orphan did not use the one slot, so the other was rebuilt")
+  assert.equal(waiting.orphans.oldest_pending_days, 2)
+  assert.equal((await readStatus(ctx.env)).orphans.oldest_pending_days, 2, "visible from outside")
+  assert.equal(typeof second, "string")
+  const expired = await rebuildOrphans(ctx.env, { ...own, now: () => ended + 8 * DAY })
+  assert.deepEqual([expired.pending, expired.frozen, expired.orphans.oldest_pending_days], [0, 1, null])
+  assert.deepEqual(await reasons(ctx), { recorded_by_newer_desk: 1 })
+}))
+
+test("a newer-Desk orphan with no recorded end takes its hold's time from the outbox file", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx)
+  const file = await recordNewerDesk(ctx, name, (facts) => ({ ...facts, session: { ...facts.session, ended_at: null } }))
+  const at = new Date(Date.UTC(2026, 8, 20))
+  await fs.utimes(file, at, at)
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env, { ownVersion: () => "1.0.0", now: () => at.getTime() + 3 * DAY })
+  assert.deepEqual([result.pending, result.orphans.oldest_pending_days], [1, 3])
+}))
+
+test("a newer-Desk check that cannot read this Desk's own version lets the orphan through", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx)
+  await recordNewerDesk(ctx, name)
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env, { ownVersion: () => { throw new Error("unreadable") } })
+  assert.equal(result.rebuilt, 1)
+}))
+
+test("an orphan whose desk stops yielding a store between the check and the derive is frozen as route_unknown, not pending", () => scratch(async (ctx) => {
+  await orphan(ctx)
+  const { rebuildOrphans } = await runner()
+  // This Desk's version is read after the desk's declaration was checked and before the derive reads it again.
+  const ownVersion = () => {
+    writeFileSync(path.join(ctx.desk, "_meta/factory.json"), JSON.stringify({ schema_version: 1, store: "invalid" }))
+    return "1.0.0"
+  }
+  const result = await rebuildOrphans(ctx.env, { ownVersion })
+  assert.deepEqual([result.rebuilt, result.pending, result.frozen], [0, 0, 1])
+  assert.deepEqual(await reasons(ctx), { route_unknown: 1 })
+}))
+
+test("a stuck orphan cannot starve the rest: the pass resumes after its cursor and wraps, so a good orphan sorted last is rebuilt in ceil(orphans / cap) sweeps", () => scratch(async (ctx) => {
+  const code = path.join(ctx.base, "code")
+  await fs.mkdir(path.join(code, "_meta"), { recursive: true })
+  const first = await orphan(ctx, { receiptRoot: false, cwd: code })
+  const stuck = [first.name]
+  for (const digit of ["1", "2", "3", "4", "5"]) stuck.push(await clone(ctx, first, digit))
+  const good = await clone(ctx, first, "9")
+  await staleReceipt(ctx, good, (receipt) => ({ ...receipt, desk_root: ctx.desk }))
+  const goodLog = path.join(path.dirname(first.marker.log_path), `${good.slice(12, -5)}.jsonl`)
+  const lines = (await fs.readFile(goodLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+  lines[0].cwd = ctx.desk
+  await fs.writeFile(goodLog, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
+  const { rebuildOrphans } = await runner()
+  const cap = 2
+  const sweeps = Math.ceil((stuck.length + 1) / cap)
+  const seen = []
+  for (let sweep = 1; sweep <= sweeps; sweep += 1) {
+    const result = await rebuildOrphans(ctx.env, { cap })
+    seen.push(result.rebuilt)
+    assert.equal(typeof (await readStatus(ctx.env)).orphans.cursor, "string", "the record carries where the next pass starts")
+  }
+  assert.deepEqual(seen, [0, 0, 0, 1], "rebuilt on the last sweep the arithmetic allows, not before and not never")
+  assert.equal(stuck.length, 6)
+}))
+
+test("the pass writes that it started before the work, so a record with a start and no result reads as interrupted", () => scratch(async (ctx) => {
+  await orphan(ctx, { declare: false })
+  const { rebuildOrphans } = await runner()
+  const { writeStatus: realWrite } = await import(new URL("../../../../../plugins/desk/mcp/src/factory/outbox.js", import.meta.url))
+  await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-06T00:00:00.000Z") })
+  const writes = []
+  const write = async (env, patch) => {
+    writes.push(patch)
+    if (writes.length === 2) throw new Error("disk full")
+    return realWrite(env, patch)
+  }
+  const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-07T00:00:00.000Z"), write })
+  assert.equal(result.frozen, 1, "the pass still returns its result")
+  const record = (await readStatus(ctx.env)).orphans
+  assert.deepEqual(Object.keys(record).sort(), ["cursor", "started_at"], "the earlier result was replaced by a start with no result")
+  assert.equal(record.started_at, "2026-10-07T00:00:00.000Z")
+}))
+
+test("facts, transcript lookup and the source stat run only for orphans inside the cap", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)
+  const root = await factoryStateRoot(ctx.env)
+  for (const name of await fs.readdir(path.join(root, "outbox", "ourostack__factory"))) {
+    if (name !== first.name) await fs.writeFile(path.join(root, "outbox", "ourostack__factory", name), "not json")
+  }
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env, { cap: 1 })
+  assert.deepEqual(await reasons(ctx), {}, "the unreadable copies were not even opened beyond the cap")
+  assert.deepEqual([result.rebuilt, result.pending], [1, 3])
+}))
+
+test("the oldest of several waiting orphans sets oldest_pending_days", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  const second = await clone(ctx, first, "1")
+  await recordNewerDesk(ctx, first.name)
+  await recordNewerDesk(ctx, second, (facts) => ({ ...facts, session: { ...facts.session, ended_at: new Date(Date.parse(END) + DAY).toISOString() } }))
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env, { ownVersion: () => "1.0.0", now: () => Date.parse(END) + 2 * DAY })
+  assert.deepEqual([result.pending, result.orphans.oldest_pending_days], [2, 2])
 }))

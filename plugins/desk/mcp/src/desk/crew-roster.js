@@ -17,7 +17,9 @@
 // person's own desk. A missing roster must never fail open that way.
 //
 // Dependency-free: `scripts/tidy-status.js` runs this straight from the
-// installed plugin, and hooks may run it on an old Node.
+// installed plugin, and hooks may run it on an old Node. `src/factory/derive-run.js`
+// also imports it (the one crew rule), and the factory depends on this file
+// importing only `node:` modules: keep it that way.
 
 import { lstatSync, readFileSync, statSync } from "node:fs"
 import * as path from "node:path"
