@@ -368,6 +368,7 @@ function main() {
     "Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere",
     "is an optional mirror, made only when asked, that links back to the desk",
     "one durable task",
+    "When you start or switch to an outcome, declare it with task_focus; everything you and your subagents do until the next declaration is that task's work.",
     "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking.",
     "Never add AI attribution",
     "`Co-Authored-By` trailers",
@@ -449,6 +450,7 @@ function main() {
     "root retains final accountability",
     "A child agent with a bounded brief follows the brief, not this text",
     "skips session-start, host probes, sync and any real-desk boot ceremony",
+    "A child agent never calls task_focus.",
   ]);
 
   assertSectionPhrases(section(skill, "The RFC"), "using-desk The RFC", [
@@ -483,9 +485,9 @@ function main() {
   // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
   // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
   // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
-  // sentence in "Child agents" (2026-09-29); a further addition has to justify its size.
+  // sentence in "Child agents" (2026-09-29), then from 8000 to 8300 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; a further addition has to justify its size.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 4500 && skillBytes <= 8300, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,
@@ -502,6 +504,17 @@ function main() {
   assert.doesNotMatch(skill, /\bADO\b|\bTeams\b|\bMicrosoft\b|\bPWF\b|submissionId|approvals_create/u);
 
   checkStartupHooks(skill);
+
+  // The foundation says to declare focus; each skill that chooses a task says where, once.
+  for (const [name, phrase] of [
+    ["session-start", "task_focus"],
+    ["session-resumption", "task_focus"],
+    ["task-lifecycle", "task_focus"],
+    ["start-task", "`focus: true`"],
+    ["using-superpowers-with-desk", "Never call task_focus"],
+  ]) {
+    assert.ok(read(path.join(pluginRoot, "skills", name, "SKILL.md")).includes(phrase), `${name} must mention ${phrase}`);
+  }
 
   console.log("using-desk foundation contract passed.");
 }

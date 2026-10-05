@@ -108,6 +108,17 @@ test("Desk's own migrations all parse", () => {
   assert.equal(readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").agentWork, true)
 })
 
+test("the tidy commit and its revert both end with the Desk-Tidy trailer", () => {
+  const text = readFileSync(path.join(deskPluginRoot, "migrations", "02-tidy-desk.md"), "utf8")
+  const step7 = text.slice(text.indexOf("\n7. Check, record and commit."), text.indexOf("\nThen send the Announce line"))
+  const revert = text.slice(text.indexOf("If the human objects"), text.indexOf("\nSTEPS"))
+  for (const [label, part] of [["step 7", step7], ["the revert", revert]]) {
+    assert.ok(part.length > 100, label)
+    assert.match(part, /ends with the trailer `Desk-Tidy: true`/u, label)
+  }
+  assert.equal(text.split("Desk-Tidy: true").length - 1, 2, "exactly the two commits carry the trailer")
+})
+
 // ── Running blocks ───────────────────────────────────────────────────────
 
 const noBash = (command, args, options) => spawn("/nonexistent/bash", args, options)
