@@ -5,7 +5,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { normalizePublished, stableStringify } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
-import { buildJobTimeline, buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
+import { ACTIVE_KINDS, buildJobTimeline, buildTimelines, jobActiveMs } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FACTS = path.join(here, "..", "fixtures", "store", "facts")
@@ -177,4 +177,47 @@ test("shared_with keeps jobs.length - 1 for a binding without segments, and an u
   const mixed = twoJobSession([{ start_ms: 0, end_ms: 2000 }], null)
   assert.equal(sharedWith(CLOSED, mixed), 1)
   assert.equal(sharedWith(OPEN, mixed), 1)
+})
+
+// ---- jobActiveMs: the one rule for a job's active time in one session, shared with `factory reconcile` ----
+
+const iv = (kind, agent, start_ms, end_ms) => ({ kind, agent, start_ms, end_ms })
+const SESSION = { duration_ms: 1000, intervals: [iv("turn", 0, 0, 300), iv("tool", 0, 100, 200), iv("human_wait", 0, 300, 500), iv("subagent", 1, 250, 600), iv("turn", 0, 800, 1200), iv("turn", 0, -50, 100)] }
+
+test("jobActiveMs unions the active kinds, so overlapping workers count once, and leaves waits out", () => {
+  assert.deepEqual([...ACTIVE_KINDS].sort(), ["subagent", "tool", "turn"])
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: 0 }), 600)
+})
+
+test("jobActiveMs drops, never clamps, an interval outside the session, as publishing does", () => {
+  assert.equal(jobActiveMs({ duration_ms: 1000, intervals: [iv("turn", 0, 0, 100), iv("turn", 0, 900, 1001), iv("turn", 0, -1, 50)] }, { session_offset_ms: 5 }), 100)
+})
+
+test("jobActiveMs is null where the pipeline publishes nothing: a job with no session offset", () => {
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: null }), null)
+})
+
+test("jobActiveMs for a legacy job with no segments keeps every interval, and with agents keeps only those workers", () => {
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: 0, agents: [0, 1] }), 600)
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: 0, agents: [1] }), 350)
+})
+
+test("jobActiveMs for a session shared by two jobs clips worker 0 to each job's segments and keeps subagents whole", () => {
+  const first = { session_offset_ms: 0, agents: [0, 1], segments: [{ start_ms: 0, end_ms: 150 }] }
+  const second = { session_offset_ms: 0, agents: [0], segments: [{ start_ms: 150, end_ms: 400 }] }
+  assert.equal(jobActiveMs(SESSION, first), 500)
+  assert.equal(jobActiveMs(SESSION, second), 150)
+})
+
+test("the pipeline's timeline and jobActiveMs agree on one session and job", () => {
+  const session = structuredClone(sessions[0])
+  const binding = session.jobs[0]
+  const timeline = buildJobTimeline(binding.job, [session])
+  const union = []
+  for (const interval of timeline.intervals.filter((item) => ACTIVE_KINDS.has(item.kind)).sort((a, b) => a.start_ms - b.start_ms)) {
+    const last = union.at(-1)
+    if (last !== undefined && interval.start_ms <= last[1]) last[1] = Math.max(last[1], interval.end_ms)
+    else union.push([interval.start_ms, interval.end_ms])
+  }
+  assert.equal(jobActiveMs({ duration_ms: session.session.duration_ms, intervals: session.intervals }, binding), union.reduce((total, [a, b]) => total + b - a, 0))
 })

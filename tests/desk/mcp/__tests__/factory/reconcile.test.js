@@ -76,7 +76,7 @@ const jobOf = (desk, track, slug, remote = null) => jobId({ deskRemote: deskRemo
 async function addSession({ base, desk, env }, n, track, slug, options = {}) {
   const {
     store = STORE, markerStore = STORE, host = "claude-code", receipt = BINDING_VERSION, delivered = true, held = null, log = true, remote = null, marker = true, status = "processing", markerOptions = {},
-    agents = null, segments = null, span = null, noJobs = false, boundBy, ownActivity, focusDisagrees = false, receiptFields = {},
+    agents = null, segments = null, span = null, noJobs = false, created = "2026-09-20T00:00:00.000Z", alsoJobs = [], boundBy, ownActivity, focusDisagrees = false, receiptFields = {},
   } = options
   const id = sessionId(n)
   const name = `${host}-${id}.json`
@@ -84,7 +84,8 @@ async function addSession({ base, desk, env }, n, track, slug, options = {}) {
   facts.session.id = id
   facts.session.host = host
   const job = jobOf(desk, track, slug, remote)
-  facts.jobs = [{ job, basis: ["desk_tool"], task_created_at: "2026-09-20T00:00:00.000Z", transitions: [], observed: { status, at: null }, ...(agents === null ? {} : { agents }), ...(segments === null ? {} : { segments }) }]
+  facts.jobs = [{ job, basis: ["desk_tool"], task_created_at: created, transitions: [], observed: { status, at: null }, ...(agents === null ? {} : { agents }), ...(segments === null ? {} : { segments }) }]
+  for (const other of alsoJobs) facts.jobs.push({ job: jobOf(desk, track, other.slug, remote), basis: ["desk_tool"], task_created_at: created, transitions: [], observed: { status, at: null }, agents: other.agents, segments: other.segments })
   if (noJobs) facts.jobs = []
   if (span !== null) Object.assign(facts.session, span)
   const root = await factoryStateRoot(env)
@@ -139,10 +140,10 @@ async function standardDesk(desk, slugs) {
 const mismatchOf = (result, slug) => result.mismatches.filter((item) => item.slug === slug)
 const reasonsOf = (result, slug) => mismatchOf(result, slug).map((item) => item.reason)
 
-test("the reason list is the fourteen codes, once each, in pipeline order", () => {
-  assert.equal(RECONCILE_REASONS.length, 14)
-  assert.equal(new Set(RECONCILE_REASONS).size, 14)
-  assert.deepEqual([...RECONCILE_REASONS], ["not_bound", "not_opted_in", "route_changed", "held", "log_missing", "stale_binding", "focus_disagrees", "not_delivered", "quarantined", "pr_open", "card_missing", "invalid_status", "status_unobserved", "store_only"])
+test("the reason list is the fifteen codes, once each, in pipeline order", () => {
+  assert.equal(RECONCILE_REASONS.length, 15)
+  assert.equal(new Set(RECONCILE_REASONS).size, 15)
+  assert.deepEqual([...RECONCILE_REASONS], ["not_bound", "not_opted_in", "route_changed", "held", "log_missing", "stale_binding", "receipt_too_old", "focus_disagrees", "not_delivered", "quarantined", "pr_open", "card_missing", "invalid_status", "status_unobserved", "store_only"])
   assert.ok(SUPPORTED_COMMANDS.includes("reconcile"))
 })
 
@@ -778,17 +779,22 @@ test("tidy commits are housekeeping by trailer or subject; the subject is matche
 
 test("a real commit made inside another task's session own_activity is mentioned, not a mismatch; one nobody's own_activity covers is not_bound", () => scratch(async (context) => {
   const { desk, env } = context
-  const repo = await standardDesk(desk, ["main", "other", "partial", "orphan", "ghost", "late", "abroad", "junk", "foreign", "foreign2", "foreign3", "junkowner"].map((slug) => ["t", slug]))
+  const repo = await standardDesk(desk, ["main", "other", "partial", "orphan", "ghost", "late", "abroad", "junk", "foreign", "foreign2", "foreign3", "junkowner", "edge", "edge0", "dup"].map((slug) => ["t", slug]))
   repo.commit("2026-09-25T08:30:00Z", { "t/other/work.md": "x\n", "t/partial/work.md": "x\n" })
   repo.commit("2026-09-25T12:00:00Z", { "t/partial/more.md": "x\n", "t/orphan/work.md": "x\n" })
   repo.commit("2026-09-25T08:40:00Z", { "t/main/work.md": "x\n" })
   repo.commit("2026-09-25T09:10:00Z", { "t/ghost/work.md": "x\n" })
   repo.commit("2026-09-25T09:20:00Z", { "t/late/work.md": "x\n" })
+  // A commit exactly at the end and at the start of another task's own activity is inside it; one inside two owners belongs to the one bound to its task.
+  repo.commit("2026-09-25T08:50:00Z", { "t/edge/work.md": "x\n" })
+  repo.commit("2026-09-25T08:00:00Z", { "t/edge0/work.md": "x\n" })
+  repo.commit("2026-09-25T08:40:00Z", { "t/dup/work.md": "x\n" })
   await addSession(context, 1, "t", "main", { boundBy: "focus", ownActivity: [[0, 3000000]] })
   // A session that bound no task owns the time of ghost's commit: it is not "another task's" session.
   await addSession(context, 2, "t", "ghost", { noJobs: true, ownActivity: [[3300000, 5400000]] })
-  // A session whose receipt has no own_activity claims no commit.
-  await addSession(context, 3, "t", "late", { boundBy: "focus" })
+  // A session that recorded no own activity at all claims no commit.
+  await addSession(context, 3, "t", "late", { boundBy: "focus", ownActivity: [] })
+  await addSession(context, 8, "t", "dup", { boundBy: "focus", ownActivity: [[2300000, 2500000]] })
   // Another desk's session, and a session whose own_activity is not a list of spans, own nothing here.
   repo.commit("2026-09-25T08:52:00Z", { "t/abroad/work.md": "x\n", "t/junk/work.md": "x\n" })
   await addSession(context, 4, "t", "foreign", { boundBy: "focus", ownActivity: [[0, 5400000]], receiptFields: { desk_root: "/nonexistent/other/desk" } })
@@ -804,7 +810,10 @@ test("a real commit made inside another task's session own_activity is mentioned
   assert.deepEqual(reasonsOf(result, "partial"), ["not_bound"], "one commit nobody owns is enough")
   assert.deepEqual(reasonsOf(result, "orphan"), ["not_bound"])
   assert.deepEqual(reasonsOf(result, "ghost"), ["not_bound"], "a session bound to nothing mentions nothing")
-  assert.equal(result.counts.mentioned, 2, "other's commit, and partial's first one")
+  assert.deepEqual(reasonsOf(result, "edge"), [])
+  assert.deepEqual(reasonsOf(result, "edge0"), [])
+  assert.deepEqual(reasonsOf(result, "dup"), [])
+  assert.deepEqual(result.counts.mentioned, { total: 3, recorded: 5, not_recorded: 0 }, "three commits (the 08:30 one touches two tasks and counts once), from five sessions that recorded their own activity")
   assert.ok(result.tasks.some((task) => task.slug === "other"), "a task with only mentioned commits is still real work")
 }))
 
@@ -842,7 +851,7 @@ test("each task's story lists its sessions by start with active time clipped to 
   facts.jobs[0].segments = "garbled"
   writeFileSync(file, JSON.stringify(facts))
   const garbled = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.equal(garbled.tasks.find((item) => item.slug === "tale").story.find((entry) => entry.session === sessionName(1)).active_ms, null)
+  assert.equal(garbled.tasks.find((item) => item.slug === "tale").story.find((entry) => entry.session === sessionName(1)).active_ms, "not_recorded")
 }))
 
 test("bound_by is reported per story entry: focus, inferred, subagent only, and not recorded where the receipt cannot say", () => scratch(async (context) => {
@@ -928,6 +937,75 @@ test("status_unobserved fires when the card's status differs from the latest the
   // A later session of the job observes the card's status: the latest observation wins, so it clears.
   publishTo(store, observed(4, "s", "done", "2026-09-25T09:00:00.000Z"), { deskVisibility: "private" })
   assert.ok(!reasonsOf(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env }), "s").includes("status_unobserved"))
+}))
+
+test("a commit over a session whose receipt predates own_activity is receipt_too_old, never not_bound; mentioned says how many receipts could not say", () => scratch(async (context) => {
+  const { desk, env } = context
+  const repo = await standardDesk(desk, ["old", "gap", "mix", "men", "host", "host2"].map((slug) => ["t", slug]))
+  repo.commit("2026-09-25T08:05:00Z", { "t/men/work.md": "x\n" })
+  repo.commit("2026-09-25T08:45:00Z", { "t/old/work.md": "x\n", "t/mix/work.md": "x\n" })
+  repo.commit("2026-09-25T12:00:00Z", { "t/gap/work.md": "x\n", "t/mix/more.md": "x\n" })
+  // Session 1's receipt predates own_activity; session 2's records its own activity (08:00 to 08:10).
+  await addSession(context, 1, "t", "host", { receipt: 4 })
+  await addSession(context, 2, "t", "host2", { boundBy: "focus", ownActivity: [[0, 600000]] })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(mismatchOf(result, "old").map(({ reason, detail }) => ({ reason, detail })), [{ reason: "receipt_too_old", detail: "own_activity_not_recorded_1" }])
+  assert.deepEqual(reasonsOf(result, "gap"), ["not_bound"], "no session overlaps it, so none could have owned it")
+  assert.deepEqual(reasonsOf(result, "mix"), ["not_bound", "receipt_too_old"], "each commit gets the reason that is true of it")
+  assert.deepEqual(reasonsOf(result, "men"), [], "a recorded owner bound elsewhere mentions it, whatever an old receipt says")
+  assert.deepEqual(result.counts.mentioned, { total: 1, recorded: 1, not_recorded: 1 })
+}))
+
+test("with no receipt recording own_activity, mentioned is not recorded, never 0", () => scratch(async (context) => {
+  const { desk, env } = context
+  const repo = await standardDesk(desk, ["a", "b"].map((slug) => ["t", slug]))
+  repo.commit("2026-09-25T08:45:00Z", { "t/a/work.md": "x\n" })
+  await addSession(context, 1, "t", "b", { receipt: 4 })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(result.counts.mentioned, { total: "not_recorded", recorded: 0, not_recorded: 1 })
+  const quiet = reconcile({ deskRoot: desk, since: "2026-09-01T00:00:00.000Z", until: "2026-09-02T00:00:00.000Z", env })
+  assert.deepEqual(quiet.counts.mentioned, { total: "not_recorded", recorded: 0, not_recorded: 0 }, "no session to say is not a measured zero")
+}))
+
+test("active_ms is the number the pipeline would publish: an interval outside the session is dropped, a job with no card time says not recorded, and a shared session splits by segments", () => scratch(async (context) => {
+  const { desk, env } = context
+  await standardDesk(desk, ["skew", "nocard", "far", "one", "two"].map((slug) => ["t", slug]))
+  await addSession(context, 1, "t", "skew", { span: { started_at: "2026-09-25T07:00:00.000Z" } })
+  await addSession(context, 2, "t", "nocard", { created: null })
+  await addSession(context, 4, "t", "far", { created: "2010-01-01T00:00:00.000Z" })
+  // One session, two jobs: worker 0's time is split at five minutes, and the subagent interval (08:10:05, agent 0) falls in the second.
+  await addSession(context, 3, "t", "one", { agents: [0], segments: [{ start_ms: 0, end_ms: 300000 }], alsoJobs: [{ slug: "two", agents: [0], segments: [{ start_ms: 600000, end_ms: 1200000 }] }] })
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "outbox", "ourostack__factory", `${sessionName(1)}.json`)
+  const facts = JSON.parse(readFileSync(file, "utf8"))
+  // Skewed intervals: one before the session started, one after it was derived through. The pipeline drops both.
+  facts.intervals.push({ kind: "turn", agent: 0, start: "2026-09-25T06:00:00.000Z", end: "2026-09-25T06:30:00.000Z" }, { kind: "turn", agent: 0, start: "2026-09-25T09:29:00.000Z", end: "2026-09-25T09:45:00.000Z" })
+  writeFileSync(file, JSON.stringify(facts))
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  const active = (slug) => result.tasks.find((task) => task.slug === slug).story.map((entry) => entry.active_ms)
+  assert.deepEqual(active("skew"), [844000], "a legacy job with no segments keeps every interval inside the session and drops the skewed ones")
+  assert.deepEqual(active("nocard"), ["not_recorded"], "the pipeline publishes nothing for a job whose card has no creation time")
+  assert.deepEqual(active("far"), ["not_recorded"], "a card created more than ten years before the session has no published offset either")
+  assert.deepEqual(active("one"), [249000])
+  assert.deepEqual(active("two"), [595000])
+}))
+
+test("status_unobserved says not_checked with no store, and counts what it found with one", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const repo = await standardDesk(desk, [["t", "a"]])
+  repo.commit("2026-09-25T10:00:00Z", { "t/a/work.md": "x\n" })
+  assert.equal(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).counts.status_unobserved, "not_checked")
+  assert.equal(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: path.join(base, "nostore"), env }).counts.status_unobserved, 0)
+}))
+
+test("a Desk-Tidy trailer is read as git reads trailers: any case, and only in the last paragraph on its own", () => scratch(async ({ desk, env }) => {
+  const repo = await standardDesk(desk, ["upper", "prose", "later"].map((slug) => ["t", slug]))
+  repo.commit("2026-09-25T10:00:00Z", { "t/upper/doc.md": "x\n" }, "cleanup\n\ndesk-tidy: TRUE")
+  repo.commit("2026-09-25T11:00:00Z", { "t/prose/doc.md": "x\n" }, "cleanup\n\nDesk-Tidy: true is how a tidy is marked")
+  repo.commit("2026-09-25T12:00:00Z", { "t/later/doc.md": "x\n" }, "cleanup\n\nDesk-Tidy: true\n\nand then some prose")
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(result.housekeeping_cards.map((card) => card.slug), ["upper"])
+  assert.deepEqual(result.tasks.map((task) => task.slug), ["later", "prose"])
 }))
 
 test("every reason in the fixed vocabulary was reached by a test above", () => {
