@@ -529,8 +529,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     const values = [...text.matchAll(/\b(?:CommandLine|FileName)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s;}]+))/giu)].map((match) => match[1] ?? match[2] ?? match[3])
     if (values.length === 0) values.push(text)
     return values.some((value) => {
-      const program = /^\s*(?:"([^"]*)"|'([^']*)'|(\S+))/u.exec(value)
-      const word = program?.[1] ?? program?.[2] ?? program?.[3] ?? ""
+      const program = /^\s*(?:"([^"]*)"|'([^']*)'|(\S*))/u.exec(value)
+      const word = program[1] ?? program[2] ?? program[3]
       // A path cut at a space (`C:\Program Files\Git\bin\git.exe`) or a word not written out could still be Git.
       if (/[$(`]/u.test(word) || word.includes(UNKNOWN) || word === "" || (/[\\/]/u.test(word) && !/\.(?:exe|com|bat|cmd|ps1)$/iu.test(word))) return true
       return /^(?:git|cmd|powershell|pwsh|bash|sh|zsh|wsl|env|start|call|cscript|wscript|node|python3?|ruby|perl|xargs|sudo|nohup|conhost|wt|cmdkey)(?:\.exe)?$/iu.test(word.split(/[\\/]/u).at(-1))
