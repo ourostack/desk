@@ -46,7 +46,7 @@ const runFile = (file) => new Promise((resolve) => {
       file: path.relative(testsRoot, file).split(path.sep).join("/"),
       exitCode: code, timedOut, ms: Date.now() - started,
       pass: count("pass"), fail: count("fail"), skipped: count("skipped"), failedTests: [...new Set(failed)],
-      tail: code === 0 ? "" : output.slice(-1500),
+      firstFailures: code === 0 ? "" : [...output.matchAll(/^\s*not ok \d+ - [\s\S]*?(?=^\s*(?:# Subtest|ok \d+|not ok \d+|1\.\.))/gm)].slice(0, 3).map((m) => m[0].slice(0, 1500)).join("\n----\n") || output.slice(-1500),
     })
   })
 })

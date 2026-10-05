@@ -31,11 +31,12 @@ git config --system --add safe.directory '*'
 
 $nodeDir = Split-Path (Get-Command node).Source
 $gitDir = Split-Path (Get-Command git).Source
-$profileDir = "C:\Users\$userName"
+# The same machine-wide PATH a person gets (PowerShell 7, Git, Python and so on), plus the runner's Node and Git.
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $wrapper = Join-Path $LogDir 'run.cmd'
 @"
 @echo off
-set "PATH=$nodeDir;$gitDir;%SystemRoot%\system32;%SystemRoot%;%SystemRoot%\System32\WindowsPowerShell\v1.0"
+set "PATH=$nodeDir;$gitDir;$machinePath"
 set "TEMP=$tmp"
 set "TMP=$tmp"
 set "CI=true"
