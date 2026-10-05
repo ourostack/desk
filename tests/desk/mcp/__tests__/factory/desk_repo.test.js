@@ -630,19 +630,19 @@ after(() => {
 
 test("readTask reads status, created and updated from a live card's frontmatter, unquoting values", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(readTask("track", "live-task"), { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" })
+  assert.deepEqual(readTask("track", "live-task"), { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z", repos: [] })
 })
 
 test("readTask falls back to the _archive card, drops trailing comments and normalizes offsets to UTC", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
   // The working tree's current content, after the later housekeeping-only edit to `updated:`.
-  assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-05T10:30:00.000Z" })
+  assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-05T10:30:00.000Z", repos: [] })
 })
 
 test("readTask finds a card under a whole archived track, and one archived a second time within that archived track", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(readTask("birth-whole-track", "task-w"), { status: "drafting", created_at: null, updated_at: null })
-  assert.deepEqual(readTask("birth-doubly-archived", "task-d"), { status: "drafting", created_at: null, updated_at: null })
+  assert.deepEqual(readTask("birth-whole-track", "task-w"), { status: "drafting", created_at: null, updated_at: null, repos: [] })
+  assert.deepEqual(readTask("birth-doubly-archived", "task-d"), { status: "drafting", created_at: null, updated_at: null, repos: [] })
 })
 
 test("readTask returns null when no card exists, live or archived, or when the names are unsafe", () => {
@@ -653,15 +653,14 @@ test("readTask returns null when no card exists, live or archived, or when the n
   }
 })
 
-test("readTask gives nulls for fields it cannot read: no frontmatter, invalid values, unterminated, past 40 lines, or a folder", () => {
+test("readTask gives nulls for fields it cannot read: no frontmatter, invalid values, unterminated, or a folder", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
-  const empty = { status: null, created_at: null, updated_at: null }
+  const empty = { status: null, created_at: null, updated_at: null, repos: [] }
   assert.deepEqual(readTask("track", "no-frontmatter"), empty)
   assert.deepEqual(readTask("track", "bad-values"), empty)
   assert.deepEqual(readTask("track", "unterminated"), empty)
-  assert.deepEqual(readTask("track", "late-frontmatter"), empty)
   assert.deepEqual(readTask("track", "dir-card"), empty)
-  assert.deepEqual(readTask("track", "indented"), { status: "validating", created_at: null, updated_at: null })
+  assert.deepEqual(readTask("track", "indented"), { status: "validating", created_at: null, updated_at: null, repos: [] })
 })
 
 test("readTask treats a card it may not open as unreadable, and a track that is a file as no card", () => {
@@ -670,7 +669,7 @@ test("readTask treats a card it may not open as unreadable, and a track that is 
   write("file-track", "not a folder\n")
   chmodSync(path.join(desk, "track/locked/task.md"), 0o000)
   try {
-    assert.deepEqual(readTask("track", "locked"), { status: null, created_at: null, updated_at: null })
+    assert.deepEqual(readTask("track", "locked"), { status: null, created_at: null, updated_at: null, repos: [] })
     assert.equal(readTask("file-track", "x"), null)
   } finally {
     chmodSync(path.join(desk, "track/locked/task.md"), 0o644)
@@ -679,10 +678,148 @@ test("readTask treats a card it may not open as unreadable, and a track that is 
 
 test("readTask reads under the person prefix when one is given", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk, personPrefix: "desks/ari" })
-  assert.deepEqual(readTask("track", "person-task"), { status: "collaborating", created_at: "2026-09-21T00:00:00.000Z", updated_at: null })
+  assert.deepEqual(readTask("track", "person-task"), { status: "collaborating", created_at: "2026-09-21T00:00:00.000Z", updated_at: null, repos: [] })
   assert.equal(readTask("track", "live-task"), null)
   assert.throws(() => createDeskReaders({ deskRoot: desk, personPrefix: "people/ari" }), TypeError)
   assert.throws(() => createDeskReaders({ deskRoot: "relative" }), TypeError)
+})
+
+test("readTask reads the whole frontmatter block, so a field after line 40 still counts", () => {
+  const { readTask } = createDeskReaders({ deskRoot: desk })
+  assert.deepEqual(readTask("track", "late-frontmatter"), { status: "done", created_at: null, updated_at: null, repos: [] })
+  write("track/late-repos/task.md", `---\nstatus: done\n${"x: y\n".repeat(45)}repos:\n  - name: ourostack/desk\n---\n`)
+  assert.deepEqual(readTask("track", "late-repos").repos, ["ourostack/desk"])
+})
+
+const reposOf = (name, lines) => {
+  write(`track/${name}/task.md`, card(["status: done", ...lines]))
+  return createDeskReaders({ deskRoot: desk }).readTask("track", name).repos
+}
+
+test("readTask returns repos from a flow list and a block list of names", () => {
+  assert.deepEqual(reposOf("repos-flow", ["repos: [ourostack/desk, spoonjoy/spoonjoy-v2]"]), ["ourostack/desk", "spoonjoy/spoonjoy-v2"])
+  assert.deepEqual(reposOf("repos-block", ["repos:", "  - ourostack/desk", "  - spoonjoy/spoonjoy-v2", "title: after"]), ["ourostack/desk", "spoonjoy/spoonjoy-v2"])
+  assert.deepEqual(reposOf("repos-block-flush", ["repos:", "- ourostack/desk", "status: done"]), ["ourostack/desk"])
+})
+
+test("readTask returns repos from object entries and never a path, mode or other field", () => {
+  const repos = reposOf("repos-objects", [
+    "repos:",
+    "  - name: ourostack/teamscrawl",
+    "    mode: local",
+    "    local_path: '~/code/teamscrawl'",
+    "  - name: desk",
+    "    url: https://github.com/ourostack/desk",
+    "    mode: remote",
+    "  - name: ssh-form",
+    "    url: git@github.com:ourostack/ouro-work-substrate.git",
+    "  - name: plain",
+    "    url: https://example.com/not/github",
+    "  - name: bare-no-url",
+    "    local_path: /Users/someone/code/bare-no-url",
+    "    branches:",
+    "      - feature/x",
+    "    name: ignored-second-name",
+  ])
+  assert.deepEqual(repos, ["ourostack/teamscrawl", "ourostack/desk", "ourostack/ouro-work-substrate", "plain", "bare-no-url"])
+  assert.equal(JSON.stringify(repos).includes("/Users"), false)
+})
+
+test("readTask strips quotes from repos, skips empty or missing names, drops duplicates, and reads an empty or absent list as none", () => {
+  assert.deepEqual(reposOf("repos-quoted", ['repos: ["ourostack/desk", \'spoonjoy/spoonjoy-v2\', "ourostack/desk", "", {a: b}]']), ["ourostack/desk", "spoonjoy/spoonjoy-v2"])
+  assert.deepEqual(reposOf("repos-quoted-block", ["repos:", '  - "ourostack/desk" # note', "  - ''", "  - url: https://github.com/a/b", "    mode: remote", "  - name:"]), ["ourostack/desk"])
+  assert.deepEqual(reposOf("repos-empty", ["repos: []"]), [])
+  assert.deepEqual(reposOf("repos-scalar", ["repos: ourostack/desk"]), [])
+  assert.deepEqual(reposOf("repos-absent", []), [])
+  assert.deepEqual(reposOf("repos-blank", ["repos:"]), [])
+})
+
+// --- readTask follows renames ---------------------------------------------------------------
+
+function renameRepo(name) {
+  const repo = path.join(scratch, name)
+  mkdirSync(repo)
+  gitIn(repo, ["init", "-q", "-b", "main"])
+  return repo
+}
+const taskCard = (label) => fixtureCard(label, "processing")
+function moveIn(repo, from, to, at) {
+  mkdirSync(path.dirname(path.join(repo, to)), { recursive: true })
+  gitIn(repo, ["mv", from, to])
+  return commitIn(repo, at, `move ${from}`)
+}
+
+test("renamed task folder still found", () => {
+  const repo = renameRepo("rename-one")
+  writeIn(repo, "a/old/task.md", taskCard("rename-one"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/new", "2026-09-25T09:00:00Z")
+  const { readTask } = createDeskReaders({ deskRoot: repo })
+  assert.equal(readTask("a", "old").status, "processing")
+  assert.equal(readTask("b", "new").status, "processing")
+})
+
+test("a chain of two renames resolves, including into an archive and to a later reader after HEAD moves", () => {
+  const repo = renameRepo("rename-chain")
+  writeIn(repo, "a/old/task.md", taskCard("rename-chain"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/mid", "2026-09-25T09:00:00Z")
+  const { readTask } = createDeskReaders({ deskRoot: repo })
+  assert.equal(readTask("a", "old").status, "processing")
+  moveIn(repo, "b/mid", "c/new", "2026-09-25T10:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+  assert.equal(readTask("b", "mid").status, "processing")
+  moveIn(repo, "c/new", "c/_archive/new", "2026-09-25T11:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+  moveIn(repo, "c/_archive/new", "_archive/c/new", "2026-09-25T12:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+  moveIn(repo, "_archive/c/new", "_archive/c/_archive/new", "2026-09-25T13:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+})
+
+test("renames are read under the person prefix, and another person's or a non-card rename is ignored", () => {
+  const repo = renameRepo("rename-person")
+  writeIn(repo, "desks/ari/a/old/task.md", taskCard("rename-person-ari"))
+  writeIn(repo, "desks/bo/a/old/task.md", taskCard("rename-person-bo"))
+  writeIn(repo, "desks/ari/a/old/notes.md", "# Notes\n\nUnique notes for the person-prefix rename fixture.\n")
+  writeIn(repo, "a/old/deep/inner/task.md", taskCard("rename-person-deep"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "desks/ari/a/old", "desks/ari/b/new", "2026-09-25T09:00:00Z")
+  moveIn(repo, "desks/bo/a/old", "desks/bo/b/new", "2026-09-25T10:00:00Z")
+  moveIn(repo, "a/old/deep", "a/old/deeper", "2026-09-25T11:00:00Z")
+  const { readTask } = createDeskReaders({ deskRoot: repo, personPrefix: "desks/ari" })
+  assert.equal(readTask("a", "old").status, "processing")
+  assert.equal(createDeskReaders({ deskRoot: repo }).readTask("a", "old"), null)
+})
+
+test("a deleted, never-renamed folder returns null", () => {
+  const repo = renameRepo("rename-deleted")
+  writeIn(repo, "a/gone/task.md", taskCard("rename-deleted"))
+  writeIn(repo, "a/kept/task.md", taskCard("rename-deleted-kept"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/kept", "a/kept-renamed", "2026-09-25T09:00:00Z")
+  removeIn(repo, "a/gone/task.md")
+  commitIn(repo, "2026-09-25T10:00:00Z", "delete")
+  const { readTask } = createDeskReaders({ deskRoot: repo })
+  assert.equal(readTask("a", "gone"), null)
+  assert.equal(readTask("a", "kept").status, "processing")
+})
+
+test("a rename lookup in a desk that is not its own repository, has no commits, or whose Git fails gives null without throwing", () => {
+  const plain = path.join(scratch, "rename-plain")
+  mkdirSync(path.join(plain, "a/x"), { recursive: true })
+  assert.equal(createDeskReaders({ deskRoot: plain }).readTask("a", "old"), null)
+  const empty = renameRepo("rename-empty")
+  assert.equal(createDeskReaders({ deskRoot: empty }).readTask("a", "old"), null)
+  const repo = renameRepo("rename-gitfail")
+  writeIn(repo, "a/old/task.md", taskCard("rename-gitfail"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/new", "2026-09-25T09:00:00Z")
+  const wrapper = path.join(scratch, "git-no-log.sh")
+  writeFileSync(wrapper, '#!/bin/sh\nfor arg in "$@"; do [ "$arg" = "log" ] && exit 1; done\nexec git "$@"\n')
+  chmodSync(wrapper, 0o755)
+  assert.equal(createDeskReaders({ deskRoot: repo, git: wrapper }).readTask("a", "old"), null)
+  assert.equal(createDeskReaders({ deskRoot: repo, git: path.join(scratch, "no-such-git") }).readTask("a", "old"), null)
 })
 
 // --- deskCommitsBetween: the commits this clone made -------------------------------------

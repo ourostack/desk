@@ -5,12 +5,19 @@
 // task.md`, else `<track>/_archive/<slug>/task.md`, else, for a whole
 // archived track, `_archive/<track>/<slug>/task.md` or
 // `_archive/<track>/_archive/<slug>/task.md`, and returns `{ status,
-// created_at, updated_at }` from its frontmatter (the YAML between the first
-// two `---` lines, searched in the first 40 lines only), or `null` when none
+// created_at, updated_at, repos }` from its frontmatter (the YAML between the first
+// two `---` lines, anywhere within the first 16 KiB), or `null` when none
 // of the four exist. Only top-level `key: value` lines are read, quotes and
 // a trailing ` # comment` stripped. A status outside `ENUMS.jobStatus`, or a
 // time `normalizeTimestamp` refuses (a bare date, say), is `null`, never a
-// guess; an unreadable card gives all three `null`.
+// guess; an unreadable card gives all three `null` and no repos. `repos` is
+// the card's `repos:` list reduced to names (see `parseRepos`): `owner/name`
+// where the card or its GitHub `url` gives one, else the bare name, never a
+// path or any other field. When no card sits at the given `track/slug`, the
+// desk's Git rename history is asked once per `HEAD` (`git log --name-status
+// -M --diff-filter=R`, cached) where the task folder went, live or archived,
+// following chains; a deleted, never-renamed folder, a failed Git call and a
+// desk that is not its own repository all read as `null`.
 //
 // `deskCommitsBetween(startIso, endIso)` lists the commits this clone made
 // in the window: the reflog entries of `HEAD` and every local branch whose
@@ -124,7 +131,6 @@ import { checkPersonPrefix, isTaskSegment, relativeSegments, taskOfSegments } fr
 import { ENUMS, PATTERNS } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
 
-const FRONTMATTER_LINES = 40
 const READ_BYTES = 16 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
 
@@ -137,6 +143,9 @@ const DEFAULT_TIMEOUT_MS = 20_000
 const REPO_CHECK_CACHE = new Map()
 const BIRTH_PATH_CACHE = new Map()
 const REPO_HEAD_CACHE = new Map()
+// A desk root's real path -> `{ head, renames }`: the task-folder renames
+// found once for that `HEAD` (see `createDeskReaders`' `renamedKey`).
+const RENAME_CACHE = new Map()
 
 export function gitEnv() {
   const env = {}
@@ -185,30 +194,85 @@ function readHead(file) {
 
 function unquote(raw) {
   const value = raw.trim()
-  const quoted = /^(["'])(.*)\1$/u.exec(value)
+  const quoted = /^(["'])(.*)\1(?:\s+#.*)?$/u.exec(value)
   if (quoted) return quoted[2]
   return value.replace(/\s+#.*$/u, "").trim()
 }
 
-function frontmatterOf(text) {
-  const lines = text.split(/\r?\n/u).slice(0, FRONTMATTER_LINES)
-  const fields = {}
-  if (lines[0] !== "---") return fields
+function frontmatterLines(text) {
+  const lines = text.split(/\r?\n/u)
+  if (lines[0] !== "---") return []
   const end = lines.indexOf("---", 1)
-  if (end === -1) return fields
-  for (const line of lines.slice(1, end)) {
+  return end === -1 ? [] : lines.slice(1, end)
+}
+
+function frontmatterOf(lines) {
+  const fields = {}
+  for (const line of lines) {
     const match = /^([A-Za-z_][A-Za-z0-9_-]*):(.*)$/u.exec(line)
     if (match && !Object.hasOwn(fields, match[1])) fields[match[1]] = unquote(match[2])
   }
   return fields
 }
 
+const REPO_NAME = /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?$/u
+const OWNER_NAME = /^[^/]+\/[^/]+$/u
+const GITHUB_URL = /^(?:https?:\/\/(?:[^/@\s]+@)?|git@)github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/iu
+
+// One `repos:` entry (a name string, or the fields of an object entry) as the
+// name it stands for: `owner/name` when `name` is one, else the one parsed
+// from a GitHub `url`, else the bare name; null for no usable name. No other
+// field (`local_path`, `mode`) is ever read out.
+function repoName(entry) {
+  const name = entry.name ?? ""
+  if (!REPO_NAME.test(name)) return null
+  if (OWNER_NAME.test(name)) return name
+  const url = GITHUB_URL.exec(entry.url ?? "")
+  return url ? `${url[1]}/${url[2]}` : name
+}
+
+function flowRepoEntries(value) {
+  const inner = /^\[(.*)\]/u.exec(value)
+  if (!inner) return []
+  return inner[1].split(",").map((item) => ({ name: unquote(item) }))
+}
+
+function blockRepoEntries(lines) {
+  const entries = []
+  let itemIndent = null
+  for (const line of lines) {
+    if (/^[^\s-]/u.test(line)) break
+    const item = /^(\s*)-\s*(.*)$/u.exec(line)
+    if (item && (itemIndent === null || item[1].length <= itemIndent)) {
+      itemIndent = item[1].length
+      const field = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/u.exec(item[2])
+      entries.push(field ? { [field[1]]: unquote(field[2]) } : { name: unquote(item[2]) })
+      continue
+    }
+    const field = /^\s+([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/u.exec(line)
+    if (field && entries.length > 0 && !Object.hasOwn(entries.at(-1), field[1])) entries.at(-1)[field[1]] = unquote(field[2])
+  }
+  return entries
+}
+
+// The card's `repos:` list, block or flow form, strings or objects, as
+// distinct names in order.
+function parseRepos(lines) {
+  const at = lines.findIndex((line) => /^repos:/u.test(line))
+  if (at === -1) return []
+  const value = lines[at].slice("repos:".length).trim()
+  const entries = value === "" ? blockRepoEntries(lines.slice(at + 1)) : flowRepoEntries(value)
+  return [...new Set(entries.map(repoName).filter((name) => name !== null))]
+}
+
 function cardFields(text) {
-  const fields = frontmatterOf(text)
+  const lines = frontmatterLines(text)
+  const fields = frontmatterOf(lines)
   return {
     status: ENUMS.jobStatus.includes(fields.status) ? fields.status : null,
     created_at: normalizeTimestamp(fields.created),
     updated_at: normalizeTimestamp(fields.updated),
+    repos: parseRepos(lines),
   }
 }
 
@@ -643,6 +707,21 @@ function gitBirthPathSegments(options, relativePath, runFn) {
   return paths.length > 0 ? relativeSegments(paths[0]) : null
 }
 
+// The `track/slug` a `task.md` path names, in any of the four places a card
+// lives (see `findCard`), or null for any other path or another person's.
+function cardKeyOfPath(filePath, alias) {
+  let segments = relativeSegments(filePath)
+  if (alias !== null) {
+    if (segments[0] !== "desks" || segments[1] !== alias) return null
+    segments = segments.slice(2)
+  }
+  if (segments.at(-1) !== "task.md") return null
+  const folder = segments.slice(0, -1)
+  const archivedTrack = folder[0] === "_archive" ? folder.slice(1) : folder
+  const names = archivedTrack[1] === "_archive" ? [archivedTrack[0], archivedTrack[2]] : archivedTrack
+  return names.length === 2 && archivedTrack.length === (archivedTrack[1] === "_archive" ? 3 : 2) && names.every(isTaskSegment) ? names.join("/") : null
+}
+
 function isWindow(startIso, endIso) {
   return typeof startIso === "string" && typeof endIso === "string" && PATTERNS.timestamp.test(startIso) && PATTERNS.timestamp.test(endIso) && startIso <= endIso
 }
@@ -658,16 +737,55 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   const base = path.join(deskRoot, personPrefix)
   const options = { git, deskRoot, timeoutMs }
 
-  function readTask(track, slug) {
-    if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
-    const found = findCard(base, track, slug)
-    return found === null ? null : cardFields(found.text)
-  }
-
   let ownRepository
   const deskIsOwnRepository = () => {
     if (ownRepository === undefined) ownRepository = isOwnRepository(options)
     return ownRepository
+  }
+
+  // Every task-folder rename in the desk's history, oldest first, as
+  // `{ from, to }` task keys (`track/slug`, live or archived alike), read in
+  // one `git log` pass per `HEAD`. null on any Git failure.
+  const alias = checkPersonPrefix(personPrefix, "createDeskReaders")
+  function taskRenames() {
+    if (!deskIsOwnRepository()) return null
+    const head = runGit(options, ["rev-parse", "HEAD"])
+    if (head === null) return null
+    const root = path.resolve(deskRoot)
+    const cached = RENAME_CACHE.get(root)
+    if (cached !== undefined && cached.head === head.trim()) return cached.renames
+    const output = runGit(options, ["log", "--name-status", "-M", "--diff-filter=R", "-z", "--format="])
+    if (output === null) return null
+    const renames = []
+    for (const entry of parseNameStatus(output).reverse()) {
+      const from = cardKeyOfPath(entry.oldPath, alias)
+      const to = cardKeyOfPath(entry.path, alias)
+      if (from !== null && to !== null && from !== to) renames.push({ from, to })
+    }
+    RENAME_CACHE.set(root, { head: head.trim(), renames })
+    return renames
+  }
+
+  // Where `track/slug` is now, when its folder was renamed or moved: follows
+  // every rename in order, so a chain resolves, and gives the final task key.
+  function renamedKey(track, slug) {
+    const renames = taskRenames()
+    if (renames === null) return null
+    let key = `${track}/${slug}`
+    for (const rename of renames) {
+      if (rename.from === key) key = rename.to
+    }
+    return key === `${track}/${slug}` ? null : key.split("/")
+  }
+
+  function readTask(track, slug) {
+    if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
+    let found = findCard(base, track, slug)
+    if (found === null) {
+      const moved = renamedKey(track, slug)
+      if (moved !== null) found = findCard(base, moved[0], moved[1])
+    }
+    return found === null ? null : cardFields(found.text)
   }
 
   // Keyed by sha alone: this cache lives for exactly one `createDeskReaders`
