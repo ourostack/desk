@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
+import { UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 
 // ── task_update says how to report an unfinished task ───────────────────
@@ -325,4 +326,17 @@ test("report_as redacts credential-like text in the next step and cuts a long on
   assert.equal(long.report_as.includes("finish"), false)
   const unbroken = await task_update({ deskRoot: root, input: { track: "t", slug: "s", next_step: "x".repeat(500) } })
   assert.match(unbroken.report_as, /\(not done\): x{300} \.\.\. \(see card\)$/u)
+})
+
+// ── PR #135 review nit: the unmatched-name wording, read from a real boot ───────
+
+test("a name that matches no open task gets the report-every-task instruction from a real boot, in JSON field names and in plain text without them", async () => {
+  const root = await deskWithRepos("  - name: acme/relay\n    local_path: ~/code/relay\n    mode: local")
+  const result = await boot(root, "nothing-like-it")
+  assert.equal(result.task.status, "not_found")
+  assert.ok(result.instructions.includes(UNMATCHED_TASK_INSTRUCTION), result.instructions.join("\n"))
+  assert.ok(result.text_instructions.includes(UNMATCHED_TASK_INSTRUCTION_TEXT), result.text_instructions.join("\n"))
+  const text = formatBootText(result)
+  assert.match(text, /The name matches no open task: report every task under "Active tasks" above, each with its status and its next step or blocker, then ask what to resume or start\./u)
+  assert.doesNotMatch(text, /show the active_tasks status block/u)
 })

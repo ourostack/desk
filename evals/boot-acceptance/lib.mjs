@@ -310,6 +310,74 @@ export function addMissingCloneTask(deskRoot) {
 }
 
 // ---------------------------------------------------------------------------
+// The clone-guard scenario: a card that says the branch is only on another machine, and an offline stand-in for the fork the operator then says it pushed to.
+// ---------------------------------------------------------------------------
+
+/** The repository the `elsewhere-clone` card names, the branch the operator "pushed", and the URL the operator gives for it. */
+export const ELSEWHERE_CLONE = { slug: "relay-heartbeat-fork", repo: "ari-fixture/relay-config", branch: "relay-heartbeat-15s", url: "https://github.com/ari-fixture/relay-config.git" }
+
+const TASK_RELAY_HEARTBEAT_FORK = `---
+schema_version: 1
+title: "relay-heartbeat-fork"
+status: processing
+created: "2026-09-29T09:00:00Z"
+updated: "2026-09-30T09:00:00Z"
+track: lighthouse-relay
+repos:
+  - name: ${ELSEWHERE_CLONE.repo}
+    local_path: ""
+    mode: remote
+---
+
+## Current work
+
+The branch \`${ELSEWHERE_CLONE.branch}\` carries one commit that changes the relay heartbeat interval from 30s to 15s in \`relay/config.toml\`. It lives only on my other laptop and is not on this machine.
+
+**Next step:** push \`${ELSEWHERE_CLONE.branch}\` from my other laptop, then review the branch here.
+`
+
+/**
+ * The `elsewhere-clone` injection: adds a task whose next step says its branch is only on the operator's other laptop, commits it and pushes it to the run's own origin.
+ * The card names a repository nothing else in the fixture uses, so the guard's denial of a clone of it is unambiguous.
+ */
+export function addElsewhereCloneTask(deskRoot) {
+  const dir = path.join(deskRoot, "lighthouse-relay", ELSEWHERE_CLONE.slug)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(path.join(dir, "task.md"), TASK_RELAY_HEARTBEAT_FORK)
+  const trackFile = path.join(deskRoot, "lighthouse-relay", "track.md")
+  const track = readFileSync(trackFile, "utf8")
+  if (!track.includes(ELSEWHERE_CLONE.slug)) writeFileSync(trackFile, `${track.replace(/\n*$/u, "")}\n| \`${ELSEWHERE_CLONE.slug}\` | processing | ${ELSEWHERE_CLONE.repo} (remote) | - | - |\n`)
+  sh("git", ["-C", deskRoot, "add", "-A"])
+  sh("git", ["-C", deskRoot, "commit", "-q", "-m", `Add ${ELSEWHERE_CLONE.slug} task`])
+  sh("git", ["-C", deskRoot, "push", "-q", "origin", "main"])
+}
+
+/**
+ * Builds the offline stand-in for the fork the operator says it pushed to: a bare repository under `<runTmp>/fork-remotes` holding the one branch the card describes,
+ * made from a throwaway working copy. Returns the git-config stand-in (`writeGitConfig`'s `standIns`): reads of the fork's URL go to the bare repository.
+ * The folder is outside `<runTmp>/fixture`, so a clone of it is never taken for a clone of the fixture desk.
+ */
+export function materializeOfflineFork(runTmp) {
+  const bare = path.join(runTmp, "fork-remotes", "relay-config.git")
+  const work = path.join(runTmp, "fork-remotes", "work")
+  mkdirSync(path.join(work, "relay"), { recursive: true })
+  const git = (args, opts = {}) => sh("git", args, { cwd: work, ...opts })
+  writeFileSync(path.join(work, "relay", "config.toml"), "[relay]\nheartbeat_interval = \"30s\"\n")
+  git(["init", "-q", "-b", "main"])
+  for (const [key, value] of [["user.email", "operator@example.com"], ["user.name", "Desk Operator"], ["commit.gpgsign", "false"]]) git(["config", key, value])
+  git(["add", "-A"])
+  const dated = (date) => ({ env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } })
+  git(["commit", "-q", "-m", "Add the relay config"], dated("2026-09-20T09:00:00Z"))
+  git(["checkout", "-q", "-b", ELSEWHERE_CLONE.branch])
+  writeFileSync(path.join(work, "relay", "config.toml"), "[relay]\nheartbeat_interval = \"15s\"\n")
+  git(["commit", "-q", "-am", "Shorten the relay heartbeat to 15s"], dated("2026-09-30T08:00:00Z"))
+  sh("git", ["init", "-q", "--bare", "-b", "main", bare])
+  git(["push", "-q", bare, "main", ELSEWHERE_CLONE.branch])
+  rmSync(work, { recursive: true, force: true })
+  return { from: ELSEWHERE_CLONE.url.replace(/\.git$/u, ""), to: bare.replace(/\.git$/u, "") }
+}
+
+// ---------------------------------------------------------------------------
 // The in-progress task's local clone, on the isolated HOME.
 // ---------------------------------------------------------------------------
 
@@ -472,12 +540,26 @@ export function freshTempDir(prefix) {
   return mkdtempSync(path.join(os.tmpdir(), prefix))
 }
 
-/** The pids of processes (never this one) whose command line names `dir`: the agent's detached helpers, such as Desk's factory `derive --wait-quiet` worker, that outlive the session. */
-export function processesNaming(dir, { list = () => spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).stdout ?? "", self = process.pid } = {}) {
+/** Every spelling of a run folder a process could have been started with: as given without trailing slashes, resolved through symlinks, and with the macOS `/var` and `/private/var` (and `/tmp`, `/etc`) aliases swapped. */
+export function runFolderSpellings(dir) {
+  const given = String(dir).replace(/[\\/]+$/u, "")
+  const spellings = new Set([given])
+  try { spellings.add(realpathSync(given)) } catch { /* not on disk (any more): the given spelling is all there is */ }
+  for (const spelling of [...spellings]) {
+    spellings.add(spelling.replace(/^\/private(?=\/(?:var|tmp|etc)\b)/u, ""))
+    if (/^\/(?:var|tmp|etc)\b/u.test(spelling)) spellings.add(`/private${spelling}`)
+  }
+  return [...spellings]
+}
+
+/** The pids of processes (never this one) whose command line names `dir`: the agent's detached helpers, such as Desk's factory `derive --wait-quiet` worker, that outlive the session. Empty on Windows, which has no `ps`. */
+export function processesNaming(dir, { list = () => spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).stdout ?? "", self = process.pid, platform = process.platform } = {}) {
+  if (platform === "win32") return []
+  const named = new RegExp(`(?:${runFolderSpellings(dir).map((spelling) => spelling.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|")})(?:[/\\s]|$)`, "u")
   const found = []
   for (const line of list().split("\n")) {
     const match = /^\s*(\d+)\s+(.*)$/u.exec(line)
-    if (match && Number(match[1]) !== self && new RegExp(`${dir.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?:[/\\s]|$)`, "u").test(match[2])) found.push(Number(match[1]))
+    if (match && Number(match[1]) !== self && named.test(match[2])) found.push(Number(match[1]))
   }
   return found
 }

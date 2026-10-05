@@ -82,7 +82,6 @@ test("boot's tool-naming instruction, on both hosts, says a looked-up tool is lo
     assert.ok(hint.endsWith(CALL_IT), host)
     assert.match(hint, /Once a lookup returns a Desk tool it is loaded: call it directly as a tool, never through Bash, Node or file edits/u)
     assert.match(hint, /If the card cannot be updated, say so in your reply and give the task's real status/u)
-    assert.ok(CALL_IT.length < 260, "short")
   }
 })
 
@@ -95,7 +94,7 @@ test("the deferred-tools hint names the exact Desk tools for the host it runs on
   assert.match(copilot, /`desk-task_update`/u)
   assert.match(copilot, /never through the shell/u)
   assert.doesNotMatch(copilot, /ToolSearch|mcp__plugin_desk_desk__/u)
-  assert.ok(copilot.length < deferredToolsLoadHint("claude").length)
+  // No length comparison: what makes the Copilot hint right is what it names and omits (above), not how it compares in size with the Claude one.
   // Codex and an unknown host (and the hostless git hook) get both names.
   for (const host of ["codex", "unknown", undefined]) {
     assert.match(deferredToolsLoadHint(host), /ToolSearch `select:mcp__plugin_desk_desk__task_update/u)

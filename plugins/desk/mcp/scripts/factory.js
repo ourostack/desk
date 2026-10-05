@@ -80,7 +80,10 @@ export function parseOptions(argv) {
 
 const DERIVE_HARD_DEADLINE_MS = 360000
 
-export async function runDeriveCommand({ argv, env, deadlineMs = DERIVE_HARD_DEADLINE_MS, exit = process.exit }) {
+// The exit code `timeout(1)` uses, so a worker that hit its ceiling is told apart from one that finished (0).
+const DERIVE_DEADLINE_EXIT = 124
+
+export async function runDeriveCommand({ argv, env, deadlineMs = DERIVE_HARD_DEADLINE_MS, exit = process.exit, warn = console.error }) {
   const options = parseOptions(argv)
   if (options === null || !options.has("marker") || [...options.keys()].some((key) => !["marker", "wait-quiet"].includes(key))) {
     throw new Error("Usage: factory.js derive --marker <file> [--wait-quiet <milliseconds>]")
@@ -89,7 +92,10 @@ export async function runDeriveCommand({ argv, env, deadlineMs = DERIVE_HARD_DEA
   if (!/^\d{1,6}$/u.test(raw) || Number(raw) > 30000) throw new Error("factory.js derive: wait-quiet must be 0..30000")
   const { deriveFile } = await import("../src/factory/derive-run.js")
   // A hard ceiling on the detached worker's life: the quiet wait is capped at five minutes, and derivation after it gets one more minute. A worker still alive then is stuck, so it ends itself.
-  const ceiling = setTimeout(() => exit(0), deadlineMs)
+  const ceiling = setTimeout(() => {
+    warn(`factory.js derive: still running after ${Math.round(deadlineMs / 1000)}s; ending it (exit ${DERIVE_DEADLINE_EXIT}) so a hang is not mistaken for success`)
+    exit(DERIVE_DEADLINE_EXIT)
+  }, deadlineMs)
   ceiling.unref()
   try {
     return await deriveFile(env, options.get("marker"), { quietMs: Number(raw) })

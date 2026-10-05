@@ -11,7 +11,10 @@
 // desk and process here is a throwaway fixture; nothing reaches the real
 // HOME or the network -- `launchRepair` is the same test seam
 // `boot_checks_host_enforcement.test.js` already uses.
-import { test } from "node:test"
+import { test, after } from "node:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { strict as assert } from "node:assert"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
@@ -19,6 +22,14 @@ import { fileURLToPath } from "node:url"
 const require = createRequire(import.meta.url)
 const BOOT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/boot-checks.cjs", import.meta.url))
 const { runBootChecks } = require(BOOT)
+// Every call gets its own throwaway HOME, so the filing throttle's stamp files never land under the process HOME and a rerun within the hour is never "already queued".
+const tempHomes = []
+const isolatedEnv = () => {
+  const home = mkdtempSync(path.join(tmpdir(), "desk-error-skip-home-"))
+  tempHomes.push(home)
+  return { HOME: home, XDG_STATE_HOME: path.join(home, "state") }
+}
+after(() => { for (const home of tempHomes) rmSync(home, { recursive: true, force: true }) })
 const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
 
 test("a check that throws produces a Desk problem: <id> block, queues the detached filer, and never throws itself", async () => {
@@ -26,7 +37,7 @@ test("a check that throws produces a Desk problem: <id> block, queues the detach
   const line = await runBootChecks({
     ...quiet,
     host: "claude",
-    env: { HOME: "/nonexistent-boot-error-skip-home" },
+    env: isolatedEnv(),
     checks: [{ id: "probe", budgetMs: 50, run: async () => { throw new Error("probe blew up") } }],
     launchRepair: async (command, env) => { launched.push({ command, env }) },
   })
@@ -44,7 +55,7 @@ test("a check that throws produces a Desk problem: <id> block, queues the detach
 test("a check that throws a non-Error value still produces a block, with a stringified reason", async () => {
   const line = await runBootChecks({
     ...quiet,
-    env: {},
+    env: isolatedEnv(),
     checks: [{ id: "probe", budgetMs: 50, run: async () => { throw "not an Error object" } }],
   })
   assert.match(line, /Desk problem: probe — the check failed internally at startup/)
@@ -54,7 +65,7 @@ test("a check that throws a non-Error value still produces a block, with a strin
 test("a check that only overruns its own budget (boot_check_budget) is skipped with no Desk problem: block", async () => {
   const line = await runBootChecks({
     ...quiet,
-    env: {},
+    env: isolatedEnv(),
     checks: [{ id: "probe", budgetMs: 50, run: async () => { throw Object.assign(new Error("over budget"), { code: "boot_check_budget" }) } }],
   })
   assert.equal(line, "")
@@ -64,7 +75,7 @@ test("a check that only overruns its own budget (boot_check_budget) is skipped w
 test("a check that genuinely times out (never settles) is skipped with no Desk problem: block", async () => {
   const line = await runBootChecks({
     ...quiet,
-    env: {},
+    env: isolatedEnv(),
     checks: [{ id: "probe", budgetMs: 20, run: () => new Promise(() => {}) }],
   })
   assert.equal(line, "")
@@ -74,7 +85,7 @@ test("a check that genuinely times out (never settles) is skipped with no Desk p
 test("several checks that each throw produce a block per check, in order, alongside any well-behaved check's own line", async () => {
   const line = await runBootChecks({
     ...quiet,
-    env: {},
+    env: isolatedEnv(),
     checks: [
       { id: "first-probe", budgetMs: 50, run: async () => { throw new Error("first failure") } },
       { id: "quiet-check", budgetMs: 50, run: async () => ({ line: "fine" }) },
@@ -92,7 +103,7 @@ test("several checks that each throw produce a block per check, in order, alongs
 test("a repair that cannot start is swallowed, exactly like every other check's own repair: the block still reports 'filing in background'", async () => {
   const line = await runBootChecks({
     ...quiet,
-    env: {},
+    env: isolatedEnv(),
     checks: [{ id: "probe", budgetMs: 50, run: async () => { throw new Error("boom") } }],
     launchRepair: async () => { throw new Error("spawn unavailable") },
   })
@@ -111,7 +122,7 @@ test("a check's filer argv carries the fixed 'reason unavailable' placeholder, n
   const launched = []
   const line = await runBootChecks({
     ...quiet,
-    env: { HOME: "/nonexistent-boot-error-skip-home" },
+    env: isolatedEnv(),
     checks: [{ id: "probe", budgetMs: 50, run: async () => { throw new Error("/Users/someone/.ssh/id_rsa is unreadable") } }],
     launchRepair: async (command, env) => { launched.push({ command, env }) },
     loadArgvSafeReason: async () => { throw new Error("argv-safe-reason module missing") },
@@ -127,11 +138,20 @@ test("the failing check's own skip is still recorded in the protected status.jso
   const recorded = []
   await runBootChecks({
     ...quiet,
-    env: {},
+    env: isolatedEnv(),
     checks: [{ id: "probe", budgetMs: 50, run: async () => { throw new Error("boom") } }],
     record: async (env, skipped) => { recorded.push(skipped) },
   })
   assert.equal(recorded.length, 1)
   assert.equal(recorded[0][0].id, "probe")
   assert.equal(recorded[0][0].reason, "error")
+})
+
+test("the error-skip tests never write the filing throttle under the process HOME", async () => {
+  const before = process.env.HOME
+  const env = isolatedEnv()
+  await runBootChecks({ ...quiet, env, checks: [{ id: "probe-isolated", budgetMs: 50, run: async () => { throw new Error("boom") } }], launchRepair: async () => {} })
+  const { existsSync } = await import("node:fs")
+  assert.ok(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk")), "the throttle stamp lands under the test's own state dir")
+  assert.equal(process.env.HOME, before)
 })

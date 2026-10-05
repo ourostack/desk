@@ -263,7 +263,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 const asList = (value) => (Array.isArray(value) ? value : [])
@@ -619,6 +619,13 @@ function requiredText(value, field) {
 
 export async function task_update({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
+  // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
+  const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
+  if (unknown.length > 0) {
+    throw new Error(
+      `task_update: unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; nothing was changed. Accepted fields: ${TASK_UPDATE_FIELDS.map((key) => `\`${key}\``).join(", ")}. Other card fields go inside \`frontmatter\`.`,
+    )
+  }
   const { track, slug, body_append } = values
   if (
     !Object.hasOwn(values, "track") ||
@@ -628,7 +635,12 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   }
   // Checked before anything is read or written: a string spread into the
   // card would write one key per character.
-  const frontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
+  const givenFrontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
+  // Top-level `status` is an alias for `frontmatter.status`, the field an agent reaches for first.
+  if (values.status !== undefined && givenFrontmatter != null && Object.hasOwn(givenFrontmatter, "status") && givenFrontmatter.status !== values.status) {
+    throw new Error("task_update: `status` and `frontmatter.status` disagree; pass the status once, as `status`")
+  }
+  const frontmatter = values.status === undefined ? givenFrontmatter : { ...(givenFrontmatter ?? {}), status: values.status }
   const nextStep = values.next_step === undefined ? undefined : requiredText(values.next_step, "next_step")
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
@@ -639,7 +651,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   })
 
   if (frontmatter != null && Object.hasOwn(frontmatter, "status") && !LIFECYCLE_STATES.includes(frontmatter.status)) {
-    throw new Error(`task_update: ${invalidStatusMessage(frontmatter.status)} (set in \`frontmatter.status\`)`)
+    throw new Error(`task_update: ${invalidStatusMessage(frontmatter.status)} (set in \`status\` or \`frontmatter.status\`)`)
   }
 
   const filePath = await resolveWriteTarget({

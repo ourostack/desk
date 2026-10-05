@@ -117,7 +117,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_move: schema({
     ...TASK_TARGET,

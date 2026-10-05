@@ -236,6 +236,25 @@ test("processesNaming finds the other processes that name a run folder, and neve
   assert.ok(Array.isArray(processesNaming("/nonexistent-run-folder-xyz")))
 })
 
+test("processesNaming keeps run-1 apart from run-10, accepts a trailing slash and the /var and /private/var spellings, and finds nothing on Windows", async () => {
+  const { processesNaming, runFolderSpellings } = await import("./lib.mjs")
+  const list = () => [" 1 node /tmp/runs/run-1/home/a.js", " 2 node /tmp/runs/run-10/home/b.js", " 3 node /tmp/runs/run-1", " 4 node /tmp/runs/run-1x/c.js"].join("\n")
+  assert.deepEqual(processesNaming("/tmp/runs/run-1", { list, self: 0 }), [1, 3], "run-10 and run-1x are other runs")
+  assert.deepEqual(processesNaming("/tmp/runs/run-10", { list, self: 0 }), [2])
+  assert.deepEqual(processesNaming("/tmp/runs/run-1/", { list, self: 0 }), [1, 3], "a trailing slash names the same folder")
+  assert.deepEqual(processesNaming("/private/var/folders/x/T/run-a", { list: () => " 7 node /var/folders/x/T/run-a/home/x.js", self: 0 }), [7], "the /private spelling finds a process started through /var")
+  assert.deepEqual(processesNaming("/var/folders/x/T/run-a/", { list: () => " 8 node /private/var/folders/x/T/run-a/home/x.js", self: 0 }), [8], "and the other way round")
+  assert.deepEqual(processesNaming("/tmp/runs/run-1", { list, self: 0, platform: "win32" }), [])
+  assert.ok(runFolderSpellings("/var/a.b/").includes("/private/var/a.b"), "regex characters in a folder name stay literal")
+  assert.deepEqual(processesNaming("/var/a.b", { list: () => " 9 node /var/aXb/x.js", self: 0 }), [])
+  // A folder on disk is also matched by its resolved path.
+  const dir = mkdtempSync(path.join(tmpdir(), "boot-acceptance-spelling-"))
+  try {
+    const { realpathSync } = await import("node:fs")
+    assert.deepEqual(processesNaming(dir, { list: () => ` 5 node ${realpathSync(dir)}/home/x.js`, self: 0 }), [5])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test("reapRunProcesses kills what names the folder until nothing does, and tolerates a process that is already gone", async () => {
   const { reapRunProcesses } = await import("./lib.mjs")
   const rounds = [[1, 2], [2], []]
@@ -251,7 +270,7 @@ test("cleanupRunDir reaps the run's background processes before it removes the f
   assert.deepEqual(order, ["reap /run", "remove"])
 })
 
-test("cleanupRunDir kills a real background process that names the run folder, then removes it", async () => {
+test("cleanupRunDir kills a real background process that names the run folder, then removes it", { skip: process.platform === "win32" && "the reap uses ps and process groups, which Windows lacks" }, async () => {
   const { spawn } = await import("node:child_process")
   const { existsSync } = await import("node:fs")
   const dir = mkdtempSync(path.join(tmpdir(), "boot-acceptance-reap-"))

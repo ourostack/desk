@@ -650,3 +650,43 @@ test("task_update validates status only when the key is present", async () => {
   await task_update({ deskRoot: root, input: { track: "t", slug: "keep-status", frontmatter: { status: "processing" } } })
   assert.equal((await readFront(path.join(root, "t", "keep-status", "task.md"))).data.status, "processing")
 })
+
+// ---- boot-acceptance leftovers: an unknown top-level field is never dropped in silence ----
+
+test("task_update accepts a top-level `status` as an alias for `frontmatter.status`", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "alias-status", title: "T" } })
+  const filePath = path.join(root, "t", "alias-status", "task.md")
+  await task_update({ deskRoot: root, input: { track: "t", slug: "alias-status", status: "processing" } })
+  assert.equal((await readFront(filePath)).data.status, "processing")
+  // Merged with other frontmatter fields rather than replacing them.
+  await task_update({ deskRoot: root, input: { track: "t", slug: "alias-status", status: "validating", frontmatter: { category: "general" } } })
+  const front = (await readFront(filePath)).data
+  assert.equal(front.status, "validating")
+  assert.equal(front.category, "general")
+  // The same status in both places is fine; a different one is refused before the card is touched.
+  await task_update({ deskRoot: root, input: { track: "t", slug: "alias-status", status: "paused", frontmatter: { status: "paused" } } })
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-status", status: "blocked", frontmatter: { status: "paused" } } }), /`status` and `frontmatter.status` disagree/)
+  assert.equal((await readFront(filePath)).data.status, "paused")
+})
+
+test("task_update through the alias still refuses a bad status and still gates `done` on evidence", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "alias-gate", title: "T" } })
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-gate", status: "finished" } }), /set in `status` or `frontmatter.status`/)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-gate", status: "done" } }), /needs evidence/)
+  assert.notEqual((await readFront(path.join(root, "t", "alias-gate", "task.md"))).data.status, "done")
+})
+
+test("task_update refuses an unknown top-level field, naming it and the accepted fields, and changes nothing", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "unknown-field", title: "T" } })
+  const filePath = path.join(root, "t", "unknown-field", "task.md")
+  const before = await fs.readFile(filePath, "utf8")
+  await assert.rejects(
+    task_update({ deskRoot: root, input: { track: "t", slug: "unknown-field", status: "processing", owner: "me", priority: 1 } }),
+    (error) => /unknown fields `owner`, `priority`; nothing was changed/.test(error.message) && /Accepted fields: `track`, `slug`, `status`, `frontmatter`/.test(error.message) && !/`status`, `owner`/.test(error.message),
+  )
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "unknown-field", owner: "me" } }), /unknown field `owner`;/)
+  assert.equal(await fs.readFile(filePath, "utf8"), before)
+})

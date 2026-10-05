@@ -511,11 +511,15 @@ test("the derive command ends itself at its hard deadline and clears the timer w
   const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
   await fs.utimes(marker.log_path, new Date(), new Date())
   const exits = []
-  await runDeriveCommand({ argv: ["--marker", file, "--wait-quiet", "400"], env: ctx.env, deadlineMs: 20, exit: (code) => exits.push(code) })
-  assert.deepEqual(exits, [0])
-  await runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", "0"], env: ctx.env, deadlineMs: 150, exit: (code) => exits.push(code) })
+  const warnings = []
+  await runDeriveCommand({ argv: ["--marker", file, "--wait-quiet", "400"], env: ctx.env, deadlineMs: 20, exit: (code) => exits.push(code), warn: (message) => warnings.push(message) })
+  assert.deepEqual(exits, [124], "a worker that hits its ceiling exits 124, not 0, so a hang is not mistaken for success")
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /still running after 0s; ending it \(exit 124\)/u)
+  await runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", "0"], env: ctx.env, deadlineMs: 150, exit: (code) => exits.push(code), warn: (message) => warnings.push(message) })
   await new Promise((resolve) => setTimeout(resolve, 400))
-  assert.deepEqual(exits, [0], "a finished worker must not fire its deadline")
+  assert.deepEqual(exits, [124], "a finished worker must not fire its deadline")
+  assert.equal(warnings.length, 1)
 }))
 
 test("derive refuses a file that exists but is not a marker in the markers folder", () => scratch(async (ctx) => {

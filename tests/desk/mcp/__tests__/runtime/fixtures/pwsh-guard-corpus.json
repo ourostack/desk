@@ -1243,18 +1243,40 @@
   "known_gap": true
  },
  {
-  "group": "known gap",
+  "group": "bypass: process creation that is not the program itself (fixed)",
   "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='git checkout topic'}",
   "expect": "deny",
-  "why": "WMI process creation is not modeled",
-  "known_gap": true
+  "why": "WMI process creation whose own text names git"
  },
  {
-  "group": "known gap",
+  "group": "bypass: process creation that is not the program itself (fixed)",
+  "command": "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'git checkout topic'",
+  "expect": "deny",
+  "why": "the older WMI cmdlet, same"
+ },
+ {
+  "group": "bypass: process creation that is not the program itself (fixed)",
+  "command": "icim Win32_Process Create @{CommandLine='git stash'}",
+  "expect": "deny",
+  "why": "the alias form, same"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='hostname'}",
+  "expect": "allow",
+  "why": "WMI process creation that names no git is not stopped"
+ },
+ {
+  "group": "bypass: process creation that is not the program itself (fixed)",
   "command": "$p = New-Object System.Diagnostics.Process; $p.StartInfo.FileName = 'git'; $p.StartInfo.Arguments = 'checkout topic'; $p.Start()",
   "expect": "deny",
-  "why": "a Process object configured by assignment is not modeled",
-  "known_gap": true
+  "why": "a Process object configured by assignment: the FileName that names git is the program it starts"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "$p = New-Object System.Diagnostics.Process; $p.StartInfo.FileName = 'hostname'; $p.Start()",
+  "expect": "allow",
+  "why": "a Process object that starts a program other than git is not stopped"
  },
  {
   "group": "known gap",

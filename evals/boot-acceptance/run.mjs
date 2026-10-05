@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import * as process from "node:process"
 
-import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
+import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, addElsewhereCloneTask, materializeOfflineFork, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
 import { gateReport, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
 import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactSecrets, writeGitConfig } from "./safety.mjs"
@@ -297,6 +297,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   const { deskRoot } = materializeFixture(path.join(runTmp, "fixture"))
   if (scenario.inject === "break-origin") breakOriginForFailure(deskRoot)
   if (scenario.inject === "missing-clone") addMissingCloneTask(deskRoot)
+  if (scenario.inject === "elsewhere-clone") addElsewhereCloneTask(deskRoot)
 
   const homeDir = path.join(runTmp, "home")
   // `--outside-desk`: the session opens in an ordinary folder under the run's temp dir, with no `_meta`/`_archive` and no saved binding anywhere.
@@ -315,7 +316,9 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   // run-private git config (see safety.mjs). Nothing is inherited wholesale.
   const shimDir = path.join(runTmp, "shim")
   const ghLog = path.join(runTmp, "gh-denied.jsonl")
-  const gitConfig = writeGitConfig(homeDir)
+  // The `elsewhere-clone` scenario is the one exception to "a run reaches no real host": reads of its one fork URL go to a local bare repository (see `writeGitConfig`).
+  const standIns = scenario.inject === "elsewhere-clone" ? [materializeOfflineFork(runTmp)] : []
+  const gitConfig = writeGitConfig(homeDir, { standIns })
   const realGh = findRealGh(process.env.PATH, shimDir)
   let flags
   let env

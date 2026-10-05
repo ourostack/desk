@@ -633,3 +633,16 @@ test("a claim that the task itself is done blocks whatever status the reply stat
   // Work-level claims stay cleared by the status.
   for (const reply of ["The code is effectively done but the task is at validating.", "I'm done for now. Status: validating."]) assert.deepEqual(stop(validating(), reply), {}, reply)
 })
+
+// ---- boot-acceptance leftovers: the two edge cases accepted at #153 ----
+
+test("a done-gate edge case: 'Ran the tests, then it's done.' blocks, because a then-it's-done after a reported step closes the whole job", () => {
+  for (const reply of ["Ran the tests, then it's done.", "I ran the tests, then it is finished."]) assert.ok(blocks(stop(validating(), reply)), reply)
+  // Still not claims: addressed to the operator, a condition on them, or a work-level sentence with no "then".
+  for (const reply of ["Run the tests, then it's done.", "Once you run the tests, it's done.", "The tests pass and the code is effectively done, but the task is at validating."]) assert.deepEqual(stop(validating(), reply), {}, reply)
+})
+
+test("a done-gate edge case: 'If it helps, the task is done.' blocks, because a courtesy opener is no condition, while a real condition still is not a claim", () => {
+  for (const reply of ["If it helps, the task is done.", "In case that helps, the task is complete."]) assert.ok(blocks(stop(validating(), reply)), reply)
+  for (const reply of ["If it passes review, the task is done.", "If that merges, the task is done."]) assert.deepEqual(stop(validating(), reply), {}, reply)
+})
