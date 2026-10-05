@@ -725,6 +725,29 @@ test("readTask returns repos from object entries and never a path, mode or other
   assert.equal(JSON.stringify(repos).includes("/Users"), false)
 })
 
+test("readTask falls back to a GitHub url when the name is not a usable owner/name, and refuses dot segments", () => {
+  const repos = reposOf("repos-url-fallback", [
+    "repos:",
+    '  - name: "My Repo"',
+    "    url: https://github.com/ourostack/desk.git",
+    "  - name: ../x",
+    "    url: https://github.com/ourostack/ouro-work-substrate",
+    "  - name: ../x",
+    "  - name: ..",
+    "  - name: .",
+    "  - name: a/..",
+    "  - name: bad",
+    "    url: https://github.com/../x",
+    "  - name: My Repo",
+  ])
+  assert.deepEqual(repos, ["ourostack/desk", "ourostack/ouro-work-substrate", "bad"])
+})
+
+test("a trailing comment after a quoted value is dropped for status, created and updated too", () => {
+  write("track/quoted-comments/task.md", card(['status: "done" # finished', 'created: "2026-09-20T10:00:00Z" # born', "updated: '2026-09-25T09:00:00Z' # touched"]))
+  assert.deepEqual(createDeskReaders({ deskRoot: desk }).readTask("track", "quoted-comments"), { status: "done", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z", repos: [] })
+})
+
 test("readTask strips quotes from repos, skips empty or missing names, drops duplicates, and reads an empty or absent list as none", () => {
   assert.deepEqual(reposOf("repos-quoted", ['repos: ["ourostack/desk", \'spoonjoy/spoonjoy-v2\', "ourostack/desk", "", {a: b}]']), ["ourostack/desk", "spoonjoy/spoonjoy-v2"])
   assert.deepEqual(reposOf("repos-quoted-block", ["repos:", '  - "ourostack/desk" # note', "  - ''", "  - url: https://github.com/a/b", "    mode: remote", "  - name:"]), ["ourostack/desk"])
@@ -790,6 +813,39 @@ test("renames are read under the person prefix, and another person's or a non-ca
   const { readTask } = createDeskReaders({ deskRoot: repo, personPrefix: "desks/ari" })
   assert.equal(readTask("a", "old").status, "processing")
   assert.equal(createDeskReaders({ deskRoot: repo }).readTask("a", "old"), null)
+})
+
+test("two readers on one desk root and HEAD with different person prefixes each get their own renames", () => {
+  const repo = renameRepo("rename-two-prefixes")
+  writeIn(repo, "desks/ari/a/old/task.md", taskCard("two-prefixes-ari"))
+  writeIn(repo, "desks/bo/a/old/task.md", taskCard("two-prefixes-bo"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "desks/ari/a/old", "desks/ari/b/ari-new", "2026-09-25T09:00:00Z")
+  moveIn(repo, "desks/bo/a/old", "desks/bo/b/bo-new", "2026-09-25T10:00:00Z")
+  const ari = createDeskReaders({ deskRoot: repo, personPrefix: "desks/ari" })
+  const bo = createDeskReaders({ deskRoot: repo, personPrefix: "desks/bo" })
+  assert.equal(ari.readTask("a", "old").status, "processing")
+  assert.equal(bo.readTask("a", "old").status, "processing")
+})
+
+test("a card heavily edited in its rename commit is not followed, and reads null (the known limit of Git's rename detection)", () => {
+  const repo = renameRepo("rename-heavy")
+  writeIn(repo, "a/old/task.md", taskCard("rename-heavy-before"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  gitIn(repo, ["mv", "a/old", "b-new"])
+  writeIn(repo, "b-new/task.md", card(["status: done"], `# Completely different\n\n${"Entirely new text, nothing shared. ".repeat(20)}`))
+  commitIn(repo, "2026-09-25T09:00:00Z", "rename and rewrite")
+  assert.equal(createDeskReaders({ deskRoot: repo }).readTask("a", "old"), null)
+})
+
+test("resolveJobIdentity finds a renamed card, so it agrees with readTask on where it lives", () => {
+  const repo = renameRepo("rename-identity")
+  writeIn(repo, "a/old/task.md", taskCard("rename-identity"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/mid", "2026-09-25T09:00:00Z")
+  moveIn(repo, "b/mid", "c/new", "2026-09-25T10:00:00Z")
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "b", slug: "mid" }), { track: "a", slug: "old" })
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "c", slug: "new" }), { track: "a", slug: "old" })
 })
 
 test("a deleted, never-renamed folder returns null", () => {

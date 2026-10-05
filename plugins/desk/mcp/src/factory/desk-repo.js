@@ -143,8 +143,8 @@ const DEFAULT_TIMEOUT_MS = 20_000
 const REPO_CHECK_CACHE = new Map()
 const BIRTH_PATH_CACHE = new Map()
 const REPO_HEAD_CACHE = new Map()
-// A desk root's real path -> `{ head, renames }`: the task-folder renames
-// found once for that `HEAD` (see `createDeskReaders`' `renamedKey`).
+// A desk root and person alias -> `{ head, renames }`: the task-folder
+// renames found once for that `HEAD` (see `taskRenameLookup`).
 const RENAME_CACHE = new Map()
 
 export function gitEnv() {
@@ -215,20 +215,29 @@ function frontmatterOf(lines) {
   return fields
 }
 
-const REPO_NAME = /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?$/u
-const OWNER_NAME = /^[^/]+\/[^/]+$/u
+const NAME_SEGMENT = /^(?!\.+$)[A-Za-z0-9_.-]+$/u
 const GITHUB_URL = /^(?:https?:\/\/(?:[^/@\s]+@)?|git@)github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/iu
+
+// `owner/name` when the text is two safe segments (no empty, `.` or `..`).
+const ownerName = (text) => {
+  const parts = text.split("/")
+  return parts.length === 2 && parts.every((part) => NAME_SEGMENT.test(part)) ? text : null
+}
 
 // One `repos:` entry (a name string, or the fields of an object entry) as the
 // name it stands for: `owner/name` when `name` is one, else the one parsed
-// from a GitHub `url`, else the bare name; null for no usable name. No other
-// field (`local_path`, `mode`) is ever read out.
+// from a GitHub `url` (even for a name that is not itself a safe name), else
+// the bare name when it is a safe single segment; null otherwise, and for no
+// name. No other field (`local_path`, `mode`) is ever read out.
 function repoName(entry) {
   const name = entry.name ?? ""
-  if (!REPO_NAME.test(name)) return null
-  if (OWNER_NAME.test(name)) return name
+  if (name === "") return null
+  const own = ownerName(name)
+  if (own !== null) return own
   const url = GITHUB_URL.exec(entry.url ?? "")
-  return url ? `${url[1]}/${url[2]}` : name
+  const fromUrl = url === null ? null : ownerName(`${url[1]}/${url[2]}`)
+  if (fromUrl !== null) return fromUrl
+  return NAME_SEGMENT.test(name) ? name : null
 }
 
 function flowRepoEntries(value) {
@@ -282,18 +291,66 @@ function cardFields(text) {
 // `readTask` and job-identity resolution both look a card up, so they
 // always agree on where it lives; `finishedTasks` (`boot-check.js`) walks
 // the same four shapes on its own, since it must enumerate every track,
-// live and archived, rather than look one up.
-function findCard(base, track, slug) {
-  for (const folder of [
-    path.join(base, track, slug),
-    path.join(base, track, "_archive", slug),
-    path.join(base, "_archive", track, slug),
-    path.join(base, "_archive", track, "_archive", slug),
-  ]) {
-    const text = readHead(path.join(folder, "task.md"))
-    if (text !== null) return { folder, text }
+// live and archived, rather than look one up. When none of the four holds
+// the card, `renamedKey(track, slug)` (a `[track, slug]` or null; see
+// `taskRenameLookup`) says where Git history moved the task folder to, and
+// the same four places are searched under that name.
+function findCard(base, track, slug, renamedKey) {
+  const inFourPlaces = (t, s) => {
+    for (const folder of [
+      path.join(base, t, s),
+      path.join(base, t, "_archive", s),
+      path.join(base, "_archive", t, s),
+      path.join(base, "_archive", t, "_archive", s),
+    ]) {
+      const text = readHead(path.join(folder, "task.md"))
+      if (text !== null) return { folder, text }
+    }
+    return null
   }
-  return null
+  const found = inFourPlaces(track, slug)
+  if (found !== null) return found
+  const moved = renamedKey(track, slug)
+  return moved === null ? null : inFourPlaces(moved[0], moved[1])
+}
+
+// `(track, slug) -> [track, slug] | null`: where the task folder went, by
+// Git's own rename history (`git log --name-status -M --diff-filter=R`, one
+// pass per `HEAD`, cached per desk root and person alias, since the alias
+// decides which renames count). Follows chains in order, live or archived.
+// null for a never-renamed task, a desk that is not its own repository, and
+// any Git failure. `runFn(options, args)` is `runGit` or a deadline-aware
+// wrapper of it.
+function taskRenameLookup(options, alias, runFn) {
+  const root = path.resolve(options.deskRoot)
+  const cacheKey = `${root}\u0000${alias ?? ""}`
+  function renames() {
+    if (!isOwnRepository(options, runFn)) return null
+    const head = runFn(options, ["rev-parse", "HEAD"])
+    if (head === null) return null
+    const cached = RENAME_CACHE.get(cacheKey)
+    if (cached !== undefined && cached.head === head.trim()) return cached.renames
+    const output = runFn(options, ["log", "--name-status", "-M", "--diff-filter=R", "-z", "--format="])
+    if (output === null) return null
+    const found = []
+    for (const entry of parseNameStatus(output).reverse()) {
+      const from = cardKeyOfPath(entry.oldPath, alias)
+      const to = cardKeyOfPath(entry.path, alias)
+      if (from !== null && to !== null && from !== to) found.push({ from, to })
+    }
+    RENAME_CACHE.set(cacheKey, { head: head.trim(), renames: found })
+    return found
+  }
+  return (track, slug) => {
+    const list = renames()
+    if (list === null) return null
+    const start = `${track}/${slug}`
+    let key = start
+    for (const rename of list) {
+      if (rename.from === key) key = rename.to
+    }
+    return key === start ? null : key.split("/")
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -743,48 +800,12 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return ownRepository
   }
 
-  // Every task-folder rename in the desk's history, oldest first, as
-  // `{ from, to }` task keys (`track/slug`, live or archived alike), read in
-  // one `git log` pass per `HEAD`. null on any Git failure.
   const alias = checkPersonPrefix(personPrefix, "createDeskReaders")
-  function taskRenames() {
-    if (!deskIsOwnRepository()) return null
-    const head = runGit(options, ["rev-parse", "HEAD"])
-    if (head === null) return null
-    const root = path.resolve(deskRoot)
-    const cached = RENAME_CACHE.get(root)
-    if (cached !== undefined && cached.head === head.trim()) return cached.renames
-    const output = runGit(options, ["log", "--name-status", "-M", "--diff-filter=R", "-z", "--format="])
-    if (output === null) return null
-    const renames = []
-    for (const entry of parseNameStatus(output).reverse()) {
-      const from = cardKeyOfPath(entry.oldPath, alias)
-      const to = cardKeyOfPath(entry.path, alias)
-      if (from !== null && to !== null && from !== to) renames.push({ from, to })
-    }
-    RENAME_CACHE.set(root, { head: head.trim(), renames })
-    return renames
-  }
-
-  // Where `track/slug` is now, when its folder was renamed or moved: follows
-  // every rename in order, so a chain resolves, and gives the final task key.
-  function renamedKey(track, slug) {
-    const renames = taskRenames()
-    if (renames === null) return null
-    let key = `${track}/${slug}`
-    for (const rename of renames) {
-      if (rename.from === key) key = rename.to
-    }
-    return key === `${track}/${slug}` ? null : key.split("/")
-  }
+  const renamedKey = taskRenameLookup(options, alias, runGit)
 
   function readTask(track, slug) {
     if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
-    let found = findCard(base, track, slug)
-    if (found === null) {
-      const moved = renamedKey(track, slug)
-      if (moved !== null) found = findCard(base, moved[0], moved[1])
-    }
+    const found = findCard(base, track, slug, renamedKey)
     return found === null ? null : cardFields(found.text)
   }
 
@@ -890,9 +911,6 @@ export function resolveJobIdentity({
   const alias = checkPersonPrefix(personPrefix, "resolveJobIdentity")
   if (!isTaskSegment(track) || !isTaskSegment(slug)) return current
 
-  const found = findCard(path.join(deskRoot, personPrefix), track, slug)
-  if (found === null) return current
-
   const options = { git, deskRoot, timeoutMs, spawn }
   const root = path.resolve(deskRoot)
 
@@ -912,6 +930,9 @@ export function resolveJobIdentity({
     if (deadline !== null && clock() >= deadline) throw gitDeadline()
     return output
   }
+
+  const found = findCard(path.join(deskRoot, personPrefix), track, slug, taskRenameLookup(options, alias, run))
+  if (found === null) return current
 
   let ownRepo = REPO_CHECK_CACHE.get(root)
   if (ownRepo === undefined) {
