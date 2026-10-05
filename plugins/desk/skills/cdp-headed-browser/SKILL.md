@@ -21,7 +21,7 @@ Use a brokered headed context when:
 
 Keep the default isolated browser when it works. Desk ships it as the `desk-web` MCP server on every install: headless, with an in-memory profile, started from a copy of `@playwright/mcp` that Desk installs in its state folder and keeps on the `@latest` channel. It is always signed out, so a page that needs the operator's sign-in never works there. Broker setup has a persistent-context and provider cost that unauthenticated tasks do not need.
 
-The broker needs an overlay provider. Today only the MS Desk overlay supplies one (managed Edge); without a provider, `acquire` fails closed with `INVALID_PROVIDER_CONFIG`. On a personal install with no provider, reach a signed-in page by adding a separate workspace MCP server with `desk:add-workspace-mcp` that runs `@playwright/mcp@latest` with Playwright MCP's own options: `--extension` to attach to the operator's running browser through the Playwright MCP Bridge extension, or `--user-data-dir <dir>` or `--storage-state <file>` for a persistent or saved signed-in profile. Give it its own name, never `desk-web`.
+The broker needs an overlay provider. Today only the MS Desk overlay supplies one (managed Edge); without a provider, `acquire` fails closed (`INVALID_ARGUMENTS` with no `--config`, `INVALID_PROVIDER_CONFIG` when the config has no provider). On a personal install with no provider, reach a signed-in page by adding a separate workspace MCP server with `desk:add-workspace-mcp` that runs `@playwright/mcp@latest` with Playwright MCP's own options: `--extension` to attach to the operator's running browser through the Playwright MCP Bridge extension, or `--user-data-dir <dir>` or `--storage-state <file>` for a persistent or saved signed-in profile. Give it its own name, never `desk-web`.
 
 ## Required runtime inputs
 
@@ -34,6 +34,21 @@ The consuming overlay supplies:
 - A launcher that requests the intended alias or claim set.
 
 The released Desk package is the canonical plugin-relative source at `browser-context-broker/`. An ordinary Desk install does not place `browser-context-broker` on `PATH`. A host overlay that offers this optional capability owns a runtime installer: it copies or installs that plugin-relative package, installs production dependencies, and supplies the resulting executable path to its launcher as `BROWSER_CONTEXT_BROKER_BIN`.
+
+## Make the broker runnable on a fresh install
+
+The broker source ships inside Desk's plugin folder without its `ws` dependency, so running it in place fails with `ERR_MODULE_NOT_FOUND`. The plugin folder is the parent of `docs/` in the path on the `Desk RFC:` line printed at session start. Install a private runtime copy once, with no overlay:
+
+```bash
+DESK_PLUGIN_DIR="<plugin folder>"
+RUNTIME="${XDG_STATE_HOME:-$HOME/.local/state}/ouroboros-skills/desk/browser-context-broker"
+mkdir -p "$RUNTIME" && cp -R "$DESK_PLUGIN_DIR/browser-context-broker/." "$RUNTIME/"
+(cd "$RUNTIME" && npm ci --omit=dev --ignore-scripts)
+export BROWSER_CONTEXT_BROKER_BIN="$RUNTIME/bin/browser-context-broker.mjs"
+"$BROWSER_CONTEXT_BROKER_BIN" status --state-dir "$RUNTIME/state" --json
+```
+
+`status` answers `{"ok":true,...}` once the copy runs. Copy again after a Desk update. Without a provider, `acquire` still fails closed: it answers `INVALID_ARGUMENTS` when it is given no `--config`, and `INVALID_PROVIDER_CONFIG` when the config declares no `provider.command`, so on a personal install this makes the broker's own diagnostics reachable but not a signed-in browser; use the Playwright MCP options above for that.
 
 Aliases are convenience only. The broker expands them to claims and applies the same exact, conjunctive comparison. Missing evidence, zero matches, and ambiguous matches fail closed.
 

@@ -13,6 +13,8 @@ The host overlay owns the runtime contract:
 3. Run `npm ci --omit=dev --ignore-scripts` in that runtime package.
 4. Supply the exact installed executable path to its launcher as `BROWSER_CONTEXT_BROKER_BIN`.
 
+Without an overlay, the same copy and `npm ci --omit=dev --ignore-scripts` steps work by hand; `desk:cdp-headed-browser` lists the exact commands. The broker's `status` then runs, and `acquire` still needs a provider.
+
 The overlay also supplies the private provider, declarations, state directory, and readiness-file location. The generic Desk package does not claim those host-specific resources or mutate the operator's `PATH`.
 
 ## CDP transport bounds
