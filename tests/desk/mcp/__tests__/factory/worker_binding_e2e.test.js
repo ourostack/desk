@@ -1,7 +1,8 @@
 // One realistic multi-worker Claude session, run through the real functions:
 // derive -> bindSession with agents -> publish -> both validators -> build().
-// It pins what no single unit test can: that per-worker binding, PR crediting,
-// worker_split and worker_shared survive every hand-off up to the built store.
+// It pins what no single unit test can: that per-worker binding, PR crediting
+// and worker_split survive every hand-off up to the built store, and that no
+// worker and no controller moment is shared between two jobs.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -19,12 +20,13 @@ const { build } = await import(`${FACTORY}pipeline/build.js`)
 
 const SID = "2a3b4c5d-6e7f-4809-9a0b-1c2d3e4f5a6b"
 const REMOTE = "https://github.com/o/desk"
-const DT = "mcp__plugin_desk_desk__task_update"
+const FT = "mcp__plugin_desk_desk__task_focus"
 const at = (minute) => new Date(Date.UTC(2026, 8, 25, 8, 0, 0) + minute * 60000).toISOString()
 
-// Root worker 0 works on tasks A and B. Child 1 (brief line) is on A, and its own
-// child 4 (no line) inherits A. Child 2 (bulleted brief line) is on C. Child 3
-// has no line and its parent binds two jobs, so it stays unattributed. Every
+// Root worker 0 declares task A, then task B two minutes later. Child 1 (brief
+// line) is on A although it is spawned while the root works B, and its own
+// child 4 (no line) follows it into A. Child 2 (bulleted brief line) is on C.
+// Child 3 has no line, so it is in B, the root's job when it was spawned. Every
 // worker creates one PR, and the root transcript holds a `pr-link` for all of them.
 function writeSession(dir) {
   let mid = 0
@@ -41,8 +43,8 @@ function writeSession(dir) {
 
   const root = [
     prompt(0, "go"),
-    assistant(1, [use("d1", DT, { track: "t", slug: "task-a", status: "processing" })], "claude-opus-5-5"), result(2, "d1"),
-    assistant(3, [use("d2", DT, { track: "t", slug: "task-b", status: "processing" })], "claude-opus-5-5"), result(4, "d2"),
+    assistant(1, [use("d1", FT, { track: "t", slug: "task-a" })], "claude-opus-5-5"), result(2, "d1"),
+    assistant(3, [use("d2", FT, { track: "t", slug: "task-b" })], "claude-opus-5-5"), result(4, "d2"),
     ...created(5, "r1", 10),
     assistant(7, [use("s1", "Agent", { prompt: "Desk-Task: t/task-a\nbrief" })], "claude-opus-5-5"), result(40, "s1"),
     assistant(41, [use("s2", "Agent", { prompt: "Rules:\n- Desk-Task: t/task-c\nbrief" })], "claude-opus-5-5"), result(80, "s2"),
@@ -65,7 +67,7 @@ function writeSession(dir) {
   }
 }
 
-test("a multi-worker Claude session goes from transcript to built store with per-worker jobs, PRs, worker_split and worker_shared", async () => {
+test("a multi-worker Claude session goes from transcript to built store with every worker in one job, PRs, worker_split and no shared time", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-e2e-"))
   const store = mkdtempSync(path.join(os.tmpdir(), "desk-e2e-store-"))
   const out = path.join(mkdtempSync(path.join(os.tmpdir(), "desk-e2e-out-")), "built")
@@ -83,7 +85,7 @@ test("a multi-worker Claude session goes from transcript to built store with per
 
     const cards = Object.fromEntries(["task-a", "task-b", "task-c"].map((slug) => [`t/${slug}`, { status: "processing", created_at: at(-60), updated_at: at(0) }]))
     facts.jobs = bindSession({
-      events, agents: facts.agents, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
+      events, agents: facts.agents, session: facts.session, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
       readTask: (track, slug) => cards[`${track}/${slug}`] ?? null,
       deskCommitsBetween: () => [], gitCommitTaskPaths: () => ({ exists: false }), isCardHousekeeping: () => false,
       resolveJobIdentity: (track, slug) => ({ track, slug }),
@@ -94,12 +96,17 @@ test("a multi-worker Claude session goes from transcript to built store with per
     const B = id("task-b")
     const C = id("task-c")
     const agentsOf = (jobs) => Object.fromEntries(jobs.map((job) => [job.job, job.agents]))
-    assert.deepEqual(agentsOf(facts.jobs), { [A]: [0, 1, 4], [B]: [0], [C]: [2] })
-    const basisOf = (job) => facts.jobs.find((entry) => entry.job === job).basis
-    assert.deepEqual(basisOf(A), ["desk_tool", "spawn_brief", "inherited"])
-    assert.deepEqual(basisOf(C), ["spawn_brief"])
-    // Worker 3 has no brief line and its parent binds two jobs: it is in no job.
-    assert.equal(facts.jobs.some((job) => job.agents.includes(3)), false)
+    assert.deepEqual(agentsOf(facts.jobs), { [A]: [0, 1, 4], [B]: [0, 3], [C]: [2] })
+    const jobOf = (job) => facts.jobs.find((entry) => entry.job === job)
+    assert.deepEqual(jobOf(A).basis, ["desk_tool", "spawn_brief", "inherited"])
+    assert.deepEqual(jobOf(B).basis, ["desk_tool", "inherited"])
+    assert.deepEqual(jobOf(C).basis, ["spawn_brief"])
+    // The root's 116 minutes are cut at the second declaration; the job only a subagent holds has no segments.
+    assert.deepEqual(jobOf(A).segments, [{ start_ms: 0, end_ms: 3 * 60000 }])
+    assert.deepEqual(jobOf(B).segments, [{ start_ms: 3 * 60000, end_ms: 116 * 60000 }])
+    assert.equal(Object.hasOwn(jobOf(C), "segments"), false)
+    // Every worker is in exactly one job.
+    assert.deepEqual(facts.jobs.flatMap((job) => job.agents).sort(), [0, 0, 1, 2, 3, 4])
 
     assert.equal(validateLocalFacts(facts).ok, true, JSON.stringify(validateLocalFacts(facts).errors))
     const { published } = toPublished(facts, { visibility: () => "public", deskVisibility: "private", storeVisibility: "private" })
@@ -116,34 +123,33 @@ test("a multi-worker Claude session goes from transcript to built store with per
     const built = (job) => JSON.parse(readFileSync(path.join(out, "jobs", `${job}.json`), "utf8")).formulas
     const numbers = (formulas) => formulas.references.value.public_pull_requests.map((pr) => pr.number)
 
-    // PR credit follows the creating worker, and a PR whose worker several jobs share goes to none of
-    // them. The root is in A and B, so its PR 10 is credited to neither. A holds children 1 and 4 alone,
-    // so it gets PRs 11 and 14. C holds only child 2, so it gets PR 12. PR 13 belongs to worker 3, who is in no job.
+    // PR credit follows the creating worker, and the root's PR follows its time: PR 10 was created at minute 6,
+    // inside B's segment. A holds children 1 and 4, so it gets PRs 11 and 14. B also holds child 3 and its PR 13.
+    // C holds only child 2, so it gets PR 12.
     assert.deepEqual(numbers(built(A)), [11, 14])
-    assert.deepEqual(numbers(built(B)), [])
+    assert.deepEqual(numbers(built(B)), [10, 13])
     assert.deepEqual(numbers(built(C)), [12])
-    // Each job's list leaves something out (PR 10 or PR 13) while the session binds other jobs, so all three are worker_shared.
+    // Every PR lands in exactly one job. The pipeline still marks each job's list partial, as it did before: the
+    // session binds other jobs and holds another worker's PR that is not this job's.
     for (const job of [A, B, C]) {
       assert.equal(built(job).references.partial, true, job)
       assert.deepEqual(built(job).references.partial_reasons, ["worker_shared"], job)
     }
 
-    // Every job holds a strict subset of the session's workers, so its tool measures are worker_split.
+    // Every job holds a strict subset of the session's workers or of the root's time, so its tool measures are worker_split.
     for (const job of [A, B, C]) {
       assert.deepEqual(built(job).tool_calls_by_kind.partial_reasons, ["worker_split"], job)
       assert.deepEqual(built(job).rework_signals.tool_failures.partial_reasons, ["worker_split"], job)
     }
-    // A owns the root (2 Desk calls, 1 shell, the 3 spawns it made), child 1 (1 shell, 1 spawn) and child 4 (1 shell).
-    assert.deepEqual(built(A).tool_calls_by_kind.value, { agent: 4, desk: 2, shell: 3 })
+    // A owns the root's first three minutes (one Desk call), child 1 (1 shell, 1 spawn) and child 4 (1 shell).
+    assert.deepEqual(built(A).tool_calls_by_kind.value, { agent: 1, desk: 1, shell: 2 })
+    // B owns the rest of the root's calls (one Desk call, 1 shell, the 3 spawns it made) and child 3 (1 shell).
+    assert.deepEqual(built(B).tool_calls_by_kind.value, { agent: 3, desk: 1, shell: 2 })
     assert.deepEqual(built(C).tool_calls_by_kind.value, { shell: 1 })
 
-    // A and B share the root, so their time is partial as worker_shared. C shares nothing.
-    for (const job of [A, B]) {
-      assert.equal(built(job).active_time_ms.partial, true, job)
-      assert.deepEqual(built(job).active_time_ms.partial_reasons, ["worker_shared"], job)
-    }
-    assert.equal(Object.hasOwn(built(C).active_time_ms, "partial"), false)
-    assert.ok(built(C).active_time_ms.value < built(A).active_time_ms.value)
+    // No worker and no moment of the root is in two jobs, so no job's time is partial.
+    for (const job of [A, B, C]) assert.equal(Object.hasOwn(built(job).active_time_ms, "partial"), false, job)
+    assert.ok(built(C).active_time_ms.value < built(B).active_time_ms.value)
   } finally {
     rmSync(dir, { recursive: true, force: true })
     rmSync(store, { recursive: true, force: true })

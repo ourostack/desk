@@ -612,6 +612,8 @@ const FAKE_DESK = `/tmp/${SENTINEL}/desk`
 function bindFixture(facts, events) {
   const { jobs } = bindSession({
     events,
+    agents: facts.agents,
+    session: facts.session,
     deskRoot: FAKE_DESK,
     deskRemote: `git@github.com:${SENTINEL}/desk.git`,
     personPrefix: "",

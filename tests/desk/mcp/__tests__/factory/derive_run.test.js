@@ -187,16 +187,33 @@ test("re-deriving a session that no longer binds a job removes it from the index
   assert.deepEqual(await readJobsIndex(ctx.env), {})
 }))
 
+// Appends tool calls to the session's transcript, one a minute from `START`, each with an ok result a second later.
+async function appendCalls(marker, calls) {
+  const lines = calls.flatMap(([name, input], index) => {
+    const at = (seconds) => new Date(Date.parse(START) + index * 60000 + seconds * 1000).toISOString()
+    return [
+      { type: "assistant", sessionId: ID, timestamp: at(60), message: { content: [{ type: "tool_use", id: `call-${index}`, name, input }] } },
+      { type: "user", sessionId: ID, timestamp: at(61), message: { content: [{ type: "tool_result", tool_use_id: `call-${index}`, content: "ok" }] } },
+    ]
+  })
+  await fs.appendFile(marker.log_path, lines.map((line) => JSON.stringify(line)).join("\n") + "\n")
+}
+
+async function writeCard(ctx, name) {
+  const card = path.join(ctx.desk, name, "task.md")
+  await fs.mkdir(path.dirname(card), { recursive: true })
+  await fs.writeFile(card, `---\nstatus: done\ncreated: ${START}\nupdated: ${END}\n---\n${SENTINEL}\n`)
+}
+
 test("binding writes only hashed jobs and updates the finalize lookup", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
   const marker = await session(ctx)
-  const card = path.join(ctx.desk, "track/task/task.md")
-  await fs.mkdir(path.dirname(card), { recursive: true })
-  await fs.writeFile(card, `---\nstatus: done\ncreated: ${START}\nupdated: ${END}\n---\n${SENTINEL}\n`)
-  await fs.appendFile(marker.log_path, [
-    { type: "assistant", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_use", id: "call", name: "mcp__desk__task_update", input: { track: "track", slug: "task", frontmatter: { status: "done" } } }] } },
-    { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "call", content: "ok" }] } },
-  ].map((line) => JSON.stringify(line)).join("\n") + "\n")
+  await writeCard(ctx, "track/task")
+  // A status-only update is no evidence of work; the write beside it is.
+  await appendCalls(marker, [
+    ["mcp__desk__task_update", { track: "track", slug: "task", frontmatter: { status: "done" } }],
+    ["Write", { file_path: path.join(ctx.desk, "track/task/notes.md"), content: SENTINEL }],
+  ])
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
   const index = await readJobsIndex(ctx.env)
@@ -204,6 +221,53 @@ test("binding writes only hashed jobs and updates the finalize lookup", () => sc
   assert.match(Object.keys(index)[0], /^[0-9a-f]{32}$/u)
   assert.deepEqual(Object.values(index)[0], [`claude-code-${ID}.json`])
   assert.equal(JSON.stringify(await readStatus(ctx.env)).includes(SENTINEL), false)
+  const facts = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `claude-code-${ID}.json`), "utf8"))
+  assert.deepEqual(facts.jobs.map((job) => [job.transitions.map((entry) => entry.to), job.agents, job.segments.length]), [[["done"], [0], 1]])
+}))
+
+test("a status-only update alone binds no job", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await writeCard(ctx, "track/task")
+  await appendCalls(marker, [["mcp__desk__task_update", { track: "track", slug: "task", frontmatter: { status: "done" } }]])
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  assert.deepEqual(await readJobsIndex(ctx.env), {})
+  const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
+  assert.deepEqual([receipt.bound_by, receipt.focus_disagrees], [{}, []])
+  assert.equal(receipt.own_activity.length, 1, "the call is still the session's own activity")
+}))
+
+test("the receipt has binding_version: 5, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
+  const { deriveMarker, BINDING_VERSION } = await runner()
+  const marker = await session(ctx)
+  await writeCard(ctx, "track/task")
+  await writeCard(ctx, "track/other")
+  // Focus is declared on one task while an update and ten writes land on the other.
+  await appendCalls(marker, [
+    ["mcp__desk__task_focus", { track: "track", slug: "task" }],
+    ["mcp__desk__task_update", { track: "track", slug: "other", progress: SENTINEL }],
+    ...Array.from({ length: 10 }, (_, index) => ["Write", { file_path: path.join(ctx.desk, "track/other", `${index}.md`), content: SENTINEL }]),
+  ])
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const name = `claude-code-${ID}.json`
+  const status = await readStatus(ctx.env)
+  const receipt = status.derivations[name]
+  const [job] = Object.keys(await readJobsIndex(ctx.env))
+  assert.equal(BINDING_VERSION, 5)
+  assert.equal(receipt.binding_version, 5)
+  assert.deepEqual(receipt.bound_by, { [job]: "focus" })
+  assert.deepEqual(receipt.focus_disagrees, [job])
+  // The update at two minutes in, widened by a minute each way, in milliseconds from the session's start.
+  assert.deepEqual(receipt.own_activity, [[60000, 180000]])
+  assert.ok(receipt.own_activity.length <= 500)
+  assert.equal(receipt.desk_root, ctx.desk)
+  assert.equal(JSON.stringify(status).includes(SENTINEL), false)
+  // None of it reaches the facts.
+  const bytes = await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "utf8")
+  for (const key of ["bound_by", "own_activity", "focus_disagrees", "focusCalls"]) assert.equal(bytes.includes(key), false, key)
+  assert.equal(validateLocalFacts(JSON.parse(bytes)).ok, true)
 }))
 
 test("concurrent derivation serializes one session instead of overwriting fresher facts", () => scratch(async (ctx) => {
@@ -320,14 +384,14 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
 
 test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
-  assert.equal(BINDING_VERSION, 4)
+  assert.equal(BINDING_VERSION, 5)
   const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
   const name = `claude-code-${ID}.json`
   const receipt = (await readStatus(ctx.env)).derivations[name]
   assert.equal(receipt.binding_version, BINDING_VERSION)
-  for (const older of [undefined, 1, 2, 3]) {
+  for (const older of [undefined, 1, 2, 3, 4]) {
     const { binding_version, ...legacy } = receipt
     await writeStatus(ctx.env, { derivations: { [name]: older === undefined ? legacy : { ...legacy, binding_version: older } } })
     assert.equal((await deriveMarker(ctx.env, marker)).result, "written")

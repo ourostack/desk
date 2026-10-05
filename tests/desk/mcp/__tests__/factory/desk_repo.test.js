@@ -1411,9 +1411,11 @@ test("readDeskRemote reads origin's URL, and is null with no origin or no reposi
 
 // --- The real readers drive binding end to end ---------------------------------------------
 
-function bindWith(windows) {
+// Each call is `[start, end, ...paths]`: a `git commit` shell call in the desk and the desk-relative paths its `git add` or `git commit` named.
+function bindWith(calls, events = {}) {
   return bindSession({
-    events: { shellGitCommits: windows.map(([start, end]) => ({ start, end, cwd: desk })) },
+    events: { ...events, shellGitCommits: calls.map(([start, end, ...paths]) => ({ start, end, cwd: desk, paths: paths.map((named) => path.join(desk, named)) })) },
+    session: { started_at: "2026-09-25T08:00:00.000Z", derived_through: "2026-09-26T09:00:00.000Z" },
     deskRoot: desk,
     deskRemote: null,
     personPrefix: "",
@@ -1422,45 +1424,50 @@ function bindWith(windows) {
 }
 const idOf = (track, slug) => jobId({ deskRemote: `local:${realpathSync(desk)}`, personPrefix: "", track, slug })
 const id = (slug) => idOf("track", slug)
-const byJob = (a, b) => (a.job < b.job ? -1 : 1)
 
-test("end to end: a session's git commit call in the desk binds the tasks its own commit changed", () => {
-  // shas.second touches live-task/notes with space.md and old-task/notes.md
-  // (real work on each), and old-task/task.md too, but that card is a
-  // brand-new add here, not identity/placement, so it is real content and
-  // would bind old-task on its own regardless: see isCardHousekeeping.
-  const jobs = bindWith([["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]])
-  assert.deepEqual(jobs.map(({ job, basis, observed }) => ({ job, basis, observed })).sort(byJob), [
-    { job: id("live-task"), basis: ["desk_commit"], observed: { status: "processing", at: null } },
-    { job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-05T10:30:00.000Z" } },
-  ].sort(byJob))
+test("end to end: a session's git commit call binds the task whose path it names, live or archived", () => {
+  const window = ["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]
+  const live = bindWith([[...window, "track/live-task/notes with space.md"]])
+  assert.deepEqual(live.map(({ job, basis, observed }) => ({ job, basis, observed })), [{ job: id("live-task"), basis: ["desk_commit"], observed: { status: "processing", at: null } }])
+  const archived = bindWith([[...window, "track/_archive/old-task/notes.md"]])
+  assert.deepEqual(archived.map(({ job, basis, observed }) => ({ job, basis, observed })), [{ job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-05T10:30:00.000Z" } }])
+  // The task folder itself is a named path too.
+  assert.deepEqual(bindWith([[...window, "track/live-task"]]).map(({ job }) => job), [id("live-task")])
+  // Naming both in one call is one event on each, which makes neither a candidate.
+  assert.deepEqual(bindWith([[...window, "track/live-task/notes with space.md", "track/_archive/old-task/notes.md"]]), [])
 })
 
-test("end to end: a real-git commit whose only change to an archived card is housekeeping (only `updated:` differs) binds nothing", () => {
+test("end to end: a real-git commit from the session's own refs whose only change to an archived card is housekeeping (only `updated:` differs) binds nothing", () => {
   // Finding 2: shas.oldTaskHousekeeping only bumps old-task's card's
   // `updated:` field; the body and every other field stay the same, so
-  // isCardHousekeeping must call it housekeeping and this window binds no job.
-  const jobs = bindWith([["2026-09-25T08:49:59.000Z", "2026-09-25T08:50:00.500Z"]])
-  assert.deepEqual(jobs, [])
+  // isCardHousekeeping must call it housekeeping and this commit binds no job.
+  assert.deepEqual(bindWith([], { nativeCommitShas: [{ sha: shas.oldTaskHousekeeping, agent: 0 }] }), [])
+  // shas.second is real work on live-task and old-task: two tasks, one event each, so neither is a candidate.
+  assert.deepEqual(bindWith([], { nativeCommitShas: [{ sha: shas.second, agent: 0 }] }), [])
 })
 
-test("end to end, two clones: a session in this clone never binds the other clone's commit, fetched here during its call", () => {
+test("end to end: a commit that lands while the session's git commit call runs binds nothing unless the call named its task", () => {
   // The other clone committed track/fetched-task at 08:40:00 and this clone
   // fetched it at 08:45; a session here had a git commit call spanning both.
   assert.deepEqual(bindWith([["2026-09-25T08:39:59.000Z", "2026-09-25T08:45:05.000Z"]]), [])
+  // This clone's own commit to track/old-task and track/live-task at 08:20:01 is inside this window too.
+  assert.deepEqual(bindWith([["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]]), [])
 })
 
-test("end to end, same clone: two sessions whose git commit calls overlap one commit both bind it (the documented ambiguity)", () => {
-  const first = bindWith([["2026-09-25T09:29:58.000Z", "2026-09-25T09:30:01.000Z"]])
+test("end to end, same clone: of two sessions whose git commit calls overlap one commit, only the one that named the task's path binds it", () => {
+  const first = bindWith([["2026-09-25T09:29:58.000Z", "2026-09-25T09:30:01.000Z", "track/other-task/notes.md"]])
   const second = bindWith([["2026-09-25T09:29:59.500Z", "2026-09-25T09:30:03.000Z"]])
   assert.deepEqual(first.map(({ job }) => job), [id("other-task")])
-  assert.deepEqual(second.map(({ job }) => job), [id("other-task")])
+  assert.deepEqual(second, [])
 })
 
 test("end to end: a real rename's job ID, through the real Git readers and bindSession together, is the birth path's, not the current path's (ourostack/desk#76)", () => {
-  const jobs = bindWith([["2026-09-26T08:00:19.000Z", "2026-09-26T08:00:20.500Z"]])
+  const jobs = bindWith([["2026-09-26T08:00:19.000Z", "2026-09-26T08:00:20.500Z", "birth-rename/new-slug/notes.md"]])
   assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: idOf("birth-rename", "origin-slug"), basis: ["desk_commit"] }])
   assert.notEqual(jobs[0].job, idOf("birth-rename", "new-slug"), "not the current (post-rename) path's own ID")
+  // A session that touched the task under its old name, before the rename, is the same job.
+  const before = bindWith([["2026-09-26T08:00:00.000Z", "2026-09-26T08:00:01.000Z", "birth-rename/origin-slug/task.md"], ["2026-09-26T08:00:19.000Z", "2026-09-26T08:00:20.500Z", "birth-rename/new-slug/notes.md"]])
+  assert.deepEqual(before.map(({ job }) => job), [idOf("birth-rename", "origin-slug")])
 })
 
 test("readDeskRemote shares one deadline across its Git calls and throws on reaching it", () => {
