@@ -1565,6 +1565,19 @@ test("repoOfPath answers null for no repository, no remote, a remote with no own
   for (const bad of ["relative/path.js", "", null, undefined, 7]) assert.equal(repoOfPath(bad), null)
 }))
 
+test("directoryGone is true only for an absolute directory that no longer exists", () => withRepos(({ root, repo }) => {
+  const { directoryGone } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const plain = path.join(root, "plain")
+  mkdirSync(plain)
+  assert.equal(directoryGone(plain), false, "an existing folder in no repository is a true none")
+  assert.equal(directoryGone(path.join(repo("no-remote", null), "src")), true, "a folder that never existed there")
+  assert.equal(directoryGone(path.join(root, "vanished")), true)
+  const file = path.join(plain, "file.txt")
+  writeFileSync(file, "x")
+  assert.equal(directoryGone(file), true, "a file is not a directory that exists")
+  for (const unknown of ["relative/dir", "", null, undefined, 7]) assert.equal(directoryGone(unknown), false, "not a directory path, so nothing is known to be lost")
+}))
+
 test("repoOfPath answers null when Git fails or is missing", () => withRepos(({ root, repo }) => {
   const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
   const code = repo("code", "git@github.com:OurOStack/Desk.git")

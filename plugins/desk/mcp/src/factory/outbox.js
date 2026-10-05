@@ -760,6 +760,33 @@ const removeNames = (names) => (current) => Object.fromEntries(Object.entries(cu
 const ownNames = (names) => [...new Set(names)].filter((name) => typeof name === "string" && (OUTBOX_NAME_PATTERN.test(name) || LABELS_KEY_PATTERN.test(name)))
 
 /**
+ * `outboxCopies(env, host) -> { store, name }[]`: the facts files in every store's outbox for `host` (`<host>-<session_id>.json`), by store
+ * and name. A store folder is named from its store by `storeSlug`; one that does not read back to a valid store is skipped.
+ */
+export async function outboxCopies(env, host) {
+  const root = await factoryStateRoot(env)
+  const copies = []
+  for (const slug of await listDirSafe(path.join(root, "outbox"))) {
+    const store = slug.replace("__", "/")
+    if (!PATTERNS.prRepo.test(store) || storeSlug(store) !== slug) continue
+    for (const name of await listRegularFiles(path.join(root, "outbox", slug), OUTBOX_NAME_PATTERN)) if (name.startsWith(`${host}-`)) copies.push({ store, name })
+  }
+  return copies
+}
+
+/** `hasRetractionRecord(env, name) -> boolean`: whether any store has a retracting record or tombstone for facts file `name`, or keeps a retracted copy of it. */
+export async function hasRetractionRecord(env, name) {
+  const root = await factoryStateRoot(env)
+  for (const file of (await listDirSafe(path.join(root, "retracting"))).filter((entry) => /^[^.].*\.json$/u.test(entry))) {
+    if (Object.hasOwn(await readJsonFileSafe(path.join(root, "retracting", file), {}, process.platform), name)) return true
+  }
+  for (const slug of await listDirSafe(path.join(root, RETRACTED_COPIES))) {
+    if ((await listRegularFiles(path.join(root, RETRACTED_COPIES, slug), OUTBOX_NAME_PATTERN)).includes(name)) return true
+  }
+  return false
+}
+
+/**
  * `markRetracting(env, store, items)`: a session's delete has been pushed. Each `{ name, path, blob }` moves from delivered to retracting: the
  * retracting record is written first and the delivered records are dropped second, so a crash between the two leaves both, which the next flush
  * reads as retracting; the local files stay, so the session can publish again if it routes back.

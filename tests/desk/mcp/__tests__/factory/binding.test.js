@@ -29,7 +29,7 @@ const expectedId = (remote, prefix, track, slug) => createHash("sha256").update(
 
 const CARD = { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" }
 
-function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {}, repos = {} } = {}) {
+function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {}, repos = {}, gone = [] } = {}) {
   const calls = { readTask: [], between: [], native: [], housekeeping: [], resolveJobIdentity: [], repoOfPath: [] }
   return {
     calls,
@@ -47,6 +47,10 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeepi
       calls.repoOfPath.push(absPath)
       const root = Object.keys(repos).sort((a, b) => b.length - a.length).find((directory) => absPath === directory || absPath.startsWith(`${directory}/`))
       return root === undefined ? null : repos[root]
+    },
+    // `gone` lists directories (and everything below them) that no longer exist.
+    directoryGone(directory) {
+      return gone.some((prefix) => directory === prefix || directory.startsWith(`${prefix}/`))
     },
     gitCommitTaskPaths(sha) {
       calls.native.push(sha)
@@ -1001,7 +1005,7 @@ test("a repository listed by two cards that both have events counts for neither"
   assert.deepEqual(bind(events, { agents: tree(), repos: { [CODE]: "ourostack/desk" } }).jobs, [])
 })
 
-test("a path outside the desk that resolves to no repository binds nothing and is counted by directory", () => {
+test("a path outside the desk that resolves to no repository binds nothing, and only a directory that is gone is counted", () => {
   const events = {
     fileWrites: [
       writeAt(1, X), writeAt(2, X), writeAt(3, Y),
@@ -1019,14 +1023,21 @@ test("a path outside the desk that resolves to no repository binds nothing and i
       { start: minute(46), end: minute(47), cwd: "/tmp/unlisted", paths: ["/tmp/unlisted/a.txt"], agent: 9 },
     ],
   }
-  const result = bind(events, { agents: tree(), cards: listing(X) })
+  const result = bind(events, { agents: tree(), cards: listing(X), gone: ["/tmp"] })
   assert.deepEqual(result.jobs, [], "two desk writes beside another task's are not enough, and an unresolved path is never guessed")
   // Two write directories, the commit's directory and the directory of the paths it named.
   assert.equal(result.repoUnresolved, 4)
   assert.equal(typeof result.repoUnresolved, "number")
   // A reader that answers with something other than a name is unresolved too.
-  const odd = bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...fakes({ cards: listing(X) }), repoOfPath: () => "" })
+  const odd = bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...fakes({ cards: listing(X), gone: ["/tmp"] }), repoOfPath: () => "" })
   assert.deepEqual([odd.jobs, odd.repoUnresolved], [[], 4])
+  // Directories that exist and are in no repository are a true none: nothing was lost, so nothing is counted.
+  assert.equal(bind(events, { agents: tree(), cards: listing(X) }).repoUnresolved, 0)
+  // A repository that resolves is never counted, gone or not.
+  assert.equal(bind(events, { agents: tree(), cards: listing(X), gone: ["/tmp"], repos: { "/tmp": "someone/else" } }).repoUnresolved, 0)
+  // A caller that cannot tell a directory is gone is an error, never a silent zero.
+  const { directoryGone, ...blind } = fakes({ cards: listing(X) })
+  assert.throws(() => bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...blind }), TypeError)
 })
 
 test("a commit call in a repository is one event per repository it touches, at the call's start, and paths inside the desk are never asked about", () => {
@@ -1080,4 +1091,17 @@ test("native commits count toward candidacy only, never toward time", () => {
   // In a session that declares, evidence with no time counts for nothing.
   const declared = bind({ ...events, focusCalls: [focusAt(40, X)] }, { agents: tree(), nativeCommits })
   assert.deepEqual(Object.keys(shape(declared.jobs)), [idOf(X)])
+})
+
+test("the cap's dropped time comes out as segmentsCappedMs: 0 when nothing dropped, the lost time when a task over the cap stands alone", () => {
+  assert.equal(bind({ focusCalls: [focusAt(1, SLUG)] }).segmentsCappedMs, 0)
+  assert.equal(bind({}).segmentsCappedMs, 0, "a session with no focus and no evidence drops nothing")
+  const at = (seconds) => new Date(T0 + seconds * 1000).toISOString()
+  const focusCalls = []
+  for (let index = 0; index < LIMITS.jobSegments + 2; index += 1) {
+    focusCalls.push({ agent: 0, at: at(index * 20), track: TRACK, slug: SLUG }, { agent: 0, at: at(index * 20 + 10), clear: true })
+  }
+  const result = bind({ focusCalls })
+  assert.equal(result.segmentsCappedMs, 2 * 10000)
+  assert.equal(result.jobs[0].segments.length, LIMITS.jobSegments)
 })

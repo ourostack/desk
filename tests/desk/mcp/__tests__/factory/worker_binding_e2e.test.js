@@ -87,7 +87,7 @@ test("a multi-worker Claude session goes from transcript to built store with eve
     facts.jobs = bindSession({
       events, agents: facts.agents, session: facts.session, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
       readTask: (track, slug) => cards[`${track}/${slug}`] ?? null,
-      repoOfPath: () => null, gitCommitTaskPaths: () => ({ exists: false }), isCardHousekeeping: () => false,
+      repoOfPath: () => null, directoryGone: () => false, gitCommitTaskPaths: () => ({ exists: false }), isCardHousekeeping: () => false,
       resolveJobIdentity: (track, slug) => ({ track, slug }),
     }).jobs
 

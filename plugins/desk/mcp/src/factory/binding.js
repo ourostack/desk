@@ -40,7 +40,7 @@
 //     start), and a pull request the session created (`events.prRefs` with
 //     `created: true`). `repoOfPath` names the repository a path is in; a path
 //     it cannot name is no evidence, never a guess, and its directory is
-//     counted in `repoUnresolved`. A `repo` event counts only for the one card
+//     counted in `repoUnresolved` only when it no longer exists. A `repo` event counts only for the one card
 //     that lists the repository and has another event (`focus.js`).
 // Events of a subagent bound by a `Desk-Task:` line, and of the subagents
 // below it, are left out: that subtree has its own job. Reads never bind (no
@@ -60,7 +60,7 @@
 // subagent's own touches never create a job, and a subagent that keeps
 // running, or is resumed, after the controller moves on keeps its job.
 //
-// Output. `{ jobs, boundBy, disagrees, ownActivity, repoUnresolved }`.
+// Output. `{ jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs }`.
 //   - `jobs` is `LocalJob[]`, sorted by job ID: `{ job, basis, agents,
 //     task_created_at, transitions, observed, segments? }`, the hashed job ID
 //     only, never a track, slug, title or path. `agents` lists the job's
@@ -90,9 +90,13 @@
 //     task tool call widened by a minute each way, merged where they touch.
 //     `factory reconcile` matches desk commits to the session with it.
 //   - `repoUnresolved` is how many distinct directories outside the desk the
-//     session wrote or committed in that `repoOfPath` could not name: a
-//     number, never a path.
-// These four are local only (`derive-run.js` keeps them in the derivation
+//     session wrote or committed in that no longer exist and that `repoOfPath`
+//     could not name: evidence that was lost. A directory that exists and is
+//     in no repository, or in one with no origin, is a true none and is not
+//     counted. A number, never a path.
+//   - `segmentsCappedMs` is the time the segment cap dropped (`capSegments`
+//     reports it): 0 only when nothing was dropped.
+// These five are local only (`derive-run.js` keeps them in the derivation
 // receipt) and never reach facts.
 //
 // Without the session's `started_at` and `derived_through` there is no
@@ -109,7 +113,8 @@
 // Dependencies are injected so tests can fake them (`desk-repo.js` has the
 // real ones): `readTask(track, slug)`, `gitCommitTaskPaths(sha)`,
 // `isCardHousekeeping(sha, path)`, `resolveJobIdentity(track, slug)` and
-// `repoOfPath(absolutePath)`, which answers `owner/name` or `null`. The
+// `repoOfPath(absolutePath)`, which answers `owner/name` or `null`, and
+// `directoryGone(directory)`, whether a directory no longer exists. The
 // desk root is passed in rather than resolved here: `src/util/paths.js` is
 // outside `src/factory`, so the caller resolves it (with
 // `resolveDeskRootWithSource`) and hands it over.
@@ -321,13 +326,13 @@ function requireFunction(value, name) {
 /**
  * `bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix,
  * readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity,
- * repoOfPath }) -> { jobs, boundBy, disagrees, ownActivity, repoUnresolved }`; the
+ * repoOfPath, directoryGone }) -> { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs }`; the
  * header describes each. `agents` is the facts' `agents[]` (`{ n, parent }`),
  * used for ancestry. `session` is the facts' `session` (`started_at` and
  * `derived_through` are read). `deskRemote` is the desk's `origin` URL, or
  * empty when it has none (the job IDs then use `local:` plus the desk root).
  */
-export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoOfPath }) {
+export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoOfPath, directoryGone }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
@@ -335,6 +340,8 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
   requireFunction(isCardHousekeeping, "isCardHousekeeping")
   requireFunction(resolveJobIdentity, "resolveJobIdentity")
   requireFunction(repoOfPath, "repoOfPath")
+  // Required, so a caller that cannot tell a gone directory from a bare one is an error, never a silent zero.
+  requireFunction(directoryGone, "directoryGone")
   if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
   // One unpublished desk reached through a symlink and through its real path is one desk.
   const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
@@ -387,7 +394,8 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
   const repoAt = (absolute, directory) => {
     const repo = repoOfPath(absolute)
     if (typeof repo === "string" && repo !== "") return repo
-    unresolved.add(directory)
+    // Only evidence that is lost counts: a directory that exists and names no repository is a true none.
+    if (directoryGone(directory)) unresolved.add(directory)
     return null
   }
 
@@ -494,6 +502,8 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
 
   // Worker 0's timeline, `[{ key, start, end }]` in epoch ms.
   let timeline = { segments: [], boundBy: new Map(), disagrees: new Set() }
+  // The time the segment cap dropped (`capSegments` reports it); 0 when nothing was dropped, which includes a session with no timeline.
+  let segmentsCappedMs = 0
   let kept = []
   if (startedMs !== null && endMs !== null && endMs >= startedMs && listed.has(0)) {
     const focusCalls = []
@@ -510,7 +520,9 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     kept = evidence.filter((event) => listed.has(event.agent) && originOf(event.agent).line === undefined)
     const cards = new Map([...tasks].map(([key, task]) => [key, { repos: asArray(task.card.repos) }]))
     timeline = controllerTimeline({ events: { focusCalls, evidence: kept }, startMs: startedMs, endMs, cards })
-    timeline.segments = capSegments({ segments: timeline.segments, main: timeline.main, cap: LIMITS.jobSegments })
+    const capped = capSegments({ segments: timeline.segments, main: timeline.main, cap: LIMITS.jobSegments })
+    timeline.segments = capped.segments
+    segmentsCappedMs = capped.droppedMs
   }
   // The task holding worker 0's timeline at a time; the session's last instant belongs to its last segment.
   const controllerAt = (at) => {
@@ -570,5 +582,5 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     if (last !== undefined && start - startedMs <= last[1]) last[1] = Math.max(last[1], end - startedMs)
     else ownActivity.push([start - startedMs, end - startedMs])
   }
-  return { jobs: jobs.slice(0, LIMITS.jobs), boundBy, disagrees, ownActivity: ownActivity.slice(0, OWN_ACTIVITY_SPANS), repoUnresolved: unresolved.size }
+  return { jobs: jobs.slice(0, LIMITS.jobs), boundBy, disagrees, ownActivity: ownActivity.slice(0, OWN_ACTIVITY_SPANS), repoUnresolved: unresolved.size, segmentsCappedMs }
 }

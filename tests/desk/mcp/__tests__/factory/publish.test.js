@@ -620,7 +620,7 @@ function bindFixture(facts, events) {
     readTask: (track) => (track.length % 2 === 0
       ? { status: "done", created_at: "2026-09-20T08:00:00.000Z", updated_at: "2026-09-25T08:00:30.000Z" }
       : { status: "processing", created_at: null, updated_at: null }),
-    repoOfPath: () => null,
+    repoOfPath: () => null, directoryGone: () => false,
     gitCommitTaskPaths: () => ({ exists: false }),
     isCardHousekeeping: () => false,
     resolveJobIdentity: (track, slug) => ({ track, slug }),

@@ -283,8 +283,10 @@ export function controllerTimeline({ events, startMs, endMs, cards }) {
 }
 
 /**
- * `capSegments({ segments, main, cap }) -> segments`: no task keeps more than
- * `cap` segments, and no time is lost. A task over the cap gives its shortest
+ * `capSegments({ segments, main, cap }) -> { segments, droppedMs }`: no task
+ * keeps more than `cap` segments, and no time is lost except `droppedMs`,
+ * which is exactly the time of the segments dropped by the one case below
+ * (0 when none was; time handed to a neighbour is kept, never counted). A task over the cap gives its shortest
  * segment (the earliest among equals) to the main task, where it joins the
  * main task's neighbours. When there is no main task, or the main task is
  * the one over the cap, the task's shortest segment that touches another
@@ -298,17 +300,20 @@ export function controllerTimeline({ events, startMs, endMs, cards }) {
  */
 export function capSegments({ segments, main, cap }) {
   let list = segments.map((segment) => ({ ...segment }))
+  let droppedMs = 0
   for (;;) {
     // Another task's segments go first: moving one to the main task can join two of the main task's own.
     const crowded = [...new Set(list.map((segment) => segment.key))].sort(compareKeys).filter((key) => list.filter((segment) => segment.key === key).length > cap)
-    if (crowded.length === 0) return list
+    if (crowded.length === 0) return { segments: list, droppedMs }
     const over = crowded.find((key) => key !== main) ?? main
     if (main !== null && main !== over) {
       list = rekeyed(list, shortestIndex(list, (segment) => segment.key === over), main)
       continue
     }
     const pick = shortestIndex(list, (segment, index) => segment.key === over && longerNeighbour(list, index) !== -1)
-    if (pick === -1) list.splice(shortestIndex(list, (segment) => segment.key === over), 1)
-    else list = rekeyed(list, pick, list[longerNeighbour(list, pick)].key)
+    if (pick === -1) {
+      const [lost] = list.splice(shortestIndex(list, (segment) => segment.key === over), 1)
+      droppedMs += lost.end - lost.start
+    } else list = rekeyed(list, pick, list[longerNeighbour(list, pick)].key)
   }
 }

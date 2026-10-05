@@ -26,6 +26,12 @@
 // (`createDeskReaders` has the details). Only the name is returned, never the
 // path or the remote.
 //
+// `directoryGone(absolutePath)` is true when an absolute path names a folder
+// that no longer exists. `repoOfPath` answers `null` both for a folder that
+// exists and is in no repository (a true none) and for one whose evidence is
+// lost; this tells them apart for the session's receipt. A path that is not
+// absolute is not known to be lost, so it is false.
+//
 // `deskCommitsBetween(startIso, endIso)` lists the commits this clone made
 // in the window: the reflog entries of `HEAD` and every local branch whose
 // subject starts `commit:`, `commit (initial):`, `commit (amend):` or
@@ -827,7 +833,7 @@ function repositoryRoot(directory) {
 /**
  * `createDeskReaders({ deskRoot, personPrefix, git, timeoutMs })` ->
  * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
- * resolveJobIdentity, repoOfPath }`; `bindSession` takes all but
+ * resolveJobIdentity, repoOfPath, directoryGone }`; `bindSession` takes all but
  * `deskCommitsBetween`, which `factory reconcile` still reads.
  */
 export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
@@ -976,8 +982,13 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return repo
   }
 
+  /** `directoryGone(absolutePath) -> boolean`: see the header. */
+  function directoryGone(absolutePath) {
+    return typeof absolutePath === "string" && path.isAbsolute(absolutePath) && !isDirectory(path.resolve(absolutePath))
+  }
+
   return {
-    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath,
+    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, directoryGone,
     resolveJobIdentity: (track, slug) => resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs }),
   }
 }

@@ -304,18 +304,21 @@ test("focus disagrees when a declared stretch has none of its own events and at 
 
 // --- capSegments -------------------------------------------------------------------
 
+// The segments alone; the cap also reports the time it dropped.
+const capList = (args) => capSegments(args).segments
+
 test("segment cap reassigns shortest to main", () => {
   const segments = [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 20), seg(Y, 20, 21), seg(X, 21, 30), seg(Y, 30, 40), seg(Z, 40, 50), seg(Y, 50, 53)]
   // Y holds four segments; with a cap of two, its two shortest go to the main task and merge into its neighbours.
-  assert.deepEqual(capSegments({ segments, main: X, cap: 2 }), [seg(X, 0, 30), seg(Y, 30, 40), seg(Z, 40, 50), seg(Y, 50, 53)])
+  assert.deepEqual(capList({ segments, main: X, cap: 2 }), [seg(X, 0, 30), seg(Y, 30, 40), seg(Z, 40, 50), seg(Y, 50, 53)])
   // With a cap of three only the shortest moves, here to a main task that is not a neighbour.
-  assert.deepEqual(capSegments({ segments, main: Z, cap: 3 }), [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 20), seg(Z, 20, 21), seg(X, 21, 30), seg(Y, 30, 40), seg(Z, 40, 50), seg(Y, 50, 53)])
+  assert.deepEqual(capList({ segments, main: Z, cap: 3 }), [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 20), seg(Z, 20, 21), seg(X, 21, 30), seg(Y, 30, 40), seg(Z, 40, 50), seg(Y, 50, 53)])
   // Under the cap: unchanged, and the input is never modified.
   const before = JSON.stringify(segments)
-  assert.deepEqual(capSegments({ segments, main: X, cap: 4 }), segments)
+  assert.deepEqual(capList({ segments, main: X, cap: 4 }), segments)
   assert.equal(JSON.stringify(segments), before)
   // Segments never overlap afterwards.
-  const capped = capSegments({ segments, main: X, cap: 1 })
+  const capped = capList({ segments, main: X, cap: 1 })
   capped.forEach((segment, index) => assert.ok(index === 0 || segment.start >= capped[index - 1].end))
 })
 
@@ -325,15 +328,15 @@ const covered = (segments) => segments.reduce((total, segment) => total + segmen
 test("the segment cap never drops time: with no main task, or for the main task itself, the shortest segment joins its longer neighbour", () => {
   const segments = [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 13), seg(Y, 13, 21), seg(X, 21, 30)]
   // X is the main task and over the cap: its one-minute segment joins the longer neighbour, Y's eight minutes, and Y's two segments join through it.
-  assert.deepEqual(capSegments({ segments, main: X, cap: 2 }), [seg(X, 0, 10), seg(Y, 10, 21), seg(X, 21, 30)])
+  assert.deepEqual(capList({ segments, main: X, cap: 2 }), [seg(X, 0, 10), seg(Y, 10, 21), seg(X, 21, 30)])
   // A declared timeline has no main task. Equal lengths: the earliest segment goes first, and of two equal neighbours the earlier one takes it.
   const even = [seg(X, 0, 5), seg(Y, 5, 10), seg(X, 10, 15), seg(Y, 15, 20)]
-  assert.deepEqual(capSegments({ segments: even, main: null, cap: 1 }), [seg(Y, 0, 10), seg(X, 10, 20)])
+  assert.deepEqual(capList({ segments: even, main: null, cap: 1 }), [seg(Y, 0, 10), seg(X, 10, 20)])
   // Only a neighbour that touches can take a segment: here the one after a cleared gap cannot.
   const gapped = [seg(X, 0, 5), seg(Y, 5, 6), seg(X, 6, 7), seg(Y, 10, 90), seg(X, 90, 95)]
-  assert.deepEqual(capSegments({ segments: gapped, main: null, cap: 2 }), [seg(X, 0, 5), seg(Y, 5, 7), seg(Y, 10, 90), seg(X, 90, 95)])
+  assert.deepEqual(capList({ segments: gapped, main: null, cap: 2 }), [seg(X, 0, 5), seg(Y, 5, 7), seg(Y, 10, 90), seg(X, 90, 95)])
   for (const [list, main, cap] of [[segments, X, 2], [segments, X, 1], [segments, null, 1], [even, null, 1], [gapped, null, 2], [gapped, Y, 1]]) {
-    const capped = capSegments({ segments: list, main, cap })
+    const capped = capList({ segments: list, main, cap })
     assert.equal(covered(capped), covered(list), "no time is lost")
     capped.forEach((segment, index) => assert.ok(index === 0 || segment.start >= capped[index - 1].end))
     for (const key of [X, Y]) assert.ok(capped.filter((segment) => segment.key === key).length <= cap)
@@ -344,7 +347,7 @@ test("500 alternating declarations keep all 90 declared minutes under the cap", 
   // The reviewer's case: X and Y declared in turn every 10.8 seconds for 90 minutes.
   const step = (90 * MIN) / 500
   const segments = Array.from({ length: 500 }, (_, index) => ({ key: index % 2 === 0 ? X : Y, start: T0 + index * step, end: T0 + (index + 1) * step }))
-  const capped = capSegments({ segments, main: null, cap: 200 })
+  const capped = capList({ segments, main: null, cap: 200 })
   assert.equal(covered(capped), 90 * MIN)
   assert.equal(capped[0].start, T0)
   assert.equal(capped.at(-1).end, T0 + 90 * MIN)
@@ -353,14 +356,14 @@ test("500 alternating declarations keep all 90 declared minutes under the cap", 
   // The same through the timeline: nothing the controller declared binds no job.
   const calls = Array.from({ length: 500 }, (_, index) => ({ agent: 0, at: T0 + index * step, key: index % 2 === 0 ? X : Y }))
   const declared = controllerTimeline({ events: { focusCalls: calls, evidence: [] }, startMs: T0, endMs: T0 + 90 * MIN, cards: new Map() })
-  assert.equal(covered(capSegments({ segments: declared.segments, main: declared.main, cap: 200 })), 90 * MIN)
+  assert.equal(covered(capList({ segments: declared.segments, main: declared.main, cap: 200 })), 90 * MIN)
 })
 
 test("a task over the cap with no touching neighbour anywhere loses its shortest segment, the one case where time cannot be kept", () => {
   // Every X segment stands alone between cleared stretches, so no neighbour can take one without also taking cleared time.
   const alone = [seg(X, 0, 5), seg(X, 10, 12), seg(X, 20, 25)]
-  assert.deepEqual(capSegments({ segments: alone, main: null, cap: 2 }), [seg(X, 0, 5), seg(X, 20, 25)])
-  assert.deepEqual(capSegments({ segments: alone, main: X, cap: 2 }), [seg(X, 0, 5), seg(X, 20, 25)])
+  assert.deepEqual(capList({ segments: alone, main: null, cap: 2 }), [seg(X, 0, 5), seg(X, 20, 25)])
+  assert.deepEqual(capList({ segments: alone, main: X, cap: 2 }), [seg(X, 0, 5), seg(X, 20, 25)])
 })
 
 // --- The one-minute floor on inferred segments -----------------------------------
@@ -423,3 +426,13 @@ test("a short inferred segment at the edge of a declared stretch joins its infer
   assert.deepEqual(lone.segments, [seg(Y, 0, 0.5), seg(X, 0.5, 100), seg(Y, 100, 100.5), seg(X, 100.5, 600)])
 })
 
+
+test("the cap reports the time it dropped: 0 when it keeps everything, the lost segment's length when a task over the cap stands alone", () => {
+  const alone = [seg(X, 0, 5), seg(X, 10, 12), seg(X, 20, 25)]
+  assert.deepEqual(capSegments({ segments: alone, main: null, cap: 2 }), { segments: [seg(X, 0, 5), seg(X, 20, 25)], droppedMs: 2 * MIN })
+  const two = [seg(X, 0, 5), seg(X, 10, 12), seg(X, 20, 25), seg(X, 30, 31), seg(X, 40, 41)]
+  assert.equal(capSegments({ segments: two, main: X, cap: 2 }).droppedMs, 4 * MIN, "three segments dropped one by one: 1, 1, then 2 minutes")
+  const joined = [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 20), seg(Y, 20, 21), seg(X, 21, 30)]
+  assert.equal(capSegments({ segments: joined, main: X, cap: 1 }).droppedMs, 0, "time that moves to a neighbour is kept, not dropped")
+  assert.equal(capSegments({ segments: joined, main: X, cap: 9 }).droppedMs, 0)
+})
