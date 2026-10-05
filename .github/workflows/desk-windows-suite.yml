@@ -52,7 +52,7 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out "$env:RUNNER_TEMP/results.json"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json
         env:
           GIT_TERMINAL_PROMPT: "0"
 
@@ -62,14 +62,12 @@ jobs:
         run: >
           ./.github/scripts/run-as-standard-user.ps1
           -WorkDir "$PWD"
-          -Command 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out C:\deskstd-tmp\results.json'
+          -Command 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json'
 
       - name: Keep the per-file results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.mode }}-shard-${{ matrix.shard }}
-          path: |
-            ${{ runner.temp }}/results.json
-            C:/deskstd-tmp/results.json
+          path: results.json
           if-no-files-found: warn

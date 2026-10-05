@@ -4,7 +4,7 @@
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -31,7 +31,7 @@ const killTree = (pid) => {
 const runFile = (file) => new Promise((resolve) => {
   const started = Date.now()
   const child = spawn(process.execPath, [
-    "--import", path.join(testsRoot, "_isolated_env.mjs"), "--test", "--test-reporter=tap", file,
+    "--import", pathToFileURL(path.join(testsRoot, "_isolated_env.mjs")).href, "--test", "--test-reporter=tap", file,
   ], { cwd: mcpRoot, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, detached: process.platform !== "win32" })
   let output = ""
   child.stdout.on("data", (chunk) => { output += chunk })
