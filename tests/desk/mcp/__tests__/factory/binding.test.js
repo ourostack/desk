@@ -1069,6 +1069,17 @@ test("a commit path that is itself a nested repository root credits the nested r
   assert.ok(Object.hasOwn(shape(result.jobs), idOf(X)), "the nested repository is the one the card lists")
 })
 
+test("only a commit path entry may be a file: writes and the commit's directory are asked about as folders", () => {
+  const asked = []
+  const events = {
+    fileWrites: [{ at: minute(1), path: "/tmp/w/out.txt", agent: 0 }],
+    shellGitCommits: [{ start: minute(10), end: minute(11), cwd: "/tmp/c", paths: ["/tmp/c/gone.txt"], agent: 0 }],
+  }
+  const deps = fakes({ cards: listing(X) })
+  bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, repoLookup: (p, o) => { asked.push([p, o?.maybeFile === true]); return { none: true } } })
+  assert.deepEqual(asked.sort(), [["/tmp/c", false], ["/tmp/c/gone.txt", true], ["/tmp/w", false]])
+})
+
 test("task_create with focus declares the new card: the session is bound by declaration, not as one that never declared", () => {
   const create = deskCall({ at: minute(10), name: "mcp__plugin_desk_desk__task_create", slug: X })
   // The parser emits the focus call beside the create call; ten notes on Y would otherwise take the whole session.

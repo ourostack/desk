@@ -1592,6 +1592,18 @@ test("repoLookup says unavailable for a folder that is gone (ENOENT) or under a 
   assert.deepEqual(repoLookup(path.join(repo("no-remote", null), "src")), { unavailable: true }, "a folder that never existed in a repository with no origin")
 }))
 
+test("a deleted file is not lost evidence when its own folder exists, and is when its folder is gone", () => withRepos(({ root, repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const file = { maybeFile: true }
+  const plain = path.join(root, "plain")
+  mkdirSync(plain)
+  assert.deepEqual(repoLookup(path.join(plain, "gone.txt"), file), { none: true }, "an existing folder in no repository")
+  assert.deepEqual(repoLookup(path.join(repo("no-origin", null), "gone.txt"), file), { none: true }, "an existing repository with no origin")
+  assert.deepEqual(repoLookup(path.join(repo("code", "git@github.com:OurOStack/Desk.git"), "gone.txt"), file), { repo: "ourostack/desk" })
+  assert.deepEqual(repoLookup(path.join(root, "vanished", "gone.txt"), file), { unavailable: true }, "its folder is gone too")
+  assert.deepEqual(repoLookup(path.join(plain, "gone.txt")), { unavailable: true }, "asked as a folder, a missing path is a folder that is gone")
+}))
+
 test("repoLookup names a nested repository root itself, and a file by the repository that holds its folder", () => withRepos(({ repo }) => {
   const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
   const parent = repo("parent", "git@github.com:Some/Parent.git")

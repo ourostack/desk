@@ -737,7 +737,7 @@ test("the orphan pass writes its result to status.json as counts keyed by a clos
   await orphan(ctx, { declare: false })
   const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-06T00:00:00.000Z") })
   assert.deepEqual([result.rebuilt, result.current, result.pending, result.frozen], [0, 0, 0, 1])
-  const expected = { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:00.000Z", cursor: null, examined: 1, rebuilt: 0, current: 0, pending: 0, unexamined: 0, oldest_pending_days: null, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
+  const expected = { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:00.000Z", cursor: null, last_wrap_at: "2026-10-06T00:00:00.000Z", sweeps_in_walk: 0, examined: 1, rebuilt: 0, current: 0, pending: 0, unexamined: 0, oldest_pending_days: null, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
   assert.deepEqual((await readStatus(ctx.env)).orphans, expected)
   assert.deepEqual(result.orphans, expected)
   const text = JSON.stringify((await readStatus(ctx.env)).orphans)
@@ -890,11 +890,11 @@ test("an orphan pass that throws records a fixed failure class and reads as fail
   await fs.writeFile(path.join(root, "retracting"), "not a folder")
   const { sweep, ORPHAN_PASS_FAILED } = await runner()
   const summary = await sweep(ctx.env)
-  assert.deepEqual([summary.rebuilt, summary.frozen, summary.pending], [0, 0, 0])
+  assert.deepEqual([summary.rebuilt, summary.frozen, summary.pending, summary.unexamined], [undefined, undefined, undefined, undefined], "a failed pass has no counts, not zeros")
   const { ran_at: ranAt, started_at: startedAt, ...failed } = (await readStatus(ctx.env)).orphans
-  assert.deepEqual(failed, { failed: ORPHAN_PASS_FAILED, cursor: null })
+  assert.deepEqual(failed, { failed: ORPHAN_PASS_FAILED, cursor: null, last_wrap_at: null, sweeps_in_walk: 0 })
   assert.deepEqual([typeof ranAt, typeof startedAt], ["string", "string"])
-  assert.deepEqual(Object.keys(summary.orphans).sort(), ["cursor", "failed", "ran_at", "started_at"])
+  assert.deepEqual(Object.keys(summary.orphans).sort(), ["cursor", "failed", "last_wrap_at", "ran_at", "started_at", "sweeps_in_walk"])
   assert.equal(JSON.stringify(failed).includes(root), false, "no message text or path")
   await fs.rm(path.join(root, "retracting"))
   await fs.rm(path.join(root, "outbox"), { recursive: true })
@@ -1092,7 +1092,7 @@ test("the pass writes that it started before the work, so a record with a start 
   const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-07T00:00:00.000Z"), write })
   assert.equal(result.frozen, 1, "the pass still returns its result")
   const record = (await readStatus(ctx.env)).orphans
-  assert.deepEqual(Object.keys(record).sort(), ["cursor", "started_at"], "the earlier result was replaced by a start with no result")
+  assert.deepEqual(Object.keys(record).sort(), ["cursor", "last_wrap_at", "started_at", "sweeps_in_walk"], "the earlier result was replaced by a start with no result")
   assert.equal(record.started_at, "2026-10-07T00:00:00.000Z")
 }))
 
@@ -1132,4 +1132,45 @@ test("a pile of current orphans over the cap is unexamined, not pending, and a l
   assert.notEqual(two.orphans.cursor, one.orphans.cursor, "the cursor moved")
   const three = await rebuildOrphans(ctx.env, { cap: 10 })
   assert.deepEqual([three.pending, three.orphans.unexamined, three.orphans.examined, three.orphans.current], [0, 0, 4, 4])
+}))
+
+test("the record shows the walk: when the cursor last wrapped and how many sweeps this walk has taken", () => scratch(async (ctx) => {
+  const first = await orphan(ctx, { stale: false })
+  for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)
+  const { rebuildOrphans } = await runner()
+  const at = (day) => () => Date.parse(`2026-10-0${day}T00:00:00.000Z`)
+  const walk = async (cap, day) => {
+    const { orphans } = await rebuildOrphans(ctx.env, { cap, now: at(day) })
+    return [orphans.last_wrap_at, orphans.sweeps_in_walk, orphans.unexamined]
+  }
+  assert.deepEqual(await walk(10, 1), ["2026-10-01T00:00:00.000Z", 0, 0], "everything examined in one sweep is a wrap")
+  assert.deepEqual(await walk(1, 2), ["2026-10-01T00:00:00.000Z", 1, 3], "one orphan of four: the walk is one sweep in and the wrap time stays")
+  assert.deepEqual(await walk(1, 3), ["2026-10-01T00:00:00.000Z", 2, 3])
+  assert.deepEqual(await walk(1, 4), ["2026-10-01T00:00:00.000Z", 3, 3])
+  assert.deepEqual(await walk(1, 5), ["2026-10-05T00:00:00.000Z", 0, 3], "the last orphan was reached: the walk wrapped")
+}))
+
+test("before the first wrap the wrap time is not yet, never a zero or a start of the epoch", () => scratch(async (ctx) => {
+  const first = await orphan(ctx, { stale: false })
+  await clone(ctx, first, "1")
+  const { rebuildOrphans } = await runner()
+  const one = (await rebuildOrphans(ctx.env, { cap: 1 })).orphans
+  assert.deepEqual([one.last_wrap_at, one.sweeps_in_walk], [null, 1])
+}))
+
+test("orphans recorded by a newer Desk advance the cursor, so enough of them cannot hold up the orphans after them", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  const held = [first.name]
+  for (const digit of ["1", "2"]) held.push(await clone(ctx, first, digit))
+  const good = await clone(ctx, first, "9")
+  for (const name of held) await recordNewerDesk(ctx, name)
+  const { rebuildOrphans } = await runner()
+  let ticks = 0
+  const options = { ownVersion: () => "1.0.0", budgetMs: 3, now: () => Date.parse(END) + DAY }
+  const sweep = () => { ticks = 0; return rebuildOrphans(ctx.env, { ...options, clock: () => ticks++ }) }
+  const one = await sweep()
+  assert.deepEqual([one.rebuilt, one.pending, one.orphans.unexamined], [0, 2, 2], "the budget reached two of them")
+  const two = await sweep()
+  assert.equal(two.rebuilt, 1, "the next sweep went on past them to the good orphan")
+  assert.equal(typeof good, "string")
 }))

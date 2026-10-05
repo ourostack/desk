@@ -391,8 +391,8 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
   const nameOf = (segments, folder = false) => taskOfSegments(folder ? [...segments, CARD_FILE] : segments, alias)
   // The repository holding an absolute path outside the desk, or `null`; `directory` is counted when it cannot be named.
   const unresolved = new Set()
-  const repoAt = (lookup, directory = lookup) => {
-    const found = repoLookup(lookup)
+  const repoAt = (lookup, directory = lookup, options = undefined) => {
+    const found = repoLookup(lookup, options)
     if (typeof found?.repo === "string" && found.repo !== "") return found.repo
     // A true none is nothing lost. Anything else, including an answer that is none of the three, is evidence that was not available.
     if (found?.none !== true) unresolved.add(directory)
@@ -462,7 +462,7 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
       if (place === null) continue
       if (place.segments === undefined) {
         // The entry itself: a path that is a nested repository root names its own repository, a file is looked up by its folder.
-        repos.add(repoAt(place.outside, path.dirname(place.outside)))
+        repos.add(repoAt(place.outside, path.dirname(place.outside), { maybeFile: true }))
         continue
       }
       const name = nameOf(place.segments, true)

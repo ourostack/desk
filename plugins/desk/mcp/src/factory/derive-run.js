@@ -304,63 +304,80 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  *
  * Orphans are taken in name order starting after the `cursor` the last pass recorded, and wrapping, so a stuck orphan cannot keep a later one
  * from its turn. Cheap checks (a retraction, the receipt's desk root, roster and declaration) run for every orphan; the rest (facts, the
- * transcript, its stat, the derive) only inside `cap` orphans and `budgetMs` (`clock` is milliseconds). The others are `pending`. An orphan
+ * transcript, its stat, the derive) only inside `cap` orphans and `budgetMs` (`clock` is milliseconds). The others are `unexamined`. An orphan
  * whose outbox copy records a newer Desk than this one is held `pending` (taking no slot) for the seven days `STALE_DERIVER_HOLD_MS` allows,
  * counted from the copy's `ended_at` (its file's mtime when there is none), then frozen as `recorded_by_newer_desk`.
  *
- * The record is written to `status.json` as `orphans` twice: `{ started_at, cursor }` before the work, and after it `{ started_at, ran_at,
- * cursor, examined, rebuilt, current, pending, unexamined, oldest_pending_days, frozen: { <reason>: n } }`, or `{ started_at, ran_at, cursor, failed:
- * "pass_failed" }` when the pass threw. A record with a start and no `ran_at` is a pass that was interrupted or could not report.
+ * The record is written to `status.json` as `orphans` twice: `{ started_at, cursor, last_wrap_at, sweeps_in_walk }` before the work, and
+ * after it `{ started_at, ran_at, cursor, last_wrap_at, sweeps_in_walk, examined, rebuilt, current, pending, unexamined, oldest_pending_days,
+ * frozen: { <reason>: n } }`, or `{ started_at, ran_at, cursor, last_wrap_at, sweeps_in_walk, failed: "pass_failed" }` when the pass threw (the
+ * summary then has no counts). `last_wrap_at` is when every orphan from the cursor to the end of the list was last reached (null: not yet) and
+ * `sweeps_in_walk` the sweeps since (0 right after a wrap), so a walk that is not advancing shows as a wrap time that grows old and a count that
+ * grows. A record with a start and no `ran_at` is a pass that was interrupted or could not report.
  * `pending` is orphans examined and waiting for a known reason; `unexamined` is those left over by the cap or the budget this sweep, verdict not yet known (a count only; the cursor works through them), and `examined` is how many the pass looked at, so a reader can see the queue move. `oldest_pending_days` is the age in whole days of the oldest orphan found waiting (null when none was): a queue that does not drain shows
  * as a number that grows. `retractions(env)` lists the retracted session names; `ownVersion()` is this Desk's version; `write` is
  * `writeStatus`.
  */
 export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus } = {}) {
   const startedAt = new Date(now()).toISOString()
-  let cursor = null
+  // Where the walk stands, from the last record: the cursor, when it last wrapped (null: not yet) and how many sweeps this walk has taken.
+  let walk = { cursor: null, last_wrap_at: null, sweeps_in_walk: 0 }
   try {
-    const previous = (await readStatus(env)).orphans?.cursor
-    cursor = typeof previous === "string" ? previous : null
+    const previous = (await readStatus(env)).orphans
+    walk = {
+      cursor: typeof previous?.cursor === "string" ? previous.cursor : null,
+      last_wrap_at: typeof previous?.last_wrap_at === "string" ? previous.last_wrap_at : null,
+      sweeps_in_walk: Number.isInteger(previous?.sweeps_in_walk) ? previous.sweeps_in_walk : 0,
+    }
   } catch {
-    // No cursor: the pass starts from the first orphan.
+    // No walk to resume: the pass starts from the first orphan.
   }
   try {
-    await write(env, { orphans: { started_at: startedAt, cursor } })
+    await write(env, { orphans: { started_at: startedAt, ...walk } })
   } catch {
     // The pass still runs; the closing record may still be written.
   }
   let orphans
   try {
-    const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor })
-    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...pass }
+    const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor: walk.cursor })
+    const { wrapped, ...counts } = pass
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...counts, last_wrap_at: wrapped ? new Date(now()).toISOString() : walk.last_wrap_at, sweeps_in_walk: wrapped ? 0 : walk.sweeps_in_walk + 1 }
   } catch {
-    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), cursor, failed: ORPHAN_PASS_FAILED }
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...walk, failed: ORPHAN_PASS_FAILED }
   }
   try {
     await write(env, { orphans })
   } catch {
     // The start record stands, with no result: it reads as a pass that did not finish.
   }
-  const counts = orphans.failed === undefined ? orphans : { rebuilt: 0, current: 0, pending: 0, unexamined: 0, frozen: zeroReasons() }
-  return { rebuilt: counts.rebuilt, current: counts.current, pending: counts.pending, unexamined: counts.unexamined, frozen: Object.values(counts.frozen).reduce((sum, count) => sum + count, 0), orphans }
+  // A failed pass has no counts to give: they are absent, never zeros.
+  if (orphans.failed !== undefined) return { orphans }
+  return { rebuilt: orphans.rebuilt, current: orphans.current, pending: orphans.pending, unexamined: orphans.unexamined, frozen: Object.values(orphans.frozen).reduce((sum, count) => sum + count, 0), orphans }
 }
+
+// Plain code-unit order, the same in every locale, so the cursor means the same thing in every session.
+const byName = (a, b) => Number(a.name > b.name) - Number(a.name < b.name)
 
 async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor }) {
   const kept = new Set((markers ?? await listMarkers(env)).map((marker) => `${marker.host}-${marker.session_id}.json`))
   const receipts = (await readStatus(env)).derivations
-  const all = (await outboxCopies(env, "claude-code")).filter(({ name }) => !kept.has(name)).sort((a, b) => a.name.localeCompare(b.name))
+  const all = (await outboxCopies(env, "claude-code")).filter(({ name }) => !kept.has(name)).sort(byName)
   // Start after the cursor and wrap.
-  const after = cursor === null ? 0 : all.findIndex(({ name }) => name.localeCompare(cursor) > 0)
+  const after = cursor === null ? 0 : all.findIndex(({ name }) => name > cursor)
   const start = after === -1 ? 0 : after
   const copies = [...all.slice(start), ...all.slice(0, start)]
+  const tail = all.length - start
   const retracted = await retractions(env)
   const find = transcriptFinder(env)
   const started = clock()
   let spent = 0
-  // Takes one of this pass's transcript-work slots, or says there is none left (the cap, or the time budget). `refund` gives one back.
+  let taken = 0
+  // Takes one of this pass's transcript-work slots, or says there is none left (the cap, or the time budget). `refund` gives the slot back
+  // (the orphan was served but needs no transcript work); the orphan still counts as reached for the cursor.
   const room = () => {
     if (spent >= cap || clock() - started >= budgetMs) return false
     spent += 1
+    taken += 1
     return true
   }
   const refund = () => {
@@ -373,19 +390,22 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
   }
   const tally = { rebuilt: 0, current: 0, pending: 0, unexamined: 0, frozen: zeroReasons() }
   let last = cursor
-  for (const { store, name } of copies) {
+  let tailUnexamined = 0
+  for (const [index, { store, name }] of copies.entries()) {
     let outcome
-    const before = spent
+    const before = taken
     try {
       outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion })
     } catch {
       outcome = "derive_failed"
     }
-    if (spent > before) last = name
+    if (taken > before) last = name
+    if (outcome === "unexamined" && index < tail) tailUnexamined += 1
     if (ORPHAN_REASONS.includes(outcome)) tally.frozen[outcome] += 1
     else tally[outcome] += 1
   }
-  return { cursor: last, examined: copies.length - tally.unexamined, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
+  // The walk wrapped when every orphan from the cursor to the end of the list was reached.
+  return { cursor: last, wrapped: tailUnexamined === 0, examined: copies.length - tally.unexamined, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
 }
 
 // One orphan: "rebuilt", "current", "pending" (examined, waiting for a known reason), "unexamined" (no slot left this sweep) or the reason it stays frozen.
@@ -422,7 +442,7 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
   }
   const marker = { schema_version: 1, host: "claude-code", session_id: facts.session.id, log_path: transcript, cwd: root, desk_root: root, end_reason: endReason, ended_at: endedAt, plugins, updated_at: new Date(recordedAt).toISOString() }
   const admit = async () => ((await retractions(env)).has(name) ? "retracted" : null)
-  const { result, reason } = await deriveMarker(env, marker, { quietMs, admit })
+  const { result, reason } = await deriveMarker(env, marker, { quietMs, admit, ownVersion })
   if (result === "written") return "rebuilt"
   // Inside the quiet window, or the source changed: not done yet.
   if (result === "skipped") {
@@ -436,7 +456,7 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
 }
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
-  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0, rebuilt: 0, frozen: 0, pending: 0, unexamined: 0, orphans: null }
+  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
   try {
     if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
   } catch {
@@ -450,8 +470,7 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
     if (reason === "route_unverified") summary.route_unverified += 1
   }
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.
-  const { rebuilt, frozen, pending, unexamined, orphans } = await rebuildOrphans(env, { quietMs, markers })
-  Object.assign(summary, { rebuilt, frozen, pending, unexamined, orphans })
+  Object.assign(summary, await rebuildOrphans(env, { quietMs, markers }))
   // `route_unverified` counts the Codex markers held inside `held`; `factory.js status` shows it.
   try {
     await writeStatus(env, { held_markers: { route_unverified: summary.route_unverified } })

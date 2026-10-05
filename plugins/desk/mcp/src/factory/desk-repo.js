@@ -971,19 +971,23 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
    * `repoLookup(absolutePath)`: the code repository holding a path, as one of three answers a caller cannot confuse:
    * `{ repo: "owner/name" }` (lowercase, from the `origin` remote of the nearest folder at or above the path that still exists: a deleted
    * file is still in its repository; a path that is a folder is looked up as itself, so a nested repository root names its own repository,
-   * and an existing file by its folder); `{ none: true }` (the folder exists and Git cleanly reports no repository, or a repository with no
+   * and an existing file by its folder; with `{ maybeFile: true }` (a commit's path entry) a missing path is a deleted file, lost only when the
+   * folder it was in is missing too, where without it a missing path is a folder that is gone); `{ none: true }` (the folder exists and Git cleanly reports no repository, or a repository with no
    * origin or one that is not `host/…/owner/name`, or the desk itself: a path inside the desk root, or a checkout of the desk's own remote;
    * also a path that is not absolute); and `{ unavailable: true }` (the evidence cannot be read: the folder is gone (ENOENT, ENOTDIR) or
    * and no repository above it names it, any other stat error such as a permission or I/O failure, a Git failure or a
    * timeout). Only the name is ever returned, never the path or the remote.
    */
-  function repoLookup(absolutePath) {
+  function repoLookup(absolutePath, { maybeFile = false } = {}) {
     if (typeof absolutePath !== "string" || !path.isAbsolute(absolutePath)) return NONE
     const start = path.resolve(absolutePath)
-    if (lookupByDirectory.has(start)) return lookupByDirectory.get(start)
+    const cacheKey = maybeFile ? `${start}\0file` : start
+    if (lookupByDirectory.has(cacheKey)) return lookupByDirectory.get(cacheKey)
     let directory = start
     let kind = folderKind(directory)
     let lost = kind !== "directory"
+    // A path that may be a file (a commit's path entry) and is missing is a deleted file, not a lost folder, when the folder it was in exists.
+    if (kind === "missing" && maybeFile) lost = folderKind(path.dirname(start)) !== "directory"
     // A file that exists is in its folder's repository; nothing is lost.
     if (kind === "other") {
       directory = path.dirname(start)
@@ -1008,7 +1012,7 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
       } else answer = NONE
       if (lost && answer.repo === undefined) answer = UNAVAILABLE
     }
-    lookupByDirectory.set(start, answer)
+    lookupByDirectory.set(cacheKey, answer)
     return answer
   }
   /** `repoOfPath(absolutePath) -> "owner/name" | null`: `repoLookup`'s name, or `null` for either of its other answers. */
