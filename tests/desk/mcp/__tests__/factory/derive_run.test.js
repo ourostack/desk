@@ -737,7 +737,7 @@ test("the orphan pass writes its result to status.json as counts keyed by a clos
   await orphan(ctx, { declare: false })
   const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-06T00:00:00.000Z") })
   assert.deepEqual([result.rebuilt, result.current, result.pending, result.frozen], [0, 0, 0, 1])
-  const expected = { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:00.000Z", cursor: null, rebuilt: 0, current: 0, pending: 0, oldest_pending_days: null, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
+  const expected = { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:00.000Z", cursor: null, examined: 1, rebuilt: 0, current: 0, pending: 0, unexamined: 0, oldest_pending_days: null, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
   assert.deepEqual((await readStatus(ctx.env)).orphans, expected)
   assert.deepEqual(result.orphans, expected)
   const text = JSON.stringify((await readStatus(ctx.env)).orphans)
@@ -958,10 +958,10 @@ test("more orphans than the cap are pending, and the next sweep rebuilds them", 
   await clone(ctx, first, "2")
   const { rebuildOrphans } = await runner()
   const one = await rebuildOrphans(ctx.env, { cap: 2 })
-  assert.deepEqual([one.rebuilt, one.pending, one.frozen], [2, 1, 0])
-  assert.equal((await readStatus(ctx.env)).orphans.pending, 1, "visible from outside")
+  assert.deepEqual([one.rebuilt, one.pending, one.frozen], [2, 0, 0])
+  assert.equal((await readStatus(ctx.env)).orphans.unexamined, 1, "visible from outside")
   const two = await rebuildOrphans(ctx.env, { cap: 3 })
-  assert.deepEqual([two.rebuilt, two.pending, two.current], [1, 0, 2])
+  assert.deepEqual([two.rebuilt, two.pending, two.current, two.orphans.unexamined], [1, 0, 2, 0], "a sweep that examines everything reports a measured zero")
 }))
 
 test("the pass stops at its time budget and leaves the rest pending", () => scratch(async (ctx) => {
@@ -971,7 +971,7 @@ test("the pass stops at its time budget and leaves the rest pending", () => scra
   const clock = () => times.shift() ?? 10
   const { rebuildOrphans } = await runner()
   const result = await rebuildOrphans(ctx.env, { budgetMs: 5, clock })
-  assert.deepEqual([result.rebuilt, result.pending], [1, 1])
+  assert.deepEqual([result.rebuilt, result.pending, result.orphans.unexamined], [1, 0, 1])
   assert.deepEqual([(await rebuildOrphans(ctx.env)).rebuilt], [1], "the next pass finishes it")
 }))
 
@@ -1106,7 +1106,7 @@ test("facts, transcript lookup and the source stat run only for orphans inside t
   const { rebuildOrphans } = await runner()
   const result = await rebuildOrphans(ctx.env, { cap: 1 })
   assert.deepEqual(await reasons(ctx), {}, "the unreadable copies were not even opened beyond the cap")
-  assert.deepEqual([result.rebuilt, result.pending], [1, 3])
+  assert.deepEqual([result.rebuilt, result.pending, result.orphans.unexamined], [1, 0, 3])
 }))
 
 test("the oldest of several waiting orphans sets oldest_pending_days", () => scratch(async (ctx) => {
@@ -1117,4 +1117,19 @@ test("the oldest of several waiting orphans sets oldest_pending_days", () => scr
   const { rebuildOrphans } = await runner()
   const result = await rebuildOrphans(ctx.env, { ownVersion: () => "1.0.0", now: () => Date.parse(END) + 2 * DAY })
   assert.deepEqual([result.pending, result.orphans.oldest_pending_days], [2, 2])
+}))
+
+test("a pile of current orphans over the cap is unexamined, not pending, and a later sweep works through it", () => scratch(async (ctx) => {
+  const first = await orphan(ctx, { stale: false })
+  for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)
+  const { rebuildOrphans } = await runner()
+  assert.equal((await rebuildOrphans(ctx.env, { cap: 10 })).rebuilt, 3, "the copies get receipts of their own, so all four are current after this")
+  const one = await rebuildOrphans(ctx.env, { cap: 2 })
+  assert.deepEqual([one.pending, one.orphans.unexamined, one.orphans.examined, one.orphans.current], [0, 2, 2, 2])
+  assert.equal((await readStatus(ctx.env)).orphans.oldest_pending_days, null, "no age: nothing is waiting")
+  const two = await rebuildOrphans(ctx.env, { cap: 2 })
+  assert.deepEqual([two.orphans.unexamined, two.orphans.examined], [2, 2])
+  assert.notEqual(two.orphans.cursor, one.orphans.cursor, "the cursor moved")
+  const three = await rebuildOrphans(ctx.env, { cap: 10 })
+  assert.deepEqual([three.pending, three.orphans.unexamined, three.orphans.examined, three.orphans.current], [0, 0, 4, 4])
 }))

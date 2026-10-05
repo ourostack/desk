@@ -275,7 +275,7 @@ async function cwdRoot(transcript) {
 
 /** The reasons an orphan stays frozen, a closed list: one for each condition of spec section 4 that can fail, and the one rule below (`reconcile` reads it). */
 export const ORPHAN_REASONS = Object.freeze(["no_facts", "no_transcript", "no_desk_root", "crew_desk", "route_unknown", "retracted", "not_opted_in", "recorded_by_newer_desk", "derive_failed"])
-/** The most orphans one sweep gives transcript work (facts, transcript, derive); the rest are `pending` and the next pass starts after the last one served. */
+/** The most orphans one sweep gives transcript work (facts, transcript, derive); the rest are `unexamined` and the next pass starts after the last one served. */
 export const ORPHAN_EXAMINE_CAP = 25
 /** The time one sweep's orphan pass may spend on transcript work, half of the 120 s the delivery deadline allows; the rest is `pending`. */
 export const ORPHAN_BUDGET_MS = 60000
@@ -309,9 +309,9 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  * counted from the copy's `ended_at` (its file's mtime when there is none), then frozen as `recorded_by_newer_desk`.
  *
  * The record is written to `status.json` as `orphans` twice: `{ started_at, cursor }` before the work, and after it `{ started_at, ran_at,
- * cursor, rebuilt, current, pending, oldest_pending_days, frozen: { <reason>: n } }`, or `{ started_at, ran_at, cursor, failed:
+ * cursor, examined, rebuilt, current, pending, unexamined, oldest_pending_days, frozen: { <reason>: n } }`, or `{ started_at, ran_at, cursor, failed:
  * "pass_failed" }` when the pass threw. A record with a start and no `ran_at` is a pass that was interrupted or could not report.
- * `oldest_pending_days` is the age in whole days of the oldest orphan found waiting (null when none was): a queue that does not drain shows
+ * `pending` is orphans examined and waiting for a known reason; `unexamined` is those left over by the cap or the budget this sweep, verdict not yet known (a count only; the cursor works through them), and `examined` is how many the pass looked at, so a reader can see the queue move. `oldest_pending_days` is the age in whole days of the oldest orphan found waiting (null when none was): a queue that does not drain shows
  * as a number that grows. `retractions(env)` lists the retracted session names; `ownVersion()` is this Desk's version; `write` is
  * `writeStatus`.
  */
@@ -341,8 +341,8 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
   } catch {
     // The start record stands, with no result: it reads as a pass that did not finish.
   }
-  const counts = orphans.failed === undefined ? orphans : { rebuilt: 0, current: 0, pending: 0, frozen: zeroReasons() }
-  return { rebuilt: counts.rebuilt, current: counts.current, pending: counts.pending, frozen: Object.values(counts.frozen).reduce((sum, count) => sum + count, 0), orphans }
+  const counts = orphans.failed === undefined ? orphans : { rebuilt: 0, current: 0, pending: 0, unexamined: 0, frozen: zeroReasons() }
+  return { rebuilt: counts.rebuilt, current: counts.current, pending: counts.pending, unexamined: counts.unexamined, frozen: Object.values(counts.frozen).reduce((sum, count) => sum + count, 0), orphans }
 }
 
 async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor }) {
@@ -371,7 +371,7 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
     const age = Math.max(0, now() - sinceMs)
     oldestMs = oldestMs === null ? age : Math.max(oldestMs, age)
   }
-  const tally = { rebuilt: 0, current: 0, pending: 0, frozen: zeroReasons() }
+  const tally = { rebuilt: 0, current: 0, pending: 0, unexamined: 0, frozen: zeroReasons() }
   let last = cursor
   for (const { store, name } of copies) {
     let outcome
@@ -385,10 +385,10 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
     if (ORPHAN_REASONS.includes(outcome)) tally.frozen[outcome] += 1
     else tally[outcome] += 1
   }
-  return { cursor: last, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
+  return { cursor: last, examined: copies.length - tally.unexamined, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
 }
 
-// One orphan: "rebuilt", "current", "pending", or the reason it stays frozen.
+// One orphan: "rebuilt", "current", "pending" (examined, waiting for a known reason), "unexamined" (no slot left this sweep) or the reason it stays frozen.
 async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion }) {
   if (retracted.has(name)) return "retracted"
   const receiptRoot = deskRootOf(receipts, [name])
@@ -396,7 +396,7 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
     const refusal = rootRefusal(receiptRoot, store)
     if (refusal !== null) return refusal
   }
-  if (!room()) return "pending"
+  if (!room()) return "unexamined"
   const facts = await readLocalFacts(env, store, name)
   if (facts === null || `claude-code-${facts.session.id}.json` !== name) return "no_facts"
   const { end_reason: endReason, ended_at: endedAt } = facts.session
@@ -436,7 +436,7 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
 }
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
-  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0, rebuilt: 0, frozen: 0, pending: 0, orphans: null }
+  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0, rebuilt: 0, frozen: 0, pending: 0, unexamined: 0, orphans: null }
   try {
     if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
   } catch {
@@ -450,8 +450,8 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
     if (reason === "route_unverified") summary.route_unverified += 1
   }
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.
-  const { rebuilt, frozen, pending, orphans } = await rebuildOrphans(env, { quietMs, markers })
-  Object.assign(summary, { rebuilt, frozen, pending, orphans })
+  const { rebuilt, frozen, pending, unexamined, orphans } = await rebuildOrphans(env, { quietMs, markers })
+  Object.assign(summary, { rebuilt, frozen, pending, unexamined, orphans })
   // `route_unverified` counts the Codex markers held inside `held`; `factory.js status` shows it.
   try {
     await writeStatus(env, { held_markers: { route_unverified: summary.route_unverified } })
