@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.187 — 2026-10-05
+
+Browser access is now part of what first-run onboarding and `SETUP.md` verify, not an optional extra. Step 6 of `SETUP.md` and `first-run-bootstrap` both check that the `desk-web` tools are listed and `browser_navigate` reaches `https://example.com`, say that the first call can wait up to two minutes while Playwright MCP installs, and separate a `status: degraded` answer (Node, npm or the registry) from a plain Playwright error (no Chrome or Edge). After one retry a failed check is recorded as not verified and onboarding continues.
+
+`desk:cdp-headed-browser` now has the commands that make the browser context broker runnable on a fresh install with no overlay: its package ships without the `ws` dependency, so running it in place failed with `ERR_MODULE_NOT_FOUND`. It also says plainly that without a provider `acquire` still fails closed, and points a personal install to Playwright MCP's own options for signed-in pages.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.186 — 2026-10-05
 
 Desk now denies the shell commands that kill the operator's other sessions. On 2026-10-02 an agent ran `pkill -f "cat" -U $(id -u) -n` to stop one hung process. macOS and BSD `pkill` stop reading options at the first non-option argument, so `-U`, the user id and `-n` became extra patterns, and the command killed about 100 processes, among them 8 Claude Code sessions, 2 Copilot sessions and the browser.
