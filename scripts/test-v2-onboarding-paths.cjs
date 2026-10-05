@@ -199,16 +199,19 @@ function main() {
   assert.match(joinCrewStep1Text, /session-start sync\s+and\s+scan/iu);
   assert.match(joinCrewStep1Text, /do not continue to Step 2/iu);
 
-  const step2 = findHeading(sessionStartHeadings, 2, "Step 2 — Workspace sync");
-  assert.ok(step2, "session-start must keep Step 2 as the existing-workspace router");
-  assert.deepStrictEqual(childHeadingTitles(sessionStart, sessionStartHeadings, step2, 3), ["Existing-workspace V1 upgrade branch"]);
-  const step2Text = sectionText(sessionStart, sessionStartHeadings, step2);
-  assert.equal((step2Text.match(/first-run-bootstrap/gu) ?? []).length, 2);
-  const existingWorkspaceUpgrade = findHeading(sessionStartHeadings, 3, "Existing-workspace V1 upgrade branch");
+  // session-start routes an existing V1 workspace by content, not by "Step N" labels (#146 removed them: the boot script now does the sync, and one workspace check remains).
+  const existingWorkspaceUpgrade = sessionStartHeadings.find((heading) => heading.level === 3 && heading.title === "Existing-workspace V1 upgrade branch");
   assert.ok(existingWorkspaceUpgrade, "session-start must route existing V1 workspaces explicitly");
+  const workspaceCheck = [...sessionStartHeadings].reverse().find((heading) => heading.level === 2 && heading.index < existingWorkspaceUpgrade.index);
+  assert.match(workspaceCheck?.title ?? "", /workspace/iu, "the V1 upgrade branch must sit under the workspace check, which routes an existing workspace");
+  assert.deepStrictEqual(childHeadingTitles(sessionStart, sessionStartHeadings, workspaceCheck, 3), ["Existing-workspace V1 upgrade branch"]);
   const existingWorkspaceUpgradeText = sectionText(sessionStart, sessionStartHeadings, existingWorkspaceUpgrade);
+  assert.match(existingWorkspaceUpgradeText, /first-run-bootstrap/iu, "the branch must hand off to first-run-bootstrap");
   assert.match(existingWorkspaceUpgradeText, /Entrance B/iu);
   assert.match(existingWorkspaceUpgradeText, /same workspace/iu);
+  assert.match(existingWorkspaceUpgradeText, /never clones or creates a parallel Desk/iu);
+  assert.match(existingWorkspaceUpgradeText, /do not continue into ordinary resumption/iu);
+  assert.match(existingWorkspaceUpgradeText, /later runs skip this branch/iu);
 
   assert.match(sessionStartMigrations, /before any path-dependent startup scans/iu);
   assert.match(sessionStartMigrations, /completed onboarding is not replayed during normal resumption/iu);
