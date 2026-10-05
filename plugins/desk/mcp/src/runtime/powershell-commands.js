@@ -523,9 +523,23 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true, powershell: true })
   }
 
+  // Git matters only in program position: the `FileName` value, or the first word of a `CommandLine` value. A literal program that is neither Git nor a
+  // wrapper that runs its arguments (`notepad C:\git\notes.txt`, `C:\tools\git-lfs.exe`) runs no Git. No such value, or one not written out, stays unknown.
+  function launchesProgramThatCouldBeGit(text) {
+    const values = [...text.matchAll(/\b(?:CommandLine|FileName)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s;}]+))/giu)].map((match) => match[1] ?? match[2] ?? match[3])
+    if (values.length === 0) values.push(text)
+    return values.some((value) => {
+      const program = /^\s*(?:"([^"]*)"|'([^']*)'|(\S+))/u.exec(value)
+      const word = program?.[1] ?? program?.[2] ?? program?.[3] ?? ""
+      // A path cut at a space (`C:\Program Files\Git\bin\git.exe`) or a word not written out could still be Git.
+      if (/[$(`]/u.test(word) || word.includes(UNKNOWN) || word === "" || (/[\\/]/u.test(word) && !/\.(?:exe|com|bat|cmd|ps1)$/iu.test(word))) return true
+      return /^(?:git|cmd|powershell|pwsh|bash|sh|zsh|wsl|env|start|call|cscript|wscript|node|python3?|ruby|perl|xargs|sudo|nohup|conhost|wt|cmdkey)(?:\.exe)?$/iu.test(word.split(/[\\/]/u).at(-1))
+    })
+  }
+
   // A launcher that is not the program itself (WMI process creation, a Process object's start settings) and whose own text names Git: denied where it could reach a protected checkout, like a computed program.
   async function launchesGit(text) {
-    if (namesGit(text) && !await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw unresolved("the program this command starts", PROGRAM_FIX)
+    if (namesGit(text) && launchesProgramThatCouldBeGit(text) && !await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw unresolved("the program this command starts", PROGRAM_FIX)
   }
 
   // Code built from text at run time. Text with an unknown part is inspected only when the part Desk can read names

@@ -375,7 +375,9 @@ const TASK_LEVEL_PATTERNS = [
 ]
 const TASK_LEVEL_WORK_EXEMPT = TASK_LEVEL_PATTERNS.slice(4)
 // "Ran the tests, then it's done.": after a step the reply reports as taken, a "then it's done" closes the whole job, so the work-subject exemption does not cover it.
-export const THEN_IT_IS_DONE = new RegExp(`\\bthen\\s+it(?:\\s+is|['\u2019]s)\\s+(?:now\\s+|all\\s+)?${DONE_WORD}\\b`, "iu")
+// A plan is no claim: "I'll run the tests, then it's done." (future, modal or "once I" before the clause) is exempt.
+const PLAN_BEFORE = "(?:\\bI['\u2019]ll|\\bI will|\\bwe['\u2019]ll|\\bwe will|\\bI['\u2019]m going to|\\bI am going to|\\bgoing to|\\bwill|\\bonce I|\\bafter I|\\bas soon as I)\\b"
+export const THEN_IT_IS_DONE = new RegExp(`(?<!${PLAN_BEFORE}[^.;!?]*)\\bthen\\s+it(?:\\s+is|['\u2019]s)\\s+(?:now\\s+|all\\s+)?${DONE_WORD}\\b`, "iu")
 
 /**
  * The sentences of `text` that claim the task itself is done: "Task x is done", "the task is complete", "Status: done", "validating (complete)", "validating -> done", "no, done", "it is finished", "effectively done".

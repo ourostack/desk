@@ -685,7 +685,7 @@ test("task_update refuses an unknown top-level field, naming it and the accepted
   const before = await fs.readFile(filePath, "utf8")
   await assert.rejects(
     task_update({ deskRoot: root, input: { track: "t", slug: "unknown-field", status: "processing", owner: "me", priority: 1 } }),
-    (error) => /unknown fields `owner`, `priority`; nothing was changed/.test(error.message) && /Accepted fields: `track`, `slug`, `status`, `frontmatter`/.test(error.message) && !/`status`, `owner`/.test(error.message),
+    (error) => /unknown fields `owner`, `priority`; nothing was changed/.test(error.message) && /Accepted fields: `track`, `slug`, `status`, `frontmatter`/.test(error.message) && /Example: \{"track": "t", "slug": "s", "status": "validating", "note"/.test(error.message) && !/`status`, `owner`/.test(error.message),
   )
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "unknown-field", owner: "me" } }), /unknown field `owner`;/)
   assert.equal(await fs.readFile(filePath, "utf8"), before)

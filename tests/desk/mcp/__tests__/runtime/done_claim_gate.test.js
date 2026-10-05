@@ -646,3 +646,8 @@ test("a done-gate edge case: 'If it helps, the task is done.' blocks, because a 
   for (const reply of ["If it helps, the task is done.", "In case that helps, the task is complete."]) assert.ok(blocks(stop(validating(), reply)), reply)
   for (const reply of ["If it passes review, the task is done.", "If that merges, the task is done."]) assert.deepEqual(stop(validating(), reply), {}, reply)
 })
+
+test("a plan is no claim: 'I'll run the tests, then it's done.' and its future, modal and 'once I' forms pass, while a reported step still blocks", () => {
+  for (const reply of ["I'll run the tests, then it's done.", "I will run the tests, then it's done.", "We'll run the tests, then it's done.", "I'm going to run the tests, then it's done.", "Going to run the tests, then it's done.", "The suite will run, then it's done.", "Once I run the tests, then it's done.", "After I run the tests, then it's done.", "As soon as I run the tests, then it's done."]) assert.deepEqual(stop(validating(), reply), {}, reply)
+  for (const reply of ["Ran the tests, then it's done.", "I ran the tests, then it's done.", "I'll run the tests. Ran them, then it's done."]) assert.ok(blocks(stop(validating(), reply)), reply)
+})

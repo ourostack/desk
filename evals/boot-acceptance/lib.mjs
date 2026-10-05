@@ -361,17 +361,19 @@ export function materializeOfflineFork(runTmp) {
   const bare = path.join(runTmp, "fork-remotes", "relay-config.git")
   const work = path.join(runTmp, "fork-remotes", "work")
   mkdirSync(path.join(work, "relay"), { recursive: true })
-  const git = (args, opts = {}) => sh("git", args, { cwd: work, ...opts })
+  // No global config, hooks or templates from the real machine reach the fixture repositories.
+  const isolated = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }
+  const git = (args, opts = {}) => sh("git", args, { cwd: work, ...opts, env: { ...isolated, ...(opts.env ?? {}) } })
   writeFileSync(path.join(work, "relay", "config.toml"), "[relay]\nheartbeat_interval = \"30s\"\n")
   git(["init", "-q", "-b", "main"])
   for (const [key, value] of [["user.email", "operator@example.com"], ["user.name", "Desk Operator"], ["commit.gpgsign", "false"]]) git(["config", key, value])
   git(["add", "-A"])
-  const dated = (date) => ({ env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } })
+  const dated = (date) => ({ env: { ...isolated, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } })
   git(["commit", "-q", "-m", "Add the relay config"], dated("2026-09-20T09:00:00Z"))
   git(["checkout", "-q", "-b", ELSEWHERE_CLONE.branch])
   writeFileSync(path.join(work, "relay", "config.toml"), "[relay]\nheartbeat_interval = \"15s\"\n")
   git(["commit", "-q", "-am", "Shorten the relay heartbeat to 15s"], dated("2026-09-30T08:00:00Z"))
-  sh("git", ["init", "-q", "--bare", "-b", "main", bare])
+  sh("git", ["init", "-q", "--bare", "-b", "main", bare], { env: isolated })
   git(["push", "-q", bare, "main", ELSEWHERE_CLONE.branch])
   rmSync(work, { recursive: true, force: true })
   return { from: ELSEWHERE_CLONE.url.replace(/\.git$/u, ""), to: bare.replace(/\.git$/u, "") }

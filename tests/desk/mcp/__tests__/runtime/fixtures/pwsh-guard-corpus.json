@@ -1187,6 +1187,13 @@
   "cwd": "own"
  },
  {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='notepad C:\\git\\notes.txt'}",
+  "expect": "allow",
+  "why": "WMI process creation whose command line only has git in a folder name",
+  "launcher_ok": "starts notepad, not git"
+ },
+ {
   "group": "known gap",
   "command": "(\"g\"+\"it checkout topic\") | iex",
   "expect": "deny",
@@ -1300,5 +1307,37 @@
   "expect": "deny",
   "why": "cherry-pick has no rule, so an unresolved checkout is not stopped",
   "known_gap": true
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "$p = New-Object System.Diagnostics.Process; $p.StartInfo.FileName = 'C:\\tools\\git-lfs.exe'; $p.Start()",
+  "expect": "allow",
+  "why": "git-lfs is another program whose name starts with git",
+  "launcher_ok": "starts git-lfs, not git"
+ },
+ {
+  "group": "bypass: process creation that is not the program itself (fixed)",
+  "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='cmd /c git checkout topic'}",
+  "expect": "deny",
+  "why": "a wrapper in program position still runs the git in its arguments"
+ },
+ {
+  "group": "bypass: process creation that is not the program itself (fixed)",
+  "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='\"C:\\Program Files\\Git\\bin\\git.exe\" checkout topic'}",
+  "expect": "deny",
+  "why": "a quoted path to git.exe is git in program position"
+ },
+ {
+  "group": "plain statements the allowlist keeps allowing",
+  "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=\"notepad C:\\git\\notes.txt\"}",
+  "expect": "allow",
+  "why": "a double-quoted command line whose program is notepad runs no git",
+  "launcher_ok": "starts notepad, not git"
+ },
+ {
+  "group": "bypass: process creation that is not the program itself (fixed)",
+  "command": "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=\"$g checkout topic\"; Note='git'}",
+  "expect": "deny",
+  "why": "a program held in a variable could be git, and git is named"
  }
 ]

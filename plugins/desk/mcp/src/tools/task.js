@@ -623,7 +623,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
   if (unknown.length > 0) {
     throw new Error(
-      `task_update: unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; nothing was changed. Accepted fields: ${TASK_UPDATE_FIELDS.map((key) => `\`${key}\``).join(", ")}. Other card fields go inside \`frontmatter\`.`,
+      `task_update: unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; nothing was changed. Accepted fields: ${TASK_UPDATE_FIELDS.map((key) => `\`${key}\``).join(", ")}. Other card fields go inside \`frontmatter\`. Example: {"track": "t", "slug": "s", "status": "validating", "note": "what happened"}.`,
     )
   }
   const { track, slug, body_append } = values
