@@ -1005,11 +1005,23 @@ test("task_focus answers without write authority or a write gate, and one focus 
   assert.equal(focusCalls[0].focus.get(), null)
 })
 
-test("task_focus is refused at once, without waiting for admission, when the runtime is not loaded", async (t) => {
-  const { session } = await makeSession(t, {
-    runtime: fakeRuntime(),
-  })
-  session.context.runtimeServer = null
+test("task_focus waits a bounded time for admission still running, then declares without write authority", async (t) => {
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const runtime = fakeRuntime()
+  // Admission loads the runtime late: the call waits for it, inside the bound.
+  const slow = await makeSession(t, { runtime, loadRuntime: async () => { await gate; return { runtimeServer: runtime, runtimeStatus: {} } }, inputs: { policy: { ...unsupported, write_authority: "person" } } })
+  const pending = slow.session.callTool({ name: "task_focus", input: { clear: true } })
+  await flush()
+  release()
+  const answered = payload(await pending)
+  assert.equal(answered.status, "ok")
+  assert.equal(requirementMet("write", slow.session.context), false, "the declaration gained no write authority")
+})
+
+test("task_focus refuses with the existing message when admission does not finish in the bound", async (t) => {
+  const late = new Promise((resolve) => setTimeout(() => resolve({ outcome: { state: "degraded", code: "artifact_integrity_invalid", fix: "refresh", diagnostic: { reason: "missing_pack" } } }), 400))
+  const { session } = await makeSession(t, { focusWaitMs: 30, loadRuntime: () => late })
   const started = Date.now()
   const refused = payload(await session.callTool({ name: "task_focus", input: { clear: true } }))
   assert.equal(refused.status, "degraded")

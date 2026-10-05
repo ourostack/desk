@@ -71,8 +71,21 @@ test("each progress entry is capped, and a credential-like entry is redacted", a
   const [entry] = (await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" } })).recent_progress
   assert.equal(entry.length, PROGRESS_ENTRY_CHARS)
   assert.ok(entry.endsWith("…"))
-  const body = "## Progress log\n\n- 2026-01-01: set password hunter2xyz now\n"
-  assert.deepEqual(recentProgress(body, 5, 300).length, 1)
+})
+
+test("a credential-like progress entry is redacted in recent_progress and the rest of the note survives", async () => {
+  const root = await mkTempDeskRoot()
+  await card(root, "tr", "alpha-work")
+  await task_update({ deskRoot: root, input: { track: "tr", slug: "alpha-work", note: "plain note kept" } })
+  await task_update({ deskRoot: root, input: { track: "tr", slug: "alpha-work", note: "wired login using ghp_abcdefghijklmnopqrstuvwxyz0123456789 in staging" } })
+  const result = await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" } })
+  assert.equal(result.recent_progress.length, 2)
+  assert.match(result.recent_progress[0], /plain note kept$/u)
+  const secretEntry = result.recent_progress[1]
+  assert.doesNotMatch(secretEntry, /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
+  assert.match(secretEntry, /wired login using/u)
+  assert.match(secretEntry, /in staging/u)
+  assert.doesNotMatch(JSON.stringify(result), /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
 })
 
 test("recentProgress ignores fences, other sections, plain lines and blank bullets", () => {
@@ -190,19 +203,24 @@ test("hint names main agent on an update to another card", async () => {
   assert.match(MAIN_FOCUSED("x/y"), /^If you are the session's main agent: /u)
 })
 
-test("no-focus hint once", async () => {
+test("no-focus hint repeats on every task tool result until the session sets a focus", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
   const { statusContext } = ctx()
   const first = await task_update({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work", note: "a" } })
   assert.equal(first.focus_note, MAIN_NONE)
   const second = await task_update({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work", note: "b" } })
-  assert.equal(second.focus_note, undefined)
+  assert.equal(second.focus_note, MAIN_NONE)
   const third = await task_create({ deskRoot: root, statusContext, input: { track: "tr", slug: "beta-work", title: "T" } })
-  assert.equal(third.focus_note, undefined)
+  assert.equal(third.focus_note, MAIN_NONE)
+  const fourth = await task_archive({ deskRoot: root, statusContext, input: { track: "tr", slug: "beta-work", outcome: "cancelled" } })
+  assert.equal(fourth.focus_note, MAIN_NONE)
+  await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" }, statusContext })
+  const after = await task_update({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work", note: "c" } })
+  assert.equal(after.focus_note, undefined, "the hint stops once a focus is set")
 })
 
-test("no-focus hint is spent by task_move, task_create and a clear, and task_focus itself never carries it", async () => {
+test("no-focus hint also rides task_move and task_create, stops after a deliberate clear, and task_focus itself never carries it", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
   const moved = ctx()
@@ -237,7 +255,7 @@ test("archiving the focused card clears the focus; archiving another does not", 
   const done = await task_archive({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work", outcome: "cancelled" } })
   assert.equal(done.focus_note, undefined)
   assert.equal(focus.get(), null)
-  assert.equal(focus.firstNoFocusHint(), false, "archiving the focused card does not bring the no-focus hint back")
+  assert.equal(focus.declared(), true, "archiving the focused card does not bring the no-focus hint back")
 })
 
 test("already_archived of the focused card clears the focus too", async () => {
@@ -299,14 +317,14 @@ test("server.callTool routes task_focus and surfaces a missing card as an error"
   assert.match(JSON.parse(missing.content[0].text).message, /card not found: tr\/nope-nope/u)
 })
 
-test("the focus holder keeps the value, and only the first no-focus hint is true", () => {
+test("the focus holder keeps the value and is undeclared until the first set", () => {
   const holder = createFocusHolder()
   assert.equal(holder.get(), null)
-  assert.equal(holder.firstNoFocusHint(), true)
-  assert.equal(holder.firstNoFocusHint(), false)
+  assert.equal(holder.declared(), false)
+  assert.equal(holder.declared(), false)
   holder.set({ track: "a", slug: "b-c" })
   assert.deepEqual(holder.get(), { track: "a", slug: "b-c" })
   const fresh = createFocusHolder()
   fresh.set(null)
-  assert.equal(fresh.firstNoFocusHint(), false)
+  assert.equal(fresh.declared(), true)
 })

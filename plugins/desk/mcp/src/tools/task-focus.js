@@ -6,7 +6,7 @@
 // the task stands.
 //
 // The held focus lives in the session layer (runtime/desk-session.js), handed in as `statusContext.focus`:
-// `{ get(): { track, slug } | null, set(value), firstNoFocusHint(): boolean }`. The hints built here are only hints:
+// `{ get(): { track, slug } | null, set(value), declared(): boolean }`. The hints built here are only hints:
 // no tool call fails, waits or changes because focus is unset or different, and every hint is worded for the
 // session's main agent because a subagent shares the session's server.
 
@@ -95,13 +95,13 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
 
 /**
  * The `focus_note` hint a task tool adds to its result, or undefined. `target` is the card an update or archive acted
- * on: a different card than the focus gets the "focused on" hint. With nothing focused, the first task tool call of the
- * session gets the "no task in focus" hint, and no later one does.
+ * on: a different card than the focus gets the "focused on" hint. With nothing focused and nothing ever declared (a focus
+ * set, or a deliberate clear), every task tool call gets the "no task in focus" hint.
  */
 export function focusNote(statusContext, target) {
   const focus = statusContext?.focus
   if (!focus) return undefined
   const current = focus.get()
-  if (current === null) return focus.firstNoFocusHint() ? NO_FOCUS_HINT : undefined
+  if (current === null) return focus.declared() ? undefined : NO_FOCUS_HINT
   return target !== undefined && !sameTask(current, target) ? focusedHint(current) : undefined
 }

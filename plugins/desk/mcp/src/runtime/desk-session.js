@@ -47,6 +47,8 @@ const STATUS_BUDGET_MS = 90
 // How long one runtime status computation may run before desk_status stops waiting on it and starts another. It is well above the 2 s the controller status check allows itself, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
 const STATUS_RUN_LIMIT_MS = 10000
 const GATE_WAIT_MS = 10000
+// How long task_focus waits for a session that is still admitting: short, because the call is a declaration, not work.
+const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
 const WRITE_PING_MS = 1000
 const CONTROLLER_FAILURE = /readiness controller|ECONNREFUSED|ECONNRESET|ENOENT|EPIPE|ETIMEDOUT|EADDRINUSE/u
@@ -60,24 +62,20 @@ export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
 /**
  * The task this session's main agent declared it is working on, held in memory for the life of the session (module
  * state in the runtime pack can reset when the pack is reloaded; this closure cannot). `get()` is `{ track, slug }` or
- * null; `set(value)` replaces it (null clears) and counts as a declaration, so a session that has declared anything,
- * `clear` included, never gets the no-focus hint; `firstNoFocusHint()` is true once, for the first caller. Never
+ * null; `set(value)` replaces it (null clears) and counts as a declaration; `declared()` is false until the first one, so
+ * the no-focus hint is repeated on task tool results until the session sets a focus or clears it on purpose. Never
  * written to disk: the transcript is the record.
  */
 export function createFocusHolder() {
   let current = null
-  let hinted = false
+  let declared = false
   return {
     get: () => current,
     set(value) {
       current = value
-      hinted = true
+      declared = true
     },
-    firstNoFocusHint() {
-      const first = !hinted
-      hinted = true
-      return first
-    },
+    declared: () => declared,
   }
 }
 
@@ -527,8 +525,11 @@ export function createDeskSession(deps) {
     const requirement = toolRequirement(name)
     if (requirement === "status") return deskStatus(input, signal)
     if (requirement === "doctor") return deskDoctor(input, signal)
-    // Answered at once or refused at once: a focus call never waits for admission, and never needs a write.
-    if (requirement === "focus") return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null) : refusal(name, requirement)
+    // A focus call needs the runtime and a root, never a write: while Desk is still admitting it waits a short, bounded time, like the read tools, then refuses.
+    if (requirement === "focus") {
+      if (!requirementMet(requirement, context)) await admission.refresh({ waitMs: deps.focusWaitMs ?? FOCUS_WAIT_MS })
+      return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null) : refusal(name, requirement)
+    }
     if (!requirementMet(requirement, context)) {
       // A Desk that is still admitting, or one a retry could fix now, gets one bounded chance before the tool is refused.
       await admission.refresh({ waitMs: GATE_WAIT_MS })

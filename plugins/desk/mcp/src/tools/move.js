@@ -627,7 +627,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, sta
   }
   if (commit) result.commit = commit
   // The held focus follows the card it names (a merge follows into the card that keeps the job); with nothing
-  // focused, the first task tool call of the session carries the no-focus hint. A different focus is left alone.
+  // focused, a task tool call carries the no-focus hint until the session declares. A different focus is left alone.
   const focus = statusContext.focus
   const current = focus?.get() ?? null
   if (current !== null && current.track === track && current.slug === slug) {

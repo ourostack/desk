@@ -547,7 +547,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   // The focus moves only once the card exists: a create that threw above never reaches this line. A create without
-  // `focus` (a parked follow-up) leaves the focus alone and, with nothing focused, carries the one-time hint.
+  // `focus` (a parked follow-up) leaves the focus alone and, with nothing focused, carries the no-focus hint.
   if (values.focus === true && statusContext.focus) {
     statusContext.focus.set({ track, slug })
     result.focused = true
@@ -793,7 +793,7 @@ async function archivedTaskStatus(archivedFile) {
 }
 
 // An archive of the focused card ends the focus (the task is finished); an archive of any other card carries the hint
-// for a session that is still focused elsewhere, or the one-time no-focus hint.
+// for a session that is still focused elsewhere, or the no-focus hint.
 function withArchiveFocus(statusContext, target, result) {
   const focus = statusContext.focus
   const current = focus?.get() ?? null
