@@ -1,4 +1,4 @@
-A task card's factory report link now names the job ID the store actually publishes. A desk known to be private (or internal) still links the plain job ID. Any other desk links the keyed ID, made with this machine's secret, so a public desk never shows a plain job ID. If the desk's visibility is not known or has expired, or the machine secret is missing, the card gets no link (`visibility_not_known` or `machine_secret_unavailable`) instead of a link that might lead nowhere. `factory job-link` follows the same rule and returns the reason when there is no link. Because the keyed ID is per machine, run the check on the machine that did the work ([factory local capture](docs/factory-local-capture.md)).
+A task card's factory report link no longer names a job ID the store does not publish, and a public desk's card no longer links its job at all. Only a desk known to be private (its cached visibility is `private` or `internal`) gets `factory_report`, to its plain job ID, which is what its store publishes. Any other desk's store job is keyed so that nobody can tie the desk's public cards to it, and a link would make that tie, so its card gets no link. The card instead records `factory_report_unavailable` with a reason code only: `desk_not_private`, `visibility_not_known` (the cached visibility answer is expired, absent or unreadable) or `job_identity_unavailable`. `task_update` and `task_archive` return the same field. A missing link is not permanent: any later `task_update` of such a card asks again, writes the link and removes the field once a link can be named, and otherwise keeps the reason current. A newer answer also removes an older link the card carried. `factory job-link` follows the same rule and prints the reason when there is no link ([factory local capture](docs/factory-local-capture.md)).
 
 Job credit is more accurate:
 
@@ -7,6 +7,7 @@ Job credit is more accurate:
 - Time the segment cap gives to another task now counts in `segments_capped_ms`, not only time it drops.
 - A human turn whose stop precedes its start is dropped and flagged `source_unreadable`, not counted as a negative window.
 - A token total missing from several sessions counts each session once, not only the larger part's count.
+- The binder version is now 6, so every session derived by an older binder is derived once more, and no older receipt's credit or `segments_capped_ms: 0` is read as this binder's.
 
 `factory reconcile` reports truer reasons:
 

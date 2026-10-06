@@ -245,7 +245,7 @@ test("a status-only update alone binds no job", () => scratch(async (ctx) => {
   assert.equal(receipt.own_activity.length, 1, "the call is still the session's own activity")
 }))
 
-test("the receipt has binding_version: 5, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
+test("the receipt has binding_version: 6, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
   const marker = await session(ctx)
   await writeCard(ctx, "track/task")
@@ -262,8 +262,8 @@ test("the receipt has binding_version: 5, bound_by, own_activity (at most 500) a
   const status = await readStatus(ctx.env)
   const receipt = status.derivations[name]
   const [job] = Object.keys(await readJobsIndex(ctx.env))
-  assert.equal(BINDING_VERSION, 5)
-  assert.equal(receipt.binding_version, 5)
+  assert.equal(BINDING_VERSION, 6)
+  assert.equal(receipt.binding_version, 6)
   assert.deepEqual(receipt.bound_by, { [job]: "focus" })
   assert.deepEqual(receipt.focus_disagrees, [job])
   // The update at two minutes in, widened by a minute each way, in milliseconds from the session's start.
@@ -441,7 +441,7 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
 
 test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
-  assert.equal(BINDING_VERSION, 5)
+  assert.equal(BINDING_VERSION, 6)
   const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
@@ -675,7 +675,7 @@ async function orphan(ctx, { declare = true, receiptRoot = true, cwd = ctx.desk,
   if (stale || !receiptRoot) {
     await staleReceipt(ctx, name, (receipt) => {
       if (!receiptRoot) delete receipt.desk_root
-      if (!stale) receipt.binding_version = 5
+      if (!stale) receipt.binding_version = 6
       return receipt
     })
   }
@@ -1685,7 +1685,7 @@ test("the receipt still records segments_capped_ms as before", () => scratch(asy
   await deriveMarker(ctx.env, marker)
   const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
   assert.equal(Number.isInteger(receipt.segments_capped_ms) && receipt.segments_capped_ms > 0, true)
-  assert.equal(receipt.binding_version, 5)
+  assert.equal(receipt.binding_version, 6)
 }))
 
 // Capture coverage (capture-sweep.js): the sweep makes one call after the orphan pass and reports it in its summary.

@@ -302,11 +302,10 @@ const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-r
  * `--track`/`--slug` as-is, so a renamed or moved card's report will not be
  * found there; pass `--desk <desk root>` (the same value the task tools see)
  * to resolve the card's birth path first, exactly as the task tools and the
- * boot check do, so the link matches the job they already agree on. The link
- * names the ID the store publishes from this machine (`publishedJobId`):
- * plain for a desk known private, machine-keyed otherwise. When that ID
- * cannot be known here it prints `{ link: null, reason }` instead of a link
- * that would never resolve.
+ * boot check do, so the link matches the job they already agree on. It
+ * follows the task card's rule (`publishedJobId`): only a desk known private
+ * gets a link, to its plain job ID; any other desk prints
+ * `{ link: null, reason }` (`desk_not_private` or `visibility_not_known`).
  */
 export async function runJobLinkCommand({ argv, env = process.env }) {
   const options = parseOptions(argv)

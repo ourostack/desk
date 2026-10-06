@@ -1,7 +1,6 @@
 import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
-import { jobId } from "../binding.js"
 import { validateLabelsBytes } from "../label-schema.js"
 import { PATTERNS } from "../schema.js"
 import { calculateFormulas } from "./formulas.js"
@@ -192,12 +191,7 @@ export function build({ storeDir, outDir }) {
   return { jobs: reports.length, sessions: sessions.length }
 }
 
-/** The report page of plain job ID of a task: correct only where the store publishes plain IDs (a desk known private); see `jobReportUrl`. */
-export function jobLink({ store, deskRemote, personPrefix, track, slug }) {
-  return jobReportUrl({ store, job: jobId({ deskRemote, personPrefix, track, slug }) })
-}
-
-/** The report page of `job`, an ID as the store publishes it (plain, or machine-keyed for a desk not known private). */
+/** The report page of `job`, an ID as the store publishes it. A task card links only a desk known private, whose store job is its plain ID (`local-status.js` `publishedJobId`). */
 export function jobReportUrl({ store, job }) {
   if (typeof store !== "string" || !PATTERNS.prRepo.test(store)) throw new TypeError("jobReportUrl: store must be owner/repo")
   if (typeof job !== "string" || !/^[0-9a-f]{32}$/u.test(job)) throw new TypeError("jobReportUrl: job must be 32 lowercase hex")

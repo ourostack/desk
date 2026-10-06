@@ -5,7 +5,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { build, jobLink, jobReportUrl, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
+import { jobId } from "../../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
 
@@ -256,19 +257,9 @@ test("build reads facts as data only and rejects unexpected entries, invalid byt
   assert.throws(() => build({ storeDir: store, outDir: null }), /storeDir and outDir/u)
 }))
 
-test("jobLink reuses the accepted job identity and validates the public store name", () => {
-  assert.equal(jobLink({
-    store: "ourostack/factory",
-    deskRemote: "git@github.com:OuroStack/Desk.git",
-    personPrefix: "",
-    track: "factory",
-    slug: "store-pipeline",
-  }), "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md")
-  assert.throws(() => jobLink({ store: "not a store", deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
-  assert.throws(() => jobLink({ store: null, deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
-})
-
-test("jobReportUrl names a published job ID and refuses anything that is not 32 lowercase hex", () => {
+test("jobReportUrl names a published job ID and refuses anything that is not 32 lowercase hex, or a store that is not owner/repo", () => {
+  assert.equal(jobReportUrl({ store: "ourostack/factory", job: jobId({ deskRemote: "git@github.com:OuroStack/Desk.git", personPrefix: "", track: "factory", slug: "store-pipeline" }) }), "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md")
+  for (const store of ["not a store", null]) assert.throws(() => jobReportUrl({ store, job: "a".repeat(32) }), /store must be owner\/repo/u)
   assert.equal(jobReportUrl({ store: "ourostack/factory", job: "a".repeat(32) }), `https://github.com/ourostack/factory/blob/reports/jobs/${"a".repeat(32)}.md`)
   for (const job of [null, "A".repeat(32), "a".repeat(31), "../secret"]) assert.throws(() => jobReportUrl({ store: "ourostack/factory", job }), /job must be 32 lowercase hex/u)
 })

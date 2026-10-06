@@ -635,7 +635,7 @@ test("task_archive refuses to cancel a hand-damaged card whose record cannot mov
   await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(/^status: done$/mu, "status: weird"))
   await assert.rejects(
     task_archive({ deskRoot: root, input: { track: "t", slug: "damaged", outcome: "cancelled" } }),
-    /^Error: task_archive: the card's status is not one of the statuses.*Nothing was moved\. Set the card's status with task_update first/u,
+    /^Error: task_archive: nothing was moved\. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused \(this move sends work back and needs a return reason\)\. Set the card's status with task_update first/u,
   )
   assert.ok(await exists(file), "the live folder is where it was")
   assert.equal(await exists(path.join(root, "t", "_archive", "damaged")), false)

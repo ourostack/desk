@@ -109,7 +109,7 @@ function loopLines(loop, now) {
   return lines
 }
 
-/** `factoryReportLink` with this host's plugin set: the task card's `factory_report`, or `null` without consent. */
+/** `factoryReportLink` with this host's plugin set: `{ link }`, `{ link: null, reason }`, or `{ link: null }` without consent. */
 export function reportLink({ env, deskRoot, deskRemote, personPrefix, track, slug }) {
   const { dirs, incomplete } = factoryPluginScan(env)
   return factoryReportLink({ env, deskRoot, deskRemote, personPrefix, track, slug, pluginDirs: dirs, pluginScanIncomplete: incomplete })

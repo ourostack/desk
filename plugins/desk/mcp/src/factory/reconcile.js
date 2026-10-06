@@ -68,7 +68,9 @@
 // Privacy: names tracks and slugs only for the desk given; details are short codes and counts, never prompt
 // text, file contents, store names, a local path (the desk is named by its person alias only) or the machine secret.
 //
-// `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
+// `src/factory/**` imports only `node:` built-ins and other `src/factory/` files, with one exception, as in `derive-run.js`:
+// `../desk/crew-roster.js` (the one crew rule, which imports only `node:` built-ins), so a stale binding's detail names a crew desk the
+// way the orphan pass decides it.
 
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs"
 import { spawnSync } from "node:child_process"

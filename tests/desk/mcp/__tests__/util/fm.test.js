@@ -714,3 +714,21 @@ test("patchFrontmatterFields writes a non-scalar list item as its text form (a k
   const out = patchFrontmatterFields(raw, { returns: [{ a: 1 }] })
   assert.equal(out, ["---", "title: T", "returns:", '  - "[object Object]"', "---", "body"].join("\n"))
 })
+
+test("patchFrontmatterFields removes a field whose value is undefined, with its own continuation lines, and leaves an absent one absent", () => {
+  const card = ["---", "status: done", "factory_report: https://example.test/old.md # an older link", "note: |", "  literal", "", "track: t", "---", "", "Body.", ""].join("\n")
+  assert.equal(
+    patchFrontmatterFields(card, { factory_report: undefined, note: undefined, factory_report_unavailable: undefined, status: "done" }),
+    ["---", "status: done", "track: t", "---", "", "Body.", ""].join("\n"),
+  )
+  assert.equal(patchFrontmatterFields(card, { missing: undefined }), card, "removing an absent field changes nothing")
+})
+
+test("patchMarkdownFrontmatter's full-write fallback also removes a field whose value is undefined", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "task.md")
+  await fs.writeFile(filePath, "Just a body, no frontmatter.\n", "utf8")
+  await patchMarkdownFrontmatter(filePath, { status: "done", factory_report: undefined })
+  const { data } = await readMarkdown(filePath)
+  assert.deepEqual(data, { status: "done" })
+})
