@@ -12,11 +12,9 @@ description: >-
   precedent claims, or test coverage. Also invoke when writing factual claims
   into a pull request, task card, handoff or subagent brief, for the citation
   procedure. Not needed for a routine status read directly from its source.
-  Also invoke when a visual would help a human verify a state, or when a
-  milestone claims a rendered, installed, merged or rollout state, for the
-  visual-proof rule. Covers citing every factual claim, primary sources before
-  recommendations, evidence precedence, answering the governing question,
-  fixtures or refusal, and visual proof.
+  Also invoke when a visual would help verify a state or a milestone claims a
+  rendered, installed, merged or rollout state. Covers citation, primary
+  sources, evidence precedence, fixtures and visual proof.
 ---
 
 # Evidence discipline
