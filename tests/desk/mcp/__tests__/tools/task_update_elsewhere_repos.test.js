@@ -103,3 +103,8 @@ test("a card with no repos and an elsewhere marking can still gain repos", async
   const { update } = await card({ repos: [] })
   assert.equal((await update({ frontmatter: { repos: [{ name: "a/b", local_path: "", mode: "remote" }] } })).status, "updated")
 })
+
+test("a card that names its repo as a bare string is protected the same way", async () => {
+  const { update } = await card({ repos: [REPO] })
+  await assert.rejects(() => update({ frontmatter: { repos: [] } }), REFUSAL)
+})

@@ -826,9 +826,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // The clone guard (`runtime/elsewhere-clone.js`) finds a card that says its work is on another machine through the repos the card names. Dropping or renaming one of them would switch the guard
   // off without the operator's word, so a call that does must also rewrite the next step so it no longer says the work is elsewhere (the operator's word, recorded as `next_step`).
   const blocker = blockerOf(existing.content)
+  const priorRepoNames = recordedRepos(existing.data.repos).map((repo) => repo.name)
   if (saysElsewhere({ next_step: nextStepOf(existing.content), blocker }) && saysElsewhere({ next_step: nextStep ?? nextStepOf(existing.content), blocker })) {
-    const kept = new Set(asList(merged.repos).map((repo) => String(repo?.name ?? "").toLowerCase()))
-    const lost = asList(existing.data.repos).map((repo) => String(repo?.name ?? "")).filter((name) => name !== "" && !kept.has(name.toLowerCase()))
+    const kept = new Set(recordedRepos(merged.repos).map((repo) => repo.name.toLowerCase()))
+    const lost = priorRepoNames.filter((name) => !kept.has(name.toLowerCase()))
     if (lost.length > 0) {
       throw new Error(`task_update: record the operator's word with \`next_step\`; \`repos\` cannot drop a repo from a card marked elsewhere. Dropped: ${lost.map((name) => `\`${name}\``).join(", ")}. Nothing was changed.`)
     }
