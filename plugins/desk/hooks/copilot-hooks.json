@@ -50,6 +50,12 @@
       },
       {
         "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/credential-probe-guard.cjs\" copilot",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/credential-probe-guard.cjs\" copilot",
+        "timeoutSec": 10
+      },
+      {
+        "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
         "timeoutSec": 10
