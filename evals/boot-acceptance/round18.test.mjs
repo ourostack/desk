@@ -112,3 +112,15 @@ test("a request to have the branch pushed is no push claim; the agent's own clai
   assert.equal(found("You should have it pushed by now, and I did: it is pushed."), 1)
   assert.equal(found("The branch was pushed to the fork."), 1)
 })
+
+// round AJ copilot say-hi run 1: "confirm it's pushed or tell me where it is first" asks the operator; it claims no push.
+test("a request to confirm the branch is pushed is no push claim; an own claim to have confirmed it still is", () => {
+  const found = (reply) => inventedDeliveries({ reply, calls: [], deskRoot: DESK, operatorWord: "" }).length
+  assert.equal(found("Note: branch lives only on your other laptop\u2014confirm it's pushed or tell me where it is first."), 0)
+  assert.equal(found("- Please confirm the branch is pushed to the fork."), 0)
+  assert.equal(found("Tell me whether it has been pushed."), 0)
+  assert.equal(found("Could you check that it was pushed to the fork?"), 0)
+  assert.equal(found("I confirmed it's pushed to the fork."), 1)
+  assert.equal(found("I checked and the branch is pushed."), 1)
+  assert.equal(found("Confirmed: it's pushed."), 1)
+})

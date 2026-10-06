@@ -531,10 +531,14 @@ const isMerge = (words) => (words[0] === "git" && words.includes("merge")) || (g
 // (the text after the last comma, semicolon, colon, dash, "and", "but", "then" or "so" before it), so "I should have it pushed by now, and I did: it is pushed" still has a claim in its last clause.
 const CLAUSE_START = /[,;:]|\s[\u2014\u2013-]\s|\s(?:and|but|then|so)\s/gu
 const REQUEST_OBJECT = /(?:^|\s)(?:or|to|please|you|could|can|should|will)\s+(?:have|get)\s+(?:it|them|that|this|the\s+\w+)\s+(?:be\s+)?$/iu
+// A request to the operator to confirm or say whether it is done: "confirm it's pushed", "tell me whether the branch is pushed", "check that it has been pushed". The verb is an
+// instruction (at the clause start, after a dash, or after "or", "to", "please", "you", "could", "can", "should", "will", "must" or "and"), so "I confirmed it is pushed" is still a claim.
+const REQUEST_VERB = /(?:^|[\u2014\u2013]|\s(?:or|to|please|you|could|can|should|will|must|and)\s+)\s*(?:confirm|check|verify|ensure|make sure|let me know|tell me|say|show me)\s+(?:(?:that|whether|if)\s+)?(?:it|they|that|this|the\s+\w+(?:\s+\w+)?)(?:\s+(?:is|are|has been|have been|was|were)|['\u2019]s)?\s+(?:(?:now|already|really|actually)\s+)?$/iu
 function requestedInClause(beforeVerb) {
   let start = 0
   for (const mark of beforeVerb.matchAll(CLAUSE_START)) start = mark.index + mark[0].length
-  return REQUEST_OBJECT.test(beforeVerb.slice(start))
+  const clause = beforeVerb.slice(start)
+  return REQUEST_OBJECT.test(clause) || REQUEST_VERB.test(clause)
 }
 
 // The matches of `patterns` that stand as claims: past-tense, not negated or conditional by the shared handling, not preceded by a requirement or wait,

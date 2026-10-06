@@ -138,6 +138,10 @@ function checkStartupHooks(skill) {
       claude: runClaudeHook({ env, cwd: codeRepo, projectDir: codeRepo }),
       copilot: runCopilotHook({ env, cwd: codeRepo, sessionCwd: codeRepo }),
     };
+    // Claude Code keeps only the first 2 KB of a SessionStart context that passes 10,000 characters (round AJ: with the foundation 400 characters longer, 13 of 17 runs
+    // over the limit never ran the boot, against 1 of 99 under it), so the boot imperative opens the context and the foundation follows it.
+    assert.ok(contexts.claude.startsWith("Desk startup:"), "claude startup must open with the Desk startup line, ahead of the foundation");
+    assert.ok(contexts.claude.indexOf("session-boot.js") < 2000, "claude startup must name the boot script inside the first 2 KB");
     for (const [host, context] of Object.entries(contexts)) {
       assert.equal(countOccurrences(context, foundation), 1, `${host} startup must inject the using-desk foundation exactly once`);
       const rfcLines = context.split("\n").filter((line) => line.startsWith("Desk RFC:"));

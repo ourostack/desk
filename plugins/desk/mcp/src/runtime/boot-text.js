@@ -179,7 +179,7 @@ function pushNote(entry) {
     // A direct push by the account gh already has active needs no line.
     if (entry.route !== "fork" && (typeof active !== "string" || active === entry.account)) return null
     const login = typeof active === "string" && active !== entry.account ? ` For git and gh calls use \`GH_TOKEN=$(gh auth token --user ${entry.account})\`, and name ${entry.account}, never ${active}, as the push account in any note.` : ""
-    return `${store}: ${route}${route.endsWith(".") ? "" : "."}${fork}${login} ${SAY_ROUTE}`
+    return `${store}: ${route}${route.endsWith(".") ? "" : "."}${fork}${login} ${SAY_ROUTE} ${ROUTE_CHECKED}`
   }
   if (entry.result === "no_account_can_deliver") {
     const reasons = Array.isArray(entry.accounts) && entry.accounts.length > 0 ? ` (${entry.accounts.map((item) => `${item.account}: ${item.reason}`).join("; ")})` : ""
@@ -191,6 +191,8 @@ function pushNote(entry) {
 }
 
 const SAY_ROUTE = "Say this route in one line when you report on the task."
+// Desk's own route is the answer to "which account and route can deliver"; an agent that re-checks it with gh and gets a failure goes on to probe the token itself.
+export const ROUTE_CHECKED = "Desk resolved this route, so say it rather than re-checking it with gh; never print, count or test the token, and if a gh call fails, report the error as it is."
 
 const taskKey = (desk, track, slug) => `${desk ?? ""}|${track}|${slug}`
 

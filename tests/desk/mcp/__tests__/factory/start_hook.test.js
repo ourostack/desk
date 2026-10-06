@@ -374,12 +374,14 @@ function runHook(host, env, desk) {
     : spawnSync("bash", [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env, encoding: "utf8" })
 }
 
-function expectedContext(host, env, desk) {
+// `checks` is the boot pre-checks line a speaking check adds ("\n\nDesk boot pre-checks: ..."). Copilot appends it at the end; Claude's resolver adds it to the startup
+// direction, which opens the context (Claude Code keeps only a 2 KB preview of a context past 10,000 characters, so the boot imperative leads).
+function expectedContext(host, env, desk, checks = "") {
   const skill = readFileSync(path.join(PLUGIN, "skills", "using-desk", "SKILL.md"), "utf8")
   const rfc = path.join(PLUGIN, "docs", "agentic-engineering-v2-rfc.md")
-  if (host === "copilot") return `${skill.trimEnd()}\n\nDesk RFC: ${rfc}\n\n${copilotStartupDirection({ env, sessionFolder: desk })}`
+  if (host === "copilot") return `${skill.trimEnd()}\n\nDesk RFC: ${rfc}\n\n${copilotStartupDirection({ env, sessionFolder: desk })}${checks}`
   // Bash command substitution drops the file's trailing newlines, as `trimEnd` does for the newline-only tail.
-  return `${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n\n${claudeStartupDirection({ env })}`
+  return `${claudeStartupDirection({ env })}${checks}\n\n${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n`
 }
 
 function envelope(host, context) {
@@ -405,8 +407,8 @@ for (const host of ["claude", "copilot"]) {
     const spokenRun = runHook(host, { ...hookEnv, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${speaking}`.trim() }, desk)
     assert.equal(spokenRun.status, 0, spokenRun.stderr)
     const spoken = JSON.parse(spokenRun.stdout)
-    assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, `${context}\n\nDesk boot pre-checks: one; two`)
-    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, `${context}\n\nDesk boot pre-checks: one; two`))
+    assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two"))
+    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two")))
     assert.equal(readFileSync(calls, "utf8"), "started\nstarted\n", "each start launches factory delivery once, after its output is built")
   }))
 }
