@@ -11,6 +11,7 @@ import {
   TOMBSTONE_RETENTION_MS,
   factoryStateRoot,
   finishRetracting,
+  gitBlobSha,
   markDelivered,
   markRetracting,
   pruneDeliveredCopy,
@@ -101,25 +102,50 @@ async function deliveredCopy(ctx, n) {
 const outboxFile = async (ctx, name) => path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
 const present = (file) => fs.lstat(file).then(() => true, () => false)
 
-test("a delivered copy is pruned; an undelivered, quarantined, retracting, tombstoned, missing, label or odd name is not", () => scratch(async (ctx) => {
+const shaOfCopy = async (ctx, name) => gitBlobSha(await fs.readFile(await outboxFile(ctx, name)))
+const deliverCopy = async (ctx, name, extra = {}) => markDelivered(ctx.env, STORE, { name, publishedBlobSha: SHA, publishedPath: "facts/x.json", localSha: await shaOfCopy(ctx, name), ...extra })
+
+test("a delivered copy is pruned only when its delivery is trusted and it is the very copy that was delivered", () => scratch(async (ctx) => {
   assert.equal(COPY_RETENTION_MS, 90 * DAY)
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const name = await deliveredCopy(ctx, 1)
   // Not delivered yet: the outbox copy is the only thing that holds it.
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false)
-  assert.equal(await present(await outboxFile(ctx, name)), true)
+  // Delivered with no recorded local copy (an older Desk), or with no path: kept.
   await markDelivered(ctx.env, STORE, { name, publishedBlobSha: SHA, publishedPath: "facts/x.json" })
+  assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false, "no local sha: an older Desk's record")
+  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: SHA, localSha: "not a sha" , publishedPath: "facts/x.json" })
+  assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false, "a local sha that is not one is not recorded")
+  const noPath = await deliveredCopy(ctx, 6)
+  await markDelivered(ctx.env, STORE, { name: noPath, publishedBlobSha: SHA, localSha: await shaOfCopy(ctx, noPath) })
+  assert.equal(await pruneDeliveredCopy(ctx.env, STORE, noPath), false, "no trusted path: a later retraction could not find the file")
+  // The path entry's blob must be the delivered blob.
+  await deliverCopy(ctx, name)
+  const root = await factoryStateRoot(ctx.env)
+  const pathsFile = path.join(root, "delivered-paths", "ourostack__factory.json")
+  const paths = JSON.parse(await fs.readFile(pathsFile, "utf8"))
+  await fs.writeFile(pathsFile, JSON.stringify({ ...paths, [name]: { ...paths[name], blob: "b".repeat(40) } }))
+  assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false, "a path record that is not for the delivered blob")
+  await fs.writeFile(pathsFile, JSON.stringify({ ...paths, [name]: "facts/x.json" }))
+  assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false, "a bare path is an older record")
+  await fs.writeFile(pathsFile, JSON.stringify(paths))
+  // The copy changed after it was delivered: an undelivered update, never pruned.
+  const file = await outboxFile(ctx, name)
+  await fs.writeFile(file, `${await fs.readFile(file, "utf8")} `)
+  assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false, "newer than what was delivered")
+  assert.equal(await present(file), true)
+  await fs.writeFile(file, (await fs.readFile(file, "utf8")).trimEnd())
   // Quarantined: the store refused it, so the copy is evidence.
   await quarantine(ctx.env, STORE, name, "unknown_key")
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false)
-  await fs.rm(path.join(await factoryStateRoot(ctx.env), "quarantine"), { recursive: true })
+  await fs.rm(path.join(root, "quarantine"), { recursive: true })
   // Names that are not a facts copy, and a copy that is not there.
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, "labels/job/x.json"), false)
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, "nonsense"), false)
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, nameOf(9)), false)
   // A directory is not a copy.
   const dir = await deliveredCopy(ctx, 5)
-  await markDelivered(ctx.env, STORE, { name: dir, publishedBlobSha: SHA, publishedPath: "facts/d.json" })
+  await deliverCopy(ctx, dir)
   await fs.rm(await outboxFile(ctx, dir))
   await fs.mkdir(await outboxFile(ctx, dir))
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, dir), false)
@@ -128,14 +154,44 @@ test("a delivered copy is pruned; an undelivered, quarantined, retracting, tombs
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false)
   await finishRetracting(ctx.env, STORE, [{ name, path: "facts/x.json", blob: SHA }])
   assert.equal((await readDelivered(ctx.env, STORE)).retracted[name] !== undefined, true)
-  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: SHA, publishedPath: "facts/x.json" })
+  await deliverCopy(ctx, name)
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, name), false)
   assert.equal(await present(await outboxFile(ctx, name)), true)
-  // Delivered and otherwise untouched: pruned, and the delivered record stays.
+  // Delivered, trusted and unchanged: pruned, and the delivered record stays.
   const plain = await deliveredCopy(ctx, 2)
-  await markDelivered(ctx.env, STORE, { name: plain, publishedBlobSha: SHA, publishedPath: "facts/p.json" })
+  await deliverCopy(ctx, plain)
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, plain), true)
   assert.equal(await present(await outboxFile(ctx, plain)), false)
   assert.equal((await readDelivered(ctx.env, STORE)).blobs[plain], SHA)
   assert.equal(await pruneDeliveredCopy(ctx.env, STORE, plain), false, "already gone")
+}))
+
+test("a tombstone is never pruned while any local copy of its session exists for the store: outbox, kept, labels or quarantine", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const root = await factoryStateRoot(ctx.env)
+  const where = {
+    outbox: (n) => path.join(root, "outbox", "ourostack__factory", nameOf(n)),
+    kept: (n) => path.join(root, "retracted-copies", "ourostack__factory", nameOf(n)),
+    quarantine: (n) => path.join(root, "quarantine", "ourostack__factory", nameOf(n)),
+    labels: (n) => path.join(root, "labels", "ourostack__factory", "1a2b3c4d5e6f708192a3b4c5d6e7f809", `${sessionId(n)}.json`),
+    keptLabels: (n) => path.join(root, "retracted-copies", "ourostack__factory", "labels", "1a2b3c4d5e6f708192a3b4c5d6e7f809", `${sessionId(n)}.json`),
+    quarantinedLabels: (n) => path.join(root, "quarantine", "ourostack__factory", "labels", "1a2b3c4d5e6f708192a3b4c5d6e7f809", `${sessionId(n)}.json`),
+  }
+  const file = await retractingFile(ctx)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const kinds = Object.keys(where)
+  const records = {}
+  for (const [index, kind] of kinds.entries()) {
+    const n = index + 1
+    await fs.mkdir(path.dirname(where[kind](n)), { recursive: true })
+    await fs.writeFile(where[kind](n), "{}")
+    records[nameOf(n)] = tomb({ at: ago(500) })
+  }
+  records[nameOf(20)] = tomb({ at: ago(500) })
+  await fs.writeFile(file, JSON.stringify(records))
+  assert.equal(await pruneTombstones(ctx.env, { now: () => NOW }), 1, "only the session with nothing left locally")
+  assert.deepEqual(Object.keys(await readRetracting(ctx)).sort(), kinds.map((_, index) => nameOf(index + 1)).sort())
+  // The copy goes, and so may the tombstone.
+  await fs.rm(where.outbox(1))
+  assert.equal(await pruneTombstones(ctx.env, { now: () => NOW }), 1)
 }))

@@ -677,6 +677,35 @@ test("the store's own check failing to read the commits is no refusal: no week's
   assert.ok(github.headFiles(STORE, `intake/${id}`).has(`capture/${id}.json`) || github.mainFiles().has(`capture/${id}.json`))
 }))
 
+test("a store whose own check keeps failing is counted, never blamed on the record, and the count clears once a record lands", () => scratch(async ({ env }) => {
+  const id = await setup(env, { facts: 1 })
+  const github = fakeGitHub({ captureJson: READY })
+  const clock = { t: T0 }
+  await run(env, github, clock)
+  const fail = async () => {
+    github.rejectOpenPr("factory-rejected: capture_check_unavailable")
+    clock.t += 21 * HOUR
+    await writeStatus(env, { coverage: coverageAt(iso(clock.t - HOUR)) })
+    assert.equal((await run(env, github, clock)).result, "intake_stale_retried")
+  }
+  await fail()
+  assert.equal((await capture(env)).check_unavailable, 1)
+  assert.equal((await capture(env)).refused, undefined)
+  await fail()
+  await fail()
+  const saved = await capture(env)
+  assert.equal(saved.check_unavailable, 3)
+  const { captureCheckLines } = await import("../../../../../plugins/desk/mcp/src/factory/retention.js")
+  assert.equal(captureCheckLines(await readStatus(env)).length, 1)
+  // The record lands: merged and seen on the default branch, the count is cleared with the other delivery signals.
+  github.mergeOpenPr()
+  clock.t += 21 * HOUR
+  await writeStatus(env, { coverage: coverageAt(iso(clock.t - HOUR)) })
+  await run(env, github, clock)
+  assert.equal((await capture(env))?.check_unavailable, undefined)
+  assert.ok(github.mainFiles().has(`capture/${id}.json`))
+}))
+
 test("a record whose pull request was closed unmerged is not retracted when the scope empties", () => scratch(async ({ env }) => {
   const id = await setup(env)
   const github = fakeGitHub({ captureJson: READY })

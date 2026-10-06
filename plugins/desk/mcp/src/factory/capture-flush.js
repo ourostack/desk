@@ -11,6 +11,7 @@
 //   refused      the fixed code of the store's refusal that named the record
 //   skipped      `store_not_ready`: the store's `capture.json` is not exactly `{"capture":1}`
 //   invalid      `capture_invalid`: the record failed its own gate (a bug in the caller or the coverage); nothing is sent
+//   check_unavailable  how many times in a row the store's own check could not read the record's commits (stale, not a refusal); cleared when a record settles
 //   retry_after  nothing is considered before it: +24 h for skipped, +7 days for refused, +1 day for invalid
 // Keys this file does not know are kept as they are.
 //
@@ -44,7 +45,7 @@ const SHA = /^[0-9a-f]{40}$/u
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const timeOf = (value) => (typeof value === "string" ? Date.parse(value) : Number.NaN)
 const iso = (ms) => new Date(ms).toISOString()
-const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after"]
+const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable"]
 
 /** The coverage the record may be built from: parsable `ran_at`, not in the future, under three days old; else null. */
 export function freshCoverage(status, nowMs) {
@@ -99,6 +100,13 @@ async function update(env, store, change) {
 
 const without = (cap, keys) => Object.fromEntries(Object.entries(cap).filter(([key]) => !keys.includes(key)))
 const SIGNALS = ["pr", "sent_bytes", "refused", "skipped", "invalid", "retry_after"]
+const SETTLED_CLEARS = [...SIGNALS, "check_unavailable"]
+
+/**
+ * The store's own check could not read the commits for the pull request that carried the record: one more in a row. The record is not blamed
+ * (it goes again in its turn), but a store that keeps failing must show, so the count is kept (`check_unavailable`) and `retentionLines` reads it. A delivery that settles clears it.
+ */
+export const saveCheckUnavailable = (env, store) => update(env, store, (cap) => ({ ...cap, check_unavailable: (Number.isSafeInteger(cap.check_unavailable) ? cap.check_unavailable : 0) + 1 }))
 
 /** The record failed its own gate: only the fixed code is kept, and nothing is considered for a day. */
 export const saveInvalid = (env, store, nowMs) => update(env, store, (cap) => ({ ...without(cap, ["refused", "skipped"]), invalid: INVALID, retry_after: iso(nowMs + INVALID_MS) }))
@@ -113,7 +121,7 @@ export const saveNotReady = (env, store, nowMs) => update(env, store, (cap) => (
 export const saveSent = (env, store, item, pr, nowMs) => update(env, store, (cap) => ({ ...without(cap, SIGNALS), pr, sent_bytes: item.bytes.toString("utf8"), sent_at: item.fresh === false ? cap.sent_at : iso(nowMs) }))
 
 /** The default branch holds the record's bytes (`sha`); an empty record that is there is forgotten, with everything else kept about the delivery. */
-export const saveSettled = (env, store, item) => update(env, store, (cap) => (item.empty ? without(cap, [...RECORD_KEYS]) : { ...without(cap, SIGNALS), blob: item.sha }))
+export const saveSettled = (env, store, item) => update(env, store, (cap) => (item.empty ? without(cap, [...RECORD_KEYS]) : { ...without(cap, SETTLED_CLEARS), blob: item.sha }))
 
 /** A push left the record out of the pull request, so nothing is pending for it any more: a later refusal of that pull request is not the record's. */
 export const dropPending = (env, store) => update(env, store, (cap) => without(cap, ["pr", "sent_bytes"]))

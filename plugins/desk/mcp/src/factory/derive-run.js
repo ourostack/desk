@@ -378,7 +378,7 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  *
  * Orphans are taken in name order starting after the `cursor` the last pass recorded, and wrapping, so a stuck orphan cannot keep a later one
  * from its turn. Cheap checks (a retraction, the receipt's desk root, roster and declaration) run for every orphan; the rest (facts, the
- * transcript, its stat, the derive) only inside `cap` orphans and `budgetMs` (`clock` is milliseconds); a current orphan, which needs no derive, gives its slot back. The others are `unexamined`. An orphan whose transcript is gone, whose facts were delivered and whose record is over `COPY_RETENTION_MS` old loses its outbox copy (`pruneCopy`, default `pruneDeliveredCopy`), counted as `copies_pruned` in the record when above 0. An orphan
+ * transcript, its stat, the derive) only inside `cap` orphans and `budgetMs` (`clock` is milliseconds); a current orphan, which needs no derive, gives its slot back. The others are `unexamined`. An orphan whose transcript is gone, whose facts were delivered and whose record is over `COPY_RETENTION_MS` old loses its outbox copy (`pruneCopy`, default `pruneDeliveredCopy`), counted as `copies_pruned` in the record when above 0 (`copies_prune_failed` when a prune threw). An orphan
  * whose outbox copy records a newer Desk than this one is held `pending` (taking no slot) for the seven days `STALE_DERIVER_HOLD_MS` allows,
  * counted from the copy's `ended_at` (its file's mtime when there is none), then frozen as `recorded_by_newer_desk`.
  *
@@ -494,11 +494,12 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
   let last = cursor
   let tailUnexamined = 0
   let copiesPruned = 0
+  let copiesPruneFailed = 0
   for (const [index, { store, name }] of copies.entries()) {
     let outcome
     const before = taken
     try {
-      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version, pruneCopy, pruned: () => { copiesPruned += 1 } })
+      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version, pruneCopy, pruned: () => { copiesPruned += 1 }, pruneFailed: () => { copiesPruneFailed += 1 } })
     } catch {
       outcome = "derive_failed"
     }
@@ -509,11 +510,11 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
     else tally[outcome] += 1
   }
   // The walk wrapped when every orphan from the cursor to the end of the list was reached.
-  return { cursor: last, wrapped: tailUnexamined === 0, examined: copies.length - tally.unexamined, worked: taken, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS), ...(copiesPruned > 0 ? { copies_pruned: copiesPruned } : {}) }
+  return { cursor: last, wrapped: tailUnexamined === 0, examined: copies.length - tally.unexamined, worked: taken, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS), ...(copiesPruned > 0 ? { copies_pruned: copiesPruned } : {}), ...(copiesPruneFailed > 0 ? { copies_prune_failed: copiesPruneFailed } : {}) }
 }
 
 // One orphan: "rebuilt", "current", "pending" (examined, waiting for a known reason), "unexamined" (no slot left this sweep) or the reason it stays frozen.
-async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version, pruneCopy, pruned }) {
+async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version, pruneCopy, pruned, pruneFailed }) {
   if (retracted.has(name)) return "retracted"
   const receiptRoot = deskRootOf(receipts, [name])
   if (receiptRoot !== undefined) {
@@ -536,7 +537,16 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
   const transcript = await find(facts.session.id)
   if (transcript === null) {
     // Delivered, recorded long ago and its transcript gone: nothing can rebuild it and the host no longer lists it, so the local copy is inventory. It goes; the store keeps the facts.
-    if (now() - recordedAt > COPY_RETENTION_MS && (await pruneCopy(env, store, name).catch(() => false))) pruned()
+    if (now() - recordedAt > COPY_RETENTION_MS) {
+      let removed = false
+      try {
+        removed = await pruneCopy(env, store, name)
+      } catch {
+        // Counted, never swallowed: the copy stays and the next sweep tries again.
+        pruneFailed()
+      }
+      if (removed) pruned()
+    }
     return "no_transcript"
   }
   const receipt = receipts?.[name]

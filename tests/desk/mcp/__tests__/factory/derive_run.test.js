@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, writeFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
-import { factoryStateRoot, listMarkers, markDelivered, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, gitBlobSha, listMarkers, markDelivered, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { LIMITS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { deliver, formatReturn, sign } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
@@ -849,7 +849,7 @@ const exists = (file) => fs.lstat(file).then(() => true, () => false)
 
 test("a delivered orphan whose transcript is gone and whose record is over 90 days old loses its outbox copy, and is still frozen as no_transcript", () => scratch(async (ctx) => {
   const { name } = await orphan(ctx, { transcript: false })
-  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: "a".repeat(40), publishedPath: "facts/x.json" })
+  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: "a".repeat(40), publishedPath: "facts/x.json", localSha: gitBlobSha(await fs.readFile(await copyFile(ctx, name))) })
   const { rebuildOrphans } = await runner()
   // Inside the window, nothing goes.
   assert.equal((await rebuildOrphans(ctx.env, { now: () => Date.parse(END) + 89 * DAY })).orphans.copies_pruned, undefined)
@@ -867,9 +867,10 @@ test("an orphan copy that was never delivered, or whose pruning fails, stays and
   const undelivered = await rebuildOrphans(ctx.env, { now: late })
   assert.equal(undelivered.orphans.copies_pruned, undefined)
   assert.equal(await exists(await copyFile(ctx, name)), true, "undelivered: the copy is the only record")
-  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: "a".repeat(40), publishedPath: "facts/x.json" })
+  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: "a".repeat(40), publishedPath: "facts/x.json", localSha: gitBlobSha(await fs.readFile(await copyFile(ctx, name))) })
   const failed = await rebuildOrphans(ctx.env, { now: late, pruneCopy: async () => { throw new Error("disk") } })
   assert.equal(failed.orphans.copies_pruned, undefined)
+  assert.equal(failed.orphans.copies_prune_failed, 1, "a failed prune is counted, not swallowed")
   assert.equal(failed.orphans.frozen.no_transcript, 1, "a failed prune is no derive failure")
   assert.equal(await exists(await copyFile(ctx, name)), true)
 }))

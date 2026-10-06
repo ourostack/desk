@@ -719,16 +719,17 @@ export async function pendingFiles(env, store, { publishedBytesFor, includeQuara
 /**
  * Records `name` as delivered with `publishedBlobSha` for `store`. Concurrent deliveries for the same store are serialized so none is lost.
  * `publishedPath`, the path the file has in the store (`facts/<name>` or `labels/<job>/<session>.json`, the keyed one for a desk not known to be private), is kept in
- * `delivered-paths/<store-slug>.json` so a later retraction deletes exactly what was delivered.
+ * `delivered-paths/<store-slug>.json` so a later retraction deletes exactly what was delivered. `localSha`, the blob sha of the local outbox copy that was delivered, is kept beside it
+ * (`local`): it is what lets `pruneDeliveredCopy` know the copy has not changed since.
  */
-export async function markDelivered(env, store, { name, publishedBlobSha, publishedPath = undefined }, { platform = process.platform, runner = undefined } = {}) {
+export async function markDelivered(env, store, { name, publishedBlobSha, publishedPath = undefined, localSha = undefined }, { platform = process.platform, runner = undefined } = {}) {
   requireString(name, "name")
   requirePattern(publishedBlobSha, SHA1, "publishedBlobSha")
   if (publishedPath !== undefined) requireString(publishedPath, "publishedPath")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
   if (publishedPath !== undefined) {
-    await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, [name]: { path: publishedPath, blob: publishedBlobSha } }), { platform, env, runner })
+    await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, [name]: { path: publishedPath, blob: publishedBlobSha, ...(typeof localSha === "string" && SHA1.test(localSha) ? { local: localSha } : {}) } }), { platform, env, runner })
   }
   const file = path.join(root, "delivered", `${slug}.json`)
   return updateJsonLocked(root, file, {}, (current) => ({ ...current, [name]: publishedBlobSha }), { platform, env, runner })
@@ -843,10 +844,23 @@ export async function finishRetracting(env, store, items, { now = defaultNow, pl
 export const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 
 /**
+ * Whether any local copy of `session` exists for the store of `slug`: its facts or labels in the outbox or the labels folder, in `retracted-copies/`, or in quarantine.
+ * A finished retraction's tombstone must outlive every one of them: it is what keeps the session away from the store when `status.json` is lost.
+ */
+async function hasLocalCopy(root, slug, session) {
+  const live = liveFolders(root, slug)
+  const kept = keptFolders(root, slug)
+  const held = { facts: path.join(root, "quarantine", slug), labels: path.join(root, "quarantine", slug, "labels") }
+  for (const folders of [live, kept, held]) if ((await copiesOf(folders.facts, folders.labels, session)).length > 0) return true
+  return false
+}
+
+/**
  * `pruneTombstones(env, { now, retentionMs }) -> number`: removes, in every store's retracting file, each tombstone (`done: true`) whose `at` is
- * more than `retentionMs` old, and returns how many it removed. A tombstone with no readable `at` (one written before the time was kept) is
- * stamped `now` and kept, so it ages from the first sweep that sees it and is never removed on a guess. Only tombstones go: an open retraction
- * is never touched, and neither is any local copy, which is never deleted (`keepRetractedCopies`).
+ * more than `retentionMs` old and whose session has no local copy left for that store (see `hasLocalCopy`; kept copies are never deleted, so a
+ * tombstone normally stays as long as they do), and returns how many it removed. A tombstone with no readable `at` (one written before the time
+ * was kept) is stamped `now` and kept, so it ages from the first sweep that sees it and is never removed on a guess. Only tombstones go: an open
+ * retraction is never touched, and neither is any local copy.
  */
 export async function pruneTombstones(env, { now = defaultNow, retentionMs = TOMBSTONE_RETENTION_MS, platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
@@ -854,15 +868,18 @@ export async function pruneTombstones(env, { now = defaultNow, retentionMs = TOM
   const nowMs = Date.parse(nowText)
   const isTombstone = (record) => isPlainObject(record) && record.done === true
   const stamped = (record) => typeof record.at === "string" && PATTERNS.timestamp.test(record.at) && Number.isFinite(Date.parse(record.at))
+  const expired = (record) => stamped(record) && nowMs - Date.parse(record.at) > retentionMs
   let pruned = 0
   for (const entry of (await listDirSafe(path.join(root, "retracting"))).filter((name) => /^[^.].*\.json$/u.test(name))) {
     const file = path.join(root, "retracting", entry)
-    const tombstones = Object.values(await readJsonFileSafe(file, {}, platform)).filter(isTombstone)
-    if (!tombstones.some((record) => !stamped(record) || nowMs - Date.parse(record.at) > retentionMs)) continue
+    const tombstones = Object.entries(await readJsonFileSafe(file, {}, platform)).filter(([, record]) => isTombstone(record))
+    if (!tombstones.some(([, record]) => !stamped(record) || expired(record))) continue
+    const guarded = new Set()
+    for (const [name, record] of tombstones) if (expired(record) && (await hasLocalCopy(root, entry.slice(0, -".json".length), name.slice(-41, -5)))) guarded.add(name)
     await updateJsonLocked(root, file, {}, (current) => Object.fromEntries(Object.entries(current).flatMap(([name, record]) => {
       if (!isTombstone(record)) return [[name, record]]
       if (!stamped(record)) return [[name, { ...record, at: nowText }]]
-      if (nowMs - Date.parse(record.at) > retentionMs) {
+      if (expired(record) && !guarded.has(name)) {
         pruned += 1
         return []
       }
@@ -876,19 +893,23 @@ export async function pruneTombstones(env, { now = defaultNow, retentionMs = TOM
 export const COPY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 
 /**
- * `pruneDeliveredCopy(env, store, name) -> boolean`: removes the facts copy `name` from `store`'s outbox, only when this store's delivered record
- * holds it (it was delivered, so the store has it), it is not quarantined, no retraction or tombstone names it, and the file is a regular one.
- * The caller decides it is old enough and that its transcript is gone. Only the outbox file goes: the delivered record stays, as does everything
- * in `retracted-copies/`, which is never deleted. True when a file was removed.
+ * `pruneDeliveredCopy(env, store, name) -> boolean`: removes the facts copy `name` from `store`'s outbox, only when it is certain nothing is lost: this
+ * store's delivered record holds it, with a trusted path (so a later retraction can still find the file in the store) and with the blob sha of the
+ * very local copy that was delivered (`local`), and that is the copy on disk now, so no newer, undelivered version is dropped; it is not
+ * quarantined; no retraction or tombstone names it; and the file is a regular one. A delivery recorded by an older Desk has no `local`, so its
+ * copy stays. The caller decides it is old enough and that its transcript is gone. Only the outbox file goes: the delivered record stays, as does
+ * everything in `retracted-copies/`, which is never deleted. True when a file was removed.
  */
 export async function pruneDeliveredCopy(env, store, name, { platform = process.platform, runner = undefined } = {}) {
   if (ownNames([name]).length !== 1 || LABELS_KEY_PATTERN.test(name)) return false
   const delivered = await readDelivered(env, store, { platform })
-  if (!Object.hasOwn(delivered.blobs, name) || delivered.quarantined.has(name) || Object.hasOwn(delivered.retracting, name) || Object.hasOwn(delivered.retracted, name)) return false
+  const entry = delivered.paths[name]
+  const trusted = isPlainObject(entry) && typeof entry.path === "string" && entry.blob === delivered.blobs[name] && typeof entry.local === "string"
+  if (!trusted || delivered.quarantined.has(name) || Object.hasOwn(delivered.retracting, name) || Object.hasOwn(delivered.retracted, name)) return false
   const root = await factoryStateRoot(env, { platform, runner })
   const file = path.join(root, "outbox", storeSlug(store), name)
   const stat = await lstatIfPresent(file, NAMING)
-  if (stat === null || !stat.isFile()) return false
+  if (stat === null || !stat.isFile() || gitBlobSha(await fsp.readFile(file)) !== entry.local) return false
   await fsp.unlink(file)
   return true
 }
