@@ -17,6 +17,7 @@ import {
   hasUnstagedWork,
   stagePaths,
   commitPaths,
+  commitBranchRefusal,
   commitIndexPaths,
   indexEntries,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
@@ -245,4 +246,11 @@ test("a caller that was not told is only held to the detached-HEAD rule", async 
   originHead(root, "trunk")
   assert.equal(stagePaths(root, ["a.txt"], spawnSync).ok, true)
   assert.equal(commitPaths(root, ["a.txt"], "untold", spawnSync).ok, true)
+})
+
+test("a Git that cannot answer the branch question, or answers with no output, is not mistaken for a wrong branch", async () => {
+  const root = await repoWithChange()
+  assert.equal(commitBranchRefusal(root, () => null, null), null)
+  assert.equal(commitBranchRefusal(root, () => ({ status: 128, stdout: "", stderr: "fatal" }), null), null)
+  assert.match(commitBranchRefusal(root, () => ({ status: 0, stdout: null }), null), /detached HEAD/u)
 })

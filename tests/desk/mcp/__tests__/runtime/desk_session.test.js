@@ -1072,3 +1072,11 @@ test("a checkout outside Git is not refused by the branch rule", async (t) => {
   assert.equal((await session.admission.refresh()).state, "ready")
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
 })
+
+test("with a state branch configured and HEAD on it, a write reaches the tool", async (t) => {
+  const state = { branch: "main", onRemote: true, upstream: true }
+  const { session, runtime } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "ready")
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
+  assert.equal(runtime.calls.length, 1)
+})
