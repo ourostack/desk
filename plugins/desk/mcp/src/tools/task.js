@@ -38,7 +38,8 @@ import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js
 import { setTaskState } from "./track-row.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
-import { nextStepOf } from "../desk/active-tasks.js"
+import { blockerOf, nextStepOf } from "../desk/active-tasks.js"
+import { saysElsewhere } from "../runtime/elsewhere-note.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
 
@@ -822,6 +823,16 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     merged.created = existing.data.created
   }
   merged.updated = nowIso()
+  // The clone guard (`runtime/elsewhere-clone.js`) finds a card that says its work is on another machine through the repos the card names. Dropping or renaming one of them would switch the guard
+  // off without the operator's word, so a call that does must also rewrite the next step so it no longer says the work is elsewhere (the operator's word, recorded as `next_step`).
+  const blocker = blockerOf(existing.content)
+  if (saysElsewhere({ next_step: nextStepOf(existing.content), blocker }) && saysElsewhere({ next_step: nextStep ?? nextStepOf(existing.content), blocker })) {
+    const kept = new Set(asList(merged.repos).map((repo) => String(repo?.name ?? "").toLowerCase()))
+    const lost = asList(existing.data.repos).map((repo) => String(repo?.name ?? "")).filter((name) => name !== "" && !kept.has(name.toLowerCase()))
+    if (lost.length > 0) {
+      throw new Error(`task_update: record the operator's word with \`next_step\`; \`repos\` cannot drop a repo from a card marked elsewhere. Dropped: ${lost.map((name) => `\`${name}\``).join(", ")}. Nothing was changed.`)
+    }
+  }
   // A card's code repos are what make `done` need code evidence, so one call cannot empty them and finish the task on
   // `non_code`. Emptying them is allowed when the call cancels the task, or says why (`repos_removed_reason`, recorded
   // on the card as `repos_removed`) and does not also finish the task: finishing is a separate call.

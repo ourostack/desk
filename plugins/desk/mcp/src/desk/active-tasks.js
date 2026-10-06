@@ -124,7 +124,7 @@ function sectionText(lines, start) {
 // `## Blocker`, `## Blockers` (a list) or `## Waiting on` section, or as a `**Blocker:**` / `Waiting on:` line, which may
 // sit in a list item or a blockquote (task-lifecycle: the transition to `blocked` writes a "Blocker" / "Waiting on" line with
 // the specific reason). "None" and "n/a" mean no blocker. Fenced code is skipped.
-function blockerOf(content) {
+export function blockerOf(content) {
   const lines = withoutFences(content).split(/\r?\n/u)
   for (let index = 0; index < lines.length; index += 1) {
     const line = bare(lines[index])
