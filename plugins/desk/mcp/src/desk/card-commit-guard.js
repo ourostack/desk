@@ -45,7 +45,7 @@ import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
 export const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 /** The first marker line of the hook Desk writes. */
 export const HOOK_MARKER = "# desk-card-commit-guard"
-export const HOOK_VERSION = 4
+export const HOOK_VERSION = 5
 export const CHAINED_NAME = "pre-commit.desk-chained"
 /** Set by the hook while it runs; a second entry (the pre-commit framework's `pre-commit.legacy` chain) exits 0 instead of looping. */
 export const RUNNING_ENV = "DESK_CARD_GUARD_RUNNING"
@@ -111,7 +111,6 @@ desk_card_guard() {
     echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_move or task_archive: each writes the card and commits it for you."
     echo '${hint}'
     echo "To commit your other work, take each card out of this commit first (git restore --staged <card path>), then use task_update for the card itself."
-    echo "Human, or repairing a card task_update cannot parse: ${TOOL_COMMIT_ENV}=1 git commit ..."
   } >&2
   return 1
 }
@@ -191,7 +190,7 @@ export function installCardGuard(root, { spawnGit = spawnSync } = {}) {
         state: "tracked",
         path: file,
         reason: `core.hooksPath (${hooksPath.stdout.trim()}) holds tracked files, so Desk left it alone`,
-        remedy: "to guard card commits here, add this to the tracked pre-commit hook: refuse a commit that adds or modifies <track>/<slug>/task.md unless DESK_TOOL_COMMIT=1 is set (the hook text is hookScript() in plugins/desk/mcp/src/desk/card-commit-guard.js)",
+        remedy: "to guard card commits here, add this to the tracked pre-commit hook: refuse a commit that adds or modifies <track>/<slug>/task.md unless Desk itself is committing (the hook text is hookScript() in plugins/desk/mcp/src/desk/card-commit-guard.js)",
       }
     }
     let state = "installed"
