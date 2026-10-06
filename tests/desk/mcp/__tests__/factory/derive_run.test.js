@@ -1660,12 +1660,12 @@ test("returns are kept for a card whose start cannot be read, and a card with a 
   assert.equal(entry.returns.length, 1)
 })
 
-test("a refusal's counts pass through as the record decides: a witnessed human changed_ask does not count, an unwitnessed one does", async () => {
+test("a refusal's counts pass through as the record decides: a human changed_ask does not count, with or without a verified flag", async () => {
   const refusal = (verified) => formatReturn({ at: "2026-09-25T10:00:00.000Z", from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: "changed_ask", refusal_verified: verified })
   const verified = await oneEntry({ flow: flowOf(), returns: [refusal(true)] })
   assert.deepEqual(verified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: true }])
   const unverified = await oneEntry({ flow: flowOf(), returns: [refusal(false)] })
-  assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: true, refusal: "changed_ask", refusal_verified: false }])
+  assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: false }])
 })
 
 // Focus on a task, then on a task whose card is gone (which clears), over and over: each stretch of the task stands alone between cleared stretches, so a cap that is exceeded has to drop time.
