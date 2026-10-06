@@ -103,6 +103,11 @@
 //   the store refuses returns the session to delivered and is not retried
 //   while it stays away.
 
+// The capture record (`capture-flush.js`, `capture-publish.js`) travels as one more file, `capture/<intake_id>.json`, appended after the batch is
+// taken so it never displaces facts, labels or deletes, and only when the store's `factory.json` says `"capture": 1`. A refusal that names it
+// (a `capture_` code, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
+// record waits a week. Its bookkeeping is `status.capture[store]` and nothing else.
+
 // Every step's result is one stable `FlushCode`. The account token comes from
 // `gh auth token --user <account>`, lives only in memory and reaches `gh` only
 // through the runner's `token` option, which the real runner passes as
@@ -170,6 +175,7 @@ import {
   restoreRetractedCopies,
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
+import { captureOnBranch, dropPending, judge, namesRecord, planCapture, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
@@ -673,9 +679,11 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
   return items.slice(0, maxItems)
 }
 
-async function readRejections(env, client, { store, head, through, labelKeys, retractPaths }) {
+async function readRejections(env, client, { store, head, through, labelKeys, retractPaths, capturePath, recordedPr }) {
   const rejected = new Set()
   const refused = new Set()
+  // The first refusal that names the capture record, never a reason to quarantine facts: its pull request is a stale one (the facts go again).
+  let captureRefused = null
   let stale = 0
   let unmatched = 0
   let highest = through
@@ -701,7 +709,10 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       }
       break
     }
-    if (codes.length === 0) continue
+    const named = codes.filter((candidate) => namesRecord(candidate, { onRecordedPr: pr.number === recordedPr, stale: STALE_INTAKE_CODES }))
+    captureRefused ??= named[0] ?? null
+    codes = codes.filter((candidate) => !named.includes(candidate))
+    if (codes.length === 0 && named.length === 0) continue
     // Stale only when every code says so; any data code rejects the files, and quarantine names the first one.
     const code = codes.find((candidate) => !STALE_INTAKE_CODES.has(candidate))
     if (code === undefined) {
@@ -712,6 +723,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
       // A file is named back to its local key by its published path. One with no local key (a session already delivered or gone, or a keyed name no outbox file carries) has nothing to quarantine and is only counted.
       // A refused delete is counted and never quarantined: the delivered file stays publishable if its session routes back.
+      if (String(file?.filename) === capturePath) continue
       const refusedName = retractPaths.get(String(file?.filename))
       if (refusedName !== undefined) {
         refused.add(refusedName)
@@ -726,7 +738,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       rejected.add(name)
     }
   }
-  return { rejected, refused, stale, unmatched, through: highest }
+  return { rejected, refused, stale, unmatched, through: highest, captureRefused }
 }
 
 function treeEntries(json) {
@@ -779,7 +791,8 @@ async function treeLookup(client, repo, treeSha, items) {
   const listing = newListing()
   const facts = await factsOnBranch(client, repo, treeSha, listing)
   const labels = await labelsOnBranch(client, repo, treeSha, items.filter((item) => item.labels).map((item) => item.path), listing)
-  const at = (item) => (item.labels ? labels.get(item.path) : facts.get(item.path.slice("facts/".length))) ?? (listing.truncated ? UNKNOWN : undefined)
+  const captures = items.some((item) => item.capture) ? await captureOnBranch((sha) => readTree(client, repo, requireSha(sha), listing), treeSha) : new Map()
+  const at = (item) => (item.capture ? captures.get(item.path) : item.labels ? labels.get(item.path) : facts.get(item.path.slice("facts/".length))) ?? (listing.truncated ? UNKNOWN : undefined)
   at.facts = facts
   return at
 }
@@ -845,7 +858,8 @@ async function openPr(client, { store, head, base, count, retracted }) {
 async function deliver(env, context) {
   const { store, client, now, deadline, transform, maxFiles, maxBytes, progress } = context
   const nowIso = () => new Date(now()).toISOString()
-  const record = (await readConsent(env)).stores[store]
+  const consent = (await readConsent(env)).stores
+  const record = consent[store]
   if (record?.contribute !== true) return { result: "not_opted_in" }
   if (typeof record.account !== "string" || record.account === "") return { result: "no_account" }
   if (!INTAKE_ID.test(record.intake_id ?? "")) stop("unexpected")
@@ -883,7 +897,10 @@ async function deliver(env, context) {
   progress.newerFormat = newer.size
   // The kept copies of retracted sessions, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
-  if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0) return { result: "nothing_pending" }
+  // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
+  const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
+  if (capture.invalid) await saveInvalid(env, store, now())
+  if (!capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
   // route to another store, or a finished retraction's tombstone), `stalled` (a retraction open with no positive route), `unknown` (an
@@ -1089,7 +1106,7 @@ async function deliver(env, context) {
   progress.refused = away.filter((item) => item.from === "delivered" && priorRefused.has(item.name)).map((item) => item.name)
   let retract = away.filter((item) => !heldSessions.has(item.session) && !priorRefused.has(item.name))
   // Frozen and refused names never send the flush online; only work that changes the store, or a batch that may still be open, does.
-  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen) return { result: "nothing_pending" }
+  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen && !capture.work) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
   await client.session(account)
@@ -1122,7 +1139,7 @@ async function deliver(env, context) {
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
   // A rejected file is named back to its local key by its published path.
   const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
-  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])) })
+  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])), capturePath: `capture/${record.intake_id}.json`, recordedPr: capture.cap.pr })
   progress.rejectionsThrough = rejections.through
   progress.rejectionsUnmatched = rejections.unmatched
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
@@ -1139,7 +1156,25 @@ async function deliver(env, context) {
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
-  const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract])
+  // The record goes when it is due, or its pull request is still open and must keep carrying it; a refusal naming it is bookkept and it waits a week.
+  let captureItem = null
+  if (rejections.captureRefused !== null) await saveRefused(env, store, rejections.captureRefused, now())
+  else if (capture.work) captureItem = capture.record
+  const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract, ...(captureItem === null ? [] : [captureItem])])
+  if (captureItem !== null) {
+    // The earlier record is "pending" only while its pull request is still open.
+    const hasOpen = capture.carry && (await findOpenPr(client, store, head)) !== undefined
+    let verdict = judge(captureItem, onMain(captureItem), { pending: hasOpen })
+    let send = false
+    if (verdict === "settled") await saveSettled(env, store, captureItem)
+    else if (verdict === "forget") await saveForgotten(env, store)
+    else if (!capture.due && !hasOpen) verdict = "waits"
+    else if (await storeAcceptsCapture(client, store, target.branch)) send = true
+    else await saveNotReady(env, store, now())
+    if (!send) captureItem = null
+  }
+  // This push rebuilds the branch without the record: nothing is pending for it, so a later refusal of that pull request is not the record's.
+  if (captureItem === null && rejections.captureRefused === null && Number.isSafeInteger(capture.cap.pr)) await dropPending(env, store)
   const remaining = []
   for (const item of pending) {
     if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path })
@@ -1166,12 +1201,13 @@ async function deliver(env, context) {
     return result
   }
   // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
-  const takenAll = takeBatch([...deletes, ...remaining], { maxFiles, maxBytes })
+  // The record is one more changed path, and the store's gate refuses more than 500: it takes its place inside the limit, and never displaces facts in a batch below it.
+  const takenAll = takeBatch([...deletes, ...remaining], { maxFiles: maxFiles - (captureItem === null ? 0 : 1), maxBytes: maxBytes - (captureItem === null ? 0 : captureItem.bytes.length) })
   const takenDeletes = takenAll.filter((item) => item.retract)
   const taken = takenAll.filter((item) => !item.retract)
   const factsReady = new Set([...onMain.facts.keys(), ...pending.filter((item) => !item.labels && onMain.facts.has(item.file)).map((item) => item.name), ...taken.filter((item) => !item.labels).map((item) => item.name)])
   const publishing = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
-  const batch = [...takenDeletes, ...publishing]
+  const batch = [...takenDeletes, ...publishing, ...(captureItem === null ? [] : [captureItem])]
   if (batch.length === 0) {
     // Nothing to change: an open intake PR of this machine is closed and its branch reset, whatever it carried.
     const open = await findOpenPr(client, store, head)
@@ -1186,8 +1222,9 @@ async function deliver(env, context) {
   }
   await pushBatch(client, { target, branch, base, batch })
   progress.intakePushed = true
-  const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length, retracted: takenDeletes.length })
+  const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length + (captureItem === null ? 0 : 1), retracted: takenDeletes.length })
   progress.intakePrs = [...leftOpen, { number: pr.number, head: head.label }]
+  if (captureItem !== null) await saveSent(env, store, { bytes: captureItem.bytes, fresh: capture.due }, pr.number, now())
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
   await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting"))
   await keepRetractedCopies(env, store, takenDeletes.map((item) => item.session))

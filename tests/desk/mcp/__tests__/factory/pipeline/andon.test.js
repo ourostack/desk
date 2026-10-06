@@ -43,6 +43,15 @@ test("parseStoreConfig reads the tracked plugins from the store's factory.json, 
   for (const text of invalid) assert.deepEqual(parseStoreConfig(text), { ok: false, code: "invalid_config" }, text)
 })
 
+test("parseStoreConfig tolerates the capture flag beside andon, as a whole number of 1 or more, and nothing else", () => {
+  assert.deepEqual(parseStoreConfig('{"andon":{"plugins":["desk"]},"capture":1}'), { ok: true, plugins: ["desk"] })
+  assert.deepEqual(parseStoreConfig('{"capture":1,"andon":{"plugins":[]}}'), { ok: true, plugins: [] })
+  assert.deepEqual(parseStoreConfig('{"andon":{"plugins":[]},"capture":2}'), { ok: true, plugins: [] }, "2 or more is tolerated on purpose; the flush requires exactly 1")
+  for (const text of ['{"capture":1}', '{"andon":{"plugins":[]},"capture":"1"}', '{"andon":{"plugins":[]},"capture":0}', '{"andon":{"plugins":[]},"capture":1.5}', '{"andon":{"plugins":[]},"capture":true}', '{"andon":{"plugins":[]},"capture":1,"extra":1}']) {
+    assert.deepEqual(parseStoreConfig(text), { ok: false, code: "invalid_config" }, text)
+  }
+})
+
 test("andon titles name the plugin, version, measure and job class, and parse back only when well formed", () => {
   assert.equal(andonTitle("desk", "3.1.0-alpha.7", "tool_retries", "other"), "Andon: desk 3.1.0-alpha.7 tool_retries other")
   assert.deepEqual(parseAndonTitle("Andon: desk 3.1.0-alpha.7 tool_retries other"), { plugin: "desk", version: "3.1.0-alpha.7", measure: "tool_retries", jobClass: "other" })

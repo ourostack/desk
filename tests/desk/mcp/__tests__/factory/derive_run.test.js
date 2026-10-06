@@ -1621,3 +1621,25 @@ test("the receipt still records segments_capped_ms as before", () => scratch(asy
   assert.equal(Number.isInteger(receipt.segments_capped_ms) && receipt.segments_capped_ms > 0, true)
   assert.equal(receipt.binding_version, 5)
 }))
+
+// Capture coverage (capture-sweep.js): the sweep makes one call after the orphan pass and reports it in its summary.
+test("the sweep summary says whether capture coverage was written, and status.json holds it", () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  const summary = await sweep(ctx.env, { quietMs: 0 })
+  assert.equal(summary.coverage, "written")
+  const status = await readStatus(ctx.env)
+  assert.equal(status.coverage.method, 1)
+  assert.equal(status.coverage_failed, undefined)
+}))
+
+test("a sweep whose capture coverage fails still derives and reports coverage failed", () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, { ...await session(ctx), end_reason: "complete", ended_at: END })
+  const root = await factoryStateRoot(ctx.env)
+  await fs.rm(path.join(root, "quarantine"), { recursive: true, force: true })
+  await fs.writeFile(path.join(root, "quarantine"), "not a folder")
+  const summary = await sweep(ctx.env, { quietMs: 0 })
+  assert.deepEqual([summary.written, summary.coverage], [1, "failed"])
+  assert.equal((await readStatus(ctx.env)).coverage_failed, "state_unreadable")
+}))
