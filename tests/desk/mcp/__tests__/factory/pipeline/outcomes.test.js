@@ -141,7 +141,7 @@ test("a censored wait is counted under unsigned waits with its class, and a sign
   })
 })
 
-test("refusal reasons are counted by code, with the unverified refusals counted beside them", () => {
+test("refusal reasons are counted by code whatever the verified flag, and refused_unverified stays 0", () => {
   const sessions = [session([
     entry(J1, { state: "refused", verified: true, reason: "defect" }),
     entry(J2, { state: "refused", verified: false, reason: "defect" }),
@@ -150,7 +150,7 @@ test("refusal reasons are counted by code, with the unverified refusals counted 
   ])]
   const { signoff } = computeOutcomeRollups({ sessions, reports: withRecord(J1, J2, J3, J4) })
   assert.equal(signoff.refused, 3)
-  assert.equal(signoff.refused_unverified, 2)
+  assert.equal(signoff.refused_unverified, 0)
   assert.deepEqual(signoff.refusal_reasons, { not_what_was_asked: 0, defect: 2, changed_ask: 1, incomplete: 0, other: 0 })
 })
 
@@ -277,7 +277,7 @@ test("rework counts returns by catch point and compares reasons only on refusals
     state: "measured",
     value: { in_task: 1, at_review: 1, after_delivery: 5 },
     reasons: [],
-    reason_check: { compared: 4, disagree: 2, compared_verified: 2 },
+    reason_check: { compared: 4, disagree: 2, compared_verified: 4 },
   })
 })
 
@@ -375,7 +375,7 @@ test("the reason check counts compared and disagreeing refusals and is unavailab
     accepted(J1, { returns: [refusal("defect", "agent_error", true), refusal("defect", "external", true), refusal("other", "agent_error", true), ret()] }),
     accepted(J2, { returns: [refusal("changed_ask", "agent_error", false)] }),
   )
-  assert.deepEqual(rework.reason_check, { state: "measured", compared: 3, disagree: 2, compared_verified: 2, reasons: [] })
+  assert.deepEqual(rework.reason_check, { state: "measured", compared: 3, disagree: 2, compared_verified: 3, reasons: [] })
   const none = store(accepted(J1, { returns: [ret()] })).rework
   assert.deepEqual(none.reason_check, { state: "unavailable", reasons: ["no_refusals"] })
 })
@@ -418,13 +418,14 @@ test("the outcome rollups carry no key beyond the contract, and defects is the o
   assert.deepEqual(Object.keys(result.rework.defects), ["state", "reasons", "n", "N"])
 })
 
-test("an unverified refusal's human changed_ask does not make a return a changed ask, and the agent's reason then decides", () => {
+test("a refusal's recorded reason decides whatever its verified flag, old shape or new", () => {
   const refusal = (human, agent, verified, counts) => ret({ caught: "after_delivery", reason: agent, refusal: human, refusal_verified: verified, counts })
   const cases = [
     // [return, per-job changed_ask, changed_ask_only, per-job yield]
-    [refusal("changed_ask", "agent_error", true, false), 1, true, 1],
-    [refusal("changed_ask", "agent_error", false, true), 0, false, 0],
-    [refusal("defect", "changed_ask", false, false), 1, true, 1],
+    ...[true, false, null, undefined].flatMap((verified) => [
+      [refusal("changed_ask", "agent_error", verified, false), 1, true, 1],
+      [refusal("defect", "changed_ask", verified, true), 0, false, 0],
+    ]),
   ]
   for (const [item, changedAsk, only, value] of cases) {
     const result = firstPassFormula(created({ state: "accepted", verified: true, returns: [item] }))

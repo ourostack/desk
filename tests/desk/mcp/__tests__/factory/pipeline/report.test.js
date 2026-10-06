@@ -567,8 +567,8 @@ test("the job page says which sign-off the job has, in the plan's words", () => 
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("lt_1d", true) }), ["- Sign-off: delivered, waiting at least 1 hour."])
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("ge_7d", true) }), ["- Sign-off: delivered, waiting at least 7 days."])
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: null }), ["- Sign-off: delivered, waiting for sign-off."])
-  assert.deepEqual(signoffLine({ state: "refused", verified: true, reason: "defect", wait: class1("lt_1d", false) }), ["- Sign-off: refused (verified), reason defect, waited under 1 day."])
-  assert.deepEqual(signoffLine({ state: "refused", verified: false, reason: "changed_ask", wait: null }), ["- Sign-off: refused (unverified), reason changed_ask."])
+  assert.deepEqual(signoffLine({ state: "refused", verified: true, reason: "defect", wait: class1("lt_1d", false) }), ["- Sign-off: refused, reason defect, waited under 1 day."])
+  assert.deepEqual(signoffLine({ state: "refused", verified: false, reason: "changed_ask", wait: null }), ["- Sign-off: refused, reason changed_ask."])
   assert.deepEqual(signoffLine({ state: "reopened" }), ["- Sign-off: reopened after delivery."])
   assert.deepEqual(signoffLine({ state: "not_delivered", deliveries: 0 }), ["- Sign-off: not delivered yet."])
 })
@@ -625,7 +625,7 @@ test("the rollups page section names the sign-off counts, or says they are not r
     "## Sign-off", "", "Sign-off: not recorded in any session of this store.", "",
   ])
   const signoff = {
-    recorded: true, jobs: 9, accepted: 3, accepted_unverified: 0, delivered_unsigned: 2, refused: 1, refused_unverified: 1, reopened: 0, not_recorded: 1, not_delivered: 1,
+    recorded: true, jobs: 9, accepted: 3, accepted_unverified: 0, delivered_unsigned: 2, refused: 1, refused_unverified: 0, reopened: 0, not_recorded: 1, not_delivered: 1,
     no_record: 2, jobs_without_work_record: 1,
     refusal_reasons: { not_what_was_asked: 0, defect: 1, changed_ask: 0, incomplete: 0, other: 0 },
     waits: { signed: { lt_1h: 1, lt_1d: 2, lt_7d: 0, ge_7d: 0 }, unsigned: { lt_1h: 0, lt_1d: 0, lt_7d: 2, ge_7d: 0 } },
@@ -634,7 +634,7 @@ test("the rollups page section names the sign-off counts, or says they are not r
     "## Sign-off", "",
     "- Jobs with a sign-off record: 9; with no work record: 1. Jobs with a work record and no sign-off record: 2.",
     "- Accepted (recorded by the agent on the operator's word): 3.",
-    "- Delivered, waiting for sign-off: 2. Refused: 1 (unverified: 1). Reopened: 0.",
+    "- Delivered, waiting for sign-off: 2. Refused: 1. Reopened: 0.",
     "- Delivered before sign-off was recorded: 1. Not delivered yet: 1.",
     "- Refusal reasons: defect 1.",
     "- Waits that ended in an answer: under 1 hour 1, under 1 day 2.",
@@ -675,7 +675,7 @@ test("the rollups page says what was sent back, where it was caught and how ofte
     "- Jobs with returns recorded: 3 of 3.",
     "- Returns caught in the task: new_information 1. At review: none. After delivery: agent_error 2, changed_ask 1.",
     "- Returns that were changed asks: 1.",
-    "- Reason check on refusals: compared 4, disagree 1, of which 3 of the compared refusals were verified. This is a lower bound on disagreement.",
+    "- Reason check on refusals: compared 4, disagree 1. This is a lower bound on disagreement.",
     "",
   ].join("\n"))
   const partial = section({ state: "partial", reasons: ["history_not_recorded"], n: 1, N: 3, returns, changed_ask: 0, reason_check: { state: "unavailable", reasons: ["no_refusals"] } })

@@ -53,8 +53,8 @@ export function signoffFormula(outcome) {
   return measuredResult(outcome.state, { verified: outcome.verified, reason: outcome.reason, wait: outcome.wait })
 }
 
-// The reason that decides a return: the human's for a witnessed refusal, else the agent's (as `returnCounts` decides it).
-const decidedReason = (entry) => (entry.refusal !== null && entry.refusal_verified === true ? entry.refusal : entry.reason)
+// The reason that decides a return: the human's when a refusal recorded one, else the agent's (as `returnCounts` decides it).
+const decidedReason = (entry) => (entry.refusal !== null ? entry.refusal : entry.reason)
 const isChangedAsk = (entry) => decidedReason(entry) === "changed_ask"
 const recordedInFull = (outcome) => !(outcome.returns_unreadable > 0) && outcome.returns_truncated !== true
 
@@ -84,16 +84,15 @@ export function firstPassFormula(outcome) {
 function reasonCheckOf(returns) {
   let compared = 0
   let disagree = 0
-  let comparedVerified = 0
   for (const entry of returns) {
     if (entry.refusal === null) continue
     const agree = reasonsAgree(entry.refusal, entry.reason)
     if (agree === null) continue
     compared += 1
     if (!agree) disagree += 1
-    if (entry.refusal_verified === true) comparedVerified += 1
   }
-  return { compared, disagree, compared_verified: comparedVerified }
+  // `compared_verified` stays for older readers and equals `compared`: every recorded refusal counts.
+  return { compared, disagree, compared_verified: compared }
 }
 
 /**
@@ -125,7 +124,8 @@ function signoffCounts(outcomes, timelineJobs) {
     accepted_unverified: 0,
     delivered_unsigned: inState("delivered_unsigned").length,
     refused: inState("refused").length,
-    refused_unverified: inState("refused").filter((entry) => entry.verified !== true).length,
+    // Kept at 0, like `accepted_unverified`: a refusal is no longer split by a verified flag.
+    refused_unverified: 0,
     reopened: inState("reopened").length,
     not_recorded: inState("not_recorded").length,
     not_delivered: inState("not_delivered").length,

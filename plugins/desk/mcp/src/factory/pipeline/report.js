@@ -213,15 +213,11 @@ function waitedText(wait) {
   return wait === null ? "" : `, waited ${SETTLED_WAIT[wait.class]}`
 }
 
-function verifiedText(formula) {
-  return formula.verified === true ? "verified" : "unverified"
-}
-
 // The job page's sign-off line: what the human said about the delivery, how sure the record is, and how long it waited.
 function signoffText(formula) {
   if (formula.class === "unavailable") return formula.reason === "signoff_not_recorded" ? "delivered, sign-off not recorded" : "not recorded"
   if (formula.value === "accepted") return `accepted${waitedText(formula.wait)}`
-  if (formula.value === "refused") return `refused (${verifiedText(formula)}), reason ${formula.reason}${waitedText(formula.wait)}`
+  if (formula.value === "refused") return `refused, reason ${formula.reason}${waitedText(formula.wait)}`
   if (formula.value === "delivered_unsigned") {
     if (formula.wait === null) return "delivered, waiting for sign-off"
     return formula.wait.class === "lt_1h" ? "delivered, waiting, under 1 hour so far" : `delivered, waiting ${OPEN_WAIT[formula.wait.class]}`
@@ -281,7 +277,7 @@ function signoffSection(signoff) {
     "",
     `- Jobs with a sign-off record: ${signoff.jobs}; with no work record: ${signoff.jobs_without_work_record}. Jobs with a work record and no sign-off record: ${signoff.no_record}.`,
     `- Accepted (recorded by the agent on the operator's word): ${signoff.accepted}.`,
-    `- Delivered, waiting for sign-off: ${signoff.delivered_unsigned}. Refused: ${signoff.refused} (unverified: ${signoff.refused_unverified}). Reopened: ${signoff.reopened}.`,
+    `- Delivered, waiting for sign-off: ${signoff.delivered_unsigned}. Refused: ${signoff.refused}. Reopened: ${signoff.reopened}.`,
     `- Delivered before sign-off was recorded: ${signoff.not_recorded}. Not delivered yet: ${signoff.not_delivered}.`,
     `- Refusal reasons: ${countsText(signoff.refusal_reasons, reasons)}.`,
     `- Waits that ended in an answer: ${countsText(signoff.waits.signed, SETTLED_WAIT)}.`,
@@ -311,7 +307,7 @@ function reworkSection(rework) {
   const check = rework.reason_check
   const bound = check.state === "unavailable"
     ? `not recorded (${reasonsPhrase(check)})`
-    : `compared ${check.compared}, disagree ${check.disagree}, of which ${check.compared_verified} of the compared refusals were verified. This is a lower bound on disagreement`
+    : `compared ${check.compared}, disagree ${check.disagree}. This is a lower bound on disagreement`
   return [
     "## Rework",
     "",
