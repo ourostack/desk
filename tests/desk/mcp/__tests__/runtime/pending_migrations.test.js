@@ -135,7 +135,8 @@ test("runBlock reports the exit, the output, a timeout that kills the whole bloc
   assert.equal(slow.unavailable, false)
   const grandchild = Number(execFileSync("cat", [marker], { encoding: "utf8" }).trim())
   await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
+  // Windows has no process groups, so runBlock kills the block itself there (the last assertion below) and a grandchild it started can outlive it. That is a known limit of the product, so the grandchild check runs where groups exist.
+  if (process.platform !== "win32") assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
   const missing = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
   assert.deepEqual(missing, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
   const windows = await runBlock("sleep 5", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32" })

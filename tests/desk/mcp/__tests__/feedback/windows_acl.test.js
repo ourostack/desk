@@ -142,6 +142,26 @@ test("a verified path is not protected again until its identity or change time m
   }
 })
 
+test("a verified file is remembered like a verified folder", async () => {
+  const base = await mkBase()
+  forgetVerifiedWindowsPaths()
+  try {
+    const file = path.join(base, "status.json")
+    await fs.writeFile(file, "{}")
+    const entry = { path: file, kind: "file", created: false }
+    const okResult = { status: "ok", results: [{ path: file, kind: "file", owner_sid: "S-1-5-21-1-2-3-1001", owner_reassigned: false, protected: true, rule_count: 1 }] }
+    const runner = runnerReturning(okResult)
+    const env = { SystemRoot: base }
+    await mkProvider(base, ECHO_PROVIDER)
+    await protectWindowsPaths([entry], { env, runner, memoize: true })
+    await protectWindowsPaths([entry], { env, runner, memoize: true })
+    assert.equal(runner.calls.length, 1)
+  } finally {
+    forgetVerifiedWindowsPaths()
+    await fs.rm(base, { recursive: true, force: true })
+  }
+})
+
 test("identical protection requests made at the same time share one run, and a failed run is not remembered", async () => {
   const base = await mkBase()
   forgetVerifiedWindowsPaths()

@@ -599,7 +599,7 @@ test("the card write goes through the injected commit seam, in the person's fold
   assert.equal(calls[0].message({ file_name: "x.md" }), "improvement: friction x.md")
   assert.equal(calls[0].message({}), "improvement: friction set_aside")
   await friction_add({ deskRoot: root, person: "ari", input: sysInput({ title: "Another shell failure" }), env, commitCard })
-  assert.equal(calls[1].personPrefix, path.join("desks", "ari"))
+  assert.equal(calls[1].personPrefix, path.posix.join("desks", "ari"))
 })
 
 test("a card write that throws never loses the friction entry", async () => {

@@ -93,6 +93,7 @@ function realTarget(absolute) {
       return path.join(realpathSync.native(dir), ...missing)
     } catch {
       const parent = path.dirname(dir)
+      /* istanbul ignore next -- the filesystem root always resolves, so the walk ends before it; this only stops a loop on a host where even the root cannot be read. */
       if (parent === dir) return absolute
       missing.unshift(path.basename(dir))
     }
