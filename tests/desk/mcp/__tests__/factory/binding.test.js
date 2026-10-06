@@ -48,9 +48,9 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeepi
     // (and everything below them) whose evidence cannot be read; anything else is a true none.
     repoLookup(absPath) {
       calls.repoLookup.push(absPath)
-      const root = Object.keys(repos).sort((a, b) => b.length - a.length).find((directory) => absPath === directory || absPath.startsWith(`${directory}/`))
+      const root = Object.keys(repos).sort((a, b) => b.length - a.length).find((directory) => absPath === directory || absPath.startsWith(`${directory}${path.sep}`))
       if (root !== undefined) return { repo: repos[root] }
-      return unavailable.some((prefix) => absPath === prefix || absPath.startsWith(`${prefix}/`)) ? { unavailable: true } : { none: true }
+      return unavailable.some((prefix) => absPath === prefix || absPath.startsWith(`${prefix}${path.sep}`)) ? { unavailable: true } : { none: true }
     },
     gitCommitTaskPaths(sha) {
       calls.native.push(sha)

@@ -354,6 +354,9 @@ test("a lock is taken over only when its process is gone, or when it is older th
   await fs.writeFile(lock, JSON.stringify({ pid: DEAD, token: "x" }))
   assert.deepEqual(await step(env, seams({ processAlive: gone })), { ok: true, result: "no_jobs_waiting" }, "a lock whose process is gone is taken over at once")
   await assert.rejects(fs.stat(lock))
+  // A dangling symbolic link stands in for a lock whose age cannot be read. On Windows a link needs a privilege a standard user lacks, and opening
+  // a dangling one behaves differently, so only this last case is left out there.
+  if (process.platform === "win32") return
   await fs.symlink(path.join(root, "nowhere"), lock)
   assert.deepEqual(await step(env, seams({ processAlive: gone })), { ok: true, result: "busy" }, "a lock whose age cannot be read is respected")
 }))
