@@ -404,6 +404,9 @@ test("with no marker and no receipt (status.json lost), the sweep routes a copy 
   const codex = localFacts(6)
   codex.session.host = "codex-cli"
   assert.equal((await writeLocalFacts(ctx.env, STORE, codex)).written, true)
+  // 7: no marker, and its receipt names a desk folder that is gone: no route, so it is kept.
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(7))).written, true)
+  await writeStatus(ctx.env, { derivations: { [nameOf(7)]: { store: STORE, desk_root: path.join(ctx.base, "desk-gone") } } })
   // A transcript that cannot be read is no route either.
   await transcript(ctx, 5, ctx.base)
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(5))).written, true)
@@ -413,7 +416,7 @@ test("with no marker and no receipt (status.json lost), the sweep routes a copy 
   } finally {
     await fs.chmod(path.join(ctx.base, ".claude", "projects", "p", `${sessionId(5)}.jsonl`), 0o600)
   }
-  assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(2), sessionId(3), sessionId(5)])
+  assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(2), sessionId(3), sessionId(5), sessionId(7)])
   assert.equal(await outboxHas(ctx, 1), true)
   assert.equal(await outboxHas(ctx, 4), true)
   assert.equal(await outboxHas(ctx, 2, "shared-internal-tools__ms-desk-factory"), true)
