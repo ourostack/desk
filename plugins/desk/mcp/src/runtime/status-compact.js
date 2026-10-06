@@ -70,6 +70,8 @@ function notesFor(payload, search) {
 // paths tried); those payloads are small, so the keys are passed through whole.
 const DIAGNOSTIC_KEYS = ["mode", "reason", "reason_detail", "binding_path", "paths_tried", "remediation"]
 
+const DETAIL_PENDING_SUMMARY = "Desk is ready, but its details (root, search, sync) are still loading, so the empty fields below are not a missing desk. Call desk_status again shortly."
+
 /** The compact answer for a full desk_status payload (already merged with the admission fields). */
 export function compactStatus(payload) {
   const syncProblem = syncDegradation(payload.sync?.last_pull)
@@ -77,9 +79,11 @@ export function compactStatus(payload) {
   // A desk that is otherwise ready is degraded by a failed sync, exactly as the boot script reports it.
   const state = base === "ready" ? healthWord(syncProblem === null ? [] : [syncProblem]) : base
   const search = payload.readiness?.state ?? "not_checked"
+  // Desk is ready, but the runtime's status detail missed this call's short budget: the root, search and sync fields below are empty because they are not loaded yet, not because there is no desk.
+  const detailPending = state === "ready" && payload.detail_pending === true
   const compact = {
     state,
-    summary: state === "ready" ? "Desk is ready." : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
+    summary: state === "ready" ? (detailPending ? DETAIL_PENDING_SUMMARY : "Desk is ready.") : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
     degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
     ...(state === "ready" ? {} : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
@@ -88,6 +92,7 @@ export function compactStatus(payload) {
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),
     search,
     notes: notesFor(payload, search),
+    ...(detailPending ? { detail_pending: true } : {}),
     root: { path: payload.root?.path ?? null, source: payload.root?.source ?? null },
     // The person a migration or a person-scoped write needs (`--tools-person`); null for a single-person desk.
     write_scope: { mode: payload.write_scope?.mode ?? null, person: payload.write_scope?.person ?? null },
