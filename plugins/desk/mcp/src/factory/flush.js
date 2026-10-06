@@ -866,6 +866,9 @@ async function openPr(client, { store, head, base, count, retracted }) {
 // The flush.
 // ---------------------------------------------------------------------------
 
+// Whether this machine ever delivered to, retracted from or was refused by the store (`readDelivered`).
+const deliveredBefore = (delivered) => Object.keys(delivered.blobs).length > 0 || Object.keys(delivered.retracting).length > 0 || Object.keys(delivered.retracted).length > 0 || delivered.quarantined.size > 0
+
 async function deliver(env, context) {
   const { store, client, now, deadline, transform, maxFiles, maxBytes, progress } = context
   const nowIso = () => new Date(now()).toISOString()
@@ -879,8 +882,9 @@ async function deliver(env, context) {
   const status = await readStatus(env)
   const prior = status.last_flush?.[store] ?? {}
   const priorRefused = new Set(list(prior.refused_retractions).filter((name) => typeof name === "string"))
-  // A batch pushed and not yet seen settled: the intake PR may be open, carrying changes the current state no longer wants.
-  const mayBeOpen = prior.intake_pushed === true
+  // A batch pushed and not yet seen settled: the intake PR may be open, carrying changes the current state no longer wants. So may one when this
+  // store has no last-flush entry (`status.json` lost or reset) on a machine that delivered here before: the flush goes online once to look.
+  const mayBeOpen = prior.intake_pushed === true || (!isPlainObject(status.last_flush?.[store]) && deliveredBefore(await readDelivered(env, store)))
   // The intake PRs pushed and not yet seen settled, by number and head (`owner:branch`): a PR under an earlier head (the route moved between
   // the store and a fork, or the account changed) is invisible under the current one, so it is closed by its number.
   const priorPrs = list(prior.intake_prs).filter((pr) => isPlainObject(pr) && Number.isSafeInteger(pr.number) && typeof pr.head === "string")
