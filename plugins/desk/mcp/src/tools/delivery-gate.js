@@ -26,8 +26,13 @@
 // `not_verified` and the done-gate lets the move through and says so. A desk with no network must still be able to close a task, and a gate
 // that failed closed would make that impossible for as long as GitHub is unreachable. The release workflow and the boot alert are what make an
 // unreleased merge visible; this gate only closes the one door. A pull request GitHub says does not exist is refused: nothing can carry it.
+// Credentials: the requests use GH_TOKEN or GITHUB_TOKEN when set. When neither is, and the caller does not inject its own fetch, the GitHub
+// CLI is asked once for a token (`gh auth token --hostname github.com`, 3 seconds at most), so a private repo's rules can be read by an agent that
+// is signed in to `gh`. The token goes only into the request headers and is kept in this process's memory; it is never logged, printed or written.
+// No `gh`, not signed in, a timeout or an empty answer all leave the request anonymous, exactly as before.
 // Limit: a pull request's first 300 changed files are read; more than that is `not_verified`.
 
+import { execFile } from "node:child_process"
 import { looksLikeNodeTestRunner } from "../runtime/test-state-guard.js"
 
 export const POLICY_PATH = ".desk/delivery.json"
@@ -36,9 +41,31 @@ const FILE_PAGES = 3
 const GITHUB_PR = /^https:\/\/(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+)\/pull\/(\d+)(?:[/?#].*)?$/iu
 const MERGE = Object.freeze({ kind: "merge" })
 
-async function github({ fetchFn, env, budgetMs }, route, accept = "application/vnd.github+json") {
+const GH_TOKEN_BUDGET_MS = 3000
+const ghTokens = new WeakMap()
+
+// istanbul ignore next -- the real `gh`; every test injects its own runner.
+const runGh = (args) =>
+  new Promise((resolve, reject) => {
+    execFile("gh", args, { timeout: GH_TOKEN_BUDGET_MS, maxBuffer: 65536, windowsHide: true }, (error, stdout) => (error === null ? resolve(String(stdout)) : reject(error)))
+  })
+
+// The token `gh` holds for github.com, or undefined. Remembered per runner for the life of the process; only a token is remembered.
+async function ghToken(run) {
+  if (ghTokens.has(run)) return ghTokens.get(run)
+  let token
+  try {
+    token = String(await run(["auth", "token", "--hostname", "github.com"])).trim() || undefined
+  } catch {
+    token = undefined
+  }
+  if (token !== undefined) ghTokens.set(run, token)
+  return token
+}
+
+async function github({ fetchFn, env, budgetMs, token: fromGh }, route, accept = "application/vnd.github+json") {
   const headers = { "User-Agent": "desk-delivery-gate", Accept: accept }
-  const token = [env.GH_TOKEN, env.GITHUB_TOKEN].find((value) => typeof value === "string" && value.trim() !== "")
+  const token = [env.GH_TOKEN, env.GITHUB_TOKEN].find((value) => typeof value === "string" && value.trim() !== "") ?? fromGh
   if (token !== undefined) headers.Authorization = `Bearer ${token.trim()}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), budgetMs)
@@ -89,17 +116,19 @@ function usableRule(rule) {
  * Is pull request `repo`#`number` delivered? Never throws. `{ status: "delivered", basis }` (`basis` says why: "no delivery rule declared",
  * "merge", the label), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged }` with a ready sentence in `need`,
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
- * `fetchFn` and `budgetMs` (per request) are test seams.
+ * `fetchFn`, `budgetMs` (per request) and `ghRunner` (asks `gh` for a token) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
  */
-export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS }) {
+export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner = fetchFn === undefined ? runGh : undefined }) {
+  const inEnv = [env.GH_TOKEN, env.GITHUB_TOKEN].some((value) => typeof value === "string" && value.trim() !== "")
+  const token = inEnv || ghRunner === undefined ? undefined : await ghToken(ghRunner)
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
-  const ask = { fetchFn: fetchFn ?? globalThis.fetch, env, budgetMs }
+  const ask = { fetchFn: fetchFn ?? globalThis.fetch, env, budgetMs, token }
   const policyAnswer = await github(ask, `/repos/${repo}/contents/${POLICY_PATH}`, "application/vnd.github.raw+json")
   let rules = null
   if (policyAnswer.status === 404) {
     // A repo that is private or hidden from the caller also answers 404, so "no policy" is believed only when the repo itself is visible.
     const visible = await github(ask, `/repos/${repo}`)
-    if (visible.status !== 200) return notVerified(`${repo} is not visible to GitHub requests from here (${why(visible.status)}), so whether it declares delivery rules is unknown; set GH_TOKEN for a private repo`)
+    if (visible.status !== 200) return notVerified(`${repo} is not visible to GitHub requests from here (${why(visible.status)}), so whether it declares delivery rules is unknown; set GH_TOKEN or sign in with gh (gh auth login) for a private repo`)
   } else {
     if (policyAnswer.status !== 200) return notVerified(`${repo}'s delivery rules could not be read from GitHub (${why(policyAnswer.status)})`)
     const policy = parse(policyAnswer.body)
@@ -148,13 +177,13 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
  * The done-gate's use of `prDelivery`: null when `evidence` is not a GitHub pull request URL (or a node:test run gave no fetch), otherwise
  * the answer, thrown as a refusal naming the pull request when it is `undelivered` or `not_found`. The caller reports `not_verified`.
  */
-export async function checkDelivery({ toolName, evidence, env = process.env, fetchFn, budgetMs }) {
+export async function checkDelivery({ toolName, evidence, env = process.env, fetchFn, budgetMs, ghRunner }) {
   const match = evidence.kind === "pr" ? GITHUB_PR.exec(evidence.ref.trim()) : null
   if (match === null) return null
   if (fetchFn === undefined && looksLikeNodeTestRunner(env)) return null
   const repo = `${match[1]}/${match[2]}`
   const number = Number(match[3])
-  const answer = await prDelivery({ repo, number, env, fetchFn, budgetMs })
+  const answer = await prDelivery({ repo, number, env, fetchFn, budgetMs, ghRunner })
   if (answer.status === "not_found") throw new Error(`${toolName}: ${evidence.ref.trim()} does not exist on GitHub, so nothing can carry it. Supply the URL of the pull request that did the work.`)
   if (answer.status === "undelivered") {
     const need = answer.unmet.map((entry) => entry.need).join(" and ")

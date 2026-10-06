@@ -183,6 +183,55 @@ test("a token in the environment goes to api.github.com only; none means an anon
   assert.ok(withToken.calls.every((call) => call.url.startsWith("https://api.github.com/") && call.options.headers.Authorization === "Bearer tok"))
 })
 
+test("with no token in the environment, the token from gh is used for every request, asked once and kept in memory", async () => {
+  const asked = []
+  const ghRunner = async (args) => { asked.push(args); return "  from-gh\n" }
+  const fake = fakeGitHub()
+  await ask(fake, { ghRunner })
+  assert.deepEqual(asked, [["auth", "token", "--hostname", "github.com"]])
+  assert.ok(fake.calls.every((call) => call.options.headers.Authorization === "Bearer from-gh"))
+  const later = fakeGitHub()
+  await ask(later, { ghRunner })
+  assert.equal(asked.length, 1, "remembered for the process")
+  assert.equal(later.calls[0].options.headers.Authorization, "Bearer from-gh")
+})
+
+test("a token in the environment means gh is not asked", async () => {
+  const ghRunner = async () => assert.fail("gh must not run")
+  for (const env of [{ GH_TOKEN: "a" }, { GITHUB_TOKEN: "b" }]) {
+    const fake = fakeGitHub()
+    await ask(fake, { env, ghRunner })
+    assert.equal(fake.calls[0].options.headers.Authorization, `Bearer ${Object.values(env)[0]}`)
+  }
+})
+
+test("gh absent, signed out, failing or silent leaves the request anonymous, and is asked again next time", async () => {
+  for (const ghRunner of [async () => { throw new Error("ENOENT") }, async () => "\n", async () => ""]) {
+    const fake = fakeGitHub()
+    await ask(fake, { ghRunner })
+    assert.equal(fake.calls[0].options.headers.Authorization, undefined)
+  }
+  let asks = 0
+  const flaky = async () => { asks += 1; if (asks === 1) throw new Error("not signed in"); return "late" }
+  await ask(fakeGitHub(), { ghRunner: flaky })
+  const second = fakeGitHub()
+  await ask(second, { ghRunner: flaky })
+  assert.equal(second.calls[0].options.headers.Authorization, "Bearer late")
+})
+
+test("a caller that injects its own fetch and no runner never runs gh", async () => {
+  // Every other test here relies on this: a real gh would put the machine's token into a fake GitHub.
+  const fake = fakeGitHub()
+  await prDelivery({ repo: "ourostack/desk", number: 200, env: {}, fetchFn: fake.fetchFn })
+  assert.equal(fake.calls[0].options.headers.Authorization, undefined)
+})
+
+test("checkDelivery passes the runner through", async () => {
+  const fake = fakeGitHub()
+  await checkDelivery({ toolName: "task_update", evidence: PR, env: {}, fetchFn: fake.fetchFn, ghRunner: async () => "viaCheck" }).catch(() => {})
+  assert.equal(fake.calls[0].options.headers.Authorization, "Bearer viaCheck")
+})
+
 test("a node:test run with no fetch of its own makes no request", async () => {
   assert.equal(await checkDelivery({ toolName: "task_update", evidence: PR, env: { NODE_TEST_CONTEXT: "child" } }), null)
 })
