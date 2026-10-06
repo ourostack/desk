@@ -156,7 +156,7 @@ const STALE = (where) => `stale row: ${where} is not on this machine (it may exi
  * row delivered or dropped, or the card `status` done or cancelled. A worktree whose path is gone is `stale` and its action is to
  * record it removed. Reads only the body and the file system; `exists` is for tests.
  */
-export function dueResources(body, { status, truncated = false, exists = existsSync } = {}) {
+export function dueResources(body, { status, truncated = false, exists = existsSync }) {
   const read = readResources(body, { truncated })
   if (read.rows === undefined) return []
   const steps = readSteps(body, { truncated }).rows ?? []
