@@ -13,6 +13,7 @@ import {
   assertNotRealStateUnderTest,
   isUnderOsTmpdir,
   looksLikeNodeTestRunner,
+  tmpdirSpellingsOf,
 } from "../../../../../plugins/desk/mcp/src/factory/test-state-guard.js"
 
 test("looksLikeNodeTestRunner is true whenever NODE_TEST_CONTEXT is a non-blank string", () => {
@@ -55,6 +56,16 @@ test("isUnderOsTmpdir recognizes the OS temp directory itself, a subdirectory, a
   assert.equal(isUnderOsTmpdir(path.join(tmp, "desk-test-x")), true, "a plain subdirectory")
   assert.equal(isUnderOsTmpdir(path.join(realTmp, "desk-test-x")), true, "a subdirectory of the realpath spelling")
   assert.equal(isUnderOsTmpdir(path.join(path.dirname(realTmp), "definitely-not-tmp")), false, "a sibling of the temp directory")
+})
+
+test("tmpdirSpellingsOf keeps the operating system's long spelling of a short temp path (Windows 8.3 names) and survives a path that cannot be resolved", () => {
+  const spellings = tmpdirSpellingsOf("C:\\Users\\RUNNER~1\\Temp", {
+    realpath: (target) => target,
+    native: () => "C:\\Users\\runneradmin\\Temp",
+  })
+  assert.deepEqual([...spellings].sort(), ["C:\\Users\\RUNNER~1\\Temp", "C:\\Users\\runneradmin\\Temp"])
+  const unresolved = tmpdirSpellingsOf("/gone", { realpath: () => { throw new Error("ENOENT") }, native: () => { throw new Error("ENOENT") } })
+  assert.deepEqual([...unresolved], ["/gone"])
 })
 
 test("isUnderOsTmpdir folds path casing only under an injected win32 platform; every other platform stays case-sensitive", () => {

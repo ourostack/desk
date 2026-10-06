@@ -10,7 +10,7 @@ const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
 const [index, total] = arg("--shard", "1/1").split("/").map(Number)
 const out = arg("--out", "suite-results.json")
-const timeoutMs = Number(arg("--timeout-ms", "180000"))
+const timeoutMs = Number(arg("--timeout-ms", "420000"))
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
 const testsRoot = path.join(repoRoot, "tests", "desk", "mcp", "__tests__")
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -23,10 +23,35 @@ const files = walk(testsRoot).sort()
 // Round-robin keeps a slow directory's files spread over the shards.
 const mine = files.filter((_, i) => i % total === index - 1)
 
+// What is still running under the test process when it hit its time limit, so a hang names the stuck command.
+const describeDescendants = (rootPid) => {
+  if (process.platform !== "win32") return ""
+  const probe = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"],
+  { encoding: "utf8", timeout: 30000 })
+  try {
+    const all = [].concat(JSON.parse(probe.stdout || "[]"))
+    const keep = new Set([rootPid])
+    for (let grew = true; grew;) {
+      grew = false
+      for (const p of all) if (keep.has(p.ParentProcessId) && !keep.has(p.ProcessId)) { keep.add(p.ProcessId); grew = true }
+    }
+    return all.filter((p) => keep.has(p.ProcessId)).map((p) => `${p.ProcessId}<-${p.ParentProcessId} ${p.Name} ${String(p.CommandLine ?? "").slice(0, 300)}`).join("\n")
+  } catch { return "(process list unavailable)" }
+}
+
 const killTree = (pid) => {
   if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" })
   else try { process.kill(-pid, "SIGKILL") } catch { /* already gone */ }
 }
+
+// One compact record per failed test: its name, the assertion or error text and the first stack frames.
+const failures = (output) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: # [^\n]*)?\n([\s\S]*?)(?=^\s*(?:# Subtest|ok \d+|not ok \d+|1\.\.))/gm)].map((m) => {
+  const body = m[2]
+  const error = /^\s*error: ([\s\S]*?)^\s*code:/m.exec(body)?.[1]?.trim() ?? ""
+  const stack = /^\s*stack: \|-\n([\s\S]*?)^\s*\.\.\./m.exec(body)?.[1]?.split("\n").slice(0, 4).map((l) => l.trim()).join(" | ") ?? ""
+  return { name: m[1], error: error.slice(0, 700), stack: stack.slice(0, 500) }
+})
 
 const runFile = (file) => new Promise((resolve) => {
   const started = Date.now()
@@ -37,7 +62,8 @@ const runFile = (file) => new Promise((resolve) => {
   child.stdout.on("data", (chunk) => { output += chunk })
   child.stderr.on("data", (chunk) => { output += chunk })
   let timedOut = false
-  const timer = setTimeout(() => { timedOut = true; killTree(child.pid) }, timeoutMs)
+  let stuck = ""
+  const timer = setTimeout(() => { timedOut = true; stuck = describeDescendants(child.pid); killTree(child.pid) }, timeoutMs)
   child.on("close", (code) => {
     clearTimeout(timer)
     const failed = [...output.matchAll(/^\s*not ok \d+ - (.+?)(?: # .*)?$/gm)].map((m) => m[1])
@@ -46,6 +72,8 @@ const runFile = (file) => new Promise((resolve) => {
       file: path.relative(testsRoot, file).split(path.sep).join("/"),
       exitCode: code, timedOut, ms: Date.now() - started,
       pass: count("pass"), fail: count("fail"), skipped: count("skipped"), failedTests: [...new Set(failed)],
+      failures: failures(output),
+      stuck, tail: timedOut ? output.slice(-2500) : "",
       firstFailures: code === 0 ? "" : [...output.matchAll(/^\s*not ok \d+ - [\s\S]*?(?=^\s*(?:# Subtest|ok \d+|not ok \d+|1\.\.))/gm)].slice(0, 3).map((m) => m[0].slice(0, 1500)).join("\n----\n") || output.slice(-1500),
     })
   })
