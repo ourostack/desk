@@ -1,6 +1,6 @@
 ---
 name: work-orchestration
-description: Align new work before go by gathering every decision that needs the human's judgment into one batch with recommendations, then bind authorized engineering work to the selected Superpowers method and preserve Desk state and cross-repository dependency authority.
+description: Align new work before go by gathering every decision that needs the human's judgment into one batch with recommendations, then bind authorized engineering work to the selected Superpowers method and preserve Desk state and cross-repository dependency authority. Also invoke when a material new requirement arrives mid-task, for the rule on keeping it on the same durable task.
 ---
 
 # Work orchestration
@@ -30,6 +30,8 @@ Do not optimize for one final reveal. Local branches, completed nodes and review
 Only a current, unsatisfied `needs-human-approval` is a hard exception. A producer may use `needs reviewer gate` only when it explicitly permits machine review. Superseded records do not revoke existing go. Mechanical reviews go to the authorized reviewer. A nested worker returns its brief and evidence to the parent rather than self-certifying or waiting for the parent's entire task to finish.
 
 Before any fan-out, the root identifies dependencies, write sets, exclusive resources, the integration fold, the evidence each child must return, and the final synthesis it will own. If those stay implicit, the work is not ready to split.
+
+Every child brief carries one line `Desk-Task: <track>/<slug>` naming the task the child's work serves, or `Desk-Task: none` when it serves none: the factory credits a child's work to a task only through that line or the task the parent held when it spawned the child. On Claude Code a hook adds the line from the task the main agent holds and refuses a brief with no line when none is held; on Copilot it refuses only; on Codex no hook runs, so the line in the brief is the whole mechanism. A child that dispatches its own child copies the line from its own brief.
 
 Include `task-lifecycle`'s **Resources** inventory in every child return contract, including reviewers: every created worktree and local/remote branch, exact repository/path/ref, current state, owner and verified disposition, or `none created`. Record ownership and disposition at creation, not from branch-name patterns at cleanup time. At each task, iteration or delegated-assignment boundary, its owner closes out through `git-hygiene`; the Superpowers controller removes completed task worktrees through `using-superpowers-with-desk`'s mapped controller duty before releasing their reservations. A return or root exit alone does not prove that delegated, remote, MCP or command writers are absent.
 
@@ -65,3 +67,7 @@ A candidate is accepted only after spec/targeted proof and a completed finding d
 On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one.
 
 Final behavioral scheduling proof — that dispatch, serialization and acceptance actually execute this way at runtime — belongs to a later task; this section ships the source contract and the real caller/provider witnesses only.
+
+## Requirements that arrive during execution
+
+Keep a material new requirement on the same durable task: update the governing spec, numbered plan and progress ledger before implementation, evaluate dependencies, sequencing, authority, tests and review evidence, name any invalidated evidence, keep unaffected authorized work moving, and send the affected path back through the normal implementation and review gates; the agent must not silently absorb contradictory scope, must not restart the whole task without cause, and must not return control merely because the plan changed.

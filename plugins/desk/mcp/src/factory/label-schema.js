@@ -1,5 +1,5 @@
-// Published labels v1 (`desk.factory.labels/1`): the waste labels for one
-// job's session.
+// Published labels (`desk.factory.labels/2`; `/1` files are still read):
+// the waste labels for one job's session.
 //
 // An independent evaluator (the `observer` agent, never the agent that did
 // the work) reads a finished job's evidence and writes one labels file per
@@ -35,6 +35,15 @@
 //   - `class` is `value`, `support` or `muda`. `waste` is one of the eight
 //     classic wastes for `muda` and `null` otherwise (else `inconsistent`).
 //     `mura` (unevenness) and `muri` (overburden) are flags on the stretch.
+//   - `/2` adds, on every stretch, the evaluator's `confidence` in that
+//     label (`high`, `medium` or `low`) and the `evaluator_version` that
+//     assigned it (the same shape as `evaluator.plugin_version`, and never
+//     newer than it, else `inconsistent`). `/2` also allows the label
+//     "could not tell": `class: "unknown"` with `waste: "unknown"`, each only
+//     with the other (else `inconsistent`). It is not muda: the rollups keep
+//     it as its own row, in labeled time but out of every waste total. A `/1`
+//     file has none of these (a `/2` key is `unknown_key`, `unknown` is not
+//     an enum member) and stays valid as it is.
 //   - `caught` is optional: where the defect was caught (`in_task`,
 //     `at_review` or `after_delivery`). Desk writes it on `defects` stretches
 //     from the job's record; the evaluator never does.
@@ -84,9 +93,18 @@ import {
   validateObject,
 } from "./schema.js"
 
-export const LABELS_SCHEMA = "desk.factory.labels/1"
+export const LABELS_SCHEMA = "desk.factory.labels/2"
+
+/** Every labels schema value a reader accepts: the legacy `/1` and the current one. */
+export const LABELS_SCHEMAS = Object.freeze(["desk.factory.labels/1", LABELS_SCHEMA])
 
 export const LABEL_CLASSES = Object.freeze(["value", "support", "muda"])
+
+/** The `/2` label for time the evaluator looked at and could not tell: its class and its waste row. */
+export const UNKNOWN_LABEL = "unknown"
+
+/** How sure the evaluator is of one `/2` label. */
+export const LABEL_CONFIDENCE = Object.freeze(["high", "medium", "low"])
 
 export const LABEL_WASTES = Object.freeze([
   "defects",
@@ -110,7 +128,7 @@ export const LABEL_LIMITS = Object.freeze({
   evidence: 1000,
 })
 
-const LABELS_SCHEMA_PATTERN = /^desk\.factory\.labels\/1$/u
+const LABELS_SCHEMA_PATTERN = /^desk\.factory\.labels\/[12]$/u
 const DESK_VERSION = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?:-(alpha|beta|rc)\.([0-9]{1,4}))?$/u
 const RUBRIC = /^[1-9][0-9]{0,2}$/u
 const STAGES = Object.freeze(["alpha", "beta", "rc"])
@@ -153,11 +171,26 @@ const STRETCH = {
   evidence: arrayField(customField(checkEvidenceRange), LABEL_LIMITS.evidence),
 }
 
+// `/2` stretch keys: the label's confidence and version, and the "could not tell" class and waste.
+const STRETCH_V2 = {
+  ...STRETCH,
+  class: enumField([...LABEL_CLASSES, UNKNOWN_LABEL]),
+  waste: nullableEnumField([...LABEL_WASTES, UNKNOWN_LABEL]),
+  confidence: enumField(LABEL_CONFIDENCE),
+  evaluator_version: patternField(DESK_VERSION),
+}
+
+// A stretch's waste agrees with its class: one of the eight for `muda`, `unknown` for `unknown`, `null` otherwise.
+function wasteAgrees(value) {
+  if (value.class === "muda") return value.waste !== null && value.waste !== UNKNOWN_LABEL
+  return value.waste === (value.class === UNKNOWN_LABEL ? UNKNOWN_LABEL : null)
+}
+
 function stretchCheck(value, path, results, errors) {
   if (results.start_ms === true && results.end_ms === true && value.end_ms <= value.start_ms) {
     addError(errors, "order", joinPath(path, "end_ms"))
   }
-  if (results.class === true && results.waste === true && (value.class === "muda") === (value.waste === null)) {
+  if (results.class === true && results.waste === true && !wasteAgrees(value)) {
     addError(errors, "inconsistent", joinPath(path, "waste"))
   }
   if (Array.isArray(results.evidence)) {
@@ -172,20 +205,29 @@ function stretchCheck(value, path, results, errors) {
   }
 }
 
+// The stretch spec for one schema version, with `caught` when the stretch carries it.
+const stretchesField = (base) => arrayField(objectField((value) => (Object.hasOwn(value, "caught") ? { ...base, ...CAUGHT } : base), stretchCheck), LABEL_LIMITS.stretches)
+
 const TOP = {
   schema: patternField(LABELS_SCHEMA_PATTERN),
   job: publicPatternField(PATTERNS.jobId),
   session: publicPatternField(SESSION_ID_V4),
   evaluator: objectField(EVALUATOR),
-  stretches: arrayField(objectField((value) => (Object.hasOwn(value, "caught") ? { ...STRETCH, ...CAUGHT } : STRETCH), stretchCheck), LABEL_LIMITS.stretches),
+  stretches: stretchesField(STRETCH),
   unavailable: arrayField(enumField(LABEL_UNAVAILABLE), LABEL_UNAVAILABLE.length),
 }
+
+const TOP_V2 = { ...TOP, stretches: stretchesField(STRETCH_V2) }
+
+// A `/1` file is walked with the `/1` stretch spec; anything else, including a wrong schema value (refused once, as `pattern`), with the current one.
+const topFields = (value) => (value.schema === LABELS_SCHEMAS[0] ? TOP : TOP_V2)
 
 // For the structural test: every allowed key carries a real check.
 export const __LABEL_SPECS__ = Object.freeze({
   top: TOP,
   evaluator: EVALUATOR,
   stretch: { ...STRETCH, ...CAUGHT },
+  stretchV2: { ...STRETCH_V2, ...CAUGHT },
 })
 
 // A stretch whose own start and end are sound and in order.
@@ -199,8 +241,16 @@ function soundStretch(value, result) {
  */
 export function validateLabels(value) {
   const errors = []
-  const results = validateObject(value, "", TOP, errors)
+  const results = validateObject(value, "", topFields, errors)
   if (results === undefined) return { ok: false, errors }
+
+  // No label is newer than the evaluator that wrote the file, so the store's file-level replacement rule still compares the newest label.
+  if (results.evaluator?.plugin_version === true && Array.isArray(results.stretches)) {
+    value.stretches.forEach((stretch, index) => {
+      if (results.stretches[index]?.evaluator_version !== true) return
+      if (compareVersions(stretch.evaluator_version, value.evaluator.plugin_version) > 0) addError(errors, "inconsistent", `stretches.${index}.evaluator_version`)
+    })
+  }
 
   // Stretches in start order, none overlapping any earlier one. Unsound
   // stretches are skipped, so one bad stretch is one error.
@@ -265,12 +315,17 @@ function compareTuples(left, right) {
   return 0
 }
 
+/** `compareVersions(left, right) -> number`: two valid evaluator versions in release order (negative, zero or positive). */
+export function compareVersions(left, right) {
+  return compareTuples(versionTuple(left), versionTuple(right))
+}
+
 /**
  * `evaluatorDowngrade(previous, current) -> boolean`: whether valid labels
  * `current` come from an older evaluator than valid labels `previous`, by
  * plugin version or by rubric.
  */
 export function evaluatorDowngrade(previous, current) {
-  return compareTuples(versionTuple(current.evaluator.plugin_version), versionTuple(previous.evaluator.plugin_version)) < 0
+  return compareVersions(current.evaluator.plugin_version, previous.evaluator.plugin_version) < 0
     || Number(current.evaluator.rubric) < Number(previous.evaluator.rubric)
 }

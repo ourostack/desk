@@ -14,6 +14,7 @@ import { writeGitConfig } from "./safety.mjs"
 import { findScenario } from "./scenarios.mjs"
 import { elsewhereCloneDenial } from "../../plugins/desk/mcp/src/runtime/elsewhere-clone.js"
 import { activeTasks } from "../../plugins/desk/mcp/src/desk/active-tasks.js"
+import { loadGrayMatter } from "../../plugins/desk/mcp/src/desk/organization.js"
 
 const DESK = "/private/var/folders/nh/T/boot-acceptance-x/fixture/desk"
 const flagged = (reply, calls = []) => inventedDeliveries({ reply, calls, deskRoot: DESK })
@@ -91,6 +92,8 @@ test("writeGitConfig without stand-ins is unchanged, and a clone of a URL is nev
 })
 
 test("the guard denies a clone of the card's repository in the real fixture, and allows it once the card's next step is rewritten", async () => {
+  // Cards list repositories in a nested `repos:` block that only gray-matter reads; the dependency-free reader returns no repos, so no card would match. The real hook restores the runtime pack first (`loadDeskTasks`); this test imports `activeTasks` directly, so it needs `npm ci` in plugins/desk/mcp and says so rather than failing on a missing denial.
+  assert.doesNotThrow(() => loadGrayMatter(), "gray-matter is not installed: run `npm ci` in plugins/desk/mcp before running the boot acceptance unit tests")
   const dir = scratch()
   try {
     const { deskRoot } = materializeFixture(path.join(dir, "fixture"))

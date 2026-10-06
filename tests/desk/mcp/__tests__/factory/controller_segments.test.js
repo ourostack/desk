@@ -361,6 +361,37 @@ test("a private desk publishes segments and its controller PRs' times; a public 
   assert.deepEqual(toPublished(unsplit, { visibility: () => "public", deskVisibility: "private", storeVisibility: "private" }).published.refs.prs, [{ repo: "o/r", number: 1, agent: 0 }])
 })
 
+test("a commit's time publishes as a controller PR's does, and only a file that carries one or the outcomes flag is /3", () => {
+  const local = localFacts({ jobs: [job("a", { segments: [span(0, 40000)] }), job("b", { segments: [span(40000, 100000)] })] })
+  local.refs.commits = [{ repo: "o/r", sha: "a".repeat(40), at_ms: 45000 }, { repo: "o/r", sha: "b".repeat(40) }, { repo: null, sha: "c".repeat(40), at_ms: 1 }]
+  assert.deepEqual(validateLocalFacts(local), { ok: true, errors: [] })
+  const options = { visibility: () => "public", deskVisibility: "private", storeVisibility: "private" }
+  const { published } = toPublished(local, options)
+  assert.equal(published.schema, "desk.factory.published/3")
+  assert.deepEqual(published.refs.commits, [{ repo: "o/r", sha: "a".repeat(40), at_ms: 45000 }, { repo: "o/r", sha: "b".repeat(40) }])
+  assert.equal(validatePublishedBytes(serializePublished(published)).ok, true)
+
+  // A public desk publishes no commit time, and with nothing else only /3 allows the file stays /2.
+  const open = toPublished(local, { ...options, deskVisibility: "public", machineSecret: new Uint8Array(32).fill(7) }).published
+  assert.equal(open.schema, "desk.factory.published/2")
+  assert.ok(open.refs.commits.every((commit) => !Object.hasOwn(commit, "at_ms")))
+  assert.equal(validatePublishedBytes(serializePublished(open)).ok, true)
+
+  // Nor does a private session whose jobs carry no segments.
+  const unsplit = localFacts({ jobs: [job("a")] })
+  unsplit.refs.commits = [{ repo: "o/r", sha: "a".repeat(40), at_ms: 45000 }]
+  const plain = toPublished(unsplit, options).published
+  assert.equal(plain.schema, "desk.factory.published/2")
+  assert.deepEqual(plain.refs.commits, [{ repo: "o/r", sha: "a".repeat(40) }])
+
+  // The outcomes flag alone makes the file /3, so a store never sees it in a /2 file.
+  unsplit.unavailable = [...unsplit.unavailable, { field: "outcomes", reason: "capped" }]
+  const cut = toPublished(unsplit, options).published
+  assert.equal(cut.schema, "desk.factory.published/3")
+  assert.ok(cut.unavailable.some((entry) => entry.field === "outcomes" && entry.reason === "capped"))
+  assert.equal(validatePublishedBytes(serializePublished(cut)).ok, true)
+})
+
 // --- Pipeline ----------------------------------------------------------------
 
 const formulasOf = (hex, sessions) => calculateFormulas(buildJobTimeline(hex.repeat(32), sessions))

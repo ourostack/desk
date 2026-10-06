@@ -128,7 +128,16 @@ test("a stretch's catch point publishes as written, and a stretch without one pu
   assert.equal(Object.hasOwn(toPublishedLabels(unplaced, { deskVisibility: "private" }).published.stretches[0], "caught"), false)
   const keyed = toPublishedLabels(labels(), { deskVisibility: "public", machineSecret: SECRET })
   assert.equal(keyed.published.stretches[0].caught, "in_task")
-  assert.deepEqual(Object.keys(keyed.published.stretches[0]).slice(-2), ["evidence", "caught"])
+  assert.deepEqual(Object.keys(keyed.published.stretches[0]).slice(-4), ["evidence", "confidence", "evaluator_version", "caught"])
+  // A /1 stretch publishes as it was: no confidence and no version appear.
+  const legacy = labels()
+  legacy.schema = "desk.factory.labels/1"
+  legacy.evaluator.rubric = "1"
+  for (const stretch of legacy.stretches) {
+    delete stretch.confidence
+    delete stretch.evaluator_version
+  }
+  assert.deepEqual(Object.keys(toPublishedLabels(legacy, { deskVisibility: "private" }).published.stretches[0]), ["start_ms", "end_ms", "class", "waste", "mura", "muri", "evidence", "caught"])
 })
 
 test("a catch point that is not one of the three codes is refused without naming it", () => {

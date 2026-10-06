@@ -6,7 +6,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { sentence as signoffSentence } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import {
+  acceptanceClaims,
+  statesUnaccepted,
   clearTouchedTasks,
   doneClaimStopHook,
   doneClaims,
@@ -545,13 +548,13 @@ test("the .cjs entry point records over stdin, blocks over stdout, and fails ope
   assert.deepEqual(broken.output, {})
 })
 
-test("hooks.json wires the Stop gate beside the factory hook and the tracker on the four task tools", () => {
+test("hooks.json wires the Stop gate beside the factory hook and the tracker on the five task tools", () => {
   const hooks = JSON.parse(readFileSync(path.join(plugin, "hooks", "hooks.json"), "utf8")).hooks
   assert.ok(hooks.Stop.some((group) => group.hooks.some((entry) => /done-claim-gate\.cjs" claude stop$/u.test(entry.command))))
   assert.ok(hooks.Stop.some((group) => group.hooks.some((entry) => /factory-end\.cjs/u.test(entry.command))))
   const track = hooks.PostToolUse.find((group) => group.hooks.some((entry) => /done-claim-gate\.cjs" claude track$/u.test(entry.command)))
   const matcher = new RegExp(`^(?:${track.matcher})$`, "u")
-  for (const tool of ["task_update", "task_create", "task_move", "task_archive"]) {
+  for (const tool of ["task_update", "task_create", "task_move", "task_archive", "task_signoff"]) {
     assert.ok(matcher.test(`mcp__plugin_desk_desk__${tool}`), tool)
     assert.ok(matcher.test(`mcp__desk__${tool}`), tool)
   }
@@ -650,4 +653,110 @@ test("a done-gate edge case: 'If it helps, the task is done.' blocks, because a 
 test("a plan is no claim: 'I'll run the tests, then it's done.' and its future, modal and 'once I' forms pass, while a reported step still blocks", () => {
   for (const reply of ["I'll run the tests, then it's done.", "I will run the tests, then it's done.", "We'll run the tests, then it's done.", "I'm going to run the tests, then it's done.", "Going to run the tests, then it's done.", "The suite will run, then it's done.", "Once I run the tests, then it's done.", "After I run the tests, then it's done.", "As soon as I run the tests, then it's done."]) assert.deepEqual(stop(validating(), reply), {}, reply)
   for (const reply of ["Ran the tests, then it's done.", "I ran the tests, then it's done.", "I'll run the tests. Ran them, then it's done."]) assert.ok(blocks(stop(validating(), reply)), reply)
+})
+
+// ---- task_signoff: a refusal reopens the task, and a delivery is not an acceptance (Package H) ----
+
+const SIGNOFF = "mcp__plugin_desk_desk__task_signoff"
+const signedCard = (signoff, verified = signoff === "accepted" ? "true" : "null") => {
+  const root = path.join(ROOT, `desk-${(counter += 1)}`)
+  mkdirSync(path.join(root, "greenhouse-ops", "watering-schedule-api"), { recursive: true })
+  const card = path.join(root, "greenhouse-ops", "watering-schedule-api", "task.md")
+  const block = signoff === null ? "" : `signoff:\n  state: ${signoff}\n  at: null\n  verified: ${verified}\n`
+  writeFileSync(card, `---\ntitle: "x"\nstatus: done\n${block}flow:\n  rev: 1\n---\n\nbody\n`)
+  return { root, card }
+}
+const deliveredIn = (stateDir, root) => recordTouchedTask(post(UPDATE, { track: "greenhouse-ops", slug: "watering-schedule-api", status: "done" }, JSON.stringify({ status: "updated", path: "greenhouse-ops/watering-schedule-api/task.md" })), { stateDir, root })
+
+test("a task_signoff call is tracked: a refusal leaves the task back at processing, an acceptance says no status of its own", () => {
+  const input = { track: "greenhouse-ops", slug: "watering-schedule-api", outcome: "refused" }
+  const refused = touchedTask(SIGNOFF, input, JSON.stringify({ status: "signed", path: "greenhouse-ops/watering-schedule-api/task.md", report_as: "Task watering-schedule-api is back at processing (not done)." }))
+  assert.equal(refused.status, "processing")
+  assert.equal(refused.key, "greenhouse-ops/watering-schedule-api")
+  const accepted = touchedTask(SIGNOFF, { ...input, outcome: "accepted" }, JSON.stringify({ status: "signed", path: "greenhouse-ops/watering-schedule-api/task.md" }))
+  assert.equal(accepted.status, null)
+  assert.equal(touchedTask(SIGNOFF, input, "task_signoff: only a delivered task can be signed; this one is at processing."), null, "a refused call records nothing")
+  const stateDir = freshState()
+  recordTouchedTask(post(SIGNOFF, input, JSON.stringify({ status: "signed", path: "greenhouse-ops/watering-schedule-api/task.md", report_as: "Task watering-schedule-api is back at processing (not done)." })), { stateDir, root: null })
+  const result = stop(stateDir, "Done. The fix is merged.")
+  assert.equal(blocks(result), true, "a Done after a refused sign-off is gated like any other task short of done")
+  assert.match(result.reason, /is at processing\./u)
+})
+
+test("acceptance is judged by word, not phrasing: any acceptance word counts unless the reply states the honest state; code and quotations claim nothing", () => {
+  const blocked = (text) => acceptanceClaims(text).length > 0 && !statesUnaccepted(text)
+  // The re-review's phrasings, which a list of claim shapes missed, and the first review's.
+  for (const claim of ["Status: accepted.", "Task soil-sensor: accepted.", "soil-sensor is accepted.", "It has been accepted.", "Ari accepted it.", "Ari accepted the task.", "You accepted soil-sensor.", "Sign-off recorded: accepted.", "Accepted by you, so we're finished.", "The task is accepted.", "Task watering-schedule-api was signed off.", "Delivered the fix, and the task is accepted.", "Accepted.", "**Signed off!**", "Approved by Ari.", "Sign-off complete.", "Acceptance is in.", "Since you accepted the plan earlier, I went ahead."]) {
+    assert.equal(blocked(claim), true, claim)
+  }
+  // The honest state clears it, whatever else the reply says.
+  for (const honest of ["Delivered. Asked: x. Delivered: pr 7. Accept or send back?", "Delivered, not accepted: it awaits your sign-off.", "The task is not accepted yet.", "Delivered and awaiting sign-off; nothing is accepted until you say so.", "It is still unsigned, so I have not called it accepted.", "Delivered, pending the operator's sign-off. Accept it or send it back."]) {
+    assert.equal(statesUnaccepted(honest), true, honest)
+    assert.equal(blocked(honest), false, honest)
+  }
+  for (const quiet of ["```\nAccepted.\n```", "> The task is accepted.", "Merged and deployed.", "Delivered the fix."]) assert.equal(acceptanceClaims(quiet).length, 0, quiet)
+  // A state in a code span or double quotes is a claim: `accepted` is the literal Desk state. Bare "approved" and the sign-off-recorded family count.
+  for (const claim of ["Status: `accepted`.", "Task soil-sensor: `accepted`", "Task soil-sensor is \"accepted\".", "Ari approved it.", "Approved.", "The operator approved the delivery.", "Sign-off received.", "Your sign-off is recorded.", "Sign-off was given."]) assert.equal(blocked(claim), true, claim)
+  // "Send back" is honest only in the packet's own form.
+  for (const claim of ["You accepted it, so there is nothing to send back.", "Accepted. Nothing to send back."]) assert.equal(blocked(claim), true, claim)
+  for (const honest of ["Accept it, or send it back?", "Should I send it back?", "Accepted (unverified)."]) assert.equal(blocked(honest), false, honest)
+})
+
+test("a reply that says a delivered task was accepted is blocked while its card has no accepted sign-off; an accepted card, a card with no record, or no claim passes", () => {
+  const unsigned = signedCard("delivered_unsigned")
+  const stateDir = freshState()
+  deliveredIn(stateDir, unsigned.root)
+  const result = stop(stateDir, "Delivered the fix, and the task is accepted.")
+  assert.equal(blocks(result), true)
+  assert.match(result.reason, /^Restate your reply as delivered, not accepted\. Task watering-schedule-api awaits the operator's sign-off/u)
+  assert.match(result.reason, /no verified acceptance is recorded\. Ask the operator for it in the sign-off packet \(asked, delivered with proof, accept or send back\) and wait for their answer\.$/u)
+  assert.doesNotMatch(result.reason, /task_signoff/u, "the agent is never pointed at the call that would silence the gate")
+  assert.equal(existsSync(sessionFile(stateDir, "s1")), true, "a blocked stop keeps the turn's tasks")
+  for (const [state, why, verified] of [["accepted", "a verified accepted card"], [null, "a card with no sign-off record"], ["refused", null], ["accepted", null, "false"], ["accepted", null, "null"]]) {
+    const card = signedCard(state, verified)
+    const dir = freshState()
+    deliveredIn(dir, card.root)
+    const answer = stop(dir, "The task is accepted.")
+    if (why === null) assert.equal(blocks(answer), true, `a ${state} sign-off with verified ${verified} is no acceptance`)
+    else assert.deepEqual(answer, {}, why)
+  }
+  const quiet = freshState()
+  deliveredIn(quiet, signedCard("delivered_unsigned").root)
+  assert.deepEqual(stop(quiet, "Delivered. Asked: x. Delivered: pr 7. Accept or send back?"), {}, "the sign-off ask itself passes")
+  // Another card's acceptance passes only when no touched card is unaccepted.
+  const other = freshState()
+  deliveredIn(other, signedCard("accepted").root)
+  assert.deepEqual(stop(other, "The soil-sensor task was accepted last week."), {}, "every touched card has a verified acceptance")
+  const mixed = freshState()
+  deliveredIn(mixed, signedCard("delivered_unsigned").root)
+  assert.equal(blocks(stop(mixed, "The soil-sensor task was accepted last week.")), true, "a touched card is unaccepted, so any acceptance word blocks")
+  assert.equal(existsSync(sessionFile(quiet, "s1")), false, "a stop that does not block clears the turn")
+})
+
+test("the reproduction: an acceptance recorded with verified false (no human turn witnessed), then 'the task is accepted', is blocked", () => {
+  const card = signedCard("accepted", "false")
+  const stateDir = freshState()
+  deliveredIn(stateDir, card.root)
+  recordTouchedTask(post(SIGNOFF, { track: "greenhouse-ops", slug: "watering-schedule-api", outcome: "accepted" }, JSON.stringify({ status: "signed", path: "greenhouse-ops/watering-schedule-api/task.md" })), { stateDir, root: card.root })
+  const result = stop(stateDir, "Delivered the fix, and the task is accepted.")
+  assert.equal(blocks(result), true)
+  assert.equal(result.reason, "Restate your reply to say task watering-schedule-api's acceptance is recorded as unverified. Desk could not tie task watering-schedule-api's answer to a human turn, so it does not count it as accepted; do not ask the operator again.")
+  assert.doesNotMatch(result.reason, /sign-off packet|Ask the operator/u, "an answer already given is never asked for again")
+  const unread = freshState()
+  recordTouchedTask(post(UPDATE, { track: "greenhouse-ops", slug: "watering-schedule-api", status: "done" }, JSON.stringify({ status: "updated", path: "greenhouse-ops/watering-schedule-api/task.md" })), { stateDir: unread, root: path.join(ROOT, "no-such-desk") })
+  assert.deepEqual(stop(unread, "The task is accepted."), {}, "a card that cannot be read is not judged")
+})
+
+test("task_signoff's own sentence for an unverified answer passes the gate: the gate never blocks its own tool's output", () => {
+  for (const verified of ["false", "null"]) {
+    const card = signedCard("accepted", verified)
+    const stateDir = freshState()
+    deliveredIn(stateDir, card.root)
+    const say = signoffSentence({ slug: "watering-schedule-api", outcome: "accepted", changed: true, verified: false })
+    assert.match(say, /recorded as unverified\.$/u)
+    assert.deepEqual(stop(stateDir, `Done. ${say}`), {}, `verified ${verified}`)
+    const dir = freshState()
+    deliveredIn(dir, card.root)
+    assert.deepEqual(stop(dir, "You accepted it; Desk recorded it as unverified."), {})
+  }
 })

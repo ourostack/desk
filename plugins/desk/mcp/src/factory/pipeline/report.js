@@ -150,6 +150,7 @@ export const FIELD_TEXT = Object.freeze({
   job_segments: "Job time segments",
   job_offsets: "Job clock offsets",
   human_turns: "Human turns",
+  outcomes: "Task outcomes",
 })
 
 function fieldText(field) {
@@ -452,7 +453,7 @@ function wasteLines(timeline, labelsByJobSession) {
     return entry === undefined ? [] : [entry]
   })
   if (labeled.length === 0) return ["Not classified yet: no session of this job has labels from the independent evaluator."]
-  const byClass = { value: 0, support: 0, muda: 0 }
+  const byClass = { value: 0, support: 0, muda: 0, unknown: 0 }
   const byWaste = new Map()
   let mura = 0
   let muri = 0
@@ -466,7 +467,7 @@ function wasteLines(timeline, labelsByJobSession) {
     if (stretch.mura) mura += 1
     if (stretch.muri) muri += 1
   }
-  const classified = byClass.value + byClass.support + byClass.muda
+  const classified = byClass.value + byClass.support + byClass.muda + byClass.unknown
   // Every line below covers only the labeled sessions, so its state is the labeled share of the job's sessions.
   const state = labeled.length === total ? "measured" : `partial: ${reasonText("not_labeled")}; ${plural(total - labeled.length, "session")} uncovered`
   const coverage = labeled.length === total
@@ -480,6 +481,7 @@ function wasteLines(timeline, labelsByJobSession) {
     `- ${coverage}`,
     wastes.length === 0 ? `- Muda: none in the labeled stretches (${state}).` : `- Muda: ${byClass.muda} ms${share}, by type: ${wastes.join(", ")} (${state}).`,
     `- Value ${byClass.value} ms; support ${byClass.support} ms (${state}).`,
+    ...(byClass.unknown === 0 ? [] : [`- Unknown (the evaluator could not tell, not counted as muda): ${byClass.unknown} ms (${state}).`]),
     `- Mura (unevenness) flagged on ${plural(mura, "stretch", "stretches")}; muri (overburden) on ${plural(muri, "stretch", "stretches")} (${state}).`,
   ]
   const unreadable = new Map()

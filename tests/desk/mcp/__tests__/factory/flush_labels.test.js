@@ -170,6 +170,7 @@ test("labels the transform or the gate refuses are quarantined and never sent", 
   huge.stretches = Array.from({ length: 10000 }, (_, index) => ({
     start_ms: index * 10, end_ms: index * 10 + 10, class: "value", waste: null, mura: false, muri: false,
     evidence: Array.from({ length: 100 }, (__, range) => [1000000000 + range, 1000000001 + range]),
+    confidence: "high", evaluator_version: huge.evaluator.plugin_version,
   }))
   await putLabels(env, 3, huge)
   const github = fakeGitHub()

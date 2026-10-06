@@ -75,7 +75,7 @@ const endOfSecond = (ms) => (ms === null ? null : ms % 1000 === 0 ? ms + 999 : m
 const deliveredAtOf = (data, record) => endOfSecond(asMs(record.flow?.delivered_at)) ?? endOfSecond(asMs(data.evidence?.recorded_at)) ?? undefined
 
 // The one sentence the agent includes in its reply; unverified answers say so at the end.
-function sentence({ slug, outcome, reason, changed, verified }) {
+export function sentence({ slug, outcome, reason, changed, verified }) {
   const lead = changed ? "Recorded" : "Already recorded"
   let text = `${lead}: ${slug} accepted.`
   if (outcome === "refused") text = changed ? `${lead}: ${slug} sent back (${reason}); it is back in processing.` : `${lead}: ${slug} sent back.`

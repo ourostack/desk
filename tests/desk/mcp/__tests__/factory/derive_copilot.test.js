@@ -9,6 +9,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
 import v8 from "node:v8"
 import vm from "node:vm"
 
@@ -880,6 +881,17 @@ test("an unreadable subagent interval is flagged under tool_durations, a compact
   ])
 })
 
+test("a warning the driver's first load emits is swallowed, and the process's own emitter is back afterwards", () => {
+  const original = process.emitWarning
+  const driver = { DatabaseSync: class {} }
+  const loud = (name) => {
+    process.emitWarning(`${name} is experimental`, "ExperimentalWarning")
+    return driver
+  }
+  assert.equal(usageInternals.loadSqlite(loud), driver)
+  assert.equal(process.emitWarning, original)
+})
+
 test("the factory reader reports a missing, an unreadable or a driverless database without throwing", () => {
   const home = makeHome({ sessions: [] })
   const env = { COPILOT_HOME: home }
@@ -1657,4 +1669,68 @@ test("a tool-only reply with no content key adds nothing and does not flag the l
   ])
   assert.deepEqual(humanFlags(facts), [])
   assert.equal(facts.human_turns[1].output_class, "none")
+})
+
+test("a commit carries when the session recorded it: the earliest readable time inside the session, from its own query", async () => {
+  // The session's clock, from a derivation with untimed rows.
+  const probe = makeHome()
+  let started
+  let through
+  try {
+    const { facts } = await derive(probe, SESSIONS.full)
+    started = Date.parse(facts.session.started_at)
+    through = Date.parse(facts.session.derived_through)
+  } finally {
+    rmSync(probe, { recursive: true, force: true })
+  }
+  const iso = (ms) => new Date(ms).toISOString()
+  const store = defaultStoreRows()
+  store.refs = [
+    // A short SHA that resolves: timed 2 s in; the same commit named in full later keeps the earlier time.
+    [SESSIONS.full, "commit", "fc6ea8a", iso(started + 2000)],
+    [SESSIONS.full, "commit", "fc6ea8a0000000000000000000000000000000aa", iso(started + 9000)],
+    // Named twice, the later row first: the earliest time still wins.
+    [SESSIONS.full, "commit", "abcdef012", iso(started + 7000)],
+    [SESSIONS.full, "commit", "abcdef0120000000000000000000000000000001", iso(started + 3000)],
+    // A full SHA the repository does not have, timed at the session's end exactly (inside).
+    [SESSIONS.full, "commit", "1234567890123456789012345678901234567890", iso(through)],
+    // Before the session, after it, and unreadable: no time.
+    [SESSIONS.full, "commit", "abcdef0000000000000000000000000000000001", iso(started - 1)],
+    [SESSIONS.full, "commit", "2222222222222222222222222222222222222222", iso(through + 1)],
+    [SESSIONS.full, "commit", "3333333333333333333333333333333333333333", "yesterday"],
+    // An unresolved short value takes no part.
+    [SESSIONS.full, "commit", "0badc0de", iso(started + 1000)],
+    [OTHER_SESSION, "commit", "4444444444444444444444444444444444444444", iso(started + 1000)],
+  ]
+  const home = makeHome({ store })
+  try {
+    fixtureResolver = fakeCommitResolver()
+    const { facts } = await derive(home, SESSIONS.full)
+    assert.deepEqual(facts.refs.commits, [
+      { repo: null, sha: "1234567890123456789012345678901234567890", at_ms: through - started },
+      { repo: null, sha: "2222222222222222222222222222222222222222" },
+      { repo: null, sha: "3333333333333333333333333333333333333333" },
+      { repo: "ourostack/desk", sha: "abcdef0000000000000000000000000000000001" },
+      { repo: "ourostack/desk", sha: "abcdef0120000000000000000000000000000001", at_ms: 3000 },
+      { repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa", at_ms: 2000 },
+    ])
+    assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+  // A store whose session_refs has no created_at still yields its commits, untimed.
+  const old = makeHome({ store })
+  try {
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite")
+    const db = new DatabaseSync(path.join(old, "session-store.db"))
+    db.exec("ALTER TABLE session_refs DROP COLUMN created_at")
+    db.close()
+    fixtureResolver = fakeCommitResolver()
+    const { facts } = await derive(old, SESSIONS.full)
+    assert.equal(facts.refs.commits.length, 6)
+    assert.ok(facts.refs.commits.every((commit) => !Object.hasOwn(commit, "at_ms")))
+    assert.ok(!facts.unavailable.some((entry) => entry.field === "commits"))
+  } finally {
+    rmSync(old, { recursive: true, force: true })
+  }
 })

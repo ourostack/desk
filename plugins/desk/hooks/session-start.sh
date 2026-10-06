@@ -54,9 +54,13 @@ sep="/"
 case "$PLUGIN_ROOT" in *\\*) sep="\\" ;; esac
 rfc="Desk RFC: ${PLUGIN_ROOT}${sep}docs${sep}agentic-engineering-v2-rfc.md"
 
-emit "${foundation}
+# The startup line goes first. Claude Code saves a hook's additionalContext to a file and shows the agent only a
+# preview of its first 2 KB once it passes 10,000 characters, and the foundation alone is most of that budget. The
+# boot imperative has to sit inside the preview, so the foundation and the RFC line come after it.
+emit "${direction}
+
+${foundation}
 
 ${rfc}
-
-${direction}"
+"
 exit 0

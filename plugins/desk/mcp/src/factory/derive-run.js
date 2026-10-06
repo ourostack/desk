@@ -61,9 +61,9 @@ function outcomeEntry(job, found, now) {
 }
 
 /**
- * `outcomesFor({ jobs, lifecycleCalls, readers, identity, now }) -> entry[]`: the outcome record of each task the session touched, sorted by job, one entry per job and at most `LIMITS.outcomes`. The tasks are the bound jobs (`jobs`: `{ job, track, slug }` as `bindSession` returns them as `tasks`) and every task a successful `task_signoff`, `task_update`, `task_create` or `task_archive` call named (`lifecycleCalls`: the deriver's `deskToolCalls`). A call's job ID is computed as binding computes it: the birth path from `readers.resolveJobIdentity`, hashed with `identity` (`{ deskRemote, personPrefix }`). A task whose card cannot be read, or whose job ID cannot be made, gets no entry and never stops the others. `observed_at` is `now` (epoch milliseconds or an ISO string), never the clock.
+ * `outcomesFor({ jobs, lifecycleCalls, readers, identity, now, unavailable }) -> entry[]`: the outcome record of each task the session touched, sorted by job, one entry per job and at most `LIMITS.outcomes`; when there are more, the rest are cut and `{outcomes, capped}` is added to `unavailable` (the session's list), so a cut list never reads as the whole one. The tasks are the bound jobs (`jobs`: `{ job, track, slug }` as `bindSession` returns them as `tasks`) and every task a successful `task_signoff`, `task_update`, `task_create` or `task_archive` call named (`lifecycleCalls`: the deriver's `deskToolCalls`). A call's job ID is computed as binding computes it: the birth path from `readers.resolveJobIdentity`, hashed with `identity` (`{ deskRemote, personPrefix }`). A task whose card cannot be read, or whose job ID cannot be made, gets no entry and never stops the others. `observed_at` is `now` (epoch milliseconds or an ISO string), never the clock.
  */
-export function outcomesFor({ jobs, lifecycleCalls, readers, identity, now }) {
+export function outcomesFor({ jobs, lifecycleCalls, readers, identity, now, unavailable = [] }) {
   const entries = new Map()
   const add = (job, track, slug) => {
     if (entries.has(job)) return
@@ -90,6 +90,7 @@ export function outcomesFor({ jobs, lifecycleCalls, readers, identity, now }) {
     }
     add(job, call.track, call.slug)
   }
+  if (entries.size > LIMITS.outcomes) addUnavailable(unavailable, "outcomes", "capped")
   return [...entries.values()].sort((a, b) => (a.job < b.job ? -1 : 1)).slice(0, LIMITS.outcomes)
 }
 
@@ -243,7 +244,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
-    derived.facts.outcomes = outcomesFor({ jobs: tasks, lifecycleCalls: derived.events.deskToolCalls, readers: createDeskReaders({ deskRoot, personPrefix }), identity: { deskRemote: remote, personPrefix }, now: now() })
+    derived.facts.outcomes = outcomesFor({ jobs: tasks, lifecycleCalls: derived.events.deskToolCalls, readers: createDeskReaders({ deskRoot, personPrefix }), identity: { deskRemote: remote, personPrefix }, now: now(), unavailable: derived.facts.unavailable })
     if (segmentsCappedMs > 0) addUnavailable(derived.facts.unavailable, "job_segments", "capped")
     // The decision that guards the write is made again right before it: the derivation above is long.
     const late = admit === null ? null : await admit()

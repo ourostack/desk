@@ -53,7 +53,7 @@
 //   evaluate-requests/quarantine/<job>.json   { reason, at }
 //   locks/<name>.lock                  a named critical-section lock with no JSON file of its own
 //
-// Local labels (`desk.factory.labels/1`) are already on the published
+// Local labels (`desk.factory.labels/2`, or `/1`) are already on the published
 // session clock and carry no free text; like local facts they leave only
 // through the publishing transform (`publish.js`'s `toPublishedLabels`),
 // which keys the job on a desk that is not known to be private. Their

@@ -608,7 +608,7 @@ test("Copilot's session id set together with an inherited Claude mark: the Copil
   assert.equal(existsSync(ticketFile(stateDir, TASK)), true, "the Copilot path does not touch a ticket")
 })
 
-test("a hook run for a call removes an older ticket for the same task and outcome, even when it denies or writes none", () => {
+test("a hook run for a main-agent call removes an older ticket for the same task and outcome, even when it writes none; a denied subagent call leaves it", () => {
   const stateDir = fresh("state")
   const file = callTranscript(human(T0))
   const strand = () => {
@@ -618,7 +618,8 @@ test("a hook run for a call removes an older ticket for the same task and outcom
   }
   strand()
   assert.equal(issueTicket(signoffCall(stateDir, file, { agent_id: "agent-1" }), { ...FAST, stateDir, now: () => T0 + 2000 }).hookSpecificOutput.permissionDecision, "deny")
-  assert.equal(existsSync(ticketFile(stateDir, TASK)), false, "a denied call leaves no ticket behind")
+  assert.equal(existsSync(ticketFile(stateDir, TASK)), true, "a denied subagent call never reaches the server, so the main agent's waiting ticket stays")
+  assert.equal(witnessFor({ env: CLAUDE_ENV, stateDir, ...TASK, now: () => T0 + 3000 }).humanOrigin, true, "the main agent's call still finds its ticket")
   strand()
   issueTicket(signoffCall(stateDir, file, { session_id: "" }), { ...FAST, stateDir, now: () => T0 + 2000 })
   assert.equal(existsSync(ticketFile(stateDir, TASK)), false, "a call that writes none leaves no older one")

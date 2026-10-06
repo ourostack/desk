@@ -239,17 +239,18 @@ function mainAgentProof(payload, { clock, sleep, maxBytes }) {
 }
 
 /**
- * PreToolUse on `task_signoff` (Claude Code). A subagent's call (a payload with a non-empty `agent_id`, or a Subagent hook event) is denied and no ticket is written. Any other call gets a ticket and the answer `{}`.
+ * PreToolUse on `task_signoff` (Claude Code). A subagent's call (a payload with a non-empty `agent_id`, or a Subagent hook event) is denied; no ticket is written and none is removed. Any other call replaces the ticket for its task and outcome and gets the answer `{}`.
  * The ticket's `main_agent` is true only on proof: no `agent_id`, and the root transcript holds this call's `tool_use` id (`tool_use_id` in the payload). Otherwise it is null, which the verdict reads as `subagent_not_ruled_out`.
  * The ticket's `prompt_at` is the human line's own time; it is null when the prompt hook left no record (hooks off). If the hook's record is more than `PROMPT_SKEW_MS` later than that line, a later turn that no human line accounts for has started, so `human_origin` is false.
  * `stateDir`, `now`, `clock`, `sleep` and `maxBytes` are for tests.
  */
 export function issueTicket(payload, { env = process.env, stateDir = resolveDeskStateDir({ env }), now = Date.now, clock = Date.now, sleep = sleepSync, maxBytes = MAX_TRANSCRIPT_BYTES } = {}) {
-  // Whatever happens to this call, an older ticket for the same task and outcome must not outlive it: it would verify a later call that has no hook of its own.
-  removeTicket(stateDir, payload?.tool_input)
+  // A subagent's call is denied here, so it never reaches the server and cannot use a ticket: it leaves the main agent's waiting ticket for the same task and outcome alone.
   if (hasText(payload?.agent_id) || /^Subagent/u.test(String(payload?.hook_event_name ?? ""))) {
     return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: DENY_REASON } }
   }
+  // Whatever else happens to this call, an older ticket for the same task and outcome must not outlive it: it would verify a later call that has no hook of its own.
+  removeTicket(stateDir, payload?.tool_input)
   try {
     const input = payload?.tool_input
     if (!hasText(payload?.session_id) || !isObject(input) || !hasText(input.track) || !hasText(input.slug) || !hasText(input.outcome)) return {}

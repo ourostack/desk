@@ -547,7 +547,12 @@ export function buildSessionStore(dbPath, rows = defaultStoreRows()) {
     )
     for (const row of rows.usage ?? []) insertUsage.run(...columns.map((column) => row[column]))
     const insertRef = db.prepare("INSERT INTO session_refs (session_id, ref_type, ref_value, turn_index) VALUES (?, ?, ?, 0)")
-    for (const [sessionId, type, value] of rows.refs ?? []) insertRef.run(sessionId, type, value)
+    // A fourth value is the row's `created_at`; without one the column keeps its default (the time the fixture was built).
+    const insertTimedRef = db.prepare("INSERT INTO session_refs (session_id, ref_type, ref_value, turn_index, created_at) VALUES (?, ?, ?, 0, ?)")
+    for (const [sessionId, type, value, ...createdAt] of rows.refs ?? []) {
+      if (createdAt.length === 0) insertRef.run(sessionId, type, value)
+      else insertTimedRef.run(sessionId, type, value, createdAt[0])
+    }
   } finally {
     db.close()
   }

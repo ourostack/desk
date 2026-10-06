@@ -157,6 +157,10 @@ test("staleSteps returns an attempted step with an old last_ok_at or three failu
   assert.deepEqual(staleSteps(status, now, []), [])
   assert.deepEqual(staleSteps(status, now, ["mirror", "reconcile"]), [])
   assert.deepEqual(staleSteps({ loop: "bad" }, now, ["route"]), [])
+  // A success dated more than the window ahead of the clock (the clock moved back) has no knowable age: it reads stale, not fresh for days.
+  const ahead = (hours) => new Date(now.getTime() + hours * HOUR).toISOString()
+  const future = { loop: { steps: { route: { last_ok_at: ahead(73), failures_in_a_row: 0 }, mirror: { last_ok_at: ahead(2), failures_in_a_row: 0 } } } }
+  assert.deepEqual(staleSteps(future, now, ["route", "mirror"]), ["route"])
   assert.deepEqual(staleSteps({}, now, ["route"]), [])
   assert.deepEqual(staleSteps({ loop: { steps: { route: { last_ok_at: ago(1) } } } }, now, ["route"]), [])
   assert.deepEqual(staleSteps({ loop: { steps: { route: { last_ok_at: "garbage", failures_in_a_row: 0 } } } }, now, ["route"]), ["route"])

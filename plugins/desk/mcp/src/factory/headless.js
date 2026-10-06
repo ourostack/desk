@@ -35,9 +35,9 @@ const PROBE_MAX_BYTES = 64 * 1024
 const RUN_MAX_BYTES = 1024 * 1024
 const AGENT_NAME = "desk:observer"
 
-// The child (and the sign-in probe) get only what the CLI needs to find itself
-// and its subscription sign-in. Everything else, every provider switch and
-// credential included, is left out.
+// The child (and the sign-in probe) get only what the CLI needs to find itself,
+// its subscription sign-in and its network (proxy and certificate settings).
+// Everything else, every provider switch and credential included, is left out.
 export const CHILD_ENV_ALLOW = Object.freeze({
   names: Object.freeze([
     "PATH",
@@ -57,6 +57,19 @@ export const CHILD_ENV_ALLOW = Object.freeze({
     "PATHEXT",
     "TEMP",
     "TMP",
+    // A proxied or TLS-inspecting network: without these the CLI cannot reach its service and every run fails.
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_USE_SYSTEM_CA",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
   ]),
   prefixes: Object.freeze(["LC_", "XDG_"]),
 })

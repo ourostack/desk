@@ -82,11 +82,13 @@ import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
+import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
+import { noteSignoffListed } from "./signoff-listed.js"
+import { resolveDeskStateDir } from "./last-start.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -936,10 +938,10 @@ function pushInstruction(entry, where) {
     if (entry.route === "fork") {
       const notActive = entry.account === active ? "" : ` Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), and write ${entry.account}, never ${active}, as the push account in any note.`
       const route = pushRoute(entry)
-      return `Push route for ${store} (${where}): ${route}${route.endsWith(".") ? " Account" : "; account"} ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on this task; it is one line of your report, not the whole of it.`
+      return `Push route for ${store} (${where}): ${route}${route.endsWith(".") ? " Account" : "; account"} ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on this task; it is one line of your report, not the whole of it. ${ROUTE_CHECKED}`
     }
     if (entry.account !== active) {
-      return `Push route for ${store} (${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task.`
+      return `Push route for ${store} (${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task. ${ROUTE_CHECKED}`
     }
     return null
   }
@@ -1031,16 +1033,18 @@ function factoryTextLine(factory, pluginRoot) {
 }
 
 // The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot
-// prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all.
+// prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all. Every producer
+// adds to `body`; the consent block is built only by `consentItems` and joined only by `withConsentLast`, so no
+// producer can put a line after consent (three packages broke "consent is last" by appending after it).
 function buildInstructionItems(ctx) {
-  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList, improvement } = ctx
-  const out = []
-  const add = (text, plain = text) => out.push({ text, plain })
+  const { root, prereqResults, pushAccounts, cardValidationResult, sync, task, host, migrationEntries, taskQuery, agentHost, noninteractive, repoStateList, improvement } = ctx
+  const body = []
+  const add = (text, plain = text) => body.push({ text, plain })
   // A question for the operator comes first, before the desk path and the tool names: the agent must not start anything until it is asked.
   const namedBlockers = taskQuery !== null && task?.status === "resolved" ? repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state)) : []
   if (namedBlockers.length > 0) add(askThenHandOff(namedBlockers, task.task))
   for (const entry of migrationEntries) {
-    add(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
+    add(migrationLine([entry], ctx.pluginRoot).replace(/^Desk migrations: /u, ""))
   }
   add(
     `Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`,
@@ -1076,22 +1080,30 @@ function buildInstructionItems(ctx) {
   } else {
     add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
   }
-  // The sign-off line comes before the consent block: consent stays the last instruction of the text boot.
-  signoffInstructions(ctx.unsigned, { noninteractive }).forEach((text) => add(text))
-  // An ask-and-stop blocker means the operator has one question to answer first: no card pickup and no consent line on this boot.
-  const asked = needsOperator(ctx) !== null
-  // The improvement lines also come before the consent block.
-  if (!noninteractive && !asked) for (const text of improvementInstructions(improvement)) add(text)
-  const consent = !asked ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
-  consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
+  signoffInstructions(ctx.unsigned, { noninteractive, seen: ctx.signoffSeen === true }).forEach((text) => add(text))
+  // An ask-and-stop blocker means the operator has one question to answer first: no card pickup on this boot.
+  if (!noninteractive && needsOperator(ctx) === null) for (const text of improvementInstructions(improvement)) add(text)
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
-  return out
+  return { body, consent: consentItems(ctx) }
+}
+
+// The factory consent block, and the only place it is built. An ask-and-stop blocker means the operator has one
+// question to answer first: no consent line on that boot.
+function consentItems(ctx) {
+  if (needsOperator(ctx) !== null) return []
+  return factoryInstructions(ctx.factory, ctx.pluginRoot, { noninteractive: ctx.noninteractive }).map((text, index) => ({ text, plain: index === 0 ? factoryTextLine(ctx.factory, ctx.pluginRoot) : null }))
+}
+
+/** The one join of a boot's instructions: `consent` after every other line. Both boots (`--json` and text) are built through it, so consent is the boot's last instruction whatever a producer adds. */
+export function withConsentLast(body, consent) {
+  return [...body, ...consent]
 }
 
 function buildInstructions(ctx) {
-  return buildInstructionItems(ctx).map((item) => item.text)
+  const { body, consent } = buildInstructionItems(ctx)
+  return withConsentLast(body.map((item) => item.text), consent.map((item) => item.text))
 }
 
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
@@ -1110,12 +1122,12 @@ const syncRule = ({ say, lead }) => `${lead}: open your reply with \"${say}\" be
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.
 function buildTextInstructions(ctx) {
-  const plain = buildInstructionItems(ctx).map((item) => item.plain).filter((line) => line !== null)
-  const factoryAt = plain.findIndex((line) => line.startsWith("Factory consent is undecided"))
+  const { body, consent } = buildInstructionItems(ctx)
+  const plainOf = (items) => items.map((item) => item.plain).filter((line) => line !== null)
   // A boot degraded by a failed sync adds how to say it (round S2: the headline said "sync failed" and the reply said "Desk synced locally").
   const opening = syncOpening(ctx.syncSummaryText)
-  plain.splice(factoryAt === -1 ? plain.length : factoryAt, 0, opening === null ? CLOSING_RULES : `${CLOSING_RULES} ${syncRule(opening)}`)
-  return plain
+  const closing = opening === null ? CLOSING_RULES : `${CLOSING_RULES} ${syncRule(opening)}`
+  return withConsentLast([...plainOf(body), closing], plainOf(consent))
 }
 
 function withinBudget(promise, ms, timeoutValue) {
@@ -1162,6 +1174,7 @@ export async function bootOnce({
   staleDeskFn = checkStaleDesk,
   nestedCards = NESTED_CARD_FIELDS,
   unsignedFn = recordUnsigned,
+  signoffListedFn = noteSignoffListed,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
   const ghAuth = ghAuthArg ?? (ghArg ?? commandRunner("gh", { env }))
@@ -1350,6 +1363,8 @@ export async function bootOnce({
   } catch {
     unsigned = null
   }
+  // Whether an earlier boot of this session (a resume, a compaction) listed the same deliveries: then they are not raised again.
+  const signoffSeen = isNoninteractive(env) ? undefined : signoffListedFn(env, unsigned, { stateDir: resolveDeskStateDir({ env, homeDir }), now })
 
   // The improvement cards the session may take: nothing is read for a session with no operator in it.
   let improvement = null
@@ -1380,7 +1395,7 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, improvement }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
