@@ -305,3 +305,29 @@ test("an invalid declaration freezes the session: it counts as pending, never ro
   await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
   assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 0, quarantined: 0, last_flush: null })
 }))
+
+test("the orphan pass reads as one line, and a failed, interrupted or stalled pass is a finding", async () => {
+  const { orphanPassFinding, orphanPassLine, ORPHAN_INTERRUPTED_MS } = await load()
+  const now = Date.parse("2026-10-06T12:00:00.000Z")
+  const ran = { started_at: "2026-10-06T11:59:00.000Z", ran_at: "2026-10-06T11:59:10.000Z", examined: 25, unexamined: 75, pending: 2, frozen: { no_facts: 3, derive_failed: 1 }, rebuilt: 1, current: 20, cursor: "claude-code-x.json", last_wrap_at: "2026-10-05T00:00:00.000Z", sweeps_in_walk: 4 }
+  assert.equal(orphanPassLine(ran, now), "orphan pass: ran 2026-10-06T11:59:10.000Z, examined 25, unexamined 75, pending 2, frozen 4, last full walk 2026-10-05T00:00:00.000Z, 4 sweeps into the walk")
+  assert.equal(orphanPassFinding(ran, now), null, "ceil(100 / 25) = 4 sweeps is the most a walk takes")
+  assert.equal(orphanPassFinding({ ...ran, sweeps_in_walk: 5 }, now), "walk_not_advancing")
+  assert.equal(orphanPassFinding({ ...ran, examined: 0, unexamined: 3, sweeps_in_walk: 4 }, now), "walk_not_advancing", "nothing examined: three sweeps at most")
+  assert.equal(orphanPassFinding({ ...ran, examined: 0, unexamined: 0, sweeps_in_walk: 0 }, now), null)
+  assert.equal(orphanPassFinding({ ...ran, examined: "x" }, now), null, "a count that is not a count says nothing")
+  const failed = { started_at: ran.started_at, ran_at: ran.ran_at, cursor: null, last_wrap_at: null, sweeps_in_walk: 0, failed: "pass_failed" }
+  assert.equal(orphanPassFinding(failed, now), "pass_failed")
+  assert.equal(orphanPassLine(failed, now), "orphan pass: failed (pass_failed), last full walk never")
+  assert.equal(orphanPassLine({ ...failed, failed: "/private/path message" }, now), "orphan pass: failed (unknown), last full walk never", "a failure is a fixed class, never a message")
+  const started = { started_at: "2026-10-06T11:58:00.000Z", cursor: null, last_wrap_at: null, sweeps_in_walk: 0 }
+  assert.equal(orphanPassFinding(started, now), null, "a pass that began a moment ago is still running")
+  assert.equal(orphanPassLine(started, now), "orphan pass: running, started 2026-10-06T11:58:00.000Z, last full walk never")
+  const old = { ...started, started_at: new Date(now - ORPHAN_INTERRUPTED_MS - 1).toISOString() }
+  assert.equal(orphanPassFinding(old, now), "pass_interrupted")
+  assert.equal(orphanPassLine(old, now).startsWith("orphan pass: interrupted, started "), true)
+  assert.equal(orphanPassLine({ ...old, started_at: 5 }, now).includes("started unknown"), true)
+  assert.equal(orphanPassFinding(undefined, now), null)
+  assert.equal(orphanPassLine(undefined, now), "orphan pass: no record yet")
+  assert.equal(orphanPassLine({ ran_at: ran.ran_at, frozen: 7, examined: -1 }, now), "orphan pass: ran 2026-10-06T11:59:10.000Z, examined unknown, unexamined unknown, pending unknown, frozen 0, last full walk never, unknown sweeps into the walk")
+})

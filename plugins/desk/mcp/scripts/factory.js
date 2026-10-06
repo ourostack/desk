@@ -47,6 +47,7 @@ import { pathToFileURL } from "node:url"
 import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
+import { orphanPassLine } from "../src/factory/local-status.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { normalizeTimestamp } from "../src/factory/time.js"
@@ -130,7 +131,8 @@ export async function runFinalizeCommand({ argv, env, runner }) {
 
 export async function runStatusCommand({ argv, env }) {
   if (argv.length) throw new Error("Usage: factory.js status")
-  return { ...await readStatus(env), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
+  const status = await readStatus(env)
+  return { ...status, orphan_pass: orphanPassLine(status.orphans), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
 }
 
 function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {

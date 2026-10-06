@@ -1096,6 +1096,56 @@ test("the pass writes that it started before the work, so a record with a start 
   assert.equal(record.started_at, "2026-10-07T00:00:00.000Z")
 }))
 
+test("an orphan whose derive throws is examined and failed, and the next pass starts after it", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  const middle = await clone(ctx, first, "1")
+  const last = await clone(ctx, first, "2")
+  const { rebuildOrphans, deriveMarker } = await runner()
+  const calls = []
+  const derive = async (env, marker, options) => {
+    calls.push(`claude-code-${marker.session_id}.json`)
+    if (`claude-code-${marker.session_id}.json` === middle) throw new Error("boom")
+    return deriveMarker(env, marker, options)
+  }
+  const result = await rebuildOrphans(ctx.env, { derive })
+  assert.deepEqual(calls, [first.name, middle, last])
+  assert.deepEqual(result.orphans.frozen.derive_failed, 1, "recorded as examined and failed, not skipped")
+  assert.equal(result.orphans.examined, 3)
+  assert.equal(result.orphans.cursor, last)
+}))
+
+test("an orphan whose derive never returns is not tried first on every sweep: the next pass records it as failed and derives the others", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  const middle = await clone(ctx, first, "1")
+  await clone(ctx, first, "2")
+  const { rebuildOrphans, deriveMarker } = await runner()
+  const nameOf = (marker) => `claude-code-${marker.session_id}.json`
+  // The first pass is stopped inside the middle orphan's derive, as the start hook's hard stop would: its promise is never settled.
+  const stuck = rebuildOrphans(ctx.env, { derive: (env, marker, options) => (nameOf(marker) === middle ? new Promise(() => {}) : deriveMarker(env, marker, options)) })
+  stuck.catch(() => {})
+  for (let wait = 0; wait < 400 && (await readStatus(ctx.env)).orphans?.attempting !== middle; wait += 1) await new Promise((resolve) => setTimeout(resolve, 25))
+  const interrupted = (await readStatus(ctx.env)).orphans
+  assert.equal(interrupted.attempting, middle, "the record names the orphan being derived")
+  assert.equal(interrupted.cursor, middle, "and the cursor is already past the orphans before it")
+  assert.equal(interrupted.ran_at, undefined)
+  const calls = []
+  const derive = async (env, marker, options) => {
+    calls.push(nameOf(marker))
+    return deriveMarker(env, marker, options)
+  }
+  const next = await rebuildOrphans(ctx.env, { derive })
+  assert.ok(!calls.includes(middle), "the hung orphan is not derived again")
+  assert.equal(next.orphans.frozen.derive_failed, 1, "it is examined and failed, with a fixed class")
+  assert.equal(next.orphans.examined, 3)
+  assert.equal(next.orphans.attempting, undefined)
+  assert.deepEqual(Object.keys(next.orphans.hung), [middle])
+  // A newer Desk tries it once more.
+  calls.length = 0
+  const newer = await rebuildOrphans(ctx.env, { derive, ownVersion: () => "999.0.0" })
+  assert.deepEqual(calls, [middle], "a different Desk version derives it again, and only it (the others are current)")
+  assert.equal(newer.orphans.frozen.derive_failed, 0)
+}))
+
 test("facts, transcript lookup and the source stat run only for orphans inside the cap", () => scratch(async (ctx) => {
   const first = await orphan(ctx)
   for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)

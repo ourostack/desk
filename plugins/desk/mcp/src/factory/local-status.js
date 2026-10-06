@@ -27,6 +27,11 @@
 // counts its quarantined files; `last_flush` is the last flush's result
 // code, or `null`.
 //
+// `orphans` is present only when the orphan pass (`derive-run.js` `rebuildOrphans`) needs attention: `"pass_failed"` (the last pass threw),
+// `"pass_interrupted"` (a record with a start older than `ORPHAN_INTERRUPTED_MS` and no result) or `"walk_not_advancing"` (`sweeps_in_walk` is
+// past `ceil((examined + unexamined) / max(1, examined))`, so the walk should have wrapped). `orphanPassLine(record, now)` is the one-line
+// reading `factory.js status` prints; both read counts, times and fixed codes only.
+//
 // The result carries store names, codes and counts only: never the machine
 // secret, an account, an intake ID, a token, a time, a local path or any
 // content. Manifest warnings keep their codes and drop their paths.
@@ -72,6 +77,34 @@ function readState(file, fallback) {
   } catch {
     return UNREADABLE
   }
+}
+
+/** How long a pass may run before a record with a start and no result reads as interrupted: past the 150 s the start hook allows. */
+export const ORPHAN_INTERRUPTED_MS = 5 * 60 * 1000
+
+const finiteCount = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
+
+/** What is wrong with the orphan pass's record, or `null`: see the header. `now` is milliseconds. */
+export function orphanPassFinding(record, now = Date.now()) {
+  if (!isPlainObject(record)) return null
+  if (record.failed !== undefined) return "pass_failed"
+  if (record.ran_at === undefined) return now - Date.parse(record.started_at) > ORPHAN_INTERRUPTED_MS ? "pass_interrupted" : null
+  const examined = finiteCount(record.examined)
+  const unexamined = finiteCount(record.unexamined)
+  const sweeps = finiteCount(record.sweeps_in_walk)
+  if (examined === null || unexamined === null || sweeps === null) return null
+  return sweeps > Math.ceil((examined + unexamined) / Math.max(1, examined)) ? "walk_not_advancing" : null
+}
+
+/** One line for the orphan pass's record: counts, times and fixed codes only (a failure is its class, never a message). */
+export function orphanPassLine(record, now = Date.now()) {
+  if (!isPlainObject(record)) return "orphan pass: no record yet"
+  const wrap = typeof record.last_wrap_at === "string" ? record.last_wrap_at : "never"
+  if (record.failed !== undefined) return `orphan pass: failed (${typeof record.failed === "string" && RESULT_CODE.test(record.failed) ? record.failed : "unknown"}), last full walk ${wrap}`
+  if (record.ran_at === undefined) return `orphan pass: ${orphanPassFinding(record, now) === null ? "running" : "interrupted"}, started ${typeof record.started_at === "string" ? record.started_at : "unknown"}, last full walk ${wrap}`
+  const frozen = isPlainObject(record.frozen) ? Object.values(record.frozen).reduce((sum, count) => sum + (finiteCount(count) ?? 0), 0) : 0
+  const count = (value) => finiteCount(value) ?? "unknown"
+  return `orphan pass: ran ${record.ran_at}, examined ${count(record.examined)}, unexamined ${count(record.unexamined)}, pending ${count(record.pending)}, frozen ${frozen}, last full walk ${wrap}, ${count(record.sweeps_in_walk)} sweeps into the walk`
 }
 
 function outboxNames(dir) {
@@ -142,12 +175,14 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const place = placer(dir, status === UNREADABLE ? {} : status.derivations)
   const decided = records === UNREADABLE ? [] : Object.keys(records).filter((store) => PATTERNS.prRepo.test(store)).sort()
   const stores = [...new Set([...(routing.store === null ? [] : [routing.store]), ...decided])]
+  const orphans = status === UNREADABLE ? null : orphanPassFinding(status.orphans)
   return {
     store: routing.store,
     source: routing.source,
     consent: routing.store === null ? "held" : decision(records, routing.store),
     stores: stores.map((store) => storeEntry(dir, records, store, lastFlush, place)),
     warnings: [...new Set(routing.warnings.map((warning) => warning.code))].sort(),
+    ...(orphans === null ? {} : { orphans }),
   }
 }
 

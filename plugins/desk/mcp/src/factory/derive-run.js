@@ -15,6 +15,7 @@ import { validMarker } from "./marker.js"
 import { factoryStateRoot, listMarkers, outboxCopies, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
+import { isPlainObject } from "./schema.js"
 import { declared, deskRootOf, markerRoute, proofIndex, provenBy } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
@@ -273,7 +274,7 @@ async function cwdRoot(transcript) {
   return isFolder(path.join(real, "_meta")) && isFolder(path.join(real, "_archive")) ? real : null
 }
 
-/** The reasons an orphan stays frozen, a closed list: one for each condition of spec section 4 that can fail, and the one rule below (`reconcile` reads it). */
+/** The reasons an orphan stays frozen, a closed list: one for each condition of spec section 4 that can fail, and the one rule below. `factory.js status` prints the pass and `desk_doctor` reports a pass that failed, was interrupted or is not advancing (`local-status.js`); `reconcile` does not read the reasons. */
 export const ORPHAN_REASONS = Object.freeze(["no_facts", "no_transcript", "no_desk_root", "crew_desk", "route_unknown", "retracted", "not_opted_in", "recorded_by_newer_desk", "derive_failed"])
 /** The most orphans one sweep gives transcript work (facts, transcript, derive); the rest are `unexamined` and the next pass starts after the last one served. */
 export const ORPHAN_EXAMINE_CAP = 25
@@ -281,6 +282,8 @@ export const ORPHAN_EXAMINE_CAP = 25
 export const ORPHAN_BUDGET_MS = 60000
 /** What a pass that threw records, instead of counts: a fixed class, never a message or a path. */
 export const ORPHAN_PASS_FAILED = "pass_failed"
+/** How many orphans whose derive never finished the record remembers. */
+const HUNG_KEPT = 50
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -316,14 +319,30 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  * grows. A record with a start and no `ran_at` is a pass that was interrupted or could not report.
  * `pending` is orphans examined and waiting for a known reason; `unexamined` is those left over by the cap or the budget this sweep, verdict not yet known (a count only; the cursor works through them), and `examined` is how many the pass looked at, so a reader can see the queue move. `oldest_pending_days` is the age in whole days of the oldest orphan found waiting (null when none was): a queue that does not drain shows
  * as a number that grows. `retractions(env)` lists the retracted session names; `ownVersion()` is this Desk's version; `write` is
- * `writeStatus`.
+ * `writeStatus`; `derive` is `deriveMarker`.
+ *
+ * Before each derive the record is written again with `cursor` and `attempting` set to that orphan, so a process stopped inside the derive (the
+ * start hook's hard stop) leaves the walk past it. The next pass finds a record with `attempting` and no `ran_at` and records the orphan in
+ * `hung` as `{ <session file>: <this Desk's version> }`: while the Desk is that version the orphan is examined and frozen as `derive_failed`
+ * without another derive, so one orphan whose derive never finishes cannot hold up every sweep. A newer Desk tries it once more.
  */
-export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus } = {}) {
+export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus, derive = deriveMarker } = {}) {
   const startedAt = new Date(now()).toISOString()
   // Where the walk stands, from the last record: the cursor, when it last wrapped (null: not yet) and how many sweeps this walk has taken.
   let walk = { cursor: null, last_wrap_at: null, sweeps_in_walk: 0 }
+  let version = null
+  try {
+    version = ownVersion()
+  } catch {
+    // Without a version nothing is recorded as hung and nothing is skipped as hung.
+  }
+  let hung = {}
   try {
     const previous = (await readStatus(env)).orphans
+    hung = isPlainObject(previous?.hung) ? Object.fromEntries(Object.entries(previous.hung).filter(([, value]) => typeof value === "string")) : {}
+    // The orphan a stopped pass was deriving: its record ends there, with no result.
+    if (previous?.ran_at === undefined && typeof previous?.attempting === "string" && typeof version === "string") hung[previous.attempting] = version
+    hung = Object.fromEntries(Object.entries(hung).slice(-HUNG_KEPT))
     walk = {
       cursor: typeof previous?.cursor === "string" ? previous.cursor : null,
       last_wrap_at: typeof previous?.last_wrap_at === "string" ? previous.last_wrap_at : null,
@@ -332,18 +351,26 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
   } catch {
     // No walk to resume: the pass starts from the first orphan.
   }
+  const hungRecord = Object.keys(hung).length > 0 ? { hung } : {}
   try {
-    await write(env, { orphans: { started_at: startedAt, ...walk } })
+    await write(env, { orphans: { started_at: startedAt, ...walk, ...hungRecord } })
   } catch {
     // The pass still runs; the closing record may still be written.
   }
+  const attempt = async (name) => {
+    try {
+      await write(env, { orphans: { started_at: startedAt, ...walk, ...hungRecord, cursor: name, attempting: name } })
+    } catch {
+      // The pass still runs; only the protection against a stop inside this derive is lost.
+    }
+  }
   let orphans
   try {
-    const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor: walk.cursor })
+    const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor: walk.cursor, hung, version, attempt, derive })
     const { wrapped, ...counts } = pass
-    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...counts, last_wrap_at: wrapped ? new Date(now()).toISOString() : walk.last_wrap_at, sweeps_in_walk: wrapped ? 0 : walk.sweeps_in_walk + 1 }
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...counts, last_wrap_at: wrapped ? new Date(now()).toISOString() : walk.last_wrap_at, sweeps_in_walk: wrapped ? 0 : walk.sweeps_in_walk + 1, ...hungRecord }
   } catch {
-    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...walk, failed: ORPHAN_PASS_FAILED }
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...walk, ...hungRecord, failed: ORPHAN_PASS_FAILED }
   }
   try {
     await write(env, { orphans })
@@ -358,7 +385,7 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
 // Plain code-unit order, the same in every locale, so the cursor means the same thing in every session.
 const byName = (a, b) => Number(a.name > b.name) - Number(a.name < b.name)
 
-async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor }) {
+async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor, hung, version, attempt, derive }) {
   const kept = new Set((markers ?? await listMarkers(env)).map((marker) => `${marker.host}-${marker.session_id}.json`))
   const receipts = (await readStatus(env)).derivations
   const all = (await outboxCopies(env, "claude-code")).filter(({ name }) => !kept.has(name)).sort(byName)
@@ -395,7 +422,7 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
     let outcome
     const before = taken
     try {
-      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion })
+      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version })
     } catch {
       outcome = "derive_failed"
     }
@@ -409,13 +436,15 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
 }
 
 // One orphan: "rebuilt", "current", "pending" (examined, waiting for a known reason), "unexamined" (no slot left this sweep) or the reason it stays frozen.
-async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion }) {
+async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version }) {
   if (retracted.has(name)) return "retracted"
   const receiptRoot = deskRootOf(receipts, [name])
   if (receiptRoot !== undefined) {
     const refusal = rootRefusal(receiptRoot, store)
     if (refusal !== null) return refusal
   }
+  // A derive that never finished under this Desk is not tried again until a newer one.
+  if (hung[name] === version) return "derive_failed"
   if (!room()) return "unexamined"
   const facts = await readLocalFacts(env, store, name)
   if (facts === null || `claude-code-${facts.session.id}.json` !== name) return "no_facts"
@@ -442,7 +471,8 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
   }
   const marker = { schema_version: 1, host: "claude-code", session_id: facts.session.id, log_path: transcript, cwd: root, desk_root: root, end_reason: endReason, ended_at: endedAt, plugins, updated_at: new Date(recordedAt).toISOString() }
   const admit = async () => ((await retractions(env)).has(name) ? "retracted" : null)
-  const { result, reason } = await deriveMarker(env, marker, { quietMs, admit, ownVersion })
+  await attempt(name)
+  const { result, reason } = await derive(env, marker, { quietMs, admit, ownVersion })
   if (result === "written") return "rebuilt"
   // Inside the quiet window, or the source changed: not done yet.
   if (result === "skipped") {

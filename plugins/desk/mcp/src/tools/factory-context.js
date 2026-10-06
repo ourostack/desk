@@ -64,6 +64,7 @@ export function factorySummary(status) {
     const moved = entry.route_changed > 0 ? `, ${entry.route_changed} routed elsewhere` : ""
     lines.push(`  ${entry.store}: ${entry.consent}, ${entry.pending} pending${moved}, ${entry.quarantined} quarantined, ${entry.last_flush === null ? "no flush yet" : `last flush ${entry.last_flush}`}`)
   }
+  if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans} (\`factory.js status\` shows the pass)`)
   if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
   return lines.join("\n")
 }
