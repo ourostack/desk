@@ -10,9 +10,11 @@
 // one dismissed (`andon-dismissed`). It records them, at most
 // `MAX_RECORDED`, as `status.json` `andon.<store>` = `{ checked_at, issues:
 // [{ number, title }] }`, replacing that store's previous record, and
-// resolves `{ result: "recorded", count }`. It records nothing and resolves
-// `{ result: <code> }` when the store is not contributing (`not_opted_in`),
-// has no account (`no_account`), `gh` is missing (`gh_missing`), the token
+// resolves `{ result: "recorded", count }`. It resolves `{ result: <code> }`
+// and keeps the last good list when the store is not contributing
+// (`not_opted_in`, nothing recorded), or, recorded as `failure: <code>` and
+// `failed_at` beside that list so the boot line can say the andon state is
+// unknown, when the store has no account (`no_account`), `gh` is missing (`gh_missing`), the token
 // cannot be read (`auth_failed`), the store's `factory.json` is missing
 // (`config_missing`: a 404, so deleted, renamed or on another branch) or not
 // valid (`invalid_config`), or GitHub fails (the issues client's codes). A
@@ -20,8 +22,9 @@
 // every open andon issue and read as clear (fail closed, ruling 2026-10-06).
 // Only a present, valid config may track no plugins.
 //
-// The session-start boot check (`boot-check.js` `andonBootCheck`) reads the
-// record synchronously and prints one line per store with open issues, so
+// The session-start boot check (`boot-check.js` `andonBootCheck` and
+// `andonUnknown`) reads the record synchronously and prints one line per
+// store with open issues, and one per store whose andon state is unknown, so
 // the line reflects the previous session's refresh.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
@@ -61,10 +64,27 @@ export async function readAndonConfig(client) {
   return text === null ? { ok: false, code: "config_missing" } : parseStoreConfig(text)
 }
 
+// The `andon` map of `status.json`, or an empty one when it is missing or misshapen.
+async function andonRecords(env) {
+  const current = (await readStatus(env)).andon
+  return current !== null && typeof current === "object" && !Array.isArray(current) ? current : {}
+}
+
 /** See the header. Never throws for GitHub or consent problems; each is a result code. */
 export async function refreshAndon(env, { store, runner, now = Date.now }) {
   const consent = (await readConsent(env)).stores[store]
   if (consent?.contribute !== true) return { result: "not_opted_in" }
+  const outcome = await lookAndon(env, { store, consent, runner, now })
+  if (outcome.result !== "recorded") {
+    // A failed look is recorded beside the last good one, so the boot line says the state is unknown instead of nothing.
+    const andon = await andonRecords(env)
+    const previous = andon[store] !== null && typeof andon[store] === "object" && !Array.isArray(andon[store]) ? andon[store] : {}
+    await writeStatus(env, { andon: { ...andon, [store]: { ...previous, failure: outcome.result, failed_at: new Date(now()).toISOString() } } })
+  }
+  return outcome
+}
+
+async function lookAndon(env, { store, consent, runner, now }) {
   if (typeof consent.account !== "string") return { result: "no_account" }
   const auth = await runner(["auth", "token", "--user", consent.account])
   if (auth.spawnError === "ENOENT") return { result: "gh_missing" }
@@ -83,8 +103,7 @@ export async function refreshAndon(env, { store, runner, now = Date.now }) {
     if (typeof error.code === "string") return { result: error.code }
     throw error
   }
-  const current = (await readStatus(env)).andon
-  const andon = current !== null && typeof current === "object" && !Array.isArray(current) ? current : {}
+  const andon = await andonRecords(env)
   await writeStatus(env, { andon: { ...andon, [store]: { checked_at: new Date(now()).toISOString(), issues } } })
   return { result: "recorded", count: issues.length }
 }

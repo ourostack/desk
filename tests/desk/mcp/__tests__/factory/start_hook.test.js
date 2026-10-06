@@ -345,8 +345,14 @@ test("the andon check names each contributing store's open andon issues in one l
   assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills")), false)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await setConsent(env, { store: "acme/work", contribute: true, account: "worker" })
-  await writeStatus(env, { andon: { [STORE]: { checked_at: "2026-09-27T12:00:00.000Z", issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: "2026-09-27T12:00:00.000Z", issues: [] } } })
+  // No refresh has run yet for either store: said out loud, never silent.
+  assert.equal(await run(), "Desk boot pre-checks: Factory: andon state unknown for acme/work (never refreshed) (not_refreshed); Factory: andon state unknown for ourostack/factory (never refreshed) (not_refreshed)")
+  const at = new Date().toISOString()
+  await writeStatus(env, { andon: { [STORE]: { checked_at: at, issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: at, issues: [] } } })
   assert.equal(await run(), "Desk boot pre-checks: Factory: 1 open andon issue in ourostack/factory (#41); it has no improvement card yet, and gets one at the next background step")
+  // A failed refresh after the last good one: unknown, beside the last known issues.
+  await writeStatus(env, { andon: { [STORE]: { checked_at: at, issues: [{ number: 41, title: "x" }], failure: "auth_failed", failed_at: new Date(Date.parse(at) + 1000).toISOString() }, "acme/work": { checked_at: at, issues: [] } } })
+  assert.equal(await run(), `Desk boot pre-checks: Factory: andon state unknown for ourostack/factory since ${at.slice(0, 10)} (auth_failed); Factory: 1 open andon issue in ourostack/factory (#41); it has no improvement card yet, and gets one at the next background step`)
   assert.deepEqual(repairs, [])
 }))
 
