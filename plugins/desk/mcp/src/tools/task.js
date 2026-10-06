@@ -34,6 +34,7 @@ import { LIFECYCLE_STATES, TERMINAL_STATES, invalidStatusMessage } from "../desk
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
+import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState } from "./track-row.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
@@ -164,6 +165,8 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
     }
   }
   assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit: card.spawnGit, homeDir: card.homeDir, existingRepos: card.existingRepos, created: card.created })
+  // A pull request whose repo ships through a release is delivered only once the release has carried it (`delivery-gate.js`).
+  return checkDelivery({ toolName, evidence, env: card.env, fetchFn: card.fetchFn })
 }
 
 /**
@@ -751,7 +754,7 @@ function refuseBodyOnlyKeys(frontmatter) {
   }
 }
 
-export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize }) {
+export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
@@ -861,13 +864,14 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const returnReason = checkReturnReason(existing.data, { to: merged.status, returnReason: values.return_reason })
   let delivered = null
   let report = null
+  let deliveryCheck = null
   if (merged.status === "done" && existing.data.status !== "done") {
-    await assertDoneEvidence(evidence, deskRoot, "task_update", {
+    deliveryCheck = await assertDoneEvidence(evidence, deskRoot, "task_update", {
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
       repos: [...asList(existing.data.repos), ...asList(frontmatter.repos)],
       // Only these can earn the local-only exemption: repos added in this call never do (`done-evidence.js`).
       existingRepos: existing.data.repos, created: existing.data.created,
-      files: [filePath], spawnGit, homeDir: env.HOME,
+      files: [filePath], spawnGit, homeDir: env.HOME, env, fetchFn,
     })
     merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
     delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
@@ -931,6 +935,9 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
   // Said outright so no agent makes a redundant `git commit` of the card: Desk committed it, and its push is scheduled
   // in the background (so `desk_pushed` is false at this moment, not a failure).
+  // What the delivery check found, in the answer: a pull request GitHub could not vouch for is not refused (a desk offline must still close its tasks), and the answer says so.
+  if (deliveryCheck?.status === "delivered") result.delivery_check = `delivered: ${deliveryCheck.basis}`
+  if (deliveryCheck?.status === "not_verified") result.delivery_check = `not verified: ${deliveryCheck.reason}. The pull request's delivery was not checked; confirm it is delivered (see the repo's .desk/delivery.json) before telling the operator it shipped.`
   if (deskCommit !== null) {
     result.desk_commit = deskCommit
     result.desk_pushed = false
@@ -1070,7 +1077,7 @@ function withArchiveFocus(statusContext, target, result) {
  *
  * Returns: { status: "archived" | "already_archived", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -1146,7 +1153,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
       } else {
-        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME })
+        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn })
         archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
       }
       // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive

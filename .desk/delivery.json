@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "paths": ["plugins/desk/**"],
+      "delivered_at": { "kind": "github_label", "name": "released" }
+    },
+    {
+      "paths": ["plugins/crew/**", "plugins/superpowers/**", "plugins/plain-language/**"],
+      "delivered_at": { "kind": "merge" }
+    },
+    {
+      "paths": ["**"],
+      "delivered_at": { "kind": "merge" }
+    }
+  ]
+}
