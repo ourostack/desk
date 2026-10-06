@@ -649,6 +649,26 @@ async function storedJobs(github, env, name) {
   return JSON.parse(github.blobs.get(head.get(name).sha)).jobs
 }
 
+test("a session published from its live marker with no receipt (status.json lost after the derive) is marked unprotected, and so is a name with no receipt at all", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/open-desk.git")
+  await markerFor(env, desk, 1)
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "markers", `claude-code-${sessionId(1)}.json`)
+  // The hook of this Desk recorded the route, so the live marker places the session here without any receipt.
+  await fs.writeFile(file, JSON.stringify({ ...JSON.parse(await fs.readFile(file, "utf8")), routing: { store: STORE, source: "default", warnings: [] } }), { mode: 0o600 })
+  const { name } = await writeLocalFacts(env, STORE, localFacts(1))
+  assert.equal((await readStatus(env)).derivations?.[name], undefined)
+  const github = fakeGitHub({ visibility: { "acme/open-desk": "public" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  assert.equal((await readStatus(env)).derivations[name].desk_unprotected, true)
+  // The mark never needs a receipt to exist: a name with none gets one holding only the mark.
+  const { recordDeskUnprotected } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  await recordDeskUnprotected(env, [`claude-code-${sessionId(2)}.json`])
+  assert.deepEqual((await readStatus(env)).derivations[`claude-code-${sessionId(2)}.json`], { desk_unprotected: true })
+}))
+
 test("a session published while its desk was public is never published plain once its marker is gone, even when the desk is private now", () => scratch(async ({ base, env }) => {
   const { flush } = await load()
   await optIn(env)

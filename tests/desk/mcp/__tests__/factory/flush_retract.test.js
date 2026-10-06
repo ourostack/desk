@@ -277,6 +277,29 @@ test("labels are retracted with their facts, at the keyed path they were deliver
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(2)}`, `labels/${job}/${sessionId(2)}.json`])
 }))
 
+test("labels retracted from one job leave another job's labels in place: the emptied job folder reads as gone", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  const desks = [await deskFor(ctx.base, "desk-1", STORE), await deskFor(ctx.base, "desk-2", STORE)]
+  for (const n of [1, 2]) {
+    await marker(ctx.env, ctx.base, n, desks[n - 1])
+    assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(n))).written, true)
+  }
+  // Session 2's labels are for another job of the same facts, so they sit in another job folder.
+  const otherJob = GOLDEN.jobs.find((job) => job.job !== LABELS.job).job
+  assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), session: sessionId(1) })).written, true)
+  assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), job: otherJob, session: sessionId(2) })).written, true)
+  const github = fakeGitHub()
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  const jobs = new Set(dataFiles(github).filter((file) => file.startsWith("labels/")).map((file) => file.split("/")[1]))
+  assert.equal(jobs.size, 2)
+  await reroute(desks[0], OTHER)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.deepEqual(dataFiles(github).filter((file) => file.includes(sessionId(1))), [])
+  assert.equal(dataFiles(github).filter((file) => file.startsWith("labels/")).length, 1)
+}))
+
 test("a delivered record from before paths were recorded is retracted at the path republishing gives, only when the blob matches", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 2)
   const root = await factoryStateRoot(ctx.env)
