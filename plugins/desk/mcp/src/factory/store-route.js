@@ -178,7 +178,8 @@ export function recheckRoute(routing, read = readFileSync, stat = statSync) {
   if (routing.warnings.length === 0) return routing
   const now = rereadWarnings(routing.warnings, read, stat)
   const settled = now === undefined ? routing : now
-  if (settled === null || settled.store === null || settled.store === DEFAULT_STORE) return { store: null, source: "invalid_declaration", warnings: routing.warnings }
+  // GitHub names are case-insensitive, so `OuroStack/Factory` is the public store too.
+  if (settled === null || settled.store === null || settled.store.toLowerCase() === DEFAULT_STORE) return { store: null, source: "invalid_declaration", warnings: routing.warnings }
   return { ...settled, warnings: [] }
 }
 

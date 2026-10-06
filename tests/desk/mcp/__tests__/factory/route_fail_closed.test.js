@@ -145,7 +145,7 @@ test("review round 2, M1: a different plugin swapped into a held Copilot plugin 
   const held = { ...(await session(ctx)), host: "copilot-cli", end_reason: "other", ended_at: recent(), updated_at: recent(), plugins: [{ name: "corp", version: "1.0.0" }], routing }
   await writeMarker(ctx.env, held)
   await setConsent(ctx.env, { store: STORE, contribute: true })
-  for (const swapped of [{ name: "other", desk: { factory: { store: STORE } } }, { name: "other" }]) {
+  for (const swapped of [{ name: "other", desk: { factory: { store: STORE } } }, { name: "other", desk: { factory: { store: "OuroStack/Factory" } } }, { name: "other" }]) {
     await fs.writeFile(manifest, JSON.stringify(swapped))
     assert.deepEqual(markerRoute(held), { store: null, source: "invalid_declaration", warnings: routing.warnings })
     assert.deepEqual(await deriveMarker(ctx.env, held, { quietMs: 0, requireStored: true }), { result: "held", store: null })

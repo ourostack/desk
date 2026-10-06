@@ -204,6 +204,8 @@ test("recheckRoute: a route recorded while a manifest was unreadable is held unt
     for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), held, "a malformed declaration holds")
     writeJson(manifest, overlay("ourostack/factory"))
     for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), held, "a reread never releases to the public store, even when it declares it")
+    writeJson(manifest, overlay("OuroStack/Factory"))
+    for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), held, "nor to the public store under another letter case")
     writeJson(manifest, { name: "corp", version: "1.0.0" })
     assert.deepEqual(recheckRoute(legacy), held, "declares nothing: the old hook's recorded public default is not proof")
     assert.deepEqual(recheckRoute({ store: "corp/other", source: "overlay", warnings }), { store: "corp/other", source: "overlay", warnings: [] })
