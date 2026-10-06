@@ -4,6 +4,7 @@ import { organizationFindings } from "../desk/organization.js"
 import { operatorNames } from "../desk/naming.js"
 import { personPrefix } from "../util/paths.js"
 import { legacyLedgerPartitions, legacyLedgerSummary } from "../protected/legacy-ledger.js"
+import { gateHealthSummary } from "../runtime/gate-health.js"
 import { factoryStatus, factorySummary } from "./factory-context.js"
 
 // Every code `organizationFindings` can return — printed in this fixed
@@ -88,6 +89,7 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
     "Desk MCP runtime dependencies are ready.",
     ...(organizationResult === null ? [] : [organizationSection(organization), factorySummary(factory)]),
     legacyLedgerSummary(legacyLedger),
+    gateHealthSummary({ env }),
   ].filter((section) => section !== null)
   const summary = sections.join("\n\n")
 

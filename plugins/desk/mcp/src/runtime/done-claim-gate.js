@@ -9,16 +9,17 @@
 //
 // Scope is the turn: from the last prompt (or the last Stop that let the reply through) to this Stop. The state is last-writer-wins when two task calls run at once (the update is under a lock file and retries briefly, then goes ahead without it); the only failure that can come of it is a missed gate, never a wrong block.
 //
-// Acceptance fails closed: the card's sign-off is read with `outcome.js`, the reader the rest of Desk uses, and a done card with no readable verified acceptance, or a card that cannot be read, is unaccepted. The gate's own error in a Stop that touched tasks blocks once, naming the error (the retry is lifted by `stop_hook_active`, so it never traps the agent). It still passes where there is nothing to gate: a turn that touched no task, a subagent's stop, a malformed state file (read as no tasks), a write error while recording, and a parse error. A child agent's stop (SubagentStop, or a payload carrying an agent id) is never gated, and `stop_hook_active` (the hook already blocked this stop) ends the loop.
+// Acceptance fails closed: the card's sign-off is read with `outcome.js`, the reader the rest of Desk uses, and a done card with no readable verified acceptance, or a card that cannot be read, is unaccepted. The gate's own error in a Stop that touched tasks blocks once, naming the error (the retry is lifted by `stop_hook_active`, so it never traps the agent). It still passes where there is nothing to gate: a turn that touched no task, a subagent's stop, a malformed state file (read as no tasks), a write error while recording, and a parse error. The gate's own errors, recording failures and the wrapper's failures are counted in `gate-health.js`, which `desk_doctor` reports as a warning. A child agent's stop (SubagentStop, or a payload carrying an agent id) is never gated, and `stop_hook_active` (the hook already blocked this stop) ends the loop.
 //
 // Claude Code and Copilot CLI. Copilot's `postToolUse`, `userPromptSubmitted` and `agentStop` hooks carry the same session id, and `agentStop` takes the same `{ decision: "block", reason }` (it makes Copilot continue with the reason as a follow-up message, and the next stop carries `stop_hook_active`); `runtime/copilot-hook-payload.js` maps the payloads, and `copilotStopHook` below reads the reply from the session transcript, which Copilot writes just after the hook starts. Codex has a stop event, but Desk has not verified that it can block a reply or hands over the transcript, and its hooks are not trusted by default, so there the rule stays the agent's to keep (see the hooks section of the plugin README and the task-lifecycle skill).
 
 import { createHash } from "node:crypto"
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { recordFromLines } from "../factory/outcome.js"
+import { recordFromLines, topLevelScalar } from "../factory/outcome.js"
+import { recordGateFailure } from "./gate-health.js"
 import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
-import { claudeShapedPayload, copilotFinalReply } from "./copilot-hook-payload.js"
+import { claudeShapedPayload, copilotFinalReply, readTranscriptTail } from "./copilot-hook-payload.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
@@ -197,7 +198,8 @@ export function recordTouchedTask(payload, { env = process.env, stateDir = resol
     }, lock)
     pruneStale(path.dirname(file), now())
   } catch {
-    // Fail open: nothing recorded means nothing gated.
+    // Fail open, but visibly: the failure is counted for desk_doctor. Nothing recorded means nothing gated.
+    recordGateFailure("record_failed", { env, stateDir })
   }
   return {}
 }
@@ -420,7 +422,10 @@ export function lastAssistantText(transcript) {
  */
 function finalReply(payload) {
   if (typeof payload.last_assistant_message === "string" && payload.last_assistant_message.trim() !== "") return payload.last_assistant_message
-  if (typeof payload.transcript_path !== "string" || statSync(payload.transcript_path).size > MAX_TRANSCRIPT_BYTES) return null
+  if (typeof payload.transcript_path !== "string") return null
+  const size = statSync(payload.transcript_path).size
+  // A long session's transcript is read from its tail: the reply is at the end, and passing on size would let any long turn through.
+  if (size > MAX_TRANSCRIPT_BYTES) return lastAssistantText(readTranscriptTail(payload.transcript_path, size))
   return lastAssistantText(readFileSync(payload.transcript_path, "utf8"))
 }
 
@@ -428,20 +433,19 @@ function finalReply(payload) {
  * What the task's card holds now: `{ status, signoff, verified, unreadable }`. `status` is null when there is nothing to judge: the card is gone or unreadable, or it records no status. A task whose desk root was not known when it was recorded keeps its recorded status and is not "unreadable": there is no card to read.
  * The sign-off comes from `outcome.js` `recordFromLines`, the reader every other Desk surface uses, so the gate and the record can never disagree about a card (block form, flow form, a missing or malformed record). `signoff` is its state (`delivered_unsigned`, `accepted`, `refused`), or null when the card records none that can be read.
  * `verified` is true only when the sign-off says `verified: true`: an acceptance the witness could not tie to a human turn is no acceptance (Package D ruling 2).
- * `unreadable` is true when the card could not be read at all (gone, a folder, no frontmatter): for an acceptance claim that is unaccepted, never a skipped gate.
+ * `unreadable` is true when the card could not be read at all (gone, a folder, no frontmatter, no status the reader can parse): for an acceptance claim that is unaccepted, never a skipped gate.
  */
 function liveCard(task) {
   if (typeof task?.root !== "string" || typeof task?.path !== "string") return { status: typeof task?.status === "string" && task.status !== "" ? task.status : null, signoff: null, verified: false, unreadable: false }
   try {
     const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(readFileSync(path.join(task.root, task.path), "utf8"))?.[1]
     if (frontmatter === undefined) return { status: null, signoff: null, verified: false, unreadable: true }
-    const { signoff } = recordFromLines(frontmatter.split(/\r?\n/u))
-    return {
-      status: /^status:[ \t]*["']?([A-Za-z_-]+)["']?[ \t]*$/mu.exec(frontmatter)?.[1] ?? null,
-      signoff: signoff?.state ?? null,
-      verified: signoff?.verified === true,
-      unreadable: false,
-    }
+    const lines = frontmatter.split(/\r?\n/u)
+    const { signoff } = recordFromLines(lines)
+    // The status comes from the same reader. A card whose status it cannot read is unreadable, not "nothing to judge".
+    const status = topLevelScalar(lines, "status")
+    if (typeof status !== "string" || status === "") return { status: null, signoff: null, verified: false, unreadable: true }
+    return { status, signoff: signoff?.state ?? null, verified: signoff?.verified === true, unreadable: false }
   } catch {
     return { status: null, signoff: null, verified: false, unreadable: true }
   }
@@ -508,8 +512,8 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
           return { decision: "block", reason: `${opening} Desk could not tie task ${task.slug}'s answer to a human turn, so it does not count it as accepted; do not ask the operator again.` }
         }
         if (task.unreadable) {
-          const lead = `Restate your reply to say task ${task.slug}'s acceptance is unverified.`
-          return { decision: "block", reason: `${lead.length <= 120 ? lead : "Restate your reply to say the task's acceptance is unverified."} Desk could not read task ${task.slug}'s card, so it cannot confirm an acceptance; if the operator has not answered, ask for the sign-off in the sign-off packet (asked, delivered with proof, accept or send back).` }
+          const lead = `Restate your reply to say Desk could not check task ${task.slug}'s acceptance.`
+          return { decision: "block", reason: `${lead.length <= 120 ? lead : "Restate your reply to say Desk could not check the task's acceptance."} Its card could not be read, so Desk cannot say whether the acceptance is recorded; if the operator has not answered, ask for the sign-off in the sign-off packet (asked, delivered with proof, accept or send back).` }
         }
         return { decision: "block", reason: `Restate your reply as delivered, not accepted. Task ${task.slug} awaits the operator's sign-off and no verified acceptance is recorded. Ask the operator for it in the sign-off packet (asked, delivered with proof, accept or send back) and wait for their answer.` }
       }
@@ -534,6 +538,7 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
  * If even this cannot be judged (no session to name), it passes: there is nothing to block on.
  */
 function gateErrorBlock(payload, stateDir, error) {
+  recordGateFailure("stop_error", { stateDir })
   try {
     if (payload?.stop_hook_active === true || !existsSync(sessionFile(stateDir, payload?.session_id))) return {}
     const named = String(error)
