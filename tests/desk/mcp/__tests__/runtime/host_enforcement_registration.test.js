@@ -10,6 +10,7 @@
 // and status_host_enforcement.test.js; the real filer itself is
 // desk_problem_file.test.js's job.
 import { test } from "node:test"
+import { fileURLToPath } from "node:url"
 import { strict as assert } from "node:assert"
 import {
   hookRegistrationDeskProblem,
@@ -62,7 +63,7 @@ test("verifyHookRegistered claims nothing for a host it does not check", async (
 })
 
 test("verifyHookRegistered reads the real hooks.json from this checkout by default (no readFile override)", async () => {
-  const pluginRoot = new URL("../../../../../plugins/desk/", import.meta.url).pathname.replace(/\/$/, "")
+  const pluginRoot = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/, "")
   const result = await verifyHookRegistered({ host: "claude", pluginRoot })
   assert.deepEqual(result, { applicable: true, registered: true })
 })
@@ -164,7 +165,7 @@ test("verifyHookRegistered never throws on an unreadable or corrupt copilot-hook
 })
 
 test("verifyHookRegistered reads the real copilot-hooks.json from this checkout by default (no readFile override)", async () => {
-  const pluginRoot = new URL("../../../../../plugins/desk/", import.meta.url).pathname.replace(/\/$/, "")
+  const pluginRoot = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/, "")
   const result = await verifyHookRegistered({ host: "copilot", pluginRoot })
   assert.deepEqual(result, { applicable: true, registered: true })
 })

@@ -32,7 +32,7 @@ async function fixture(t) {
   const home = path.join(root, "home")
   mkdirSync(home)
   writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n")
-  const env = { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_EDITOR: "true" }
+  const env = { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: "1", GIT_EDITOR: "true" }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS|GLOBAL))/u.test(key)) delete env[key]
   const git = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
   const origin = path.join(root, "origin.git"), prot = path.join(root, "prot"), own = path.join(root, "own"), pwt = path.join(root, "pwt")

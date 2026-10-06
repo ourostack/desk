@@ -28,7 +28,8 @@
 // the commit has to come from Desk.
 
 // A word that ends in task.md: a path chunk without whitespace, quotes, redirection, pipe or separator characters; `task.md.bak` and `task.mdx` do not end there.
-const CARD_WORD = /[^\s"'`=:<>|;&(),{}]*task\.md(?![\w.-])/giu
+// A Windows drive prefix (`C:`, as in `C:\...` or `C:/...`) is part of the word, so an absolute Windows path is read whole instead of losing its drive at the colon.
+const CARD_WORD = /(?:(?<![\w.-])[A-Za-z]:)?[^\s"'`=:<>|;&(),{}]*task\.md(?![\w.-])/giu
 
 // The shell write forms, each tested on the text BEFORE the path (inside its segment) unless noted.
 const REDIRECT_BEFORE = /(?<![=\-<>])>{1,2}\|?\s*["']?$/u

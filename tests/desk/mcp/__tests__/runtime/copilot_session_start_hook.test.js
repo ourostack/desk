@@ -28,7 +28,7 @@ test("the hook records the session folder under the session id, and the line nam
   mkdirSync(path.join(desk, "_archive"), { recursive: true })
   const { env, context } = start({ sessionId: "sess-1", cwd: desk, source: "new" }, "one")
   assert.deepEqual(readCopilotSession({ env: { ...env, COPILOT_AGENT_SESSION_ID: "sess-1" } }), { folder: desk, activationConfig: null })
-  assert.match(context, new RegExp(`Desk startup: \\$DESK is ${desk.replaceAll("/", "\\/")} \\(this session's project folder is a desk\\)`, "u"))
+  assert.match(context, new RegExp(`Desk startup: \\$DESK is ${desk.replace(/[.*+?^${}()|[\]\\\/]/gu, "\\$&")} \\(this session's project folder is a desk\\)`, "u"))
 })
 
 test("a hook payload with no session id records nothing but still starts the session", () => {

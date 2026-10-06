@@ -5,7 +5,7 @@
 // an unknown directory is carried forward, and only an unknown program, script or Git
 // target that could reach Git ends inspection with a denial.
 import * as path from "node:path"
-import { mktempPath, physicalDirectory, staticGitOutput } from "./shell-paths.js"
+import { bashPath, mktempPath, physicalDirectory, staticGitOutput } from "./shell-paths.js"
 import { inspectPowerShell } from "./powershell-commands.js"
 import { inspectionBudget, mayInvokeGit, mergedValue, UNKNOWN, UNKNOWN_GIT, unknownOutput } from "./guard-unknowns.js"
 
@@ -476,7 +476,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     for (const [index, part] of word.parts.entries()) {
       if (!part.expand) { emit(part.text); continue }
       let text = part.text
-      if (index === 0 && !part.quoted) text = text.replace(/^~(?=$|\/)/u, state.vars.HOME ?? "~")
+      if (index === 0 && !part.quoted) text = text.replace(/^~(?=$|\/)/u, () => bashPath.value(state.vars.HOME ?? "~"))
       for (let i = 0; i < text.length; i++) {
         if (text[i] === "$" && text[i + 1] === "(") {
           const sub = substitution(text, i + 2)
@@ -486,13 +486,13 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
         } else if (text[i] === "$") {
           const match = /^\$(?:\{([A-Za-z_]\w*|\d+)\}|(?:env:)?([A-Za-z_]\w*|\d))/u.exec(text.slice(i))
           if (match) {
-            emit(state.vars[match[1] ?? match[2]] ?? "", !part.quoted)
+            emit(bashPath.value(state.vars[match[1] ?? match[2]] ?? ""), !part.quoted)
             i += match[0].length - 1
           } else emit(text[i])
         } else emit(text[i])
       }
     }
-    return split ? fields.filter((field) => field !== "" || word.quoted) : fields.join("")
+    return split ? fields.filter((field) => field !== "" || word.quoted).map(bashPath.word) : bashPath.word(fields.join(""))
   }
   async function literalOutput(text, state) {
     const tokens = tokenizeShell(text)
@@ -503,7 +503,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   async function outputOf(tokens, text, state) {
     const words = []
     for (const token of tokens) words.push(await expand(token, state))
-    if (words[0] === "pwd" && words.length === 1) return state.cwd
+    if (words[0] === "pwd" && words.length === 1) return bashPath.value(state.cwd)
     // Read-only Git that names the checkout or its branch is answered from the file system.
     const answered = staticGitOutput(words, state.cwd, state.vars)
     if (answered !== null) return answered

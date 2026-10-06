@@ -217,6 +217,17 @@ test("~ and $HOME name the home folder", () => {
   assert.equal(result.hookSpecificOutput.permissionDecision, "deny")
 })
 
+test("a Windows drive path is read whole, drive letter included, in every spelling a shell or PowerShell command can write it", () => {
+  const words = []
+  const resolve = (word) => (words.push(word), null)
+  for (const command of [String.raw`echo hi > C:\desk\t\s\task.md`, "echo hi > C:/desk/t/s/task.md", String.raw`Set-Content -Path:C:\desk\t\s\task.md x`, String.raw`dd of=C:\desk\t\s\task.md`, "$DESK/t/s/task.md"]) {
+    words.length = 0
+    shellCardWrites(command, { resolve, vars: { DESK: String.raw`C:\desk` } })
+    assert.equal(words.length, 1, command)
+    assert.match(words[0], /^C:[\\/]desk[\\/]t[\\/]s[\\/]task\.md$/u, command)
+  }
+})
+
 test("shellCardWrites reports each card once, with the form that wrote it, and expands only whole variable names", () => {
   const seen = []
   const resolve = (word) => {

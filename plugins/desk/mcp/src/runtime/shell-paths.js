@@ -58,6 +58,21 @@ export function gitDirectoryFor(platform) {
 
 export const gitDirectory = gitDirectoryFor(process.platform)
 
+/**
+ * How Git Bash spells a Windows folder, on `platform`. A Windows path the guard knows (`C:\\Users\\me`, from the hook's folder, `pwd` or `$PWD`) is written
+ * `C:/Users/me`, because a bash command that carries it back in text would lose every backslash to the shell's escape rule. A path a Bash command writes in
+ * the MSYS or Cygwin form (`/c/Users/me`, `/cygdrive/c/Users/me`) is read as the Windows folder it names (`C:/Users/me`); node reads `/c/Users/me` as
+ * `C:\\c\\Users\\me`, so without this a `cd` or `git -C` into the protected checkout would name a folder that does not exist and pass. Other platforms keep every path as given.
+ */
+export function bashPathFor(platform) {
+  if (platform !== "win32") return { value: (text) => text, word: (text) => text }
+  const value = (text) => (/^[A-Za-z]:[\\/]/u.test(text) ? text.replaceAll("\\", "/") : text)
+  const word = (text) => value(text).replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/u, (_, drive) => `${drive.toUpperCase()}:`).replace(/^([A-Za-z]:)$/u, "$1/")
+  return { value, word }
+}
+
+export const bashPath = bashPathFor(process.platform)
+
 /** The directory Git would inspect for `dir`: itself, or the parent of a pending mktemp directory. */
 export function existingDirectory(dir) {
   return path.basename(dir).startsWith(MKTEMP_PREFIX) ? path.dirname(dir) : dir

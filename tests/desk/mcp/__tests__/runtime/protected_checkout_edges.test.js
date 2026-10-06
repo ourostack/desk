@@ -39,7 +39,8 @@ test("Git option operands, default environment, empty -C and bare control flags 
   addWorktree(root, removed)
   assert.equal((await guard("git worktree remove -f removable")).deny, true)
   assert.equal((await guard("git worktree remove -f does-not-exist")).deny, false)
-  assert.match((await guard(`git worktree remove -f ${"a".repeat(1000)}`)).reason, /could not inspect a Git command.*ENAMETOOLONG/u)
+  // Windows reports an over-long name as a folder that does not exist (ENOENT), not ENAMETOOLONG, and a Git command on it cannot run.
+  if (process.platform !== "win32") assert.match((await guard(`git worktree remove -f ${"a".repeat(1000)}`)).reason, /could not inspect a Git command.*ENAMETOOLONG/u)
 })
 
 function addWorktree(root, destination) {
@@ -97,7 +98,7 @@ test("literal shell forms exercise expansion without running any interpolated pr
   assert.equal((await guard('cd "$(date)" && git status', { env })).deny, false)
   assert.equal((await guard("cd && git checkout HEAD", { env: {} })).deny, false)
   assert.equal((await guard("cd - && git checkout HEAD", { env: { OLDPWD: "" } })).deny, false)
-  assert.match((await guard(`cd ${"a".repeat(1000)} && git checkout HEAD`)).reason, /could not inspect this shell command \(ENAMETOOLONG/u)
+  if (process.platform !== "win32") assert.match((await guard(`cd ${"a".repeat(1000)} && git checkout HEAD`)).reason, /could not inspect this shell command \(ENAMETOOLONG/u)
   assert.equal((await guard(`cd ${"a".repeat(1000)} && echo ok`)).deny, false)
 })
 

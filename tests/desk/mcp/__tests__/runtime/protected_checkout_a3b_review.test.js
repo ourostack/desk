@@ -20,6 +20,8 @@ const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const psq = (text) => `'${text.replaceAll("'", "''")}'`
+// A script text that a nested bash reads loses every backslash, so a Windows path inside one is written with forward slashes, as Git Bash users write it.
+const bashSpelling = (text) => text.replaceAll("\\", "/")
 const pwsh = !spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).error
 
 // The reviewer's fixture: a bare origin with a foreign `other` branch, a protected clone on main with
@@ -132,8 +134,8 @@ function rows(f) {
     ["new-subst-array", "bash", "own", "deny", `a=( $(git -C ${q(P)} stash) )`],
     ["new-subst-dbl-bracket", "bash", "own", "deny", `[[ -n $(git -C ${q(P)} stash) ]] && echo y`],
     ["new-heredoc-bash", "bash", "own", "deny", `bash <<'EOF'\ngit -C ${q(P)} checkout -q --detach HEAD\nEOF`],
-    ["new-herestring-bash", "bash", "own", "deny", `bash <<< ${q(`git -C ${P} stash`)}`],
-    ["new-pipe-bash", "bash", "own", "deny", `echo ${q(`git -C ${P} checkout -q --detach HEAD`)} | bash`],
+    ["new-herestring-bash", "bash", "own", "deny", `bash <<< ${q(`git -C ${bashSpelling(P)} stash`)}`],
+    ["new-pipe-bash", "bash", "own", "deny", `echo ${q(`git -C ${bashSpelling(P)} checkout -q --detach HEAD`)} | bash`],
     ["new-pipe-bash-harmless", "bash", "own", "allow", "echo 'echo harmless' | bash"],
     // Round 4 ruling: a script piped into a shell that Desk cannot read literally fails closed.
     ["new-pipe-file-bash", "bash", "own", "allow", "cat script | sh"],
@@ -593,6 +595,8 @@ test("A3b re-review 2: non-force pushes of any name pass, and here-documents pip
   f.git(f.prot, "worktree", "add", "-q", "-b", "wt-branch", wt, "HEAD")
   await protectCheckout({ root: wt })
   assert.equal((await f.guard('git push -q origin "$(git branch --show-current)"', { cwd: wt })).deny, false)
+  // Git for Windows marks a worktree's .git file hidden, and Windows refuses to open a hidden file for truncating, so the file is replaced.
+  rmSync(path.join(wt, ".git"))
   writeFileSync(path.join(wt, ".git"), "not a gitdir line\n")
   assert.equal((await f.guard('git push -q origin "$(git branch --show-current)"', { cwd: wt })).deny, true, "an unreadable .git file leaves the branch unknown")
   assert.equal((await f.guard('cd / && git push -q origin "$(git branch --show-current)"')).deny, false, "outside any checkout nothing is protected")

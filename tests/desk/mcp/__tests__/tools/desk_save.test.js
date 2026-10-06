@@ -78,7 +78,7 @@ test("desk_save commits several paths together as one commit", async () => {
   assert.equal(commitCount(root), 1)
   assert.deepEqual(
     lastCommitFiles(root),
-    [path.join("planning", "plan.md"), path.join("planning", "spec.md")],
+    ["planning/plan.md", "planning/spec.md"],
   )
 })
 
@@ -152,7 +152,7 @@ test("desk_save commits a path inside the resolved --person write prefix", async
   })
 
   assert.equal(result.status, "committed")
-  assert.deepEqual(lastCommitFiles(root), [path.join("desks", "alex", "notes.md")])
+  assert.deepEqual(lastCommitFiles(root), ["desks/alex/notes.md"])
 })
 
 test("desk_save commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {

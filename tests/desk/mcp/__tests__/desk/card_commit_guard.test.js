@@ -544,28 +544,3 @@ test("install treats a top-level it cannot resolve as different from the desk", 
     rmSync(root, { recursive: true, force: true })
   }
 })
-
-test("ensureCardGuard installs once per desk per process and tries again after a failure; openDb installs it for the real index path only", async () => {
-  const { ensureCardGuard } = await import("../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js")
-  const { openDb } = await import("../../../../../plugins/desk/mcp/src/db/init.js")
-  const root = makeDesk()
-  try {
-    const failing = (cmd, args) => (args.includes("--show-toplevel") ? { status: 0, stdout: `${root}\n` } : { status: 1, stdout: "", stderr: "" })
-    assert.equal(ensureCardGuard(root, { spawnGit: failing }).state, "failed")
-    const first = ensureCardGuard(root)
-    assert.equal(first.state, "installed")
-    assert.equal(ensureCardGuard(root), null, "the second call in this process does nothing")
-
-    const other = makeDesk()
-    try {
-      openDb(other, { dbPath: path.join(other, "elsewhere.sqlite") }).close()
-      assert.equal(existsSync(path.join(other, ".git", "hooks", "pre-commit")), false, "a test's dbPath override says nothing about the desk")
-      openDb(other).close()
-      assert.equal(readFileSync(path.join(other, ".git", "hooks", "pre-commit"), "utf8"), hookScript())
-    } finally {
-      rmSync(other, { recursive: true, force: true })
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})

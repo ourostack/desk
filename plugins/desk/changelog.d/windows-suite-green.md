@@ -5,3 +5,5 @@ Protecting the same private folder many times in one run is faster on Windows. D
 Workspace tidy now removes merged worktrees on Windows. Git reports paths with forward slashes, which the tidy and claim checks compared against native paths, so every worktree was retained. The desk report resolves 8.3 short folder names the way Git does, the coverage runner passes its reporter as a file URL, and the test-state guard recognises the long spelling of a short temp folder.
 
 The index links planning, doing and feedback docs to their task and honors pinned iterations on Windows. A failed move or archive no longer leaves an empty folder. Archiving a task with a symlinked card works with short temp paths. The workspace watcher no longer crashes the controller when the desk path uses an 8.3 short name.
+
+The task-card guard now recognises absolute Windows paths in shell writes, and the Bash guard resolves `/c/...` and `$(pwd)` paths and hands nested shells forward-slash Windows paths. Both had let a protected action through on Windows. Guard denials name the checkout in one spelling, and the card pre-commit refusal keeps its first sentence within the length limit.

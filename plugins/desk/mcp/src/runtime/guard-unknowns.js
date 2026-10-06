@@ -3,6 +3,9 @@
 // UNKNOWN_GIT. The guard fails closed on an unknown value only where it could decide a Git
 // operation: an unknown program whose text could be Git, an unknown eval/source/shell -c
 // script, or an unknown directory or operand of a Git operation the guard must check.
+import { realpathSync } from "node:fs"
+import * as path from "node:path"
+
 export const UNKNOWN = "\0"
 export const UNKNOWN_GIT = "\0\x01"
 // The own-worktree form denials name. It runs as written in Bash and in PowerShell, and both guards allow it.
@@ -19,9 +22,24 @@ export class GuardDenial extends Error {
   }
 }
 
+/**
+ * How a denial spells a checkout on `platform`. Git prints a Windows folder as `C:/Users/me/desk` and the shell as `C:\\Users\\ME~1\\desk`, so one denial could
+ * name the same checkout two ways. On Windows every denial names it the way the operating system does: the long folder names and `\\` separators.
+ */
+export function displayPath(target, platform = process.platform) {
+  if (platform !== "win32") return target
+  let resolved = target
+  try {
+    resolved = realpathSync.native(target)
+  } catch {
+    // A folder that cannot be resolved keeps the spelling it was given.
+  }
+  return path.win32.normalize(resolved)
+}
+
 /** A denial for a rule of a protected checkout: the message opens with the fix, and the checkout comes last. */
 export function protectedDenial(target, message) {
-  return `${message} Desk protects this checkout: ${target}`
+  return `${message} Desk protects this checkout: ${displayPath(target)}`
 }
 
 const GIT_WORD = /(?<![\w.-])git(?!\w)/iu

@@ -68,10 +68,11 @@ test("redactCredentialLikeText judges a whole path segment, spaces included (rev
 })
 
 test("the startup line redacts a credential-like segment of the bound root", () => {
+  // The line shows the root as the platform spells it (path.join writes backslashes on Windows), so the expected text is built the same way.
   const root = path.join("/home/a", PASSWORD_FOLDER, "desk")
   const line = deskStartupDirection({ root, source: "env:DESK" })
   assert.doesNotMatch(line, /hunter/)
-  assert.match(line, new RegExp(`\\$DESK is /home/a/${REDACTED_SEGMENT}/desk \\(the DESK environment variable\\)`))
+  assert.ok(line.includes(`$DESK is ${path.join("/home/a", REDACTED_SEGMENT, "desk")} (the DESK environment variable)`), line)
   const spaced = deskStartupDirection({ root: "/tmp/x/set pw hunter2/y", source: "env:DESK" })
   assert.doesNotMatch(spaced, /hunter/)
   assert.ok(spaced.includes(`/tmp/x/${REDACTED_SEGMENT}/y`))

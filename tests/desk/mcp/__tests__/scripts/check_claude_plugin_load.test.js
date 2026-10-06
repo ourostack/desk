@@ -27,6 +27,10 @@ else if (args[1] === "list") {
 }
 `
 
+// The stand-in Claude is an extensionless script with a `#!/usr/bin/env node` line. Windows runs a program by its extension and ignores the shebang, so
+// execFileSync cannot start it (ENOENT). The script under test is a Linux CI check of the real Claude Code binary (validate-skills.yml).
+const noShebang = process.platform === "win32" && "Windows cannot execute an extensionless shebang script as a program"
+
 function withScratch(fn) {
   const root = mkdtempSync(path.join(tmpdir(), "claude-load-test-"))
   try {
@@ -75,7 +79,7 @@ function scriptedClaude({ install, list }) {
   }
 }
 
-test("passes when every plugin and dependency loads, using the real Claude runner", () => withScratch((root) => {
+test("passes when every plugin and dependency loads, using the real Claude runner", { skip: noShebang }, () => withScratch((root) => {
   const repo = writeFixtureRepo(root, ["desk", "crew"])
   const { bin } = writeFakeClaude(root)
   const scratch = path.join(root, "tmp")
@@ -102,7 +106,7 @@ test("passes when every plugin and dependency loads, using the real Claude runne
   assert.deepEqual(readdirSync(scratch), [], "each throwaway profile is removed")
 }))
 
-test("reports load errors for the plugin and for the dependencies it pulled in", () => withScratch((root) => {
+test("reports load errors for the plugin and for the dependencies it pulled in", { skip: noShebang }, () => withScratch((root) => {
   const repo = writeFixtureRepo(root, ["desk"])
   const { claude } = writeFakeClaude(root)
   const stdout = capture()
@@ -172,7 +176,7 @@ test("fails with every install error, missing plugin and load error it finds", (
   assert.deepEqual(readdirSync(root).filter((name) => name.startsWith("claude-plugin-load-")), [])
 }))
 
-test("defaults to this repository, the process environment and CLAUDE_BIN", () => withScratch((root) => {
+test("defaults to this repository, the process environment and CLAUDE_BIN", { skip: noShebang }, () => withScratch((root) => {
   const { claude } = writeFakeClaude(root)
   const previous = process.env.CLAUDE_BIN
   process.env.CLAUDE_BIN = claude

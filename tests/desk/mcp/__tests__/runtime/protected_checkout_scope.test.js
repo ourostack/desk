@@ -11,8 +11,8 @@ import { fileURLToPath } from "node:url"
 import { guardShellCommand, pathForms, protectCheckout, protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
-import { mayInvokeGit, UNKNOWN, protectedDenial } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
-import { existingDirectory, lexicalDirectory, mktempPath, gitDirectoryFor, physicalDirectory, processDirectory, processDirectoryFor } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
+import { displayPath, mayInvokeGit, UNKNOWN, protectedDenial } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { bashPathFor, existingDirectory, lexicalDirectory, mktempPath, gitDirectoryFor, physicalDirectory, processDirectory, processDirectoryFor } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
 import { removeFixtureAfter } from "../_process_hygiene.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
@@ -333,7 +333,9 @@ test("A3b: the Git-reach rule, option parser and mktemp model", (t) => {
   assert.equal(classifyGit("worktree", ["remove", "--force"]), null, "no worktree named")
   assert.equal(classifyGit("worktree", ["repair"]), null)
   const cwd = realpathSync.native(tmpdir())
-  assert.equal(mktempPath([], cwd, {}, 1), path.join(realpathSync("/tmp"), ".desk-guard-mktemp-1"))
+  // Bash's default mktemp folder is /tmp, which Windows has no folder for (node reads it as the current drive's \tmp), so Windows needs TMPDIR.
+  if (process.platform !== "win32") assert.equal(mktempPath([], cwd, {}, 1), path.join(realpathSync("/tmp"), ".desk-guard-mktemp-1"))
+  else assert.equal(mktempPath([], cwd, {}, 1), null)
   assert.equal(mktempPath(["-d", "-t", "x"], cwd, { TMPDIR: cwd }, 2), path.join(cwd, ".desk-guard-mktemp-2"))
   assert.equal(mktempPath(["-d", "x.XXXX"], cwd, { TMPDIR: "/tmp" }, 3), path.join(cwd, ".desk-guard-mktemp-3"), "a bare template is created in the current directory")
   assert.equal(mktempPath(["-p"], cwd, { TMPDIR: cwd }, 4), path.join(cwd, ".desk-guard-mktemp-4"))
@@ -427,4 +429,33 @@ test("A3b: worktree paths compare by folder on Windows and exactly elsewhere", (
   assert.equal(windows.canonical(path.join(root, "definitely-missing-desk-guard")), path.join(root, "definitely-missing-desk-guard"))
   assert.equal(pathForms(process.platform).canonical(root), root)
   assert.throws(() => windows.canonical("bad\0path"))
+})
+
+test("a denial names the checkout the way the operating system spells it, and a Windows path keeps one spelling in Bash text", async (t) => {
+  // POSIX keeps every path as given; Windows uses the long folder names and backslashes, whatever Git or the shell wrote.
+  assert.equal(displayPath("/a/b", "linux"), "/a/b")
+  assert.equal(displayPath("/definitely-missing/x", "win32"), "\\definitely-missing\\x")
+  const real = realpathSync.native(tmpdir())
+  assert.equal(displayPath(real.replaceAll("\\", "/"), "win32"), path.win32.normalize(real))
+  assert.equal(protectedDenial("/a/b", "Do x."), process.platform === "win32" ? "Do x. Desk protects this checkout: \\a\\b" : "Do x. Desk protects this checkout: /a/b")
+  // Bash on Windows: a known Windows path inside text loses no backslash, and the MSYS and Cygwin forms name the Windows folder they stand for.
+  const posix = bashPathFor("linux")
+  assert.equal(posix.value("C:\\x"), "C:\\x")
+  assert.equal(posix.word("/c/x"), "/c/x")
+  const win = bashPathFor("win32")
+  assert.equal(win.value("C:\\Users\\me"), "C:/Users/me")
+  assert.equal(win.value("/home/me"), "/home/me")
+  assert.equal(win.word("/c/Users/me"), "C:/Users/me")
+  assert.equal(win.word("/cygdrive/d/x"), "D:/x")
+  assert.equal(win.word("/c"), "C:/")
+  assert.equal(win.word("/cc/x"), "/cc/x")
+  assert.equal(win.word("relative/c"), "relative/c")
+  if (process.platform !== "win32") return
+  // The guard must still deny when a Bash command reaches the protected checkout through its /c/... spelling or through $(pwd).
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  const msys = f.shared.replace(/^([A-Za-z]):/u, (_, drive) => `/${drive.toLowerCase()}`).replaceAll("\\", "/")
+  for (const command of [`cd ${msys} && git checkout topic`, `git -C ${msys} checkout topic`, `cd ${msys} && bash -c "cd $(pwd) && git checkout topic"`]) {
+    assert.equal((await f.guard(command)).deny, true, command)
+  }
 })

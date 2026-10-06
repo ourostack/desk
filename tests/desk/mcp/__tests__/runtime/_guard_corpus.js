@@ -24,7 +24,10 @@ export function validateCorpus(entries, name) {
   return entries
 }
 
-export const fill = (text, f) => text.replaceAll("{{PROT}}", f.prot).replaceAll("{{OWN}}", f.own)
+// A command carries the checkout's path as text. On Windows the path is written with forward slashes, the way a Git Bash or PowerShell user writes
+// it: an unquoted backslash path in Bash loses every backslash to the shell's escape rule, so the command would name a folder that does not exist.
+const asWritten = (folder) => (process.platform === "win32" ? folder.replaceAll("\\", "/") : folder)
+export const fill = (text, f) => text.replaceAll("{{PROT}}", asWritten(f.prot)).replaceAll("{{OWN}}", asWritten(f.own))
 
 /** The guard's answer for one entry, in the fixture. */
 export function answer(f, entry, powershell) {
