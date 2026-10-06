@@ -28,6 +28,7 @@ import { redactCredentialLikeText, redactName, redactTitle, REDACTED_SEGMENT, RE
 import { folderHandle } from "./handles.js"
 import { TERMINAL_STATES } from "./lifecycle.js"
 import { readSteps, summarizeSteps } from "./steps.js"
+import { dueResources } from "./resources.js"
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const MAX_CARD_BYTES = 64 * 1024
@@ -152,6 +153,12 @@ function stepsOf(content, truncated) {
   return { steps: { ...summary, blocked: summary.blocked.map(({ id, reason }) => ({ id, reason: redactCredentialLikeText(reason) })) } }
 }
 
+// How many of the card's `## Resources` rows are due for cleanup (resources.js), or nothing when none are. Reads only the body already read and the file system, with no network call.
+function cleanupOf(content, truncated, status) {
+  const due = dueResources(content, { status, truncated }).length
+  return due === 0 ? {} : { cleanup_due: due }
+}
+
 // null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
 function readCardData(filePath) {
   let fd
@@ -231,6 +238,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
         next_step: nextStepOf(content),
         blocker: blockerOf(content),
         ...stepsOf(content, truncated),
+        ...cleanupOf(content, truncated, status),
       })
     }
     if (tasks.length === 0) continue
@@ -247,7 +255,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
  *
  * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
  * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
- * where `repos` is `[{ name?, local_path?, mode? }]`, and `steps` (only on a card with a readable `## Steps` table) is `{ total, delivered, ready: [id], blocked: [{ id, reason }] }`, dropped steps not counted.
+ * where `repos` is `[{ name?, local_path?, mode? }]`, and `steps` (only on a card with a readable `## Steps` table) is `{ total, delivered, ready: [id], blocked: [{ id, reason }] }`, dropped steps not counted, and `cleanup_due` (only when some) is how many of its `## Resources` rows are due for cleanup.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.
  * `redacted`: `{ names, titles }`, how many names and titles were hidden.

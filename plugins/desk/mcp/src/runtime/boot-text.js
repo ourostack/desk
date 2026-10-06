@@ -224,7 +224,8 @@ function taskLines(track, task, pushNotes) {
   const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
   const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
   const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
-  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...elsewhere, ...push]
+  const cleanup = task.cleanup_due > 0 ? [`  cleanup due: ${task.cleanup_due}`] : []
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...cleanup, ...elsewhere, ...push]
 }
 
 // A repo's path as boot prints it: already expanded against this machine's HOME, with the card's own spelling after it ("/home/me/code/x (~/code/x)"), so an agent never expands `~` itself
@@ -328,6 +329,12 @@ function taskSection(result, lines) {
   } else if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
 }
 
+// One line when any card has resource rows due for cleanup (counted over every card boot read, not only the ones shown), nothing otherwise.
+function cleanupLines(result) {
+  const due = (result.active_tasks?.tracks ?? []).flatMap((track) => track.tasks.map((task) => task.cleanup_due ?? 0)).filter((count) => count > 0)
+  return due.length === 0 ? [] : ["", `Cleanup due: ${due.reduce((sum, count) => sum + count, 0)} items on ${due.length} cards`]
+}
+
 /**
  * The boot result as readable text, leading with the work: one status line (status, desk, host, sync in plain words),
  * the stale-Desk line and the release-alert line when there are any, the active tasks grouped by state with each task's push route, the open pull
@@ -368,6 +375,7 @@ export function formatBootText(result) {
   for (const line of result.pending ?? []) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...namedTaskLines(result.task))
   taskSection(result, lines)
+  lines.push(...cleanupLines(result))
   lines.push(...unsignedLines(result.unsigned_deliveries))
   if ((result.open_prs ?? []).length > 0) lines.push("", "Open pull requests:", ...result.open_prs.map(prLine))
   if ((result.repo_states ?? []).length > 0) lines.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))

@@ -43,6 +43,7 @@ import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
 import { applyStep } from "../desk/steps.js"
+import { applyResource, dueResources } from "../desk/resources.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -288,7 +289,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -348,6 +349,8 @@ function deliveryAnswer({ data, slug, ref }) {
 
 // How a step input that arrives as a JSON string is read, and what the refusal says about it.
 const STEP_INPUT = { tool: "task_update", field: "step", effect: "no step was changed", example: '{"id": "api-change", "depends_on": [], "repo": "widgets"}' }
+
+const RESOURCE_INPUT = { tool: "task_update", field: "resource", effect: "no resource was changed", example: '{"identity": "worktree:/Users/me/code/widgets-worktrees/api", "step": "api-change"}' }
 
 const asList = (value) => (Array.isArray(value) ? value : [])
 
@@ -699,6 +702,9 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  *     step?: object,          // adds or changes one row of the card's `## Steps`
  *                             // table (desk/steps.js); the answer carries `step`,
  *                             // and `step_note` ("now ready: ...") when it made steps ready
+ *     resource?: object,      // adds or updates one row of the card's `## Resources` table
+ *                             // (desk/resources.js); the answer carries `resource`, and
+ *                             // `cleanup_due` and `cleanup_note` when this call made rows due
  *   }
  *
  * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place, and on a
@@ -801,6 +807,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
   refuseRecordKeys("task_update", frontmatter)
   const step = objectInput(values.step, STEP_INPUT)
+  const resource = objectInput(values.resource, RESOURCE_INPUT)
   const nextStep = nextStepValue === undefined ? undefined : requiredText(nextStepValue, nextStepKey)
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
@@ -900,10 +907,18 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // A step is applied to the card as it is on disk right now, just before the write, so an `expect` holds against a change
   // another session made while this call ran. Only the body is re-read: the frontmatter is written as this call built it, as for every task_update.
   let stepResult = null
+  let resourceResult = null
   let newBody = existing.content
+  if (step !== undefined || resource !== undefined) newBody = (await readMarkdown(filePath)).content
+  const dueBefore = dueResources(newBody, { status: existing.data.status }).map((item) => item.identity)
   if (step !== undefined) {
-    stepResult = applyStep((await readMarkdown(filePath)).content, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
+    stepResult = applyStep(newBody, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
     newBody = stepResult.body
+  }
+  // Resources are recorded on the card itself (task.md); Desk reminds about them and never removes anything (desk/resources.js).
+  if (resource !== undefined) {
+    resourceResult = applyResource(newBody, resource, "task_update", `${track}/${slug}`)
+    newBody = resourceResult.body
   }
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
@@ -914,7 +929,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
 
   const stage = stagingAllowed(filePath, spawnGit)
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
-  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined })
+  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || resource !== undefined })
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
@@ -929,6 +944,13 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
   if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
+  if (resourceResult !== null) result.resource = resourceResult.row
+  // The answer to a call that makes something due lists the card's due rows and the safe action for each; Desk never performs it.
+  const due = dueResources(newBody, { status: merged.status })
+  if (due.some((item) => !dueBefore.includes(item.identity))) {
+    result.cleanup_due = due.map(({ identity, why, action, stale }) => ({ identity, why, action, ...(stale ? { stale: true } : {}) }))
+    result.cleanup_note = "Cleanup is due on this card. Desk removes nothing: do the safe action for each row yourself, then record it with resource {identity, disposition, details}."
+  }
   if (returnReason !== undefined) {
     const line = parseReturn(merged.returns.at(-1))
     result.return_recorded = `${line.from} to ${line.to}, ${line.reason}, caught ${line.caught}`
