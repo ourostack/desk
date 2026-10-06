@@ -93,7 +93,7 @@ export async function inspectStateBranch({ root, branch, git = runGit, exists = 
  * The rule for a desk with no state branch configured (a configured one is judged by `inspectStateBranch`): HEAD must not be detached, and when the remote names a default branch (`origin/HEAD`) HEAD must be on it.
  * With no such remote, any named branch is allowed, so a `master` desk, a fetched-but-not-cloned remote and a local-only desk all pass. `ok` is also true outside a Git checkout.
  */
-export async function inspectWriteBranch({ root, branch, git = runGit }) {
+export async function inspectWriteBranch({ root, branch, git }) {
   if (isStateBranchName(branch)) return { ok: true }
   const located = await git({ cwd: root, args: ["rev-parse", "--show-toplevel"] })
   if (!located.ok) return { ok: true }
