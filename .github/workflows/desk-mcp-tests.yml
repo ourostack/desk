@@ -246,6 +246,13 @@ jobs:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: npm run test:coverage -- --merge "$RUNNER_TEMP/desk-coverage-shards"
 
+      # The boot acceptance harness's own unit tests (pure Node, no agent runs, about 10 seconds). They read task cards through
+      # gray-matter, which the install step above provides. A throwaway HOME keeps them off the runner's real one.
+      - name: Run the boot acceptance harness unit tests
+        run: |
+          home="$(mktemp -d "$RUNNER_TEMP/boot-acceptance-home.XXXXXX")"
+          HOME="$home" node --test evals/boot-acceptance/*.test.mjs
+
       - name: Verify committed generated artifacts
         run: node scripts/test-desk-generated-artifacts.cjs
 
