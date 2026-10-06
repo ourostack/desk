@@ -22,6 +22,7 @@ function github(prs, { down = false } = {}) {
     if (down) throw new Error("offline")
     if (address.includes("/contents/")) return answer(200, POLICY)
     if (address.includes("/files?")) return answer(200, [{ filename: "src/a.js" }])
+    if (address.endsWith("/repos/o/widgets")) return answer(200, {})
     const number = Number(/\/pulls\/(\d+)/u.exec(address)[1])
     const pr = prs[number]
     return pr === undefined ? answer(404, "") : answer(200, { state: pr.state ?? (pr.merged ? "closed" : "open"), merged_at: pr.merged ? "2026-10-06T00:00:00Z" : null, labels: (pr.labels ?? []).map((name) => ({ name })) })
