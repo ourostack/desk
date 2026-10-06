@@ -15,6 +15,7 @@ import { findScenario } from "./scenarios.mjs"
 import { elsewhereCloneDenial } from "../../plugins/desk/mcp/src/runtime/elsewhere-clone.js"
 import { activeTasks } from "../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { loadGrayMatter } from "../../plugins/desk/mcp/src/desk/organization.js"
+import { task_update } from "../../plugins/desk/mcp/src/tools/task.js"
 
 const DESK = "/private/var/folders/nh/T/boot-acceptance-x/fixture/desk"
 const flagged = (reply, calls = []) => inventedDeliveries({ reply, calls, deskRoot: DESK })
@@ -101,9 +102,32 @@ test("the guard denies a clone of the card's repository in the real fixture, and
     const load = async () => activeTasks(deskRoot).tracks.flatMap((track) => track.tasks)
     const denial = await elsewhereCloneDenial({ command: `cd ~/code && git clone ${ELSEWHERE_CLONE.url}`, cwd: deskRoot, env: {}, load })
     assert.equal(denial.deny, true)
-    assert.match(denial.reason, new RegExp(`^Ask the operator to push ${ELSEWHERE_CLONE.branch} unless they already said it is pushed; if so, use task_update\\.`, "u"))
+    assert.match(denial.reason, new RegExp(`^Ask the operator to push ${ELSEWHERE_CLONE.branch} unless they said it is pushed; if so, use task_update next_step\\.`, "u"))
     // The scenario's other cards do not make an unrelated clone elsewhere.
     assert.deepEqual(await elsewhereCloneDenial({ command: "git clone https://github.com/someone/else.git", cwd: deskRoot, env: {}, load }), { deny: false })
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test("round AL: the exact task_update call the Copilot agent made, with the next step inside `frontmatter`, changes what Desk reads, and the guard then allows the clone", async () => {
+  assert.doesNotThrow(() => loadGrayMatter(), "gray-matter is not installed: run `npm ci` in plugins/desk/mcp before running the boot acceptance unit tests")
+  const dir = scratch()
+  try {
+    const { deskRoot } = materializeFixture(path.join(dir, "fixture"))
+    addElsewhereCloneTask(deskRoot)
+    const load = async () => activeTasks(deskRoot).tracks.flatMap((track) => track.tasks)
+    const clone = { command: `cd ~/code && git clone ${ELSEWHERE_CLONE.url}`, cwd: deskRoot, env: {}, load }
+    assert.equal((await elsewhereCloneDenial(clone)).deny, true)
+    // The call as the run recorded it (round-al-copilot/elsewhere-clone/run-1), three times: each one must take effect, not only the first.
+    const call = { track: "lighthouse-relay", slug: "relay-heartbeat-fork", frontmatter: { next_step: "Review the relay-heartbeat-15s branch changes." } }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await task_update({ deskRoot, input: structuredClone(call), schedulePush: () => {} })
+      assert.equal(result.status, "updated")
+      assert.equal(result.next_step, "Review the relay-heartbeat-15s branch changes.")
+    }
+    const [card] = (await load()).filter((task) => task.slug === ELSEWHERE_CLONE.slug)
+    assert.equal(card.next_step, "Review the relay-heartbeat-15s branch changes.")
+    assert.equal(loadGrayMatter().read(path.join(deskRoot, "lighthouse-relay", ELSEWHERE_CLONE.slug, "task.md")).data.next_step, undefined, "no dead `next_step` key is left in the frontmatter")
+    assert.deepEqual(await elsewhereCloneDenial(clone), { deny: false })
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -121,7 +145,7 @@ const HOME = "/private/var/folders/xx/T/boot-acceptance-x/home"
 const FIXTURE_DESK = "/private/var/folders/xx/T/boot-acceptance-x/fixture/desk"
 const BOOT = [use("b", "Bash", { command: `node /p/plugins/desk/mcp/scripts/session-boot.js --task ${ELSEWHERE_CLONE.slug}` }), answer("b", "Desk boot: ready")]
 const CLONE = `cd ~/code && git clone ${ELSEWHERE_CLONE.url}`
-const DENIED = "PreToolUse:Bash hook error: Ask the operator to push relay-heartbeat-15s unless they already said it is pushed; if so, use task_update."
+const DENIED = "PreToolUse:Bash hook error: Ask the operator to push relay-heartbeat-15s unless they said it is pushed; if so, use task_update next_step."
 const REWRITE = { track: "lighthouse-relay", slug: ELSEWHERE_CLONE.slug, next_step: "The operator pushed `relay-heartbeat-15s` to the fork; review the branch." }
 const UPDATE = "mcp__plugin_desk_desk__task_update"
 

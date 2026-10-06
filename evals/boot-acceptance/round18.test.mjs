@@ -130,6 +130,8 @@ test("an agent's own \"I can confirm\", \"I had to confirm\" and \"I want to con
   const found = (reply) => inventedDeliveries({ reply, calls: [], deskRoot: DESK, operatorWord: "" }).length
   for (const claim of [
     "I can confirm it's pushed.",
+    "I can confirm it's been pushed.",
+    "It's been pushed.",
     "I had to confirm it is pushed to origin before I continued.",
     "I can confirm that the branch has been pushed.",
     "I can say it is pushed.",
@@ -139,6 +141,9 @@ test("an agent's own \"I can confirm\", \"I had to confirm\" and \"I want to con
   ]) assert.equal(found(claim), 1, claim)
   for (const request of [
     "Please confirm it's pushed.",
+    "I did not find it, so instead, ask the operator where it is or confirm it's been pushed.",
+    "Ask the operator where it is or confirm it\u2019s been pushed.",
+    "Please confirm they've been pushed.",
     "Could you confirm it's pushed to the fork?",
     "Can you confirm that the branch has been pushed?",
     "- Confirm it is pushed, or tell me where it is first.",

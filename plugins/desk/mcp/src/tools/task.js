@@ -725,6 +725,15 @@ function requiredText(value, field) {
   return value
 }
 
+// Frontmatter spellings of the next step, which Desk reads from the card's body (the `**Next step:**` paragraph that top-level `next_step` writes).
+const NEXT_STEP_ALIASES = ["next_step", "next step", "next-step", "nextStep"]
+
+function refuseBodyOnlyKeys(frontmatter) {
+  if (frontmatter != null && Object.hasOwn(frontmatter, "blocker")) {
+    throw new Error("task_update: `frontmatter.blocker` is not read: Desk takes a card's blocker from its body (a `## Blocker` section or a `Blocker:` line), so nothing was changed. Say the blocker with `body_append`, or in `note`.")
+  }
+}
+
 export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
@@ -748,9 +757,25 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (values.status !== undefined && givenFrontmatter != null && Object.hasOwn(givenFrontmatter, "status") && givenFrontmatter.status !== values.status) {
     throw new Error("task_update: `status` and `frontmatter.status` disagree; pass the status once, as `status`")
   }
-  const frontmatter = values.status === undefined ? givenFrontmatter : { ...(givenFrontmatter ?? {}), status: values.status }
+  const statusMerged = values.status === undefined ? givenFrontmatter : { ...(givenFrontmatter ?? {}), status: values.status }
+  // Desk reads a card's next step and blocker from its body, so a frontmatter key of that name would be written and never read. The next step takes the same path as top-level `next_step`; a blocker has no field, so it is refused.
+  refuseBodyOnlyKeys(statusMerged)
+  const aliasKeys = NEXT_STEP_ALIASES.filter((key) => statusMerged != null && Object.hasOwn(statusMerged, key))
+  let frontmatter = statusMerged
+  let nextStepValue = values.next_step
+  if (aliasKeys.length > 0) {
+    frontmatter = { ...statusMerged }
+    for (const key of aliasKeys) {
+      const given = frontmatter[key]
+      delete frontmatter[key]
+      if (nextStepValue !== undefined && given !== nextStepValue) {
+        throw new Error(`task_update: \`next_step\` and \`frontmatter.${key}\` disagree; pass the next step once, as the top-level \`next_step\``)
+      }
+      nextStepValue = given
+    }
+  }
   refuseRecordKeys("task_update", frontmatter)
-  const nextStep = values.next_step === undefined ? undefined : requiredText(values.next_step, "next_step")
+  const nextStep = nextStepValue === undefined ? undefined : requiredText(nextStepValue, "next_step")
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
     tool: "task_update",
@@ -884,6 +909,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // the step the card still carries and say it was not touched. A terminal status leaves no next step to keep current.
   const terminal = TERMINAL_STATUSES.has(merged.status)
   const currentStep = nextStepOf(newBody)
+  if (nextStep !== undefined) result.next_step = currentStep
   if (nextStep === undefined && !terminal && (note !== undefined || merged.status !== existing.data.status)) {
     result.next_step = currentStep
     result.next_step_note = "next_step unchanged \u2014 update it if this work changed it"
