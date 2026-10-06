@@ -15,13 +15,13 @@ import { crewWorkspace } from "../desk/crew-roster.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { outcomeSnapshot } from "./outcome.js"
-import { COPY_RETENTION_MS, factoryStateRoot, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
 import { githubRepoOfRemote } from "./desk-visibility.js"
-import { LIMITS, isPlainObject } from "./schema.js"
+import { ENUMS, LIMITS, isPlainObject } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
-import { declared, deskRootOf, markerRoute, proofIndex, provenBy } from "./session-route.js"
+import { RETRACTED_COPIES, declared, deskRootOf, markerRoute, proofIndex, provenBy, sessionRoute } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
 async function sourceStamp(file) {
@@ -212,11 +212,14 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     const receipt = (await readStatus(env)).derivations?.[name]
     const destination = path.join(root, "outbox", store.replace("/", "__"), name)
     if (receipt?.store === store && receipt.marker === hash && receipt.binding_version >= BINDING_VERSION && sameSource(receipt, before)) {
-      try {
-        await sourceStamp(destination)
-        return { result: "skipped", store }
-      } catch {
-        // A lost outbox file must be rebuilt even when the log is unchanged.
+      // A copy kept in `retracted-copies/` is not lost: the session left the store, and deriving it again would only be kept again.
+      for (const copy of [destination, path.join(root, RETRACTED_COPIES, store.replace("/", "__"), name)]) {
+        try {
+          await sourceStamp(copy)
+          return { result: "skipped", store }
+        } catch {
+          // A lost outbox file must be rebuilt even when the log is unchanged.
+        }
       }
     }
     let derived
@@ -585,6 +588,22 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
   return result === "not_opted_in" ? "not_opted_in" : "derive_failed"
 }
 
+// Where a session with a copy belongs now, for the sweep's keeping step (`keepCopiesElsewhere`): a store on a positive route, `null` when no
+// route can be found (an unknown route, or no desk folder that still resolves), else `undefined`. The desk folder is the marker's, else the one
+// its receipt recorded, else (no marker and no receipt: `status.json` was lost) the one its Claude Code transcript names, as the orphan pass
+// reads it, so a copy that pass could still rebuild is never kept away from its store.
+async function keepRoute(marker, { receipts, session, markers, find }) {
+  let deskRoot = deskRootOf(receipts, ENUMS.host.map((host) => `${host}-${session}.json`))
+  if (marker === null && deskRoot === undefined) {
+    const transcript = await find(session)
+    deskRoot = (transcript === null ? null : await cwdRoot(transcript).catch(() => null)) ?? undefined
+  }
+  const route = sessionRoute(marker, { siblings: () => markers, deskRoot })
+  if (route.kind === "store") return route.store
+  if (route.kind === "unknown") return null
+  return [marker?.desk_root, deskRoot].some((root) => typeof root === "string" && isFolder(root)) ? undefined : null
+}
+
 export async function sweep(env, { quietMs = 600000 } = {}) {
   const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0, coverage: null }
   try {
@@ -601,6 +620,26 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
   }
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.
   Object.assign(summary, await rebuildOrphans(env, { quietMs, markers }))
+  // "Away" is made durable as soon as anything shows it: every session with a copy in some store's outbox is routed as the flush routes it
+  // (its marker, else the desk folder its receipt recorded), and a copy in a store it no longer routes to moves to that store's
+  // `retracted-copies/`, so that store never publishes it again once the marker and `status.json` are gone, even when its own flush (which
+  // does the same for the stores it flushes) never runs because its consent is off. A session with no route at all (an invalid declaration, or
+  // no recorded desk folder that still resolves) belongs nowhere and is kept in every store. It runs after the orphan pass, so a copy that pass
+  // rebuilds has its receipt first.
+  try {
+    const receipts = (await readStatus(env)).derivations
+    const bySession = new Map(markers.map((marker) => [marker.session_id, marker]))
+    const memo = new Map()
+    const find = transcriptFinder(env)
+    const routeOf = async (session) => {
+      if (!memo.has(session)) memo.set(session, await keepRoute(bySession.get(session) ?? null, { receipts, session, markers, find }))
+      return memo.get(session)
+    }
+    summary.kept_elsewhere = (await keepCopiesElsewhere(env, routeOf)).length
+  } catch {
+    // The flush of each consented store still moves the copies of its sessions that are not here; this step is the second line for the rest.
+    summary.kept_elsewhere = null
+  }
   // Tombstones past their retention go (inventory). The result is a count, or a fixed code when the pruning itself failed, so a stopped part signals.
   let retention
   try {

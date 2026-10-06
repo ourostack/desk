@@ -119,10 +119,10 @@ test("a file whose session still routes to the store is never deleted, and an id
   assert.equal(dataFiles(github).length, 3)
 }))
 
-test("an invalid declaration freezes the session wherever it is read; only a missing marker, a gone desk folder or a null desk root keeps the last known route", () => scratch(async (ctx) => {
+test("an invalid declaration, or a desk folder that no longer resolves, freezes the session wherever it is read; only a missing marker or a null desk root keeps the last known route", () => scratch(async (ctx) => {
   const { github, desks } = await delivered(ctx, 6)
   const root = await factoryStateRoot(ctx.env)
-  // 1: desk folder gone (moved or renamed): its last known route, this store. 2: unreadable declaration. 3: a declaration that is not a
+  // 1: desk folder gone (moved or renamed): frozen, where it routes now cannot be read; its delivered file stays. 2: unreadable declaration. 3: a declaration that is not a
   // store. 4: default route whose hook recorded that it could not resolve one. 5: marker pruned, its receipt's desk folder still there
   // with an unreadable declaration. 6: a marker with no desk root, whose receipt's desk now declares the other store.
   await fs.rm(desks[0], { recursive: true })
@@ -135,7 +135,7 @@ test("an invalid declaration freezes the session wherever it is read; only a mis
   await marker(ctx.env, ctx.base, 6, null)
   await reroute(desks[5], OTHER)
   // Changed facts of frozen sessions 2 and 5 wait. 7: a new session in desk 2 waits too. 8: a new session whose desk folder is gone
-  // publishes to the store the sweep put it in.
+  // is frozen too, never published to the store the sweep put it in.
   for (const n of [2, 5]) {
     const changed = localFacts(n)
     changed.session.end_reason = "clear"
@@ -147,12 +147,12 @@ test("an invalid declaration freezes the session wherever it is read; only a mis
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(8))).written, true)
   const before = github.mainFiles()
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
-  assert.equal(github.pulls.at(-1).body, "1\n\nRetracted: 1 files (route_changed)")
+  assert.equal(github.pulls.at(-1).body, "0\n\nRetracted: 1 files (route_changed)")
   assert.equal((await lastFlush(ctx)).route_unknown, 5)
   github.mergeOpenPr()
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   await offline(ctx, github)
-  assert.deepEqual(dataFiles(github), [1, 2, 3, 4, 5, 8].map((n) => `facts/${nameOf(n)}`))
+  assert.deepEqual(dataFiles(github), [1, 2, 3, 4, 5].map((n) => `facts/${nameOf(n)}`))
   for (const n of [2, 5]) assert.equal(github.mainFiles().get(`facts/${nameOf(n)}`), before.get(`facts/${nameOf(n)}`), "a frozen session's change never goes")
   // The declaration is fixed: the session publishes again.
   await reroute(desks[1], STORE)

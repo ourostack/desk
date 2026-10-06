@@ -117,10 +117,13 @@ test("the flush migrates a retracting session's copy left in the outbox, and ado
   assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(1), sessionId(2)])
   // Idempotent.
   assert.deepEqual(await keepRetractedCopies(ctx.env, STORE, [sessionId(1), sessionId(2)]), [])
-  // A restore never overwrites a file that is already there, and moves nothing for a session with no copy.
+  // A restore never overwrites a file that is already there, and moves nothing for a session with no copy. The kept copy the live one beat is
+  // retired beside itself, never deleted, so the session no longer reads as kept.
   await fs.writeFile(path.join(root, "outbox", SLUG, nameOf(1)), `${JSON.stringify(localFacts(1))}\n`, { mode: 0o600 })
   assert.deepEqual(await restoreRetractedCopies(ctx.env, STORE, [sessionId(1), sessionId(9)]), [`labels/${LABELS.job}/${sessionId(1)}.json`])
-  assert.equal(await exists(path.join(kept, nameOf(1))), true)
+  assert.equal(await exists(path.join(kept, nameOf(1))), false)
+  assert.equal(await exists(path.join(kept, `${nameOf(1)}.kept-1`)), true)
+  assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(2)])
 }))
 
 test("facts or labels with keys a newer Desk wrote are skipped and counted as newer_format, never quarantined; any other failure still is", () => scratch(async (ctx) => {
