@@ -480,7 +480,7 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
 
-async function deskRepositories(markers, { deadline, now }) {
+async function deskRepositories(markers, { deadline, now, receipts = {} }) {
   const byName = new Map()
   const remotes = new Map()
   for (const marker of markers) {
@@ -496,6 +496,22 @@ async function deskRepositories(markers, { deadline, now }) {
       remotes.set(root, githubRepoOfRemote(remote))
     }
     byName.set(`${marker.host}-${marker.session_id}.json`, remotes.get(root))
+  }
+  // A session with no marker (pruned, or rebuilt from its transcript) keeps the desk its receipt recorded, so a private desk's session keeps its protected form and its real job. With neither, the desk stays unknown and the session is withheld.
+  for (const name of Object.keys(receipts)) {
+    if (byName.has(name)) continue
+    const root = deskRootOf(receipts, [name])
+    if (root === undefined || root === null) continue
+    if (!remotes.has(root)) {
+      let remote
+      try {
+        remote = readDeskRemote({ deskRoot: root, timeoutMs: 5000, deadline, clock: now })
+      } catch {
+        stop("deadline")
+      }
+      remotes.set(root, githubRepoOfRemote(remote))
+    }
+    byName.set(name, remotes.get(root))
   }
   return byName
 }
@@ -924,7 +940,7 @@ async function deliver(env, context) {
   const parse = ({ localBytes }) => JSON.parse(localBytes.toString("utf8"))
   const parsed = candidates.filter(({ name }) => here(name)).map((item) => ({ name: item.name, held: item.quarantine, local: parse(item) }))
   const parsedLabels = labelCandidates.filter(({ name }) => here(name)).map((item) => ({ key: item.name, local: parse(item) }))
-  const desks = await deskRepositories(markers, { deadline, now })
+  const desks = await deskRepositories(markers, { deadline, now, receipts })
   // What a file needs resolved: the repositories it references, its desk remote, and the store when it names a plugin.
   const reposOf = ({ name, local }) => [
     ...referencedRepos(local),

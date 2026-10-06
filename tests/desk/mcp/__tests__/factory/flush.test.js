@@ -602,6 +602,31 @@ test("a public or unknown desk publishes machine-keyed job IDs without timing; a
   assert.equal(privatePublished.jobs[0].session_offset_ms, 86400000)
 }))
 
+test("agreement table, flush row: a session with no marker keeps the desk its receipt recorded; with neither it is withheld, never public", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const privateDesk = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  await markerFor(env, privateDesk, 1)
+  const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
+  // Session 2's marker was pruned but its receipt names the private desk; session 3 has no marker and no receipt desk.
+  await writeStatus(env, { derivations: { [names[1]]: { desk_root: privateDesk }, [names[2]]: { binding_version: 5 } } })
+  const github = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const head = github.headFacts(STORE, await intakeBranch(env))
+  const read = (name) => JSON.parse(github.blobs.get(head.get(name).sha))
+  const secret = await readMachineSecret(env)
+  const keyed = (job) => createHmac("sha256", secret).update(job).digest("hex").slice(0, 32)
+  const plain = GOLDEN.jobs.map((job) => job.job)
+  for (const name of [names[0], names[1]]) {
+    const published = read(name)
+    assert.deepEqual(published.jobs.map((job) => job.job), plain, name)
+    assert.equal(published.jobs[0].session_offset_ms, 86400000, name)
+  }
+  const withheld = read(names[2])
+  assert.deepEqual(withheld.jobs.map((job) => job.job).sort(), plain.map(keyed).sort())
+  assert.ok(withheld.jobs.every((job) => job.session_offset_ms === null))
+}))
+
 // ---------------------------------------------------------------------------
 // Quarantine: transform refusals, schema failures and store rejections.
 // ---------------------------------------------------------------------------
