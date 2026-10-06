@@ -11,6 +11,10 @@
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only; real callers never pass it.
 
+import { mkdtempSync, rmSync } from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
+
 // Bounds every git call so a hung hook or a held lock can never block a tool
 // call indefinitely. Git hooks stay enabled — disabling them is not this
 // module's call to make; a hook that runs long simply times out like any
@@ -72,6 +76,46 @@ export function stagedChanges(root, relPaths, spawnGit) {
     i += 1 + count
   }
   return changes
+}
+
+/** The index entries at exactly `relPaths`: `[{ mode, sha, stage, path }]`, or `null` when Git fails. A path the index does not hold has no entry. */
+export function indexEntries(root, relPaths, spawnGit) {
+  const result = run(spawnGit, root, ["ls-files", "-s", "-z", "--", ...relPaths])
+  if (result.status !== 0) return null
+  return result.stdout.split("\0").filter(Boolean).map((record) => {
+    const [meta, entryPath] = record.split("\t")
+    const [mode, sha, stage] = meta.split(" ")
+    return { mode, sha, stage, path: entryPath }
+  })
+}
+
+/**
+ * Commits exactly what the index holds at `relPaths`, never what the working tree holds there: it builds a temporary index from HEAD, copies in the real index's
+ * entry for each path (or removes the path when the real index has none), and commits that index. The real index is untouched, so other staged work stays
+ * staged, and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`; never throws on a Git failure.
+ */
+export function commitIndexPaths(root, relPaths, message, spawnGit) {
+  const entries = indexEntries(root, relPaths, spawnGit)
+  if (entries === null) return { ok: false, stderr: "git could not read the index" }
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
+  try {
+    const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
+    const hasHead = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"]).status === 0
+    const seed = run(spawnGit, root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
+    if (seed.status !== 0) return { ok: false, stderr: seed.stderr }
+    const held = new Set(entries.map((entry) => entry.path))
+    const lines = [
+      ...entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}\0`),
+      ...relPaths.filter((p) => !held.has(p)).map((p) => `0 ${"0".repeat(40)}\t${p}\0`),
+    ]
+    const update = run(spawnGit, root, ["update-index", "-z", "--index-info"], { env, input: lines.join("") })
+    if (update.status !== 0) return { ok: false, stderr: update.stderr }
+    const result = run(spawnGit, root, ["commit", "-m", message], { env })
+    if (timedOut(result)) return { ok: false, stderr: "timeout" }
+    return { ok: result.status === 0, stderr: result.stderr }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 /**

@@ -91,8 +91,7 @@ test("a card edit cannot ride through tidy: it is refused and nothing is committ
 test("an unstaged card edit is never staged by tidy", async () => {
   const root = await makeDesk()
   await fs.writeFile(path.join(root, "old-track", "job", "task.md"), CARD.replace("active", "done"))
-  const result = await save(root, { paths: ["old-track/job/task.md"], message: "m", tidy: true })
-  assert.equal(result.status, "nothing_to_commit")
+  await assert.rejects(save(root, { paths: ["old-track/job/task.md"], message: "m", tidy: true }), /unstaged change, is untracked/u)
   assert.equal(git(root, ["diff", "--cached", "--name-only"]).stdout, "")
 })
 
@@ -122,23 +121,113 @@ test("the undo of a tidy commits through the same call", async () => {
   assert.equal(git(root, ["status", "--short"]).stdout, "")
 })
 
-test("failures stay reported, not thrown: stage, list and commit", async () => {
-  const ok = { status: 0, stdout: "", stderr: "" }
-  const make = (failOn) => (cmd, args) => {
-    const sub = args[2]
-    if (sub === "rev-parse") return { ...ok, stdout: "true\n" }
-    if (sub === failOn) return { status: 1, stdout: "", stderr: `${sub} failed` }
-    if (sub === "diff" && args.includes("--cached")) return { ...ok, stdout: "M\0notes.md\0" }
-    if (sub === "diff") return { ...ok, stdout: "notes.md\n" }
-    return ok
-  }
-  const run = (failOn) => desk_save({ deskRoot: "/tmp/not-used", input: { paths: ["notes.md"], message: "m", tidy: true }, spawnGit: make(failOn), schedulePush: () => {} })
-  assert.equal((await run("add")).commit.status, "failed")
-  assert.equal((await run(null)).status, "committed")
-  assert.equal((await run("commit")).commit.status, "failed")
-  const listFail = (cmd, args) => (args[2] === "diff" && args.includes("--cached") ? { status: 1, stdout: "", stderr: "x" } : make(null)(cmd, args))
-  const result = await desk_save({ deskRoot: "/tmp/not-used", input: { paths: ["notes.md"], message: "m", tidy: true }, spawnGit: listFail, schedulePush: () => {} })
-  assert.equal(result.commit.status, "failed")
+const TIDY_PATHS = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
+
+test("an edit made after the move, still unstaged, never lands in the tidy commit (a)", async () => {
+  const root = await makeDesk()
+  await stageTidy(root)
+  await fs.appendFile(path.join(root, "new-track", "job", "task.md"), "rewritten after the move\n")
+  const before = git(root, ["rev-parse", "HEAD"]).stdout
+  await assert.rejects(save(root, { paths: TIDY_PATHS, message: "m", tidy: true }), /unstaged change, is untracked/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).stdout, before)
+})
+
+test("a card deleted and recreated unstaged is refused (b)", async () => {
+  const root = await makeDesk()
+  git(root, ["rm", "-q", "old-track/job/task.md"])
+  await fs.mkdir(path.join(root, "old-track", "job"), { recursive: true })
+  await fs.writeFile(path.join(root, "old-track", "job", "task.md"), CARD.replace("active", "done"))
+  const before = git(root, ["rev-parse", "HEAD"]).stdout
+  await assert.rejects(save(root, { paths: ["old-track/job/task.md"], message: "m", tidy: true }), /unstaged change, is untracked/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).stdout, before)
+})
+
+test("a link at a card path is refused, unstaged or staged (c)", async () => {
+  const root = await makeDesk()
+  git(root, ["rm", "-q", "old-track/job/task.md"])
+  await fs.mkdir(path.join(root, "old-track", "job"), { recursive: true })
+  await fs.symlink("/etc/hosts", path.join(root, "old-track", "job", "task.md"))
+  await assert.rejects(save(root, { paths: ["old-track/job/task.md"], message: "m", tidy: true }), /unstaged change, is untracked/u)
+  git(root, ["add", "old-track/job/task.md"])
+  const before = git(root, ["rev-parse", "HEAD"]).stdout
+  await assert.rejects(save(root, { paths: ["old-track/job/task.md"], message: "m", tidy: true }), /unstage old-track\/job\/task\.md|not a regular file/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).stdout, before)
+})
+
+test("a tracked link moved to a new card path is refused as not a regular file", async () => {
+  const root = await makeDesk()
+  await fs.mkdir(path.join(root, "link-track", "job"), { recursive: true })
+  await fs.symlink("/etc/hosts", path.join(root, "link-track", "job", "task.md"))
+  git(root, ["add", "link-track/job/task.md"])
+  git(root, ["commit", "-q", "-m", "a link as a card"])
+  await fs.mkdir(path.join(root, "moved-track"), { recursive: true })
+  git(root, ["mv", "link-track/job", "moved-track/job"])
+  const before = git(root, ["rev-parse", "HEAD"]).stdout
+  await assert.rejects(save(root, { paths: ["link-track/job/task.md", "moved-track/job/task.md"], message: "m", tidy: true }), /not a regular file/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).stdout, before)
+})
+
+test("a link staged as a moved card path is refused as not a regular file", async () => {
+  const root = await makeDesk()
+  await fs.mkdir(path.join(root, "link-track", "job"), { recursive: true })
+  await fs.symlink("/etc/hosts", path.join(root, "link-track", "job", "task.md"))
+  git(root, ["add", "link-track/job/task.md"])
+  // Staged as an add the status is A, so the card check refuses it first; the mode check backs it for any status that slips past.
+  await assert.rejects(save(root, { paths: ["link-track/job/task.md"], message: "m", tidy: true }), /unstage link-track\/job\/task\.md/u)
+})
+
+test("a folder or a pattern is refused before anything is staged", async () => {
+  const root = await makeDesk()
+  await stageTidy(root)
+  await fs.appendFile(path.join(root, "new-track", "job", "task.md"), "edit\n")
+  await assert.rejects(save(root, { paths: ["new-track"], message: "m", tidy: true }), /replace new-track with the file paths/u)
+  await assert.rejects(save(root, { paths: ["new-track/*/task.md"], message: "m", tidy: true }), /never a folder or a pattern/u)
+  assert.equal(git(root, ["diff", "--cached", "--name-only"]).stdout.includes("new-track/job/task.md"), true)
+  assert.match(git(root, ["status", "--short"]).stdout, /^RM /mu, "the unstaged edit is still unstaged")
+})
+
+test("a move needs both halves in paths, and the refusal names the missing one", async () => {
+  const root = await makeDesk()
+  await stageTidy(root)
+  await assert.rejects(save(root, { paths: ["new-track/job/task.md"], message: "m", tidy: true }), /add old-track\/job\/task\.md to `paths`/u)
+  await assert.rejects(save(root, { paths: ["old-track/job/task.md"], message: "m", tidy: true }), /add new-track\/job\/task\.md to `paths`/u)
+})
+
+test("a tidy on a desk with no commit yet commits through an empty temporary index", async () => {
+  const root = await mkTempDeskRoot()
+  git(root, ["init", "-q"])
+  git(root, ["config", "user.email", "t@example.com"])
+  git(root, ["config", "user.name", "T"])
+  await fs.mkdir(path.join(root, "_meta"), { recursive: true })
+  await fs.writeFile(path.join(root, "_meta", "organization.json"), "{}\n")
+  assert.equal((await save(root, { paths: ["_meta/organization.json"], message: "first", tidy: true })).status, "committed")
+  assert.equal(git(root, ["log", "--format=%s"]).stdout.trim(), "first")
+})
+
+// A spawn that behaves as git does except that one git subcommand (optionally only when its arguments carry `needle`) fails.
+const failing = (sub, needle) => (cmd, args, options) =>
+  args[2] === sub && (needle === undefined || args.includes(needle)) ? { status: 1, stdout: "", stderr: `${sub} failed`, error: undefined } : spawnSync(cmd, args, options)
+
+test("git failures are reported, not thrown", async () => {
+  const root = await makeDesk()
+  await stageTidy(root)
+  const run = (spawnGit) => desk_save({ deskRoot: root, input: { paths: TIDY_PATHS, message: "m", tidy: true }, spawnGit, schedulePush: () => {} })
+  assert.equal((await run(failing("add"))).commit.status, "failed")
+  assert.match((await run(failing("diff", "--cached"))).commit.reason, /list the staged changes/u)
+  assert.match((await run(failing("ls-files", "-s"))).commit.reason, /read the index/u)
+  assert.equal((await run(failing("read-tree"))).commit.reason, "read-tree failed")
+  assert.equal((await run(failing("update-index"))).commit.reason, "update-index failed")
+  assert.equal((await run(failing("commit"))).commit.reason, "commit failed")
+})
+
+test("the temporary index leaves the real index and the working tree alone", async () => {
+  const root = await makeDesk()
+  await stageTidy(root)
+  await fs.writeFile(path.join(root, "other.md"), "staged elsewhere\n")
+  git(root, ["add", "other.md"])
+  await fs.writeFile(path.join(root, "other.md"), "and edited again\n")
+  await save(root, { paths: TIDY_PATHS, message: "m", tidy: true })
+  assert.match(git(root, ["status", "--short"]).stdout, /^MM other\.md$/mu)
 })
 
 test("stagedChanges parses renames, deletes and a failing git", () => {

@@ -38,7 +38,10 @@ test("no shipped agent-facing text names the card guard's commit variable", () =
 test("the card guard's refusal and the tool texts do not name it either", async () => {
   const { hookScript } = await import("../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js")
   const { TOOL_DESCRIPTIONS } = await import("../../../../../plugins/desk/mcp/src/tool-names.js").then((m) => ({ TOOL_DESCRIPTIONS: m.TOOL_DESCRIPTIONS ?? m.default ?? m }))
-  const refusal = hookScript().split("\n").filter((line) => /echo|printf|>&2/u.test(line)).join("\n")
-  assert.doesNotMatch(refusal, new RegExp(NAME, "u"))
+  // The hook has to read the variable once, in its early return. Everything else in the script (its comments, every echoed line, the hint) must not name it.
+  const lines = hookScript().split("\n")
+  const reading = lines.filter((line) => line.includes(NAME))
+  assert.equal(reading.length, 1, "the hook names the variable on exactly one line, the one that reads it")
+  assert.match(reading[0], /^\s*\[ -n "\$DESK_TOOL_COMMIT" \] && return 0$/u)
   assert.doesNotMatch(JSON.stringify(TOOL_DESCRIPTIONS), new RegExp(NAME, "u"))
 })

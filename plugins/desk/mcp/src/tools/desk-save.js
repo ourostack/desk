@@ -14,10 +14,11 @@
 // commits on another participant's behalf.
 
 import * as path from "node:path"
+import { existsSync, statSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
-import { isGitRepository, hasUnstagedWork, stagedChanges, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
@@ -133,24 +134,51 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
 }
 
 // The tidy commit. Task cards must already be staged as pure renames or deletions; every other path is staged here when it holds unstaged work.
+// What is committed is what was judged: the index at `paths`, through a temporary index (commitIndexPaths), never the working tree. `_archive/**` is not a live
+// card path (isLiveCardPath, like the pre-commit hook), so a card moved into `_archive/` is checked as the move it is and an archived card is never judged as one.
+const TIDY_DIRECTORY_OR_GLOB = /[*?[]/u
+
 function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
-  const isCard = (p) => isLiveCardPath(path.relative(deskRoot, path.resolve(deskRoot, p)))
-  const others = paths.filter((p) => !isCard(p))
+  const rels = paths.map((p) => path.relative(deskRoot, path.resolve(deskRoot, p)).split(path.sep).join("/"))
+  for (const [i, rel] of rels.entries()) {
+    const absolute = path.resolve(deskRoot, rel)
+    if (TIDY_DIRECTORY_OR_GLOB.test(rel) || (existsSync(absolute) && statSync(absolute).isDirectory())) {
+      throw new Error(`desk_save: replace ${paths[i]} with the file paths of the tidy (the old and new path of each moved task card, and each file you fixed); tidy: true takes files, never a folder or a pattern`)
+    }
+  }
+  const isCard = (p) => isLiveCardPath(p)
+  const cards = rels.filter(isCard)
+  const others = rels.filter((p) => !isCard(p))
+  if (cards.length > 0 && hasUnstagedWork(deskRoot, cards, spawnGit)) {
+    throw new Error("desk_save: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or git restore --staged and git restore the card, and pass only cards that task_move, track_rename or git mv staged as moves")
+  }
   if (others.length > 0 && hasUnstagedWork(deskRoot, others, spawnGit)) {
     const staged = stagePaths(deskRoot, others, spawnGit)
     if (!staged.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
   }
-  const changes = stagedChanges(deskRoot, paths, spawnGit)
-  if (changes === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } }
+  const listed = new Set(rels)
+  const everything = stagedChanges(deskRoot, [], spawnGit)
+  if (everything === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } }
+  for (const change of everything) {
+    const missing = change.paths.filter((p) => !listed.has(p))
+    if (change.paths.length === 2 && missing.length === 1) {
+      throw new Error(`desk_save: add ${missing[0]} to \`paths\`: a move is committed with both its old and its new path`)
+    }
+  }
+  const changes = everything.filter((change) => change.paths.some((p) => listed.has(p)))
   if (changes.length === 0) return { status: "nothing_to_commit" }
   for (const change of changes) {
-    const pureMove = change.status === "R100" || change.status === "D"
     const card = change.paths.find(isCard)
-    if (card !== undefined && !pureMove) {
+    if (card !== undefined && change.status !== "R100" && change.status !== "D") {
       throw new Error(`desk_save: unstage ${card} (git restore --staged -- <path>) and change that task card with task_update; a tidy commits a task card only as a move or a delete, not an edit`)
     }
   }
-  const committed = commitPaths(deskRoot, paths, tidyTrailer(message), spawnGit)
+  const entries = indexEntries(deskRoot, cards, spawnGit)
+  if (entries === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not read the index" } }
+  if (entries.some((entry) => entry.mode !== "100644" && entry.mode !== "100755")) {
+    throw new Error("desk_save: a task card in `paths` is not a regular file (a link, for example); restore it with git restore --staged and git restore, then pass only the moved cards")
+  }
+  const committed = commitIndexPaths(deskRoot, rels, tidyTrailer(message), spawnGit)
   if (!committed.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
   schedulePush({ root: deskRoot })
   return { status: "committed" }
