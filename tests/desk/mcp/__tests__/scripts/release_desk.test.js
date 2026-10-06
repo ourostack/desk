@@ -206,7 +206,7 @@ test("the release workflow checks every release surface in a read-only job and p
     assert.match(checks, new RegExp(check, "u"), check)
   }
   for (const folder of ["release", "activation", "artifacts", "docs", "scripts"]) {
-    assert.ok(checks.includes(`"__tests__/${folder}/**/*.test.js"`), folder)
+    assert.ok(checks.includes(`"../../../tests/desk/mcp/__tests__/${folder}/**/*.test.js"`), folder)
   }
   assert.match(checks, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
   assert.match(checks, /echo "sha=\$sha"; echo "base=\$base"/u)
