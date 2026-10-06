@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { readFileSync } from "node:fs"
-import { checkDelivery, prDelivery, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
+import { checkDelivery, prDelivery, makeRunGh, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
@@ -19,12 +19,17 @@ function fakeGitHub({
   pr = { status: 200, body: { labels: [], merged_at: "2026-10-06T00:00:00Z", merge_commit_sha: "abc123" } },
   files = [{ status: 200, body: [{ filename: "plugins/desk/mcp/src/x.js" }] }],
   repo = { status: 200, body: { full_name: "ourostack/desk" } },
+  policyByRef = null,
 } = {}) {
   const calls = []
   const answer = ({ status, body }) => ({ status, text: async () => (typeof body === "string" ? body : JSON.stringify(body)) })
   const fetchFn = async (url, options) => {
     calls.push({ url, options })
-    if (url.includes("/contents/")) return answer(policy)
+    if (url.includes("/contents/")) {
+      if (policyByRef === null) return answer(policy)
+      const ref = /[?&]ref=([^&]+)/u.exec(url)
+      return answer(policyByRef[ref === null ? "" : decodeURIComponent(ref[1])] ?? { status: 404, body: "" })
+    }
     if (url.includes("/files?")) return answer(files[Math.min(Number(/&page=(\d+)/u.exec(url)[1]) - 1, files.length - 1)])
     if (url.endsWith("/repos/ourostack/desk")) return answer(repo)
     return answer(pr)
@@ -40,7 +45,8 @@ test("a pull request that carries the label is delivered", async () => {
   const fake = fakeGitHub({ pr: { status: 200, body: { labels: [{ name: "released" }], merged_at: "x" } } })
   const answer = await run(fake)
   assert.deepEqual(answer, { status: "delivered", basis: "carries the `released` label" })
-  assert.equal(fake.calls[0].url, `https://api.github.com/repos/ourostack/desk/contents/${POLICY_PATH}`)
+  assert.equal(fake.calls[0].url, "https://api.github.com/repos/ourostack/desk/pulls/200")
+  assert.equal(fake.calls[1].url, `https://api.github.com/repos/ourostack/desk/contents/${POLICY_PATH}`, "no base branch given: the default branch's rules")
 })
 
 test("an unlabeled pull request that changes a ruled path is refused, naming the pull request and that no release carried it", async () => {
@@ -181,6 +187,174 @@ test("a token in the environment goes to api.github.com only; none means an anon
   const withToken = fakeGitHub()
   await run(withToken, PR, { GH_TOKEN: " ", GITHUB_TOKEN: " tok " }).catch(() => {})
   assert.ok(withToken.calls.every((call) => call.url.startsWith("https://api.github.com/") && call.options.headers.Authorization === "Bearer tok"))
+})
+
+test("with no token in the environment, the token from gh is used for every request, asked once and kept in memory", async () => {
+  const asked = []
+  const ghRunner = async (args) => { asked.push(args); return "  from-gh\n" }
+  const fake = fakeGitHub()
+  await ask(fake, { ghRunner })
+  assert.deepEqual(asked, [["auth", "token", "--hostname", "github.com"]])
+  assert.ok(fake.calls.every((call) => call.options.headers.Authorization === "Bearer from-gh"))
+  const later = fakeGitHub()
+  await ask(later, { ghRunner })
+  assert.equal(asked.length, 1, "remembered for the process")
+  assert.equal(later.calls[0].options.headers.Authorization, "Bearer from-gh")
+})
+
+test("a token in the environment means gh is not asked", async () => {
+  const ghRunner = async () => assert.fail("gh must not run")
+  for (const env of [{ GH_TOKEN: "a" }, { GITHUB_TOKEN: "b" }]) {
+    const fake = fakeGitHub()
+    await ask(fake, { env, ghRunner })
+    assert.equal(fake.calls[0].options.headers.Authorization, `Bearer ${Object.values(env)[0]}`)
+  }
+})
+
+test("gh absent, signed out, failing or silent leaves the request anonymous", async () => {
+  for (const ghRunner of [async () => { throw new Error("ENOENT") }, async () => "\n", async () => ""]) {
+    const fake = fakeGitHub()
+    await ask(fake, { ghRunner })
+    assert.equal(fake.calls[0].options.headers.Authorization, undefined)
+  }
+})
+
+test("a caller that injects its own fetch and no runner never runs gh", async () => {
+  // Every other test here relies on this: a real gh would put the machine's token into a fake GitHub.
+  const fake = fakeGitHub()
+  await prDelivery({ repo: "ourostack/desk", number: 200, env: {}, fetchFn: fake.fetchFn })
+  assert.equal(fake.calls[0].options.headers.Authorization, undefined)
+})
+
+test("checkDelivery passes the runner through", async () => {
+  const fake = fakeGitHub()
+  await checkDelivery({ toolName: "task_update", evidence: PR, env: {}, fetchFn: fake.fetchFn, ghRunner: async () => "viaCheck" }).catch(() => {})
+  assert.equal(fake.calls[0].options.headers.Authorization, "Bearer viaCheck")
+})
+
+test("the rules are read from the branch the pull request merged into", async () => {
+  const fake = fakeGitHub({ pr: { status: 200, body: { labels: [], merged_at: "x", base: { ref: "v2/alpha" } } } })
+  await ask(fake)
+  assert.equal(fake.calls[1].url, `https://api.github.com/repos/ourostack/desk/contents/${POLICY_PATH}?ref=v2%2Falpha`)
+})
+
+test("a pull request GitHub hides is not_verified, and one it shows as missing in a visible repo is not_found", async () => {
+  const hidden = await ask(fakeGitHub({ pr: { status: 404, body: "" }, repo: { status: 404, body: "" } }))
+  assert.equal(hidden.status, "not_verified")
+  assert.match(hidden.reason, /not visible to GitHub requests from here.*set GH_TOKEN/u)
+  assert.deepEqual(await ask(fakeGitHub({ pr: { status: 404, body: "" } })), { status: "not_found" })
+})
+
+test("a pull request GitHub cannot read (403, 429, 5xx, unreachable) is not_verified", async () => {
+  for (const status of [403, 429, 500, 503, 0]) {
+    const answer = await ask(fakeGitHub({ pr: { status, body: "" } }))
+    assert.equal(answer.status, "not_verified", String(status))
+    assert.match(answer.reason, /could not be read from GitHub/u)
+  }
+})
+
+const MERGED = (ref) => ({ status: 200, body: { labels: [], merged_at: "x", base: { ref } } })
+
+test("a base branch without a rules file falls back to the default branch's rules", async () => {
+  const fake = fakeGitHub({ pr: MERGED("release/x"), repo: { status: 200, body: { default_branch: "main" } }, policyByRef: { "": { status: 200, body: JSON.stringify(POLICY) } } })
+  assert.equal((await ask(fake)).status, "undelivered")
+  const urls = fake.calls.map((call) => call.url)
+  assert.ok(urls.some((url) => url.endsWith(`/contents/${POLICY_PATH}?ref=release%2Fx`)))
+  assert.ok(urls.some((url) => url.endsWith(`/contents/${POLICY_PATH}`)))
+})
+
+test("a base branch with its own rules file does not read the default branch's", async () => {
+  const merge = { status: 200, body: JSON.stringify({ schema_version: 1, rules: [MERGE_RULE] }) }
+  const fake = fakeGitHub({ pr: MERGED("v2-alpha"), policyByRef: { "v2-alpha": merge, "": { status: 200, body: JSON.stringify(POLICY) } } })
+  assert.deepEqual(await ask(fake), { status: "delivered", basis: "every rule delivers at merge" })
+  assert.ok(!fake.calls.some((call) => call.url.endsWith(`/contents/${POLICY_PATH}`)))
+})
+
+test("with no rules on the base branch or the default branch, merge counts as delivery; on the default branch there is no second read", async () => {
+  const none = fakeGitHub({ pr: MERGED("release/x"), repo: { status: 200, body: { default_branch: "main" } }, policyByRef: {} })
+  assert.match((await ask(none)).basis, /^no delivery rule declared/u)
+  assert.equal(none.calls.filter((call) => call.url.includes("/contents/")).length, 2)
+  const onDefault = fakeGitHub({ pr: MERGED("main"), repo: { status: 200, body: { default_branch: "main" } }, policyByRef: {} })
+  assert.match((await ask(onDefault)).basis, /^no delivery rule declared/u)
+  assert.equal(onDefault.calls.filter((call) => call.url.includes("/contents/")).length, 1)
+})
+
+test("an unmerged pull request is undelivered before any rules are read, even when the rules are unreadable", async () => {
+  const fake = fakeGitHub({ pr: { status: 200, body: { labels: [], merged_at: null, base: { ref: "main" } } }, policy: { status: 500, body: "" } })
+  assert.deepEqual(await ask(fake), { status: "undelivered", unmet: [{ need: "be merged" }], merged: false })
+  assert.ok(!fake.calls.some((call) => call.url.includes("/contents/")))
+})
+
+test("the real gh runner passes its arguments and time limit to execFile, and maps its result and error", async () => {
+  const seen = []
+  const ok = makeRunGh((file, args, options, done) => { seen.push({ file, args, options }); done(null, Buffer.from("tok\n")) })
+  assert.equal(await ok(["auth", "token"]), "tok\n")
+  assert.deepEqual(seen[0].file, "gh")
+  assert.deepEqual(seen[0].args, ["auth", "token"])
+  assert.equal(seen[0].options.timeout, 3000)
+  const bad = makeRunGh((file, args, options, done) => done(new Error("ENOENT")))
+  await assert.rejects(bad([]), /ENOENT/u)
+})
+
+test("concurrent gh lookups share one call", async () => {
+  let asks = 0
+  const slow = async () => { asks += 1; await new Promise((resolve) => setTimeout(resolve, 10)); return "tok" }
+  await Promise.all([ask(fakeGitHub(), { ghRunner: slow }), ask(fakeGitHub(), { ghRunner: slow })])
+  assert.equal(asks, 1)
+})
+
+test("a failed gh lookup is remembered for 60 seconds, then asked again; a token is kept for the process", async () => {
+  let clock = 1000
+  const now = () => clock
+  let asks = 0
+  let answer = null
+  const flaky = async () => { asks += 1; if (answer === null) throw new Error("timeout"); return answer }
+  await ask(fakeGitHub(), { ghRunner: flaky, now })
+  clock += 59000
+  await ask(fakeGitHub(), { ghRunner: flaky, now })
+  assert.equal(asks, 1, "within 60 seconds the failure is reused")
+  clock += 2000
+  answer = "late"
+  const late = fakeGitHub()
+  await ask(late, { ghRunner: flaky, now })
+  assert.equal(asks, 2, "after 60 seconds it asks again")
+  assert.equal(late.calls[0].options.headers.Authorization, "Bearer late")
+  clock += 10 * 60000
+  await ask(fakeGitHub(), { ghRunner: flaky, now })
+  assert.equal(asks, 2, "a token does not expire")
+})
+
+// A GitHub that refuses one token with 401 and answers everything else as the plain fake does.
+function refusing(bad) {
+  const fake = fakeGitHub()
+  const fetchFn = async (url, options) => {
+    if (options.headers.Authorization === `Bearer ${bad}`) { fake.calls.push({ url, options }); return { status: 401, text: async () => "" } }
+    return fake.fetchFn(url, options)
+  }
+  return { fetchFn, calls: fake.calls }
+}
+
+test("a 401 on a gh token drops it and repeats the request anonymously, for the rest of the call and the next minute", async () => {
+  let clock = 0
+  const now = () => clock
+  let asks = 0
+  const ghRunner = async () => { asks += 1; return "revoked" }
+  const fake = refusing("revoked")
+  const answer = await ask(fake, { ghRunner, now })
+  assert.equal(answer.status, "undelivered", "the public answer, not not_verified")
+  assert.equal(fake.calls[0].options.headers.Authorization, "Bearer revoked")
+  assert.equal(fake.calls[1].options.headers.Authorization, undefined)
+  assert.ok(fake.calls.slice(1).every((call) => call.options.headers.Authorization === undefined))
+  clock += 1000
+  await ask(fakeGitHub(), { ghRunner, now })
+  assert.equal(asks, 1, "the refused token is not asked for again at once")
+})
+
+test("a 401 on a token from the environment is left alone", async () => {
+  const fake = refusing("mine")
+  const answer = await ask(fake, { env: { GH_TOKEN: "mine" }, ghRunner: async () => assert.fail("gh must not run") })
+  assert.equal(answer.status, "not_verified")
+  assert.equal(fake.calls.length, 1)
 })
 
 test("a node:test run with no fetch of its own makes no request", async () => {
