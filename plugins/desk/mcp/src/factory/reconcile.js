@@ -426,8 +426,12 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   const known = visibilityMap(freshVisibility(cached, Date.parse(now())))
   const visibilityKnown = deskRepo === null || known.has(deskRepo.toLowerCase())
   const deskPrivate = deskTimingKept(deskVisibilityOf(deskRepo, known))
+  // With `--store`, a GitHub desk whose visibility answer is expired or absent is not compared: keyed IDs cannot be told from plain ones
+  // without it, and a zero read from a store that was never searched would stand for "not checked". The store-side measures say `not_checked`.
+  const storeCompared = storeDir !== null && visibilityKnown
+  if (storeDir !== null && !visibilityKnown) warn("visibility_not_known")
   let secret = null
-  if (storeDir !== null) {
+  if (storeCompared) {
     if (!deskPrivate) {
       try {
         const bytes = readFileSync(path.join(dir, "machine-secret"))
@@ -488,7 +492,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const flush = status.last_flush?.[slug.replace("__", "/")]
     if (!OPEN_PR_RESULTS.has(flush?.result)) return null
     if (!Number.isSafeInteger(flush.pr)) return "pr_open"
-    return storeDir === null ? `pr_${flush.pr}_unchecked` : `pr_${flush.pr}`
+    return !storeCompared ? `pr_${flush.pr}_unchecked` : `pr_${flush.pr}`
   }
 
   // Why an outbox file's session is placed elsewhere than the store whose outbox holds it, read as the flush and the local status read it
@@ -537,7 +541,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   }
 
   const storeToPlain = new Map()
-  if (storeDir !== null) {
+  if (storeCompared) {
     for (const plain of [...allJobs().keys(), ...sessionsByJob.keys()]) {
       const id = storeIdOf(plain)
       if (id !== null) storeToPlain.set(id, plain)
@@ -620,7 +624,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
         ...bound.map((session) => ({ kind: "session", session: session.name.slice(0, -5), start: new Date(session.start).toISOString(), end: new Date(session.end).toISOString() })),
       ],
       story: [...story.values()].sort((a, b) => byKey(a.start, b.start) || byKey(a.session, b.session)),
-      store: storeDir === null ? { checked: false } : { checked: true, sessions: storeSessions === null ? measure("not_recorded") : measure("measured", storeSessions.length) },
+      store: storeDir === null ? { checked: false } : !storeCompared ? { checked: false, sessions: measure("not_checked", undefined, { reason: "visibility_not_known" }) } : { checked: true, sessions: storeSessions === null ? measure("not_recorded") : measure("measured", storeSessions.length) },
       mismatched: mismatches.length > before,
     })
   }
@@ -634,7 +638,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     if (!sessions.some((session) => inWindow(session, created, plain))) continue
     const [track, slug] = key === null ? [null, null] : key.split("/")
     mismatches.push({ track, slug, job: plain ?? (deskPrivate ? storeId : null), reason: "store_only", detail: "store_session_in_window" })
-    if (key !== null) report.push({ track, slug, job: plain, activity: [], story: [], store: { checked: true, sessions: sessions.length }, mismatched: true })
+    if (key !== null) report.push({ track, slug, job: plain, activity: [], story: [], store: { checked: true, sessions: measure("measured", sessions.length) }, mismatched: true })
   }
 
   mismatches.sort((a, b) => byKey(`${a.track}/${a.slug}`, `${b.track}/${b.slug}`) || rank(a.reason) - rank(b.reason))
@@ -671,7 +675,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     unbound_markers: deskMarkers.map(({ name, marker }) => ({ session: name.slice(0, -5), ...(markerProblem(name, marker) ?? { reason: null, detail: "marker_not_bound" }) })),
     counts: {
       tasks: report.length, matched: report.filter((item) => !item.mismatched).length, mismatched: mismatches.length, by_reason: byReason, mentioned: mentionedCount,
-      status_unobserved: measure(storeDir === null ? "not_checked" : "measured", byReason.status_unobserved ?? 0),
+      status_unobserved: storeCompared ? measure("measured", byReason.status_unobserved ?? 0) : measure("not_checked", undefined, storeDir === null ? {} : { reason: "visibility_not_known" }),
       bound_by: boundBy, segments_capped_ms: totalOf(sessions.map((session) => session.segments_capped_ms)),
       repository_evidence_unavailable: totalOf(sessions.map((session) => session.repository_evidence_unavailable)),
     },

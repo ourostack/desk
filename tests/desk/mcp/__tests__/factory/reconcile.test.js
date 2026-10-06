@@ -387,6 +387,41 @@ test("a store job in the window with no desk activity is store_only; a private d
   assert.deepEqual(bare.tasks[0].store, { checked: false })
 }))
 
+test("a store-only row for a known card with no activity carries store.sessions as a measure, like every other row", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const repo = await makeDesk(desk, { remote: REMOTE })
+  repo.commit("2026-09-20T00:00:00Z", { "t/ghost/task.md": cardText() }, "seed")
+  await setVisibility(env, "private")
+  const store = path.join(base, "store")
+  publishTo(store, localFor(1, jobOf(desk, "t", "ghost", REMOTE)), { deskVisibility: "private" })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
+  assert.deepEqual(reasonsOf(result, "ghost"), ["store_only"])
+  assert.deepEqual(result.tasks.find((task) => task.slug === "ghost").store, { checked: true, sessions: got(1) })
+}))
+
+test("with --store and a visibility answer that is expired or absent, the store is not compared: not_checked, a warning, and no store_only rows", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const repo = await makeDesk(desk, { remote: REMOTE })
+  repo.commit("2026-09-20T00:00:00Z", { "t/ghost/task.md": cardText(), "t/busy/task.md": cardText() }, "seed")
+  repo.commit("2026-09-25T10:00:00Z", { "t/busy/work.md": "x\n" })
+  const store = path.join(base, "store")
+  publishTo(store, localFor(1, jobOf(desk, "t", "ghost", REMOTE)), { deskVisibility: "private" })
+  publishTo(store, localFor(2, jobOf(desk, "t", "busy", REMOTE)), { deskVisibility: "private" })
+  const notChecked = { state: "not_checked", reason: "visibility_not_known" }
+  const check = (label) => {
+    const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
+    assert.ok(result.warnings.includes("visibility_not_known"), label)
+    assert.deepEqual(result.mismatches.filter((item) => item.reason === "store_only"), [], label)
+    assert.deepEqual(result.counts.status_unobserved, notChecked, label)
+    assert.ok(result.tasks.length > 0)
+    for (const task of result.tasks) assert.deepEqual(task.store, { checked: false, sessions: notChecked }, label)
+    assert.equal(result.warnings.includes("machine_secret_unavailable"), false, `${label}: the store was never searched`)
+  }
+  check("absent")
+  await setVisibility(env, "private", "2026-09-17T00:00:00.000Z")
+  check("expired")
+}))
+
 test("a store job the desk does not know is store_only with no track or slug, placed by this machine's local facts", () => scratch(async (context) => {
   const { desk, env, base } = context
   const remote = "https://github.com/acme/desk.git"
