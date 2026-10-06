@@ -154,9 +154,13 @@ export async function captureOnBranch(read, treeSha) {
   return blobs
 }
 
+/** The store's own check could not read the commits: its infrastructure failed, not the record. Never the record's refusal, so it never costs a week. */
+export const CHECK_UNAVAILABLE = "capture_check_unavailable"
+
 /**
- * Whether a refusal `code` names the record: a `capture_` code, or any code that is not a stale one (`stale`) on the pull request that carried the
+ * Whether a refusal `code` names the record: a `capture_` code (but not `capture_check_unavailable`, a failure of the store's own check, which is
+ * stale like a conflict: the next batch goes again), or any code that is not a stale one (`stale`) on the pull request that carried the
  * record (`onRecordedPr`). The store's own validator may refuse the record with the plain schema codes facts use, so on that pull request the
  * facts are not blamed: they go again without the record, and a real facts error is refused (and quarantined) on the next pull request.
  */
-export const namesRecord = (code, { onRecordedPr, stale }) => code.startsWith("capture_") || (onRecordedPr && !stale.has(code))
+export const namesRecord = (code, { onRecordedPr, stale }) => (code.startsWith("capture_") && code !== CHECK_UNAVAILABLE) || (onRecordedPr && !stale.has(code))

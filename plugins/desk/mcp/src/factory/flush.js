@@ -105,7 +105,7 @@
 
 // The capture record (`capture-flush.js`, `capture-publish.js`) travels as one more file, `capture/<intake_id>.json`, appended after the batch is
 // taken so it never displaces facts, labels or deletes, and only when the store's `capture.json` holds exactly `{"capture":1}`. A refusal that names it
-// (a `capture_` code, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
+// (a `capture_` code other than `capture_check_unavailable`, which is the store's own check failing and is stale like a conflict, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
 // record waits a week. Its bookkeeping is `status.capture[store]` and nothing else.
 
 // Every step's result is one stable `FlushCode`. The account token comes from
@@ -175,7 +175,7 @@ import {
   restoreRetractedCopies,
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
-import { captureOnBranch, dropPending, judge, namesRecord, planCapture, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
+import { CHECK_UNAVAILABLE, captureOnBranch, dropPending, judge, namesRecord, planCapture, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
@@ -199,7 +199,8 @@ const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
-const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge"])
+// `capture_check_unavailable` is the store's own capture check failing to read the commits: its failure, not the files' and not the record's.
+const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge", CHECK_UNAVAILABLE])
 const MAX_COMMENTS = 300
 const MAX_BYTES = 24 * 1024 * 1024
 const MAX_OUTPUT = 64 * 1024 * 1024
@@ -999,8 +1000,10 @@ async function deliver(env, context) {
   for (const repo of deskRepos.filter((repo) => deskTimingKept(known.get(repo)) && !(dated[repo]?.checked_at >= askedAfter))) {
     try {
       known.set(repo, (await resolveVisibility(env, client, account, [repo], nowIso, new Set([repo]))).get(repo))
-    } catch {
-      // Whatever stopped the question (offline, a deadline, a refusal), this desk is not known private now; the flush's own deadline check ends it later.
+    } catch (error) {
+      // Out of time is not "could not ask": the flush ends here as `deadline`, and the last recorded count of sessions waiting for an answer stays as it was, so a flush that never got to ask cannot rewrite it.
+      if (error instanceof Stop && error.code === "deadline") throw error
+      // Whatever else stopped the question (offline, a refusal), this desk is not known private now; the flush's own deadline check ends it later.
       known.set(repo, "unknown")
       distrusted.add(repo)
     }
@@ -1010,6 +1013,8 @@ async function deliver(env, context) {
   const deferredLabels = (local) => desksOfSession(factsNamesOf(local?.session)).some((repo) => distrusted.has(repo))
   const deferred = new Set(parsed.filter(({ name }) => deferredName(name)).map(({ name }) => name))
   progress.visibilityUnasked = new Set([...deferred].map(sessionOfName)).size
+  // Held back for a visibility answer is not delivered: finalize must see these names as still waiting (`flushDetailed`).
+  progress.deferred = new Set(deferred)
   // A session published under a desk not known private is marked, so it is never published under a later, more open reading once its marker is gone.
   const unprotected = parsed.filter(({ name }) => !deferred.has(name) && receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
   if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
@@ -1054,7 +1059,10 @@ async function deliver(env, context) {
   const labelsByKey = new Map()
   const publishLabels = async (items) => {
     for (const { key, local } of items) {
-      if (deferredLabels(local)) continue
+      if (deferredLabels(local)) {
+        progress.deferred.add(key)
+        continue
+      }
       const out = publishLabelsOne(local, key, { known, desks, secret })
       if (out.bytes) labelsByKey.set(key, out)
       else await quarantine(env, store, key, out.reason)
@@ -1248,7 +1256,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, visibilityUnasked: null, intakePushed: null, intakePrs: null }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, visibilityUnasked: null, intakePushed: null, intakePrs: null, deferred: null }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -1298,7 +1306,9 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   } finally {
     await releaseLock(lock)
   }
-  const pending = outcome.result === "nothing_pending" ? [] : DELIVERED_OPEN.has(outcome.result) ? progress.pending : null
+  const waiting = outcome.result === "nothing_pending" ? [] : DELIVERED_OPEN.has(outcome.result) ? progress.pending : null
+  // A job held only for a visibility answer has nothing in `pending` (it has no published bytes), yet it is not delivered: it counts as waiting.
+  const pending = waiting === null || progress.deferred === null ? waiting : [...new Set([...waiting, ...progress.deferred])]
   return { ...outcome, pending }
 }
 

@@ -655,6 +655,28 @@ test("a stale code on the recorded pull request does not back off the record", (
   assert.ok(id)
 }))
 
+test("the store's own check failing to read the commits is no refusal: no week's wait, no quarantine, the record goes again", () => scratch(async ({ env }) => {
+  const id = await setup(env, { facts: 2 })
+  const github = fakeGitHub({ captureJson: READY })
+  const clock = { t: T0 }
+  await run(env, github, clock)
+  github.rejectOpenPr("factory-rejected: capture_check_unavailable")
+  clock.t = T0 + HOUR
+  const again = await run(env, github, clock)
+  assert.equal(again.result, "intake_stale_retried")
+  const saved = await capture(env)
+  assert.equal(saved.refused, undefined)
+  assert.equal(saved.retry_after, undefined)
+  const delivered = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js").then((m) => m.readDelivered(env, STORE))
+  assert.equal(delivered.quarantined.size, 0)
+  // The record goes again once its 20 hours are up, not after a week.
+  github.mergeOpenPr()
+  clock.t = T0 + 21 * HOUR
+  await writeStatus(env, { coverage: coverageAt(iso(clock.t - HOUR)) })
+  await run(env, github, clock)
+  assert.ok(github.headFiles(STORE, `intake/${id}`).has(`capture/${id}.json`) || github.mainFiles().has(`capture/${id}.json`))
+}))
+
 test("a record whose pull request was closed unmerged is not retracted when the scope empties", () => scratch(async ({ env }) => {
   const id = await setup(env)
   const github = fakeGitHub({ captureJson: READY })

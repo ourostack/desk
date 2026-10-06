@@ -26,7 +26,8 @@
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
 //   delivered-paths/<store-slug>.json  name -> the { path, blob } it was delivered at
 //   retracting/<store-slug>.json       name -> { path, blob } of a file whose delete has been pushed, or
-//                                      { path, blob, done: true }, a tombstone once the delete is done
+//                                      { path, blob, done: true, at }, a tombstone once the delete is done (`at` is when;
+//                                      `pruneTombstones` removes it after `TOMBSTONE_RETENTION_MS`, and stamps an older one without `at`)
 //   retracted-copies/<store-slug>/<name>.json, retracted-copies/<store-slug>/labels/<job>/<session>.json
 //                                      the local facts and labels of a session whose delete was pushed, kept
 //                                      outside outbox/ so an older Desk's flush never lists them (never deleted)
@@ -827,14 +828,69 @@ export async function markRetracting(env, store, items, { platform = process.pla
  * and its delivered records are dropped second. The tombstone keeps the session away from `store` until a positive route says it routes there
  * again (`session-route.js`), whatever else is lost. The local outbox and labels files stay.
  */
-export async function finishRetracting(env, store, items, { platform = process.platform, runner = undefined } = {}) {
+export async function finishRetracting(env, store, items, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
   const own = items.filter((item) => ownNames([item.name]).length === 1)
   if (own.length === 0) return
-  const done = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, done: true }]))
+  const at = now()
+  const done = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, done: true, at }]))
   await updateJsonLocked(root, retractingFile(root, slug), {}, (current) => ({ ...current, ...done }), { platform, env, runner })
   await undeliver(env, store, own.map((item) => item.name), { platform, runner })
+}
+
+/** How long a finished retraction's tombstone is kept: well past the 30 days a host keeps a transcript by default, and a marker's 30 days. */
+export const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * `pruneTombstones(env, { now, retentionMs }) -> number`: removes, in every store's retracting file, each tombstone (`done: true`) whose `at` is
+ * more than `retentionMs` old, and returns how many it removed. A tombstone with no readable `at` (one written before the time was kept) is
+ * stamped `now` and kept, so it ages from the first sweep that sees it and is never removed on a guess. Only tombstones go: an open retraction
+ * is never touched, and neither is any local copy, which is never deleted (`keepRetractedCopies`).
+ */
+export async function pruneTombstones(env, { now = defaultNow, retentionMs = TOMBSTONE_RETENTION_MS, platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const nowText = now()
+  const nowMs = Date.parse(nowText)
+  const isTombstone = (record) => isPlainObject(record) && record.done === true
+  const stamped = (record) => typeof record.at === "string" && PATTERNS.timestamp.test(record.at) && Number.isFinite(Date.parse(record.at))
+  let pruned = 0
+  for (const entry of (await listDirSafe(path.join(root, "retracting"))).filter((name) => /^[^.].*\.json$/u.test(name))) {
+    const file = path.join(root, "retracting", entry)
+    const tombstones = Object.values(await readJsonFileSafe(file, {}, platform)).filter(isTombstone)
+    if (!tombstones.some((record) => !stamped(record) || nowMs - Date.parse(record.at) > retentionMs)) continue
+    await updateJsonLocked(root, file, {}, (current) => Object.fromEntries(Object.entries(current).flatMap(([name, record]) => {
+      if (!isTombstone(record)) return [[name, record]]
+      if (!stamped(record)) return [[name, { ...record, at: nowText }]]
+      if (nowMs - Date.parse(record.at) > retentionMs) {
+        pruned += 1
+        return []
+      }
+      return [[name, record]]
+    })), { platform, env, runner })
+  }
+  return pruned
+}
+
+/** How old a delivered facts copy whose transcript is gone must be before it is removed (see `pruneDeliveredCopy`). */
+export const COPY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * `pruneDeliveredCopy(env, store, name) -> boolean`: removes the facts copy `name` from `store`'s outbox, only when this store's delivered record
+ * holds it (it was delivered, so the store has it), it is not quarantined, no retraction or tombstone names it, and the file is a regular one.
+ * The caller decides it is old enough and that its transcript is gone. Only the outbox file goes: the delivered record stays, as does everything
+ * in `retracted-copies/`, which is never deleted. True when a file was removed.
+ */
+export async function pruneDeliveredCopy(env, store, name, { platform = process.platform, runner = undefined } = {}) {
+  if (ownNames([name]).length !== 1 || LABELS_KEY_PATTERN.test(name)) return false
+  const delivered = await readDelivered(env, store, { platform })
+  if (!Object.hasOwn(delivered.blobs, name) || delivered.quarantined.has(name) || Object.hasOwn(delivered.retracting, name) || Object.hasOwn(delivered.retracted, name)) return false
+  const root = await factoryStateRoot(env, { platform, runner })
+  const file = path.join(root, "outbox", storeSlug(store), name)
+  const stat = await lstatIfPresent(file, NAMING)
+  if (stat === null || !stat.isFile()) return false
+  await fsp.unlink(file)
+  return true
 }
 
 /**
