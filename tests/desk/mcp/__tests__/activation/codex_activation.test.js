@@ -356,6 +356,19 @@ SessionEnd = [{ hooks = [{ type = "command", command = "echo custom" }] }]
   assert.doesNotMatch(result.generatedConfig, /factory-end\.cjs/u)
 })
 
+test("Codex activation leaves the operator's own [[hooks.SessionEnd]] table alone", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const own = `${existingConfig}
+[[hooks.SessionEnd]]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "echo custom"
+`
+  const result = materializeCodexActivation(activationInput("global-personal", { existingConfig: own }))
+  assert.doesNotMatch(result.generatedConfig, /factory-end\.cjs/u)
+})
+
 test("Codex activation escapes the factory-end.cjs hook command for host paths, the same as the direct MCP args", async () => {
   const { materializeCodexActivation } = await loadCodexAdapter()
   const result = materializeCodexActivation(activationInput("global-personal", {
