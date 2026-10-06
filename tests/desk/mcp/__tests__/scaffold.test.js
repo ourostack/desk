@@ -62,7 +62,7 @@ test("server scaffolds all 18 expected tool names", () => {
 test("path resolver expands ~ and rejects nonexistent roots", async () => {
   const { resolveDeskRoot, expandHome } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   assert.equal(expandHome("~"), homedir())
-  assert.ok(expandHome("~/foo").endsWith("/foo"))
+  assert.ok(/[\\/]foo$/.test(expandHome("~/foo")))
   assert.equal(expandHome("/abs/path"), "/abs/path")
   assert.throws(
     () => resolveDeskRoot("/definitely/does/not/exist/" + Date.now()),

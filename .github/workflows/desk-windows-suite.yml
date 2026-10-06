@@ -13,6 +13,11 @@ on:
         description: "Only run test files whose path (under tests/desk/mcp/__tests__) matches this regular expression. Empty runs everything."
         required: false
         default: ""
+      elevated:
+        description: "Also run the elevated (administrator) mode. It is a diagnostic: Desk refuses to reuse a path owned by the Administrators group, which is what an administrator's own existing files are."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [elevated, standard]
+        mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
         shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Check out repository

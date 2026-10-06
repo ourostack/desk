@@ -355,10 +355,14 @@ test("withNamedLock refuses a name that isn't a safe path segment", () => scratc
 
 test("two differently named locks never block each other", () => scratch(async (env) => {
   let concurrent = 0, maximum = 0
+  let bothInside
+  const overlapped = new Promise((resolve) => { bothInside = resolve })
+  // Each lock first protects its own folder, which can take about a second on Windows, so a fixed short sleep would let one body finish before the other starts. Each body waits (bounded) until both are inside.
   const body = async () => {
     concurrent += 1
     maximum = Math.max(maximum, concurrent)
-    await new Promise((resolve) => setTimeout(resolve, 15))
+    if (concurrent === 2) bothInside()
+    await Promise.race([overlapped, new Promise((resolve) => setTimeout(resolve, 20000))])
     concurrent -= 1
   }
   await Promise.all([withNamedLock(env, "lock-a", body), withNamedLock(env, "lock-b", body)])
