@@ -92,7 +92,7 @@ function unavailableGroups(sessions) {
 // uncovered once, and the coverage says how many were cut for that reason.
 // `shared` holds the sessions whose workers also belong to another job, so
 // their time is counted for each of those jobs; it is reported the same way.
-export function fieldCoverage(sessions, fields, partialFields = [], split = new Set(), shared = new Set()) {
+export function fieldCoverage(sessions, fields, partialFields, split = new Set(), shared = new Set()) {
   const reasons = new Set()
   const flagReasons = new Set()
   let uncovered = 0
@@ -458,8 +458,8 @@ function referencesResult(references, parts, privateCounts) {
   const reasons = [...new Set(entries.flatMap((entry) => entry.result.reasons))].sort(compareText)
   const uncovered = Math.max(...entries.map((entry) => entry.coverage.uncovered))
   const allMissing = entries.every((entry) => entry.result.class === "unavailable")
-  const missing = reasons.length === 1 ? unavailable(reasons[0]) : unavailable("mixed", { reasons })
-  const result = allMissing ? { ...value, class: "unavailable", reason: missing.reason, ...(missing.reasons ? { reasons: missing.reasons } : {}) } : reasons.length === 0 ? value : { ...value, partial: true, uncovered_sessions: uncovered, partial_reasons: reasons }
+  // Public pull requests have no field that can make them unavailable, so every part is unavailable only for a job with no sessions, and then all four share the one reason the job clock gives.
+  const result = allMissing ? { ...value, class: "unavailable", reason: reasons[0] } : reasons.length === 0 ? value : { ...value, partial: true, uncovered_sessions: uncovered, partial_reasons: reasons }
   return { ...result, parts: Object.fromEntries(Object.entries(parts).map(([name, entry]) => [name, entry.result])) }
 }
 

@@ -986,6 +986,23 @@ test("a fractional or unsafe token count is unknown with a tokens entry, and the
   }
 })
 
+test("a count that stays unknown across repeats of a message keeps the stronger reason: unreadable beats absent, and two absences stay absent", async () => {
+  const rest = { output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  const reasons = (facts) => facts.unavailable.filter((entry) => entry.field === "tokens").map((entry) => entry.reason).sort()
+  // Unreadable first, then absent: the count is still unreadable, so no "absent" reason is reported.
+  const unreadableThenAbsent = await deriveInline([assistant("a", { input_tokens: 1.5, ...rest }), assistant("a", rest)])
+  assert.equal(unreadableThenAbsent.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(unreadableThenAbsent.facts), ["source_unreadable"])
+  // Absent first, then unreadable: the same result in the other order.
+  const absentThenUnreadable = await deriveInline([assistant("a", rest), assistant("a", { input_tokens: 1.5, ...rest })])
+  assert.equal(absentThenUnreadable.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(absentThenUnreadable.facts), ["source_unreadable"])
+  // Absent both times: the count is absent, and only the "absent" reason is reported.
+  const absentTwice = await deriveInline([assistant("a", rest), assistant("a", rest)])
+  assert.equal(absentTwice.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(absentTwice.facts), ["field_absent"])
+})
+
 test("a good repeat of a message recovers an unreadable count, and a malformed repeat never erases a good one", async () => {
   const { facts } = await deriveInline([
     assistant("a", { input_tokens: 1.5, output_tokens: 7 }),

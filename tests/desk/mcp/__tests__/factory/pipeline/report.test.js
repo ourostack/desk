@@ -220,6 +220,20 @@ test("reports print the evidence class, partial and mixed-reason qualifiers, and
   assert.match(lackingReport, /- Public pull requests: none \(partial: [^)]*\);/u)
 })
 
+test("a job whose lead-time contributors are all measured has no partial-contributors line", () => {
+  const whole = structuredClone(sessions[2])
+  whole.schema = "desk.factory.published/2"
+  whole.unavailable = []
+  whole.intervals.push({ kind: "permission_wait", agent: 0, start_ms: 100, end_ms: 200 }, { kind: "compaction", agent: 0, start_ms: 300, end_ms: 400 })
+  const timeline = buildJobTimeline(CLOSED, [whole])
+  const formulas = calculateFormulas(timeline)
+  assert.equal(formulas.lead_contributors.state, "measured")
+  const report = renderJobMarkdown({ timeline, formulas })
+  const section = report.split("## What mattered\n\n")[1].split("\n## What was waste")[0]
+  assert.doesNotMatch(section, /Lead-time contributors are partial/u)
+  assert.match(section, /^- .*% of lead time \(measured, inferred evidence\)\.$/mu)
+})
+
 test("an empty store renders an index with no job table and explicit empty sections", () => {
   const index = renderIndexMarkdown([], buildCoverage([]))
   assert.match(index, /## Jobs\n\nNo job has published facts yet\.\n/u)
