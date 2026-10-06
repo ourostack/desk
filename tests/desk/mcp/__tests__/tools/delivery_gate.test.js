@@ -40,7 +40,8 @@ test("a pull request that carries the label is delivered", async () => {
   const fake = fakeGitHub({ pr: { status: 200, body: { labels: [{ name: "released" }], merged_at: "x" } } })
   const answer = await run(fake)
   assert.deepEqual(answer, { status: "delivered", basis: "carries the `released` label" })
-  assert.equal(fake.calls[0].url, `https://api.github.com/repos/ourostack/desk/contents/${POLICY_PATH}`)
+  assert.equal(fake.calls[0].url, "https://api.github.com/repos/ourostack/desk/pulls/200")
+  assert.equal(fake.calls[1].url, `https://api.github.com/repos/ourostack/desk/contents/${POLICY_PATH}`, "no base branch given: the default branch's rules")
 })
 
 test("an unlabeled pull request that changes a ruled path is refused, naming the pull request and that no release carried it", async () => {
@@ -230,6 +231,18 @@ test("checkDelivery passes the runner through", async () => {
   const fake = fakeGitHub()
   await checkDelivery({ toolName: "task_update", evidence: PR, env: {}, fetchFn: fake.fetchFn, ghRunner: async () => "viaCheck" }).catch(() => {})
   assert.equal(fake.calls[0].options.headers.Authorization, "Bearer viaCheck")
+})
+
+test("the rules are read from the branch the pull request merged into", async () => {
+  const fake = fakeGitHub({ pr: { status: 200, body: { labels: [], merged_at: "x", base: { ref: "v2/alpha" } } } })
+  await ask(fake)
+  assert.equal(fake.calls[1].url, `https://api.github.com/repos/ourostack/desk/contents/${POLICY_PATH}?ref=v2%2Falpha`)
+})
+
+test("a pull request GitHub hides is not_verified, and one it shows as missing is refused", async () => {
+  const hidden = await ask(fakeGitHub({ pr: { status: 404, body: "" }, repo: { status: 404, body: "" } }))
+  assert.equal(hidden.status, "not_verified")
+  assert.match(hidden.reason, /not visible to GitHub requests from here.*set GH_TOKEN/u)
 })
 
 test("a node:test run with no fetch of its own makes no request", async () => {

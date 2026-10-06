@@ -3,7 +3,7 @@
 // A merged pull request reaches users through whatever ships its repo. For some changes that is the merge itself; for others
 // it is a release that comes minutes or hours later (ourostack/desk: a release run ships plugins/desk, and a failed release
 // stops it for hours with nothing about the merge showing it). The repository declares which, in `.desk/delivery.json` at its
-// root on the default branch:
+// root on the branch the pull request merged into (its base branch, because the rules say how that branch reaches its consumers):
 //
 //   { "schema_version": 1, "rules": [
 //       { "paths": ["plugins/desk/**"], "delivered_at": { "kind": "github_label", "name": "released" } },
@@ -88,6 +88,7 @@ const parse = (text) => {
 }
 const why = (status) => (status === 0 ? "unreachable" : `HTTP ${status}`)
 const notVerified = (reason) => ({ status: "not_verified", reason })
+const hiddenReason = (repo, status) => `${repo} is not visible to GitHub requests from here (${why(status)}), so whether it declares delivery rules is unknown; set GH_TOKEN or sign in with gh (gh auth login) for a private repo`
 
 // A glob over repo-relative paths: `**` matches across folders, `*` and `?` stay inside one folder.
 function globToRegExp(glob) {
@@ -125,12 +126,23 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
   const token = inEnv || runner === undefined ? undefined : await ghToken(runner)
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
   const ask = { fetchFn: fetchFn ?? globalThis.fetch, env, budgetMs, token }
-  const policyAnswer = await github(ask, `/repos/${repo}/contents/${POLICY_PATH}`, "application/vnd.github.raw+json")
+  // The pull request comes first: it must exist, and its base branch says which copy of the rules applies.
+  const prAnswer = await github(ask, `/repos/${repo}/pulls/${number}`)
+  if (prAnswer.status === 404) {
+    // A private or hidden repo also answers 404, so "no such pull request" is believed only when the repo itself is visible.
+    const visible = await github(ask, `/repos/${repo}`)
+    return visible.status === 200 ? { status: "not_found" } : notVerified(hiddenReason(repo, visible.status))
+  }
+  const pr = prAnswer.status === 200 ? parse(prAnswer.body) : null
+  if (pr === null || !Array.isArray(pr.labels)) return notVerified(`pull request ${repo}#${number} could not be read from GitHub (${why(prAnswer.status)})`)
+
+  // The rules describe how the branch the pull request merged into reaches its consumers, so they are read from that branch.
+  const base = typeof pr.base?.ref === "string" && pr.base.ref !== "" ? `?ref=${encodeURIComponent(pr.base.ref)}` : ""
+  const policyAnswer = await github(ask, `/repos/${repo}/contents/${POLICY_PATH}${base}`, "application/vnd.github.raw+json")
   let rules = null
   if (policyAnswer.status === 404) {
-    // A repo that is private or hidden from the caller also answers 404, so "no policy" is believed only when the repo itself is visible.
     const visible = await github(ask, `/repos/${repo}`)
-    if (visible.status !== 200) return notVerified(`${repo} is not visible to GitHub requests from here (${why(visible.status)}), so whether it declares delivery rules is unknown; set GH_TOKEN or sign in with gh (gh auth login) for a private repo`)
+    if (visible.status !== 200) return notVerified(hiddenReason(repo, visible.status))
   } else {
     if (policyAnswer.status !== 200) return notVerified(`${repo}'s delivery rules could not be read from GitHub (${why(policyAnswer.status)})`)
     const policy = parse(policyAnswer.body)
@@ -138,11 +150,7 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
     if (rules.length === 0 || rules.includes(null)) return notVerified(`${repo}'s ${POLICY_PATH} is not a usable delivery policy (every rule needs \`paths\` and a \`delivered_at\` of kind merge or github_label)`)
   }
 
-  // The pull request must exist and be merged whatever the rules say.
-  const prAnswer = await github(ask, `/repos/${repo}/pulls/${number}`)
-  if (prAnswer.status === 404) return { status: "not_found" }
-  const pr = prAnswer.status === 200 ? parse(prAnswer.body) : null
-  if (pr === null || !Array.isArray(pr.labels)) return notVerified(`pull request ${repo}#${number} could not be read from GitHub (${why(prAnswer.status)})`)
+  // Not merged is never delivered, whatever the rules say.
   if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false }
   if (rules === null) return { status: "delivered", basis: `no delivery rule declared in ${repo} (${POLICY_PATH}); merge counts as delivery` }
   if (rules.every((rule) => rule.delivered_at.kind === "merge")) return { status: "delivered", basis: "every rule delivers at merge" }
