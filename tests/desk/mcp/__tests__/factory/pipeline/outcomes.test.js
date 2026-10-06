@@ -97,7 +97,7 @@ test("a store whose sessions carry no outcomes says not recorded and never count
   }
 })
 
-test("a store that records outcomes counts every state, and an unverified acceptance is not an acceptance", () => {
+test("a store that records outcomes counts every state, and every acceptance counts whatever its verified flag", () => {
   const sessions = [
     session([
       entry(J1, { state: "accepted", verified: true, wait: { class: "lt_1d", censored: false } }),
@@ -113,8 +113,8 @@ test("a store that records outcomes counts every state, and an unverified accept
   const { signoff } = computeOutcomeRollups({ sessions, reports: withRecord(J1, J2, J3, J4, "5".repeat(32), "6".repeat(32)) })
   assert.equal(signoff.recorded, true)
   assert.equal(signoff.jobs, 6)
-  assert.equal(signoff.accepted, 1)
-  assert.equal(signoff.accepted_unverified, 2)
+  assert.equal(signoff.accepted, 3)
+  assert.equal(signoff.accepted_unverified, 0)
   assert.equal(signoff.not_recorded, 1)
   assert.equal(signoff.reopened, 1)
   assert.equal(signoff.not_delivered, 1)
@@ -219,9 +219,9 @@ test("an unsigned job with no return is 1 and partial as awaiting_signoff", () =
   assert.deepEqual(verdict(firstPassFormula(created({ state: "delivered_unsigned" }))), { state: "partial", value: 1, reasons: ["awaiting_signoff"] })
 })
 
-test("an unverified acceptance is 1 and partial as signoff_unverified", () => {
-  for (const verified of [false, null]) {
-    assert.deepEqual(verdict(firstPassFormula(created({ state: "accepted", verified }))), { state: "partial", value: 1, reasons: ["signoff_unverified"] })
+test("an acceptance is 1 and measured whatever its verified flag, or none", () => {
+  for (const verified of [true, false, null, undefined]) {
+    assert.deepEqual(verdict(firstPassFormula(created({ state: "accepted", verified }))), { state: "measured", value: 1, reasons: [] })
   }
 })
 
@@ -307,7 +307,7 @@ test("yield is passed over the delivered jobs that have a verdict", () => {
     created({ job: J4, state: "not_delivered", deliveries: 0 }),
   )
   assert.deepEqual(result, {
-    state: "measured", value: 0.5, reasons: [], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 0, signoff_unverified: 0, changed_ask_only: 0,
+    state: "measured", value: 0.5, reasons: [], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 0, changed_ask_only: 0,
     excluded: [{ reason: "history_not_recorded", jobs: 1 }, { reason: "not_delivered", jobs: 1 }],
   })
 })
@@ -321,8 +321,8 @@ test("yield is partial and an upper bound while any counted job awaits sign-off"
   )
   assert.equal(result.state, "partial")
   assert.equal(result.value, 0.75)
-  assert.deepEqual(result.reasons, ["awaiting_signoff", "signoff_unverified"])
-  assert.deepEqual([result.n, result.N, result.passed, result.returned, result.awaiting_signoff, result.signoff_unverified], [3, 4, 3, 1, 1, 1])
+  assert.deepEqual(result.reasons, ["awaiting_signoff"])
+  assert.deepEqual([result.n, result.N, result.passed, result.returned, result.awaiting_signoff], [3, 4, 3, 1, 1])
 })
 
 test("yield is unavailable as no_delivered_jobs when none has a verdict, not zero", () => {
@@ -544,7 +544,7 @@ const flag = (reason, field = "human_turns") => ({ field, reason })
 const acceptedEntry = (job, extra = {}) => entry(job, { state: "accepted", verified: true, ...extra })
 const rollupsOf = (sessions, jobs, records = []) => computeOutcomeRollups({ sessions, reports: withRecord(...jobs), records })
 
-test("the headline is all estimated attention in the period over accepted, verified outcomes", () => {
+test("the headline is all estimated attention in the period over accepted outcomes", () => {
   const sessions = [
     pub({ turns: [turn(1000), turn(2000), turn(3000)], jobs: [[J1, [segment(0, 10_000)]]], outcomes: [acceptedEntry(J1), acceptedEntry(J2)] }),
     pub({ turns: [turn(500)], jobs: [[J2, [segment(0, 10_000)]]] }),
@@ -582,7 +582,7 @@ test("unattributed and unplaced attention stays in the numerator", () => {
   assert.equal(attention.headline.value, 5 * EST)
 })
 
-test("an unverified acceptance does not enter the denominator, and the headline and the sign-off count cannot disagree", () => {
+test("every acceptance enters the denominator, verified or not, and the headline and the sign-off count cannot disagree", () => {
   const variants = [
     [acceptedEntry(J1), acceptedEntry(J2, { verified: false }), acceptedEntry(J3, { verified: null })],
     [acceptedEntry(J1, { verified: false })],
@@ -599,11 +599,17 @@ test("an unverified acceptance does not enter the denominator, and the headline 
     assert.equal(grouped, result.signoff.accepted)
   }
   const one = rollupsOf([pub({ turns: [turn(0), turn(1)], outcomes: [acceptedEntry(J1), acceptedEntry(J2, { verified: false })] })], [J1, J2])
-  assert.equal(one.attention.headline.value, 2 * EST)
+  assert.equal(one.attention.headline.accepted_outcomes, 2)
+  assert.equal(one.attention.headline.value, EST)
+  const { verified: _dropped, ...noFlag } = acceptedEntry(J2)
+  const mixed = rollupsOf([pub({ turns: [turn(0), turn(1), turn(2)], outcomes: [acceptedEntry(J1), acceptedEntry(J2, { verified: false }), noFlag, acceptedEntry(J4, { verified: null })] })], [J1, J2, J4])
+  assert.equal(mixed.signoff.accepted, 3)
+  assert.equal(mixed.attention.headline.value, EST)
+  assert.equal(mixed.attention.turns_per_accepted.value, 1)
 })
 
 test("with no accepted outcome the headline is unavailable as no_accepted_outcomes and the numerator is still published", () => {
-  const sessions = [pub({ turns: [turn(0), turn(1)], jobs: [[J1, [segment(0, 10_000)]]], outcomes: [entry(J1, { state: "delivered_unsigned" }), acceptedEntry(J2, { verified: false })] })]
+  const sessions = [pub({ turns: [turn(0), turn(1)], jobs: [[J1, [segment(0, 10_000)]]], outcomes: [entry(J1, { state: "delivered_unsigned" }), entry(J2, { state: "refused", verified: false, reason: "defect" })] })]
   const { attention } = rollupsOf(sessions, [J1, J2])
   assert.deepEqual(attention.headline, { state: "unavailable", reasons: ["no_accepted_outcomes"], n: 0, N: 0, numerator_ms: 2 * EST, accepted_outcomes: 0 })
   assert.equal(attention.est_ms.attributed, 2 * EST)
@@ -660,7 +666,7 @@ test("a session in the period that flags the field makes the headline partial, w
 test("human turns per accepted outcome uses the raw count and the same denominator", () => {
   const sessions = [pub({ turns: [turn(0), turn(1), turn(2), turn(3), turn(4)], outcomes: [acceptedEntry(J1), acceptedEntry(J2), acceptedEntry(J3, { verified: false })] })]
   const { attention } = rollupsOf(sessions, [J1, J2, J3])
-  assert.deepEqual(attention.turns_per_accepted, { state: "measured", value: 2.5, reasons: [], n: 2, N: 2 })
+  assert.deepEqual(attention.turns_per_accepted, { state: "measured", value: 5 / 3, reasons: [], n: 3, N: 3 })
   // The count is not affected by a turn the estimator cannot read, so that reason is not on it.
   const broken = rollupsOf([pub({ turns: [turn(0), turn(1, { prompt_class: "huge" })], outcomes: [acceptedEntry(J1)] })], [J1]).attention
   assert.deepEqual(broken.turns_per_accepted, { state: "measured", value: 2, reasons: [], n: 1, N: 1 })

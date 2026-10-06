@@ -360,10 +360,10 @@ test("the build writes rollups/outcomes.json and the job file carries the signof
   const open = JSON.parse(readFileSync(path.join(out, "jobs", `${OPEN_JOB}.json`), "utf8"))
   assert.equal(open.formulas.signoff.state, "unavailable")
   assert.equal(open.timeline.outcome, null)
-  assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: accepted \(verified\), waited under 1 day\./u)
+  assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: accepted, waited under 1 day\./u)
   const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
   assert.match(page, /## Sign-off/u)
-  assert.match(page, /Accepted \(verified\): 1\./u)
+  assert.match(page, /Accepted \(recorded by the agent on the operator.s word\): 1\./u)
 }))
 
 test("a store with no outcomes at all builds, and every sign-off count is absent or not recorded, never zero accepted", () => scratch((root) => {
@@ -373,7 +373,7 @@ test("a store with no outcomes at all builds, and every sign-off count is absent
   assert.deepEqual(rollup.signoff, { recorded: false })
   const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
   assert.match(page, /Sign-off: not recorded in any session of this store\./u)
-  assert.doesNotMatch(page, /Accepted \(verified\)/u)
+  assert.doesNotMatch(page, /Accepted \(verified\)|accepted but unverified/u)
   assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: not recorded\./u)
 }))
 
@@ -412,7 +412,7 @@ test("the build publishes first-pass yield with what it counted and what it left
   const rollup = JSON.parse(readFileSync(path.join(out, "rollups", "outcomes.json"), "utf8"))
   assert.deepEqual(Object.keys(rollup), ["attention", "first_pass_yield", "groupings", "rework", "schema", "signoff"])
   assert.deepEqual(rollup.first_pass_yield, {
-    state: "partial", value: 0.5, reasons: ["awaiting_signoff"], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 1, signoff_unverified: 0, changed_ask_only: 0,
+    state: "partial", value: 0.5, reasons: ["awaiting_signoff"], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 1, changed_ask_only: 0,
     excluded: [{ reason: "history_not_recorded", jobs: 1 }],
   })
   assert.equal(rollup.rework.state, "partial")
