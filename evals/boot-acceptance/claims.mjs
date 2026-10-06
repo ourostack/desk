@@ -446,8 +446,8 @@ const HISTORY_PATTERN = /\b(?:earlier|previously|already|before this session|las
 // "I had already pushed" is the agent's own claim about this run, not history: only "already" in someone else's mouth (the card, the boot, "was already pushed") anchors it in the past.
 const FIRST_PERSON_ALREADY = /\b(?:I|we)(?:'ve|'d|\s+(?:have|had))?\s+already\b/gi
 const isHistory = (sentence) => HISTORY_PATTERN.test(sentence.replace(FIRST_PERSON_ALREADY, "I"))
-// Words around the verb that make it a promise, a requirement or a wait: "must be pushed", "to be pushed", "waiting for it to be pushed", "needs to be merged".
-const NOT_YET_BEFORE = /\b(?:must|needs?|need to|has to|have to|requires?|required|to be|waiting for|awaiting|wait for|before|unless|so that|in order to|until)\b|\b(?:no|zero)\s+(?:\w+\s+){0,2}$/i
+// Words around the verb that make it a promise, a requirement or a wait: "must be pushed", "to be pushed", "waiting for it to be pushed", "needs to be merged", and a request to the operator: "or have it pushed there first".
+const NOT_YET_BEFORE = /\b(?:must|needs?|need to|has to|have to|requires?|required|to be|waiting for|awaiting|wait for|before|unless|so that|in order to|until)\b|\b(?:or|to|please|you|could|can|should|will)\s+(?:have|get)\s+(?:it|them|that|this|the\s+\w+)\s+(?:be\s+)?(?:pushed|merged)\b|\b(?:no|zero)\s+(?:\w+\s+){0,2}$/i
 // A quantity of nothing right after the verb: "pushed nothing", "pushed zero commits", "pushed no commits", "merged none".
 const NOTHING_AFTER = /^[\s*_`"'(]*(?:nothing|no|zero|none|0|not|never|neither)\b/i
 const OPTIONS_HEADER = /\b(?:options?|choices?|alternatives?|paths?|ways?|either|which (?:would|do|of)|prefer)\b[^.]*[:?]\s*$/i

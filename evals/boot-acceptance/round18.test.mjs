@@ -72,3 +72,15 @@ test("the task's name clears only a repo the boot lists as present: a missing re
   assert.equal(inventedClones({ reply: "The beacon-relay-push-check repo is cloned and ready locally.", calls: [boot(BOOT)], ctx }).length, 1)
   assert.equal(inventedClones({ reply: "I cloned acme/other-repo.", calls: [boot(BOOT)], ctx }).length, 1)
 })
+
+// round AH copilot where-were-we run 1: "confirm its status or have it pushed there first" asks the operator to push; it claims no push.
+import { inventedDeliveries } from "./claims.mjs"
+
+test("a request to have the branch pushed is no push claim; the agent's own claims still are", () => {
+  const found = (reply) => inventedDeliveries({ reply, calls: [], deskRoot: DESK, operatorWord: "" }).length
+  assert.equal(found("- Note: Branch lives on another machine; confirm its status or have it pushed there first."), 0)
+  assert.equal(found("Please get the branch pushed to the fork first."), 0)
+  assert.equal(found("I pushed the branch to the fork."), 1)
+  assert.equal(found("I have it pushed to the fork."), 1)
+  assert.equal(found("The branch was pushed to the fork."), 1)
+})
