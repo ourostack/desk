@@ -484,9 +484,8 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 async function deskRepositories(markers, { deadline, now, receipts = {} }) {
   const byName = new Map()
   const remotes = new Map()
-  for (const marker of markers) {
-    const root = marker.desk_root
-    if (root === null) continue
+  // The GitHub repository a desk root's remote names, read once per root.
+  const repositoryOf = (root) => {
     if (!remotes.has(root)) {
       let remote
       try {
@@ -496,7 +495,11 @@ async function deskRepositories(markers, { deadline, now, receipts = {} }) {
       }
       remotes.set(root, githubRepoOfRemote(remote))
     }
-    byName.set(`${marker.host}-${marker.session_id}.json`, remotes.get(root))
+    return remotes.get(root)
+  }
+  for (const marker of markers) {
+    if (marker.desk_root === null) continue
+    byName.set(`${marker.host}-${marker.session_id}.json`, repositoryOf(marker.desk_root))
   }
   // A session with no marker (pruned, or rebuilt from its transcript) keeps its desk's protection only when the desk is certainly the one it ran
   // under: its receipt recorded the desk root and the desk's GitHub repository (`desk_repo`), the root still names that same repository, and
@@ -507,16 +510,7 @@ async function deskRepositories(markers, { deadline, now, receipts = {} }) {
     const root = deskRootOf(receipts, [name])
     const recorded = receipts[name]?.desk_repo
     if (root === undefined || typeof recorded !== "string" || receipts[name]?.desk_unprotected === true) continue
-    if (!remotes.has(root)) {
-      let remote
-      try {
-        remote = readDeskRemote({ deskRoot: root, timeoutMs: 5000, deadline, clock: now })
-      } catch {
-        stop("deadline")
-      }
-      remotes.set(root, githubRepoOfRemote(remote))
-    }
-    const current = remotes.get(root)
+    const current = repositoryOf(root)
     if (typeof current === "string" && current.toLowerCase() === recorded.toLowerCase()) byName.set(name, current)
   }
   return byName
