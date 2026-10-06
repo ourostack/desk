@@ -407,6 +407,11 @@ test("with no marker and no receipt (status.json lost), the sweep routes a copy 
   // 7: no marker, and its receipt names a desk folder that is gone: no route, so it is kept.
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(7))).written, true)
   await writeStatus(ctx.env, { derivations: { [nameOf(7)]: { store: STORE, desk_root: path.join(ctx.base, "desk-gone") } } })
+  // 8: its transcript names a desk whose declaration cannot be read (an unknown route): kept.
+  const broken = await realDesk(ctx, "desk-8", STORE)
+  await fs.writeFile(path.join(broken, "_meta", "factory.json"), "{ not json")
+  await transcript(ctx, 8, broken)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(8))).written, true)
   // A transcript that cannot be read is no route either.
   await transcript(ctx, 5, ctx.base)
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(5))).written, true)
@@ -416,7 +421,7 @@ test("with no marker and no receipt (status.json lost), the sweep routes a copy 
   } finally {
     await fs.chmod(path.join(ctx.base, ".claude", "projects", "p", `${sessionId(5)}.jsonl`), 0o600)
   }
-  assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(2), sessionId(3), sessionId(5), sessionId(7)])
+  assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(2), sessionId(3), sessionId(5), sessionId(7), sessionId(8)])
   assert.equal(await outboxHas(ctx, 1), true)
   assert.equal(await outboxHas(ctx, 4), true)
   assert.equal(await outboxHas(ctx, 2, "shared-internal-tools__ms-desk-factory"), true)
