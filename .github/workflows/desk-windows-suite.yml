@@ -43,7 +43,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          # The Windows runtime pack is built with Node 24.18.0 (desk-mcp-tests.yml, win32-x64-node-137). Node 24.19.0 and later abort when a better-sqlite3 build made against their headers collects a prepared statement (nodejs/node#65446, WiseLibs/better-sqlite3#1515), so this suite pins the version the pack ships with.
+          node-version: "24.18.0"
           cache: "npm"
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 

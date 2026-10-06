@@ -79,6 +79,8 @@ const runFile = (file) => new Promise((resolve) => {
       pass: count("pass"), fail: count("fail"), skipped: count("skipped"), failedTests: [...new Set(failed)],
       failures: failures(output),
       stuck, tail: timedOut ? output.slice(-2500) : "",
+      // A file that exits non-zero with no failing assertion (a native abort) leaves its reason only in the raw output.
+      outputTail: code !== 0 && !timedOut ? output.slice(-4000) : "",
       firstFailures: code === 0 ? "" : [...output.matchAll(/^\s*not ok \d+ - [\s\S]*?(?=^\s*(?:# Subtest|ok \d+|not ok \d+|1\.\.))/gm)].slice(0, 3).map((m) => m[0].slice(0, 1500)).join("\n----\n") || output.slice(-1500),
     })
   })
