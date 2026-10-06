@@ -311,5 +311,6 @@ test("missing-clone: a reply must say the repository itself is absent; a bare 'c
     "The repository isn't at its recorded path `~/code/valve-firmware`.",
     "valve-firmware does not exist here.",
     "The `~/code/valve-firmware` folder is missing.",
+    "The boot found that **valve-firmware** repo is missing. Where is valve-firmware cloned?",
   ]) assert.equal(check("missing-clone", BOOT_PLAIN, reply).outcome, "pass", reply)
 })
