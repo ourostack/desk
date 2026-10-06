@@ -14,7 +14,7 @@ export const GATE_HEALTH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 const healthFile = (stateDir) => path.join(stateDir, GATE_HEALTH_FILE)
 
 /** The record `{ count, last_at, last_kind }`, or null when none exists or it cannot be read. */
-export function readGateHealth({ env = process.env, stateDir = resolveDeskStateDir({ env }) } = {}) {
+export function readGateHealth({ env = process.env, stateDir = resolveDeskStateDir({ env }) }) {
   try {
     const parsed = JSON.parse(readFileSync(healthFile(stateDir), "utf8"))
     return Number.isInteger(parsed?.count) && parsed.count > 0 && typeof parsed.last_at === "string" ? { count: parsed.count, last_at: parsed.last_at, last_kind: typeof parsed.last_kind === "string" ? parsed.last_kind : "unknown" } : null
@@ -39,7 +39,7 @@ export function recordGateFailure(kind, { env = process.env, stateDir = resolveD
 }
 
 /** The doctor's section: a warning with the count and the last time while the last failure is recent, else null. */
-export function gateHealthSummary({ env = process.env, stateDir = resolveDeskStateDir({ env }), now = Date.now } = {}) {
+export function gateHealthSummary({ env = process.env, stateDir = resolveDeskStateDir({ env }), now = Date.now }) {
   const record = readGateHealth({ stateDir })
   if (record === null || now() - Date.parse(record.last_at) > GATE_HEALTH_WINDOW_MS) return null
   return `Done-claim gate\n  warning: ${record.count} quiet failure${record.count === 1 ? "" : "s"} (last ${record.last_kind} at ${record.last_at}); the gate could not check some replies, and nothing was blocked for it`
