@@ -43,14 +43,13 @@ test("the end hook writes no marker and starts nothing under the flag, and behav
   assert.equal((await listMarkers(ctx.env)).length, 1)
 }))
 
+// Only the flagged run is a process: the bounded hook gives itself 1500 ms, and an instrumented run on a loaded runner can pass that deadline, so a process run without the flag would sometimes write nothing. The unflagged path is the in-process test above.
 test("the bounded end hook process spawns no worker and writes no marker under the flag", () => scratch(async (ctx) => {
   const marker = await session(ctx)
   const payload = { session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: "Stop" }
   const run = (flag) => spawnSync(process.execPath, [path.join(HOOKS, "factory-end.cjs"), "claude"], { env: { ...ctx.env, DESK_FACTORY_HEADLESS: flag }, input: JSON.stringify(payload), encoding: "utf8" })
   assert.equal(run("1").status, 0)
   assert.deepEqual(await listMarkers(ctx.env), [])
-  assert.equal(run("0").status, 0)
-  assert.equal((await listMarkers(ctx.env)).length, 1)
 }))
 
 test("boot checks say nothing and the detached factory start never happens under the flag", async () => {
