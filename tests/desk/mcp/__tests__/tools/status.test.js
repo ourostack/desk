@@ -26,6 +26,8 @@ const packageJson = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/mcp/package.json", import.meta.url)), "utf8"),
 )
 
+const deskPluginVersion = JSON.parse(readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/plugin.json", import.meta.url)), "utf8")).version
+
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-status-"))
 }
@@ -268,8 +270,10 @@ test("desk_status reports root, runtime, missing DB, and deferred repair state w
     assert.equal(body.root.path, root)
     assert.equal(body.root.source, "activation-config")
     assert.deepEqual(body.root.tried, [{ source: "activation-config", path: root }])
-    assert.equal(body.runtime.plugin.name, packageJson.name)
-    assert.equal(body.runtime.plugin.version, packageJson.version)
+    // One Desk version: the plugin release, never the runtime package's version.
+    assert.equal(body.runtime.plugin.name, "desk")
+    assert.equal(body.runtime.plugin.version, deskPluginVersion)
+    assert.notEqual(body.runtime.plugin.version, packageJson.version)
     assert.equal(body.runtime.runtime_cache_dir, runtimeCacheDir)
     assert.equal(body.runtime.source_mirror_path, sourceMirrorPath)
     assert.equal(body.local_db.path, dbPath)

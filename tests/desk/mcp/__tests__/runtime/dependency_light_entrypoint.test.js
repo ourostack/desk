@@ -27,6 +27,7 @@ const repoRoot = path.resolve(
 )
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 const packageJson = loadJson(path.join(mcpRoot, "package.json"))
+const deskPluginVersion = loadJson(path.join(repoRoot, "plugins", "desk", "plugin.json")).version
 const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
 const packageLock = loadJson(path.join(mcpRoot, "package-lock.json"))
 const hostTarget = `${process.platform}-${process.arch}-node-${process.versions.modules}`
@@ -192,6 +193,8 @@ function makeFixture({
   const networkLog = path.join(root, "network.log")
   const commandLog = path.join(root, "commands.log")
   copyMcpPackage(fixtureMcpRoot)
+  // The plugin folder holds plugin.json beside mcp/: the release the handshake reports.
+  writeFileSync(path.join(root, "plugin.json"), JSON.stringify({ version: deskPluginVersion }))
   mkdirSync(deskRoot, { recursive: true })
   mkdirSync(runtimeCacheDir, { recursive: true })
   mkdirSync(binDir, { recursive: true })
@@ -1068,7 +1071,7 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
     assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
     // The front door answers the handshake; the missing pack is found during admission afterwards.
     assert.equal(result.initialize.result.serverInfo.name, "desk-mcp")
-    assert.equal(result.initialize.result.serverInfo.version, packageJson.version)
+    assert.equal(result.initialize.result.serverInfo.version, deskPluginVersion)
     // Diagnostic mode lists the full tool set, so the list a host caches never changes once Desk recovers.
     assert.deepEqual(
       result.tools.result.tools.map((tool) => tool.name),

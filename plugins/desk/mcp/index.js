@@ -65,7 +65,7 @@ const DEFAULT_NODE_FLOOR = [20, 0, 0]
 // The lowest Node that Desk supports, from engines.node in package.json (">=X[.Y[.Z]]").
 export function resolveNodeFloor({ mcpRoot, readFile = readFileSync } = {}) {
   try {
-    const range = JSON.parse(readFile(path.join(mcpRoot, "package.json"), "utf8")).engines.node
+    const range = JSON.parse(readFile(path.join(mcpRoot, "..", "plugin.json"), "utf8")).engines.node
     const match = /^>=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/u.exec(range.trim())
     if (match !== null) {
       return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)]
@@ -128,7 +128,7 @@ export function resolveMcpServerVersion({
 } = {}) {
   try {
     const version = JSON.parse(
-      readFile(path.join(mcpRoot, "package.json"), "utf8"),
+      readFile(path.join(mcpRoot, "..", "plugin.json"), "utf8"),
     ).version
     return hasText(version) && MCP_VERSION_PATTERN.test(version)
       ? version

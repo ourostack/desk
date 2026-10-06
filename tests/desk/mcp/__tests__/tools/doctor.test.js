@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
@@ -8,6 +8,7 @@ import matter from "gray-matter"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
+const deskPluginVersion = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/plugin.json", import.meta.url), "utf8")).version
 
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-doctor-"))
@@ -135,14 +136,14 @@ test("preview doctor emits only a versioned local snapshot without workspace or 
       statusContext: { runtime: { runtime_cache_path: "/private/cache" }, secret: "private-token" },
     }))
     assert.deepEqual(Object.keys(body).sort(), [
-      "architecture", "collection", "mcp_version", "node_abi", "node_major",
+      "architecture", "collection", "desk_version", "node_abi", "node_major",
       "platform", "purpose", "runtime_state", "schema_version",
     ])
     assert.equal(body.schema_version, 1)
     assert.equal(body.purpose, "preview-runtime-diagnostics")
     assert.equal(body.collection, "local-on-demand")
     assert.equal(body.runtime_state, "ready")
-    assert.match(body.mcp_version, /^\d+\.\d+\.\d+/u)
+    assert.equal(body.desk_version, deskPluginVersion)
     assert.equal(body.platform, process.platform)
     assert.equal(body.architecture, process.arch)
     assert.equal(body.node_major, Number(process.versions.node.split(".")[0]))
