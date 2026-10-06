@@ -7,3 +7,7 @@ Workspace tidy now removes merged worktrees on Windows. Git reports paths with f
 The index links planning, doing and feedback docs to their task and honors pinned iterations on Windows. A failed move or archive no longer leaves an empty folder. Archiving a task with a symlinked card works with short temp paths. The workspace watcher no longer crashes the controller when the desk path uses an 8.3 short name.
 
 The task-card guard now recognises absolute Windows paths in shell writes, and the Bash guard resolves `/c/...` and `$(pwd)` paths and hands nested shells forward-slash Windows paths. Both had let a protected action through on Windows. Guard denials name the checkout in one spelling, and the card pre-commit refusal keeps its first sentence within the length limit.
+
+Desk no longer starts a separate PowerShell for each of several identical folder-protection requests made at the same moment on Windows. They share one run, which is faster and avoids concurrent rewrites of one folder's permissions.
+
+Desk now watches the long spelling of the desk folder on Windows so a path with 8.3 short names no longer aborts the index process, closes an unreadable index database before moving it aside so the rebuild works, and no longer preloads its native database modules on a worker thread on Windows, which could end the server with an access violation.

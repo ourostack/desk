@@ -980,9 +980,9 @@ test("only a successful bash or powershell git commit call becomes a shellGitCom
   const { facts, events } = await deriveText(lines)
   assert.deepEqual(events.shellGitCommits, [
     { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, agent: 0 },
-    { start: at(3), end: at(4), cwd: path.normalize(`/tmp/${SENTINEL}/desk`), agent: 0 },
+    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, agent: 0 },
     { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, agent: 0 },
-    { start: at(14), end: at(15), cwd: path.normalize(`/tmp/${SENTINEL}/resumed`), agent: 0 },
+    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed`, agent: 0 },
     { start: at(17), end: at(18), cwd: null, agent: 0 },
     { start: at(22), end: at(23), cwd: null, agent: 0 },
   ])

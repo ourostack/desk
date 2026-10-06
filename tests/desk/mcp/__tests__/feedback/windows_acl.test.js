@@ -142,6 +142,37 @@ test("a verified path is not protected again until its identity or change time m
   }
 })
 
+test("identical protection requests made at the same time share one run, and a failed run is not remembered", async () => {
+  const base = await mkBase()
+  forgetVerifiedWindowsPaths()
+  try {
+    const dir = path.join(base, "state")
+    await fs.mkdir(dir)
+    const entry = { path: dir, kind: "directory", created: false }
+    const okResult = { status: "ok", results: [{ path: dir, kind: "directory", owner_sid: "S-1-5-21-1-2-3-1001", owner_reassigned: false, protected: true, rule_count: 1 }] }
+    const env = { SystemRoot: base }
+    await mkProvider(base, ECHO_PROVIDER)
+    let calls = 0
+    const slow = async () => {
+      calls += 1
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return { code: 0, stdout: JSON.stringify(okResult), stderr: "", timedOut: false }
+    }
+    const both = await Promise.all([1, 2, 3].map(() => protectWindowsPaths([entry], { env, runner: slow, memoize: true })))
+    assert.equal(calls, 1, "three concurrent requests started one run")
+    assert.deepEqual(both[1], both[0])
+    forgetVerifiedWindowsPaths()
+    const failing = async () => ({ code: 1, stdout: "", stderr: "boom", timedOut: false })
+    await assert.rejects(protectWindowsPaths([entry], { env, runner: failing, memoize: true }))
+    const after = runnerReturning(okResult)
+    await protectWindowsPaths([entry], { env, runner: after, memoize: true })
+    assert.equal(after.calls.length, 1, "a later request runs again after a failed one")
+  } finally {
+    forgetVerifiedWindowsPaths()
+    await fs.rm(base, { recursive: true, force: true })
+  }
+})
+
 test("assertWindowsAclAvailable fails when SystemRoot is absent or blank", () => {
   for (const env of [{}, { SystemRoot: "" }, { SystemRoot: "   " }]) {
     assert.throws(() => assertWindowsAclAvailable({ env }), /SystemRoot/u)

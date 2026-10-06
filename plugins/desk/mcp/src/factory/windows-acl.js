@@ -374,19 +374,31 @@ export async function protectWindowsPaths(
     const done = await protectWindowsPaths(stale, { env, runner, timeoutMs, maxOutputBytes, label, memoize })
     return requested.map((entry) => done.find((item) => item.path === entry.path) ?? verifiedPaths.get(entry.path).result)
   }
-  const completed = await runner({
-    executable,
-    args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_PROGRAM],
-    payload: JSON.stringify({ paths: requested }),
-    timeoutMs,
-    maxOutputBytes,
-    label,
-  })
-  const verified = verify(requested, readResponse(completed, label), label)
-  if (memoized) for (const result of verified) rememberVerified(result, verifiedPaths)
-  return verified
+  // Sixteen callers protecting the same folders at once would start sixteen PowerShell processes that each rewrite the same ACLs, and
+  // concurrent rewrites of one folder can read each other's half-applied state. Identical requests in flight share one run.
+  const key = memoized ? requested.map((entry) => `${entry.kind}:${entry.created}:${entry.path}`).join("\n") : null
+  if (key !== null && inFlight.has(key)) return inFlight.get(key)
+  const run = (async () => {
+    const completed = await runner({
+      executable,
+      args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_PROGRAM],
+      payload: JSON.stringify({ paths: requested }),
+      timeoutMs,
+      maxOutputBytes,
+      label,
+    })
+    const verified = verify(requested, readResponse(completed, label), label)
+    if (memoized) for (const result of verified) rememberVerified(result, verifiedPaths)
+    return verified
+  })()
+  if (key === null) return run
+  inFlight.set(key, run)
+  const release = () => inFlight.delete(key)
+  run.then(release, release)
+  return run
 }
 
+const inFlight = new Map()
 const verifiedPaths = new Map()
 
 function identityOf(target) {

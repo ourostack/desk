@@ -994,6 +994,8 @@ test("the real runner reports a missing gh, a failed spawn and a timeout without
   const result = await missing(["--version"], { timeoutMs: 5000 })
   assert.equal(result.code, null)
   assert.equal(result.spawnError, "ENOENT")
+  // The rest runs a fake gh written as a script with a shebang line, which Windows cannot execute, so it runs where shebang scripts exist.
+  if (process.platform === "win32") return
   const node = process.execPath
   const bin = path.join(await fs.mkdtemp(path.join((await import("node:os")).tmpdir(), "desk-gh-")), "gh")
   await fs.writeFile(bin, `#!${node}\nconst [,, mode] = process.argv; if (mode === "sleep") setTimeout(() => {}, 10000); else { let input = ""; process.stdin.on("data", (c) => input += c); process.stdin.on("end", () => { process.stdout.write(input + ":" + (process.env.GH_TOKEN ? "token" : "none")); process.stderr.write("e"); process.exit(3) }) }\n`, { mode: 0o755 })

@@ -156,7 +156,10 @@ async function makeLocalOnlyClone() {
   identity(clone)
   await fs.writeFile(path.join(clone, "a.txt"), "a\n")
   git(clone, "add", ".")
-  git(clone, "commit", "-q", "-m", "work")
+  // The card is created after this commit, and git can take over a second on a slow host, so the commit is dated a minute ahead to stay inside the card's "made at or after created" window.
+  const before = process.env.GIT_COMMITTER_DATE
+  process.env.GIT_COMMITTER_DATE = new Date(Date.now() + 60_000).toISOString()
+  try { git(clone, "commit", "-q", "-m", "work") } finally { if (before === undefined) delete process.env.GIT_COMMITTER_DATE; else process.env.GIT_COMMITTER_DATE = before }
   return { clone, sha: git(clone, "rev-parse", "HEAD") }
 }
 

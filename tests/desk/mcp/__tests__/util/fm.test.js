@@ -150,7 +150,7 @@ test("Unicode slugs reach lesson and track-friction file paths", async () => {
     deskRoot: root,
     input: { track: "t1", theme: "安全/路径", body: "Friction body." },
   })
-  assert.equal(path.dirname(friction.path), path.join("t1", "_friction"))
+  assert.equal(path.posix.dirname(friction.path), "t1/_friction")
   assert.match(path.basename(friction.path), /^\d{4}-\d{2}-\d{2}-安全-路径\.md$/)
   assert.match(await fs.readFile(path.join(root, friction.path), "utf8"), /Friction body/)
 
@@ -233,7 +233,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: collisionRoot,
     input: { topic: "café", body: "Specific lesson." },
   })
-  assert.equal(collision.path, path.join("_meta", "tips", "café.md"))
+  assert.equal(collision.path, "_meta/tips/café.md")
   assert.equal(await fs.readFile(collisionPath, "utf8"), "# caf\n\nDifferent lesson.\n")
 
   const occupiedRoot = await mkTempDeskRoot()
