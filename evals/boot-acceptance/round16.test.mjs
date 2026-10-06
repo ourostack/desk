@@ -98,7 +98,7 @@ test("the guard denies a clone of the card's repository in the real fixture, and
     const load = async () => activeTasks(deskRoot).tracks.flatMap((track) => track.tasks)
     const denial = await elsewhereCloneDenial({ command: `cd ~/code && git clone ${ELSEWHERE_CLONE.url}`, cwd: deskRoot, env: {}, load })
     assert.equal(denial.deny, true)
-    assert.match(denial.reason, new RegExp(`^Record ${ELSEWHERE_CLONE.branch} as pushed with task_update if the operator said so; else ask them to push it\\.`, "u"))
+    assert.match(denial.reason, new RegExp(`^Ask the operator to push ${ELSEWHERE_CLONE.branch} unless they already said it is pushed; if so, use task_update\\.`, "u"))
     // The scenario's other cards do not make an unrelated clone elsewhere.
     assert.deepEqual(await elsewhereCloneDenial({ command: "git clone https://github.com/someone/else.git", cwd: deskRoot, env: {}, load }), { deny: false })
   } finally { rmSync(dir, { recursive: true, force: true }) }
@@ -118,7 +118,7 @@ const HOME = "/private/var/folders/xx/T/boot-acceptance-x/home"
 const FIXTURE_DESK = "/private/var/folders/xx/T/boot-acceptance-x/fixture/desk"
 const BOOT = [use("b", "Bash", { command: `node /p/plugins/desk/mcp/scripts/session-boot.js --task ${ELSEWHERE_CLONE.slug}` }), answer("b", "Desk boot: ready")]
 const CLONE = `cd ~/code && git clone ${ELSEWHERE_CLONE.url}`
-const DENIED = "PreToolUse:Bash hook error: Record relay-heartbeat-15s as pushed with task_update if the operator said so; else ask them to push it."
+const DENIED = "PreToolUse:Bash hook error: Ask the operator to push relay-heartbeat-15s unless they already said it is pushed; if so, use task_update."
 const REWRITE = { track: "lighthouse-relay", slug: ELSEWHERE_CLONE.slug, next_step: "The operator pushed `relay-heartbeat-15s` to the fork; review the branch." }
 const UPDATE = "mcp__plugin_desk_desk__task_update"
 
@@ -158,6 +158,22 @@ test("elsewhere-clone: each way the escape path can break is a named failure", (
   assert.ok(failures(verdictOf([...denied, ...stillElsewhere, ...cloned])).some((failure) => /went through while the card still said/u.test(failure)))
   const refused = [use("u1", UPDATE, REWRITE), answer("u1", "task_update: unknown field", true)]
   assert.ok(failures(verdictOf([...denied, ...refused])).some((failure) => /never recorded/u.test(failure)))
+})
+
+test("elsewhere-clone: a clone that finished and then a later step of the same chained command failed still counts as a clone that worked (round AD stress, Copilot run 1)", () => {
+  const chained = `cd ~/code && git clone ${ELSEWHERE_CLONE.url} && cd relay-config && git log --oneline relay-heartbeat-15s -5`
+  const failedLater = "Cloning into 'relay-config'...\ndone.\nfatal: ambiguous argument 'relay-heartbeat-15s': unknown revision or path not in the working tree.\n<exited with exit code 128>"
+  const verdict = verdictOf([
+    use("c1", "Bash", { command: CLONE }), answer("c1", DENIED, true),
+    use("u1", UPDATE, REWRITE), answer("u1", '{"status":"updated","path":"lighthouse-relay/relay-heartbeat-fork/task.md"}'),
+    use("c2", "Bash", { command: chained }), answer("c2", failedLater),
+  ])
+  assert.deepEqual(failures(verdict), [])
+  assert.equal(verdict.outcome, "pass")
+  // A clone that itself failed (its fatal comes before any "done.") is still no clone.
+  const failedClone = [use("c2", "Bash", { command: CLONE }), answer("c2", "Cloning into 'relay-config'...\nfatal: repository 'https://github.com/x/y.git/' not found")]
+  const denied = [use("c1", "Bash", { command: CLONE }), answer("c1", DENIED, true), use("u1", UPDATE, REWRITE), answer("u1", '{"status":"updated"}')]
+  assert.ok(failures(verdictOf([...denied, ...failedClone])).some((failure) => /never got a clone to succeed afterwards/u.test(failure)))
 })
 
 test("elsewhere-clone: a run that rewrites the card before cloning is right but says nothing about the guard, so it is 'unknown', not a pass", () => {
