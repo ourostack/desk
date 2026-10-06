@@ -7,6 +7,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { osEnv } from "../_os_env.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
@@ -164,7 +165,7 @@ test("lastSyncedAt reads the recorded last success, never FETCH_HEAD, and is nul
 test("a failed fetch that bumps FETCH_HEAD does not move the 'as of' time: only a real success does", async () => {
   const root = await mkTempRoot("desk-lastsync-")
   const state = await mkTempRoot("desk-lastsync-state-")
-  const env = { DESK: root, XDG_STATE_HOME: state, HOME: state }
+  const env = osEnv({ DESK: root, XDG_STATE_HOME: state, HOME: state })
   execFileSync("git", ["init", "-q", root])
   assert.equal(lastSyncedAt({ root, env }), null, "never synced")
   recordPullOutcome({ root, env, result: { state: "synced" } })

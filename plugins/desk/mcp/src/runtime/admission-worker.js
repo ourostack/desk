@@ -52,7 +52,9 @@ export function resolveAdmissionInputs({ args, env, cwd, homeDir, injectedReadin
  * Load the restored runtime's native modules (better-sqlite3 and the sqlite-vec extension) once on this worker thread and open an in-memory database with them.
  * A native library is loaded once per process, so the thread that answers the host later finds both already loaded: the first load of freshly restored files (60 to 80 ms here, more while the OS checks new files) happens here instead of at the transition to ready. Returns whether the warm-up ran; a failure is harmless, because the session loads the modules itself either way.
  */
-export function warmNativeModules(sourceMirrorPath, { requireFrom = createRequire } = {}) {
+export function warmNativeModules(sourceMirrorPath, { requireFrom = createRequire, platform = process.platform } = {}) {
+  // Not on Windows: loading better-sqlite3 and sqlite-vec from the restored runtime ahead of the session aborted Node (an environment cleanup hook assertion, exit 134) in the CI test for this module, and ended Desk servers with an access violation (0xC0000005) after the handshake. The session loads the modules itself, so the only cost is the first load happening later.
+  if (platform === "win32") return false
   try {
     const load = requireFrom(path.join(sourceMirrorPath, "src", "db", "init.js"))
     const Database = load("better-sqlite3")
