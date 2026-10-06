@@ -193,6 +193,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   desk_save: schema({
     paths: list("The paths to commit, relative to the desk root."),
     message: text("The commit message."),
+    tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards (already staged by task_move, track_rename or git mv) with the old and new path of every move, plus _meta/organization.json. Task cards are accepted only as moves or deletes. Leaves other staged work staged and ends the message with the Desk-Tidy: true trailer."),
   }, ["paths", "message"]),
   desk_search: schema({
     query: text("The search query."),
