@@ -65,3 +65,7 @@ A candidate is accepted only after spec/targeted proof and a completed finding d
 On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one.
 
 Final behavioral scheduling proof — that dispatch, serialization and acceptance actually execute this way at runtime — belongs to a later task; this section ships the source contract and the real caller/provider witnesses only.
+
+## Requirements that arrive during execution
+
+Keep a material new requirement on the same durable task: update the governing spec, numbered plan and progress ledger before implementation, evaluate dependencies, sequencing, authority, tests and review evidence, name any invalidated evidence, keep unaffected authorized work moving, and send the affected path back through the normal implementation and review gates; the agent must not silently absorb contradictory scope, must not restart the whole task without cause, and must not return control merely because the plan changed.

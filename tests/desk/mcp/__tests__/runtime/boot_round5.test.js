@@ -113,8 +113,8 @@ test("bootOnce: a fork route names the repo, the account and the route, in instr
   assert.match(line, /account ari cannot push to it directly\. Push your branch to ari's fork/u)
   assert.match(line, /never push to acme\/widgets itself\. Tell the operator this route in one line/u)
   assert.ok(result.instructions.includes(line))
-  assert.match(line, /Tell the operator this route in one line when you report on this task; it is one line of your report, not the whole of it\. Desk resolved this route, so say it rather than re-checking it with gh; never print, count or test the token, and if a gh call fails, report the error as it is\.$/u)
-  assert.match(line, /never print, count or test the token/u, "round AJ copilot wrong-push-account: an agent that re-checked the route and got a 404 went on to probe the token")
+  assert.match(line, /Tell the operator this route in one line when you report on this task; it is one line of your report, not the whole of it\. Desk resolved this route, so say it rather than re-checking it with gh\. Using the token inside the git or gh call as above is fine; never print, count or test it on its own, and if a gh call fails, report the error as it is\.$/u)
+  assert.match(line, /never print, count or test it on its own/u, "round AJ copilot wrong-push-account: an agent that re-checked the route and got a 404 went on to probe the token")
 })
 
 test("bootOnce: when only a non-active account can push, the instruction names both and how to push as the right one", async () => {

@@ -24,7 +24,7 @@ const WINDOW_CHARS = 30
 
 // The matches of `patterns` in `sentence` that no negation (and, when asked, no condition) touches: the window runs from
 // a few words before the match through the match itself.
-function standingMatches(sentence, patterns, { conditional = true } = {}) {
+function standingMatches(sentence, patterns, { conditional = true, accept = () => true } = {}) {
   const found = []
   for (const pattern of patterns) {
     // The first occurrence that stands: a later one still counts when an earlier one is negated or conditional ("I should have it pushed by now, and I did: it is pushed").
@@ -33,7 +33,7 @@ function standingMatches(sentence, patterns, { conditional = true } = {}) {
       const window = sentence.slice(Math.max(0, match.index - WINDOW_CHARS), match.index + match[0].length)
       // A condition may also follow, as in the gate: "complete once the PR merges".
       const after = sentence.slice(match.index + match[0].length, match.index + match[0].length + WINDOW_CHARS)
-      if (NEGATION.test(window) || (conditional && (CONDITIONAL.test(window) || CONDITIONAL.test(after)))) continue
+      if (NEGATION.test(window) || (conditional && (CONDITIONAL.test(window) || CONDITIONAL.test(after))) || !accept(match)) continue
       found.push(match)
       break
     }
@@ -532,8 +532,9 @@ const isMerge = (words) => (words[0] === "git" && words.includes("merge")) || (g
 const CLAUSE_START = /[,;:]|\s[\u2014\u2013-]\s|\s(?:and|but|then|so)\s/gu
 const REQUEST_OBJECT = /(?:^|\s)(?:or|to|please|you|could|can|should|will)\s+(?:have|get)\s+(?:it|them|that|this|the\s+\w+)\s+(?:be\s+)?$/iu
 // A request to the operator to confirm or say whether it is done: "confirm it's pushed", "tell me whether the branch is pushed", "check that it has been pushed". The verb is an
-// instruction (at the clause start, after a dash, or after "or", "to", "please", "you", "could", "can", "should", "will", "must" or "and"), so "I confirmed it is pushed" is still a claim.
-const REQUEST_VERB = /(?:^|[\u2014\u2013]|\s(?:or|to|please|you|could|can|should|will|must|and)\s+)\s*(?:confirm|check|verify|ensure|make sure|let me know|tell me|say|show me)\s+(?:(?:that|whether|if)\s+)?(?:it|they|that|this|the\s+\w+(?:\s+\w+)?)(?:\s+(?:is|are|has been|have been|was|were)|['\u2019]s)?\s+(?:(?:now|already|really|actually)\s+)?$/iu
+// imperative: it opens the clause (after a bullet mark), follows a dash, or follows "or", "then", "please" or "you" ("could you confirm"), so "I can confirm it's pushed", "I had to
+// confirm it is pushed" and "I want to confirm it is pushed" are still claims. A modal or "to" before the verb makes the sentence the agent's own.
+const REQUEST_VERB = /(?:^[\s\-\u2022*]*|[\u2014\u2013]\s*|\s(?:or|then|please|you)\s+)(?:confirm|check|verify|ensure|make sure|let me know|tell me|say|show me)\s+(?:(?:that|whether|if)\s+)?(?:it|they|that|this|the\s+\w+(?:\s+\w+)?)(?:\s+(?:is|are|has been|have been|was|were)|['\u2019]s)?\s+(?:(?:now|already|really|actually)\s+)?$/iu
 function requestedInClause(beforeVerb) {
   let start = 0
   for (const mark of beforeVerb.matchAll(CLAUSE_START)) start = mark.index + mark[0].length
@@ -544,11 +545,13 @@ function requestedInClause(beforeVerb) {
 // The matches of `patterns` that stand as claims: past-tense, not negated or conditional by the shared handling, not preceded by a requirement or wait,
 // and not followed by "nothing", "no commits" or "zero".
 function claimMatches(sentence, patterns) {
-  return standingMatches(sentence, patterns).filter((match) => {
+  // A later occurrence still counts when an earlier one is a request ("Show me it is pushed \u2014 it is pushed to the fork").
+  const stands = (match) => {
     const before = sentence.slice(0, match.index + match[0].length)
     const after = sentence.slice(match.index + match[0].length, match.index + match[0].length + 25)
     return !NOT_YET_BEFORE.test(before) && !NOTHING_AFTER.test(after) && !requestedInClause(sentence.slice(0, match.index))
-  })
+  }
+  return standingMatches(sentence, patterns, { accept: stands })
 }
 
 /**

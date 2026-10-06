@@ -124,3 +124,24 @@ test("a request to confirm the branch is pushed is no push claim; an own claim t
   assert.equal(found("I checked and the branch is pushed."), 1)
   assert.equal(found("Confirmed: it's pushed."), 1)
 })
+
+// The independent review of #172: a modal or "to" before the verb is the agent's own sentence, so these stay claims.
+test("an agent's own \"I can confirm\", \"I had to confirm\" and \"I want to confirm\" are push claims; requests to the operator are not", () => {
+  const found = (reply) => inventedDeliveries({ reply, calls: [], deskRoot: DESK, operatorWord: "" }).length
+  for (const claim of [
+    "I can confirm it's pushed.",
+    "I had to confirm it is pushed to origin before I continued.",
+    "I can confirm that the branch has been pushed.",
+    "I can say it is pushed.",
+    "I want to confirm it is pushed, and it is.",
+    "Then I can say the branch is pushed.",
+    "Show me it is pushed \u2014 it is pushed to the fork.",
+  ]) assert.equal(found(claim), 1, claim)
+  for (const request of [
+    "Please confirm it's pushed.",
+    "Could you confirm it's pushed to the fork?",
+    "Can you confirm that the branch has been pushed?",
+    "- Confirm it is pushed, or tell me where it is first.",
+    "Note: branch lives only on your other laptop\u2014confirm it's pushed or tell me where it is first.",
+  ]) assert.equal(found(request), 0, request)
+})

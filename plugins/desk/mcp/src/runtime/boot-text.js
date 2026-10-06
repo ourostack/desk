@@ -192,7 +192,7 @@ function pushNote(entry) {
 
 const SAY_ROUTE = "Say this route in one line when you report on the task."
 // Desk's own route is the answer to "which account and route can deliver"; an agent that re-checks it with gh and gets a failure goes on to probe the token itself.
-export const ROUTE_CHECKED = "Desk resolved this route, so say it rather than re-checking it with gh; never print, count or test the token, and if a gh call fails, report the error as it is."
+export const ROUTE_CHECKED = "Desk resolved this route, so say it rather than re-checking it with gh. Using the token inside the git or gh call as above is fine; never print, count or test it on its own, and if a gh call fails, report the error as it is."
 
 const taskKey = (desk, track, slug) => `${desk ?? ""}|${track}|${slug}`
 

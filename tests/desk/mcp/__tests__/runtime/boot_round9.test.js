@@ -258,7 +258,7 @@ test("formatBootText leads with the work: one status line, then the tasks by sta
   assert.doesNotMatch(text, /no GitHub remote/u, "a repo with no GitHub remote has no route to print")
   assert.doesNotMatch(text, /acme\/valves|acme\/plain/u, "a plain direct push by the active account has no line")
   assert.match(text, /\nno status \(1\)\n- ops\/same\n  next: no next step recorded\n/u)
-  assert.match(text, /\ndrafting \(1\)\n- crew\/<redacted segment>\/<redacted segment> \(handle task-3\)\n  next: no next step recorded\n  push: acme\/forked: push as me via fork me\/forked\. Push your branch to the fork and open the pull request from it; never push to acme\/forked itself\. Say this route in one line when you report on the task\. Desk resolved this route, so say it rather than re-checking it with gh; never print, count or test the token, and if a gh call fails, report the error as it is\.\n/u)
+  assert.match(text, /\ndrafting \(1\)\n- crew\/<redacted segment>\/<redacted segment> \(handle task-3\)\n  next: no next step recorded\n  push: acme\/forked: push as me via fork me\/forked\. Push your branch to the fork and open the pull request from it; never push to acme\/forked itself\. Say this route in one line when you report on the task\. Desk resolved this route, so say it rather than re-checking it with gh\. Using the token inside the git or gh call as above is fine; never print, count or test it on its own, and if a gh call fails, report the error as it is\.\n/u)
   assert.match(text, /- acme\/w#4 Fix it \(draft\), REVIEW_REQUIRED: https:\/\/github\.com\/acme\/w\/pull\/4\n/u)
   assert.match(text, /- acme\/w#5 Plain: /u)
   assert.match(text, /- valves \(ops\/flash-valves\): branch main, uncommitted changes, fetched\n/u)

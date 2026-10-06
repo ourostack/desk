@@ -239,3 +239,7 @@ macOS Keychain has analogous per-user encryption (the cipher is in a SQLite stor
 **Generalizable.** The 7 categories are a checklist, not a rigid template — some categories are inapplicable per change (e.g., a pure function has no state-based or caching tests). Mark inapplicable categories explicitly (`N/A: pure function, no state`) so the audit shows the deliberation happened.
 
 **Cross-link.** Pairs with `pr-self-review`'s coverage evaluator + AIDLC's test-generation skill (where this taxonomy originated). Folded into desk so non-coding-agent consumers can skip (description-gated; only fires on coding-task contexts).
+
+## Visual proof when it helps
+
+Where a visual would help a human verify a state, capture bounded visual proof at that stage, including working or doing logs and intermediate milestones such as pull request opened, reviewed, or merged states. When a milestone claims a rendered, installed, merged, rollout or other consumer-visible state, capture that real result, not a terminal success line. It supplements rather than replaces tests, logs and system-of-record readback. Capture only the relevant bounded view, never secrets or sensitive/private content; if capture is impossible, record why and use the strongest safe alternative. Nonvisual work gets no artificial screenshots.

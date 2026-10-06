@@ -88,7 +88,8 @@ function emit(additionalContext) {
   try {
     const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
     const direction = await startupDirection();
-    const output = `${foundation}\n\nDesk RFC: ${rfcPath}\n\n${direction}`;
+    // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
+    const output = `${direction}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
     // Factory delivery starts detached only once the output is built; it never delays or changes it.
     await startFactory();
     emit(output);
