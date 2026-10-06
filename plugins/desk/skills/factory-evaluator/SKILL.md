@@ -1,11 +1,11 @@
 ---
 name: factory-evaluator
-description: For `desk:observer` labeling the waste in a finished job's sessions from evaluator briefs that Desk prepared when the task reached `done`. Classifies each stretch of a session as value, support or muda, names the waste, flags mura and muri, cites evidence as exact fact intervals and writes labels with no free text. Do NOT use for evaluating a release, for reviewing a pull request, or for any job observer did or helped with.
+description: For `desk:observer` labeling the waste in a finished job's sessions from evaluator briefs that Desk prepared when the task reached `done`. Classifies each stretch of a session as value, support, muda or unknown with a confidence, names the waste, flags mura and muri, cites evidence as exact fact intervals and writes labels with no free text. Do NOT use for evaluating a release, for reviewing a pull request, or for any job observer did or helped with.
 ---
 
 # Label a finished job's waste
 
-Rubric version: 1
+Rubric version: 2
 
 You are a fresh `observer` with none of the working agent's context. Desk gives you one brief file per session of a finished job. For each brief, read the evidence, label the session's stretches, and write labels the factory can publish. Your labels are evidence for the job's report and for kaizen; they are never a verdict on anyone.
 
@@ -51,6 +51,14 @@ A stretch is a span `[start_ms, end_ms)` of the session in which one class holds
 
 For `value` and `support`, `waste` is `null`. When two wastes fit, pick the one whose removal would remove the stretch.
 
+- **`unknown`**: you looked at the stretch and could not tell what it was. Write `"class":"unknown","waste":"unknown"`. Use it instead of guessing: it is shown as its own row, never counted as waste and never merged into another label. Leave a gap only where you did not look at all.
+
+Give every stretch your `confidence` in its label:
+
+- **`high`**: the evidence shows it directly, such as a failed tool call for `defects` or a permission prompt for `waiting`.
+- **`medium`**: the evidence supports it but another label could fit.
+- **`low`**: a judgment the evidence barely supports. Low-confidence time is shown as not sound, so say so rather than overstate.
+
 Two flags apply to any stretch, `true` or `false`:
 
 - **`mura`** (unevenness): the stretch's pace was irregular, with bursts and stalls, or parallel work collided.
@@ -65,11 +73,12 @@ Every stretch cites at least one evidence range, and every range is an interval'
 Write exactly this shape to `output`, and nothing else:
 
 ```json
-{"schema":"desk.factory.labels/1","job":"<job>","session":"<session id>","evaluator":{"plugin_version":"<from the brief>","model":"<your model ID>","rubric":"<from the brief>"},"stretches":[{"start_ms":0,"end_ms":1000,"class":"muda","waste":"waiting","mura":false,"muri":false,"evidence":[[0,1000]]}],"unavailable":[]}
+{"schema":"desk.factory.labels/2","job":"<job>","session":"<session id>","evaluator":{"plugin_version":"<from the brief>","model":"<your model ID>","rubric":"<from the brief>"},"stretches":[{"start_ms":0,"end_ms":1000,"class":"muda","waste":"waiting","mura":false,"muri":false,"evidence":[[0,1000]],"confidence":"high","evaluator_version":"<from the brief>"}],"unavailable":[]}
 ```
 
 - No free text anywhere: no notes, reasons, quotes, names, paths or times of day. Every string is an enum value, an ID from the brief, or your model ID exactly as the host names it.
 - Every stretch ends within `facts.duration_ms`.
+- Every stretch carries `confidence` and `evaluator_version`, the brief's `plugin_version` copied exactly.
 - Do not write `caught`: Desk places each `defects` stretch by where the defect was caught, from the job's own record, when it accepts your labels.
 - Copy the brief's `unavailable` codes into `unavailable`. `session_log_missing` means you labeled from the facts alone. `facts_missing` means there is nothing to cite, so `stretches` is empty.
 

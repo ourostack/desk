@@ -3,8 +3,10 @@
 //
 // `toPublished(local, { visibility, deskVisibility, storeVisibility,
 // machineSecret })` turns
-// one valid local facts file (`desk.factory.local/1`, `schema.js`) into
-// published facts (`desk.factory.published/1`, `published-schema.js`). The
+// one valid local facts file (`desk.factory.local/2`, `schema.js`) into
+// published facts (`desk.factory.published/3`, `published-schema.js`, or
+// `/2` when the file carries nothing only `/3` allows: a commit's `at_ms` or
+// the `outcomes` flag, so an unchanged session keeps its bytes). The
 // stores are public, so the published form carries no who and no when, just
 // how:
 //
@@ -62,6 +64,10 @@
 //   - No who. Local facts carry no contributor, and nothing here adds a
 //     machine, host name, desk path, account or branch. The file name is
 //     `<host>-<session id>.json` (`publishedFileName`).
+//   - A commit's `at_ms` (when the session recorded it, on the session
+//     clock) is published under the rule for a controller PR's `at_ms`: only
+//     on a desk known to be private and only in a session whose jobs carry
+//     segments, where it can place the commit in a job's segment.
 //   - Public references only. A PR or commit is kept only when
 //     `visibility(repo)` returns exactly `"public"`. Private and unknown
 //     repositories, commits without a repository, and a repository whose
@@ -103,7 +109,7 @@
 // whose labels must cite exactly the intervals the store will hold.
 //
 // `toPublishedLabels(labels, { deskVisibility, machineSecret })` is the
-// labels' transform. Local labels (`desk.factory.labels/1`, `label-schema.js`)
+// labels' transform. Local labels (`desk.factory.labels/2` or `/1`, `label-schema.js`)
 // are already on the published session clock and carry no free text, so
 // only the job changes: a desk that is not known to be private publishes
 // the same keyed job ID as its facts. The file goes to
@@ -127,7 +133,7 @@ import { PRIVATE_VISIBILITIES, deskTimingKept } from "./desk-visibility.js"
 import { waitClass } from "./outcome.js"
 import { intervalInSession } from "./pipeline/timeline.js"
 import { validateLocalFacts } from "./schema.js"
-import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
+import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, PUBLISHED_SCHEMA_V2, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
 /** Why `toPublished` returned no file. */
 export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_not_v4"])
@@ -207,8 +213,8 @@ function publicRepos(visibility) {
   }
 }
 
-// `timedPrs`: whether a controller PR keeps its `at_ms` (see `toPublished`).
-function publishRefs(refs, askPublic, timedPrs) {
+// `timed`: whether a controller PR and a commit keep their `at_ms` (see `toPublished`).
+function publishRefs(refs, askPublic, timed) {
   const isPublic = (repo) => repo !== null && !DATE_SHAPE.test(repo) && askPublic(repo)
   const dropped = { prs: refs.unresolved.prs, commits: refs.unresolved.commits }
   // Keeps each public reference once (by `keyOf`) and counts the others.
@@ -228,9 +234,13 @@ function publishRefs(refs, askPublic, timedPrs) {
     repo: pr.repo,
     number: pr.number,
     ...(Object.hasOwn(pr, "agent") ? { agent: pr.agent } : {}),
-    ...(timedPrs && pr.agent === 0 && Object.hasOwn(pr, "at_ms") ? { at_ms: pr.at_ms } : {}),
+    ...(timed && pr.agent === 0 && Object.hasOwn(pr, "at_ms") ? { at_ms: pr.at_ms } : {}),
   }))
-  const commits = keep(refs.commits, "commits", (commit) => commit.sha, (commit) => ({ repo: commit.repo, sha: commit.sha }))
+  const commits = keep(refs.commits, "commits", (commit) => commit.sha, (commit) => ({
+    repo: commit.repo,
+    sha: commit.sha,
+    ...(timed && Object.hasOwn(commit, "at_ms") ? { at_ms: commit.at_ms } : {}),
+  }))
   return { prs, commits, dropped }
 }
 
@@ -409,6 +419,9 @@ function publishHumanTurns(turns, startedMs, durationMs, flag) {
   return kept
 }
 
+// A file is `/3` only when it carries something only `/3` allows (a commit time or the outcomes flag), so an unchanged session republishes the same bytes.
+const needsV3 = (commits, unavailable) => commits.some((commit) => Object.hasOwn(commit, "at_ms")) || unavailable.some((entry) => entry.field === "outcomes")
+
 /**
  * `toPublished(local, { visibility, deskVisibility, storeVisibility,
  * machineSecret }) -> { published, dropped: { prs, commits, plugins } }`,
@@ -453,8 +466,9 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
   // Marked before `unavailable` is built below; absent in local facts stays absent.
   const humanTurns = Object.hasOwn(local, "human_turns") ? publishHumanTurns(local.human_turns, startedMs, durationMs, flag) : null
   const isPublic = publicRepos(visibility)
-  // Job segments and controller PR times are job timing: a desk that withholds its timing publishes neither.
+  // Job segments and controller PR and commit times are job timing: a desk that withholds its timing publishes none of them.
   // Elsewhere a PR's `at_ms` is published only where it decides a PR's job: a controller (worker 0) PR in a session whose jobs carry segments.
+  // A commit's `at_ms` follows the same rule; a commit names no worker, and the one host that times commits (Copilot) records them as the root's.
   const refs = publishRefs(local.refs, isPublic, deskPrivate && local.jobs.some((job) => Object.hasOwn(job, "segments")))
   const plugins = publishPlugins(local.plugins, isPublic, storeVisibility)
   const dropped = { ...refs.dropped, plugins: plugins.hidden }
@@ -465,11 +479,14 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
     : local.jobs.map((job) => protectedJob(job, machineSecret)).sort((a, b) => (a.job < b.job ? -1 : 1))
   if (!deskPrivate && jobs.length > 0) flag("job_offsets", "desk_public")
 
+  // Every flag is raised before the list is built: the models' merge can raise one.
+  const models = publishModels(local.models, flag)
+  const unavailable = [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)), ...own]
   const published = {
-    schema: PUBLISHED_SCHEMA,
+    schema: needsV3(refs.commits, unavailable) ? PUBLISHED_SCHEMA : PUBLISHED_SCHEMA_V2,
     session: publishSession(local.session, durationMs, sessionId),
     plugins: plugins.plugins,
-    models: publishModels(local.models, flag),
+    models,
     agents: local.agents.map((agent) => publishAgent(agent, local.session.host, plugins.names)),
     intervals,
     counts: {
@@ -481,7 +498,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
     },
     refs: { prs: refs.prs, commits: refs.commits, private: { ...dropped } },
     jobs,
-    unavailable: [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)), ...own],
+    unavailable,
     ...(Object.hasOwn(local, "outcomes") ? { outcomes: publishOutcomes(local, { keyJob: deskPrivate ? (job) => job : (job) => keyedJobId(job, machineSecret) }) } : {}),
     ...(humanTurns === null ? {} : { human_turns: humanTurns }),
   }
@@ -549,6 +566,7 @@ export function toPublishedLabels(labels, { deskVisibility, machineSecret } = {}
       mura: stretch.mura,
       muri: stretch.muri,
       evidence: stretch.evidence.map((range) => [range[0], range[1]]),
+      ...(Object.hasOwn(stretch, "confidence") ? { confidence: stretch.confidence, evaluator_version: stretch.evaluator_version } : {}),
       ...(Object.hasOwn(stretch, "caught") ? { caught: stretch.caught } : {}),
     })),
     unavailable: [...labels.unavailable],

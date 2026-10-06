@@ -83,6 +83,19 @@ test("what was waste renders the evaluator's classified waste when every session
   assert.match(section, /Candidate signals only \(inferred\):/u)
 })
 
+test("what was waste shows unknown time on a line of its own, in labeled time and never in muda", () => {
+  const labels = new Map([
+    [`${CLOSED}/${FIRST}`, { stretches: [stretch(0, 4000, "value"), stretch(4000, 6000, "muda", "waiting"), stretch(6000, 9000, "unknown", "unknown")], unavailable: [] }],
+    [`${CLOSED}/${SECOND}`, { stretches: [stretch(0, 1000, "support")], unavailable: [] }],
+  ])
+  assert.equal(wasteSection(labels).split("\n- Mura")[0], [
+    "- Classified by the independent evaluator: 2 sessions labeled (measured).",
+    "- Muda: 2000 ms, 20.00% of labeled time, by type: waiting 2000 ms in 1 stretch (measured).",
+    "- Value 4000 ms; support 1000 ms (measured).",
+    "- Unknown (the evaluator could not tell, not counted as muda): 3000 ms (measured).",
+  ].join("\n"))
+})
+
 test("what was waste names unlabeled sessions, labels with no muda and what the evaluator could not read", () => {
   const section = wasteSection(new Map([[`${CLOSED}/${SECOND}`, { stretches: [stretch(0, 3000, "value")], unavailable: ["session_log_missing"] }]]))
   assert.equal(section.split("\n- Candidate signals")[0], [

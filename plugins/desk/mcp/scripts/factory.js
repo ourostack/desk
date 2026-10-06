@@ -7,7 +7,7 @@
 //   node scripts/factory.js finalize --job <job> [--job <job> ...]
 //   node scripts/factory.js validate-pr --base <sha> --head <sha> --author-association <value>
 //   node scripts/factory.js build --store <directory> --out <directory>
-//   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug>
+//   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug> [--this-machine]
 //   node scripts/factory.js evaluate --desk <desk root> --task [desks/<alias>/]<track>/<slug>
 //   node scripts/factory.js evaluate --pending
 //   node scripts/factory.js evaluate-accept --job <job>
@@ -53,11 +53,13 @@ import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { orphanPassLine, ownVersion, publishedJobId } from "../src/factory/local-status.js"
+import { factoryStateDir } from "../src/factory/boot-check.js"
 import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
-import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
+import { listFinalizeRequests, listMarkers, readMachineSecret, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { normalizeTimestamp } from "../src/factory/time.js"
 import { reconcile } from "../src/factory/reconcile.js"
+import { keyedJobId } from "../src/factory/publish.js"
 import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
@@ -295,7 +297,7 @@ export async function runBuildCommand({ argv }) {
   return build({ storeDir: options.get("store"), outDir: options.get("out") })
 }
 
-const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug>"
+const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug> [--this-machine]"
 
 /**
  * `job-link`: the card's report URL. Without `--desk` this hashes the given
@@ -306,9 +308,23 @@ const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-r
  * follows the task card's rule (`publishedJobId`): only a desk known private
  * gets a link, to its plain job ID; any other desk prints
  * `{ link: null, reason }` (`desk_not_private` or `visibility_not_known`).
+ *
+ * `--this-machine` answers the operator instead of the card: where this
+ * machine's sessions of the job are reported. A desk known private gets the
+ * same link, as `{ link, keyed: false }`. A desk known not to be private has
+ * its sessions published under the job ID keyed with this machine's secret
+ * (`publish.js` `keyedJobId`), so it prints `{ link, keyed: true, note }` to
+ * that report, which holds this machine's sessions only; `note` says the link
+ * is private. A desk whose visibility is not known prints `{ link: null,
+ * reason: "visibility_not_known" }`, and a machine with no secret yet prints
+ * `{ link: null, reason: "no_machine_secret" }`: it has published nothing
+ * keyed, and this command never creates the secret. The keyed link ties the desk's public
+ * card to its store job, which is why the card never carries it: it is for
+ * the operator's own reading, never for the card or any public record.
  */
 export async function runJobLinkCommand({ argv, env = process.env }) {
-  const options = parseOptions(argv)
+  const thisMachine = argv.includes("--this-machine")
+  const options = parseOptions(argv.filter((arg) => arg !== "--this-machine"))
   const required = ["store", "desk-remote", "track", "slug"]
   const allowed = [...required, "person-prefix", "desk"]
   if (options === null || required.some((key) => !options.has(key)) || [...options.keys()].some((key) => !allowed.includes(key))) {
@@ -333,8 +349,22 @@ export async function runJobLinkCommand({ argv, env = process.env }) {
   const deskRemote = options.get("desk-remote")
   // A bad store fails with the usage error before any state is read.
   jobReportUrl({ store, job: "0".repeat(32) })
-  const published = publishedJobId({ env, deskRemote, job: jobId({ deskRemote, personPrefix, track, slug }) })
+  const job = jobId({ deskRemote, personPrefix, track, slug })
+  const published = publishedJobId({ env, deskRemote, job })
+  if (thisMachine) return thisMachineLink({ env, store, job, published })
   return published.job === null ? { link: null, reason: published.reason } : { link: jobReportUrl({ store, job: published.job }) }
+}
+
+// Said beside every keyed link, so the agent that receives one is told where it may go.
+export const KEYED_LINK_NOTE = "Private: this link ties this desk to its job in the store. Keep it in your private evaluation; never put it on the task card, in a pull request or anywhere public."
+
+// `--this-machine`, see `runJobLinkCommand`. A link that might 404 is never printed: an unknown visibility is `visibility_not_known` (the next
+// flush asks GitHub again), and a machine with no secret has published nothing keyed yet (`no_machine_secret`); the secret is never created here.
+async function thisMachineLink({ env, store, job, published }) {
+  if (published.job !== null) return { link: jobReportUrl({ store, job }), keyed: false }
+  if (published.reason === "visibility_not_known") return { link: null, reason: published.reason }
+  if (!existsSync(path.join(factoryStateDir(env), "machine-secret"))) return { link: null, reason: "no_machine_secret" }
+  return { link: jobReportUrl({ store, job: keyedJobId(job, await readMachineSecret(env)) }), keyed: true, note: KEYED_LINK_NOTE }
 }
 
 /** The installed Desk plugin's version, which the evaluator's labels carry. */

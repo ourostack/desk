@@ -1,4 +1,4 @@
-// Published facts v1 (`desk.factory.published/1`): the public gate the
+// Published facts (`desk.factory.published/3`, with `/1` and `/2` still read): the public gate the
 // factory stores' CI runs on every intake PR.
 //
 // As in `schema.test.js`, every violating case plants the sentinel where the
@@ -33,8 +33,12 @@ const GOLDEN = JSON.parse(GOLDEN_BYTES.toString("utf8"))
 const LOCAL_GOLDEN = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
 const SENTINEL = "SENTINEL-7f3a"
 
+// The golden file is `/2`, as the transform writes a session with nothing only `/3` allows; the cases below run on its `/3` form, with a timed commit.
 function golden() {
-  return structuredClone(GOLDEN)
+  const value = structuredClone(GOLDEN)
+  value.schema = PUBLISHED_SCHEMA
+  value.refs.commits[0].at_ms = 600000
+  return value
 }
 
 function at(obj, keys) {
@@ -71,18 +75,83 @@ function assertNoLeak(result) {
 test("the golden published file validates, as a value and as its exact bytes", () => {
   assert.deepEqual(validatePublished(golden()), { ok: true, errors: [] })
   assert.deepEqual(validatePublishedBytes(GOLDEN_BYTES), { ok: true, errors: [] })
-  assert.equal(GOLDEN.schema, PUBLISHED_SCHEMA)
-  assert.equal(PUBLISHED_SCHEMA, "desk.factory.published/2")
-  assert.deepEqual(PUBLISHED_SCHEMAS, ["desk.factory.published/1", PUBLISHED_SCHEMA])
+  assert.equal(GOLDEN.schema, "desk.factory.published/2")
+  assert.equal(PUBLISHED_SCHEMA, "desk.factory.published/3")
+  assert.deepEqual(PUBLISHED_SCHEMAS, ["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA])
 })
 
-test("published facts accept schema /1 and /2 and refuse /3", () => {
+test("published facts accept schema /1, /2 and /3 and refuse /4", () => {
   const bare = golden()
   delete bare.human_turns // a /1 file carries no human_turns
-  for (const schema of ["desk.factory.published/1", "desk.factory.published/2"]) {
+  delete bare.refs.commits[0].at_ms // nor does a /1 or /2 file carry a commit time
+  for (const schema of ["desk.factory.published/1", "desk.factory.published/2", "desk.factory.published/3"]) {
     assert.deepEqual(validatePublished({ ...bare, schema }), { ok: true, errors: [] }, schema)
   }
-  assertSingle(validatePublished({ ...golden(), schema: "desk.factory.published/3" }), "pattern", "schema")
+  assertSingle(validatePublished({ ...golden(), schema: "desk.factory.published/4" }), "pattern", "schema")
+})
+
+test("a commit time is /3 only, within the session, and never beside a public desk's withheld timing", () => {
+  assert.deepEqual(validatePublished(golden()), { ok: true, errors: [] })
+  for (const schema of ["desk.factory.published/1", "desk.factory.published/2"]) {
+    const value = golden()
+    delete value.human_turns
+    value.schema = schema
+    assertSingle(validatePublished(value), "inconsistent", "refs.commits.0.at_ms")
+    // A commit that is not an object is named once, by its own check.
+    value.refs.commits[0] = "not a commit"
+    const result = validatePublished(value)
+    assert.equal(result.ok, false)
+    assert.ok(result.errors.every((error) => error.path === "refs.commits.0" && error.code !== "inconsistent"), JSON.stringify(result.errors))
+  }
+  // At the session's end exactly is inside; one past it is `range`.
+  assert.deepEqual(validatePublished(setPath(golden(), ["refs", "commits", 0, "at_ms"], 5400000)), { ok: true, errors: [] })
+  assertSingle(validatePublished(setPath(golden(), ["refs", "commits", 0, "at_ms"], 5400001)), "range", "refs.commits.0.at_ms")
+  // An unsound duration skips the bound, so one bad number is one error.
+  assertSingle(validatePublished(setPath(setPath(golden(), ["refs", "commits", 0, "at_ms"], 5400001), ["session", "duration_ms"], -1)), "integer", "session.duration_ms")
+  for (const bad of [-1, 1.5, "600000", null]) {
+    const result = validatePublished(setPath(golden(), ["refs", "commits", 0, "at_ms"], bad))
+    assert.equal(result.ok, false, String(bad))
+    assert.ok(result.errors.every((error) => error.path === "refs.commits.0.at_ms"), String(bad))
+  }
+  // A commit time on a desk that withholds its timing would date the session.
+  const withheld = golden()
+  withheld.jobs = withheld.jobs.map((job) => ({ ...job, session_offset_ms: null, transitions: [], observed: job.observed === null ? null : { ...job.observed, offset_ms: null } }))
+  withheld.unavailable = [{ field: "job_offsets", reason: "desk_public" }]
+  assertSingle(validatePublished(withheld), "inconsistent", "refs.commits.0")
+  delete withheld.refs.commits[0].at_ms
+  assert.deepEqual(validatePublished(withheld), { ok: true, errors: [] })
+})
+
+test("an older file whose refs or unavailable list fails its own check gets no /3 error beside it", () => {
+  const older = golden()
+  delete older.human_turns
+  older.schema = "desk.factory.published/2"
+  older.refs = "not refs"
+  older.unavailable = "not a list"
+  const result = validatePublished(older)
+  assert.deepEqual(result.errors.map((error) => `${error.code} ${error.path}`).sort(), ["type refs", "type unavailable"])
+})
+
+test("the outcomes flag is /3 only, with any reason it carries", () => {
+  const value = golden()
+  value.unavailable = [{ field: "outcomes", reason: "capped" }]
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  for (const schema of ["desk.factory.published/1", "desk.factory.published/2"]) {
+    const older = structuredClone(value)
+    delete older.human_turns
+    delete older.refs.commits[0].at_ms
+    older.schema = schema
+    assertSingle(validatePublished(older), "inconsistent", "unavailable.0")
+    older.unavailable = [{ field: "outcomes", reason: "log_missing" }]
+    assertSingle(validatePublished(older), "inconsistent", "unavailable.0")
+    // A field that fails its own check is named once, by that check.
+    older.unavailable = [{ field: "made_up", reason: "capped" }]
+    assertSingle(validatePublished(older), "enum", "unavailable.0.field")
+    older.unavailable = ["outcomes"]
+    const result = validatePublished(older)
+    assert.equal(result.ok, false)
+    assert.ok(result.errors.every((error) => error.path === "unavailable.0" && error.code !== "inconsistent"), JSON.stringify(result.errors))
+  }
 })
 
 test("every new unavailable field and reason is accepted in published facts", () => {
@@ -95,7 +164,7 @@ test("every new unavailable field and reason is accepted in published facts", ()
       assert.deepEqual(validatePublished(value), { ok: true, errors: [] }, `${field}/${reason}`)
     }
   }
-  assert.deepEqual(ENUMS.publishedUnavailableField.slice(-1), ["job_offsets"])
+  assert.deepEqual(ENUMS.publishedUnavailableField.slice(-2), ["job_offsets", "outcomes"])
 })
 
 test("a local facts file is refused by the public gate", () => {
@@ -283,6 +352,7 @@ function publicDesk() {
   const value = golden()
   value.jobs = value.jobs.map((job) => ({ ...job, session_offset_ms: null, transitions: [], observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null } }))
   value.unavailable = [{ field: "job_offsets", reason: "desk_public" }]
+  delete value.refs.commits[0].at_ms // a commit time is job timing too
   return value
 }
 
@@ -439,6 +509,7 @@ test("accepted: a zero-length session", () => {
   const value = golden()
   value.session.duration_ms = 0
   delete value.human_turns
+  delete value.refs.commits[0].at_ms
   value.intervals = [{ kind: "turn", agent: 0, start_ms: 0, end_ms: 0 }]
   assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
 })
@@ -619,8 +690,8 @@ test("validatePublishedBytes rejects bytes that are not JSON", () => {
 })
 
 test("validatePublishedBytes rejects a duplicate key that would carry free text past the parser", () => {
-  const text = GOLDEN_BYTES.toString("utf8").replace(`"schema":"${PUBLISHED_SCHEMA}"`, `"schema":"${SENTINEL} free text","schema":"${PUBLISHED_SCHEMA}"`)
-  assert.equal(JSON.parse(text).schema, PUBLISHED_SCHEMA)
+  const text = GOLDEN_BYTES.toString("utf8").replace(`"schema":"${GOLDEN.schema}"`, `"schema":"${SENTINEL} free text","schema":"${GOLDEN.schema}"`)
+  assert.equal(JSON.parse(text).schema, GOLDEN.schema)
   const result = validatePublishedBytes(Buffer.from(text, "utf8"))
   assert.deepEqual(result, { ok: false, errors: [{ code: "canonical", path: "" }] })
   assertNoLeak(result)
@@ -839,6 +910,7 @@ test("published facts without human_turns stay valid, and a well-formed list is 
   assert.deepEqual(validatePublishedBytes(`${JSON.stringify(withTurns(TURNS))}\n`), { ok: true, errors: [] })
   const old = withTurns(TURNS)
   delete old.human_turns
+  delete old.refs.commits[0].at_ms
   old.schema = "desk.factory.published/1"
   assert.deepEqual(validatePublished(old), { ok: true, errors: [] }, "a stored /1 file stays valid")
 })
@@ -926,9 +998,11 @@ test("a file with a human_turns list cannot also say the host does not record it
 test("human_turns is refused in a /1 file", () => {
   const value = withTurns(TURNS)
   value.schema = "desk.factory.published/1"
+  delete value.refs.commits[0].at_ms
   assertSingle(validatePublished(value), "inconsistent", "human_turns")
   const bare = golden()
   delete bare.human_turns
+  delete bare.refs.commits[0].at_ms
   bare.schema = "desk.factory.published/1"
   assert.deepEqual(validatePublished(bare), { ok: true, errors: [] })
 })

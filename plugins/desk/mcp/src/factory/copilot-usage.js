@@ -2,7 +2,8 @@
 //
 // A read of a native local source, never a write to it, and never a copy of
 // what was said: only `assistant_usage_events` (model, counters, timestamp),
-// `session_refs` (reference type and value) and the `repository` and `cwd`
+// `session_refs` (reference type, value and, for commits, the time the row
+// was recorded) and the `repository` and `cwd`
 // columns of `sessions` are queried, always filtered to one session. `turns`
 // holds message text and is never touched.
 //
@@ -97,6 +98,14 @@ export function readSessionRows(options) {
 /** One session's references as raw `{ ref_type, ref_value }` rows, same statuses. */
 export function readSessionRefs(options) {
   return read("SELECT ref_type, ref_value FROM session_refs WHERE session_id = ? ORDER BY id", options)
+}
+
+/**
+ * One session's commit references as raw `{ ref_value, created_at }` rows, same statuses. A query of its own, so a store whose
+ * `session_refs` has no `created_at` column still yields the references themselves (`readSessionRefs`); only their times are lost.
+ */
+export function readSessionCommitTimes(options) {
+  return read("SELECT ref_value, created_at FROM session_refs WHERE session_id = ? AND ref_type = 'commit' ORDER BY id", options)
 }
 
 /**

@@ -23,9 +23,12 @@
 //   - `output`: where the evaluator writes its labels.
 //
 // `acceptEvaluation(brief, bytes)` is the check. The answer must be JSON of
-// at most the facts size cap and pass `validateLabels`; it must name the
-// brief's job and session and carry the brief's evaluator version and rubric
-// (`job_mismatch`, `session_mismatch`, `evaluator_mismatch`); it must declare
+// at most the facts size cap and pass `validateLabels`; it must be the
+// current labels form (`desk.factory.labels/2`, else `schema_outdated`), so
+// every new label carries its confidence and version; it must name the
+// brief's job and session and carry the brief's evaluator version and rubric,
+// on the file and on every stretch (`job_mismatch`, `session_mismatch`,
+// `evaluator_mismatch`); it must declare
 // everything the brief says is unavailable and never declare facts missing
 // that the brief holds (`inconsistent`); and it must pass
 // `checkLabelsAgainstFacts` against the brief's facts (`range`,
@@ -65,7 +68,7 @@ import * as path from "node:path"
 import { promises as fsp } from "node:fs"
 
 import { outcomeForStamping, stampCatchPoints } from "./catch-point.js"
-import { checkLabelsAgainstFacts, validateLabels } from "./label-schema.js"
+import { LABELS_SCHEMA, checkLabelsAgainstFacts, validateLabels } from "./label-schema.js"
 import {
   clearEvaluation,
   clearEvaluationRequest,
@@ -92,7 +95,7 @@ import { LIMITS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js
 export const BRIEF_SCHEMA = "desk.factory.evaluator-brief/1"
 export const EVALUATOR_SKILL = "desk:factory-evaluator"
 /** The rubric `skills/factory-evaluator/SKILL.md` states; labels carry it as `evaluator.rubric`. */
-export const RUBRIC_VERSION = "1"
+export const RUBRIC_VERSION = "2"
 
 const DESK_VERSION = /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-(?:alpha|beta|rc)\.[0-9]{1,4})?$/u
 // The session ID an outbox file name (`<host>-<session_id>.json`) carries.
@@ -161,11 +164,15 @@ export function acceptEvaluation(brief, bytes, stamping = null) {
   const schema = validateLabels(value)
   if (!schema.ok) return rejected(schema.errors)
 
+  if (value.schema !== LABELS_SCHEMA) return rejected([{ code: "schema_outdated", path: "schema" }])
   const identity = []
   if (value.job !== brief.job) identity.push({ code: "job_mismatch", path: "job" })
   if (value.session !== brief.session.id) identity.push({ code: "session_mismatch", path: "session" })
   if (value.evaluator.plugin_version !== brief.evaluator.plugin_version) identity.push({ code: "evaluator_mismatch", path: "evaluator.plugin_version" })
   if (value.evaluator.rubric !== brief.evaluator.rubric) identity.push({ code: "evaluator_mismatch", path: "evaluator.rubric" })
+  value.stretches.forEach((stretch, index) => {
+    if (stretch.evaluator_version !== brief.evaluator.plugin_version) identity.push({ code: "evaluator_mismatch", path: `stretches.${index}.evaluator_version` })
+  })
   if (identity.length > 0) return rejected(identity)
 
   const undeclared = brief.unavailable.some((code) => !value.unavailable.includes(code))
@@ -192,6 +199,8 @@ export function acceptEvaluation(brief, bytes, stamping = null) {
       mura: stretch.mura,
       muri: stretch.muri,
       evidence: stretch.evidence.map((range) => [range[0], range[1]]),
+      confidence: stretch.confidence,
+      evaluator_version: stretch.evaluator_version,
     })),
     unavailable: [...value.unavailable],
   }

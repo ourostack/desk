@@ -1522,9 +1522,17 @@ test("the list is sorted by job and holds at most LIMITS.outcomes entries", asyn
   const card = { record: ACCEPTED, status: "done", evidenceAt: null }
   const slugs = Array.from({ length: LIMITS.outcomes + 5 }, (_, index) => `task-${index}`)
   const cards = Object.fromEntries(slugs.map((slug) => [`a/${slug}`, card]))
-  const list = outcomesFor({ jobs: [], lifecycleCalls: slugs.map((slug) => signoffCall("a", slug)), readers: readers(cards), identity, now: NOW })
+  const unavailable = [{ field: "turns", reason: "capped" }]
+  const list = outcomesFor({ jobs: [], lifecycleCalls: slugs.map((slug) => signoffCall("a", slug)), readers: readers(cards), identity, now: NOW, unavailable })
   assert.equal(list.length, LIMITS.outcomes)
   assert.deepEqual(list.map((entry) => entry.job), [...list.map((entry) => entry.job)].sort())
+  // The cut is said, once, beside what the session already flagged.
+  assert.deepEqual(unavailable, [{ field: "turns", reason: "capped" }, { field: "outcomes", reason: "capped" }])
+  // Exactly at the limit nothing is cut and nothing is flagged; without a list to add to, nothing breaks.
+  const exact = []
+  assert.equal(outcomesFor({ jobs: [], lifecycleCalls: slugs.slice(0, LIMITS.outcomes).map((slug) => signoffCall("a", slug)), readers: readers(cards), identity, now: NOW, unavailable: exact }).length, LIMITS.outcomes)
+  assert.deepEqual(exact, [])
+  assert.equal(outcomesFor({ jobs: [], lifecycleCalls: slugs.map((slug) => signoffCall("a", slug)), readers: readers(cards), identity, now: NOW }).length, LIMITS.outcomes)
 })
 
 // A card in block form, as the task tools write it.

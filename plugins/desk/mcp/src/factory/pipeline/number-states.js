@@ -111,6 +111,7 @@ export const FEEDS = Object.freeze({
   ci_runs: nothing("no formula uses CI runs"),
   // `attention` reads the list through its own rule (a list present is a figure, a flag beside it says it is a lower bound, no list is no figure), so a flag only ever makes it partial; a missing list is stated by the formula as `not_recorded`.
   human_turns: row([], ["attention"]),
+  outcomes: nothing("a job whose entry was cut has no outcome, which every outcome formula already reads as not recorded"),
 })
 
 export function fieldsFeeding(formulaId, effect) {
