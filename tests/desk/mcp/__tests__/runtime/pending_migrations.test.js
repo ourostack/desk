@@ -232,7 +232,7 @@ test("startupMigrationLine never throws, and the boot-check hook helper passes t
   const registryError = await startupMigrationLine({ pluginRoot: undefined })
   assert.match(registryError, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
   assert.match(registryError, /  file: not filed: filer_unavailable\n/u)
-  const root = await plugin([{ id: "01-where", agent: true, detect: '[ "$PWD" = "$EXPECTED" ]' }])
+  const root = await plugin([{ id: "01-where", agent: true, detect: '[ "$(cd "$EXPECTED" && pwd)" = "$PWD" ]' }])
   assert.match(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: root }), /^Desk migrations: 01-where is pending/u)
   assert.equal(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: path.dirname(root) }), "")
 })
@@ -253,7 +253,7 @@ test("startupMigrationLine's registry-error block calls the injected fileProblem
 })
 
 test("startupMigrationLine's registry-error block still renders a reason when the registry throws a non-Error value", async () => {
-  const root = await plugin([{ id: "01-where", agent: true, detect: '[ "$PWD" = "$EXPECTED" ]' }])
+  const root = await plugin([{ id: "01-where", agent: true, detect: '[ "$(cd "$EXPECTED" && pwd)" = "$PWD" ]' }])
   const line = await startupMigrationLine({ pluginRoot: root, env: { EXPECTED: root }, cwd: root, spawn: () => { throw "not-an-error-object" } })
   assert.match(line, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
   assert.match(line, /  broke: not-an-error-object\n/u)

@@ -33,6 +33,10 @@ import {
   writeRecordProblem,
 } from "../../../../../plugins/desk/mcp/src/desk/tidy.js"
 
+// A path put into a regular expression: a Windows path holds backslashes.
+const reEscape = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+const noPosixBits = process.platform === "win32" ? "POSIX permission bits only: Windows has no execute-only directory or mode-000 file, so the read never fails" : false
+
 const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const SCRIPT = path.join(mcpRoot, "scripts", "tidy-status.js")
 const NOW = Date.parse("2026-09-25T00:00:00Z")
@@ -310,7 +314,7 @@ test("--report stops with one line when the tools' desk or person differs from w
 
   const agree = cli(["--report", "--root", root, "--person", "bob"], { env: { DESK: root, DESK_PERSON: "bob" } })
   assert.equal(agree.code, 0)
-  assert.match(agree.stdout, new RegExp(`^Desk tools: ${root} as bob\\nThis script: ${root} as bob\\nThis session's own desk: ${path.join(root, "desks", "bob")}\\n`))
+  assert.match(agree.stdout, new RegExp(`^Desk tools: ${reEscape(root)} as bob\\nThis script: ${reEscape(root)} as bob\\nThis session's own desk: ${reEscape(path.join(root, "desks", "bob"))}\\n`))
 })
 
 // ── Crew desks: only this session's own subtree ─────────────────────────────
@@ -392,7 +396,7 @@ test("a single-owner hub whose desks.md is a routing registry is tidied at its r
     assert.equal(cli(["--detect", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 0)
     const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh })
     assert.equal(report.code, 0)
-    assert.match(report.stdout, new RegExp(`^Desk tools: ${root}\\nThis script: ${root}\\nThis session's own desk: ${root}\\n`))
+    assert.match(report.stdout, new RegExp(`^Desk tools: ${reEscape(root)}\\nThis script: ${reEscape(root)}\\nThis session's own desk: ${reEscape(root)}\\n`))
     assert.doesNotMatch(report.stdout, /crew workspace/)
 
     const clean = registryDesk(registry, { messy: false })
@@ -509,7 +513,7 @@ test("the gh identity is cached in Desk's state folder per desk: 24 hours when f
 test("the identity cache honours XDG_STATE_HOME and survives a bad or unwritable cache", () => {
   const home = tempDir()
   assert.equal(identityCachePath({ env: { XDG_STATE_HOME: "~/state" }, homeDir: home }), path.join(home, "state", "ouroboros-skills", "desk", "identity-cache.json"))
-  assert.match(identityCachePath({ env: {} }), /\.local\/state\/ouroboros-skills\/desk\/identity-cache\.json$/)
+  assert.match(identityCachePath({ env: {} }), /\.local[\\/]state[\\/]ouroboros-skills[\\/]desk[\\/]identity-cache\.json$/)
 
   const root = crewDesk()
   const state = tempDir()
@@ -683,7 +687,7 @@ test("--report lists this session's own findings, and gives one line for a desk 
   const root = soloDesk()
   const result = cli(["--report", "--root", root], { env: { DESK: root } })
   assert.equal(result.code, 0)
-  assert.match(result.stdout, new RegExp(`^Desk tools: ${root}\\nThis script: ${root}\\nThis session's own desk: ${root}\\nOrganization findings in it: \\d+\\n`))
+  assert.match(result.stdout, new RegExp(`^Desk tools: ${reEscape(root)}\\nThis script: ${reEscape(root)}\\nThis session's own desk: ${reEscape(root)}\\nOrganization findings in it: \\d+\\n`))
   assert.match(result.stdout, /^ {2}track_catch_all: inbox \(handle track-[0-9a-f]{10}\) — .*rename with track_rename \(handle, to\)/m)
   assert.match(result.stdout, /^ {2}name_prompt_like: inbox\/hi-please-fix-this \(handle task-[0-9a-f]{10}\) — .*rename with task_move \(handle, to_slug\)/m)
   assert.match(result.stdout, /^ {2}loose_file: scratch-notes.txt — /m, "a loose entry has no handle")
@@ -943,7 +947,7 @@ test("--write-record allows the procedure's own raw git mv of a track into _arch
   assert.ok(readOrganizationRecord(root) !== null)
 })
 
-test("--write-record cannot list a candidate track's directory and finds no card to compare, so it does not flag it", () => {
+test("--write-record cannot list a candidate track's directory and finds no card to compare, so it does not flag it", { skip: noPosixBits }, () => {
   const root = tempDir()
   write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome whose directory listing will be blocked; not anything else\n---\n")
   write(
@@ -969,7 +973,7 @@ test("--write-record cannot list a candidate track's directory and finds no card
   }
 })
 
-test("--write-record refuses when a candidate track's task card can't be read, since it can't be confirmed to match", () => {
+test("--write-record refuses when a candidate track's task card can't be read, since it can't be confirmed to match", { skip: noPosixBits }, () => {
   const root = tempDir()
   // Ignored, not merely untracked: an untracked task.md would itself trip
   // the step 7 clean-tree check before the bypass check ever runs. Ignoring

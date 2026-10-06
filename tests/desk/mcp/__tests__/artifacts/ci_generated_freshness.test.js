@@ -14,6 +14,8 @@ import {
 } from "node:fs"
 import { createRequire } from "node:module"
 import { devNull, tmpdir } from "node:os"
+// Git for Windows rejects Node's `\\.\nul` spelling of the null device but maps `/dev/null` itself.
+const gitNull = process.platform === "win32" ? "/dev/null" : devNull
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import matter from "gray-matter"
@@ -1194,7 +1196,7 @@ test("fingerprinted source bytes survive a Windows-style Git checkout", () => {
     const result = spawnSync("git", args, {
       cwd: fixtureRoot,
       encoding: "utf8",
-      env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull },
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: gitNull },
     })
     assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`)
   }

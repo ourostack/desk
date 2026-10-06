@@ -475,7 +475,7 @@ test("canonical RFC validation rejects broken local links", () => {
         : "Not canonical.",
       repoRoot,
       markdownFiles: [canonicalRfcPath],
-      exists: (file) => file.endsWith(canonicalRfcPath),
+      exists: (file) => file.endsWith(path.normalize(canonicalRfcPath)),
     }),
     /broken local link/iu,
   )

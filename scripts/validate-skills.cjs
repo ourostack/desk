@@ -256,7 +256,7 @@ function validatePluginMetadata(options = {}) {
     if (typeof plugin.source !== "string") {
       continue;
     }
-    const pluginPath = path.join(plugin.source, ".claude-plugin", "plugin.json");
+    const pluginPath = path.posix.join(plugin.source, ".claude-plugin", "plugin.json");
     if (!exists(pluginPath, options)) {
       throw new Error(`${plugin.name}: marketplace source is missing ${pluginPath}`);
     }
@@ -277,7 +277,7 @@ function validatePluginMetadata(options = {}) {
     if (typeof plugin.source !== "string") {
       continue;
     }
-    const pluginPath = path.join(plugin.source, ".claude-plugin", "plugin.json");
+    const pluginPath = path.posix.join(plugin.source, ".claude-plugin", "plugin.json");
     for (const dependency of readJson(pluginPath, options).dependencies ?? []) {
       const name = typeof dependency === "string" ? dependency : dependency.name;
       const version = typeof dependency === "string" ? undefined : dependency.version;
@@ -327,7 +327,7 @@ function validatePluginMetadata(options = {}) {
       if (plugin.source.source !== "local") {
         throw new Error(`${name}: Codex marketplace source.source must be local`);
       }
-      const pluginPath = path.join(plugin.source.path, ".codex-plugin", "plugin.json");
+      const pluginPath = path.posix.join(plugin.source.path, ".codex-plugin", "plugin.json");
       if (!exists(pluginPath, options)) {
         throw new Error(`${name}: Codex marketplace source is missing ${pluginPath}`);
       }

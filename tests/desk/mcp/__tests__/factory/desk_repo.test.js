@@ -664,7 +664,7 @@ test("readTask gives nulls for fields it cannot read: no frontmatter, invalid va
   assert.deepEqual(readTask("track", "indented"), { status: "validating", created_at: null, updated_at: null })
 })
 
-test("readTask treats a card it may not open as unreadable, and a track that is a file as no card", () => {
+test("readTask treats a card it may not open as unreadable, and a track that is a file as no card", { skip: process.platform === "win32" ? "POSIX permission bits only: chmod 000 does not make a file unreadable to its owner on Windows" : false }, () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
   write("track/locked/task.md", card(["status: done"]))
   write("file-track", "not a folder\n")
@@ -791,7 +791,7 @@ test("gitCommitTaskPaths confirms a desk commit and lists what it changed, the r
   assert.deepEqual(gitCommitTaskPaths(shas.fetched), { exists: true, taskPaths: ["track/fetched-task/task.md"] }, "a native ref needs only to exist in the desk")
 })
 
-test("gitCommitTaskPaths reports a commit Git confirms but cannot list as changing nothing", () => {
+test("gitCommitTaskPaths reports a commit Git confirms but cannot list as changing nothing", { skip: process.platform === "win32" ? "the stand-in Git is a #!/bin/sh script, which Windows cannot execute as a program" : false }, () => {
   // A stand-in Git that confirms every commit, finds the desk, and fails every other command.
   const fakeGit = path.join(desk, "..", `${path.basename(desk)}-fake-git.sh`)
   writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = cat-file ] && exit 0; [ \"$arg\" = rev-parse ] && exec git \"$@\"; done\nexit 1\n", { mode: 0o755 })

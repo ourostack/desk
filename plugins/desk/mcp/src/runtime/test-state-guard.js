@@ -54,6 +54,8 @@ function spellings(target) {
   const out = new Set([target])
   try {
     out.add(realpathSync(target))
+    // On Windows only the native call expands an 8.3 short name (`RUNNER~1`) into the long spelling a fixture's own `fs.promises.realpath` gives.
+    out.add(realpathSync.native(target))
   } catch {
     // istanbul ignore next -- os.tmpdir() always exists on a real machine; nothing further to add if it somehow did not.
   }

@@ -465,7 +465,8 @@ function runInstrumentedTests({
     // A shard keeps the TAP output and also records each file's duration for rebalancing the shards.
     ...(timingsPath ? [
       "--test-reporter=tap", "--test-reporter-destination=stdout",
-      `--test-reporter=${path.join(defaultTestRoot, "_file_timing_reporter.mjs")}`, `--test-reporter-destination=${timingsPath}`,
+      // A URL, because Node imports a reporter by specifier and rejects a Windows drive path (`D:\...`) as an unsupported URL scheme.
+      `--test-reporter=${pathToFileURL(path.join(defaultTestRoot, "_file_timing_reporter.mjs")).href}`, `--test-reporter-destination=${timingsPath}`,
     ] : []),
     // A shard names its own files; the whole suite is the glob plus, as separate path arguments that run as separate test workers, the offline suite and the CLI contract with their own hooks.
     ...(testFiles ?? [path.join(repoRoot, "tests/desk/mcp/__tests__/**/*.test.js"), ...offline.testTargets]),

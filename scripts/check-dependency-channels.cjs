@@ -51,7 +51,7 @@ function agencyManifests(repoRoot) {
   const pluginsDir = path.join(repoRoot, "plugins");
   return fs.readdirSync(pluginsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join("plugins", entry.name, "agency.json"))
+    .map((entry) => path.posix.join("plugins", entry.name, "agency.json"))
     .filter((relative) => fs.existsSync(path.join(repoRoot, relative)));
 }
 

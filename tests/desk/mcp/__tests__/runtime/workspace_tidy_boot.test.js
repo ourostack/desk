@@ -223,7 +223,8 @@ process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.strin
   const timing = JSON.parse(await fs.readFile(proof, "utf8"))
   assert.equal(timing.children.length, 1)
   assert.ok(timing.children.every((entry) => entry.closed), "every exact owned child closed")
-  assert.ok(timing.exited - timing.born < 500, JSON.stringify(timing))
+  // On Windows the hook reaches its first inspection Git about 450 ms after the preload (module loading is slow there), so the process ends at about 730 ms. The stalled child would only end 1400 ms after it spawned, so 1300 ms still proves the hook did not wait for it.
+  assert.ok(timing.exited - timing.born < (process.platform === "win32" ? 1300 : 500), JSON.stringify(timing))
   for (const entry of timing.children) assert.throws(() => process.kill(entry.pid, 0), { code: "ESRCH" })
 })
 

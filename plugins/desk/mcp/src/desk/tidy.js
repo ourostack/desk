@@ -371,7 +371,8 @@ export function uncommittedPaths(root, subtree, { spawnGit = spawnSync } = {}) {
   const status = run(spawnGit, "git", ["-C", root, "status", "--porcelain=v1", "-z", "--", subtree])
   if (top.status !== 0 || status.status !== 0) return []
   const toplevel = top.stdout.trim()
-  const realRoot = real(root)
+  // Git names the top level with its long spelling and forward slashes (`C:/Users/runneradmin/...`), so the desk is read back the same way: `realpathSync.native` also expands an 8.3 short name such as `RUNNER~1`, which plain `realpathSync` leaves alone, and a relative path between the two spellings would climb out of the desk.
+  const realRoot = realpathSync.native(root)
   const entries = status.stdout.split("\0")
   const paths = []
   for (let index = 0; index < entries.length; index += 1) {

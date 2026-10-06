@@ -57,7 +57,8 @@ for (const [helper, prefix] of [
         const roots = JSON.parse(reported[1])
         assert.equal(roots.length, 2)
         for (const root of roots) {
-          assert.equal(realpathSync(path.dirname(root)), realpathSync(sandbox))
+          // Native, because the child's mkTempRoot expands an 8.3 short name (RUNNER~1) and plain realpathSync would not.
+          assert.equal(realpathSync.native(path.dirname(root)), realpathSync.native(sandbox))
           assert.ok(path.basename(root).startsWith(prefix))
           assert.equal(existsSync(root), false, `fixture survived completed ${outcome}: ${root}`)
         }

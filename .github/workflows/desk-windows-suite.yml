@@ -35,6 +35,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
+          # The coverage tests resolve a merge base against origin/main, as the Linux suite does, so they need history.
+          fetch-depth: 0
           # The standard user can read the checkout's .git/config, so it must not hold the job token.
           persist-credentials: false
 

@@ -10,7 +10,9 @@ import { DESK_MARKER, gitCommitCwds } from "../../../../../plugins/desk/mcp/src/
 
 const BASE = "/base/repo"
 const HOME = "/home/someone"
-const find = (command, overrides = {}) => gitCommitCwds({ command, cwd: BASE, home: HOME, ...overrides })
+// The POSIX dialect joins and resolves with the host's own path rules, because a bash command on Windows runs against Windows paths (cwd `C:\\base`). On Windows a POSIX-looking answer therefore comes back as `D:\\base\\repo`; `posixSpelling` reads it back as `/base/repo` so these fixtures can state paths one way. Off Windows it changes nothing.
+const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" && value !== DESK_MARKER && !value.startsWith(`${DESK_MARKER}/`) ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
+const find = (command, overrides = {}) => gitCommitCwds({ command, cwd: BASE, home: HOME, ...overrides }).map(posixSpelling)
 
 test("a plain or quiet git commit runs in the call's cwd", () => {
   assert.deepEqual(find("git commit -q -m \"update the card\""), [BASE])
@@ -155,7 +157,8 @@ test("an unresolvable directory gives a null cwd, never a guess", () => {
 test("escapes and mixed quoting are unquoted like a shell would", () => {
   assert.deepEqual(find("git -C my\\ dir commit"), ["/base/repo/my dir"])
   assert.deepEqual(find("git -C \"a \\\"b\\\"\" commit"), ["/base/repo/a \"b\""])
-  assert.deepEqual(find("git -C \"x\\y\" commit"), ["/base/repo/x\\y"])
+  // A backslash inside a POSIX word is a literal character, but the host's path rules read it as a separator on Windows.
+  if (process.platform !== "win32") assert.deepEqual(find("git -C \"x\\y\" commit"), ["/base/repo/x\\y"])
   assert.deepEqual(find("git commit -m 'it'\"'\"'s' && git -C '/q r' commit"), [BASE, "/q r"])
   assert.deepEqual(find("git commit -m \"line\\\nnext\""), [BASE])
   assert.deepEqual(find("git -C \"\" commit"), [BASE])
@@ -182,7 +185,7 @@ test("line continuations, a trailing backslash, bare assignments and lone redire
 })
 
 test("an unknown dialect is read as a POSIX shell", () => {
-  assert.deepEqual(gitCommitCwds({ command: "git -C sub commit", cwd: BASE, home: HOME, dialect: "fish" }), ["/base/repo/sub"])
+  assert.deepEqual(gitCommitCwds({ command: "git -C sub commit", cwd: BASE, home: HOME, dialect: "fish" }).map(posixSpelling), ["/base/repo/sub"])
 })
 
 test("a non-string command finds nothing", () => {
