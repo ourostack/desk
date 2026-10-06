@@ -96,7 +96,9 @@ test("flush without consent, with a declined store or without an account records
   assert.equal(github.calls.length, 0)
   const status = await readStatus(env)
   assert.equal(status.last_flush[STORE].result, "nothing_pending")
-  assert.deepEqual(Object.keys(status.last_flush[STORE]).sort(), ["at", "result"])
+  // The no_account fault the earlier flush met is carried: a flush that never reached the account cannot clear it (flush-health.js).
+  assert.deepEqual(Object.keys(status.last_flush[STORE]).sort(), ["account_fault", "at", "result"])
+  assert.equal(status.last_flush[STORE].account_fault, "no_account")
   assert.deepEqual(await flush(env, { store: "not a store", runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "unexpected" })
 }))
 
@@ -1658,7 +1660,8 @@ test("closed-PR entries that are not PRs of this machine's intake branch are ski
   assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 0)
 }))
 
-for (const code of ["merge_conflict", "unexpected_merge"]) {
+// Every `*_check_unavailable` is the store's own check failing: wait and retry, never quarantine.
+for (const code of ["merge_conflict", "unexpected_merge", "intake_check_unavailable", "corrections_check_unavailable", "labels_check_unavailable"]) {
   test(`a PR closed with ${code} is stale, not bad: nothing is quarantined and the files go out again rebuilt on the current main`, () => scratch(async ({ env }) => {
     const { flush } = await load()
     await optIn(env)

@@ -181,6 +181,7 @@ import {
   restoreRetractedCopies,
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
+import { carriedAccountFault } from "./flush-health.js"
 import { CHECK_UNAVAILABLE, captureOnBranch, dropPending, judge, namesRecord, planCapture, saveCheckUnavailable, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
@@ -205,8 +206,9 @@ const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
-// `capture_check_unavailable` is the store's own capture check failing to read the commits: its failure, not the files' and not the record's.
-const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge", CHECK_UNAVAILABLE])
+// Every `*_check_unavailable` (`capture_check_unavailable`, `intake_check_unavailable`, `corrections_check_unavailable`, ...) is one of the
+// store's own checks failing to run: its failure, not the files' and not the record's, so the files wait and go again, never quarantined.
+const STALE_INTAKE_CODES = { has: (code) => code === "merge_conflict" || code === "unexpected_merge" || code === CHECK_UNAVAILABLE || /^[a-z][a-z0-9_]*_check_unavailable$/u.test(code) }
 const MAX_COMMENTS = 300
 const MAX_BYTES = 24 * 1024 * 1024
 const MAX_OUTPUT = 64 * 1024 * 1024
@@ -1307,6 +1309,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     const intakePushed = progress.intakePushed ?? before?.intake_pushed === true
     const intakePrs = progress.intakePrs ?? list(before?.intake_prs)
     const through = progress.rejectionsThrough ?? (Number.isSafeInteger(previous) ? previous : null)
+    const accountFault = carriedAccountFault(outcome.result, before)
     await writeStatus(env, {
       last_flush: {
         [store]: {
@@ -1324,6 +1327,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           ...(refused.length > 0 ? { retractions_refused: refused.length, refused_retractions: refused } : {}),
           ...(intakePushed ? { intake_pushed: true } : {}),
           ...(intakePrs.length > 0 ? { intake_prs: intakePrs } : {}),
+          ...(accountFault !== null ? { account_fault: accountFault } : {}),
         },
       },
     })
