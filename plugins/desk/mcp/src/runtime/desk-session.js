@@ -620,7 +620,7 @@ export function createDeskSession(deps) {
           ? `a runtime status computation (index, readiness controller) that started at ${run.at} is still running`
           : "the runtime status (index, readiness controller) did not answer within this call's budget"
         payload = lastStatusDetail === null
-          ? { ...payload, status_detail: `unavailable: ${why}; call desk_status again shortly` }
+          ? { ...payload, detail_pending: true, status_detail: `unavailable: ${why}; call desk_status again shortly` }
           : { ...lastStatusDetail.payload, status_detail: `cached: ${why}; this detail is from ${lastStatusDetail.at} (${ageSeconds(lastStatusDetail.at)} s old). Call desk_status again shortly for a fresh one.`, status_detail_from: lastStatusDetail.at }
       }
     }

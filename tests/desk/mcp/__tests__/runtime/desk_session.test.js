@@ -703,6 +703,7 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   const slow = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.ok(Date.now() - started < 400, `desk_status took ${Date.now() - started} ms`)
   assert.match(slow.status_detail, /^unavailable: .*did not answer within this call's budget/u)
+  assert.equal(slow.detail_pending, true)
   assert.equal(slow.state, "ready")
   // While that computation runs, another call waits only its own budget for it and does not start a second one.
   const joinedStarted = Date.now()
@@ -718,6 +719,7 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   assert.equal(late.local_db.state, "late")
   assert.match(late.status_detail, /^cached: .*this detail is from \d{4}-/u)
   assert.ok(late.status_detail_from < beforeLate, "the detail is dated from when its computation started")
+  assert.equal(late.detail_pending, undefined, "a cached detail still has the root and the rest")
   assert.equal(late.state, "ready", "the admission fields are current, not cached")
 })
 
@@ -730,6 +732,7 @@ test("desk_status serves a fresh detail once no older computation is running, an
   assert.equal(fresh.local_db.state, "fresh")
   assert.equal(fresh.status_detail, undefined)
   assert.equal(fresh.status_detail_from, undefined)
+  assert.equal(fresh.detail_pending, undefined)
   runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
   const cachedStarted = Date.now()
   const cached = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
