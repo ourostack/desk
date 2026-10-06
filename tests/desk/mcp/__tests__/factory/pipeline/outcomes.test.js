@@ -307,9 +307,16 @@ test("yield is passed over the delivered jobs that have a verdict", () => {
     created({ job: J4, state: "not_delivered", deliveries: 0 }),
   )
   assert.deepEqual(result, {
-    state: "measured", value: 0.5, reasons: [], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 0, changed_ask_only: 0,
+    state: "measured", value: 0.5, reasons: [], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 0, signoff_unverified: 0, changed_ask_only: 0,
     excluded: [{ reason: "history_not_recorded", jobs: 1 }, { reason: "not_delivered", jobs: 1 }],
   })
+})
+
+test("the yield rollup keeps emitting signoff_unverified as 0 for the store site, whatever the verified flags", () => {
+  const { first_pass_yield: result } = store(accepted(J1, { verified: false }), accepted(J2, { verified: null }), accepted(J3))
+  assert.equal(result.signoff_unverified, 0)
+  assert.equal(result.state, "measured")
+  assert.equal(result.passed, 3)
 })
 
 test("yield is partial and an upper bound while any counted job awaits sign-off", () => {

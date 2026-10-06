@@ -412,7 +412,7 @@ test("the build publishes first-pass yield with what it counted and what it left
   const rollup = JSON.parse(readFileSync(path.join(out, "rollups", "outcomes.json"), "utf8"))
   assert.deepEqual(Object.keys(rollup), ["attention", "first_pass_yield", "groupings", "rework", "schema", "signoff"])
   assert.deepEqual(rollup.first_pass_yield, {
-    state: "partial", value: 0.5, reasons: ["awaiting_signoff"], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 1, changed_ask_only: 0,
+    state: "partial", value: 0.5, reasons: ["awaiting_signoff"], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 1, signoff_unverified: 0, changed_ask_only: 0,
     excluded: [{ reason: "history_not_recorded", jobs: 1 }],
   })
   assert.equal(rollup.rework.state, "partial")

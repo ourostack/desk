@@ -151,6 +151,8 @@ function yieldRollup(verdicts) {
     passed,
     returned: counted.length - passed,
     awaiting_signoff: partial.filter((verdict) => verdict.reasons.includes("awaiting_signoff")).length,
+    // Kept at 0, like `accepted_unverified`: the store site reads it, and an acceptance is no longer split by a verified flag.
+    signoff_unverified: 0,
     changed_ask_only: counted.filter((verdict) => verdict.changed_ask_only === true).length,
     excluded: [...excluded].sort(([left], [right]) => compareText(left, right)).map(([reason, jobs]) => ({ reason, jobs })),
   }
