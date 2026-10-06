@@ -72,8 +72,15 @@ const DIAGNOSTIC_KEYS = ["mode", "reason", "reason_detail", "binding_path", "pat
 
 const DETAIL_PENDING_SUMMARY = "Desk is ready, but its details (root, search, sync) are still loading, so the empty fields below are not a missing desk. Call desk_status again shortly."
 
-const statusErrorSummary = (error) => `Desk is ready, but its runtime status failed (${line(error)}), so the empty fields below (root, search, sync) are not a missing desk. Call desk_status again; if it fails the same way, call desk_doctor.`
-const NO_DETAIL_SUMMARY = "Desk is ready, but this answer carries no runtime detail (the runtime is not loaded, or Desk is in refuse mode), so the empty root, search and sync fields below are not a missing desk. Call desk_status with { detail: true } or desk_doctor to see why."
+// The first line of a runtime status error, at most 200 characters, so a stack or a long message never fills the answer.
+function errorLine(error) {
+  const first = error.trim().split(/\r?\n/u)[0].trim()
+  if (first === "") return "unknown error"
+  return first.length > 200 ? `${first.slice(0, 199)}…` : first
+}
+
+const statusErrorSummary = (error) => `Desk is ready, but its runtime status failed (${error}), so the empty fields below (root, search, sync) are not a missing desk. Call desk_status again; if it fails the same way, call desk_doctor.`
+const NO_DETAIL_SUMMARY = "Desk is ready, but this answer carries no runtime detail (the runtime is not loaded, or Desk is in refuse mode), so the empty root, search and sync fields below are not a missing desk. Call desk_doctor to see why."
 
 /** The compact answer for a full desk_status payload (already merged with the admission fields). */
 export function compactStatus(payload) {
@@ -85,7 +92,7 @@ export function compactStatus(payload) {
   // Desk is ready, but the runtime's status detail missed this call's short budget: the root, search and sync fields below are empty because they are not loaded yet, not because there is no desk.
   const detailPending = state === "ready" && payload.detail_pending === true
   // The other ways a ready desk answers without its root, each with its own cause, so the empty fields are never read as "no desk".
-  const statusError = state === "ready" && typeof payload.status_error === "string" ? payload.status_error : null
+  const statusError = state === "ready" && typeof payload.status_error === "string" ? errorLine(payload.status_error) : null
   const noDetail = state === "ready" && !detailPending && statusError === null && !payload.root?.path
   const readySummary = detailPending ? DETAIL_PENDING_SUMMARY : statusError !== null ? statusErrorSummary(statusError) : noDetail ? NO_DETAIL_SUMMARY : "Desk is ready."
   const compact = {
