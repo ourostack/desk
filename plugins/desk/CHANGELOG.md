@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.199 — 2026-10-06
+
+The desk MCP tests workflow now runs on every pull request, with no path filter, and ends in a new `CI gate` job that needs every other job in the workflow (the coverage shards, the offline eval shards, the test suite, the runtime packs and the Windows feedback job) and fails unless each one succeeded. Main's ruleset will require `CI gate`, `Validate skills` and `Claude Code plugin load`; a required check from a workflow that a path filter skipped would never report and would block the pull request for good. Pushes to main stay path-filtered. The coverage gate's workflow parity check (`assertCoverageCommandParity`) accepts a pull request trigger with no path filter, and still requires one that has a filter to cover `scripts/*.cjs`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.198 — 2026-10-06
 
 Factory consent is now the boot's last instruction by construction. Every other instruction is collected first, the consent block is built in one place, and one join puts it after everything else in both the text boot and `--json`, so a new boot line can no longer land after consent. Three packages had broken the rule the same way, by appending their own line after consent. A test reads [`boot.js`](mcp/src/runtime/boot.js) and holds the consent calls and the join to those single places.
