@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.204 — 2026-10-06
+
+A merged Desk pull request is now delivered only when a release has carried it, and CI and Desk enforce that so nobody has to remember it.
+
+After a release is published, and on every later run that gets that far, the release workflow comments `Released in Desk <version>` and adds a `released` label on every merged pull request that a release has carried and that lacks the label, using the first release after its merge (only pull requests merged in the last 30 days). So marking that failed once is repaired by the next run, even one with nothing to release. Marking is safe to repeat, and the "Desk release needs attention" issue stays open until marking has succeeded.
+
+The done-gate reads a delivery policy that each repo declares in `.desk/delivery.json`: rules that match changed paths (`paths` globs, first match per file wins) and say when a change is delivered, `merge` or `github_label` (a named label). A pull request that is not merged is never delivered. For a pull request that has to wait for its rule, `task_update` (and `task_archive`, when it bumps a task to done) refuses to close the task until the rule is met, and the refusal names the pull request and says the release has not carried it yet. A repo with no policy (and visible to the caller) defaults to `merge`, and the response says "no delivery rule declared". This repo's policy waits on the `released` label for `plugins/desk/**` only, because Crew, Superpowers and Plain Language bump their own version in the pull request that changes them, which is how Claude Code receives them. When GitHub cannot be reached or does not answer, the check is skipped and the response carries a `delivery_check` line saying the delivery was not verified, so a desk without network can still close tasks. The check is one function, `prDelivery` in `tools/delivery-gate.js`, that other callers can reuse.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.203 — 2026-10-06
 
 Boot now says when a Desk release has failed, so an agent working on Desk hears it at session start instead of finding out by looking at GitHub. When the bound desk has an open task whose repos include ourostack/desk and that repo has an open "Desk release needs attention" issue, boot prints one line under the status line, `Desk release needs attention: ourostack/desk#<number> is open (<url>)`, and the `--json` result carries it as `release_alert` (`number`, `url`, `line`), or `null`.
