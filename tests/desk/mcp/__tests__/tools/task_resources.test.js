@@ -7,8 +7,9 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { mkdtempSync, mkdirSync, rmSync, existsSync, realpathSync } from "node:fs"
 import { promises as fs } from "node:fs"
-import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { applyResource, canonicalIdentity, dueResources, readResources } from "../../../../../plugins/desk/mcp/src/desk/resources.js"
+import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { applyResource, canonicalIdentity, dueResources, openResources, readResources, shellQuote } from "../../../../../plugins/desk/mcp/src/desk/resources.js"
+import { cleanupIndexPath, readCleanupIndex } from "../../../../../plugins/desk/mcp/src/desk/cleanup-index.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -106,8 +107,8 @@ test("a row is due when its step is delivered or dropped, the answer lists it wi
   await update(root, { resource: { identity: "branch:o/widgets#feat/ui", step: "ui" } })
   const answer = await update(root, { step: { id: "api", state: "delivered", evidence: PR } })
   assert.deepEqual(answer.cleanup_due.map((item) => [item.identity, item.why]), [[`worktree:${where}`, "step api is delivered"], ["branch:o/widgets#feat/api", "step api is delivered"]])
-  assert.match(answer.cleanup_due[0].action, new RegExp(`git worktree remove ${where.replaceAll("/", "\\/")}`, "u"))
-  assert.match(answer.cleanup_due[1].action, /git branch -d feat\/api/u)
+  assert.match(answer.cleanup_due[0].action, new RegExp(`git worktree remove '${where.replaceAll("/", "\\/")}'`, "u"))
+  assert.match(answer.cleanup_due[1].action, /git branch -d 'feat\/api'/u)
   assert.match(answer.cleanup_note, /Desk removes nothing/u)
   assert.equal(existsSync(where), true)
   // The same rows are not announced again by a call that makes nothing new due.
@@ -143,13 +144,13 @@ test("boot counts due rows from the cards it reads, prints one line, and prints 
   await update(root, { resource: { identity: "branch:o/widgets#feat/boot", step: "api" } })
   const quiet = formatBootText({ status: "ready", active_tasks: activeTasks(root) })
   assert.doesNotMatch(quiet, /Cleanup due|cleanup due/u)
-  assert.equal("cleanup_due" in activeTasks(root).tracks[0].tasks[0], false)
+  assert.equal("cleanup_due_count" in activeTasks(root).tracks[0].tasks[0], false)
   await update(root, { step: { id: "api", state: "delivered", evidence: PR } })
   const [task] = activeTasks(root).tracks[0].tasks
-  assert.equal(task.cleanup_due, 2)
+  assert.equal(task.cleanup_due_count, 2)
   const out = formatBootText({ status: "ready", active_tasks: activeTasks(root) })
   assert.match(out, /- t\/chain[^\n]*\n[^\n]*next:[^\n]*\n  Steps: 1 of 1 delivered\n  cleanup due: 2\n/u)
-  assert.match(out, /\nCleanup due: 2 items on 1 cards\n/u)
+  assert.match(out, /\nCleanup due: 2 items on 1 card \(see the task lines\)\n/u)
   assert.doesNotMatch(out, new RegExp(where.replaceAll("/", "\\/"), "u"))
   await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
   await update(root, { resource: { identity: "branch:o/widgets#feat/boot", disposition: "named transfer", details: "ari took it, acknowledged" } })
@@ -198,4 +199,116 @@ test("a table Desk cannot read is not reminded about, and fenced copies and cut 
   const body = `${steps}\n## Resources\n\n${HEADER}\n${SEP}\n${rows}\n`
   assert.deepEqual(dueResources(body, { status: "processing" }), [])
   assert.deepEqual(dueResources(body, { status: "done" }).map((item) => item.identity), ["branch:o/r#b", "branch:o/r#c"])
+})
+
+const unfinished = async (finish) => {
+  const { root } = await newCard(undefined, [])
+  const where = worktree(`idx-${Math.random().toString(16).slice(2)}`)
+  await update(root, { resource: { identity: `worktree:${where}`, step: "api" } })
+  await update(root, { resource: { identity: "branch:o/widgets#feat/idx" } })
+  await finish(root)
+  return { root, where }
+}
+const DONE = { status: "done", evidence: { kind: "non_code", ref: "https://example.com/proof" } }
+
+test("a finished card still reminds, whether it stays in its folder or is archived, until its rows are dealt with", async () => {
+  const { root, where } = await unfinished((root) => update(root, DONE))
+  const live = activeTasks(root)
+  assert.deepEqual(live.cleanup, { items: 2, cards: 1, finished: [{ card: "t/chain", due: 2 }] })
+  assert.match(formatBootText({ status: "ready", active_tasks: live }), /\nCleanup due: 2 items on 1 card \(see the task lines\)\n- t\/chain \(finished\): 2 due\n/u)
+  const archived = await task_archive({ deskRoot: root, input: { track: "t", slug: "chain" } })
+  assert.deepEqual(archived.cleanup_due.map((item) => item.identity), [`worktree:${where}`, "branch:o/widgets#feat/idx"])
+  assert.match(archived.cleanup_note, /Desk removes nothing/u)
+  assert.deepEqual(activeTasks(root).cleanup.finished, [{ card: "t/chain", due: 2 }])
+  // The reminder is closed by recording each row, which reaches the archived card.
+  await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
+  console.log(JSON.stringify(activeTasks(root).cleanup), (await fs.readFile(path.join(root, "t", "_archive", "chain", "task.md"), "utf8")).split("\n").filter((l) => l.startsWith("| ")).join("\n"))
+  assert.equal(activeTasks(root).cleanup.items, 1)
+  await update(root, { resource: { identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "deleted" } })
+  assert.equal("cleanup" in activeTasks(root), false)
+  assert.equal(JSON.parse(await fs.readFile(cleanupIndexPath(root), "utf8")).cards.length, 0)
+  await assert.rejects(update(root, { note: "x" }), /task does not exist/u)
+  await assert.rejects(update(root, { resource: { identity: "branch:o/widgets#feat/other" }, note: "x" }), /task does not exist/u)
+})
+
+test("a live card that is not finished is counted once, from the scan, though it is indexed", async () => {
+  const { root } = await unfinished(() => {})
+  await update(root, { step: { id: "api", state: "dropped", reason: "no" } })
+  assert.deepEqual(activeTasks(root).cleanup, { items: 1, cards: 1, finished: [] })
+})
+
+test("finishing the card lists every due row, not only the newly due ones", async () => {
+  const { root, where } = await unfinished((root) => update(root, { step: { id: "api", state: "dropped", reason: "no" } }))
+  const answer = await update(root, DONE)
+  assert.equal(answer.cleanup_due.length, 2)
+  assert.equal(answer.cleanup_due[0].identity, `worktree:${where}`)
+})
+
+test("the cleanup index is per desk root and per machine: only listed cards are read, odd entries and files are ignored, and a card with nothing open or gone is dropped", async () => {
+  const { root } = await unfinished((root) => update(root, DONE))
+  const file = cleanupIndexPath(root)
+  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  await fs.writeFile(file, JSON.stringify({ cards: ["../x", "/abs", "", 7, "t/ghost", "t/chain"] }))
+  assert.deepEqual(readCleanupIndex(root), ["t/ghost", "t/chain"])
+  assert.deepEqual(activeTasks(root).cleanup.finished, [{ card: "t/chain", due: 2 }])
+  for (const junk of ["not json", "{}", "null"]) {
+    await fs.writeFile(file, junk)
+    assert.deepEqual(readCleanupIndex(root), [])
+  }
+  await fs.rm(file)
+  assert.equal("cleanup" in activeTasks(root, { env: { ...process.env, XDG_STATE_HOME: path.join(scratch, "other-state") } }), false)
+  // A write starts again from a broken file, drops a gone card, and keeps the newest first.
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, JSON.stringify({ cards: ["t/ghost", "t/chain"] }))
+  await update(root, { resource: { identity: "branch:o/widgets#feat/more" } })
+  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  await fs.writeFile(file, "garbage")
+  await update(root, { resource: { identity: "branch:o/widgets#feat/more2" } })
+  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+})
+
+test("a state folder that cannot be written never fails the card write", async () => {
+  const { root } = await newCard()
+  const blocked = path.join(scratch, "blocked-state")
+  await fs.writeFile(blocked, "a file, not a folder")
+  const saved = process.env.XDG_STATE_HOME
+  process.env.XDG_STATE_HOME = blocked
+  try {
+    const answer = await task_update({ deskRoot: root, input: { track: "t", slug: "chain", resource: { identity: "branch:o/widgets#feat/x" } }, env: { ...process.env, XDG_STATE_HOME: blocked } })
+    assert.equal(answer.resource.identity, "branch:o/widgets#feat/x")
+  } finally {
+    process.env.XDG_STATE_HOME = saved
+  }
+})
+
+test("suggested commands quote paths and branch names, and a branch's action names its clone", () => {
+  assert.equal(shellQuote("a b'c"), "'a b'\\''c'")
+  const body = applyResource("", { identity: "worktree:/tmp/it's here" }, "task_update", "t/c").body
+  const [item] = dueResources(applyResource(body, { identity: "branch:o/r#feat/it's" }, "task_update", "t/c").body, { status: "done", exists: () => true })
+  assert.match(item.action, /git worktree remove '\/tmp\/it'\\''s here'/u)
+  const [, branch] = dueResources(applyResource(body, { identity: "branch:o/r#feat/it's" }, "task_update", "t/c").body, { status: "done", exists: () => true })
+  assert.match(branch.action, /^in your clone of o\/r: .*git branch -d 'feat\/it'\\''s'.*git push origin --delete 'feat\/it'\\''s'/u)
+})
+
+test("identities match on their trimmed, trailing-separator-free form, and a branch may name an Azure DevOps org/project/repo", () => {
+  const hand = `## Resources\n\n${HEADER}\n${SEP}\n|  worktree:/x/y/  | step a | — | keep | — |  |\n`
+  const out = applyResource(hand, { identity: "worktree:/x/y", intended: "now" }, "task_update", "t/c")
+  assert.equal(out.created, false)
+  assert.match(out.body, /\| worktree:\/x\/y \| step a \| — \| now \| — \|  \|\n$/u)
+  assert.deepEqual(openResources(hand), ["worktree:/x/y"])
+  assert.equal(canonicalIdentity("branch:org/project/repo#feat/x"), "branch:org/project/repo#feat/x")
+  assert.equal(canonicalIdentity("branch:a/b/c/d#x"), null)
+  const [item] = dueResources(applyResource("", { identity: "branch:org/project/repo#feat" }, "task_update", "t/c").body, { status: "done" })
+  assert.match(item.action, /in your clone of org\/project\/repo/u)
+})
+
+test("a write drops listed cards whose rows are all closed or that have no Resources table", async () => {
+  const { root, where } = await unfinished(() => {})
+  await task_create({ deskRoot: root, input: { track: "t", slug: "plain", title: "P", body: "Nothing.\n" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "other", title: "O", body: "Nothing.\n" } })
+  await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
+  await update(root, { resource: { identity: "branch:o/widgets#feat/idx", disposition: "named transfer", details: "ari, acknowledged" } })
+  await fs.writeFile(cleanupIndexPath(root), JSON.stringify({ cards: ["t/chain", "t/plain"] }))
+  await task_update({ deskRoot: root, input: { track: "t", slug: "other", resource: { identity: "branch:o/widgets#feat/o" } } })
+  assert.deepEqual(readCleanupIndex(root), ["t/other"])
 })

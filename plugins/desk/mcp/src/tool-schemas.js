@@ -78,7 +78,7 @@ const STEP = {
 const RESOURCE = {
   type: "object",
   properties: {
-    identity: text("`worktree:<absolute path>` or `branch:<owner/repo>#<name>`: a worktree or branch you created. Unknown identities add a row; known ones update it."),
+    identity: text("`worktree:<absolute path>` or `branch:<owner/repo>#<name>` (or `branch:<org/project/repo>#<name>` for Azure DevOps): a worktree or branch you created. Unknown identities add a row; known ones update it."),
     step: text("The step (a name in the card's `## Steps` table) that owns it; written as `step <id>`. Cleanup is due when that step is delivered or dropped."),
     intended: text("What you intend to do with it, in a few words (for example `remove after merge`)."),
     disposition: { type: "string", enum: ["removed-and-absent", "named transfer", "retained-with-trigger"], description: "Record this once the resource is dealt with; needs `details`. Desk removes nothing." },

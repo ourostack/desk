@@ -43,7 +43,8 @@ import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
 import { applyStep } from "../desk/steps.js"
-import { applyResource, dueResources } from "../desk/resources.js"
+import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
+import { recordCleanupCard } from "../desk/cleanup-index.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -821,11 +822,16 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     throw new Error(`task_update: ${invalidStatusMessage(frontmatter.status)} (set in \`status\` or \`frontmatter.status\`)`)
   }
 
-  const filePath = await resolveWriteTarget({
+  let filePath = await resolveWriteTarget({
     deskRoot,
     person,
     segments: [track, slug, "task.md"],
   })
+  // A call that only records a resource may reach an archived card, so a cleanup reminder left on a finished card can be closed.
+  if (!(await pathExists(filePath)) && resource !== undefined && Object.keys(values).every((key) => ["track", "slug", "resource"].includes(key))) {
+    const archived = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug, "task.md"] })
+    if (await pathExists(archived)) filePath = archived
+  }
   if (!(await pathExists(filePath))) {
     throw new Error(
       `task_update: task does not exist at ${relPath(deskRoot, filePath)}`,
@@ -930,6 +936,14 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const stage = stagingAllowed(filePath, spawnGit)
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
   await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || resource !== undefined })
+  // The per-machine index of cards with open resource rows follows each resource write; a state folder that cannot be written never fails the card write.
+  if (resource !== undefined) {
+    try {
+      recordCleanupCard(deskRoot, relPath(deskRoot, path.dirname(filePath)), openResources(newBody).length > 0, env)
+    } catch {
+      // The reminder still comes from the card itself while it is unfinished.
+    }
+  }
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
@@ -945,12 +959,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   Object.assign(result, reportResult(report, delivered === null))
   if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
   if (resourceResult !== null) result.resource = resourceResult.row
-  // The answer to a call that makes something due lists the card's due rows and the safe action for each; Desk never performs it.
+  // A call that makes something due lists the card's due rows and the safe action for each; Desk never performs it. A call that finishes the card lists all of them.
   const due = dueResources(newBody, { status: merged.status })
-  if (due.some((item) => !dueBefore.includes(item.identity))) {
-    result.cleanup_due = due.map(({ identity, why, action, stale }) => ({ identity, why, action, ...(stale ? { stale: true } : {}) }))
-    result.cleanup_note = "Cleanup is due on this card. Desk removes nothing: do the safe action for each row yourself, then record it with resource {identity, disposition, details}."
-  }
+  const finishes = TERMINAL_STATUSES.has(merged.status) && !TERMINAL_STATUSES.has(existing.data.status)
+  if (finishes || due.some((item) => !dueBefore.includes(item.identity))) Object.assign(result, cleanupAnswer(due))
   if (returnReason !== undefined) {
     const line = parseReturn(merged.returns.at(-1))
     result.return_recorded = `${line.from} to ${line.to}, ${line.reason}, caught ${line.caught}`
@@ -1208,11 +1220,13 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   await target([track, "_archive", slug])
   const filePath = await target([track, "_archive", slug, "task.md"])
   let finalStatus = null
+  let cardBody = ""
   let delivered = null
   let report = null
   if (await pathExists(filePath)) {
     const existing = await readMarkdown(filePath)
     finalStatus = existing.data.status
+    cardBody = existing.content
     // Patch only the fields this archive changes (`status:`, `updated:`, the record, `evidence:` and the report link fields) in place:
     // every other byte of the card — quoting, date formats, block scalars, key order — survives.
     const patchFields = {}
@@ -1247,6 +1261,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
+  // Archiving finishes the card, so every due resource row is listed, as for a task_update that finishes it.
+  Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
   return withArchiveFocus(statusContext, { track, slug }, result)
 }
 

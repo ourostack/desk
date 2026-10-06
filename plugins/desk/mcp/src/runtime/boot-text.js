@@ -224,7 +224,7 @@ function taskLines(track, task, pushNotes) {
   const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
   const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
   const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
-  const cleanup = task.cleanup_due > 0 ? [`  cleanup due: ${task.cleanup_due}`] : []
+  const cleanup = task.cleanup_due_count > 0 ? [`  cleanup due: ${task.cleanup_due_count}`] : []
   return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...cleanup, ...elsewhere, ...push]
 }
 
@@ -329,10 +329,12 @@ function taskSection(result, lines) {
   } else if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
 }
 
-// One line when any card has resource rows due for cleanup (counted over every card boot read, not only the ones shown), nothing otherwise.
+// One line when any card has resource rows due for cleanup (over every card boot read and this machine's cleanup index, not only the tasks shown), then a line for each finished or archived card, which has no task line; nothing when none are due.
 function cleanupLines(result) {
-  const due = (result.active_tasks?.tracks ?? []).flatMap((track) => track.tasks.map((task) => task.cleanup_due ?? 0)).filter((count) => count > 0)
-  return due.length === 0 ? [] : ["", `Cleanup due: ${due.reduce((sum, count) => sum + count, 0)} items on ${due.length} cards`]
+  const cleanup = result.active_tasks?.cleanup
+  if (cleanup === undefined) return []
+  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`
+  return ["", `Cleanup due: ${plural(cleanup.items, "item")} on ${plural(cleanup.cards, "card")} (see the task lines)`, ...cleanup.finished.map((entry) => `- ${entry.card} (finished): ${entry.due} due`)]
 }
 
 /**

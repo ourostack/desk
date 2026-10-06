@@ -32,7 +32,8 @@ const COLUMNS = [
   "Terminal disposition details",
 ]
 const [IDENTITY, OWNER, WRITERS, INTENDED, POINTER, TERMINAL] = COLUMNS.map((_, index) => index)
-const BRANCH = /^branch:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\S+)$/u
+// `owner/repo`, or an Azure DevOps `org/project/repo`.
+const BRANCH = /^branch:([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+){1,2})#(\S+)$/u
 const EMPTY = /^(?:—|-)?$/u
 const STEP_OWNER = /^step ([a-z0-9]+(?:-[a-z0-9]+)*)$/u
 const oneLine = (value) => value.replace(/\s*\r?\n\s*/gu, " ").trim()
@@ -124,7 +125,7 @@ export function applyResource(body, input, tool, taskRef) {
   if (step !== undefined && !(readSteps(body).rows ?? []).some((row) => row.id === step)) refuse(`resource \`step\` ${JSON.stringify(step)} is not a step of this card's \`## Steps\` table`)
   const read = readResources(body)
   if (read.found && read.rows === undefined) refuse(`the \`## Resources\` table on this card is left as prose because ${read.reason}, so ${identity} cannot be written there. Fix the table by hand or leave this resource out`)
-  const existing = (read.rows ?? []).find((row) => row.identity === identity)
+  const existing = (read.rows ?? []).find((row) => canonicalIdentity(row.identity) === identity)
   const set = [[IDENTITY, identity]]
   if (step !== undefined) set.push([OWNER, `step ${step}`])
   else if (existing === undefined) set.push([OWNER, `task ${taskRef}`])
@@ -141,15 +142,32 @@ export function applyResource(body, input, tool, taskRef) {
     else lines[existing.line] = rowLine(set, splitCells(lines[existing.line]), col, width)
     out = lines
   }
-  const now = readResources(out.join(read.eol)).rows.find((row) => row.identity === identity)
+  const now = readResources(out.join(read.eol)).rows.find((row) => canonicalIdentity(row.identity) === identity)
   return { body: out.join(read.eol), row: { identity, owner: now.owner, intended: now.intended, disposition: EMPTY.test(now.terminal) ? "" : now.terminal }, created: existing === undefined }
 }
 
+// A value as one shell word: single-quoted, with each `'` written as `'\''`.
+export const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`
 const ACTIONS = {
-  worktree: (where) => `if it holds no uncommitted or unpushed work and nothing is running in it, remove it with \`git worktree remove ${where}\` from its repository; then record resource disposition removed-and-absent with the readback as details. If it must stay, record named transfer or retained-with-trigger instead`,
-  branch: (name) => `if its pull request is merged (\`gh pr view\` says MERGED), delete the local branch (\`git branch -d ${name}\`) and the remote branch, then record resource disposition removed-and-absent with the readback as details. If it must stay, record named transfer or retained-with-trigger instead`,
+  worktree: (where) => `if it holds no uncommitted or unpushed work and nothing is running in it, remove it with \`git worktree remove ${shellQuote(where)}\` (run from its repository); then record resource disposition removed-and-absent with the readback as details. If it must stay, record named transfer or retained-with-trigger instead`,
+  branch: (name, repo) => `in your clone of ${repo}: if its pull request is merged (\`gh pr view\` says MERGED), delete the local branch with \`git branch -d ${shellQuote(name)}\` and the remote branch with \`git push origin --delete ${shellQuote(name)}\`, then record resource disposition removed-and-absent with the readback as details. If it must stay, record named transfer or retained-with-trigger instead`,
 }
 const STALE = (where) => `stale row: ${where} is not on this machine (it may exist on another); if you removed it, record resource disposition removed-and-absent with how you checked as details`
+
+/** The card's rows that still have no disposition, typed identities only: `[identity]`. */
+export function openResources(body, { truncated = false } = {}) {
+  const read = readResources(body, { truncated })
+  return (read.rows ?? []).filter((row) => canonicalIdentity(row.identity) !== null && EMPTY.test(row.terminal)).map((row) => canonicalIdentity(row.identity))
+}
+
+/** The `task_update` or `task_archive` answer fields for a card's due rows: nothing when there are none. */
+export function cleanupAnswer(due) {
+  if (due.length === 0) return {}
+  return {
+    cleanup_due: due.map(({ identity, why, action, stale }) => ({ identity, why, action, ...(stale ? { stale: true } : {}) })),
+    cleanup_note: "Cleanup is due on this card. Desk removes nothing: do the safe action for each row yourself, then record it with resource {identity, disposition, details}.",
+  }
+}
 
 /**
  * The card's resource rows that are due, `[{ identity, why, action, stale }]`: terminal column empty, and the step that owns the
@@ -164,14 +182,14 @@ export function dueResources(body, { status, truncated = false, exists = existsS
   const due = []
   for (const row of read.rows) {
     const identity = canonicalIdentity(row.identity)
-    if (identity !== row.identity || !EMPTY.test(row.terminal)) continue
+    if (identity === null || !EMPTY.test(row.terminal)) continue
     const step = steps.find((item) => item.id === STEP_OWNER.exec(row.owner)?.[1])
     const why = [...(step !== undefined && SETTLED.includes(step.state) ? [`step ${step.id} is ${step.state}`] : []), ...(ended ? [`the task is ${status}`] : [])]
     if (why.length === 0) continue
     const branch = BRANCH.exec(identity)
     const where = branch === null ? identity.slice("worktree:".length) : branch[2]
     const stale = branch === null && !exists(where)
-    due.push({ identity, why: why.join(" and "), action: stale ? STALE(where) : ACTIONS[branch === null ? "worktree" : "branch"](where), stale })
+    due.push({ identity, why: why.join(" and "), action: stale ? STALE(where) : branch === null ? ACTIONS.worktree(where) : ACTIONS.branch(where, branch[1]), stale })
   }
   return due
 }
