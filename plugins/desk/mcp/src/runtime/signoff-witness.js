@@ -3,7 +3,7 @@
 // A sign-off is a human's answer, and only the server may decide that it counts as one. The agent cannot write these records: hooks do, and the server reads them. Anything the witness cannot see is `unverified` with a reason code (`WITNESS_REASONS`); it never reads as accepted.
 //
 // Three pieces:
-//   1. A session file, `<state>/signoff-witness/<digest of the session id>.json`, `{ prompt_at, stop_at }` in milliseconds. The prompt hook sets `prompt_at`; the stop hook sets `stop_at`, for the main agent only. A host's prompt hook also fires for a scheduled task, a background subagent reporting back and a message from another session, so `prompt_at` alone proves no human.
+//   1. A session file, `<state>/signoff-witness/<digest of the session id>.json`, `{ prompt_at, stop_at, prompts }`, times in milliseconds. The prompt hook sets `prompt_at` and counts `prompts`; the stop hook sets `stop_at`, for the main agent only. A session with more than one prompt and no stop record lost its stop (the stop hook failed or was off), which is not the same as a first turn that has not stopped yet: it reads `no_stop_record`. A host's prompt hook also fires for a scheduled task, a background subagent reporting back and a message from another session, so `prompt_at` alone proves no human.
 //   2. On Claude Code, a ticket. A `PreToolUse` hook on `task_signoff` denies a subagent's call, then reads the tail of the transcript for the last prompt-like root line and checks it carries `origin.kind: "human"`, and writes `<state>/signoff-ticket/<digest of track, slug, outcome>.json`. The server reads and deletes it; one older than two minutes is ignored.
 //   3. On Copilot, no ticket: the server reads the session file by `COPILOT_AGENT_SESSION_ID` and checks the last `user.message` in the session's event log for a `source`.
 //
@@ -31,7 +31,7 @@ export const PROMPT_SKEW_MS = 30000
 export const MAIN_AGENT_WAIT_MS = 1500
 const MAIN_AGENT_STEP_MS = 100
 /** Every reason a verdict can give, `witnessed` first. */
-export const WITNESS_REASONS = ["witnessed", "no_witness", "subagent", "subagent_not_ruled_out", "not_human_origin", "human_origin_unknown", "no_prompt_since_stop", "same_turn_as_delivery"]
+export const WITNESS_REASONS = ["witnessed", "no_witness", "subagent", "subagent_not_ruled_out", "not_human_origin", "human_origin_unknown", "no_stop_record", "no_prompt_since_stop", "no_delivery_time", "same_turn_as_delivery"]
 
 const STALE_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
@@ -84,14 +84,18 @@ function readJson(file) {
 
 function readSession(stateDir, sessionId) {
   const record = readJson(witnessFile(stateDir, sessionId))
-  return { prompt_at: asTime(record?.prompt_at), stop_at: asTime(record?.stop_at) }
+  return { prompt_at: asTime(record?.prompt_at), stop_at: asTime(record?.stop_at), prompts: Number.isSafeInteger(record?.prompts) && record.prompts > 0 ? record.prompts : 0 }
 }
+
+// More than one prompt and no stop record: a stop the hook should have recorded is missing.
+const stopMissing = (session) => session.prompts > 1 && session.stop_at === null
 
 function setField(field, payload, { env = process.env, stateDir = resolveDeskStateDir({ env }), now = Date.now } = {}) {
   try {
     if (!hasText(payload?.session_id)) return {}
     const at = now()
-    writeRecord(witnessFile(stateDir, payload.session_id), { ...readSession(stateDir, payload.session_id), [field]: at }, at)
+    const session = readSession(stateDir, payload.session_id)
+    writeRecord(witnessFile(stateDir, payload.session_id), { ...session, [field]: at, ...(field === "prompt_at" ? { prompts: session.prompts + 1 } : {}) }, at)
   } catch {
     // No record means no witness, which is unverified: fail closed for the sign-off, quiet for the turn.
   }
@@ -263,6 +267,7 @@ export function issueTicket(payload, { env = process.env, stateDir = resolveDesk
       issued_at: at,
       prompt_at: session.prompt_at === null ? null : prompt.at,
       stop_at: session.stop_at,
+      ...(stopMissing(session) ? { stop_missing: true } : {}),
       main_agent: mainAgentProof(payload, { clock, sleep, maxBytes }),
       human_origin: humanOrigin,
     }
@@ -290,23 +295,25 @@ function takeTicket(stateDir, task, now) {
   return {
     promptAt: asTime(ticket.prompt_at),
     stopAt: asTime(ticket.stop_at),
+    // Present only when true; a ticket from before this field reads as not missing: it was written by a hook that could not tell.
+    ...(ticket.stop_missing === true ? { stopMissing: true } : {}),
     mainAgent: typeof ticket.main_agent === "boolean" ? ticket.main_agent : null,
     humanOrigin: typeof ticket.human_origin === "boolean" ? ticket.human_origin : null,
   }
 }
 
 /**
- * What the server knows about the turn behind a `task_signoff` call: `{ promptAt, stopAt, mainAgent, humanOrigin }`, or null when nothing witnessed it (Codex, hooks off, no ticket, an expired ticket).
+ * What the server knows about the turn behind a `task_signoff` call: `{ promptAt, stopAt, stopMissing?, mainAgent, humanOrigin }` (`stopMissing` only when true), or null when nothing witnessed it (Codex, hooks off, no ticket, an expired ticket).
  * Claude Code: reads and deletes the ticket for this task and outcome. Copilot (`COPILOT_AGENT_SESSION_ID` set): reads the session file and the event log instead, with `mainAgent: null`.
  * `copilotOptions` reaches `copilotLastPromptIsHuman` in tests.
  */
 export function witnessFor({ env, stateDir = resolveDeskStateDir({ env }), track, slug, outcome, now, copilotOptions = {} }) {
   const sessionId = env?.COPILOT_AGENT_SESSION_ID
   if (hasText(sessionId)) {
-    const session = readJson(witnessFile(stateDir, sessionId))
-    if (session === null) return null
+    if (readJson(witnessFile(stateDir, sessionId)) === null) return null
+    const session = readSession(stateDir, sessionId)
     // The one line to change when a Copilot subagent marker is proven: set `mainAgent` from it.
-    return { promptAt: asTime(session.prompt_at), stopAt: asTime(session.stop_at), mainAgent: null, humanOrigin: copilotLastPromptIsHuman(sessionId, { env, ...copilotOptions }) }
+    return { promptAt: session.prompt_at, stopAt: session.stop_at, ...(stopMissing(session) ? { stopMissing: true } : {}), mainAgent: null, humanOrigin: copilotLastPromptIsHuman(sessionId, { env, ...copilotOptions }) }
   }
   // A ticket is read only when this server runs under Claude Code, the one host whose hook writes it. On any other host it is left alone, so a ticket left behind by a call that never reached the server cannot verify a call from a host with no hooks. Known limit: a server on another host that was started from inside a Claude Code shell inherits the Claude mark.
   if (detectAgentHost(env) !== "claude") return null
@@ -315,10 +322,10 @@ export function witnessFor({ env, stateDir = resolveDeskStateDir({ env }), track
 }
 
 /**
- * Whether a human turn stood behind the sign-off: `{ verified, why }`. The caller passes the times in milliseconds: `deliveredAt` from the card's ISO time as `Date.parse` gives it, not rounded down to the second (a delivery a moment after the human line could then read as before it). A time that is not a number reads as not before the prompt, so a wiring mistake fails closed as `same_turn_as_delivery`. Verified only when `promptAt` is a finite number, `stopAt` and `deliveredAt` are each absent or below it, `mainAgent` is exactly true and `humanOrigin` is exactly true. `why` is the first reason that applies, in the order of `WITNESS_REASONS` after `witnessed`.
+ * Whether a human turn stood behind the sign-off: `{ verified, why }`. The caller passes the times in milliseconds: `deliveredAt` from the card's ISO time as `Date.parse` gives it, not rounded down to the second (a delivery a moment after the human line could then read as before it). A time that is not a number reads as not before the prompt, so a wiring mistake fails closed as `same_turn_as_delivery`. A `deliveredAt` that is absent (a card with no readable delivery time) is `no_delivery_time`, and `stopMissing` (the session lost a stop record) is `no_stop_record`: neither check is skipped (fail closed, ruling 2026-10-06). Verified only when `promptAt` is a finite number, `stopMissing` is not true, `stopAt` is absent or below it, `deliveredAt` is below it, `mainAgent` is exactly true and `humanOrigin` is exactly true. `why` is the first reason that applies, in the order of `WITNESS_REASONS` after `witnessed`.
  */
 export function witnessVerdict(witness) {
-  const { promptAt, stopAt, deliveredAt, mainAgent, humanOrigin } = witness ?? {}
+  const { promptAt, stopAt, stopMissing: lost, deliveredAt, mainAgent, humanOrigin } = witness ?? {}
   const absent = (value) => value === undefined || value === null
   const below = (value) => typeof value === "number" && value < promptAt
   let why = "witnessed"
@@ -327,7 +334,9 @@ export function witnessVerdict(witness) {
   else if (mainAgent !== true) why = "subagent_not_ruled_out"
   else if (humanOrigin === false) why = "not_human_origin"
   else if (humanOrigin !== true) why = "human_origin_unknown"
+  else if (lost === true) why = "no_stop_record"
   else if (!absent(stopAt) && !below(stopAt)) why = "no_prompt_since_stop"
-  else if (!absent(deliveredAt) && !below(deliveredAt)) why = "same_turn_as_delivery"
+  else if (absent(deliveredAt)) why = "no_delivery_time"
+  else if (!below(deliveredAt)) why = "same_turn_as_delivery"
   return { verified: why === "witnessed", why }
 }
