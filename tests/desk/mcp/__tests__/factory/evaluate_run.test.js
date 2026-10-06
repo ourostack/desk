@@ -90,9 +90,20 @@ test("the brief carries the job, the session on the published clock, the rubric 
     session_log: LOG,
     clock_origin: LOCAL.session.started_at,
     facts: { duration_ms: PUBLISHED.session.duration_ms, ended: true, intervals: PUBLISHED.intervals, counts },
+    own_share: null,
     unavailable: [],
     output: OUTPUT,
   })
+})
+
+test("the brief names the job's own share of the session when its binding records segments, and none without facts", () => {
+  const shared = local()
+  const binding = shared.jobs.find((bound) => bound.job === JOB)
+  binding.agents = [0]
+  binding.segments = [{ start_ms: 0, end_ms: 1000 }, { start_ms: 5000, end_ms: 6000, shared: true }]
+  assert.deepEqual(brief({ localFacts: shared }).own_share, [{ start_ms: 0, end_ms: 1000 }, { start_ms: 5000, end_ms: 6000 }])
+  shared.session.started_at = "2020-01-01T00:00:00.000Z"
+  assert.equal(brief({ localFacts: shared }).own_share, null, "a session the store will never hold has no share to label")
 })
 
 test("the brief's intervals are exactly the published facts' intervals, so cited evidence matches the store", () => {

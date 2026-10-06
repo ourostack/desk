@@ -19,6 +19,10 @@
 //     `publishedClock`), with the counts. Its intervals are exactly the ones
 //     the store will hold, so evidence copied from them matches the store's
 //     gate. `null` when the session could never be published;
+//   - `own_share`: the job's own spans of the session (`[{ start_ms,
+//     end_ms }]` on the same clock, its binding's segments), or `null` when
+//     the binding records none. The store counts labels only inside the job's
+//     share, so a session several jobs share is labeled there, not whole;
 //   - `unavailable`: `session_log_missing` and `facts_missing` as they apply;
 //   - `output`: where the evaluator writes its labels.
 //
@@ -124,6 +128,7 @@ export function buildEvaluatorBrief({ job, localFacts, logPath, outputPath, plug
   // Codex sessions carry a version-7 ID and are not labelled yet (parked for milestone 4); their published ID is keyed, which labels cannot carry.
   if (!SESSION_ID_V4.test(localFacts.session.id)) return null
   const { clock } = publishedClock(localFacts)
+  const binding = localFacts.jobs.find((bound) => bound.job === job)
   const unavailable = []
   if (logPath === null) unavailable.push("session_log_missing")
   if (clock === null) unavailable.push("facts_missing")
@@ -136,6 +141,7 @@ export function buildEvaluatorBrief({ job, localFacts, logPath, outputPath, plug
     session_log: logPath,
     clock_origin: clock === null ? null : localFacts.session.started_at,
     facts: clock === null ? null : { ...clock, counts: structuredClone(localFacts.counts) },
+    own_share: clock === null || !Object.hasOwn(binding, "segments") ? null : binding.segments.map((segment) => ({ start_ms: segment.start_ms, end_ms: segment.end_ms })),
     unavailable,
     output: outputPath,
   }

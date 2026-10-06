@@ -322,27 +322,58 @@ test("the muda Pareto sums labeled waste largest first, breaks ties by waste nam
   assert.deepEqual(unlabeled.muda.groupings.overall.all, { jobs: 1, jobs_labeled: 0, n: 0, N: 1, state: "unavailable", jobs_excluded: [{ reason: "not_in_published_facts", jobs: 1 }], sessions_labeled: 0, sessions_shared: 0, muda_time_ms: null, wastes: [] })
 })
 
-test("a session bound to several jobs counts its labeled waste once in every Pareto total", () => {
-  // Session 1 is bound to job 1 and to a second job, and labeled identically for both.
-  const sessions = fixtureSessions()
-  const shared = sessions.map((session) => session.session.id !== S(1) ? session : {
+// Session 1 bound to job 1 and a second job (8), each with the given binding fields, and labeled whole and identically for both.
+function sharedSession(first, second) {
+  const sessions = fixtureSessions().map((session) => session.session.id !== S(1) ? session : {
     ...session,
-    jobs: [...session.jobs, { ...session.jobs[0], job: J("8") }],
+    jobs: [{ ...session.jobs[0], ...first }, { ...session.jobs[0], job: J("8"), ...second }],
   })
   const labels = fixtureLabels()
-  const twin = { ...labels.find((entry) => entry.session === S(1)), job: J("8") }
-  const resolved = resolveLabels([...labels, twin], shared)
-  const records = buildTimelines(shared).map((timeline) => jobRecord({ timeline, formulas: calculateFormulas(timeline) }, resolved.byJobSession))
-  const rollups = computeRollups({ records, sessions: shared, labels: resolved })
+  const resolved = resolveLabels([...labels, { ...labels.find((entry) => entry.session === S(1)), job: J("8") }], sessions)
+  const records = buildTimelines(sessions).map((timeline) => jobRecord({ timeline, formulas: calculateFormulas(timeline) }, resolved.byJobSession))
+  return { resolved, records, rollups: computeRollups({ records, sessions, labels: resolved }) }
+}
+
+test("a session bound to several jobs counts each job's labels only inside its own segments, so the session counts once", () => {
+  // Job 1 owns 0..7000 and job 8 owns 7000..10000 of session 1, whose labels are value 0..6000, waiting 6000..8000 and defects 8000..10000.
+  const { resolved, records, rollups } = sharedSession({ agents: [0], segments: [{ start_ms: 0, end_ms: 7000 }] }, { agents: [0], segments: [{ start_ms: 7000, end_ms: 10000 }] })
+  assert.deepEqual(resolved.byJobSession.get(`${J("8")}/${S(1)}`).stretches.map((stretch) => [stretch.start_ms, stretch.end_ms, stretch.class]), [[7000, 8000, "muda"], [8000, 10000, "muda"]])
+  const byJob = Object.fromEntries(records.map((entry) => [entry.job, entry]))
+  assert.deepEqual(byJob[J("1")].measures.muda_time, { value: 1000, state: "measured" })
+  assert.deepEqual(byJob[J("1")].measures["muda_time.defects"], { value: 0, state: "measured" })
+  assert.deepEqual(byJob[J("8")].measures.muda_time, { value: 3000, state: "measured" })
   const overall = rollups.muda.groupings.overall.all
   assert.equal(overall.jobs_labeled, 5)
   assert.equal(overall.sessions_labeled, 6)
-  assert.equal(overall.sessions_shared, 1)
-  assert.equal(overall.muda_time_ms, 14000, "session 1's 4000 ms counts once, not twice")
-  assert.deepEqual(overall.wastes.slice(0, 2).map((entry) => [entry.waste, entry.total_ms, entry.jobs]), [["waiting", 8000, 5], ["defects", 4000, 3]])
-  // Per-job measures still give each job the whole session, as active time does.
-  assert.equal(rollups.measures.groupings.overall.all.measures.muda_time.jobs_counted, 5)
-  assert.match(renderRollupsMarkdown(rollups), /Sessions summed: 6, each once; shared by several jobs: 1\./u)
+  assert.equal(overall.sessions_shared, 0)
+  assert.equal(overall.muda_time_ms, 14000, "session 1's 4000 ms counts once, split between its jobs")
+  assert.deepEqual(overall.wastes.slice(0, 2).map((entry) => [entry.waste, entry.total_ms, entry.jobs]), [["waiting", 8000, 5], ["defects", 4000, 2]])
+  assert.match(renderRollupsMarkdown(rollups), /Sessions summed: 6, each job's own part once; shared by several jobs: 0\./u)
+})
+
+test("labels whose job's share of a shared session is not recorded are unused, so the job reads partial, never the whole session", () => {
+  // Neither binding records segments, or one is a subagent-only binding: no job's share is known.
+  for (const [first, second] of [[{}, {}], [{ agents: [0], segments: [{ start_ms: 0, end_ms: 7000 }] }, { agents: [2] }]]) {
+    const { resolved, records, rollups } = sharedSession(first, second)
+    const unknown = Object.hasOwn(first, "segments") ? 1 : 2
+    assert.deepEqual(resolved.unused.find((entry) => entry.reason === "share_unknown"), { reason: "share_unknown", files: unknown })
+    const byJob = Object.fromEntries(records.map((entry) => [entry.job, entry]))
+    assert.deepEqual(byJob[J("8")].measures.muda_time, { excluded: "not_labeled" })
+    assert.ok(rollups.coverage.labels.unused.some((entry) => entry.reason === "share_unknown"))
+    assert.match(renderRollupsMarkdown(rollups), /which part of the session was the job's/u)
+  }
+  // A job that is its session's only binding, with neither segments nor workers recorded, owns the whole session.
+  const { records } = fixtureRollups()
+  assert.deepEqual(records.find((entry) => entry.job === J("1")).measures.muda_time, { value: 4000, state: "measured" })
+})
+
+test("overlapping segments merge, and a shared segment counts for each job that holds it", () => {
+  const { resolved, rollups } = sharedSession(
+    { agents: [0], segments: [{ start_ms: 7500, end_ms: 9000, shared: true }, { start_ms: 0, end_ms: 6500 }, { start_ms: 6000, end_ms: 7000 }] },
+    { agents: [0], segments: [{ start_ms: 7500, end_ms: 9000, shared: true }] },
+  )
+  assert.deepEqual(resolved.byJobSession.get(`${J("1")}/${S(1)}`).stretches.map((stretch) => [stretch.start_ms, stretch.end_ms]), [[0, 6000], [6000, 7000], [7500, 8000], [8000, 9000]])
+  assert.equal(rollups.muda.groupings.overall.all.sessions_shared, 1)
 })
 
 test("a Pareto whose labeled jobs carry no muda has no shares, not zero shares", () => {
@@ -546,24 +577,16 @@ test("the rollups Markdown shows the Pareto, the catalog per group, tool kinds a
   assert.doesNotMatch(emptyText, /\bNaN\b|undefined|null/u)
 })
 
-test("sessions_shared counts a session only when two labeled jobs' segments overlap, or one has none", () => {
+test("sessions_shared counts a session only when two labeled jobs' segments overlap", () => {
   const sharedCount = (firstSegments, secondSegments) => {
-    const sessions = fixtureSessions().map((session) => {
-      if (session.session.id !== S(1)) return session
-      const first = { ...session.jobs[0], ...(firstSegments ? { segments: firstSegments } : {}) }
-      const second = { ...session.jobs[0], job: J("8"), ...(secondSegments ? { segments: secondSegments } : {}) }
-      return { ...session, jobs: [first, second] }
-    })
-    const labels = fixtureLabels()
-    const resolved = resolveLabels([...labels, { ...labels.find((entry) => entry.session === S(1)), job: J("8") }], sessions)
-    const records = buildTimelines(sessions).map((timeline) => jobRecord({ timeline, formulas: calculateFormulas(timeline) }, resolved.byJobSession))
-    return computeRollups({ records, sessions, labels: resolved }).muda.groupings.overall.all.sessions_shared
+    const fields = (segments) => (segments ? { agents: [0], segments } : {})
+    return sharedSession(fields(firstSegments), fields(secondSegments)).rollups.muda.groupings.overall.all.sessions_shared
   }
   const early = [{ start_ms: 0, end_ms: 1000 }]
   assert.equal(sharedCount(early, [{ start_ms: 1000, end_ms: 2000 }]), 0)
   assert.equal(sharedCount(early, [{ start_ms: 500, end_ms: 2000 }]), 1)
-  assert.equal(sharedCount(early, null), 1)
-  assert.equal(sharedCount(null, null), 1)
+  assert.equal(sharedCount(early, null), 0, "the job with no recorded share has no labels counted")
+  assert.equal(sharedCount(null, null), 0)
 })
 
 const measuredValue = (value) => ({ value, state: "measured" })
