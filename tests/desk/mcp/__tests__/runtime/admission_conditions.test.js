@@ -200,6 +200,8 @@ test("a stopped owner is never taken over: the other session reports controller_
   assert.equal(record.owner.parent_pid, owner.child.pid)
   assert.notEqual(record.owner.pid, owner.child.pid)
   const inode = statSync(record.endpoint).ino
+  // SIGSTOP freezes the controller wherever it is. A controller stopped while it still holds the index database's write lock leaves every other session's admission waiting on "database is locked" (SQLITE_BUSY), so its checks of the stopped owner are spaced out far past the test's wait, and the run failed at 90 s with 2 of 3 checks missed. Stop it only once it has nothing running or queued.
+  await owner.statusUntil((payload) => payload.lexical?.pending_changes === 0 && payload.lexical?.current_automatic_action == null && payload.semantic?.current_automatic_action == null, { deadlineMs: 30000 })
   process.kill(record.owner.pid, "SIGSTOP")
   t.after(() => {
     try { process.kill(record.owner.pid, "SIGCONT") } catch (error) { if (error.code !== "ESRCH") throw error }
