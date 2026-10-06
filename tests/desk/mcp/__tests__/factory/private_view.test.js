@@ -30,6 +30,7 @@ async function scratch(run) {
   mkdirSync(path.join(root, "_meta"), { recursive: true })
   mkdirSync(path.join(root, ".git-like"), { recursive: true })
   mkdirSync(path.join(root, "track-a/.dot"), { recursive: true })
+  card(root, "track-b/plain", "---\ntitle: Plain\n---\n")
   card(root, "track-a/blank", "---\ntitle: \"\"\n---\n")
   const env = { HOME: home, DESK: root }
   try {
@@ -44,6 +45,7 @@ test("a desk not known private publishes keyed job IDs, so the names map keyed I
   const plain = (track, slug) => jobId({ deskRemote: `local:${root}`, personPrefix: "", track, slug })
   const jobs = await taskNames({ root, env })
   assert.deepEqual(jobs, {
+    [keyedJobId(plain("track-b", "plain"), secret)]: { title: "Plain", track: "track-b", task: "plain" },
     [keyedJobId(plain("track-a", "first"), secret)]: { title: "First task", track: "track-a", task: "first" },
     [keyedJobId(plain("track-a", "old"), secret)]: { title: "Old task", track: "track-a", task: "old" },
     [keyedJobId(plain("track-a", "blank"), secret)]: { title: "blank", track: "track-a", task: "blank" },
@@ -75,7 +77,7 @@ test("main copies the site and writes the names privately", () => scratch(async 
   assert.equal(dir, path.join(home, ".local", "state", "desk-private-view", "factory"))
   assert.ok(fetched.every((url) => url.startsWith(SITE)))
   assert.equal(readFileSync(path.join(dir, "app.js"), "utf8"), `copy of ${SITE}app.js`)
-  assert.equal(Object.keys(JSON.parse(readFileSync(path.join(dir, "local-names.json"), "utf8")).jobs).length, 4)
+  assert.equal(Object.keys(JSON.parse(readFileSync(path.join(dir, "local-names.json"), "utf8")).jobs).length, 5)
   assert.equal(statSync(dir).mode & 0o777, 0o700)
   assert.equal(statSync(path.join(dir, "local-names.json")).mode & 0o777, 0o600)
   assert.equal(statSync(path.join(dir, "data.json")).mode & 0o777, 0o600)
