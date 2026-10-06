@@ -104,7 +104,7 @@
 //   while it stays away.
 
 // The capture record (`capture-flush.js`, `capture-publish.js`) travels as one more file, `capture/<intake_id>.json`, appended after the batch is
-// taken so it never displaces facts, labels or deletes, and only when the store's `factory.json` says `"capture": 1`. A refusal that names it
+// taken so it never displaces facts, labels or deletes, and only when the store's `capture.json` holds exactly `{"capture":1}`. A refusal that names it
 // (a `capture_` code, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
 // record waits a week. Its bookkeeping is `status.capture[store]` and nothing else.
 

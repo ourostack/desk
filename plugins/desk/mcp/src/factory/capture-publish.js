@@ -9,7 +9,7 @@
 // nothing about work that belongs elsewhere. Store names in `by_owner` are
 // lower-cased by the sweep, so the store is lower-cased here and compared
 // exactly. A host that is not `counted`, or that has no session in scope, is
-// omitted (never zero): an all-zero host cannot be told from an uncounted one.
+// omitted (never zero): an all-zero host cannot be told from an uncounted one. When any host could not be counted (capped or unreadable) the result is `null`: a record without it would overwrite the store's true counts for that host, and the local `status.json` says why.
 //
 // Unowned sessions (`-`) count only while at most one store contributes. The sweep decides that
 // when it runs, so the caller passes the current number of contributing stores (`contributing`)
@@ -113,18 +113,17 @@ export function captureFor(coverage, { store, intakeId, sentBefore = false, loop
   const path = `capture/${intakeId}.json`
   const hosts = {}
   const sourceHosts = coverage.hosts
-  let readable = true
   for (const name of ENUMS.host) {
     if (!Object.hasOwn(sourceHosts, name)) continue
     const entry = hostEntry(name, sourceHosts[name], owners)
     if (entry === undefined) return invalid()
+    // A host that could not be counted (capped, unreadable) means the record would drop it and overwrite the store's true counts for it: say nothing and keep the record already there.
+    if (entry === null && !["counted", "absent"].includes(sourceHosts[name]?.state)) return null
     if (entry !== null) hosts[name] = entry
-    // A passing read error or a cap must not retract a true record.
-    else if (!isObject(sourceHosts[name]) || !["counted", "absent"].includes(sourceHosts[name].state)) readable = false
   }
   let bytes = EMPTY_RECORD
   if (Object.keys(hosts).length === 0) {
-    if (sentBefore !== true || !readable) return null
+    if (sentBefore !== true) return null
   } else {
     const slot = loopSlot(loop)
     bytes = serialize({ schema: CAPTURE_SCHEMA, basis: "still_on_disk", hosts, ...(slot === null ? {} : { [CAPTURE_LOOP_KEY]: slot }) })

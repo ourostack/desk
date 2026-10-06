@@ -154,7 +154,7 @@ test("an uncounted host is left out, not written as zero", () => {
   const cov = coverage({
     "claude-code": host({ [PUBLIC]: bucket(mine) }),
     "copilot-cli": { state: "absent", unverified: true },
-    "codex-cli": { state: "capped", unverified: true },
+    "codex-cli": { state: "absent", unverified: true },
   })
   const got = records(ask(cov))
   assert.deepEqual(Object.keys(got.hosts), ["claude-code"])
@@ -164,6 +164,15 @@ test("an uncounted host is left out, not written as zero", () => {
   for (const state of ["unreadable", "capped", "absent", "other"]) {
     assert.equal(ask(coverage({ "claude-code": { state, unverified: true } })), null)
   }
+})
+
+test("one host that could not be counted keeps the record already there, even beside a counted host", () => {
+  for (const state of ["capped", "unreadable"]) {
+    const cov = coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }), "codex-cli": { state, unverified: true } })
+    assert.equal(ask(cov), null)
+    assert.equal(ask(cov, { sentBefore: true }), null)
+  }
+  assert.notEqual(ask(coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }), "codex-cli": { state: "absent", unverified: true } }), { sentBefore: true }), null)
 })
 
 test("nothing counted and nothing sent before is null; nothing counted and sent before is the empty record", () => {
