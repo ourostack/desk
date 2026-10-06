@@ -158,16 +158,18 @@ export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs }) {
  * `findAgentCli({ env, exists }) -> string | null`: `DESK_AGENT_CLI`, else
  * `claude` on PATH, else `local/claude` in the Claude config directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`), else `~/.local/bin/claude`.
  */
-export function findAgentCli({ env, exists = isExecutableFile }) {
+export function findAgentCli({ env, exists = isExecutableFile, platform = process.platform }) {
   const explicit = env.DESK_AGENT_CLI
   if (typeof explicit === "string" && explicit !== "" && exists(explicit)) {
     return explicit
   }
   const dirs = typeof env.PATH === "string" ? env.PATH.split(path.delimiter).filter((dir) => dir !== "") : []
-  const candidates = dirs.map((dir) => path.join(dir, "claude"))
+  // The native Claude Code install is `claude.exe` on Windows, and a program started without a shell must be named in full.
+  const name = platform === "win32" ? "claude.exe" : "claude"
+  const candidates = dirs.map((dir) => path.join(dir, name))
   if (typeof env.HOME === "string" && env.HOME !== "") {
     const configDir = env.CLAUDE_CONFIG_DIR || path.join(env.HOME, ".claude")
-    candidates.push(path.join(configDir, "local", "claude"), path.join(env.HOME, ".local", "bin", "claude"))
+    candidates.push(path.join(configDir, "local", name), path.join(env.HOME, ".local", "bin", name))
   }
   return candidates.find((candidate) => exists(candidate)) ?? null
 }

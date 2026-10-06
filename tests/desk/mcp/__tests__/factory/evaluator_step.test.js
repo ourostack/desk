@@ -8,6 +8,7 @@ import { mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { osEnv } from "../_os_env.js"
 
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
@@ -27,7 +28,7 @@ const DAY0 = Math.floor(Date.now() / DAY) * DAY + 12 * 60 * 60 * 1000
 
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-evaluator-step-")))
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin") })
   try {
     return await run(env, base)
   } finally {

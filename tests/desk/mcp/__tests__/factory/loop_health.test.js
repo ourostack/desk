@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { osEnv } from "../_os_env.js"
 
 import { cardFile, cardKey, openImprovement, readCards, LOOP_ALARMS } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { conditionOf, observeConditions } from "../../../../../plugins/desk/mcp/src/factory/loop-conditions.js"
@@ -31,7 +32,7 @@ async function scratch(run, { version = "3.2.0-alpha.9" } = {}) {
   await fs.mkdir(deskRoot, { recursive: true })
   await fs.mkdir(pluginRoot, { recursive: true })
   if (version !== null) await fs.writeFile(path.join(pluginRoot, "plugin.json"), JSON.stringify({ name: "desk", version }))
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state"), DESK_PLUGIN_ROOT: pluginRoot }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state"), DESK_PLUGIN_ROOT: pluginRoot })
   try {
     return await run({ env, deskRoot, personPrefix: "", base, pluginRoot })
   } finally {

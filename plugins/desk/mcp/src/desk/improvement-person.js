@@ -8,15 +8,14 @@
 // `login_not_cached`, `no_matching_member` or `invalid_member`: the cards were not checked, and the caller says so.
 
 import * as os from "node:os"
-import * as path from "node:path"
 import { crewWorkspace } from "./crew-roster.js"
-import { personPrefix } from "../util/paths.js"
+import { deskRelativePath, personPrefix } from "../util/paths.js"
 
 const SOLO = Object.freeze({ status: "ok", personPrefix: "" })
 
 function prefixOf(deskRoot, alias) {
   try {
-    return { status: "ok", personPrefix: path.relative(deskRoot, personPrefix(deskRoot, alias)) }
+    return { status: "ok", personPrefix: deskRelativePath(deskRoot, personPrefix(deskRoot, alias)) }
   } catch {
     return null
   }

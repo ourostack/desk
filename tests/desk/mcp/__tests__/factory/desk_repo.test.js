@@ -1702,7 +1702,7 @@ test("repoLookup says unavailable for a stat error that is not a missing folder,
   }
 }))
 
-test("repoLookup says unavailable when Git fails or times out, and none when Git cleanly reports no origin", () => withRepos(({ root, repo }) => {
+test("repoLookup says unavailable when Git fails or times out, and none when Git cleanly reports no origin", { skip: process.platform === "win32" ? "a #!/bin/sh script cannot stand in for git on Windows: it cannot be started without a shell" : false }, () => withRepos(({ root, repo }) => {
   const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
   const code = repo("code", "git@github.com:OurOStack/Desk.git")
   const script = (name, body) => {
@@ -1726,7 +1726,7 @@ test("repoOfPath answers null when Git fails or is missing", () => withRepos(({ 
   assert.equal(createDeskReaders({ deskRoot }).repoOfPath(path.join(code, "a.txt")), "ourostack/desk")
 }))
 
-test("repoOfPath asks Git once per repository and remembers each directory", () => withRepos(({ repo, loggingGit, gitCalls }) => {
+test("repoOfPath asks Git once per repository and remembers each directory", { skip: process.platform === "win32" ? "a #!/bin/sh script cannot stand in for git on Windows: it cannot be started without a shell" : false }, () => withRepos(({ repo, loggingGit, gitCalls }) => {
   const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
   const code = repo("code", "git@github.com:OurOStack/Desk.git")
   mkdirSync(path.join(code, "src"))

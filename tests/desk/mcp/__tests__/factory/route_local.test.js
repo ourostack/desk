@@ -8,6 +8,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { osEnv } from "../_os_env.js"
 
 import { cardKey, claimNext, readCards, updateCard, EVALUATOR_NAMES, FLUSH_HEALTH_CODES, RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { factoryStateDir } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
@@ -22,7 +23,7 @@ async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-route-local-")))
   const deskRoot = path.join(base, "desk")
   await fs.mkdir(deskRoot, { recursive: true })
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   try {
     return await run({ env, deskRoot, personPrefix: "", base })
   } finally {
