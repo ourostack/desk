@@ -52,7 +52,7 @@ test("the startup line names the bound root and where it came from", () => {
   ]) {
     const line = deskStartupDirection({ root: "/desks/one", source })
     assert.ok(line.startsWith(`Desk startup: $DESK is /desks/one (${label}). `), `${source}: ${line}`)
-    assert.match(line, /The boot has not run yet: .* not a scan of the workspace\. Run `node \S*session-boot\.js` now, before other work/u)
+    assert.match(line, /The boot has not run yet: .* not a workspace scan\. Run `node \S*session-boot\.js` now, before other work/u)
     assert.match(line, /An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound/u)
   }
 })
