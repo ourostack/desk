@@ -961,18 +961,16 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   let stepResult = null
   let refreshed = null
   let newBody = existing.content
-  if (step !== undefined || refresh !== null) {
-    newBody = (await readMarkdown(filePath)).content
-    if (step !== undefined) {
-      stepResult = applyStep(newBody, step, "task_update", repoNames)
-      newBody = stepResult.body
-    }
-    if (refresh !== null) {
-      const before = readSteps(newBody).rows
-      const { body: derivedBody, written } = setDerived(newBody, refresh.derived.changes)
-      newBody = derivedBody
-      refreshed = refreshAnswer(refresh, written, readyOf(before ?? []), readSteps(newBody).rows ?? [])
-    }
+  if (step !== undefined || refresh !== null) newBody = (await readMarkdown(filePath)).content
+  if (step !== undefined) {
+    stepResult = applyStep(newBody, step, "task_update", repoNames)
+    newBody = stepResult.body
+  }
+  if (refresh !== null) {
+    const before = readSteps(newBody).rows
+    const { body: derivedBody, written } = setDerived(newBody, refresh.derived.changes)
+    newBody = derivedBody
+    refreshed = refreshAnswer(refresh, written, readyOf(before ?? []), readSteps(newBody).rows ?? [])
   }
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
