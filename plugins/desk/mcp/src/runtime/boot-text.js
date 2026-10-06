@@ -131,14 +131,20 @@ export function ceiling(text, limit = TEXT_CEILING) {
 // A next step or blocker that says the thing lives only on another machine gets ELSEWHERE_NOTE (elsewhere-note.js, shared with the clone guard).
 export { ELSEWHERE_NOTE }
 
+// A card with no step ready or moving and one blocked is blocked work whatever its status says; a card with a step still moving is not.
+const stepsBlocked = (task) => task.steps !== undefined && task.steps.ready.length === 0 && task.steps.moving === 0 && task.steps.blocked.length > 0
+const stepsLine = ({ delivered, total, ready }) => `  Steps: ${delivered} of ${total} delivered${ready.length > 0 ? `; ready: ${ready.join(", ")}` : ""}`
+
 function stepLines(task) {
   const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
   const blocker = typeof task.blocker === "string" && task.blocker !== "" ? task.blocker : null
+  const steps = task.steps === undefined ? [] : [stepsLine(task.steps)]
   if (task.status === "blocked") {
-    if (blocker !== null) return [`  blocker: ${ceiling(blocker)}`, ...(next === null ? [] : [`  next: ${ceiling(next)}`])]
-    return [`  blocker: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`]
+    if (blocker !== null) return [`  blocker: ${ceiling(blocker)}`, ...(next === null ? [] : [`  next: ${ceiling(next)}`]), ...steps]
+    return [`  blocker: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`, ...steps]
   }
-  return [`  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`]
+  const stuck = stepsBlocked(task) ? [`  blocker: ${ceiling(task.steps.blocked.map((step) => `${step.id}: ${step.reason}`).join("; "))}`] : []
+  return [...stuck, `  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`, ...steps]
 }
 
 // What Desk's own access check found for the active account, in words that claim nothing the check did not show.
@@ -298,7 +304,7 @@ function taskSection(result, lines) {
   lines.push("", `Active tasks (${result.active_tasks.task_count})${namedOnly ? ", showing the named one" : ""}:`)
   if (tracks.length === 0) lines.push("- none")
   // Blocked tasks first, then the most recently updated, before the cap cuts the list.
-  const rank = ({ task }) => (task.status === "blocked" ? 0 : 1)
+  const rank = ({ task }) => (task.status === "blocked" || stepsBlocked(task) ? 0 : 1)
   const everyTask = tracks
     .flatMap((track) => track.tasks.map((task) => ({ track, task })))
     .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
@@ -308,7 +314,7 @@ function taskSection(result, lines) {
   const groups = new Map()
   const shownTasks = namedOnly ? pinned : [...pinned, ...everyTask.slice(0, TASKS_SHOWN_CAP - pinned.length)]
   for (const entry of shownTasks) {
-    const status = entry.task.status ?? "no status"
+    const status = stepsBlocked(entry.task) ? "blocked" : (entry.task.status ?? "no status")
     groups.set(status, [...(groups.get(status) ?? []), entry])
   }
   const pushNotes = pushNotesByTask(result.push_accounts)

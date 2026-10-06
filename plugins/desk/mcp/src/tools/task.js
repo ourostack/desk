@@ -42,6 +42,7 @@ import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
+import { applyStep } from "../desk/steps.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -286,8 +287,8 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // OPTIONAL_RUNTIME_FIELDS is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
-export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason"]
+export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", ...OPTIONAL_RUNTIME_FIELDS]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -344,6 +345,9 @@ function deliveryAnswer({ data, slug, ref }) {
     signoff_note: SIGNOFF_NOTE,
   }
 }
+
+// How a step input that arrives as a JSON string is read, and what the refusal says about it.
+const STEP_INPUT = { tool: "task_update", field: "step", effect: "no step was changed", example: '{"id": "api-change", "depends_on": [], "repo": "widgets"}' }
 
 const asList = (value) => (Array.isArray(value) ? value : [])
 
@@ -578,6 +582,12 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
     throw new Error("task_create: `focus` must be true or false")
   }
   refuseRecordKeys("task_create", values, values.frontmatter)
+  // The steps are checked and placed before anything is written: a bad one refuses the whole create.
+  let body = values.body ?? ""
+  if (values.steps !== undefined) {
+    if (!Array.isArray(values.steps)) throw new Error("task_create: `steps` must be a list of step objects; nothing was created")
+    for (const step of values.steps) body = applyStep(body, objectInput(step, { ...STEP_INPUT, tool: "task_create" }), "task_create", recordedRepos(values.repos).map((repo) => repo.name)).body
+  }
 
   const filePath = await resolveWriteTarget({
     deskRoot,
@@ -631,7 +641,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   // `local_only` the caller wrote is dropped (see `local-only.js`).
   if (data.repos !== undefined) data.repos = withLocalOnlyRecorded(data.repos, { spawnGit, homeDir: env.HOME, deskRoot })
 
-  await writeMarkdown(filePath, data, values.body ?? "")
+  await writeMarkdown(filePath, data, body)
   let commit
   if (isGitRepository(path.dirname(filePath), spawnGit)) {
     commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit)
@@ -686,6 +696,9 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  *     evidence?: { kind, ref },  // required only when this call moves the
  *                             // task into `done` from a non-`done` status;
  *                             // see "Evidence gate on `done`" below
+ *     step?: object,          // adds or changes one row of the card's `## Steps`
+ *                             // table (desk/steps.js); the answer carries `step`,
+ *                             // and `step_note` ("now ready: ...") when it made steps ready
  *   }
  *
  * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place, and on a
@@ -787,6 +800,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     }
   }
   refuseRecordKeys("task_update", frontmatter)
+  const step = objectInput(values.step, STEP_INPUT)
   const nextStep = nextStepValue === undefined ? undefined : requiredText(nextStepValue, nextStepKey)
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
@@ -883,7 +897,14 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     if (existing.data.status === "done") delete merged.evidence
   }
 
+  // A step is applied to the card as it is on disk right now, just before the write, so an `expect` holds against a change
+  // another session made while this call ran. Only the body is re-read: the frontmatter is written as this call built it, as for every task_update.
+  let stepResult = null
   let newBody = existing.content
+  if (step !== undefined) {
+    stepResult = applyStep((await readMarkdown(filePath)).content, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
+    newBody = stepResult.body
+  }
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
   if (typeof body_append === "string" && body_append.length > 0) {
@@ -892,7 +913,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
 
   const stage = stagingAllowed(filePath, spawnGit)
-  await writeMarkdown(filePath, merged, newBody)
+  // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
+  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined })
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
@@ -906,6 +928,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
+  if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
   if (returnReason !== undefined) {
     const line = parseReturn(merged.returns.at(-1))
     result.return_recorded = `${line.from} to ${line.to}, ${line.reason}, caught ${line.caught}`
@@ -945,6 +968,17 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (focus !== undefined) result.focus_note = focus
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
+}
+
+// What the answer says about a step write: the row as it now stands, the dependents a drop blocked, and the steps it made ready.
+function stepAnswer({ row, blocked, ready }) {
+  const shown = { ...row }
+  delete shown.line
+  return {
+    step: shown,
+    ...(blocked.length === 0 ? {} : { blocked_dependents: blocked }),
+    ...(ready.length === 0 ? {} : { step_note: `now ready: ${ready.join(", ")}` }),
+  }
 }
 
 // The already-archived card's status, read fail-safe: a missing file reads
