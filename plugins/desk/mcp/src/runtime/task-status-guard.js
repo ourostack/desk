@@ -306,7 +306,7 @@ function denyReason(card, change, via, host, { existing = null, proposed = null 
   const target = `{ track: "${track}", slug: "${slug}"`
   const tool = deskToolName(host, "task_update")
   const { call, shortened } = suggestedCall({ track, slug }, updateFields({ change, existing, proposed, via }))
-  const staging = via === "git add of it"
+  const staging = via === "git add of it" || via === "git commit of it"
   const instead = via === null ? "editing the card" : staging ? "staging the card by hand" : "writing the card from the shell"
   // The first sentence is the fix; when the exact call is too long for it, the call follows in the next one.
   const first = `Call ${tool} with ${call}.`
@@ -323,7 +323,7 @@ function denyReason(card, change, via, host, { existing = null, proposed = null 
     (via === null
       ? "Desk denies a direct edit of an existing task card: "
       : staging
-        ? "Desk denies staging a task card by hand, because Desk commits every card itself: `task_update` (and `task_create`, `task_move`, `task_archive`) already committed what it wrote, so run no git for a card; "
+        ? "Desk denies staging or committing a task card by hand, because Desk commits every card itself: `task_update` (and `task_create`, `task_move`, `task_archive`) already committed what it wrote, so run no git for a card; "
         : `Desk denies a shell command that writes an existing task card (${via}; reading a card with cat, grep or git diff is fine): `) +
     "every write to a card goes through `task_update`, which commits it for you and keeps its history honest. A commit that changes a card is refused by the desk's own git hook unless Desk makes it." +
     statusPart +

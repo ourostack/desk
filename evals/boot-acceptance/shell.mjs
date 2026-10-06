@@ -257,7 +257,13 @@ export function simpleCommands(command, depth = 0) {
     for (const redirect of raw.redirects) redirect.target = expandVars(redirect.target, vars)
     // `REPO_URL="https://..."` on a line of its own: later commands name the repository through `"$REPO_URL"` (round AG, elsewhere-clone run 2).
     if (raw.words.length > 0 && raw.redirects.length === 0 && raw.words.every((word) => ASSIGNMENT.test(word))) {
-      for (const word of raw.words) vars.set(word.slice(0, word.indexOf("=")), word.slice(word.indexOf("=") + 1))
+      // A value the shell computes (`$(cmd)`, which the tokenizer leaves as a bare `$`, or a backtick) is unknown: later uses stay as written, never a half-built string.
+      for (const word of raw.words) {
+        const name = word.slice(0, word.indexOf("="))
+        const value = word.slice(word.indexOf("=") + 1)
+        if (/\$(?![\w{])|`/u.test(value)) vars.delete(name)
+        else vars.set(name, value)
+      }
       continue
     }
     const words = unwrap(raw.words)

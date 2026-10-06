@@ -308,18 +308,40 @@ const SCRIPT_DENIES = [
 ]
 for (const [command, label] of SCRIPT_DENIES) test(`denies: ${label}`, () => denied(command))
 
-test("staging a card by hand is denied with the task_update fix first, and the tidy's DESK_TOOL_COMMIT=1 and other git adds pass", () => {
-  for (const command of [`git add ${CARD_REL}`, `git -C ${DESK} add ${CARD_REL}`, `git add -- ${CARD_REL}`, `git add ${CARD_ABS} && git commit -m "Update task"`, `cd ${DESK} && git add ${CARD_REL} && git commit -m x`]) {
+test("staging or committing a card by hand is denied with the task_update fix first, whatever the git spelling; other git commands pass", () => {
+  for (const command of [
+    `git add ${CARD_REL}`,
+    `git -C ${DESK} add ${CARD_REL}`,
+    `git add -- ${CARD_REL}`,
+    `git stage ${CARD_REL}`,
+    `git update-index --add ${CARD_REL}`,
+    `git update-index --add --cacheinfo 100644,abc,${CARD_REL}`,
+    `git commit ${CARD_REL} -m x`,
+    `git commit --only ${CARD_REL} -m x`,
+    `git commit -m "Update task" -- ${CARD_REL}`,
+    `git commit -m "Update task" -- "${CARD_REL}"`,
+    `git add ${CARD_ABS} && git commit -m "Update task"`,
+    `cd ${DESK} && git add ${CARD_REL} && git commit -m x`,
+    `echo DESK_TOOL_COMMIT=1; git add ${CARD_REL}`,
+    `export DESK_TOOL_COMMIT=1; git add ${CARD_REL}`,
+    `DESK_TOOL_COMMIT=1 git add ${CARD_REL}`,
+    `git add ${CARD_REL} # DESK_TOOL_COMMIT=1`,
+  ]) {
     const reason = denied(command)
     assert.match(reason, /^Call .*task_update/, `the fix leads: ${command}`)
-    assert.match(reason, /staging a task card by hand/)
+    assert.match(reason, /staging or committing a task card by hand/)
     assert.match(reason, /run no git for a card/)
+    assert.doesNotMatch(reason, /DESK_TOOL_COMMIT/, "the denial never mentions the override")
   }
   for (const command of [
-    `DESK_TOOL_COMMIT=1 git add ${CARD_REL}`,
     `git add README.md`,
     `git add -A -- greenhouse-ops/watering-schedule-api greenhouse-ops/_archive/watering-schedule-api`,
+    `git add -A`,
+    `git commit -a -m x`,
+    `git commit -m "see ${CARD_REL}" -- README.md`,
+    `git commit -m 'edited ${CARD_REL} by hand' -- README.md`,
     `git commit -m "add ${CARD_REL}" -- README.md`,
+    `git update-index --refresh ${CARD_REL}`,
     `git add greenhouse-ops/_archive/old-job/task.md`,
   ]) allowed(command)
 })
@@ -347,6 +369,7 @@ test("git add of a card passes while the card is conflicted in a merge", () => {
     denied(`git add ${rel}`, { cwd: repo, root: repo })
     assert.notEqual(sh(["merge", "other"]).status, 0)
     allowed(`git add ${rel}`, { cwd: repo, root: repo })
+    allowed(`git commit ${rel} -m resolved`, { cwd: repo, root: repo })
   } finally {
     rmSync(repo, { recursive: true, force: true })
   }
