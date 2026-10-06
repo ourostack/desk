@@ -377,10 +377,10 @@ export function unreadAlarms(loop, signals = {}) {
  * `observe`, `readStatusImpl`, `updateStatusImpl`, `readCardsImpl`, `recordStepImpl`, `pluginVersion`. It throws only for an invalid `deskRoot` or `now`.
  */
 export async function runMeasureStep(env, {
-  deskRoot, personPrefix = "", now = new Date(), attempted = [],
+  deskRoot, personPrefix = "", now, attempted = [],
   writeCardCommitted = writeCardCommittedDefault, observe = observeConditions, readStatusImpl = readStatus, updateStatusImpl = updateStatus,
   readCardsImpl = readCardsDefault, recordStepImpl = recordStep, pluginVersion: version,
-} = {}) {
+}) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   const nowMs = toMillis(now)
   const counts = {}

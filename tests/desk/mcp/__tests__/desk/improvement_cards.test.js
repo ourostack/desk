@@ -672,6 +672,12 @@ test("the takeover interleaving cannot remove a lock that replaced the stale one
   await makeLock(lock, "old-token", true)
   const vanished = await claim(where, { lockHooks: { afterStale: async () => { await fs.rm(lock, { recursive: true }) } } })
   assert.equal(vanished.result, "claimed")
+  // the holder released between the waiter's listing and its look at the holder's token: the waiter reads no age and tries again
+  await makeLock(lock, "old-token", true)
+  let listed = 0
+  const released = await claim(where, { lockHooks: { afterList: async () => { listed += 1; await fs.rm(lock, { recursive: true }) } } })
+  assert.equal(listed, 1)
+  assert.equal(released.result, "claim_held", "the lock was taken; the earlier claim is still live")
   // a creator whose lock directory is removed before it can make its token directory starts again
   let fired = false
   const retried = await claim(where, {

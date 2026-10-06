@@ -137,7 +137,7 @@ export async function runVerifyStep(env, {
   shipped = shippedVersion, merged = mergedWithGreenChecks, access = githubAccess,
   writeCardCommitted = writeCardCommittedDefault, readCardsImpl = readCards, readStatusImpl = readStatus,
   armImpl = armKnownHits, recordStepImpl = recordStep,
-} = {}) {
+}) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   const nowMs = new Date(now).getTime()
   if (Number.isNaN(nowMs)) throw new TypeError("now: must be a valid time")
@@ -199,7 +199,7 @@ export async function runVerifyStep(env, {
     issues = granted.issues
   }
 
-  const store = async (card, patch) => {
+  const store = async (card, patch, okCode) => {
     try {
       const written = await writeCardCommitted({
         deskRoot,
@@ -207,7 +207,10 @@ export async function runVerifyStep(env, {
         write: () => updateCard({ deskRoot, personPrefix, key: card.key, claim_id: card.state === "claimed" ? card.claim.claim_id : undefined, patch, now }),
         message: (outcome) => cardCommitMessage("verify", outcome.file_name),
       })
-      if (written.result.result === "updated") return true
+      if (written.result.result === "updated") {
+        if (okCode !== undefined) count(okCode)
+        return true
+      }
     } catch {
       // counted below
     }
@@ -273,11 +276,11 @@ export async function runVerifyStep(env, {
   // A reading that failed or is absent: the card keeps its state and its count, is stamped so it is looked at
   // once a day, and is counted under one stable code. Only the improvement age alarm surfaces a card that stays so.
   const stamp = async (card, result, code = "unreadable") => {
-    if (await store(card, { last_check_at: nowIso, last_check_result: result })) count(code)
+    await store(card, { last_check_at: nowIso, last_check_result: result }, code)
   }
   // A measured check that decided nothing: the count goes up by one.
   const waiting = async (card, result) => {
-    if (await store(card, { checks_run: card.checks_run + 1, last_check_at: nowIso, last_check_result: result })) count(result)
+    await store(card, { checks_run: card.checks_run + 1, last_check_at: nowIso, last_check_result: result }, result)
   }
   // At the deadline the merge state decides, and only a read one: green closes unverified, not merged reopens, and
   // checks that are not green or not finished (or a merge state that could not be read) wait without advancing.

@@ -428,6 +428,7 @@ async function acquire(lock, token, wait, hooks) {
       if (error.code !== "EEXIST") throw error
     }
     const children = await fs.readdir(lock).catch(() => null)
+    await hooks.afterList?.(lock)
     const stat = children === null ? null : await fs.stat(children.length === 0 ? lock : path.join(lock, children[0])).catch(() => null)
     if (stat !== null && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
       await hooks.afterStale?.(lock)

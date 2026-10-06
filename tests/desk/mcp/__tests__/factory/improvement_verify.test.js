@@ -101,7 +101,7 @@ function world({ failComment = false, issues = {}, found = { state: "version", v
   w.access = async () => { w.accessCalls += 1; return { ok: true, reader, issues: () => client } }
   w.shipped = async (input) => { w.shippedCalls.push(input); return typeof found === "function" ? found(input) : found }
   w.merged = async (input) => { w.mergedCalls.push(input); return { state: typeof mergedState === "function" ? mergedState(input) : mergedState } }
-  w.arm = async () => { w.armCalls += 1; return arm }
+  w.arm = async (_env, { now }) => { w.armCalls += 1; w.armedAt = now(); return arm }
   return w
 }
 
@@ -439,6 +439,7 @@ test("a desk problem card is armed for known-hit recording when it enters verifi
   const w = world()
   assert.deepEqual((await go(ctx, w)).counts, { version_set: 1 })
   assert.equal(w.armCalls, 1)
+  assert.equal(typeof w.armedAt, "number", "the arm step is given a clock")
   assert.equal((await byKey(ctx, key)).state, "verifying")
   await fs.rm(cardFile(ctx.deskRoot, ctx.personPrefix, key))
   await make(ctx, "desk_problem", DESK_PROBLEM, "shipped")

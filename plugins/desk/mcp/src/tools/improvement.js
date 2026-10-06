@@ -7,9 +7,7 @@
 // read-only list.
 
 import * as path from "node:path"
-import { spawnSync } from "node:child_process"
 import { personPrefix } from "../util/paths.js"
-import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isNoninteractive } from "../runtime/boot.js"
 import { isHeadlessFactorySession } from "../factory/headless-flag.js"
@@ -62,7 +60,7 @@ async function record(deskRoot, readiness, prefix, fileName) {
  * `status` is "ok" when the card is opened, reopened or already open, else "refused"; `result` is the library's code.
  * `title` is never accepted (refused `title_not_allowed`): the library builds every title.
  */
-export async function improvement_open({ deskRoot, input, person = null, readiness, now, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function improvement_open({ deskRoot, input, person = null, readiness, now, spawnGit, schedulePush }) {
   const values = input ?? {}
   let key
   try {
@@ -93,7 +91,7 @@ export async function improvement_open({ deskRoot, input, person = null, readine
  * The codes are the keys of NEXT_REFUSALS, plus the library's own (`invalid_session`, `unreadable_folder`, `lock_busy`,
  * `invalid_location`).
  */
-export async function improvement_next({ deskRoot, input, person = null, readiness, env = process.env, now, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function improvement_next({ deskRoot, input, person = null, readiness, env = process.env, now, spawnGit, schedulePush }) {
   if (isNoninteractive(env) || isHeadlessFactorySession(env)) return { status: "noninteractive", meaning: NEXT_REFUSALS.noninteractive }
   const prefix = prefixOf(deskRoot, person)
   const { result, commit, left_alone: leftAlone } = await writeCardCommitted({
@@ -131,7 +129,7 @@ function holderPatch(values) {
  * omitted), release (`state: "open"`) and close (`state: "closed_unverified"` with a `close_reason` from
  * AGENT_CLOSE_REASONS). Everything the verify step owns is out of reach.
  */
-export async function improvement_update({ deskRoot, input, person = null, readiness, now, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function improvement_update({ deskRoot, input, person = null, readiness, now, spawnGit, schedulePush }) {
   const values = input ?? {}
   const prefix = prefixOf(deskRoot, person)
   const patch = holderPatch(values)

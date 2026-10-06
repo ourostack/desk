@@ -98,9 +98,9 @@ const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, routeIssues: runRouteIssuesS
  * Throws a `TypeError` for a `deskRoot` that is neither null nor absolute or a `personPrefix` that is not `""` or `desks/<alias>`.
  */
 export async function runLoopWorker(env, {
-  deskRoot = null, personPrefix = "", pluginVersion, clock = Date.now, alive = processAlive, budgetMs = LOOP_BUDGET_MS,
+  deskRoot, personPrefix = "", pluginVersion, clock = Date.now, alive = processAlive, budgetMs = LOOP_BUDGET_MS,
   ceilingMs = budgetMs + CEILING_GRACE_MS, exit = process.exit, readStatusImpl = readStatus, updateStatusImpl = updateStatus, impls = {},
-} = {}) {
+}) {
   if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   checkPersonPrefix(personPrefix, "runLoopWorker")
   if (isHeadlessFactorySession(env)) return answer("headless_session")

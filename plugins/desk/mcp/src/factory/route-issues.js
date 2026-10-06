@@ -55,10 +55,10 @@ const KINDS = Object.freeze([
 const codeOf = (error) => (typeof error.code === "string" && /^[a-z0-9_]{1,40}$/u.test(error.code) ? error.code : "unexpected_error")
 
 export async function runRouteIssuesStep(env, {
-  deskRoot, personPrefix = "", runner = ghRunner(), now = new Date(),
+  deskRoot, personPrefix, runner = ghRunner(), now,
   writeCardCommitted = writeCardCommittedDefault, openImprovementImpl = openImprovement, observeImpl = observeConditions,
   updateStatusImpl = updateStatus, readConsentImpl = readConsent, readStatusImpl = readStatus,
-} = {}) {
+}) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   const nowMs = new Date(now).getTime()
   if (Number.isNaN(nowMs)) throw new TypeError("now: must be a valid time")

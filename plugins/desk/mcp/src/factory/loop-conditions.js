@@ -80,7 +80,7 @@ function bounded(conditions) {
  * A collector that could not look must not call this. Results: `observed`, `observed_within_gap` (ok); `headless_session`, `invalid_source`,
  * `invalid_present`, `invalid_key`, `invalid_time`, `status_unwritable` (not ok, nothing written).
  */
-export async function observeConditions(env, { source, present, now = new Date(), updateStatusImpl = updateStatus } = {}) {
+export async function observeConditions(env, { source, present, now = new Date(), updateStatusImpl = updateStatus }) {
   if (isHeadlessFactorySession(env)) return { ok: false, result: "headless_session" }
   if (!SOURCES.includes(source)) return { ok: false, result: "invalid_source" }
   if (!Array.isArray(present)) return { ok: false, result: "invalid_present" }

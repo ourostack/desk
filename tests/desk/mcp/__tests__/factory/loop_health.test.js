@@ -352,6 +352,7 @@ test("a stored count reads back in the contract shape from either spelling and n
   assert.deepEqual(await read({ state: "partial", value: 4, reason: "archive_cap" }, { state: "partial", value: 9, reason: "cards_unreadable" }), [{ state: "partial", value: 4, reasons: ["archive_cap"] }, { state: "partial", value: 9, reasons: ["cards_unreadable"] }])
   assert.deepEqual(await read({ state: "partial", value: 4, reasons: ["archive_cap"] }, { state: "partial", value: 1 }), [{ state: "partial", value: 4, reasons: ["archive_cap"] }, U("not_recorded")])
   assert.deepEqual(await read({ state: "partial", value: 4, reason: "bad/slash" }, { state: "partial", value: -1, reason: "x" }), [U("not_recorded"), U("not_recorded")])
+  assert.deepEqual(await read({ state: "weird", value: 1 }, { state: "weird", reason: "x" }), [U("not_recorded"), U("not_recorded")])
   assert.deepEqual(await read(5, null), [U("not_recorded"), U("not_recorded")])
   assert.deepEqual(await read({ state: "measured", value: 2, reasons: ["x"] }, { state: "unavailable", value: 0, reasons: ["none_open"] }), [U("not_recorded"), U("not_recorded")])
   assert.deepEqual(await read({ state: "unavailable", value: null, reasons: ["a", "b"] }, { state: "partial", value: 1 }), [U("not_recorded"), U("not_recorded")])

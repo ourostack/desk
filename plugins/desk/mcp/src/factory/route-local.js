@@ -116,7 +116,7 @@ export async function runRouteLocalStep(env, {
   deskRoot, personPrefix = "", now = new Date(),
   writeCardCommitted = writeCardCommittedDefault, labelsCheck = labelsBootCheck, labelsReadable = labelsFoldersReadable, observe = observeConditions,
   readStatusImpl = readStatus, updateStatusImpl = updateStatus,
-} = {}) {
+}) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   const nowMs = new Date(now).getTime()
   if (Number.isNaN(nowMs)) throw new TypeError("now: must be a valid time")
