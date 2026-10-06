@@ -101,6 +101,16 @@
         ]
       },
       {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/brief-task-line.cjs\" claude check",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "mcp__.*__task_signoff",
         "hooks": [
           {
@@ -154,7 +164,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*__task_(update|create|move|archive)",
+        "matcher": "mcp__.*__task_(update|create|move|archive|signoff)",
         "hooks": [
           {
             "type": "command",
@@ -169,6 +179,16 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" claude track",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*__task_(focus|create)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/brief-task-line.cjs\" claude record",
             "timeout": 5
           }
         ]

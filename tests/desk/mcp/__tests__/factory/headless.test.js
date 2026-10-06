@@ -234,7 +234,14 @@ test("probeSignIn: the probe runs with the same allowlisted environment as the r
   const spawn = fakeSpawn(status(SUB))
   const env = { PATH: "/p", HOME: "/h", LC_ALL: "C", XDG_STATE_HOME: "/x", CLAUDE_CONFIG_DIR: "/c", GH_TOKEN: "t", AWS_SECRET_ACCESS_KEY: "s", DESK_FACTORY_HEADLESS: "0", CLAUDE_CODE_ENTRYPOINT: "x", HTTPS_PROXY: "p", NODE_OPTIONS: "o", ANTHROPIC_API_KEY: "" }
   await probeSignIn({ cli: "c", env, spawn })
-  assert.deepEqual(spawn.calls[0].opts.env, { PATH: "/p", HOME: "/h", LC_ALL: "C", XDG_STATE_HOME: "/x", CLAUDE_CONFIG_DIR: "/c", DESK_FACTORY_HEADLESS: "1" })
+  assert.deepEqual(spawn.calls[0].opts.env, { PATH: "/p", HOME: "/h", LC_ALL: "C", XDG_STATE_HOME: "/x", CLAUDE_CONFIG_DIR: "/c", HTTPS_PROXY: "p", DESK_FACTORY_HEADLESS: "1" })
+})
+
+test("the allowlisted environment keeps proxy and certificate settings, so a run on a proxied machine reaches its service", () => {
+  for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "SSL_CERT_FILE", "SSL_CERT_DIR"]) {
+    assert.equal(CHILD_ENV_ALLOW.names.includes(name), true, name)
+  }
+  assert.equal(CHILD_ENV_ALLOW.names.includes("NODE_OPTIONS"), false, "a variable that changes what node runs stays out")
 })
 
 test("probeSignIn: the provider must be firstParty; a missing one is unknown", async () => {
@@ -317,7 +324,7 @@ test("the child environment is built from the allowlist", async () => {
   const env = { PATH: "/bin", HOME: "/h", LANG: "C", LC_CTYPE: "C", GH_TOKEN: "t", HTTPS_PROXY: "p", ANTHROPIC_API_KEY: "", CLAUDE_CODE_USE_BEDROCK: "0", DESK_FACTORY_HEADLESS: "" }
   const spawn = fakeSpawn(status(okRun))
   await runHeadless(baseOpts({ env, spawn }))
-  assert.deepEqual(spawn.calls[0].opts.env, { PATH: "/bin", HOME: "/h", LANG: "C", LC_CTYPE: "C", DESK_FACTORY_HEADLESS: "1" })
+  assert.deepEqual(spawn.calls[0].opts.env, { PATH: "/bin", HOME: "/h", LANG: "C", LC_CTYPE: "C", HTTPS_PROXY: "p", DESK_FACTORY_HEADLESS: "1" })
 })
 
 test("a billing variable blocks the run even when a sign-in result is passed", async () => {

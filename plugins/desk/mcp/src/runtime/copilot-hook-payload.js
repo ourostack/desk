@@ -115,7 +115,7 @@ export function copilotToolCalls(input) {
   return []
 }
 
-/** Whether `toolName` is one of Desk's task tools (`<server>-task_update`, `-task_create`, `-task_move`, `-task_archive`, `-task_signoff`). The done-claim gate's own pattern tracks the first four only. */
+/** Whether `toolName` is one of Desk's task tools (`<server>-task_update`, `-task_create`, `-task_move`, `-task_archive`, `-task_signoff`), all five of which the done-claim gate tracks. */
 export const isTaskToolName = (toolName) => TASK_TOOL.test(typeof toolName === "string" ? toolName : "")
 
 /** A Desk task tool's Copilot name (`<server>-task_update`) as Claude and Codex name an MCP tool (`mcp__<server>__task_update`); any other name is returned as it is. */

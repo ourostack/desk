@@ -3,9 +3,9 @@
 // Five acceptance rounds (B to F) ended with a final reply that opened "Done." or "Work complete" while the task the agent had just updated stood at `processing` or `validating`. `task_update` already answers with `report_as` and a warning, and agents ignore both. This gate sits where the agent cannot: after the reply is written, before the turn ends.
 //
 // Three hooks share this module:
-//   - `recordTouchedTask` (PostToolUse on task_update, task_create, task_move and task_archive) notes which task this call touched, in a session-scoped file under Desk's state folder. A `task_move` replaces the entry under the old key.
+//   - `recordTouchedTask` (PostToolUse on task_update, task_create, task_move, task_archive and task_signoff) notes which task this call touched, in a session-scoped file under Desk's state folder. A `task_move` replaces the entry under the old key.
 //   - `clearTouchedTasks` (UserPromptSubmit) starts a new turn: the file is removed, so a task touched in an earlier turn never gates a later reply.
-//   - `doneClaimStopHook` (Stop) blocks once, with a reason, when all of these hold: this turn touched a task whose card, read again now, is not done or cancelled; the reply says the task or the work is done; and the reply never states that task's real status in a status clause. A Stop that does not block also clears the turn's tasks.
+//   - `doneClaimStopHook` (Stop) blocks once, with a reason, when all of these hold: this turn touched a task whose card, read again now, is not done or cancelled; the reply says the task or the work is done; and the reply never states that task's real status in a status clause. It also blocks once when the reply says a task this turn touched was accepted (or signed off) while its card, read again now, is done with no accepted sign-off: a delivery is not an acceptance until task_signoff records one. A Stop that does not block also clears the turn's tasks.
 //
 // Scope is the turn: from the last prompt (or the last Stop that let the reply through) to this Stop. The state is last-writer-wins when two task calls run at once (the update is under a lock file and retries briefly, then goes ahead without it); the only failure that can come of it is a missed gate, never a wrong block.
 //
@@ -25,7 +25,7 @@ export const DONE_GATE_DIR = "done-gate"
 const TERMINAL = new Set(["done", "cancelled"])
 const STALE_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
-const TASK_TOOL = /(?:^|__)task_(update|create|move|archive)$/u
+const TASK_TOOL = /(?:^|__)task_(update|create|move|archive|signoff)$/u
 const LOCK_STALE_MS = 5000
 
 // ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ export function bootNamedTask(toolName, input, response) {
 /**
  * What one task tool call says about the task it touched: `{ key, slug, status, reportAs, path, oldKey }`, or null when the call failed or names no task.
  * `key` is the card's folder under the desk (`track/slug`, from the result path), so a moved or archived card is a different key; `oldKey` is the key a `task_move` or `task_archive` left behind (from the call's own track and slug), or null.
- * The status is the one the call left the card at: the `report_as` sentence of an unfinished `task_update` ("Task x is at validating (not done): ..."), the status a `task_create` was given, `done` or `cancelled` for an archive, and null when the call does not say (a `task_move`, or a plain update with no status change).
+ * The status is the one the call left the card at: the `report_as` sentence of an unfinished `task_update` ("Task x is at validating (not done): ...") or of a refused `task_signoff` ("Task x is back at processing (not done)."), the status a `task_create` was given, `done` or `cancelled` for an archive, and null when the call does not say (a `task_move`, a plain update with no status change, an accepting sign-off).
  */
 export function touchedTask(toolName, input, response) {
   const kind = TASK_TOOL.exec(String(toolName ?? ""))?.[1]
@@ -160,7 +160,8 @@ export function touchedTask(toolName, input, response) {
   if (typeof slug !== "string" || slug === "") return null
   const inputKey = `${typeof input?.track === "string" ? input.track : ""}/${slug}`
   const key = cardPath === null ? inputKey : path.posix.dirname(cardPath)
-  const said = typeof result.report_as === "string" ? /\bis at ([a-z]+)\b/u.exec(result.report_as)?.[1] : undefined
+  // "Task x is at validating (not done): ..." from task_update, "Task x is back at processing (not done)." from a refused task_signoff.
+  const said = typeof result.report_as === "string" ? /\bis (?:back )?at ([a-z]+)\b/u.exec(result.report_as)?.[1] : undefined
   const asked = input?.status ?? input?.frontmatter?.status
   let status = null
   if (said !== undefined) status = said
@@ -423,16 +424,46 @@ function finalReply(payload) {
 }
 
 /**
- * The status the task's card holds now, or null when there is nothing to judge: the card is gone or unreadable, or it records no status. A task whose desk root was not known when it was recorded keeps its recorded status.
+ * What the task's card holds now: `{ status, signoff }`. `status` is null when there is nothing to judge: the card is gone or unreadable, or it records no status. A task whose desk root was not known when it was recorded keeps its recorded status.
+ * `signoff` is the card's sign-off state (`delivered_unsigned`, `accepted`, `refused`), or null when the card records none or could not be read.
+ * `verified` is true only when the card's sign-off says `verified: true`: an acceptance the witness could not tie to a human turn is no acceptance (Package D ruling 2).
  */
-function liveStatus(task) {
-  if (typeof task?.root !== "string" || typeof task?.path !== "string") return typeof task?.status === "string" && task.status !== "" ? task.status : null
+function liveCard(task) {
+  if (typeof task?.root !== "string" || typeof task?.path !== "string") return { status: typeof task?.status === "string" && task.status !== "" ? task.status : null, signoff: null, verified: false }
   try {
     const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(readFileSync(path.join(task.root, task.path), "utf8"))?.[1] ?? ""
-    return /^status:[ \t]*["']?([A-Za-z_-]+)["']?[ \t]*$/mu.exec(frontmatter)?.[1] ?? null
+    const block = /^signoff:[ \t]*\r?\n((?:[ \t]+\S.*(?:\r?\n|$))*)/mu.exec(frontmatter)?.[1] ?? ""
+    return {
+      status: /^status:[ \t]*["']?([A-Za-z_-]+)["']?[ \t]*$/mu.exec(frontmatter)?.[1] ?? null,
+      signoff: /^[ \t]+state:[ \t]*["']?([a-z_]+)["']?[ \t]*$/mu.exec(block)?.[1] ?? null,
+      verified: /^[ \t]+verified:[ \t]*true[ \t]*$/mu.test(block),
+    }
   } catch {
-    return null
+    return { status: null, signoff: null, verified: false }
   }
+}
+
+// Acceptance is judged by word, not by phrasing (poka-yoke over inspection): a list of claim shapes can never be complete ("Status:
+// accepted.", "soil-sensor is accepted.", "Ari accepted it."), while one extra block on a reply that mentions acceptance in passing is
+// cheap. So while a touched card is done with no verified acceptance, any acceptance word anywhere in the reply blocks once, unless the
+// reply also states the honest state. Only fenced blocks and block quotes are left out: a state in a code span or in double quotes
+// ("Status: `accepted`.") is the likeliest careless form, because `accepted` is the literal Desk state.
+// The gate catches careless claims, not deliberate rewording ("LGTM", "good to go"); the unverified record and the
+// delivery-to-sign-off wait still expose those.
+const ACCEPTANCE_WORD = /\b(?:accept(?:s|ed|ance|ing)?|approve[sd]?|signed[ -]off|sign-?off\s+(?:is\s+|was\s+|has\s+been\s+)?(?:complete|recorded|received|done|given))\b/iu
+// The honest state. A bare "delivered" is not enough: "Delivered the fix, and the task is accepted." claims both. "Unverified" is
+// task_signoff's own word for an answer Desk could not tie to a human turn. "Send back" counts only in the sign-off packet's own
+// form ("accept or send back", "send it back?"), so "nothing to send back" is no honest state.
+const HONEST_STATE = /(?:\b(?:delivered,?\s+(?:but\s+)?not\s+(?:yet\s+)?accepted|delivered,?\s+(?:and\s+)?(?:awaiting|pending)\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaiting\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaits\s+(?:your\s+|the\s+operator's\s+)?sign-?off|not\s+(?:yet\s+)?accepted|unsigned|unverified|accept(?:\s+it|\s+them)?,?\s+or\s+send\s+(?:it\s+|them\s+)?back)\b|\bsend\s+(?:it|them)\s+back\?)/iu
+
+/** The sentences of `text` that use an acceptance word (fenced blocks and block quotes left out). */
+export function acceptanceClaims(text) {
+  return sentencesOf(withoutBlockQuotes(text)).filter((sentence) => ACCEPTANCE_WORD.test(sentence))
+}
+
+/** Whether `text` states that a delivery is not accepted yet: "delivered, not accepted", "awaiting sign-off", "unsigned", "unverified", "accept or send back". */
+export function statesUnaccepted(text) {
+  return HONEST_STATE.test(withoutBlockQuotes(text))
 }
 
 /**
@@ -449,14 +480,30 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
       return {}
     }
     const open = []
+    const unaccepted = []
     for (const task of Object.values(readState(file).tasks)) {
-      const status = typeof task?.slug === "string" ? liveStatus(task) : null
-      if (status !== null && !TERMINAL.has(status)) open.push({ ...task, status })
+      if (typeof task?.slug !== "string") continue
+      const card = liveCard(task)
+      if (card.status !== null && !TERMINAL.has(card.status)) open.push({ ...task, status: card.status })
+      // Only a verified acceptance counts: `accepted` with `verified` false or null is the agent's own record, not the operator's answer.
+      else if (card.status === "done" && card.signoff !== null && !(card.signoff === "accepted" && card.verified)) unaccepted.push({ ...task, signoff: card.signoff })
     }
-    const reply = open.length === 0 ? null : finalReply(payload)
+    const reply = open.length === 0 && unaccepted.length === 0 ? null : finalReply(payload)
     // A claim that the task itself is done stands whatever status the reply states; a claim about the work is cleared by an honest status statement.
     const unstated = reply === null ? [] : open.filter((task) => taskLevelClaims(reply, task.slug).length > 0 || (doneClaims(reply).length > 0 && !statesStatus(reply, task.status, task.slug)))
     if (unstated.length === 0) {
+      // A delivery is done, not accepted: only the operator's own answer, recorded and verified, is an acceptance.
+      if (reply !== null && unaccepted.length > 0 && acceptanceClaims(reply).length > 0 && !statesUnaccepted(reply)) {
+        const [task] = unaccepted
+        // An answer the witness could not tie to a human turn was still the operator's answer as far as anyone knows: say how it is
+        // recorded, and never ask the operator a second time for an answer already given.
+        if (task.signoff === "accepted") {
+          const lead = `Restate your reply to say task ${task.slug}'s acceptance is recorded as unverified.`
+          const opening = lead.length <= 120 ? lead : "Restate your reply to say the task's acceptance is recorded as unverified."
+          return { decision: "block", reason: `${opening} Desk could not tie task ${task.slug}'s answer to a human turn, so it does not count it as accepted; do not ask the operator again.` }
+        }
+        return { decision: "block", reason: `Restate your reply as delivered, not accepted. Task ${task.slug} awaits the operator's sign-off and no verified acceptance is recorded. Ask the operator for it in the sign-off packet (asked, delivered with proof, accept or send back) and wait for their answer.` }
+      }
       removeFile(file)
       return {}
     }

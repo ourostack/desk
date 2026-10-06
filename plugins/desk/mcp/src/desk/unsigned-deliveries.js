@@ -232,10 +232,12 @@ export async function recordUnsigned(env, deskRoot, now, { scan = unsignedDelive
   }
 }
 
-/** The one instruction, as a list of zero or one lines: none when nothing is unsigned or the session has no operator in it. */
-export function signoffInstructions(found, { noninteractive }) {
+/** The one instruction, as a list of zero or one lines: none when nothing is unsigned or the session has no operator in it. `seen` (from `runtime/signoff-listed.js`) is true when an earlier boot of this session listed them all. */
+export function signoffInstructions(found, { noninteractive, seen = false }) {
   if (noninteractive || !found || found.count === 0) return []
   const { count, oldest_age_days: oldest } = found
+  // An earlier boot of this session (before a resume or a compaction) listed every one of them already: the operator is not asked twice.
+  if (seen === true) return [`${count === 1 ? "The delivered task that awaits sign-off was" : "The delivered tasks that await sign-off were"} already listed by an earlier boot of this session. Raise ${count === 1 ? "it" : "them"} only if this session has not raised ${count === 1 ? "it" : "them"} yet, never twice, and record ${count === 1 ? "the answer" : "each answer"} with task_signoff when it comes.`]
   const atLeast = found.at_least || (found.unreadable ?? 0) > 0
   const lead = atLeast ? "at least " : ""
   const age = oldest === null ? "of unknown age" : `the oldest for ${atLeast ? "at least " : ""}${plural(oldest, "day", "days")}`
