@@ -1205,7 +1205,8 @@ export async function rebuildJobsIndex(env, store = undefined, { platform = proc
         throw error
       }
       files += 1
-      const jobs = Array.isArray(facts?.jobs) ? facts.jobs : []
+      // A task a session only signed off carries an outcome and no job binding; the index lists both.
+      const jobs = [...(Array.isArray(facts?.jobs) ? facts.jobs : []), ...(Array.isArray(facts?.outcomes) ? facts.outcomes : [])]
       for (const binding of jobs) {
         const job = binding?.job
         if (typeof job !== "string" || !PATTERNS.jobId.test(job)) continue

@@ -11,6 +11,7 @@ const fallbackDeskMcpTools = Object.freeze([
   "task_update",
   "task_archive",
   "task_focus",
+  "task_signoff",
   "track_create",
   "track_update",
   "friction_add",

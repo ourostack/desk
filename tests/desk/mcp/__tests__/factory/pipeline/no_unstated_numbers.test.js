@@ -14,7 +14,8 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { build } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
-import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { ATTENTION_REASON_TEXT, OUTCOME_REASONS, REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { ATTENTION_REASONS } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/attention.js"
 import { NUMBER_STATES } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/number-states.js"
 import { deriveClaudeSession } from "../../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
 import { deriveCodexSession } from "../../../../../../plugins/desk/mcp/src/factory/derive-codex.js"
@@ -60,6 +61,8 @@ const STRUCTURAL = Object.freeze([
   ["job/timeline/sessions/[]/offset_ms", "where the session starts on the job clock, null when it is not known"],
   ["job/timeline/sessions/[]/shared_with", "a count of other jobs sharing the session, read from the facts' job list"],
   ["job/timeline/transitions/[]/offset_ms", "a transition time on the job clock; a transition with no time is not listed"],
+  ["job/formulas/attention/turns", "a count of the human turns placed on the job, covered by the result's state (partial when a list was cut or a session records none)"],
+  ["job/formulas/attention/method", "the version of the estimate's constants, a label for the method and not a measure"],
   ["job/formulas/concurrent_agents/value/average", "a composite value: the average over recorded intervals, covered by the enclosing result's state"],
   ["job/formulas/concurrent_agents/value/maximum", "a composite value: the maximum over recorded intervals, covered by the enclosing result's state"],
   ["job/formulas/concurrent_sessions/value/average", "a composite value: the average over recorded intervals, covered by the enclosing result's state"],
@@ -101,6 +104,19 @@ const STRUCTURAL = Object.freeze([
   ["rollups/measures.json/groupings/*/*/jobs", "a count of jobs in the group, a population count; each measure under it carries its own n and N"],
   ["rollups/measures.json/groupings/*/*/jobs_open", "a count of open jobs in the group, a population count"],
   ["rollups/tool-kinds.json/sessions", "a count of sessions the build holds"],
+  ["rollups/outcomes.json/attention/est_ms/*", "estimated attention placed on jobs, on no job or on sessions that could not be placed, the parts of the headline's numerator; the headline's state says whether the sum is whole"],
+  ["rollups/outcomes.json/attention/human_turns", "a count of the human turns in the period's sessions, covered by the headline's state (partial when a session did not record all of them)"],
+  ["rollups/outcomes.json/attention/method/version", "the version of the estimate's constants, a label for the method and not a measure"],
+  ["rollups/outcomes.json/attention/method/floor_ms", "a constant of the estimating method, published so the estimate can be reproduced"],
+  ["rollups/outcomes.json/attention/method/permission_ms", "a constant of the estimating method, published so the estimate can be reproduced"],
+  ["rollups/outcomes.json/attention/method/read_ms/*", "a constant of the estimating method, published so the estimate can be reproduced"],
+  ["rollups/outcomes.json/attention/method/type_ms/*", "a constant of the estimating method, published so the estimate can be reproduced"],
+  ["rollups/outcomes.json/attention/permission/decisions", "a count of permission decisions, covered by the permission figure's own state"],
+  ["rollups/outcomes.json/attention/permission/est_ms", "the estimate of permission decisions, covered by the permission figure's own state"],
+  ["rollups/outcomes.json/attention/sessions/in_period", "a count of the sessions that carry or flag the human turns, a population count"],
+  ["rollups/outcomes.json/attention/sessions/complete", "a count of the period's sessions that record the human turns completely, a population count"],
+  ["rollups/outcomes.json/groupings/plugin_version/*/attention/est_ms/*", "a plugin version group's part of the estimated attention, covered by the group's headline state"],
+  ["rollups/outcomes.json/groupings/plugin_version/*/attention/human_turns", "a plugin version group's count of human turns, covered by the group's headline state"],
 ])
 
 function matches(pattern, segments) {
@@ -267,6 +283,8 @@ async function derivedStore() {
   const claudeAgents = derived.claude.agents.map((agent) => agent.n)
   assert.ok(claudeAgents.length >= 2, "the Claude fixture has subagents, so a job can own only some of its workers")
   const first = bound(derived.claude, JOB_SPLIT, [0])
+  // The controller's whole span is this job's, so its turns can be placed on it and its attention is a figure.
+  first.jobs[0].segments = [{ start_ms: 0, end_ms: Math.floor(Date.parse(derived.claude.session.derived_through) - Date.parse(derived.claude.session.started_at)) }]
   const second = bound(derived.claude, JOB_REST, claudeAgents.slice(1))
   // One Claude session two jobs share: the first owns the controller, the second the subagents.
   const claude = { ...first, jobs: [...first.jobs, ...second.jobs].sort((a, b) => (a.job < b.job ? -1 : 1)) }
@@ -456,6 +474,58 @@ test("every label-check code in label-schema.js that can reach a page has plain 
     assert.ok(Object.hasOwn(REASON_TEXT, code), `${code} has text`)
     assert.ok(REASON_TEXT[code].length > 10, `${code} text is words`)
   }
+})
+
+// The reasons the outcome figures carry: named in outcomes.js where they are produced, so a new one cannot ship without words.
+test("every reason the outcome figures carry has plain text for the operator, found structurally in outcomes.js", () => {
+  const source = readFileSync(path.join(SOURCE, "pipeline", "outcomes.js"), "utf8")
+  const found = new Set()
+  const patterns = [/\bmissing\("(\w+)"\)/gu, /\bpartialResult\([^\n]*?\["(\w+)"\]/gu, /\breasons: \["(\w+)"\]/gu, /\breasons\.push\([^)]*?"(\w+)" : "(\w+)"\)/gu, /\breasons\.push\("(\w+)"\)/gu]
+  for (const pattern of patterns) for (const match of source.matchAll(pattern)) match.slice(1).filter(Boolean).forEach((code) => found.add(code))
+  // The reasons the plan names, so a pattern that stops matching cannot hide one.
+  const NAMED = ["not_recorded", "signoff_not_recorded", "history_not_recorded", "not_delivered", "returns_not_fully_recorded", "awaiting_signoff", "signoff_unverified", "no_delivered_jobs", "no_refusals", "no_labels", "no_finished_jobs", "not_all_labeled", "active_time_unavailable", "catch_point_not_recorded"]
+  for (const code of NAMED) assert.ok(found.has(code), `${code} is produced in outcomes.js`)
+  assert.deepEqual([...found].filter((code) => !NAMED.includes(code)), [], "a reason outcomes.js produces that this test does not name")
+  for (const code of found) {
+    assert.ok(OUTCOME_REASONS.includes(code), `${code} is in the outcome reason table`)
+    assert.ok(Object.hasOwn(REASON_TEXT, code), `${code} has text`)
+    assert.ok(REASON_TEXT[code].length > 10 && !/[_;()]/u.test(REASON_TEXT[code]), `${code} text is words`)
+  }
+  assert.deepEqual([...OUTCOME_REASONS].sort(), [...found].sort(), "the table lists exactly the reasons produced")
+})
+
+// The reasons the attention figure carries: listed in attention.js, and each has plain words for the operator. The text table is one map by code, and `not_recorded` already says "no outcome record is available" for the outcome figures, so the attention words for it live in their own table.
+test("every reason the attention figure carries has plain text for the operator", () => {
+  assert.deepEqual(Object.keys(ATTENTION_REASON_TEXT).sort(), [...ATTENTION_REASONS].sort(), "the table lists exactly the reasons the figure can carry")
+  for (const code of ATTENTION_REASONS) {
+    assert.ok(ATTENTION_REASON_TEXT[code].length > 10 && !/[_;()]/u.test(ATTENTION_REASON_TEXT[code]), `${code} text is words`)
+    if (code !== "not_recorded") assert.equal(REASON_TEXT[code], ATTENTION_REASON_TEXT[code], `${code} is in the shared table`)
+  }
+  assert.notEqual(REASON_TEXT.not_recorded, ATTENTION_REASON_TEXT.not_recorded, "the outcome words for not_recorded are not overwritten")
+  // The reasons a host's flag on the turn list passes through already have words.
+  for (const code of ["host_records_partly", "source_unreadable", "log_truncated"]) assert.ok(Object.hasOwn(REASON_TEXT, code), code)
+})
+
+test("the attention result in every built job file is a count and codes, and says its state", () => {
+  let seen = 0
+  for (const { file } of walked) {
+    if (file.kind !== "job") continue
+    const { attention } = file.value.formulas
+    assert.ok(attention, `${file.name} has an attention result`)
+    seen += 1
+    assert.deepEqual(numberObjectProblems({ node: attention, at: `${file.name} attention` }), [])
+    const allowed = ["class", "state", "reasons", "value", "reason", "turns", "method", "partial", "partial_reasons"]
+    assert.deepEqual(Object.keys(attention).filter((key) => !allowed.includes(key)), [])
+    for (const code of attention.reasons) assert.ok(Object.hasOwn(REASON_TEXT, code) || ATTENTION_REASONS.includes(code), `${code} has words`)
+    assert.equal(Object.hasOwn(attention, "turns") && attention.state === "unavailable", false, "an unavailable figure carries no turn count")
+  }
+  assert.ok(seen >= 6)
+  // The freshly derived store has one job whose controller span is its own, so a real figure is walked.
+  const placed = readJob(fresh.out, JOB_SPLIT).attention
+  assert.notEqual(placed.state, "unavailable")
+  assert.ok(placed.turns > 0 && placed.value > 0)
+  assert.equal(placed.class, "inferred")
+  for (const job of [JOB_REST, JOB_CODEX]) assert.equal(readJob(fresh.out, job).attention.state, "unavailable", job)
 })
 
 test("every /2 session a deriver writes carries every flag hostFlagsFor returns for its host, for all three hosts", () => {

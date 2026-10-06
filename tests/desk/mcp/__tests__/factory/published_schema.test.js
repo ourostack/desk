@@ -23,7 +23,9 @@ import {
   SESSION_ID_V4,
   __PUBLISHED_SPECS__,
 } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { CATCH_POINTS, RETURN_REASONS, WAIT_CLASSES } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
 import { ENUMS, LIMITS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { normalizePublished } from "../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "fixtures", "published-golden.json"))
@@ -75,8 +77,10 @@ test("the golden published file validates, as a value and as its exact bytes", (
 })
 
 test("published facts accept schema /1 and /2 and refuse /3", () => {
+  const bare = golden()
+  delete bare.human_turns // a /1 file carries no human_turns
   for (const schema of ["desk.factory.published/1", "desk.factory.published/2"]) {
-    assert.deepEqual(validatePublished({ ...golden(), schema }), { ok: true, errors: [] }, schema)
+    assert.deepEqual(validatePublished({ ...bare, schema }), { ok: true, errors: [] }, schema)
   }
   assertSingle(validatePublished({ ...golden(), schema: "desk.factory.published/3" }), "pattern", "schema")
 })
@@ -434,6 +438,7 @@ for (const spec of ACCEPTED) {
 test("accepted: a zero-length session", () => {
   const value = golden()
   value.session.duration_ms = 0
+  delete value.human_turns
   value.intervals = [{ kind: "turn", agent: 0, start_ms: 0, end_ms: 0 }]
   assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
 })
@@ -684,3 +689,246 @@ function withModelId(id) {
   value.models[0].id = id
   return value
 }
+
+// --- outcomes: sign-off state with a wait class, never a time -------------
+
+const OUTCOME = { job: "1a2b3c4d5e6f708192a3b4c5d6e7f809", rev: 4, state: "accepted", verified: true, reason: null, deliveries: 1, wait: { class: "lt_1h", censored: false } }
+const withOutcomes = (outcomes) => ({ ...golden(), outcomes })
+
+test("published facts without outcomes are valid, and facts with a well-formed list are valid", () => {
+  const without = golden()
+  delete without.outcomes
+  assert.deepEqual(validatePublished(without), { ok: true, errors: [] })
+  assert.deepEqual(validatePublished({ ...without, outcomes: [] }), { ok: true, errors: [] })
+  assert.deepEqual(validatePublished(golden()), { ok: true, errors: [] }, "the golden carries outcomes")
+  assert.equal(Array.isArray(GOLDEN.outcomes), true)
+  const entries = ["not_delivered", "not_recorded", "delivered_unsigned", "accepted", "refused", "reopened"].map((state, index) => ({
+    ...OUTCOME, job: index.toString(16).padStart(32, "0"), state, verified: state === "refused" ? false : null, reason: state === "refused" ? "defect" : null, wait: index % 2 === 0 ? null : { class: ["lt_1h", "lt_1d", "lt_7d", "ge_7d"][index % 4], censored: index % 3 === 0 },
+  }))
+  assert.deepEqual(validatePublished(withOutcomes([OUTCOME, ...entries])), { ok: true, errors: [] })
+  assert.equal(typeof __PUBLISHED_SPECS__.outcome.wait.check, "function")
+  assert.equal(typeof __PUBLISHED_SPECS__.wait.class.check, "function")
+})
+
+for (const [name, change, code, where] of [
+  ["an unknown state", { state: `${SENTINEL}-state` }, "enum", "outcomes.0.state"],
+  ["an unknown reason", { reason: SENTINEL }, "enum", "outcomes.0.reason"],
+  ["an unknown wait class", { wait: { class: `${SENTINEL}-class`, censored: false } }, "enum", "outcomes.0.wait.class"],
+  ["a censored flag that is not a boolean", { wait: { class: "lt_1h", censored: SENTINEL } }, "type", "outcomes.0.wait.censored"],
+  ["a wait that is an exact number", { wait: 1200000 }, "type", "outcomes.0.wait"],
+  ["a verified that is not a boolean or null", { verified: SENTINEL }, "type", "outcomes.0.verified"],
+  ["a negative rev", { rev: -1 }, "range", "outcomes.0.rev"],
+  ["a job that is not a job ID", { job: SENTINEL }, "pattern", "outcomes.0.job"],
+  ["a job that holds a date shape", { job: "2026-09-25".padEnd(32, "0") }, "pattern", "outcomes.0.job"],
+]) {
+  test(`a published outcome with ${name} is rejected with ${code} at its path and no value`, () => {
+    const result = validatePublished(withOutcomes([{ ...OUTCOME, ...change }]))
+    assertSingle(result, code, where)
+    assertNoLeak(result)
+  })
+}
+
+test("a published outcome with a time key, an unknown key or a missing key is rejected with a path and no value", () => {
+  for (const key of ["delivered_at", "signed_at", "observed_at"]) {
+    const result = validatePublished(withOutcomes([{ ...OUTCOME, [key]: "2026-09-25T09:00:00.000Z" }]))
+    assertSingle(result, "unknown_key", "outcomes.0")
+    assertNoLeak(result)
+  }
+  assertSingle(validatePublished(withOutcomes([{ ...OUTCOME, wait: { class: "lt_1h", censored: false, ms: 5 } }])), "unknown_key", "outcomes.0.wait")
+  const extra = validatePublished(withOutcomes([{ ...OUTCOME, [`${SENTINEL}-key`]: SENTINEL }]))
+  assertSingle(extra, "unknown_key", "outcomes.0")
+  assertNoLeak(extra)
+  for (const key of Object.keys(OUTCOME)) {
+    const { [key]: _gone, ...rest } = OUTCOME
+    assertSingle(validatePublished(withOutcomes([rest])), "missing", `outcomes.0.${key}`)
+  }
+  assertSingle(validatePublished(withOutcomes([{ ...OUTCOME, wait: { class: "lt_1h" } }])), "missing", "outcomes.0.wait.censored")
+  assertSingle(validatePublished(withOutcomes([null])), "type", "outcomes.0")
+  assertSingle(validatePublished(withOutcomes(`${SENTINEL}`)), "type", "outcomes")
+})
+
+test("two published outcomes for one job are a duplicate, and a list over the cap is too_many", () => {
+  assertSingle(validatePublished(withOutcomes([OUTCOME, { ...OUTCOME, rev: 5 }])), "duplicate", "outcomes.1.job")
+  const many = Array.from({ length: LIMITS.outcomes + 1 }, (_, index) => ({ ...OUTCOME, job: index.toString(16).padStart(32, "0") }))
+  assertSingle(validatePublished(withOutcomes(many)), "too_many", "outcomes")
+})
+
+test("normalizing published facts sorts outcomes by job and leaves facts without outcomes alone", () => {
+  const value = withOutcomes([{ ...OUTCOME, job: "f".repeat(32) }, { ...OUTCOME, job: "0".repeat(32) }])
+  assert.deepEqual(normalizePublished(value).outcomes.map((entry) => entry.job), ["0".repeat(32), "f".repeat(32)])
+  const without = golden()
+  delete without.outcomes
+  assert.equal(Object.hasOwn(normalizePublished(without), "outcomes"), false)
+})
+
+// --- outcomes: the record's start and its returns, with no time -----------
+
+const RETURN = { reason: "agent_error", caught: "at_review", counts: true, refusal: null, refusal_verified: null }
+const FULL = { ...OUTCOME, since: "created", returns: [RETURN] }
+
+test("a published outcome entry without the new keys stays valid, and one with them is valid", () => {
+  assert.deepEqual(validatePublished(withOutcomes([OUTCOME])), { ok: true, errors: [] })
+  assert.deepEqual(validatePublished(withOutcomes([FULL])), { ok: true, errors: [] })
+  assert.deepEqual(validatePublished(withOutcomes([{ ...FULL, since: null, returns: [], returns_truncated: true, returns_unreadable: 3 }])), { ok: true, errors: [] })
+  assert.deepEqual(validatePublished(withOutcomes([{ ...FULL, returns: [{ ...RETURN, caught: "after_delivery", refusal: "defect", refusal_verified: true }] }])), { ok: true, errors: [] })
+  assert.equal(typeof __PUBLISHED_SPECS__.return.counts.check, "function")
+})
+
+for (const [name, change, code, where] of [
+  ["a reason off the list", { returns: [{ ...RETURN, reason: `${SENTINEL}-reason` }] }, "enum", "outcomes.0.returns.0.reason"],
+  ["a catch point off the list", { returns: [{ ...RETURN, caught: `${SENTINEL}-point` }] }, "enum", "outcomes.0.returns.0.caught"],
+  ["a refusal off the list", { returns: [{ ...RETURN, refusal: SENTINEL }] }, "enum", "outcomes.0.returns.0.refusal"],
+  ["a counts flag that is not a boolean", { returns: [{ ...RETURN, counts: SENTINEL }] }, "type", "outcomes.0.returns.0.counts"],
+  ["a since off the list", { since: SENTINEL }, "enum", "outcomes.0.since"],
+  ["a returns_truncated of false", { returns_truncated: false }, "type", "outcomes.0.returns_truncated"],
+  ["a fractional returns_unreadable", { returns_unreadable: 1.5 }, "range", "outcomes.0.returns_unreadable"],
+  ["a return with a time", { returns: [{ ...RETURN, at: "2026-09-25T09:00:00.000Z" }] }, "unknown_key", "outcomes.0.returns.0"],
+  ["a first_validating_at", { first_validating_at: "2026-09-25T09:00:00.000Z" }, "unknown_key", "outcomes.0"],
+  ["a first_delivered_at", { first_delivered_at: "2026-09-25T09:00:00.000Z" }, "unknown_key", "outcomes.0"],
+]) {
+  test(`a published outcome with ${name} is rejected with ${code} at its path and no value`, () => {
+    const result = validatePublished(withOutcomes([{ ...FULL, ...change }]))
+    assertSingle(result, code, where)
+    assertNoLeak(result)
+  })
+}
+
+test("more than 32 published returns are too_many, and a return missing a key is missing", () => {
+  assertSingle(validatePublished(withOutcomes([{ ...FULL, returns: Array.from({ length: 33 }, () => RETURN) }])), "too_many", "outcomes.0.returns")
+  assert.equal(validatePublished(withOutcomes([{ ...FULL, returns: Array.from({ length: 32 }, () => RETURN) }])).ok, true)
+  const { counts: _gone, ...rest } = RETURN
+  assertSingle(validatePublished(withOutcomes([{ ...FULL, returns: [rest] }])), "missing", "outcomes.0.returns.0.counts")
+})
+
+test("the published schema accepts exactly the wait classes, return reasons and catch points outcome.js defines", () => {
+  const facts = (entry) => withOutcomes([entry])
+  for (const value of WAIT_CLASSES) assert.equal(validatePublished(facts({ ...OUTCOME, wait: { class: value, censored: false } })).ok, true, value)
+  for (const reason of RETURN_REASONS) assert.equal(validatePublished(facts({ ...FULL, returns: [{ ...RETURN, reason }] })).ok, true, reason)
+  for (const caught of CATCH_POINTS) assert.equal(validatePublished(facts({ ...FULL, returns: [{ ...RETURN, caught }] })).ok, true, caught)
+  assert.equal(validatePublished(facts({ ...OUTCOME, wait: { class: "lt_2h", censored: false } })).ok, false)
+})
+
+test("a published rev and deliveries are 0 to 9999, and returns_unreadable is 1 to 9999", () => {
+  for (const key of ["rev", "deliveries"]) {
+    assert.equal(validatePublished(withOutcomes([{ ...OUTCOME, [key]: 0 }])).ok, true, `${key} 0`)
+    assert.equal(validatePublished(withOutcomes([{ ...OUTCOME, [key]: 9999 }])).ok, true, `${key} 9999`)
+    assertSingle(validatePublished(withOutcomes([{ ...OUTCOME, [key]: 10000 }])), "range", `outcomes.0.${key}`)
+  }
+  assert.equal(validatePublished(withOutcomes([{ ...OUTCOME, returns_unreadable: 1 }])).ok, true)
+  assert.equal(validatePublished(withOutcomes([{ ...OUTCOME, returns_unreadable: 9999 }])).ok, true)
+  assertSingle(validatePublished(withOutcomes([{ ...OUTCOME, returns_unreadable: 0 }])), "range", "outcomes.0.returns_unreadable")
+  assertSingle(validatePublished(withOutcomes([{ ...OUTCOME, returns_unreadable: 10000 }])), "range", "outcomes.0.returns_unreadable")
+})
+
+// --- human_turns: offsets, a basis and size classes, nothing else --------------
+
+const TURN = { at_ms: 5000, basis: "first", window_ms: null, prompt_class: "s", output_class: "none" }
+const TURNS = [
+  TURN,
+  { at_ms: 65000, basis: "after_stop", window_ms: 4000, prompt_class: "xs", output_class: "l" },
+  { at_ms: 70000, basis: "mid_turn", window_ms: 5000, prompt_class: "m", output_class: "none" },
+]
+const withTurns = (human_turns) => ({ ...golden(), human_turns })
+
+test("published facts without human_turns stay valid, and a well-formed list is valid", () => {
+  const without = golden()
+  delete without.human_turns
+  assert.deepEqual(validatePublished(without), { ok: true, errors: [] })
+  assert.deepEqual(validatePublished(withTurns([])), { ok: true, errors: [] })
+  assert.deepEqual(validatePublished(withTurns(TURNS)), { ok: true, errors: [] })
+  assert.deepEqual(validatePublishedBytes(`${JSON.stringify(withTurns(TURNS))}\n`), { ok: true, errors: [] })
+  const old = withTurns(TURNS)
+  delete old.human_turns
+  old.schema = "desk.factory.published/1"
+  assert.deepEqual(validatePublished(old), { ok: true, errors: [] }, "a stored /1 file stays valid")
+})
+
+test("the published list holds offsets, classes and a basis and nothing else (SENTINEL)", () => {
+  for (const key of ["at", "text", "prompt", "delivered_at", "ts", SENTINEL]) {
+    const result = validatePublished(withTurns([{ ...TURN, [key]: key === "at" ? "2026-09-25T08:00:05.000Z" : SENTINEL }]))
+    assertSingle(result, "unknown_key", "human_turns.0")
+    assertNoLeak(result)
+  }
+  const { at_ms: _drop, ...noOffset } = TURN
+  assertSingle(validatePublished(withTurns([noOffset])), "missing", "human_turns.0.at_ms")
+  assert.deepEqual(Object.keys(__PUBLISHED_SPECS__.humanTurn), ["at_ms", "basis", "window_ms", "prompt_class", "output_class"])
+  for (const [overrides, code, where] of [
+    [{ basis: SENTINEL }, "enum", "basis"],
+    [{ prompt_class: SENTINEL }, "enum", "prompt_class"],
+    [{ output_class: SENTINEL }, "enum", "output_class"],
+    [{ at_ms: SENTINEL }, "integer", "at_ms"],
+    [{ at_ms: -1 }, "integer", "at_ms"],
+    [{ at_ms: 1.5 }, "integer", "at_ms"],
+    [{ at_ms: PUBLISHED_LIMITS.maxOffsetMs + 1 }, "range", "at_ms"],
+    [{ at_ms: GOLDEN.session.duration_ms + 1 }, "range", "at_ms"],
+    [{ basis: "after_stop", window_ms: SENTINEL }, "integer", "window_ms"],
+  ]) {
+    const result = validatePublished(withTurns([{ ...TURN, ...overrides }]))
+    assert.equal(result.ok, false, JSON.stringify(Object.keys(overrides)))
+    assert.deepEqual(result.errors[0].path, `human_turns.0.${where}`)
+    assert.equal(result.errors[0].code, code)
+    assertNoLeak(result)
+  }
+  assertSingle(validatePublished(withTurns(SENTINEL)), "type", "human_turns")
+  assertSingle(validatePublished(withTurns([null])), "type", "human_turns.0")
+})
+
+test("a published first turn has a null window, any other has a number, and the list is in time order", () => {
+  assertSingle(validatePublished(withTurns([{ ...TURN, window_ms: 5 }])), "inconsistent", "human_turns.0.window_ms")
+  assertSingle(validatePublished(withTurns([{ ...TURN, basis: "after_stop" }])), "inconsistent", "human_turns.0.window_ms")
+  assertSingle(validatePublished(withTurns([TURNS[1], TURNS[0]])), "order", "human_turns.1.at_ms")
+  assert.deepEqual(validatePublished(withTurns([TURNS[1], { ...TURNS[2], at_ms: TURNS[1].at_ms }])), { ok: true, errors: [] }, "equal offsets are in order")
+})
+
+test("a published list is capped at 1000 turns", () => {
+  const turn = (index) => ({ at_ms: index, basis: index === 0 ? "first" : "after_stop", window_ms: index === 0 ? null : 1, prompt_class: "xs", output_class: "xs" })
+  const full = Array.from({ length: LIMITS.humanTurns }, (_, index) => turn(index))
+  assert.deepEqual(validatePublished(withTurns(full)), { ok: true, errors: [] })
+  assertSingle(validatePublished(withTurns([...full, turn(LIMITS.humanTurns)])), "too_many", "human_turns")
+})
+
+test("normalizing published facts keeps the human_turns list as it is, in order, and adds none when absent", () => {
+  const value = withTurns(TURNS)
+  assert.deepEqual(normalizePublished(value).human_turns, TURNS)
+  const bare = golden()
+  delete bare.human_turns
+  assert.equal(Object.hasOwn(normalizePublished(bare), "human_turns"), false)
+})
+
+test("the golden published file carries a human_turns list that validates", () => {
+  assert.equal(GOLDEN.human_turns.length, 3)
+  assert.deepEqual(validatePublished(golden()), { ok: true, errors: [] })
+})
+
+test("a file with a human_turns list cannot also say the host does not record it, or that the field is absent", () => {
+  for (const reason of ["host_does_not_record", "field_absent"]) {
+    const value = withTurns(TURNS)
+    value.unavailable.push({ field: "human_turns", reason })
+    assertSingle(validatePublished(value), "inconsistent", `unavailable.${value.unavailable.length - 1}`)
+  }
+  // a flag that says the list is partial sits beside a list
+  for (const reason of ["capped", "source_unreadable", "host_records_partly", "log_truncated", "session_open"]) {
+    const value = withTurns(TURNS)
+    value.unavailable.push({ field: "human_turns", reason })
+    assert.deepEqual(validatePublished(value), { ok: true, errors: [] }, reason)
+  }
+  // the flag with no list is how a host that does not record reads
+  const flagged = golden()
+  delete flagged.human_turns
+  flagged.unavailable.push({ field: "human_turns", reason: "host_does_not_record" })
+  assert.deepEqual(validatePublished(flagged), { ok: true, errors: [] })
+  // an empty list is a recorded, empty list: it does not sit beside a not-recorded flag either
+  const empty = withTurns([])
+  empty.unavailable.push({ field: "human_turns", reason: "host_does_not_record" })
+  assert.equal(validatePublished(empty).ok, false)
+})
+
+test("human_turns is refused in a /1 file", () => {
+  const value = withTurns(TURNS)
+  value.schema = "desk.factory.published/1"
+  assertSingle(validatePublished(value), "inconsistent", "human_turns")
+  const bare = golden()
+  delete bare.human_turns
+  bare.schema = "desk.factory.published/1"
+  assert.deepEqual(validatePublished(bare), { ok: true, errors: [] })
+})

@@ -1,3 +1,5 @@
+import { firstPassFormula, reworkFormula, signoffFormula } from "./outcomes.js"
+import { attentionFormula } from "./attention.js"
 import { ACTIVE_KINDS, bindingsOverlap, duration, overlappingBindings, union } from "./timeline.js"
 import { fieldsFeeding, reasonsOf, withState } from "./number-states.js"
 
@@ -578,6 +580,9 @@ export function calculateFormulas(timeline) {
     },
     tokens_total: tokenTotals(sourceSessions, split),
     unavailable: measured(unavailableGroups(sourceSessions)),
-    first_pass_yield: unavailable("not_collected_in_slice_1"),
+    first_pass_yield: firstPassFormula(timeline.outcome),
+    signoff: signoffFormula(timeline.outcome),
+    rework: reworkFormula(timeline.outcome),
+    attention: attentionFormula(timeline.source_sessions, timeline.job),
   })
 }

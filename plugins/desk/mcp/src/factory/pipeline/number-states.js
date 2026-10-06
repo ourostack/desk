@@ -43,6 +43,7 @@ export const FORMULA_IDS = Object.freeze([
   "totals.tokens",
   "totals.tokens.reasoning",
   "totals.subagent_dispatches",
+  "attention",
 ])
 
 // Results that take no flag, each with the reason.
@@ -52,7 +53,9 @@ export const NOT_FED = Object.freeze({
   sessions: "counts the sessions bound to the job, which no session field changes",
   sessions_by_host: "counts the bound sessions by host, which no session field changes",
   unavailable: "lists the flags themselves",
-  first_pass_yield: "is not collected yet and says so",
+  signoff: "reads the human's recorded answer to the delivery, not session fields",
+  first_pass_yield: "reads the job's recorded returns and sign-off, not session fields",
+  rework: "reads the job's recorded returns, not session fields",
 })
 
 const ACTIVE_FAMILY = Object.freeze([
@@ -106,6 +109,8 @@ export const FEEDS = Object.freeze({
   plugins: nothing("is a grouping key that reads as unknown when withheld"),
   ended_at: nothing("an open job's lead time is already marked censored"),
   ci_runs: nothing("no formula uses CI runs"),
+  // `attention` reads the list through its own rule (a list present is a figure, a flag beside it says it is a lower bound, no list is no figure), so a flag only ever makes it partial; a missing list is stated by the formula as `not_recorded`.
+  human_turns: row([], ["attention"]),
 })
 
 export function fieldsFeeding(formulaId, effect) {
@@ -131,4 +136,11 @@ export function withState(result) {
   const reasons = reasonsOf(result)
   if (state !== "measured" && reasons.length === 0) throw new Error(`a ${state} number has no reason`)
   return { ...result, state, reasons }
+}
+
+// Each result passes through `withState` here, and a result whose hand-set `state` or `reasons` differ from what `withState` derives throws, so a disagreement stops the build instead of being rewritten silently.
+export function stated(result) {
+  const derived = withState(result)
+  if (derived.state !== result.state || JSON.stringify(derived.reasons) !== JSON.stringify(result.reasons)) throw new Error(`an outcome result disagrees with its derived state: ${result.state}`)
+  return derived
 }

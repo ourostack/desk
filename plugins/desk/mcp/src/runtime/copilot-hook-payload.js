@@ -12,7 +12,7 @@ import { readFileSync, statSync } from "node:fs"
 
 const SHELL_TOOLS = { bash: "Bash", powershell: "PowerShell" }
 const EDITOR_TOOLS = new Set(["edit", "str_replace_editor", "str_replace_based_edit_tool"])
-const TASK_TOOL = /^(.+)-(task_(?:update|create|move|archive))$/u
+const TASK_TOOL = /^(.+)-(task_(?:update|create|move|archive|signoff))$/u
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -115,7 +115,7 @@ export function copilotToolCalls(input) {
   return []
 }
 
-/** Whether `toolName` is one of Desk's four task tools (`<server>-task_update`, `-task_create`, `-task_move`, `-task_archive`), the calls the done-claim gate tracks. */
+/** Whether `toolName` is one of Desk's task tools (`<server>-task_update`, `-task_create`, `-task_move`, `-task_archive`, `-task_signoff`). The done-claim gate's own pattern tracks the first four only. */
 export const isTaskToolName = (toolName) => TASK_TOOL.test(typeof toolName === "string" ? toolName : "")
 
 /** A Desk task tool's Copilot name (`<server>-task_update`) as Claude and Codex name an MCP tool (`mcp__<server>__task_update`); any other name is returned as it is. */

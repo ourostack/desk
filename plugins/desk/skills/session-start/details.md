@@ -117,6 +117,10 @@ Applies only after the boot's last instruction said consent is undecided for a s
 3. With result `no_account_can_deliver`, do not ask: say in one line that no signed-in GitHub account can open pull requests on `<store>` (give each account's reason), and that signing in a personal account with `gh auth login` lets a later session ask.
 4. Record the answer only with `node <Desk plugin folder>/mcp/scripts/factory.js consent --store <store> --contribute yes --account <login>` or `node <Desk plugin folder>/mcp/scripts/factory.js consent --store <store> --contribute no`. A no is a decision too and is never asked again.
 
+## Delivered tasks awaiting sign-off
+
+When the boot text has a `Delivered, awaiting sign-off:` section, it lists delivered tasks the operator has not yet answered, one line each (`<track>/<slug>`, age, proof, `overdue` after seven days), and one numbered instruction says how many. The list is a lower bound when the line says "at least" or that some task cards could not be read. In an interactive session, do what the operator asked first. Then raise every listed task once, together, each as three lines (what was asked, what you delivered with its proof, accept or send back?), and carry on without waiting. When the operator answers, call `task_signoff` for that task in a later turn. In a noninteractive session, raise nothing. Do not raise the same delivery again in the same session. `status.json` carries the counts as `signoff`; a figure marked `partial` or `unavailable` is not a measured count.
+
 ## Status block and routing prompts
 
 concise status block, then an open prompt:

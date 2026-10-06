@@ -50,6 +50,12 @@ const CARD_UPDATE = {
 
 const REPOS_REMOVED_REASON = text("Required to remove every repo from a card that names code repos (a task whose work turned out not to touch them): one line on why, recorded on the card as `repos_removed` with each repo\'s name and the time. The same call may not set `status: done`; finish in a separate call. Not needed when the call sets `status: cancelled`.")
 
+const RETURN_REASON = {
+  type: "string",
+  enum: ["agent_error", "changed_ask", "new_information", "external"],
+  description: "Required when this call sends a task backwards (out of `done`, or to a stage below the furthest one it reached): why. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke). Refused on any call that is not a return.",
+}
+
 const TASK_PROGRESS = {
   note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
   next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
@@ -118,8 +124,16 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
+  task_signoff: schema({
+    track: text("The track folder of the delivered task."),
+    slug: text("The task folder name."),
+    outcome: { type: "string", enum: ["accepted", "refused"], description: "The operator's answer: accepted, or refused (the task goes back to processing)." },
+    // Mirrors REFUSAL_REASONS in src/factory/outcome.js (this file stays free of imports).
+    reason: { type: "string", enum: ["not_what_was_asked", "defect", "changed_ask", "incomplete", "other"], description: "Required when refused, and not allowed when accepted: the operator's reason, mapped from what they said. not_what_was_asked, defect, changed_ask, incomplete or other." },
+    return_reason: { ...RETURN_REASON, description: "Required when refused, and not allowed when accepted: your own reading of the cause. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke)." },
+  }, ["track", "slug", "outcome"]),
   task_focus: schema({
     track: text("The track folder of the task you are working on; give it with `slug`."),
     slug: text("The task folder name; give it with `track`."),

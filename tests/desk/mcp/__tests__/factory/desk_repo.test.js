@@ -4,7 +4,7 @@
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -1683,3 +1683,104 @@ test("repoOfPath answers null for the desk repository itself: a path inside the 
   assert.equal(local.repoOfPath(path.join(repo("code", "git@github.com:OurOStack/Desk.git"), "a.js")), "ourostack/desk")
   assert.equal(createDeskReaders({ deskRoot: path.join(root, "no-desk-here") }).repoOfPath(path.join(root, "code", "a.js")), "ourostack/desk")
 }))
+
+// --- readOutcome -----------------------------------------------------------------
+
+const OUTCOME_FIELDS = [
+  "status: done",
+  "updated: 2026-09-25T09:00:00Z",
+  "signoff:",
+  "  state: accepted",
+  "  at: 2026-09-25T09:20:00.000Z",
+  "  verified: true",
+  "flow:",
+  "  since: created",
+  "  rev: 4",
+  "  reached: done",
+  "  delivered_at: 2026-09-25T09:00:00.000Z",
+  "  deliveries: 1",
+]
+
+function outcomeDesk() {
+  const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), "desk-outcome-")))
+  writeIn(home, "track/live/task.md", card(OUTCOME_FIELDS))
+  writeIn(home, "track/_archive/old/task.md", card(OUTCOME_FIELDS))
+  writeIn(home, "_archive/gone-track/task-a/task.md", card(OUTCOME_FIELDS))
+  writeIn(home, "_archive/gone-track/_archive/task-b/task.md", card(OUTCOME_FIELDS))
+  writeIn(home, "track/legacy/task.md", card(["status: done", "updated: 2026-09-24T08:00:00Z"]))
+  writeIn(home, "track/odd-status/task.md", card(["status: nonsense", "updated: not a time"]))
+  return home
+}
+
+test("readOutcome gives the card's record, its status and the time of its last update", () => {
+  const home = outcomeDesk()
+  try {
+    const { readOutcome } = createDeskReaders({ deskRoot: home })
+    const found = readOutcome("track", "live")
+    assert.equal(found.status, "done")
+    assert.equal(found.evidenceAt, "2026-09-25T09:00:00.000Z")
+    assert.deepEqual(found.record.signoff, { state: "accepted", at: "2026-09-25T09:20:00.000Z", verified: true, reason: null })
+    assert.equal(found.record.flow.rev, 4)
+    assert.equal(found.record.flow.deliveries, 1)
+    assert.deepEqual(found.record.returns, [])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("an archived card is found, in each of the four places a card can lie", () => {
+  const home = outcomeDesk()
+  try {
+    const { readOutcome } = createDeskReaders({ deskRoot: home })
+    for (const [track, slug] of [["track", "old"], ["gone-track", "task-a"], ["gone-track", "task-b"]]) {
+      assert.equal(readOutcome(track, slug)?.record.flow.rev, 4, `${track}/${slug}`)
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("readOutcome gives an empty record for a legacy card, null status and time for unreadable fields, and null when no card exists or the names are unsafe", () => {
+  const home = outcomeDesk()
+  try {
+    const { readOutcome } = createDeskReaders({ deskRoot: home })
+    assert.deepEqual(readOutcome("track", "legacy"), { record: { signoff: null, flow: null, returns: [], returns_damaged: 0 }, status: "done", evidenceAt: "2026-09-24T08:00:00.000Z" })
+    assert.deepEqual(readOutcome("track", "odd-status")?.status, null)
+    assert.equal(readOutcome("track", "odd-status").evidenceAt, null)
+    assert.equal(readOutcome("track", "missing"), null)
+    for (const [track, slug] of [["..", "x"], ["track", "../live"], ["_meta", "x"], ["track", ""], [7, "x"]]) assert.equal(readOutcome(track, slug), null, `${track}/${slug}`)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("readOutcome follows a person prefix and a renamed task like readTask does", () => {
+  const home = outcomeDesk()
+  try {
+    writeIn(home, "desks/ari/track/mine/task.md", card(OUTCOME_FIELDS))
+    assert.equal(createDeskReaders({ deskRoot: home, personPrefix: "desks/ari" }).readOutcome("track", "mine")?.status, "done")
+    assert.equal(createDeskReaders({ deskRoot: home }).readOutcome("track", "mine"), null)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("readOutcome follows Git's rename history to a task folder that moved", () => {
+  const home = outcomeDesk()
+  try {
+    gitIn(home, ["init", "-q", "-b", "main"])
+    writeIn(home, "track/before/task.md", fixtureCard("rename before", "done", ["signoff:", "  state: accepted", "  at: 2026-09-25T09:20:00.000Z", "  verified: true"]))
+    commitIn(home, "2026-09-25T10:00:00Z", "add")
+    gitIn(home, ["mv", "track/before", "track/after"])
+    commitIn(home, "2026-09-25T10:05:00Z", "rename")
+    const { readOutcome } = createDeskReaders({ deskRoot: home })
+    assert.equal(readOutcome("track", "before")?.record.signoff.state, "accepted")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("desk-repo.js imports nothing from src/tools", () => {
+  const source = readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/desk-repo.js", import.meta.url), "utf8")
+  assert.equal(/from\s+["'][^"']*\/tools\//u.test(source), false)
+})

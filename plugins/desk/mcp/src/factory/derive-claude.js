@@ -97,7 +97,7 @@ import * as path from "node:path"
 
 import { hostFlagsFor } from "./host-flags.js"
 import { toolKind } from "./tool-kinds.js"
-import { addNullable, addUnavailable, applyLimits, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, sanitizePlugins, shellBinding, usageAbsent, usageOrNull, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, createHumanTurns, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, sanitizePlugins, shellBinding, usageAbsent, usageOrNull, withRequestedModel } from "./derive-common.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { normalizeTimestamp } from "./time.js"
@@ -105,7 +105,7 @@ import { normalizeTimestamp } from "./time.js"
 const HOST = "claude-code"
 const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"])
 const SUBAGENT_SPAWN_TOOLS = new Set(["Agent", "Task"])
-const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save)$/u
+const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save|task_signoff)$/u
 const COMMIT_SHA_PATTERN = /\b[0-9a-f]{40}\b/gu
 const PR_URL_PATTERN = /github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/pull\/\d+/u
 const SYNTHETIC_MODEL = "<synthetic>"
@@ -193,6 +193,13 @@ function promptText(content) {
   return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n")
 }
 
+// The number of text characters in a message's content: the whole string, or the text blocks (an image adds nothing). The text itself is never returned.
+function textLength(content) {
+  if (typeof content === "string") return content.length
+  if (!Array.isArray(content)) return 0
+  return content.reduce((sum, block) => sum + (block?.type === "text" && typeof block.text === "string" ? block.text.length : 0), 0)
+}
+
 function isToolResultLine(line) {
   return line.type === "user" && toolResultBlocksOf(line).length > 0
 }
@@ -202,13 +209,36 @@ function isToolResultLine(line) {
 // content (text, image, or string); and it isn't made up only of tool
 // results. Only ever called on a line already known to be `type: "user"`
 // (from `handleUserLine`).
-function isHumanPromptLine(line) {
+export function isHumanPromptLine(line) {
   if (line.isMeta || line.isCompactSummary) return false
   if (line.promptSource === "system") return false
   const originKind = line.origin?.kind
   if (originKind !== undefined && originKind !== "human") return false
   const { hasTextOrImage, isAllToolResult } = classifyUserContent(line.message?.content)
   return hasTextOrImage && !isAllToolResult
+}
+
+// A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, the same rules the sign-off witness uses (`humanMark` in `signoff-witness.js`). `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
+function isHumanTurnLine(line) {
+  if (line.isSidechain === true || line.isMeta === true) return false
+  if (Object.hasOwn(line, "scheduledTaskId") || Object.hasOwn(line, "scheduledFireId")) return false
+  if (line.origin?.kind !== "human") return false
+  if (Object.hasOwn(line, "turnOrigin") && line.turnOrigin !== "human") return false
+  return isHumanPromptLine(line)
+}
+
+// The fixed host marker for an interrupted turn: a prefix test, so no text is kept.
+const INTERRUPT_MARKER = "[Request interrupted by user"
+
+function isInterruptMarker(content) {
+  // Only called on a prompt-like line, whose content is a string or an array.
+  const first = typeof content === "string" ? content : content.find((block) => block?.type === "text")?.text
+  return typeof first === "string" && first.startsWith(INTERRUPT_MARKER)
+}
+
+// A prompt-like line that should have said who wrote it and did not: not the interrupt marker, and not a headless prompt (`promptSource: "sdk"`, which no human typed).
+function isUnmarkedPrompt(line) {
+  return !Object.hasOwn(line, "origin") && line.promptSource !== "sdk" && !isInterruptMarker(line.message?.content)
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +319,13 @@ function createAgentProcessor({ agentIndex }) {
   const spawnStartById = new Map() // spawn tool_use id -> time of the spawning call, answered or not
   let firstPromptSeen = false
   let firstPromptTask = null
+  // Human turns are the root agent's only: a subagent's prompt comes from its parent.
+  const humanTurns = agentIndex === 0 ? createHumanTurns() : null
+  let humanSeen = false
+  let promptLikeSeen = false
+  let originSeen = false
+  let unmarkedSeen = false
+  let humanTurnUndated = false
 
   const intervals = []
   const toolCallCounts = new Map()
@@ -429,6 +466,9 @@ function createAgentProcessor({ agentIndex }) {
       }
     }
 
+    // The reply's size only: the text is measured here and not kept.
+    if (humanTurns !== null && humanSeen && line.isSidechain !== true && !line.isApiErrorMessage && message.model !== SYNTHETIC_MODEL) humanTurns.addReply(textLength(message.content))
+
     const content = Array.isArray(message.content) ? message.content : []
     for (const block of content) {
       if (!block || block.type !== "tool_use" || typeof block.id !== "string") continue
@@ -496,12 +536,26 @@ function createAgentProcessor({ agentIndex }) {
       if (typeof block.tool_use_id === "string") finalizeToolResult(block, line.toolUseResult, ts)
     }
 
-    if (ts === null) return
+    if (humanTurns !== null && line.isSidechain !== true && isHumanPromptLine(line)) {
+      promptLikeSeen = true
+      if (Object.hasOwn(line, "origin")) originSeen = true
+      else if (isUnmarkedPrompt(line)) unmarkedSeen = true
+    }
+    if (ts === null) {
+      if (humanTurns !== null && isHumanTurnLine(line)) humanTurnUndated = true
+      return
+    }
     if (isHumanPromptLine(line)) {
       if (currentPromptStart !== null) {
         const end = lastActivityTs ?? currentPromptStart
         intervals.push({ kind: "turn", agent: agentIndex, start: currentPromptStart, end })
         if (agentIndex === 0) intervals.push({ kind: "human_wait", agent: agentIndex, start: end, end: ts })
+        // The agent stopped where the wait starts, if it did anything after the last prompt. A prompt the human queued while it worked is written after, but typed during the turn.
+        if (humanTurns !== null && lastActivityTs !== null && line.promptSource !== "queued") humanTurns.agentStopped(end)
+      }
+      if (humanTurns !== null && isHumanTurnLine(line)) {
+        humanTurns.prompt(ts, textLength(line.message?.content))
+        humanSeen = true
       }
       currentPromptStart = ts
       lastActivityTs = null
@@ -577,6 +631,12 @@ function createAgentProcessor({ agentIndex }) {
         hadUsableEnvelope,
         firstUsableVersion,
         entrypoint: mapEntrypoint(firstEntrypointRaw),
+        humanTurns,
+        humanTurnUndated,
+        // Prompt-like lines exist but none carries an `origin` key (an older host): who typed them cannot be told.
+        humanTurnsAbsent: promptLikeSeen && !originSeen,
+        // Some prompt lines say who wrote them and some that should do not: the list is a lower bound.
+        humanTurnsPartial: originSeen && unmarkedSeen,
       }
     },
   }
@@ -743,6 +803,13 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   addUnavailable(unavailable, "ci_runs", "not_collected_in_slice_1")
   addUnavailable(unavailable, "commits", "host_does_not_record")
   if (truncatedAny) addUnavailable(unavailable, "turns", "log_truncated")
+  const humanTurnList = rootResult.humanTurns.finish(unavailable)
+  if (rootResult.humanTurnsAbsent) addUnavailable(unavailable, "human_turns", "field_absent")
+  if (rootResult.humanTurnUndated) addUnavailable(unavailable, "human_turns", "source_unreadable")
+  if (rootResult.humanTurnsPartial) addUnavailable(unavailable, "human_turns", "host_records_partly")
+  // A line that could not be read may have been a prompt, so the list is a lower bound.
+  if (rootRead.truncated) addUnavailable(unavailable, "human_turns", "log_truncated")
+  else if (rootRead.parseFailures > 0) addUnavailable(unavailable, "human_turns", "source_unreadable")
   if (hadUnresolvedAny) addUnavailable(unavailable, "tool_durations", safeEndReason === null ? "session_open" : "log_truncated")
 
   const safePlugins = sanitizePlugins(plugins, LIMITS, unavailable)
@@ -778,6 +845,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     },
     refs: { prs: limited.prs, commits: [], unresolved: { prs: 0, commits: 0 } },
     jobs: [],
+    ...(rootResult.humanTurnsAbsent ? {} : { human_turns: humanTurnList }),
     unavailable,
   }
 

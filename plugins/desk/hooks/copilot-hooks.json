@@ -27,6 +27,12 @@
         "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot stop",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot stop",
         "timeoutSec": 5
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" stop",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" stop",
+        "timeoutSec": 5
       }
     ],
     "preToolUse": [
@@ -82,6 +88,12 @@
         "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
+        "timeoutSec": 5
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" prompt",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" prompt",
         "timeoutSec": 5
       }
     ]

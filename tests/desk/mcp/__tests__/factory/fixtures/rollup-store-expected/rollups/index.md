@@ -330,6 +330,27 @@ Calls and failures summed over 10 sessions with facts, each session counted once
 | search | measured | 2 | 1 | 2 of 2 | none |
 | read | measured | 1 | 0 | 1 of 1 | none |
 
+## Sign-off
+
+Sign-off: not recorded in any session of this store.
+
+## First-pass yield
+
+- First-pass yield: not recorded (no delivered job has a first-pass result yet).
+- Left out of the count: 6 jobs (no outcome record is available).
+
+## Rework
+
+- Rework: not recorded (no outcome record is available).
+
+## Human attention
+
+- Human attention per accepted outcome: no accepted outcomes yet, and no human attention is recorded in the period (no session in the store records the human's turns).
+- Human turns per accepted outcome: no accepted outcomes yet.
+- Sessions in the period: 0, of which 0 record the human's turns completely. Sessions from before turns were recorded are not in the period.
+- Permission decisions, reported beside the headline and not in it: 1, estimated at 2 seconds (partial: the host does not record it).
+- Method: version 1. An estimate of the time the human spent reading the reply and writing the prompt, never longer than the gap before the prompt, and at least 1 second per turn. Reading a reply by size: none 0 ms, xs 1 second, s 5 seconds, m 30 seconds, l 2.5 minutes, xl 6.7 minutes. Writing a prompt by size: none 2 seconds, xs 3 seconds, s 25 seconds, m 2.5 minutes, l 3 minutes, xl 3 minutes. A permission decision counts at most 5 seconds.
+
 ## Coverage
 
 - Jobs: 6; open: 1.

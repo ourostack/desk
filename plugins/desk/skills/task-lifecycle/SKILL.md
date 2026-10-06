@@ -24,6 +24,35 @@ Every task moves through a state machine with 8 states. The `status` field in `t
 | `done` | Terminal delivery verified and archived | Terminal |
 | `cancelled` | Abandoned by operator | Terminal |
 
+## Done is a delivery
+
+Done is a delivery, not an acceptance. The task is accepted only when the operator says so.
+
+- When you move a task to `done`, `task_update` and `task_archive` answer with `signoff: "delivered_unsigned"`, `signoff_packet` (three lines: what was asked, what was delivered with its proof, "Accept or send back?") and `signoff_note`. If the operator is in this conversation, end your reply with those three lines in your own words and carry on. Do not wait for the answer and do not ask again in this session.
+- When the operator answers, call `task_signoff` in that later turn, never in the turn that delivered. Give `outcome: "accepted"`, or `outcome: "refused"` with `reason` (the operator's reason: `not_what_was_asked`, `defect`, `changed_ask`, `incomplete` or `other`) and `return_reason` (your own reading of the cause, one of the four in Returns). The answer carries one sentence to say back to the operator.
+- On Claude Code Desk records the answer as verified only when it saw a message typed by a human after the delivery, in a later turn, and saw the main agent make the call. On Copilot CLI and Codex every answer is recorded as unverified in this version. An unverified answer is kept, counted apart and never counts as accepted. Only an unverified acceptance on Claude Code can be upgraded: do not ask the operator again; when their next message arrives, repeat the call with the same answer. An unverified refusal has already sent the task back to work, so there is nothing to sign until the next delivery. On Copilot CLI and Codex every answer is unverified in this version, so repeating the call changes nothing. A verified answer is never replaced by an unverified one.
+- A refusal sends the task back to `processing` (an archived card is brought back first) and is recorded as a return. `task_create` refuses a slug that exists in the archive; to work on that task again, bring it back with `task_move` (`unarchive: true`), then `task_update` with `return_reason`.
+- Session start lists the delivered tasks still waiting for an answer. Raise them once, together, after you have done what the operator asked, and record each answer with `task_signoff`.
+- A child agent never calls `task_signoff`; it reports to the main agent.
+
+## Returns
+
+A return is any move that sends work back. Desk records it on the card (`returns`) with a reason, so rework is counted honestly. Do not hide a return by editing the card.
+
+Which moves need a reason:
+
+- any move out of `done`;
+- any move to `drafting`, `processing` or `validating` that ranks below the furthest the task has reached since its last return (the order is `drafting`, `processing`, `validating`, `done`). Moves into `collaborating`, `paused`, `blocked` or `cancelled` are never returns unless the card is at `done`.
+
+`task_update` refuses such a move without `return_reason` and names the four values; it also refuses `return_reason` on a move that is not a return. When it records one, the answer carries `return_recorded`. The reason is one of:
+
+- **`agent_error`**: you got it wrong.
+- **`changed_ask`**: the operator changed what they want.
+- **`new_information`**: something nobody knew.
+- **`external`**: something outside the task broke.
+
+Honesty is the point. When the operator refuses a delivery, your reason is compared with the operator's. A disagreement is counted, not punished: it shows where the work and the operator read the cause differently. A return whose deciding reason is `changed_ask` does not lower first-pass yield, so there is never a reason to call an agent error a changed ask. An unverified refusal is decided by your reason alone, so choose it with care. Desk also records when the return was caught (in the task, at review or after delivery).
+
 ## One job is one task
 
 A job is one outcome, and it is recorded as exactly one task for its whole life. A follow-up, a re-review, a retry or a second attempt at the same outcome is a new iteration of the existing task (`directory-structure` "iteration-directory rules"), not a new task, even when it arrives in a new session or after the task is `done` and archived; `start-task` says how to reopen it. A genuinely different outcome that grew out of the work is a new task, linked from the old one with an `origin_note:`.
@@ -50,7 +79,8 @@ Each transition has a checkpoint type declaring how humans interact at that gate
 | Any → `paused` | NOTIFY | Operator-requested pause; worker emits a clean handoff state |
 | Any → `blocked` | NOTIFY | External blocker; worker emits the blocker reason + escalation path |
 | Any → `cancelled` | CONFIRM | Operator confirms abandonment; rare; worker doesn't auto-cancel |
-| `done` → `processing` | NOTIFY | Reopen: another round of the same job (a follow-up, re-review or retry) continues the existing task; the agent records why in the card and says so in one line (`start-task`) |
+| `done` → `processing` | NOTIFY | Reopen: another round of the same job (a follow-up, re-review or retry) continues the existing task; the agent records why in the card and says so in one line (`start-task`). Moving out of `done` is a return and needs `return_reason` (see Returns); a refusal recorded with `task_signoff` is this move, made by the tool. |
+| Any → `drafting`, `processing` or `validating`, below the furthest the task has reached | NOTIFY | A return: the move needs `return_reason`, one of four codes (see Returns); say in one line what went back and why |
 | `cancelled` → (terminal) | (n/a) | Terminal; no further transitions. `done` is terminal too unless the same job is reopened |
 
 **Why annotate:** the checkpoint type makes human interaction explicit. AUTO transitions proceed under the task's authorization; NOTIFY transitions explain a real pause. Do not manufacture a checkpoint because a planning document exists.

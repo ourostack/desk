@@ -10,6 +10,7 @@ import { closeSync, fstatSync, openSync, readSync } from "node:fs"
 import * as path from "node:path"
 import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
+import { unsignedLines } from "../desk/unsigned-deliveries.js"
 
 /** How much of the desk's AGENTS.md boot prints; the rest stays in the file, named by its path. */
 export const AGENTS_MD_CAP_BYTES = 16 * 1024
@@ -357,6 +358,7 @@ export function formatBootText(result) {
   for (const line of result.pending ?? []) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...namedTaskLines(result.task))
   taskSection(result, lines)
+  lines.push(...unsignedLines(result.unsigned_deliveries))
   if ((result.open_prs ?? []).length > 0) lines.push("", "Open pull requests:", ...result.open_prs.map(prLine))
   if ((result.repo_states ?? []).length > 0) lines.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
   const instructions = result.text_instructions ?? (result.instructions ?? []).map((instruction) => PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction)

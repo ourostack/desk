@@ -66,6 +66,7 @@ Write exactly this shape to `output`, and nothing else:
 
 - No free text anywhere: no notes, reasons, quotes, names, paths or times of day. Every string is an enum value, an ID from the brief, or your model ID exactly as the host names it.
 - Every stretch ends within `facts.duration_ms`.
+- Do not write `caught`: Desk places each `defects` stretch by where the defect was caught, from the job's own record, when it accepts your labels.
 - Copy the brief's `unavailable` codes into `unavailable`. `session_log_missing` means you labeled from the facts alone. `facts_missing` means there is nothing to cite, so `stretches` is empty.
 
 ## Hand it in

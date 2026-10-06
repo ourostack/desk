@@ -1239,6 +1239,19 @@ test("rebuildJobsIndex mirrors the outbox and writes its stamp", () => scratch(a
   assert.equal(typeof stamp.at, "string")
 }))
 
+test("a rebuilt jobs index lists an outcome-only job, and an outcomes value that is not a list is ignored", () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const outcome = (job) => ({ job, rev: 1, state: "delivered_unsigned", verified: null, reason: null, deliveries: 1, delivered_at: null, signed_at: null, observed_at: null })
+  const written = await writeLocalFacts(env, STORE, validLocalFacts({ jobs: [{ job: JOB, basis: ["desk_tool"], task_created_at: null, transitions: [], observed: null }], outcomes: [outcome(JOB), outcome(JOB2)] }))
+  assert.ok(written.written, JSON.stringify(written.errors))
+  const other = await writeLocalFacts(env, STORE, validLocalFacts({ session: { ...validLocalFacts().session, id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f62" } }))
+  const dir = path.join(await factoryStateRoot(env), "outbox", "ourostack__factory")
+  const facts = JSON.parse(readFileSync(path.join(dir, other.name), "utf8"))
+  writeFileSync(path.join(dir, other.name), JSON.stringify({ ...facts, outcomes: "nope" }))
+  assert.deepEqual(await rebuildJobsIndex(env, STORE), { jobs: 2, files: 2 })
+  assert.deepEqual(await readJobsIndex(env), { [JOB]: [written.name], [JOB2]: [written.name] })
+}))
+
 test("rebuildJobsIndex ignores non-directory entries in the outbox", () => scratch(async (env) => {
   const root = await factoryStateRoot(env)
   mkdirSync(path.join(root, "outbox"), { recursive: true })

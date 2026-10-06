@@ -77,7 +77,9 @@ const SESSION = { started_at: minute(0), derived_through: minute(90) }
 function bind(events, { deskRoot = DESK, deskRemote = REMOTE, personPrefix = "", agents, session = SESSION, ...options } = {}) {
   const deps = fakes(options)
   const result = bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, ...deps })
-  assert.equal(JSON.stringify(result).includes(SENTINEL), false, "no track, slug or path ever reaches a job")
+  // `tasks` names the bound tasks for the reader of their cards, in memory only; nothing else may carry a name.
+  const { tasks: _names, remote: _remote, ...written } = result
+  assert.equal(JSON.stringify(written).includes(SENTINEL), false, "no track, slug or path ever reaches a job")
   return { ...result, calls: deps.calls }
 }
 
@@ -168,6 +170,49 @@ test("three Desk task tool calls bind their task, with each valid status as a tr
   }])
   assert.deepEqual(boundBy, { [idOf(SLUG)]: "inferred" })
   assert.deepEqual(bind({ deskToolCalls: [deskCall({ status: "processing" })] }).jobs, [], "updating a card once is not working on it")
+})
+
+const SIGNOFF = "mcp__plugin_desk_desk__task_signoff"
+
+test("a task_signoff call is not evidence of working on a task", () => {
+  // Three successful sign-offs on one task bind nothing: the session where the human says yes is often not the one that did the work.
+  const alone = bind({ deskToolCalls: threeCalls({ name: SIGNOFF, status: "done" }) })
+  assert.deepEqual(alone.jobs, [])
+  assert.deepEqual(alone.boundBy, {})
+  assert.deepEqual(alone.tasks, [])
+  // Beside real work on the same task they add no basis, no transition and no second job.
+  const beside = bind({
+    deskToolCalls: threeCalls({ name: SIGNOFF, status: "done" }),
+    fileWrites: [{ at: minute(5), path: `${DESK}/${TRACK}/${SLUG}/notes.md` }],
+  })
+  assert.deepEqual(beside.jobs.map(({ basis, transitions }) => ({ basis, transitions })), [{ basis: ["file_write"], transitions: [] }])
+  // Beside work on another task they bind neither.
+  const other = bind({
+    deskToolCalls: threeCalls({ name: SIGNOFF, slug: OTHER }),
+    fileWrites: [{ at: minute(5), path: `${DESK}/${TRACK}/${SLUG}/notes.md` }],
+  })
+  assert.deepEqual(other.jobs.map(({ job }) => job), [idOf(SLUG)])
+  // A sign-off is still the session's own activity, but a name that is not a string is no sign-off.
+  assert.equal(alone.ownActivity.length > 0, true)
+  assert.equal(bind({ deskToolCalls: threeCalls({ name: undefined }) }).jobs.length, 1)
+})
+
+test("the remote binding hashed the jobs with comes back, and is local:<desk> for a desk with no remote", () => {
+  const events = { fileWrites: [1, 2, 3].map((n) => ({ at: minute(n), path: `${DESK}/${TRACK}/${SLUG}/a.md` })) }
+  assert.equal(bind(events).remote, REMOTE)
+  const none = bind(events, { deskRemote: null })
+  assert.equal(none.remote, `local:${DESK}`)
+  assert.equal(none.jobs[0].job, expectedId(`local:${DESK}`, "", TRACK, SLUG))
+})
+
+test("the bound tasks come back with their birth path beside the jobs", () => {
+  const { jobs, tasks } = bind({
+    fileWrites: [...[1, 2, 3].map((n) => ({ at: minute(n), path: `${DESK}/${TRACK}/${SLUG}/a.md` })), ...[50, 60, 70].map((n) => ({ at: minute(n), path: `${DESK}/${TRACK}/${OTHER}/b.md` }))],
+  }, { birthPaths: { [`${TRACK}/${OTHER}`]: { track: "birth-track", slug: "birth-slug" } } })
+  assert.equal(jobs.length, 2)
+  assert.deepEqual(tasks.map(({ job }) => job).sort(), jobs.map(({ job }) => job))
+  assert.deepEqual(tasks.map(({ track, slug }) => `${track}/${slug}`).sort(), ["birth-track/birth-slug", `${TRACK}/${SLUG}`].sort())
+  assert.equal(tasks.find(({ job }) => job === expectedId(NORMALIZED, "", "birth-track", "birth-slug")).slug, "birth-slug")
 })
 
 test("a successful file write alone binds the task folder it lands in", () => {

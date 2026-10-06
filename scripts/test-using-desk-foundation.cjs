@@ -263,6 +263,7 @@ function main() {
   const expectedSections = [
     "Human and agent",
     "Alignment, then ownership",
+    "Delivery and sign-off",
     "Coaching the collaboration",
     "Authority",
     "Waste judgment",
@@ -278,10 +279,18 @@ function main() {
     "The RFC",
   ];
   const headings = [...skill.matchAll(/^## (.+)$/gmu)].map((match) => match[1]);
-  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the fifteen foundation sections, in order");
+  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the sixteen foundation sections, in order");
   for (const title of expectedSections) {
     assertSinglePhysicalLine(section(skill, title), `using-desk ${title}`);
   }
+
+  // The foundation says done is a delivery, tells the agent what to do at delivery, and tells a child never to record the answer.
+  assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation says done is a delivery and names task_signoff", [
+    "Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered. Raise older unsigned deliveries once, together, after you have done what the operator asked.",
+  ]);
+  assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation tells a child agent never to call task_signoff", [
+    "A child agent never calls task_signoff.",
+  ]);
 
   assertSectionConcepts(section(skill, "Human and agent"), [
     /The human supplies intent.*authority.*endpoint/u,
@@ -485,9 +494,9 @@ function main() {
   // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
   // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
   // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
-  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; a further addition has to justify its size.
+  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; a further addition has to justify its size.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 8150, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 4500 && skillBytes <= 8600, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,

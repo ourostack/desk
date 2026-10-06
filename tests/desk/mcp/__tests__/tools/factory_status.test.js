@@ -72,7 +72,9 @@ test("desk_status reports the factory for the bound desk, routed by the overlay 
   await writeStatus(host.env, { last_flush: { [OTHER]: { at: "2026-09-27T12:00:00.000Z", result: "nothing_pending" } } })
   for (const hostEnv of [host.env, host.claudeEnv]) {
     const body = await desk_status({ deskRoot: desk, env: hostEnv })
-    assert.deepEqual(body.factory, {
+    const { signoff, ...factory } = body.factory
+    assert.equal(signoff.unsigned.value, 0, "the desk's sign-off counts ride along, without a task name")
+    assert.deepEqual(factory, {
       store: OTHER,
       source: "overlay",
       consent: "yes",
@@ -115,7 +117,7 @@ test("desk_doctor names skipped plugin manifests by code only", () => scratch(as
   await fs.writeFile(path.join(host.overlay, "plugin.json"), "{ broken")
   const body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.deepEqual(body.factory.warnings, ["manifest_unparseable"])
-  assert.match(body.summary, /\n  plugin manifests skipped: manifest_unparseable$/u)
+  assert.match(body.summary, /\n  plugin manifests skipped: manifest_unparseable\n/u)
   assert.equal(body.summary.includes(base), false)
 }))
 
@@ -208,4 +210,30 @@ test("desk_doctor's store line says how many sessions wait for a visibility answ
   assert.match(body.summary, /2 sessions wait because their desk's visibility could not be asked for an unknown time\. Run/u)
   await writeStatus(host.env, { last_flush: { [STORE]: { at, result: "nothing_pending" } } })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.stores[0].waiting_for_visibility, undefined)
+}))
+
+test("the factory summary says how many delivered tasks await sign-off", async () => {
+  const { factorySummary } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
+  const base = { store: STORE, source: "desk", consent: "yes", stores: [], warnings: [] }
+  const m = (value) => ({ state: "measured", value })
+  const line = (signoff) => factorySummary({ ...base, signoff }).split("\n").find((entry) => entry.includes("sign-off"))
+  assert.equal(line({ unsigned: m(3), oldest_unsigned_age_days: m(9), not_recorded: m(2) }), "  sign-off: 3 delivered tasks await sign-off, oldest 9 days; 2 delivered before sign-off was recorded")
+  assert.equal(line({ unsigned: m(1), oldest_unsigned_age_days: m(1), not_recorded: m(0) }), "  sign-off: 1 delivered task awaits sign-off, oldest 1 day")
+  assert.equal(line({ unsigned: m(0), oldest_unsigned_age_days: { state: "unavailable", reason: "none_unsigned" }, not_recorded: m(4) }), "  sign-off: no delivered tasks await sign-off; 4 delivered before sign-off was recorded")
+  const partial = (value) => ({ state: "partial", value, reason: "archive_cap" })
+  assert.equal(line({ unsigned: partial(500), oldest_unsigned_age_days: partial(30), not_recorded: partial(1) }), "  sign-off: at least 500 delivered tasks await sign-off, oldest at least 30 days; at least 1 delivered before sign-off was recorded")
+  assert.equal(line({ unsigned: m(2), oldest_unsigned_age_days: { state: "unavailable", reason: "age_unknown" }, not_recorded: m(0) }), "  sign-off: 2 delivered tasks await sign-off, oldest age unknown")
+  const failed = { state: "unavailable", reason: "scan_failed" }
+  assert.equal(line({ unsigned: failed, oldest_unsigned_age_days: failed, not_recorded: failed }), "  sign-off: not checked (scan_failed)")
+  assert.equal(line(undefined), undefined, "a status with no sign-off figures prints no sign-off line")
+})
+
+test("desk_status carries the sign-off counts for the bound desk and no task name", () => scratch(async ({ desk, env }) => {
+  const { factoryStatus } = await load()
+  await fs.mkdir(path.join(desk, "alpha", "PRIVATE-slug"), { recursive: true })
+  await fs.writeFile(path.join(desk, "alpha", "PRIVATE-slug", "task.md"), "---\ntitle: PRIVATE-title\nstatus: done\nsignoff:\n  state: delivered_unsigned\n  at: null\n  verified: null\n  reason: null\nflow:\n  since: created\n  rev: 1\n  reached: done\n  delivered_at: '2026-10-01T00:00:00.000Z'\n  deliveries: 1\n---\n")
+  const status = factoryStatus({ env, deskRoot: desk })
+  assert.equal(status.signoff.unsigned.value, 1)
+  assert.equal(JSON.stringify(status.signoff).includes("PRIVATE"), false)
+  assert.equal(factoryStatus({ env, deskRoot: null }).signoff, undefined)
 }))

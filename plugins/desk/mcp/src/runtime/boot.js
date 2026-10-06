@@ -81,6 +81,7 @@ import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTI
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
+import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -1064,6 +1065,7 @@ function buildInstructionItems(ctx) {
   // An ask-and-stop blocker means the operator has one question to answer first: no consent line on this boot.
   const consent = needsOperator(ctx) === null ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
   consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
+  signoffInstructions(ctx.unsigned, { noninteractive }).forEach((text) => add(text))
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
@@ -1140,6 +1142,7 @@ export async function bootOnce({
   agentsFn = readAgentsMd,
   staleDeskFn = checkStaleDesk,
   nestedCards = NESTED_CARD_FIELDS,
+  unsignedFn = recordUnsigned,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
   const ghAuth = ghAuthArg ?? (ghArg ?? commandRunner("gh", { env }))
@@ -1319,6 +1322,14 @@ export async function bootOnce({
     degraded.push(`factory: ${error.message}`)
   }
 
+  // The delivered tasks that await the operator's sign-off; the counts go to status.json.
+  let unsigned = null
+  try {
+    unsigned = await unsignedFn(env, root.path, now())
+  } catch {
+    unsigned = null
+  }
+
   let task = null
   if (taskQuery !== null) {
     const resolved = resolveTaskQuery(taskQuery, cards, root.path)
@@ -1333,7 +1344,7 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
@@ -1361,6 +1372,7 @@ export async function bootOnce({
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
+    unsigned_deliveries: unsigned,
   }
 }
 

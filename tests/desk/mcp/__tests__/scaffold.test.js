@@ -7,7 +7,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { homedir, tmpdir } from "node:os"
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import * as path from "node:path"
 
 // Import from tool-names directly (not server.js) so the test doesn't pull
@@ -21,6 +21,7 @@ const EXPECTED_TOOLS = [
   "task_archive",
   "task_move",
   "task_focus",
+  "task_signoff",
   "track_create",
   "track_update",
   "track_rename",
@@ -46,7 +47,7 @@ function makeDesk(dir) {
   mkdirSync(path.join(dir, "_archive"), { recursive: true })
 }
 
-test("server scaffolds all 19 expected tool names", () => {
+test("server scaffolds every expected tool name", () => {
   for (const name of EXPECTED_TOOLS) {
     assert.ok(
       TOOL_NAMES.includes(name),
@@ -58,6 +59,14 @@ test("server scaffolds all 19 expected tool names", () => {
     EXPECTED_TOOLS.length,
     `expected exactly ${EXPECTED_TOOLS.length} tools; got ${TOOL_NAMES.length}`,
   )
+})
+
+test("the README advertises the number of tools the server exposes", () => {
+  const readme = readFileSync(new URL("../../../../plugins/desk/mcp/README.md", import.meta.url), "utf8")
+  const count = TOOL_NAMES.length
+  assert.match(readme, new RegExp(`All ${count} tools are wired to real implementations`, "u"))
+  assert.match(readme, new RegExp(`full set of ${count} tools`, "u"))
+  for (const name of TOOL_NAMES) assert.ok(readme.split("\n").some((line) => line.startsWith("- ") && line.includes(`\`${name}\``)), `the README lists ${name}`)
 })
 
 test("path resolver expands ~ and rejects nonexistent roots", async () => {

@@ -56,6 +56,7 @@ export const ENUMS = Object.freeze({
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
     "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
+    "human_turns",
   ]),
   // The published form adds `job_offsets`: a job whose offsets could not be
   // measured (no readable task-card creation time).
@@ -63,7 +64,7 @@ export const ENUMS = Object.freeze({
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
     "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
-    "job_offsets",
+    "human_turns", "job_offsets",
   ]),
   // `log_truncated` is a log that ends mid-record; `capped` is data a deriver
   // trimmed to a schema limit; `desk_public` is job timing the transform
@@ -73,6 +74,9 @@ export const ENUMS = Object.freeze({
     "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
     "field_absent", "host_records_partly", "withheld_public",
   ]),
+  // The size class of a character count (`sizeClass` in `derive-common.js`), and how a human turn relates to the agent's last stop.
+  sizeClass: Object.freeze(["none", "xs", "s", "m", "l", "xl"]),
+  turnBasis: Object.freeze(["first", "after_stop", "mid_turn"]),
 })
 
 export const LOCAL_SCHEMA = "desk.factory.local/2"
@@ -110,6 +114,9 @@ export const LIMITS = Object.freeze({
   jobSegments: 200,
   // Every field with every reason once: no entry set can overflow when an enum grows.
   unavailable: ENUMS.publishedUnavailableField.length * ENUMS.unavailableReason.length,
+  outcomes: 256,
+  returns: 32,
+  humanTurns: 1000,
 })
 
 export const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -591,6 +598,63 @@ const UNAVAILABLE_SPEC = {
   reason: enumField(ENUMS.unavailableReason),
 }
 
+// `outcomes[]`: the outcome record of one task the session touched (`derive-run.js` `outcomesFor`). These two lists are `OUTCOME_STATES` and `REFUSAL_REASONS` in `outcome.js`; a test compares them, because this module imports nothing.
+const OUTCOME_STATE_CODES = ["not_delivered", "not_recorded", "delivered_unsigned", "accepted", "refused", "reopened"]
+const REFUSAL_REASON_CODES = ["not_what_was_asked", "defect", "changed_ask", "incomplete", "other"]
+const OUTCOME_SPEC = {
+  job: patternField(PATTERNS.jobId),
+  rev: nonNegIntField(),
+  state: enumField(OUTCOME_STATE_CODES),
+  verified: leaf((value, path, errors) => (value === null ? true : booleanField().check(value, path, errors))),
+  reason: nullableEnumField(REFUSAL_REASON_CODES),
+  deliveries: nonNegIntField(),
+  delivered_at: nullableTimestampField(),
+  signed_at: nullableTimestampField(),
+  observed_at: nullableTimestampField(),
+}
+
+// The optional keys of an outcome entry: the record's start, the two milestone times (local only), the returns the record holds (newest `LIMITS.returns`), and the two flags that say a returns list is not the whole story. These lists are `RETURN_REASONS` and `CATCH_POINTS` in `outcome.js`; a test compares them.
+const RETURN_REASON_CODES = ["agent_error", "changed_ask", "new_information", "external"]
+const CATCH_POINT_CODES = ["in_task", "at_review", "after_delivery"]
+const OUTCOME_SINCE_CODES = ["created", "adopted"]
+const RETURN_SPEC = {
+  reason: enumField(RETURN_REASON_CODES),
+  caught: enumField(CATCH_POINT_CODES),
+  counts: booleanField(),
+  refusal: nullableEnumField(REFUSAL_REASON_CODES),
+  refusal_verified: OUTCOME_SPEC.verified,
+}
+const OUTCOME_OPTIONAL = {
+  since: nullableEnumField(OUTCOME_SINCE_CODES),
+  first_validating_at: nullableTimestampField(),
+  first_delivered_at: nullableTimestampField(),
+  returns: arrayField(objectField(RETURN_SPEC), LIMITS.returns),
+  returns_truncated: leaf((value, path, errors) => {
+    if (value === true) return true
+    addError(errors, "type", path)
+    return false
+  }),
+  returns_unreadable: positiveIntField(),
+}
+// An entry's spec: the required keys, and each optional key the entry carries.
+const outcomeFields = (value) => ({ ...OUTCOME_SPEC, ...Object.fromEntries(Object.entries(OUTCOME_OPTIONAL).filter(([key]) => Object.hasOwn(value, key))) })
+
+// A list capped at `LIMITS.outcomes` with one entry per job.
+const outcomesField = () => {
+  const list = arrayField(objectField(outcomeFields), LIMITS.outcomes)
+  return leaf((value, path, errors, ctx) => {
+    const results = list.check(value, path, errors, ctx)
+    if (results === undefined) return results
+    const seen = new Set()
+    value.forEach((entry, index) => {
+      if (results[index]?.job !== true) return
+      if (seen.has(entry.job)) addError(errors, "duplicate", joinPath(path, `${index}.job`))
+      seen.add(entry.job)
+    })
+    return results
+  })
+}
+
 // `ended_at` and `derived_through` never precede `started_at`: the published
 // duration is `derived_through - started_at` and must not be negative.
 function sessionOrderCheck(value, path, results, errors) {
@@ -665,6 +729,42 @@ const TOP_SPEC = {
   unavailable: arrayField(objectField(UNAVAILABLE_SPEC), LIMITS.unavailable),
 }
 
+// `human_turns[]`: one human prompt, as sizes and times only. `at` is the prompt's time in the form local intervals use; `window_ms` is null exactly for the first prompt.
+const HUMAN_TURN_SPEC = {
+  at: timestampField(),
+  basis: enumField(ENUMS.turnBasis),
+  window_ms: nullableNonNegIntField(),
+  prompt_class: enumField(ENUMS.sizeClass),
+  output_class: enumField(ENUMS.sizeClass),
+}
+
+// A list capped at `LIMITS.humanTurns`, in time order, where `window_ms` is null exactly for a `first` turn (the estimator throws on a mismatch, so the gate catches it first).
+const humanTurnsField = () => {
+  const list = arrayField(objectField(HUMAN_TURN_SPEC), LIMITS.humanTurns)
+  return leaf((value, path, errors, ctx) => {
+    const results = list.check(value, path, errors, ctx)
+    if (results === undefined) return results
+    let previous = null
+    value.forEach((entry, index) => {
+      const own = results[index]
+      if (own?.basis === true && own.window_ms === true && (entry.basis === "first") !== (entry.window_ms === null)) {
+        addError(errors, "inconsistent", joinPath(path, `${index}.window_ms`))
+      }
+      if (own?.at !== true) return
+      const ms = Date.parse(entry.at)
+      if (previous !== null && ms < previous) addError(errors, "order", joinPath(path, `${index}.at`))
+      previous = ms
+    })
+    return results
+  })
+}
+
+// The optional top-level keys, added only when the file carries them (as `agents` and `segments` are on a job).
+const topFields = (value) => {
+  const withOutcomes = Object.hasOwn(value, "outcomes") ? { ...TOP_SPEC, outcomes: outcomesField() } : TOP_SPEC
+  return Object.hasOwn(value, "human_turns") ? { ...withOutcomes, human_turns: humanTurnsField() } : withOutcomes
+}
+
 // Every spec object above, keyed for the structural regression test that
 // walks each one and asserts every allowed key carries a real validator
 // (I2): with this architecture that's true by construction, but the test
@@ -686,6 +786,10 @@ export const __SPECS__ = Object.freeze({
   observed: OBSERVED_SPEC,
   job: JOB_SPEC,
   unavailable: UNAVAILABLE_SPEC,
+  outcome: OUTCOME_SPEC,
+  humanTurn: HUMAN_TURN_SPEC,
+  return: RETURN_SPEC,
+  outcomeOptional: OUTCOME_OPTIONAL,
   counts: COUNTS_SPEC,
   intervalTool: intervalFields({ kind: "tool" }),
   intervalOther: intervalFields({ kind: "turn" }),
@@ -753,7 +857,7 @@ export function checkAgentReferences(value, results, errors) {
  */
 export function validateLocalFacts(value) {
   const errors = []
-  const results = validateObject(value, "", TOP_SPEC, errors)
+  const results = validateObject(value, "", topFields, errors)
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
   checkSegmentAgents(value, results, errors)
@@ -796,3 +900,7 @@ export function validateCanonicalBytes(buffer, validate) {
 export function validateLocalFactsBytes(buffer) {
   return validateCanonicalBytes(buffer, validateLocalFacts)
 }
+
+// The outcome entry's spec and enum lists, for the published form (`published-schema.js`), which shares them.
+export { OUTCOME_SPEC, OUTCOME_STATE_CODES, REFUSAL_REASON_CODES }
+export { OUTCOME_OPTIONAL, OUTCOME_SINCE_CODES, RETURN_SPEC }

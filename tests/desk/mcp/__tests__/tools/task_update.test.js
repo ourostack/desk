@@ -1,13 +1,15 @@
 // task_update — frontmatter merge, body append, preservation of
 // schema_version + created, refusal on missing task.
 
-import { test } from "node:test"
+import { test, mock } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
+import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
+import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
 function initGit(root) {
@@ -689,4 +691,461 @@ test("task_update refuses an unknown top-level field, naming it and the accepted
   )
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "unknown-field", owner: "me" } }), /unknown field `owner`;/)
   assert.equal(await fs.readFile(filePath, "utf8"), before)
+})
+
+// ── the delivery record and the sign-off packet ─────────────────────────────
+
+const PR_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/7" }
+const RECORD_ERROR = /these records are written by the task tools; to record an answer call task_signoff/
+const SENTINEL = "SENTINEL-card-body-text"
+
+test("task_update refuses signoff, flow and returns in frontmatter and writes nothing", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "no-forge", title: "T" } })
+  const file = path.join(root, "t", "no-forge", "task.md")
+  const before = await fs.readFile(file, "utf8")
+  for (const key of ["signoff", "flow", "returns"]) {
+    await assert.rejects(
+      task_update({ deskRoot: root, input: { track: "t", slug: "no-forge", frontmatter: { category: "general", [key]: key === "returns" ? ["x"] : { state: "accepted" } } } }),
+      RECORD_ERROR,
+    )
+  }
+  assert.equal(await fs.readFile(file, "utf8"), before)
+})
+
+test("a move to done marks the card delivered_unsigned with the delivery time", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T" } })
+  const file = path.join(root, "t", "ship-it", "task.md")
+  assert.equal((await readFront(file)).data.flow.deliveries, 0)
+  await task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  const { data } = await readFront(file)
+  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.equal(data.flow.since, "created")
+  assert.equal(data.flow.reached, "done")
+  assert.equal(data.flow.rev, 1)
+  assert.equal(data.flow.deliveries, 1)
+  assert.equal(data.flow.delivered_at, data.updated)
+  assert.equal(data.flow.first_delivered_at, data.updated)
+})
+
+test("a move to done answers with the three-line packet and a note that says not to wait", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "ship-packet", title: "Fix the login page" } })
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "ship-packet", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  assert.equal(result.signoff, "delivered_unsigned")
+  assert.deepEqual(result.signoff_packet, ["Asked: Fix the login page", `Delivered: ${PR_EVIDENCE.ref}`, "Accept or send back?"])
+  assert.equal(
+    result.signoff_note,
+    "This task is delivered, not accepted. If the operator is in this conversation, end your reply with the three lines; do not wait for the answer and do not ask again in this session. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff.",
+  )
+})
+
+test("the packet carries the card title and the evidence ref and nothing from the card body", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "packet-clean", title: "Plain title", body: `## Goal\n\n${SENTINEL}\n` } })
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "packet-clean", frontmatter: { status: "done" }, evidence: PR_EVIDENCE, note: SENTINEL } })
+  assert.ok(!JSON.stringify(result).includes(SENTINEL))
+  assert.equal(result.signoff_packet[0], "Asked: Plain title")
+  const card = await fs.readFile(path.join(root, "t", "packet-clean", "task.md"), "utf8")
+  assert.ok(!/^(?:signoff|flow):[\s\S]*SENTINEL/mu.test(card.split("\n---")[0]), "nothing from the body is in the record")
+})
+
+test("the packet uses the slug when the card has no title", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "untitled-card", title: "Unique title untitled-card" } })
+  const file = path.join(root, "t", "untitled-card", "task.md")
+  const { data, content } = await readFront(file)
+  delete data.title
+  await writeMarkdown(file, data, content)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "untitled-card", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  assert.equal(result.signoff_packet[0], "Asked: untitled-card")
+  await task_create({ deskRoot: root, input: { track: "t", slug: "blank-title", title: "Unique title blank-title" } })
+  const blank = path.join(root, "t", "blank-title", "task.md")
+  const card = await readFront(blank)
+  card.data.title = 42
+  await writeMarkdown(blank, card.data, card.content)
+  const second = await task_update({ deskRoot: root, input: { track: "t", slug: "blank-title", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  assert.equal(second.signoff_packet[0], "Asked: blank-title")
+})
+
+test("a failed evidence check writes no signoff", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "no-proof", title: "T" } })
+  const file = path.join(root, "t", "no-proof", "task.md")
+  const before = await fs.readFile(file, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-proof", frontmatter: { status: "done" } } }), /needs evidence/)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-proof", frontmatter: { status: "done" }, evidence: { kind: "pr", ref: "nope" } } }), /not a checkable pr reference/)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+})
+
+test("a legacy card moved to done gets a flow record marked adopted", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "old-card", title: "Unique title old-card" } })
+  const file = path.join(root, "t", "old-card", "task.md")
+  const card = await readFront(file)
+  delete card.data.flow
+  await writeMarkdown(file, card.data, card.content)
+  await task_update({ deskRoot: root, input: { track: "t", slug: "old-card", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  const { data } = await readFront(file)
+  assert.equal(data.flow.since, "adopted")
+  assert.equal(data.flow.deliveries, 1)
+  assert.equal(data.signoff.state, "delivered_unsigned")
+})
+
+test("a status change that is not into done writes no signoff and no packet, and moves the flow's high-water mark", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "stay-open", title: "T" } })
+  const file = path.join(root, "t", "stay-open", "task.md")
+  const before = (await readFront(file)).data.flow
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "stay-open", frontmatter: { status: "processing" } } })
+  assert.equal(result.signoff, undefined)
+  assert.equal(result.signoff_packet, undefined)
+  assert.equal(result.return_recorded, undefined)
+  const { data } = await readFront(file)
+  assert.equal(data.signoff, undefined)
+  assert.deepEqual(data.flow, { ...before, reached: "processing", rev: before.rev + 1 })
+})
+
+test("re-saving an already done card delivers nothing again and keeps the record through a task_update rewrite", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "resave", title: "T" } })
+  const file = path.join(root, "t", "resave", "task.md")
+  await task_update({ deskRoot: root, input: { track: "t", slug: "resave", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  const first = (await readFront(file)).data
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "resave", note: "later note", frontmatter: { category: "general" } } })
+  assert.equal(result.signoff, undefined)
+  const { data } = await readFront(file)
+  assert.deepEqual(data.signoff, first.signoff)
+  assert.deepEqual(data.flow, first.flow)
+})
+
+test("a rewrite by task_update keeps a returns list, a signoff and a flow as written", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "keeps-all", title: "Unique title keeps-all" } })
+  const file = path.join(root, "t", "keeps-all", "task.md")
+  const card = await readFront(file)
+  card.data.returns = ["processing, 2026-10-05T10:00:00Z, agent_error"]
+  card.data.signoff = { state: "refused", at: "2026-10-05T11:00:00Z", verified: true, reason: "defect" }
+  await writeMarkdown(file, card.data, card.content)
+  await task_update({ deskRoot: root, input: { track: "t", slug: "keeps-all", frontmatter: { category: "general" } } })
+  const { data } = await readFront(file)
+  assert.deepEqual(data.returns, ["processing, 2026-10-05T10:00:00Z, agent_error"])
+  assert.deepEqual(data.signoff, { state: "refused", at: "2026-10-05T11:00:00Z", verified: true, reason: "defect" })
+  assert.equal(data.flow.since, "created")
+})
+
+// ── a backwards move needs a reason ─────────────────────────────────────────
+
+const REFUSAL = "task_update: moving this task from validating back to processing is a return and needs a reason. Repeat the call with `return_reason` set to one of agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke)."
+const finalizeSpy = () => {
+  const calls = []
+  return { calls, finalize: async (request) => { calls.push(request) } }
+}
+
+async function validatingCard(root, slug, extra = {}) {
+  await task_create({ deskRoot: root, input: { track: "t", slug, title: `Unique title ${slug}`, status: "validating", body: `${SENTINEL}\n`, ...extra } })
+  return path.join(root, "t", slug, "task.md")
+}
+
+test("validating to processing without return_reason is refused, names the list, and writes nothing", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const file = await validatingCard(root, "back-no-reason")
+  const before = await fs.readFile(file, "utf8")
+  const head = spawnSync("git", ["-C", root, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" }).stdout
+  const spy = finalizeSpy()
+  const pushes = []
+  await assert.rejects(
+    task_update({ deskRoot: root, input: { track: "t", slug: "back-no-reason", frontmatter: { status: "processing" }, note: SENTINEL }, finalize: spy.finalize, schedulePush: (o) => pushes.push(o) }),
+    (error) => error.message === REFUSAL && !error.message.includes(SENTINEL),
+  )
+  assert.equal(await fs.readFile(file, "utf8"), before, "the card bytes are unchanged")
+  assert.equal(spy.calls.length, 0, "no finalize request")
+  assert.equal(pushes.length, 0)
+  assert.equal(spawnSync("git", ["-C", root, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" }).stdout, head, "no commit")
+})
+
+test("the same move with a reason is written and the card gains a returns line", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "back-with-reason")
+  const spy = finalizeSpy()
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "back-with-reason", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: spy.finalize })
+  assert.equal(result.return_recorded, "validating to processing, agent_error, caught at_review")
+  assert.ok(!JSON.stringify(result).includes(SENTINEL))
+  const { data } = await readFront(file)
+  assert.equal(data.status, "processing")
+  assert.equal(data.returns.length, 1)
+  assert.match(data.returns[0], /^\S+ validating processing agent_error at_review$/u)
+  assert.equal(data.flow.reached, "processing")
+  assert.equal(data.flow.since, "created")
+})
+
+test("a return in the task before any review is recorded as caught in the task", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "back-to-drafting", title: "T", status: "processing" } })
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "back-to-drafting", frontmatter: { status: "drafting" }, return_reason: "changed_ask" }, finalize: async () => {} })
+  assert.equal(result.return_recorded, "processing to drafting, changed_ask, caught in_task")
+})
+
+test("reopening a done task needs a reason and removes its signoff", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "reopen", title: "T" } })
+  const file = path.join(root, "t", "reopen", "task.md")
+  await task_update({ deskRoot: root, input: { track: "t", slug: "reopen", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  assert.equal((await readFront(file)).data.signoff.state, "delivered_unsigned")
+  const before = await fs.readFile(file, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "reopen", frontmatter: { status: "processing" } }, finalize: async () => {} }), /moving this task from done back to processing is a return and needs a reason/)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "reopen", frontmatter: { status: "processing" }, return_reason: "new_information" }, finalize: async () => {} })
+  assert.equal(result.return_recorded, "done to processing, new_information, caught after_delivery")
+  const { data } = await readFront(file)
+  assert.equal(data.signoff, undefined)
+  assert.match(data.returns[0], / done processing new_information after_delivery$/u)
+  assert.equal(data.flow.reached, "processing")
+  assert.equal(data.flow.deliveries, 1, "the delivery count stays")
+})
+
+test("the side-state route still needs a reason", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "side-route")
+  const pause = await task_update({ deskRoot: root, input: { track: "t", slug: "side-route", frontmatter: { status: "paused" } }, finalize: async () => {} })
+  assert.equal(pause.return_recorded, undefined, "pausing is not a return")
+  const before = await fs.readFile(file, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "side-route", frontmatter: { status: "processing" } }, finalize: async () => {} }), /from paused back to processing is a return and needs a reason/)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "side-route", frontmatter: { status: "processing" }, return_reason: "external" }, finalize: async () => {} })
+  assert.equal(result.return_recorded, "paused to processing, external, caught at_review")
+  const again = await task_update({ deskRoot: root, input: { track: "t", slug: "side-route", frontmatter: { status: "paused" } }, finalize: async () => {} })
+  assert.equal(again.return_recorded, undefined)
+  const second = await task_update({ deskRoot: root, input: { track: "t", slug: "side-route", frontmatter: { status: "processing" } }, finalize: async () => {} })
+  assert.equal(second.return_recorded, undefined, "a return is recorded once: the mark was reset to processing")
+  assert.equal((await readFront(file)).data.returns.length, 1)
+})
+
+test("a return_reason on a forward move or an unchanged status is refused in one sentence that says to drop it", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "no-spray", title: "T" } })
+  const file = path.join(root, "t", "no-spray", "task.md")
+  const before = await fs.readFile(file, "utf8")
+  const spy = finalizeSpy()
+  const dropIt = /^Error: task_update: `return_reason` is only for moving a task back; this call is not a return, so drop it\.$/u
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-spray", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: spy.finalize }), dropIt)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-spray", note: "x", return_reason: "agent_error" }, finalize: spy.finalize }), dropIt)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-spray", frontmatter: { status: "processing" }, return_reason: "bogus" }, finalize: spy.finalize }), dropIt)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+  assert.equal(spy.calls.length, 0)
+})
+
+test("an unknown return_reason names the four values and writes nothing", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "bad-reason")
+  const before = await fs.readFile(file, "utf8")
+  for (const bad of ["oops", 7, ""]) {
+    await assert.rejects(
+      task_update({ deskRoot: root, input: { track: "t", slug: "bad-reason", frontmatter: { status: "processing" }, return_reason: bad }, finalize: async () => {} }),
+      /^Error: task_update: `return_reason` must be one of agent_error, changed_ask, new_information, external\.$/u,
+    )
+  }
+  assert.equal(await fs.readFile(file, "utf8"), before)
+})
+
+test("a pre-existing card with no flow record moving backwards still needs a reason", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "old-validating")
+  const card = await readFront(file)
+  delete card.data.flow
+  await writeMarkdown(file, card.data, card.content)
+  const before = await fs.readFile(file, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "old-validating", frontmatter: { status: "processing" } }, finalize: async () => {} }), /needs a reason/)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+  await task_update({ deskRoot: root, input: { track: "t", slug: "old-validating", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: async () => {} })
+  const { data } = await readFront(file)
+  assert.equal(data.flow.since, "adopted")
+  assert.equal(data.returns.length, 1)
+})
+
+test("a card with an unreadable status moves forward without a record error", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "no-status", title: "Unique title no-status" } })
+  const file = path.join(root, "t", "no-status", "task.md")
+  const card = await readFront(file)
+  delete card.data.status
+  await writeMarkdown(file, card.data, card.content)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "no-status", frontmatter: { status: "processing" } }, finalize: async () => {} })
+  assert.equal(result.return_recorded, undefined)
+  assert.equal((await readFront(file)).data.flow.reached, "processing")
+})
+
+test("a return asks the factory to re-derive the job's sessions", async () => {
+  const root = await mkTempDeskRoot()
+  await validatingCard(root, "re-derive")
+  const spy = finalizeSpy()
+  await task_update({ deskRoot: root, input: { track: "t", slug: "re-derive", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: spy.finalize })
+  assert.equal(spy.calls.length, 1)
+  assert.match(spy.calls[0].identity.job, /^[0-9a-f]+$/u)
+  assert.equal(spy.calls[0].identity.track, "t")
+  assert.equal(spy.calls[0].identity.slug, "re-derive")
+  await task_update({ deskRoot: root, input: { track: "t", slug: "re-derive", note: "plain note" }, finalize: spy.finalize })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "re-derive", frontmatter: { status: "validating" } }, finalize: spy.finalize })
+  assert.equal(spy.calls.length, 1, "only a recorded return asks")
+})
+
+test("done to cancelled is a return and asks the factory once, through the terminal sync", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", title: "T" } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  const spy = finalizeSpy()
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", frontmatter: { status: "cancelled" } }, finalize: spy.finalize }), /from done back to cancelled is a return and needs a reason/)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", frontmatter: { status: "cancelled" }, return_reason: "changed_ask" }, finalize: spy.finalize })
+  assert.equal(result.return_recorded, "done to cancelled, changed_ask, caught after_delivery")
+  assert.equal(spy.calls.length, 0, "the terminal sync already requested it")
+})
+
+test("a move into validating sets the first review point once", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "first-review", title: "T" } })
+  const file = path.join(root, "t", "first-review", "task.md")
+  assert.equal((await readFront(file)).data.flow.first_validating_at, null)
+  await task_update({ deskRoot: root, input: { track: "t", slug: "first-review", frontmatter: { status: "validating" } } })
+  const first = (await readFront(file)).data.flow
+  assert.equal(first.reached, "validating")
+  assert.equal(typeof first.first_validating_at, "string")
+  await task_update({ deskRoot: root, input: { track: "t", slug: "first-review", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: async () => {} })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "first-review", frontmatter: { status: "validating" } } })
+  assert.equal((await readFront(file)).data.flow.first_validating_at, first.first_validating_at, "the first review point stays")
+})
+
+test("the return answer and the card line carry codes only, never text from the card", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "codes-only")
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "codes-only", frontmatter: { status: "processing" }, return_reason: "agent_error", note: SENTINEL }, finalize: async () => {} })
+  const raw = await fs.readFile(file, "utf8")
+  const frontmatterOnly = raw.split("\n---")[0]
+  assert.ok(!frontmatterOnly.includes(SENTINEL))
+  assert.ok(!JSON.stringify(result).includes(SENTINEL))
+  assert.ok(!JSON.stringify(result).includes(root), "no absolute path in the answer")
+})
+
+test("a title with a newline gives a packet of three one-line strings, cut to 120 characters", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "two-line-title", title: "First line\nSecond line that must not split the packet" } })
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "two-line-title", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  assert.deepEqual(result.signoff_packet, ["Asked: First line", `Delivered: ${PR_EVIDENCE.ref}`, "Accept or send back?"])
+  assert.ok(result.signoff_packet.every((line) => !line.includes("\n")))
+  await task_create({ deskRoot: root, input: { track: "t", slug: "long-title", title: `${"x".repeat(150)}\nmore` } })
+  const long = await task_update({ deskRoot: root, input: { track: "t", slug: "long-title", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  assert.equal(long.signoff_packet[0], `Asked: ${"x".repeat(120)}`)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "blank-first-line", title: "\n  Real title" } })
+  const blankFirst = await task_update({ deskRoot: root, input: { track: "t", slug: "blank-first-line", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  assert.equal(blankFirst.signoff_packet[0], "Asked: Real title")
+})
+
+test("a commit that fails after a delivery leaves the status and the record written together", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "commit-fails", title: "T" }, schedulePush: () => {} })
+  const spawnGit = (cmd, args, opts) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit boom" } : spawnSync(cmd, args, opts))
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "commit-fails", frontmatter: { status: "done" }, evidence: PR_EVIDENCE }, spawnGit, schedulePush: () => {} })
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(result.signoff, "delivered_unsigned")
+  const { data } = await readFront(path.join(root, "t", "commit-fails", "task.md"))
+  assert.equal(data.status, "done")
+  assert.equal(data.signoff.state, "delivered_unsigned")
+  assert.equal(data.flow.deliveries, 1)
+})
+
+test("every side state and back is refused without a reason after review, and one reason records one return", async () => {
+  const root = await mkTempDeskRoot()
+  for (const side of ["collaborating", "blocked", "cancelled"]) {
+    const file = await validatingCard(root, `side-${side}`)
+    await task_update({ deskRoot: root, input: { track: "t", slug: `side-${side}`, frontmatter: { status: side } }, finalize: async () => {} })
+    const before = await fs.readFile(file, "utf8")
+    await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: `side-${side}`, frontmatter: { status: "processing" } }, finalize: async () => {} }), /needs a reason/)
+    assert.equal(await fs.readFile(file, "utf8"), before)
+    const result = await task_update({ deskRoot: root, input: { track: "t", slug: `side-${side}`, frontmatter: { status: "processing" }, return_reason: "external" }, finalize: async () => {} })
+    assert.equal(result.return_recorded, `${side} to processing, external, caught at_review`)
+  }
+})
+
+test("a recorded return raises rev by one", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "rev-rises")
+  const before = (await readFront(file)).data.flow.rev
+  await task_update({ deskRoot: root, input: { track: "t", slug: "rev-rises", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: async () => {} })
+  assert.equal((await readFront(file)).data.flow.rev, before + 1)
+})
+
+test("a card with an unreadable status is judged from the furthest status it reached", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "damaged-status")
+  const card = await readFront(file)
+  card.data.status = "weird"
+  await writeMarkdown(file, card.data, card.content)
+  const before = await fs.readFile(file, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "damaged-status", frontmatter: { status: "drafting" } }, finalize: async () => {} }), /from validating back to drafting is a return and needs a reason/)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+})
+
+test("returns_damaged is a record key and cannot be set through frontmatter", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "no-damage", title: "T" } })
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-damage", frontmatter: { returns_damaged: 3 } } }), RECORD_ERROR)
+})
+
+test("a card with an unreadable status and no flow record is read as moving from drafting", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "damaged-no-flow", title: "Unique title damaged-no-flow" } })
+  const file = path.join(root, "t", "damaged-no-flow", "task.md")
+  const card = await readFront(file)
+  card.data.status = "weird"
+  delete card.data.flow
+  await writeMarkdown(file, card.data, card.content)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "damaged-no-flow", frontmatter: { status: "drafting" } }, finalize: async () => {} })
+  assert.equal(result.return_recorded, undefined)
+})
+
+// The job identity cannot be resolved: the desk's real path fails to resolve inside the job lookup only, with the factory state present so both requests run.
+async function withUnresolvableJob(run) {
+  const root = await mkTempDeskRoot()
+  const stateHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-job-null-"))
+  const env = { ...process.env, XDG_STATE_HOME: stateHome }
+  try {
+    await factoryStateRoot(env)
+    const real = fs.realpath
+    const failing = mock.method(fs, "realpath", async (target, ...rest) => {
+      if (target === root && new Error().stack.includes("taskJob")) throw new Error("SENTINEL-realpath-failure")
+      return real(target, ...rest)
+    })
+    try {
+      return await run({ root, env })
+    } finally {
+      failing.mock.restore()
+    }
+  } finally {
+    await fs.rm(stateHome, { recursive: true, force: true })
+  }
+}
+
+test("a delivery whose job identity cannot be resolved still succeeds, and both requests log their own deferred message", async (t) => {
+  await withUnresolvableJob(async ({ root, env }) => {
+    await task_create({ deskRoot: root, input: { track: "t", slug: "no-job", title: "Unique title no-job" } })
+    const messages = []
+    t.mock.method(console, "error", (message) => messages.push(message))
+    const result = await task_update({ deskRoot: root, env, input: { track: "t", slug: "no-job", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+    assert.equal(result.status, "updated")
+    assert.deepEqual(messages, ["desk_factory: finalize_request_deferred", "desk_factory: evaluation_request_deferred"])
+    assert.ok(!messages.join("\n").includes("SENTINEL"))
+  })
+})
+
+test("a return whose job identity cannot be resolved hands the finalize request no identity, and the return is still recorded", async () => {
+  await withUnresolvableJob(async ({ root, env }) => {
+    await task_create({ deskRoot: root, input: { track: "t", slug: "no-job-return", title: "Unique title no-job-return", status: "validating" } })
+    const spy = finalizeSpy()
+    const result = await task_update({ deskRoot: root, env, input: { track: "t", slug: "no-job-return", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: spy.finalize })
+    assert.equal(result.return_recorded, "validating to processing, agent_error, caught at_review")
+    assert.equal(spy.calls.length, 1)
+    assert.equal(spy.calls[0].identity, null)
+  })
 })

@@ -261,6 +261,9 @@ const FIELD_CASES = [
   { keys: ["stretches", 0, "class"], value: null, code: "type" },
   { keys: ["stretches", 0, "waste"], value: SENTINEL, code: "enum" },
   { keys: ["stretches", 0, "waste"], value: "mura", code: "enum" },
+  { keys: ["stretches", 0, "caught"], value: SENTINEL, code: "enum" },
+  { keys: ["stretches", 0, "caught"], value: null, code: "type" },
+  { keys: ["stretches", 0, "caught"], value: "pending", code: "enum" },
   { keys: ["stretches", 0, "mura"], value: SENTINEL, code: "type" },
   { keys: ["stretches", 0, "muri"], value: 0, code: "type" },
   { keys: ["stretches", 0, "evidence"], value: SENTINEL, code: "type" },
@@ -455,4 +458,18 @@ test("the labels must name the facts' session and a job the facts bind", () => {
   const unbound = golden()
   unbound.job = "0".repeat(32)
   assert.deepEqual(checkLabelsAgainstFacts(unbound, facts()), { ok: false, errors: [{ code: "job_unbound", path: "job" }] })
+})
+
+test("labels without caught stay valid and labels with a known value are valid", () => {
+  const plain = golden()
+  for (const stretch of plain.stretches) delete stretch.caught
+  assert.deepEqual(validateLabels(plain), { ok: true, errors: [] })
+  for (const caught of ["in_task", "at_review", "after_delivery"]) {
+    const value = plain
+    value.stretches[0].caught = caught
+    assert.deepEqual(validateLabels(value), { ok: true, errors: [] })
+  }
+  assert.ok(Object.hasOwn(golden().stretches[0], "caught"), "the golden labels carry one placed stretch")
+  assert.equal(LABELS_SCHEMA, "desk.factory.labels/1")
+  assert.equal(__LABEL_SPECS__.stretch.caught.check instanceof Function, true)
 })

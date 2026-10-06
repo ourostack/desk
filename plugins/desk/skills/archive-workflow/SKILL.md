@@ -38,6 +38,10 @@ when a task is done — merged or set aside — i slide it toward the back of th
 
 4. then proceed to "Archive a track" check below.
 
+## Archiving a delivered task
+
+Archiving a task at `done` does not accept it. An archived card that is still `delivered_unsigned` stays on the sign-off list until the operator answers, and `task_signoff` still finds it. A refusal brings the card back from the archive and sends it to `processing`; `task_create` refuses a slug that exists in the archive, so reopen archived work with `task_move` (`unarchive: true`) and then `task_update` with `return_reason`.
+
 ## Archive an iteration
 
 the three archive operations (iteration / task / track) nest cleanly: archive individual iterations as they terminate; archive the whole task when its final iteration merges and no further iteration is planned; archive the track when all tasks are terminal. iteration archival is a **new operation layered on top** of task/track archival — it does not replace either.

@@ -32,7 +32,10 @@
 // `evidence_unmatched`). Errors are `{ code, path }` only, as in every
 // factory gate, so nothing the evaluator wrote is ever echoed. Accepted
 // labels are rebuilt from the parsed value, so formatting and a duplicated
-// key's shadowed value are dropped.
+// key's shadowed value are dropped. After every check passes, Desk puts a
+// catch point (`caught`) on each `defects` stretch it can place from the
+// session's own local facts (`catch-point.js`); a `caught` the evaluator
+// wrote is dropped with the rest.
 //
 // The done step (`evaluateTask`) first records an evaluation request for
 // the job (`evaluate-requests/<job>.json`), because the session that
@@ -60,6 +63,7 @@
 import * as path from "node:path"
 import { promises as fsp } from "node:fs"
 
+import { outcomeForStamping, stampCatchPoints } from "./catch-point.js"
 import { checkLabelsAgainstFacts, validateLabels } from "./label-schema.js"
 import {
   clearEvaluation,
@@ -138,9 +142,12 @@ const rejected = (errors) => ({ ok: false, errors })
  * `acceptEvaluation(brief, bytes) -> { ok: true, errors: [], labels } |
  * { ok: false, errors }`: the evaluator's answer for `brief` (a value
  * `buildEvaluatorBrief` returned), checked as the header describes. `bytes`
- * is a `Buffer` or a string; anything else is a caller bug.
+ * is a `Buffer` or a string; anything else is a caller bug. `stamping` is
+ * `{ outcome, startedAt }` (`catch-point.js`): when given, each accepted
+ * `defects` stretch Desk can place gets its catch point after every check
+ * has passed. A `caught` the evaluator wrote is never kept.
  */
-export function acceptEvaluation(brief, bytes) {
+export function acceptEvaluation(brief, bytes, stamping = null) {
   if (!Buffer.isBuffer(bytes) && typeof bytes !== "string") throw new TypeError("acceptEvaluation: bytes must be a Buffer or a string")
   if (Buffer.byteLength(bytes) > LIMITS.maxBytes) return rejected([{ code: "too_large", path: "" }])
   let value
@@ -186,7 +193,7 @@ export function acceptEvaluation(brief, bytes) {
     })),
     unavailable: [...value.unavailable],
   }
-  return { ok: true, errors: [], labels }
+  return { ok: true, errors: [], labels: stamping === null ? labels : stampCatchPoints(labels, stamping) }
 }
 
 // The host log a session's marker names, while it is still a regular file.
@@ -260,7 +267,8 @@ async function trustedBrief(env, { job, store, name, output, pluginVersion }) {
   const localFacts = await labelableFacts(env, store, name, job)
   if (localFacts === null) return null
   const root = await factoryStateRoot(env)
-  return buildEvaluatorBrief({ job, localFacts, logPath: await sessionLog(env, root, name), outputPath: output, pluginVersion })
+  const brief = buildEvaluatorBrief({ job, localFacts, logPath: await sessionLog(env, root, name), outputPath: output, pluginVersion })
+  return { brief, stamping: { outcome: outcomeForStamping(localFacts, job), startedAt: localFacts.session.started_at } }
 }
 
 async function answerBytes(env, output) {
@@ -306,7 +314,7 @@ export async function acceptEvaluations(env, { job, pluginVersion }) {
       sessions.push({ session, result: "rejected", errors: [{ code: "facts_missing", path: "" }] })
       continue
     }
-    const checked = acceptEvaluation(trusted, answer.bytes)
+    const checked = acceptEvaluation(trusted.brief, answer.bytes, trusted.stamping)
     if (!checked.ok) {
       sessions.push({ session, result: "rejected", errors: checked.errors })
       continue

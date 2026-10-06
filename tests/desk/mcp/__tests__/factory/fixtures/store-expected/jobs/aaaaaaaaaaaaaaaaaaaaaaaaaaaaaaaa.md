@@ -18,6 +18,8 @@
 - Public pull requests: ourostack/desk#7, ourostack/desk#8 (partial: the host records only some of it, so this is a lower bound; 2 sessions uncovered); public commits: 2 (partial: the host does not record it; 1 session uncovered); private pull requests counted: 1 (partial: the host records only some of it, so this is a lower bound; 2 sessions uncovered); private commits counted: 2 (partial: the host does not record it; 1 session uncovered).
 - Tokens: total 1030 (measured), input 350 (measured), output 680 (measured), cache read 1020 (measured), cache write 140 (measured), reasoning 20 (partial: the host does not record it; 1 session uncovered).
 - Status transitions: processing at 0 ms, validating at 7000 ms, done at 14000 ms (measured).
+- Sign-off: not recorded.
+- Human attention: not recorded (no session of the job recorded the human's turns).
 
 ## What mattered
 
@@ -44,6 +46,7 @@
 - Permission waits: the host does not record it (1 session).
 - Pull requests: the host records only some of it, so this is a lower bound (2 sessions).
 - Reasoning tokens: the host does not record it (1 session).
-- First-pass yield: not recorded (it is not collected yet).
+- First-pass yield: not recorded (no outcome record is available).
+- Rework: not recorded (no outcome record is available).
 
 How to read these numbers: measured means every session that should supply a number did; partial means the number is a lower bound or covers only some sessions, and the reason follows; not recorded means there is no number, which is never zero. API retry counts are the errors the host surfaced: Claude surfaces only some of them, so its count is a lower bound, and Codex does not record them. Human wait is the gaps between prompts inside a session. Tool failure and retry definitions differ by host: Codex reads an output layout it does not recognise as ok, and Copilot adds denied. The number of compactions is recorded on every host; compaction wait time is recorded only where the host records it. Cost in money is not measured in v0.

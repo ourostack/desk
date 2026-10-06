@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process"
 import { hostFlagsFor } from "../../../../../plugins/desk/mcp/src/factory/host-flags.js"
 import { ENUMS, LIMITS, validateLocalFacts, validateLocalFactsBytes } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
+  HUMAN_TURNS_SESSION,
   SENTINEL,
   SESSIONS,
   FULL_FINAL_METRICS,
@@ -28,6 +29,7 @@ import {
   defaultStoreRows,
   eventWriter,
   manySubagentsText,
+  sizedText,
   usageRow,
   writeLargeEvents,
 } from "./fixtures/copilot/make.js"
@@ -192,6 +194,7 @@ test("with neither a shutdown nor database rows, tokens are unavailable, not zer
       { field: "commits", reason: "log_missing" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
       { field: "prs", reason: "host_records_partly" },
+      { field: "human_turns", reason: "host_records_partly" },
       { field: "entrypoint", reason: "host_does_not_record" },
     ])
   } finally {
@@ -396,13 +399,16 @@ test("an open session: open turn, orphan tool, failed subagent, truncated last l
     assert.deepEqual(facts.counts.tool_failures, { agent: 1 })
     assert.deepEqual(facts.unavailable, [
       { field: "models", reason: "source_unreadable" },
+      { field: "human_turns", reason: "source_unreadable" },
       { field: "tokens", reason: "source_unreadable" },
       { field: "ended_at", reason: "session_open" },
       { field: "turns", reason: "log_truncated" },
+      { field: "human_turns", reason: "log_truncated" },
       { field: "tool_durations", reason: "session_open" },
       { field: "turns", reason: "session_open" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
       { field: "prs", reason: "host_records_partly" },
+      { field: "human_turns", reason: "host_records_partly" },
     ])
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -649,9 +655,11 @@ test("odd turn, tool, permission, subagent and compaction shapes are skipped or 
     { field: "tokens", reason: "session_open" },
     { field: "models", reason: "field_absent" },
     { field: "requests", reason: "field_absent" },
+    { field: "human_turns", reason: "source_unreadable" },
     { field: "commits", reason: "log_missing" },
     { field: "ci_runs", reason: "not_collected_in_slice_1" },
     { field: "prs", reason: "host_records_partly" },
+    { field: "human_turns", reason: "host_records_partly" },
     { field: "entrypoint", reason: "host_does_not_record" },
   ])
 })
@@ -1192,6 +1200,27 @@ test("task_create with focus: true is a focusCall as well as a deskToolCall; foc
   assertValid(facts)
 })
 
+test("each deriver records a successful task_signoff call and ignores a failed one (Copilot)", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { facts, events } = await deriveText([
+    start(ev),
+    ...run("s1", 1, "desk-task_signoff", { track: "desk-plugin", slug: "signed", outcome: "accepted", reason: SENTINEL }),
+    ...run("s2", 3, "desk-task_signoff", { track: "desk-plugin", slug: "failed", outcome: "refused", reason: SENTINEL }, { success: false }),
+  ])
+  assert.deepEqual(events.deskToolCalls.map(({ name, slug, ok, status }) => ({ name, slug, ok, status })), [
+    { name: "desk-task_signoff", slug: "signed", ok: true, status: null },
+    { name: "desk-task_signoff", slug: "failed", ok: false, status: null },
+  ])
+  assert.deepEqual(events.focusCalls, [])
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("signed"), false)
+  assertValid(facts)
+})
+
 test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
   const ev = eventWriter()
   const inputs = [
@@ -1413,4 +1442,210 @@ test("facts written by the Copilot deriver validate as /2", async () => {
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+// ---------------------------------------------------------------------------
+// Human turns.
+// ---------------------------------------------------------------------------
+
+function humanHome() {
+  const home = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-human-"))
+  const dir = path.join(home, "session-state", HUMAN_TURNS_SESSION)
+  mkdirSync(dir, { recursive: true })
+  cpSync(path.join(FIXTURES, HUMAN_TURNS_SESSION, "events.jsonl"), path.join(dir, "events.jsonl"))
+  return home
+}
+
+async function humanFacts() {
+  const home = humanHome()
+  try {
+    return await derive(home, HUMAN_TURNS_SESSION, { endReason: "complete" })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+const PLAIN_ID = "a1b2c3d4-0000-4000-8000-000000000001"
+
+/** Derives a session built from the given event lines (a header is added); `raw` lines are appended as they are. */
+async function deriveLines(build, { raw = [] } = {}) {
+  let n = 5000
+  const ev = (type, seconds, data = {}, extra = {}) => {
+    n += 1
+    return { type, data, id: `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`, timestamp: seconds === null ? "not a time" : at(seconds), parentId: null, ...extra }
+  }
+  const header = ev("session.start", 0, { sessionId: PLAIN_ID, version: 1, producer: "copilot-agent", copilotVersion: "1.0.88", context: { cwd: "/tmp/x", gitRoot: "/tmp/x" } })
+  const text = [header, ...build(ev)].map((line) => JSON.stringify(line)).concat(raw).join("\n")
+  const home = makeHome({ sessions: [], store: null, texts: { [PLAIN_ID]: `${text}\n` } })
+  try {
+    return await derive(home, PLAIN_ID)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+const humanFlags = (facts) => facts.unavailable.filter((entry) => entry.field === "human_turns" && entry.reason !== "host_records_partly")
+
+test("a typed prompt is one human turn with its size class", async () => {
+  const { facts } = await humanFacts()
+  assertValid(facts)
+  assert.deepEqual(facts.human_turns[0], { at: at(2), basis: "first", window_ms: null, prompt_class: "xs", output_class: "none" })
+  assert.deepEqual(facts.human_turns.map((turn) => turn.prompt_class), ["xs", "s", "l", "none"])
+  assert.deepEqual(humanFlags(facts), [])
+})
+
+test("a message with source agent, autopilot or schedule is not a human turn", async () => {
+  const { facts } = await humanFacts()
+  // The fixture holds four such messages (and three more human ones): only the four typed prompts count.
+  assert.equal(facts.human_turns.length, 4)
+  assert.deepEqual(facts.human_turns.map((turn) => turn.at), [at(2), at(41), at(47), at(110)])
+  const flagged = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "a", source: "skill-x" }),
+    ev("user.message", 2, { content: "b", source: "schedule-1" }),
+    ev("user.message", 3, { content: "c", isAutopilotContinuation: true }),
+    ev("user.message", 4, { content: "d", source: null, isAutopilotContinuation: false }),
+  ])
+  assert.deepEqual(flagged.facts.human_turns.map((turn) => turn.at), [at(4)])
+})
+
+test("an event with an agentId is not a human turn and adds no reply size", async () => {
+  const { facts } = await humanFacts()
+  // The subagent's 6,000-character reply would make the second turn's output class xl; the root's 300 characters make it m.
+  assert.equal(facts.human_turns[1].output_class, "m")
+  assert.equal(facts.human_turns.length, 4)
+  const { facts: other } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "typed by a subagent" }, { agentId: "agent-1" }),
+    ev("assistant.message", 2, { content: sizedText(5001) }, { agentId: "agent-1" }),
+    ev("user.message", 3, { content: "typed" }),
+  ])
+  assert.deepEqual(other.human_turns, [{ at: at(3), basis: "first", window_ms: null, prompt_class: "xs", output_class: "none" }])
+})
+
+test("a permission decision is not a human turn and the permission_wait interval is unchanged", async () => {
+  const { facts } = await humanFacts()
+  assert.deepEqual(intervalsOf(facts, "permission_wait"), [{ kind: "permission_wait", agent: 0, ...span(4.7, 9.7) }])
+  assert.equal(facts.human_turns.length, 4)
+  assert.deepEqual(facts.human_turns.map((turn) => turn.at), [at(2), at(41), at(47), at(110)])
+})
+
+test("the window is the gap from the turn end to the prompt", async () => {
+  const { facts } = await humanFacts()
+  assert.deepEqual(facts.human_turns[1], { at: at(41), basis: "after_stop", window_ms: 30000, prompt_class: "s", output_class: "m" })
+  // The agent started again at 45, so the prompt at 47 follows the previous prompt, not a stop.
+  assert.deepEqual(facts.human_turns[2], { at: at(47), basis: "mid_turn", window_ms: 6000, prompt_class: "l", output_class: "s" })
+  assert.deepEqual(facts.human_turns[3], { at: at(110), basis: "after_stop", window_ms: 60000, prompt_class: "none", output_class: "none" })
+})
+
+test("SENTINEL in a message reaches no fact", async () => {
+  const { facts, events } = await humanFacts()
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  const home = makeHome()
+  try {
+    const full = await derive(home, SESSIONS.full)
+    assert.equal(JSON.stringify(full.facts.human_turns).includes(SENTINEL), false)
+    assert.deepEqual(full.facts.human_turns.map((turn) => turn.at), [at(2), at(44), at(60), at(75.2), at(90), at(95)])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a prompt with no readable time or text is not recorded and the list is flagged", async () => {
+  const noText = await deriveLines((ev) => [ev("user.message", 1, { content: sizedText(30) }), ev("user.message", 2, { interactionId: "i" }), ev("user.message", 3, { content: "ok" })])
+  assert.deepEqual(noText.facts.human_turns.map((turn) => turn.at), [at(1), at(3)])
+  assert.deepEqual(humanFlags(noText.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+  const noTime = await deriveLines((ev) => [ev("user.message", null, { content: "ok" }), ev("user.message", 3, { content: "ok" })])
+  assert.equal(noTime.facts.human_turns.length, 1)
+  assert.deepEqual(humanFlags(noTime.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a root reply with no readable text flags the list, and a turn end with no time is no stop", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "ok" }),
+    ev("assistant.message", 2, { content: 7 }),
+    ev("assistant.turn_start", 2.5, { turnId: "0" }),
+    ev("assistant.turn_end", null, { turnId: "0" }),
+    ev("user.message", 9, { content: "ok" }),
+  ])
+  assert.deepEqual(facts.human_turns[1], { at: at(9), basis: "mid_turn", window_ms: 8000, prompt_class: "xs", output_class: "none" })
+  assert.deepEqual(humanFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a log that lost lines flags the list as a lower bound", async () => {
+  const cut = await deriveLines((ev) => [ev("user.message", 1, { content: "ok" })], { raw: [`{"type":"user.message","timestamp":"${at(5)}","data":{"content":"cut`] })
+  assert.deepEqual(humanFlags(cut.facts), [{ field: "human_turns", reason: "log_truncated" }])
+  const bad = await deriveLines((ev) => [ev("user.message", 1, { content: "ok" })], { raw: ["42", JSON.stringify({ type: "user.message", timestamp: at(6), data: null })] })
+  assert.deepEqual(humanFlags(bad.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a prompt dated before the last one is dropped and the list is flagged", async () => {
+  const { facts } = await deriveLines((ev) => [ev("user.message", 10, { content: "ok" }), ev("user.message", 5, { content: "ok" })])
+  assert.equal(facts.human_turns.length, 1)
+  assert.deepEqual(humanFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+const TURN = (ev, seconds, id, interaction, end = null) => [ev("assistant.turn_start", seconds, { turnId: id, interactionId: interaction }), ...(end === null ? [] : [ev("assistant.turn_end", end, { turnId: id })])]
+
+test("a prompt logged between two iterations of one interaction is mid_turn", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go", interactionId: "i1" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("user.message", 5, { content: "wait, stop", interactionId: "i2" }),
+    ...TURN(ev, 6, "1", "i1", 7),
+  ])
+  assert.deepEqual(facts.human_turns[1], { at: at(5), basis: "mid_turn", window_ms: 4000, prompt_class: "xs", output_class: "none" })
+})
+
+test("a prompt after a stop, followed by a turn of a new interaction, is after_stop", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go", interactionId: "i1" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("user.message", 5, { content: "next", interactionId: "i2" }),
+    ...TURN(ev, 6, "1", "i2", 7),
+  ])
+  assert.deepEqual(facts.human_turns[1], { at: at(5), basis: "after_stop", window_ms: 2000, prompt_class: "xs", output_class: "none" })
+})
+
+test("a prompt the next event cannot place is after_stop, and a reply after it counts for the next prompt", async () => {
+  const last = await deriveLines((ev) => [ev("user.message", 1, { content: "go" }), ...TURN(ev, 2, "0", "i1", 3), ev("user.message", 5, { content: "end of log" })])
+  assert.equal(last.facts.human_turns[1].basis, "after_stop")
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("user.message", 5, { content: "late" }),
+    ev("assistant.message", 5.5, { content: sizedText(300) }),
+    ev("user.message", 9, { content: "again" }),
+    ev("assistant.turn_end", 10, { turnId: "9" }),
+  ])
+  assert.deepEqual(facts.human_turns.map((turn) => [turn.basis, turn.output_class]), [["first", "none"], ["after_stop", "none"], ["mid_turn", "m"]])
+})
+
+test("every Copilot session that writes a list flags it as not proven complete", async () => {
+  const { facts } = await humanFacts()
+  assert.ok(hasFlag(facts, "human_turns", "host_records_partly"))
+  const empty = await deriveLines((ev) => [])
+  assert.deepEqual(empty.facts.human_turns, [])
+  assert.ok(hasFlag(empty.facts, "human_turns", "host_records_partly"))
+})
+
+test("an abort event adds no turn and leaves the stop at its turn end", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go", interactionId: "i1" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("abort", 4, { reason: "user_initiated" }),
+    ev("user.message", 8, { content: "next", interactionId: "i2" }),
+    ...TURN(ev, 9, "1", "i2", 10),
+  ])
+  assert.equal(facts.human_turns.length, 2)
+  assert.equal(facts.human_turns[1].window_ms, 5000)
+})
+
+test("a tool-only reply with no content key adds nothing and does not flag the list", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go" }),
+    ev("assistant.message", 2, { toolRequests: [{ toolCallId: "t", name: "bash", arguments: {} }] }),
+    ev("user.message", 9, { content: "next" }),
+  ])
+  assert.deepEqual(humanFlags(facts), [])
+  assert.equal(facts.human_turns[1].output_class, "none")
 })
