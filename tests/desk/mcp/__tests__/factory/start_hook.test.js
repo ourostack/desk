@@ -396,12 +396,14 @@ for (const host of ["claude", "copilot"]) {
     assert.equal(quietRun.status, 0, quietRun.stderr)
     const context = expectedContext(host, hookEnv, desk)
     const hasJq = spawnSync("jq", ["--version"]).status === 0
+    const quietOut = process.platform === "win32" && host === "claude" ? quietRun.stdout.replace(/\r\n$/u, "\n") : quietRun.stdout
     if (host === "copilot" || hasJq) {
+      // jq.exe ends its line with CRLF on Windows; the line ending is whitespace to the JSON reader, so only the bytes before it must match.
       const wanted = envelope(host, context)
       // On a mismatch, name the first differing byte with its neighbours: the full strings are too long for a failure log.
-      const at = [...quietRun.stdout].findIndex((char, index) => char !== wanted[index])
+      const at = [...quietOut].findIndex((char, index) => char !== wanted[index])
       const near = (text) => JSON.stringify(text.slice(Math.max(0, at - 60), at + 80))
-      assert.equal(quietRun.stdout, wanted, `silent boot checks leave the output byte-identical; first difference at ${at} of ${quietRun.stdout.length} (expected ${wanted.length}): got ${near(quietRun.stdout)} expected ${near(wanted)}`)
+      assert.equal(quietOut, wanted, `silent boot checks leave the output byte-identical; first difference at ${at} of ${quietOut.length} (expected ${wanted.length}): got ${near(quietOut)} expected ${near(wanted)}`)
     }
     const parsed = JSON.parse(quietRun.stdout)
     assert.equal(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, context)

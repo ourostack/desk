@@ -63,8 +63,15 @@ export async function reapProcessesUnder(root) {
 export function removeFixtureAfter(t, root) {
   t.after(async () => {
     await reapProcessesUnder(root)
-    // Windows holds a folder for a moment after the last process in it exits (virus scan, indexer), so retry longer there.
-    rmSync(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 40 : 5, retryDelay: process.platform === "win32" ? 250 : 100 })
+    try {
+      // Windows holds a folder for a moment after the last process in it exits (virus scan, indexer), so retry longer there.
+      rmSync(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 40 : 5, retryDelay: process.platform === "win32" ? 250 : 100 })
+    } catch (error) {
+      if (process.platform !== "win32") throw error
+      let running = ""
+      try { running = execFileSync("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'git|node|perl|bash|sh' } | ForEach-Object { \"$($_.ProcessId) parent=$($_.ParentProcessId) $($_.Name) $($_.CommandLine)\" }"], { encoding: "utf8", timeout: 60000 }) } catch { /* diagnostic only */ }
+      throw new Error(`${error.message}; processes then running:\n${running}`)
+    }
   })
 }
 
