@@ -29,10 +29,12 @@ const expectedId = (remote, prefix, track, slug) => createHash("sha256").update(
 
 const CARD = { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" }
 
-function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {}, repos = {}, unavailable = [] } = {}) {
+function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {}, repos = {}, unavailable = [], merges } = {}) {
   const calls = { readTask: [], between: [], native: [], housekeeping: [], resolveJobIdentity: [], repoLookup: [] }
   return {
     calls,
+    // `merges` maps a merged task's `track/slug` to the `{ track, slug }` that keeps its job; left out, no `mergedInto` reader is handed over.
+    ...(merges === undefined ? {} : { mergedInto: (track, slug) => merges[`${track}/${slug}`] ?? null }),
     readTask(track, slug) {
       calls.readTask.push(`${track}/${slug}`)
       return Object.hasOwn(cards, `${track}/${slug}`) ? cards[`${track}/${slug}`] : CARD
@@ -1169,4 +1171,16 @@ test("the cap's dropped time comes out as segmentsCappedMs: 0 when nothing dropp
   const result = bind({ focusCalls })
   assert.equal(result.segmentsCappedMs, 2 * 10000)
   assert.equal(result.jobs[0].segments.length, LIMITS.jobSegments)
+})
+
+test("a focus held on a task later merged into another follows into the task that keeps the job; without a merge it binds nothing", () => {
+  const merged = `merged-${SENTINEL}`
+  const events = { focusCalls: [focusAt(10, merged), focusAt(40, null)] }
+  const cards = { [`${TRACK}/${merged}`]: null }
+  const followed = bind(events, { cards, merges: { [`${TRACK}/${merged}`]: { track: TRACK, slug: SLUG } } })
+  assert.deepEqual(followed.jobs.map((job) => job.job), [expectedId(NORMALIZED, "", TRACK, SLUG)])
+  assert.deepEqual(followed.jobs[0].segments, [span(0, 40)], "the opening stretch goes to the first declared task, as for any focus")
+  assert.equal(followed.boundBy[expectedId(NORMALIZED, "", TRACK, SLUG)], "focus")
+  assert.deepEqual(bind(events, { cards, merges: {} }).jobs, [], "a task neither live nor merged binds nothing")
+  assert.deepEqual(bind(events, { cards }).jobs, [], "a caller with no merge reader follows no merge")
 })

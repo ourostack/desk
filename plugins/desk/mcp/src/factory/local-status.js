@@ -42,19 +42,29 @@
 //
 // `factoryReportLink({ env, deskRoot, deskRemote, personPrefix, track, slug,
 // pluginDirs, pluginScanIncomplete })` is the task card's `factory_report`
-// link (`jobLink`) when the resolved store has consent `contribute: true`,
-// else `null`. The link is deterministic and resolves once the store has
-// merged the job's facts and rebuilt its reports.
+// link when the resolved store has consent `contribute: true`, else `null`.
+// It names the job ID the store publishes (`publishedJobId`), which is the
+// flush's own rule (`desk-visibility.js`, `publish.js`): the plain ID for a
+// desk whose cached visibility is `private` or `internal`, the machine-keyed
+// ID for any other desk. A GitHub desk whose visibility answer is expired or
+// absent could publish either, so it gets no link rather than a guess, and a
+// desk that is not known private gets no link until this machine holds its
+// 32-byte machine secret (the first flush creates it). A public desk's card
+// never carries its plain job ID. The link resolves once the store has merged
+// the job's facts from this machine and rebuilt its reports.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { readFileSync, readdirSync } from "node:fs"
+import { lstatSync, readFileSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 
 import { consentDecision, consentRecords as readConsentRecords, factoryStateDir } from "./boot-check.js"
+import { jobId } from "./binding.js"
+import { deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { readSmallText, validMarker } from "./marker.js"
-import { jobLink } from "./pipeline/build.js"
+import { jobReportUrl } from "./pipeline/build.js"
+import { keyedJobId } from "./publish.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
 import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
@@ -257,9 +267,42 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   }
 }
 
-/** See the header: the task card's `factory_report` link, or `null` without consent. */
+/** The machine secret the flush keys job IDs with (`outbox.js` `readMachineSecret`): exactly 32 bytes in a plain file, else `null`. Read only, never created. */
+function machineSecretOrNull(dir) {
+  const file = path.join(dir, "machine-secret")
+  try {
+    const stat = lstatSync(file)
+    if (!stat.isFile() || stat.size !== 32) return null
+    const bytes = readFileSync(file)
+    return bytes.length === 32 ? new Uint8Array(bytes) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The ID the store publishes for plain job ID `job` of the desk at `deskRemote`, read from this machine's factory state without creating
+ * anything: `{ job }`, or `{ job: null, reason }` with `visibility_not_known` (a GitHub desk whose cached answer is expired, absent or
+ * unreadable) or `machine_secret_unavailable` (a desk not known private, before this machine holds its secret). See the header.
+ */
+export function publishedJobId({ env, deskRemote, job, now = Date.now() }) {
+  const dir = factoryStateDir(env)
+  const repo = githubRepoOfRemote(deskRemote)
+  let known = new Map()
+  if (repo !== null) {
+    const cached = readState(path.join(dir, "visibility.json"), {})
+    if (cached !== UNREADABLE) known = visibilityMap(freshVisibility(cached, now))
+    if (!known.has(repo.toLowerCase())) return { job: null, reason: "visibility_not_known" }
+  }
+  if (deskTimingKept(deskVisibilityOf(repo, known))) return { job }
+  const secret = machineSecretOrNull(dir)
+  return secret === null ? { job: null, reason: "machine_secret_unavailable" } : { job: keyedJobId(job, secret) }
+}
+
+/** See the header: the task card's `factory_report` link, or `null` without consent or without a published ID it can name. */
 export function factoryReportLink({ env, deskRoot, deskRemote, personPrefix, track, slug, pluginDirs = [], pluginScanIncomplete = false }) {
   const routing = route({ deskRoot, pluginDirs, pluginScanIncomplete })
   if (routing.store === null || decision(consentRecords(factoryStateDir(env)), routing.store) !== "yes") return null
-  return jobLink({ store: routing.store, deskRemote, personPrefix, track, slug })
+  const { job } = publishedJobId({ env, deskRemote, job: jobId({ deskRemote, personPrefix, track, slug }) })
+  return job === null ? null : jobReportUrl({ store: routing.store, job })
 }

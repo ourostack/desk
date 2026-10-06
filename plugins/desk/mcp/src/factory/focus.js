@@ -284,9 +284,10 @@ export function controllerTimeline({ events, startMs, endMs, cards }) {
 
 /**
  * `capSegments({ segments, main, cap }) -> { segments, droppedMs }`: no task
- * keeps more than `cap` segments, and no time is lost except `droppedMs`,
- * which is exactly the time of the segments dropped by the one case below
- * (0 when none was; time handed to a neighbour is kept, never counted). A task over the cap gives its shortest
+ * keeps more than `cap` segments. `droppedMs` is exactly the time the cap
+ * took from the task that held it: every segment it hands to another task
+ * and every segment it drops (0 when the cap did nothing), so time declared
+ * for one task that the cap gives to another is never silent. A task over the cap gives its shortest
  * segment (the earliest among equals) to the main task, where it joins the
  * main task's neighbours. When there is no main task, or the main task is
  * the one over the cap, the task's shortest segment that touches another
@@ -307,13 +308,19 @@ export function capSegments({ segments, main, cap }) {
     if (crowded.length === 0) return { segments: list, droppedMs }
     const over = crowded.find((key) => key !== main) ?? main
     if (main !== null && main !== over) {
-      list = rekeyed(list, shortestIndex(list, (segment) => segment.key === over), main)
+      const given = shortestIndex(list, (segment) => segment.key === over)
+      droppedMs += lengthOf(list[given])
+      list = rekeyed(list, given, main)
       continue
     }
     const pick = shortestIndex(list, (segment, index) => segment.key === over && longerNeighbour(list, index) !== -1)
     if (pick === -1) {
       const [lost] = list.splice(shortestIndex(list, (segment) => segment.key === over), 1)
       droppedMs += lost.end - lost.start
-    } else list = rekeyed(list, pick, list[longerNeighbour(list, pick)].key)
+    } else {
+      // Adjacent segments of one task are always joined, so the neighbour is another task's.
+      droppedMs += lengthOf(list[pick])
+      list = rekeyed(list, pick, list[longerNeighbour(list, pick)].key)
+    }
   }
 }

@@ -427,12 +427,15 @@ test("a short inferred segment at the edge of a declared stretch joins its infer
 })
 
 
-test("the cap reports the time it dropped: 0 when it keeps everything, the lost segment's length when a task over the cap stands alone", () => {
+test("the cap reports the time it took from its task: 0 when it keeps everything, a lost segment's length, and time it gave to another task", () => {
   const alone = [seg(X, 0, 5), seg(X, 10, 12), seg(X, 20, 25)]
   assert.deepEqual(capSegments({ segments: alone, main: null, cap: 2 }), { segments: [seg(X, 0, 5), seg(X, 20, 25)], droppedMs: 2 * MIN })
   const two = [seg(X, 0, 5), seg(X, 10, 12), seg(X, 20, 25), seg(X, 30, 31), seg(X, 40, 41)]
   assert.equal(capSegments({ segments: two, main: X, cap: 2 }).droppedMs, 4 * MIN, "three segments dropped one by one: 1, 1, then 2 minutes")
   const joined = [seg(X, 0, 10), seg(Y, 10, 12), seg(X, 12, 20), seg(Y, 20, 21), seg(X, 21, 30)]
-  assert.equal(capSegments({ segments: joined, main: X, cap: 1 }).droppedMs, 0, "time that moves to a neighbour is kept, not dropped")
+  assert.equal(capSegments({ segments: joined, main: X, cap: 1 }).droppedMs, 11 * MIN, "Y's 1 minute given to the main task, then the main task's 10 minutes given to Y: time no longer on the task that held it")
   assert.equal(capSegments({ segments: joined, main: X, cap: 9 }).droppedMs, 0)
+  // A declared task over the cap gives its shortest segment to the inferred main task: that declared time is counted, never silent.
+  const declared = [seg(Y, 0, 3), seg(X, 3, 10), seg(Y, 10, 12), seg(X, 12, 20), seg(Y, 20, 21)]
+  assert.deepEqual(capSegments({ segments: declared, main: X, cap: 2 }), { segments: [seg(Y, 0, 3), seg(X, 3, 10), seg(Y, 10, 12), seg(X, 12, 21)], droppedMs: 1 * MIN })
 })

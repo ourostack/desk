@@ -5,7 +5,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { build, jobLink, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
+import { build, jobLink, jobReportUrl, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
 
@@ -266,6 +266,11 @@ test("jobLink reuses the accepted job identity and validates the public store na
   }), "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md")
   assert.throws(() => jobLink({ store: "not a store", deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
   assert.throws(() => jobLink({ store: null, deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
+})
+
+test("jobReportUrl names a published job ID and refuses anything that is not 32 lowercase hex", () => {
+  assert.equal(jobReportUrl({ store: "ourostack/factory", job: "a".repeat(32) }), `https://github.com/ourostack/factory/blob/reports/jobs/${"a".repeat(32)}.md`)
+  for (const job of [null, "A".repeat(32), "a".repeat(31), "../secret"]) assert.throws(() => jobReportUrl({ store: "ourostack/factory", job }), /job must be 32 lowercase hex/u)
 })
 
 test("storeRecords gives every job's rollup record exactly as the build reads the store", () => {
