@@ -4,7 +4,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
 import { CAPTURE_INVALID, EMPTY_RECORD, captureFor, isCaptureInvalid } from "../../../../../plugins/desk/mcp/src/factory/capture-publish.js"
-import { CAPTURE_HOST_KEYS, CAPTURE_LOOP_KEY, CAPTURE_PATH, CAPTURE_TOP_KEYS, CAPTURE_SCHEMA, validateCaptureBytes } from "../../../../../plugins/desk/mcp/src/factory/capture-schema.js"
+import { CAPTURE_UNCOUNTED_KEYS, CAPTURE_HOST_KEYS, CAPTURE_LOOP_KEY, CAPTURE_PATH, CAPTURE_TOP_KEYS, CAPTURE_SCHEMA, validateCaptureBytes } from "../../../../../plugins/desk/mcp/src/factory/capture-schema.js"
 import { classifySessions } from "../../../../../plugins/desk/mcp/src/factory/capture-classify.js"
 import { gitBlobSha } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
@@ -99,7 +99,7 @@ test("the record has the closed key set and no string but the enums", () => {
     "copilot-cli": host({ "-": bucket({ derived: 2, not_seen: 3 }) }, { withDesk: false, unverified: true }),
     "codex-cli": host({ [PUBLIC]: bucket({ derived: 1 }) }, { withDesk: false }),
   })
-  const got = records(ask(cov, { loop: { state: "ok", count: 3 } }))
+  const got = records(ask(cov, { loop: { v: 1, headless: "ok", steps_stale: 3 } }))
   assert.deepEqual(Object.keys(got), ["schema", "basis", "hosts", "loop"])
   assert.deepEqual(Object.keys(got.hosts), ["claude-code", "copilot-cli", "codex-cli"])
   const strings = []
@@ -126,7 +126,7 @@ test("no session id, path, store name, date or SENTINEL appears in the bytes", (
     "claude-code": { ...host({ [PUBLIC]: bucket(mine), [`${SENTINEL}`]: bucket({ derived: 3 }), "-": bucket({ not_in_a_desk: 1 }) }), frozen_by_reason: { [SENTINEL]: 3 } },
   })
   cov.ran_at = SENTINEL
-  const result = ask(cov, { loop: { note: "fine" } })
+  const result = ask(cov, { loop: { v: 1, headless: "fine" } })
   for (const text of [result.bytes, result.path, JSON.stringify(result)]) {
     assert.equal(/SENTINEL|ourostack|acme|[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+|\d{4}-\d{2}-\d{2}|[0-9a-f]{8}-[0-9a-f]{4}-/iu.test(text.replace(`capture/${ID}.json`, "").replace(CAPTURE_SCHEMA, "")), false, text)
   }
@@ -161,25 +161,38 @@ test("an uncounted host is left out, not written as zero", () => {
   // A counted host with nothing in this store's scope is left out too: all zeros cannot be told from uncounted.
   const scoped = records(ask(coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }), "codex-cli": host({ [PRIVATE]: bucket({ derived: 4 }) }, { withDesk: false }), "copilot-cli": host({ [PUBLIC]: bucket() }, { withDesk: false }) })))
   assert.deepEqual(Object.keys(scoped.hosts), ["claude-code"])
-  for (const state of ["unreadable", "capped", "absent", "other"]) {
+  for (const state of ["absent", "other"]) {
     assert.equal(ask(coverage({ "claude-code": { state, unverified: true } })), null)
   }
 })
 
-test("one host that could not be counted keeps the record already there, even beside a counted host", () => {
+test("a host that could not be counted is exactly not_counted beside the true counts of the others, never a zero", () => {
   for (const state of ["capped", "unreadable"]) {
     const cov = coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }), "codex-cli": { state, unverified: true } })
-    assert.equal(ask(cov), null)
-    assert.equal(ask(cov, { sentBefore: true }), null)
+    for (const sentBefore of [false, true]) {
+      const got = records(ask(cov, { sentBefore }))
+      assert.deepEqual(got.hosts["codex-cli"], { not_counted: true })
+      assert.equal(got.hosts["claude-code"].on_disk, 15)
+      assert.equal(validateCaptureBytes(ask(cov, { sentBefore }).bytes).ok, true)
+    }
+    // The same count in another store's scope changes nothing about the flag: it names no store's work.
+    assert.equal(ask(cov, { store: PRIVATE }).bytes.includes('"codex-cli":{"not_counted":true}'), true)
   }
-  assert.notEqual(ask(coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }), "codex-cli": { state: "absent", unverified: true } }), { sentBefore: true }), null)
+  assert.equal(Object.hasOwn(records(ask(coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }), "codex-cli": { state: "absent", unverified: true } }), { sentBefore: true })).hosts, "codex-cli"), false)
+})
+
+test("a machine whose only host could not be counted still says so, whether or not a record was sent before", () => {
+  for (const sentBefore of [false, true]) {
+    const got = ask(coverage({ "claude-code": { state: "capped", unverified: true } }), { sentBefore })
+    assert.deepEqual(records(got).hosts, { "claude-code": { not_counted: true } })
+  }
 })
 
 test("nothing counted and nothing sent before is null; nothing counted and sent before is the empty record", () => {
   for (const cov of [coverage({}), coverage({ "claude-code": { state: "absent", unverified: true } }), coverage({ "claude-code": host({ [PRIVATE]: bucket({ derived: 2 }) }) })]) {
     assert.equal(ask(cov), null)
     assert.equal(ask(cov, { sentBefore: undefined }), null)
-    const retract = ask(cov, { sentBefore: true, loop: { state: "ok" } })
+    const retract = ask(cov, { sentBefore: true, loop: { v: 1, headless: "ok" } })
     assert.equal(retract.bytes, EMPTY_RECORD)
     assert.equal(retract.path, `capture/${ID}.json`)
     assert.equal(retract.sha, gitBlobSha(EMPTY_RECORD))
@@ -196,15 +209,15 @@ test("the same coverage twice gives identical bytes", () => {
   assert.equal(one.bytes, two.bytes)
   assert.equal(one.sha, two.sha)
   const looped = (loop) => ask(coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }) }), { loop })
-  assert.equal(looped({ b: 1, a: 2 }).bytes, looped({ a: 2, b: 1 }).bytes)
-  assert.equal(JSON.parse(looped({ b: 1, a: 2 }).bytes).loop.a, 2)
+  assert.equal(looped({ v: 1, steps_stale: 1, loop_alarms_open: 2 }).bytes, looped({ loop_alarms_open: 2, steps_stale: 1, v: 1 }).bytes)
+  assert.equal(JSON.parse(looped({ v: 1, steps_stale: 1, loop_alarms_open: 2 }).bytes).loop.loop_alarms_open, 2)
 })
 
 test("the loop slot is carried only when given and valid, and never invented", () => {
   const cov = coverage({ "claude-code": host({ [PUBLIC]: bucket(mine) }) })
   assert.equal(Object.hasOwn(records(ask(cov)), "loop"), false)
-  assert.deepEqual(records(ask(cov, { loop: { state: "ok", runs: 2, live: true } })).loop, { live: true, runs: 2, state: "ok" })
-  for (const loop of [null, undefined, "text", [], 5, { nested: { a: 1 } }, { state: SENTINEL }, { "Bad Key": 1 }, { n: -1 }, { n: 1.5 }]) {
+  assert.deepEqual(records(ask(cov, { loop: { v: 1, steps_stale: 2, headless: "ok", oldest_open_age_days: null } })).loop, { headless: "ok", oldest_open_age_days: null, steps_stale: 2, v: 1 })
+  for (const loop of [null, undefined, "text", [], 5, { nested: { a: 1 } }, { v: 1, headless: SENTINEL }, { v: 1, "Bad Key": 1 }, { v: 1, steps_stale: -1 }, { v: 1, steps_stale: 1.5 }, { steps_stale: 1 }, { v: 1, steps_stale: true }, { v: 1, made_up: 1 }]) {
     const got = ask(cov, { loop })
     assert.equal(Object.hasOwn(records(got), "loop"), false)
     assert.equal(got.bytes.includes("SENTINEL"), false)
@@ -257,12 +270,12 @@ test("no coverage is not an emptied scope: null whatever sentBefore says", () =>
   }
 })
 
-test("a capped or unreadable host never retracts; absent hosts do", () => {
+test("a capped or unreadable host is flagged, not retracted; an empty or absent host retracts", () => {
   const empty = host({ [PRIVATE]: bucket({ derived: 2 }) })
   for (const state of ["capped", "unreadable"]) {
-    assert.equal(ask(coverage({ "claude-code": empty, "copilot-cli": { state, unverified: true } }), { sentBefore: true }), null)
+    assert.deepEqual(records(ask(coverage({ "claude-code": empty, "copilot-cli": { state, unverified: true } }), { sentBefore: true })).hosts, { "copilot-cli": { not_counted: true } })
   }
-  assert.equal(ask(coverage({ "claude-code": empty, "copilot-cli": null }), { sentBefore: true }), null)
+  assert.equal(ask(coverage({ "claude-code": empty, "copilot-cli": null }), { sentBefore: true }).bytes, EMPTY_RECORD)
   assert.equal(ask(coverage({ "claude-code": empty, "copilot-cli": { state: "absent", unverified: true } }), { sentBefore: true }).bytes, EMPTY_RECORD)
 })
 
@@ -389,7 +402,8 @@ test("the documented key list equals the schema's key list", () => {
     const [name, rest] = line.split(":")
     return [name.trim(), rest.trim().split(/\s+/u)]
   }))
-  assert.deepEqual(Object.keys(lists), ["top", "host"])
+  assert.deepEqual(Object.keys(lists), ["top", "host", "uncounted"])
   assert.deepEqual(lists.top, [...CAPTURE_TOP_KEYS])
   assert.deepEqual(lists.host, [...CAPTURE_HOST_KEYS])
+  assert.deepEqual(lists.uncounted, [...CAPTURE_UNCOUNTED_KEYS])
 })

@@ -8,6 +8,9 @@ import {
   CAPTURE_MAX_BYTES,
   CAPTURE_PATH,
   CAPTURE_SCHEMA,
+  LOOP_SLOT_COUNTS,
+  LOOP_SLOT_VERSION,
+  NOT_COUNTED,
   validateCapture,
   validateCaptureBytes,
   validateLoopSlot,
@@ -110,7 +113,7 @@ test("a string that looks like a date, a path or a session id is refused whereve
   variants.push({ ...record(), basis: SENTINEL }, { ...record(), schema: SENTINEL }, { ...record(), [SENTINEL]: 1 }, record({ [SENTINEL]: claude() }))
   const host = record()
   host.hosts["claude-code"][SENTINEL] = 1
-  variants.push(host, { ...record(), loop: { [SENTINEL]: 1 } }, { ...record(), loop: { state: SENTINEL } }, { ...record(), loop: SENTINEL }, { ...record(), loop: [SENTINEL] })
+  variants.push(host, { ...record(), loop: { v: 1, [SENTINEL]: 1 } }, { ...record(), loop: { v: 1, headless: SENTINEL } }, { ...record(), loop: SENTINEL }, { ...record(), loop: [SENTINEL] })
   for (const value of variants) {
     const result = validateCapture(value)
     assert.equal(result.ok, false)
@@ -135,31 +138,63 @@ test("a record over 2 KiB or not in canonical bytes is refused", () => {
   assert.equal(bytes(record()).length < CAPTURE_MAX_BYTES, true)
 })
 
-test("the optional loop slot is validated, and a record without it stays valid", () => {
+const LOOP = { v: 1, improvement_open: 3, improvement_claimed: 0, oldest_open_age_days: null, steps_stale: 1000000, headless: "closed_loop" }
+
+test("the optional loop slot is the store's loop_slot_v1, and a record without it stays valid", () => {
   const withLoop = (loop) => ({ ...record(), loop })
-  assert.deepEqual(validateCapture(withLoop({ ok: true, n: 3, last: null, state: "closed_loop" })), { ok: true, errors: [] })
-  assert.deepEqual(validateCapture(withLoop({})), { ok: true, errors: [] })
-  assert.deepEqual(validateCapture({ ...record({}), loop: { a: 1 } }), { ok: true, errors: [] })
+  assert.deepEqual(validateCapture(withLoop(LOOP)), { ok: true, errors: [] })
+  assert.deepEqual(validateCapture(withLoop({ v: 1 })), { ok: true, errors: [] })
+  assert.deepEqual(validateCapture(withLoop({ v: 1, headless: null })), { ok: true, errors: [] })
+  assert.deepEqual(validateCapture({ ...record({}), loop: { v: 1, steps_stale: 1 } }), { ok: true, errors: [] })
   assert.equal(Object.hasOwn(record({}), CAPTURE_LOOP_KEY), false)
+  assert.equal(LOOP_SLOT_VERSION, 1)
+  // The slot with every key at its largest still fits the store's 512 bytes.
+  const full = { v: 1, ...Object.fromEntries(LOOP_SLOT_COUNTS.map((key) => [key, 1000000])), headless: "x".repeat(32) }
+  assert.deepEqual(validateCapture(withLoop(full)), { ok: true, errors: [] })
+  assert.equal(Buffer.byteLength(JSON.stringify(full)) <= 512, true)
   const refused = [
     [null, "type"], [[], "type"], ["x", "type"], [3, "type"],
-    [{ a: { b: 1 } }, "type"], [{ a: [1] }, "type"], [{ a: 1.5 }, "range"], [{ a: -1 }, "range"], [{ a: 1000001 }, "range"],
-    [{ a: "Has-Dash" }, "pattern"], [{ a: "" }, "pattern"], [{ a: "x".repeat(33) }, "pattern"], [{ Bad: 1 }, "pattern"],
+    // v is required and exactly 1: missing, another number, a string, a boolean.
+    [{}, "enum", "loop.v"], [{ steps_stale: 1 }, "enum", "loop.v"], [{ v: 2 }, "enum", "loop.v"], [{ v: "1" }, "enum", "loop.v"], [{ v: true }, "enum", "loop.v"],
+    // A count is a whole number from 0 to 1,000,000 or null: never a boolean, a string, a float, a nested value.
+    [{ v: 1, steps_stale: true }, "range", "loop.steps_stale"], [{ v: 1, steps_stale: "1" }, "range", "loop.steps_stale"], [{ v: 1, steps_stale: 1.5 }, "range", "loop.steps_stale"],
+    [{ v: 1, steps_stale: -1 }, "range", "loop.steps_stale"], [{ v: 1, steps_stale: 1000001 }, "range", "loop.steps_stale"], [{ v: 1, steps_stale: { a: 1 } }, "range", "loop.steps_stale"],
+    // headless is a plain code or null.
+    [{ v: 1, headless: true }, "pattern", "loop.headless"], [{ v: 1, headless: 3 }, "pattern", "loop.headless"], [{ v: 1, headless: "Has-Dash" }, "pattern", "loop.headless"], [{ v: 1, headless: "" }, "pattern", "loop.headless"], [{ v: 1, headless: "x".repeat(33) }, "pattern", "loop.headless"],
+    // A key the store does not know, whatever its value; a key that is not a plain code is named "?".
+    [{ v: 1, made_up: 1 }, "unknown_key", "loop.made_up"], [{ v: 1, Bad: 1 }, "unknown_key", "loop.?"],
   ]
-  for (const [loop, code] of refused) {
-    assert.deepEqual(codes(validateCapture(withLoop(loop))), [code], JSON.stringify(loop))
+  for (const [loop, code, at = "loop"] of refused) {
+    assert.deepEqual(validateCapture(withLoop(loop)).errors, [{ code, path: at }], JSON.stringify(loop))
   }
-  const wide = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`key_${"abcdefghijklmnopqrstuvwxyz"[index % 26]}${"abcdefghijklmnopqrstuvwxyz"[Math.floor(index / 26)]}`, 1000000]))
+  // Over 512 bytes is its own refusal, whatever else is wrong.
+  const wide = { v: 1, ...Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`key_${"abcdefghijklmnopqrstuvwxyz"[index % 26]}${"abcdefghijklmnopqrstuvwxyz"[Math.floor(index / 26)]}`, 1000000])) }
   assert.deepEqual(validateCapture(withLoop(wide)).errors, [{ code: "size", path: "loop" }])
   assert.equal(CAPTURE_LOOP_KEY, "loop")
 })
 
+test("a host the machine could not count is exactly not_counted: true, beside counted hosts", () => {
+  assert.equal(NOT_COUNTED, "not_counted")
+  assert.deepEqual(validateCapture(record({ "claude-code": claude(), "codex-cli": { not_counted: true } })), { ok: true, errors: [] })
+  assert.deepEqual(validateCapture(record({ "claude-code": { not_counted: true } })), { ok: true, errors: [] })
+  assert.deepEqual(validateCaptureBytes(bytes(record({ "copilot-cli": { not_counted: true } }))), { ok: true, errors: [] })
+  for (const bad of [false, null, 1, "true", {}, []]) {
+    assert.deepEqual(validateCapture(record({ "claude-code": { not_counted: bad } })).errors, [{ code: "enum", path: "hosts.claude-code.not_counted" }], JSON.stringify(bad))
+  }
+  // Any other key beside it is refused, so a count can never ride along with the flag.
+  assert.deepEqual(codes(validateCapture(record({ "claude-code": { not_counted: true, on_disk: 0 } }))), ["unknown_key"])
+  assert.deepEqual(codes(validateCapture(record({ "claude-code": { not_counted: true, [SENTINEL]: 1 } }))), ["unknown_key"])
+  // A host that is not a plain object is still a type error, and the flag is only a host's own entry.
+  assert.deepEqual(codes(validateCapture(record({ "claude-code": null }))), ["type"])
+  assert.equal(validateCapture({ ...record(), not_counted: true }).ok, false)
+})
+
 test("validateLoopSlot reports into the caller's list at the caller's path", () => {
   const errors = []
-  assert.equal(validateLoopSlot({ a: 1 }, "loop", errors), true)
+  assert.equal(validateLoopSlot({ v: 1, steps_stale: 1 }, "loop", errors), true)
   assert.deepEqual(errors, [])
-  assert.equal(validateLoopSlot({ a: "No" }, "loop", errors), false)
-  assert.deepEqual(errors, [{ code: "pattern", path: "loop.a" }])
+  assert.equal(validateLoopSlot({ v: 1, headless: "No" }, "loop", errors), false)
+  assert.deepEqual(errors, [{ code: "pattern", path: "loop.headless" }])
 })
 
 test("validateCaptureBytes returns a type error unless the input is a string or a Buffer", () => {
@@ -169,25 +204,14 @@ test("validateCaptureBytes returns a type error unless the input is a string or 
   assert.deepEqual(validateCaptureBytes(new Uint8Array(2)), { ok: false, errors: [{ code: "type", path: "" }] })
 })
 
-test("the loop slot cap is exactly 512 bytes and the 2 KiB cap is exact", () => {
-  // Text values hold at most 32 letters, so build the loop from many two-letter keys. An entry costs 8 + its text length (key, quotes, colon, comma) and the braces cost 1 net, so each step takes at most 40 and leaves 0 or at least 9.
-  const loopOfSize = (size) => {
-    const loop = {}
-    let remaining = size - 1
-    for (let index = 0; remaining > 0; index += 1) {
-      const key = `${"abcdefghijklmnopqrstuvwxyz"[index % 26]}${"abcdefghijklmnopqrstuvwxyz"[Math.floor(index / 26)]}`
-      const take = remaining <= 40 ? remaining : remaining - 40 >= 9 ? 40 : remaining - 9
-      loop[key] = "a".repeat(take - 8)
-      remaining -= take
-    }
-    return loop
-  }
-  assert.equal(Buffer.byteLength(JSON.stringify(loopOfSize(512))), 512)
-  assert.equal(Buffer.byteLength(JSON.stringify(loopOfSize(513))), 513)
-  assert.deepEqual(validateCapture({ ...record({}), loop: loopOfSize(512) }), { ok: true, errors: [] })
-  assert.deepEqual(validateCapture({ ...record({}), loop: loopOfSize(513) }).errors, [{ code: "size", path: "loop" }])
-  // A full-size loop slot on a three-host record is valid and well under the cap, so no valid record reaches 2048 bytes.
-  const full = { ...record({ "claude-code": claude(), "copilot-cli": copilot(), "codex-cli": copilot() }), loop: loopOfSize(500) }
+test("the loop slot cap is 512 bytes and the 2 KiB cap is exact", () => {
+  // A valid slot is far under 512 bytes, so the cap only ever stops a slot padded with unknown keys.
+  const padded = (size) => ({ v: 1, pad: "a".repeat(size - Buffer.byteLength(JSON.stringify({ v: 1, pad: "" }))) })
+  assert.equal(Buffer.byteLength(JSON.stringify(padded(512))), 512)
+  assert.deepEqual(validateCapture({ ...record({}), loop: padded(512) }).errors, [{ code: "unknown_key", path: "loop.pad" }])
+  assert.deepEqual(validateCapture({ ...record({}), loop: padded(513) }).errors, [{ code: "size", path: "loop" }])
+  // A full-size valid loop slot on a three-host record is well under the cap, so no valid record reaches 2048 bytes.
+  const full = { ...record({ "claude-code": claude(), "copilot-cli": copilot(), "codex-cli": copilot() }), loop: { v: 1, ...Object.fromEntries(LOOP_SLOT_COUNTS.map((key) => [key, 1000000])), headless: "x".repeat(32) } }
   assert.equal(Buffer.byteLength(JSON.stringify(full)) < CAPTURE_MAX_BYTES, true)
   assert.deepEqual(validateCaptureBytes(JSON.stringify(full)), { ok: true, errors: [] })
   // The byte cap itself: exactly 2048 bytes passes the size rule, 2049 does not.

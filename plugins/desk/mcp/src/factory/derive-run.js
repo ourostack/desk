@@ -15,7 +15,7 @@ import { crewWorkspace } from "../desk/crew-roster.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { outcomeSnapshot } from "./outcome.js"
-import { factoryStateRoot, listMarkers, outboxCopies, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { COPY_RETENTION_MS, factoryStateRoot, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
 import { githubRepoOfRemote } from "./desk-visibility.js"
@@ -378,7 +378,7 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  *
  * Orphans are taken in name order starting after the `cursor` the last pass recorded, and wrapping, so a stuck orphan cannot keep a later one
  * from its turn. Cheap checks (a retraction, the receipt's desk root, roster and declaration) run for every orphan; the rest (facts, the
- * transcript, its stat, the derive) only inside `cap` orphans and `budgetMs` (`clock` is milliseconds). The others are `unexamined`. An orphan
+ * transcript, its stat, the derive) only inside `cap` orphans and `budgetMs` (`clock` is milliseconds); a current orphan, which needs no derive, gives its slot back. The others are `unexamined`. An orphan whose transcript is gone, whose facts were delivered and whose record is over `COPY_RETENTION_MS` old loses its outbox copy (`pruneCopy`, default `pruneDeliveredCopy`), counted as `copies_pruned` in the record when above 0 (`copies_prune_failed` when a prune threw). An orphan
  * whose outbox copy records a newer Desk than this one is held `pending` (taking no slot) for the seven days `STALE_DERIVER_HOLD_MS` allows,
  * counted from the copy's `ended_at` (its file's mtime when there is none), then frozen as `recorded_by_newer_desk`.
  *
@@ -399,7 +399,7 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  * `derive_failed` without another derive, so one orphan whose derive never finishes cannot hold up every sweep; a newer Desk starts again. An orphan
  * whose receipt is current, or that is rebuilt, is never frozen by a strike and loses its strikes.
  */
-export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus, derive = deriveMarker } = {}) {
+export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus, derive = deriveMarker, pruneCopy = pruneDeliveredCopy } = {}) {
   const startedAt = new Date(now()).toISOString()
   // Where the walk stands, from the last record: the cursor, when it last wrapped (null: not yet) and how many sweeps this walk has taken.
   let walk = { cursor: null, last_wrap_at: null, sweeps_in_walk: 0 }
@@ -441,7 +441,7 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
   }
   let orphans
   try {
-    const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor: walk.cursor, hung, version, attempt, derive })
+    const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor: walk.cursor, hung, version, attempt, derive, pruneCopy })
     const { wrapped, ...counts } = pass
     orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...counts, last_wrap_at: wrapped ? new Date(now()).toISOString() : walk.last_wrap_at, sweeps_in_walk: wrapped ? 0 : walk.sweeps_in_walk + 1, ...hungRecord() }
   } catch {
@@ -460,7 +460,7 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
 // Plain code-unit order, the same in every locale, so the cursor means the same thing in every session.
 const byName = (a, b) => Number(a.name > b.name) - Number(a.name < b.name)
 
-async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor, hung, version, attempt, derive }) {
+async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor, hung, version, attempt, derive, pruneCopy }) {
   const kept = new Set((markers ?? await listMarkers(env)).map((marker) => `${marker.host}-${marker.session_id}.json`))
   const receipts = (await readStatus(env)).derivations
   const all = (await outboxCopies(env, "claude-code")).filter(({ name }) => !kept.has(name)).sort(byName)
@@ -493,11 +493,13 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
   const tally = { rebuilt: 0, current: 0, pending: 0, unexamined: 0, frozen: zeroReasons() }
   let last = cursor
   let tailUnexamined = 0
+  let copiesPruned = 0
+  let copiesPruneFailed = 0
   for (const [index, { store, name }] of copies.entries()) {
     let outcome
     const before = taken
     try {
-      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version })
+      outcome = await rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version, pruneCopy, pruned: () => { copiesPruned += 1 }, pruneFailed: () => { copiesPruneFailed += 1 } })
     } catch {
       outcome = "derive_failed"
     }
@@ -508,11 +510,11 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
     else tally[outcome] += 1
   }
   // The walk wrapped when every orphan from the cursor to the end of the list was reached.
-  return { cursor: last, wrapped: tailUnexamined === 0, examined: copies.length - tally.unexamined, worked: taken, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
+  return { cursor: last, wrapped: tailUnexamined === 0, examined: copies.length - tally.unexamined, worked: taken, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS), ...(copiesPruned > 0 ? { copies_pruned: copiesPruned } : {}), ...(copiesPruneFailed > 0 ? { copies_prune_failed: copiesPruneFailed } : {}) }
 }
 
 // One orphan: "rebuilt", "current", "pending" (examined, waiting for a known reason), "unexamined" (no slot left this sweep) or the reason it stays frozen.
-async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version }) {
+async function rebuildOrphan(env, { store, name, receipts, retracted, retractions, find, room, refund, noteWaiting, now, quietMs, ownVersion, attempt, derive, hung, version, pruneCopy, pruned, pruneFailed }) {
   if (retracted.has(name)) return "retracted"
   const receiptRoot = deskRootOf(receipts, [name])
   if (receiptRoot !== undefined) {
@@ -533,9 +535,26 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
     return "pending"
   }
   const transcript = await find(facts.session.id)
-  if (transcript === null) return "no_transcript"
+  if (transcript === null) {
+    // Delivered, recorded long ago and its transcript gone: nothing can rebuild it and the host no longer lists it, so the local copy is inventory. It goes; the store keeps the facts.
+    if (now() - recordedAt > COPY_RETENTION_MS) {
+      let removed = false
+      try {
+        removed = await pruneCopy(env, store, name)
+      } catch {
+        // Counted, never swallowed: the copy stays and the next sweep tries again.
+        pruneFailed()
+      }
+      if (removed) pruned()
+    }
+    return "no_transcript"
+  }
   const receipt = receipts?.[name]
-  if (receipt?.store === store && receipt.binding_version >= BINDING_VERSION && sameSource(receipt, await sourceStamp(transcript))) return "current"
+  if (receipt?.store === store && receipt.binding_version >= BINDING_VERSION && sameSource(receipt, await sourceStamp(transcript))) {
+    // A current orphan needs no derive, so it gives its slot back: a long list of current orphans no longer makes a new one wait ceil(N / cap) sweeps for its turn. The time budget still bounds the checks.
+    refund()
+    return "current"
+  }
   // A derive that was interrupted twice under this Desk is not tried again until a newer one (a derive that finished is `current` above).
   if (hung[name]?.version === version && hung[name].strikes >= ORPHAN_HUNG_STRIKES) return "derive_failed"
   let root = receiptRoot
@@ -577,6 +596,14 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
   }
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.
   Object.assign(summary, await rebuildOrphans(env, { quietMs, markers }))
+  // Tombstones past their retention go (inventory). The result is a count, or a fixed code when the pruning itself failed, so a stopped part signals.
+  let retention
+  try {
+    retention = { ran_at: new Date().toISOString(), tombstones_pruned: await pruneTombstones(env) }
+  } catch {
+    retention = { ran_at: new Date().toISOString(), failed: "prune_failed" }
+  }
+  await writeStatus(env, { retention }).catch(() => undefined)
   // Capture coverage never throws and keeps the previous record when it fails.
   summary.coverage = await recordCoverage(env, { markers, orphans: summary.orphans, bindingVersion: BINDING_VERSION })
   // `route_unverified` counts the Codex markers held inside `held`; `factory.js status` shows it.

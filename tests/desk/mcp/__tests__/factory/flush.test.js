@@ -12,12 +12,13 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
-  factoryStateRoot, gitBlobSha, readConsent, readMachineSecret, readStatus, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus, writeVisibilityCache,
+  factoryStateRoot, gitBlobSha, listFinalizeRequests, readConsent, readMachineSecret, readStatus, requestFinalize, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus, writeVisibilityCache,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { serializePublished, toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { BOT, TOKEN, fakeGitHub, httpError } from "./_fake_github.js"
+import { indexJob } from "./_index_helper.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
@@ -785,6 +786,65 @@ test("when the fresh question cannot be answered the desk's sessions wait: nothi
   const after = (await readStatus(failed.env)).last_flush[STORE]
   assert.equal(after.visibility_unasked, undefined)
   assert.equal(after.visibility_unasked_since, undefined)
+}))
+
+test("a deadline that falls during the fresh visibility question ends the flush as deadline and leaves the recorded deferral count as it was", () => scratch(async (outer) => {
+  const { flush } = await load()
+  const prepare = async ({ base, env }) => {
+    await optIn(env)
+    const desk = await deskRepository(base, "https://github.com/acme/cached-desk.git")
+    await markerFor(env, desk, 1)
+    await put(env, localFacts(1))
+    await writeVisibilityCache(env, { "acme/cached-desk": { visibility: "private", checked_at: hoursAgo(72) } })
+  }
+  // A probe flush finds which call is the fresh question; the real one runs the clock out during that call, so its own boundary reports the deadline.
+  await prepare(outer)
+  const probe = fakeGitHub({ visibility: { "acme/cached-desk": "private" } })
+  await flush(outer.env, { store: STORE, runner: probe.runner, anonymousLookup: probe.anonymousLookup })
+  const askAt = probe.calls.findIndex((call) => call.args.some((arg) => /^repos\/acme\/cached-desk$/u.test(arg)))
+  assert.ok(askAt > 0)
+  await scratch(async (context) => {
+    await prepare(context)
+    const since = "2026-09-20T00:00:00.000Z"
+    await writeStatus(context.env, { last_flush: { [STORE]: { at: "2026-09-27T00:00:00.000Z", result: "nothing_pending", visibility_unasked: 3, visibility_unasked_since: since } } })
+    let clock = Date.now()
+    const github = fakeGitHub({ visibility: { "acme/cached-desk": "private" }, intercept: (_call, index) => { if (index === askAt) clock += 200_000 } })
+    const result = await flush(context.env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup, now: () => clock, deadlineMs: 120_000 })
+    assert.deepEqual(result, { result: "deadline" })
+    assert.equal(github.calls.length, askAt + 1, "nothing is asked after the deadline")
+    const entry = (await readStatus(context.env)).last_flush[STORE]
+    assert.equal(entry.result, "deadline")
+    assert.equal(entry.visibility_unasked, 3, "not rewritten by a flush that never got to ask")
+    assert.equal(entry.visibility_unasked_since, since)
+  })
+}))
+
+test("finalize does not call a job delivered while its sessions wait for a visibility answer", () => scratch(async ({ base, env }) => {
+  const { finalize, flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/cached-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  const job = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
+  await indexJob(env, job, name)
+  await writeStatus(env, { derivations: { [name]: { store: STORE, marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
+  await requestFinalize(env, { job, deskRoot: desk })
+  await writeVisibilityCache(env, { "acme/cached-desk": { visibility: "private", checked_at: hoursAgo(72) } })
+  const failing = fakeGitHub({ visibility: { "acme/cached-desk": 500 } })
+  const waiting = await finalize(env, { job, runner: failing.runner, anonymousLookup: failing.anonymousLookup, derive: async () => ({ result: "written", store: STORE }) })
+  assert.equal(waiting.result, "retained", "held for a visibility answer is not delivered")
+  assert.equal(waiting.flushes[STORE], "nothing_pending")
+  assert.equal((await listFinalizeRequests(env)).some((entry) => entry.job === job), true, "the request stays for the next try")
+  const working = fakeGitHub({ visibility: { "acme/cached-desk": "private" } })
+  // Once the answer can be asked the files go out; the job is delivered when the store has them on its default branch.
+  const sent = await finalize(env, { job, runner: working.runner, anonymousLookup: working.anonymousLookup, derive: async () => ({ result: "written", store: STORE }) })
+  assert.deepEqual(sent, { result: "retained", flushes: { [STORE]: "delivered_pr_open" } })
+  working.mergeOpenPr()
+  const done = await finalize(env, { job, runner: working.runner, anonymousLookup: working.anonymousLookup, derive: async () => ({ result: "written", store: STORE }) })
+  assert.equal(done.result, "cleared", JSON.stringify(done))
+  assert.equal((await listFinalizeRequests(env)).some((entry) => entry.job === job), false)
+  // A plain flush has no pending list to show.
+  assert.equal(Object.hasOwn(await flush(env, { store: STORE, runner: working.runner, anonymousLookup: working.anonymousLookup }), "pending"), false)
 }))
 
 test("a flush that stops before it can tell keeps the deferral count the last flush recorded, with or without its start time", () => scratch(async ({ env }) => {

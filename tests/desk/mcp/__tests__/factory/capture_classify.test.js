@@ -210,7 +210,9 @@ test("every not-current orphan is frozen as orphan_unsplit, whatever the orphan 
     const out = one({ hosts: claude(...sessions), copies: sessions.map(({ name }) => ({ name, store: PUBLIC })), orphans: { pending, frozen: { route_unknown: 1, [ORPHAN_UNSPLIT]: 1 }, cursor: 7, extra: { more: true }, oldest_pending_age: 1 } })
     assert.equal(out.pending, 0)
     assert.equal(out.frozen, 3)
-    assert.deepEqual(out.frozen_by_reason, { [ORPHAN_UNSPLIT]: 4, route_unknown: 1 })
+    // The pass's own window reasons are not added: each orphan is counted once, so the reasons add up to `frozen`.
+    assert.deepEqual(out.frozen_by_reason, { [ORPHAN_UNSPLIT]: 3 })
+    assert.equal(Object.values(out.frozen_by_reason).reduce((sum, count) => sum + count, 0), out.frozen)
   }
 })
 
@@ -225,12 +227,11 @@ test("without status.orphans or with a failed pass every not-current orphan is f
   }
 })
 
-test("no_facts and no_transcript orphans are not in on_disk and not in frozen_by_reason; unknown reasons and bad values are tolerated", () => {
+test("the orphan pass's own reasons (any of them, unknown ones too) never reach frozen_by_reason or on_disk", () => {
   const out = one({ hosts: claude(), orphans: { pending: -3, frozen: { no_facts: 4, no_transcript: 2, derive_failed: 1, brand_new_reason: 5, bad: "x" } } })
   assert.equal(out.on_disk, 0)
-  assert.deepEqual(out.frozen_by_reason, { derive_failed: 1, brand_new_reason: 5 })
+  assert.deepEqual(out.frozen_by_reason, {})
   assert.deepEqual(one({ hosts: claude(), orphans: { pending: 1 } }).frozen_by_reason, {})
-  assert.deepEqual(one({ hosts: { "copilot-cli": { state: "counted", sessions: [] } }, orphans: { pending: 1, frozen: { derive_failed: 1 } } }, "copilot-cli").frozen_by_reason, {})
 })
 
 test("no consent at all holds a marked session and leaves unowned sessions unowned", () => {
@@ -244,16 +245,13 @@ test("a quarantined copy is held, not derived", () => {
   assert.equal(out.derived, 0)
 })
 
-test("a store or an orphan reason named like a prototype key is an ordinary key", () => {
+test("a store named like a prototype key is an ordinary key", () => {
   const out = one({ hosts: claude(C1), copies: [{ name: C1.name, store: "__proto__" }], orphans: { pending: 0, frozen: { __proto__x: 1, constructor: 2 } } })
   assert.equal(Object.hasOwn(out.by_owner, "__proto__") || Object.keys(out.by_owner).length === 1, true)
   assert.equal(Object.keys(out.by_owner).length, 1)
   assert.equal(Object.getPrototypeOf({}).frozen, undefined)
   assert.equal(Object.getPrototypeOf({}).derived, undefined)
-  assert.equal(out.frozen_by_reason.constructor, 2)
-  const protoReason = JSON.parse('{"__proto__": 4}')
-  const second = one({ hosts: claude(), orphans: { pending: 0, frozen: protoReason } })
-  assert.equal(Object.hasOwn(second.frozen_by_reason, "__proto__"), true)
+  assert.deepEqual(out.frozen_by_reason, { orphan_unsplit: 1 })
 })
 
 test("a prototype key in a name is not a marker or a receipt", () => {

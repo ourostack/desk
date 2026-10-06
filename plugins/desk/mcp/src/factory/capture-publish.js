@@ -8,8 +8,10 @@
 // left out of both the numerator and the denominator, so the record shows
 // nothing about work that belongs elsewhere. Store names in `by_owner` are
 // lower-cased by the sweep, so the store is lower-cased here and compared
-// exactly. A host that is not `counted`, or that has no session in scope, is
-// omitted (never zero): an all-zero host cannot be told from an uncounted one. When any host could not be counted (capped or unreadable) the result is `null`: a record without it would overwrite the store's true counts for that host, and the local `status.json` says why.
+// exactly. A host with no session in scope, or not on this machine (`absent`), is
+// omitted (never zero): an all-zero host cannot be told from an uncounted one. A host that could not be counted (`capped` or `unreadable`) is
+// sent as exactly `{ "not_counted": true }`, never as a zero and never left out, so the store keeps the other hosts' true counts and can tell
+// "could not count" from "no sessions". An uncounted host is never read for scope: it names no store's work.
 //
 // Unowned sessions (`-`) count only while at most one store contributes. The sweep decides that
 // when it runs, so the caller passes the current number of contributing stores (`contributing`)
@@ -31,13 +33,14 @@
 // The result never carries a store name, a count or a message.
 
 import { gitBlobSha } from "./outbox.js"
-import { CAPTURE_LOOP_KEY, CAPTURE_PATH, CAPTURE_SCHEMA, validateCaptureBytes, validateLoopSlot } from "./capture-schema.js"
+import { CAPTURE_LOOP_KEY, CAPTURE_PATH, CAPTURE_SCHEMA, NOT_COUNTED, validateCaptureBytes, validateLoopSlot } from "./capture-schema.js"
 import { ENUMS, PATTERNS } from "./schema.js"
 
 export const CAPTURE_INVALID = "capture_invalid"
 export const OWNER_NONE = "-"
 
 const INTAKE_ID = /^[0-9a-f]{16}$/u
+const NOT_COUNTED_STATES = ["capped", "unreadable"]
 const BUCKETS = ["derived", "held", "frozen", "pending", "not_seen"]
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -52,8 +55,10 @@ const invalid = () => ({ invalid: CAPTURE_INVALID })
 /** `isCaptureInvalid(result) -> boolean`, for the flush. */
 export const isCaptureInvalid = (result) => isObject(result) && result.invalid === CAPTURE_INVALID
 
-// One host's entry for `owners`, `null` when the host is out of scope, or `undefined` when its input is malformed.
+// One host's entry for `owners`, `null` when the host is out of scope, or `undefined` when its input is malformed. A host whose listing was
+// capped or unreadable is `{ not_counted: true }`, the one honest way to say "could not count" (the store takes exactly that and nothing else).
 function hostEntry(name, host, owners) {
+  if (isObject(host) && NOT_COUNTED_STATES.includes(host.state)) return { [NOT_COUNTED]: true }
   if (!isObject(host) || host.state !== "counted") return null
   if (!isObject(host.by_owner) || typeof host.unverified !== "boolean") return undefined
   const withDesk = host.not_in_a_desk !== null
@@ -117,8 +122,6 @@ export function captureFor(coverage, { store, intakeId, sentBefore = false, loop
     if (!Object.hasOwn(sourceHosts, name)) continue
     const entry = hostEntry(name, sourceHosts[name], owners)
     if (entry === undefined) return invalid()
-    // A host that could not be counted (capped, unreadable) means the record would drop it and overwrite the store's true counts for it: say nothing and keep the record already there.
-    if (entry === null && !["counted", "absent"].includes(sourceHosts[name]?.state)) return null
     if (entry !== null) hosts[name] = entry
   }
   let bytes = EMPTY_RECORD

@@ -53,6 +53,7 @@ import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { orphanPassLine, ownVersion } from "../src/factory/local-status.js"
+import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { normalizeTimestamp } from "../src/factory/time.js"
@@ -137,7 +138,7 @@ export async function runFinalizeCommand({ argv, env, runner }) {
 export async function runStatusCommand({ argv, env }) {
   if (argv.length) throw new Error("Usage: factory.js status")
   const status = await readStatus(env)
-  return { ...status, orphan_pass: orphanPassLine(status.orphans, Date.now(), { version: ownVersion() }), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
+  return { ...status, orphan_pass: orphanPassLine(status.orphans, Date.now(), { version: ownVersion() }), retention: retentionLine(status), capture_check: captureCheckLines(status), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
 }
 
 function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {
