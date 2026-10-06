@@ -3,6 +3,10 @@
 #
 # Foundation plus bounded local boot checks; repairs run detached. MUST always exit 0 because a nonzero SessionStart hook blocks the session from starting.
 
+# A headless evaluator session gets no startup output and starts nothing. The rule is stated in
+# mcp/src/factory/headless-flag.cjs (set, and not empty or 0); a test holds this line to it.
+case "${DESK_FACTORY_HEADLESS:-}" in ""|0) ;; *) exit 0 ;; esac
+
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 FOUNDATION_SKILL="${1:-$PLUGIN_ROOT/skills/using-desk/SKILL.md}"
 

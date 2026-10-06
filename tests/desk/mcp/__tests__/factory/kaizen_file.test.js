@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, promises as fs, rmSync, writeFileSync } from "n
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { FRICTION_CLASSES, MAX_CARDS_PER_DAY, PUBLIC_PLUGINS, cardBlock, fileKaizenCard, normalizeTitle, privateCard, publicCard } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
+import { FRICTION_CLASSES, MAX_CARDS_PER_DAY, PUBLIC_PLUGINS, cardBlock, fileKaizenCard, fingerprintOf, normalizeTitle, privateCard, publicCard } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
 import { readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
 import { parseCard } from "../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
@@ -274,4 +274,16 @@ test("the real gh runner is used when none is injected", () => scratch(async ({ 
   declare(deskRoot)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   assert.deepEqual(await fileKaizenCard({ ...env, PATH: "" }, { deskRoot, title: "A generic title", body: "Body." }), { result: "gh_missing", store: STORE })
+}))
+
+test("fingerprintOf returns the same 32 hex the filer embeds in its marker, for the same normalized input", () => scratch(async ({ env, deskRoot }) => {
+  declare(deskRoot)
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const filing = fakeGh()
+  await fileKaizenCard(env, { deskRoot, title: "Shell calls fail often", body: "b", frictionClass: "mcp_tool", runner: filing.runner })
+  const embedded = /desk-kaizen-fingerprint: ([0-9a-f]{32}) -->/u.exec(filing.created()[0].body)[1]
+  const fingerprint = await fingerprintOf(env, { plugin: "desk", frictionClass: "mcp_tool", title: "shell calls: FAIL often!" })
+  assert.equal(fingerprint, embedded)
+  assert.notEqual(await fingerprintOf(env, { plugin: "crew", frictionClass: "mcp_tool", title: "Shell calls fail often" }), embedded)
+  assert.notEqual(await fingerprintOf(env, { plugin: "desk", frictionClass: "hook", title: "Shell calls fail often" }), embedded)
 }))

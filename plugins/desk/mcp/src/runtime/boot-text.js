@@ -96,6 +96,7 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
     return `${failed(FAILURE_WORDS[sync.cause] ?? "the pull did not complete")}${moved}`
   }
   if (sync.state === "quarantined") return `sync ok: moved ${plural(sync.quarantinedPaths?.length ?? 0, "stray untracked path")} to ${strayDir(sync, root)} first, then pulled`
+  if (sync.nothingToSync === "headless") return "headless session; nothing synced"
   if (sync.nothingToSync === "no_remote") return "no remote; nothing to sync"
   if (sync.nothingToSync === "no_upstream") return "no upstream branch; nothing to sync"
   return "sync ok"

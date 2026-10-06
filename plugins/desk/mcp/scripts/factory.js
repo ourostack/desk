@@ -14,6 +14,7 @@
 //   node scripts/factory.js kaizen-check --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js andon --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js reconcile --desk <absolute desk root> --since <iso> --until <iso> [--store <directory>] [--person-prefix desks/<alias>]
+//   node scripts/factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]
 //
 // `account` names the signed-in GitHub account that can open intake pull
 // requests on the store, asking GitHub with each account's own token rather
@@ -39,7 +40,10 @@
 // store without that file tracks none. Both print their JSON result and exit
 // 1 when any card or issue failed, after checking the rest. `reconcile` compares
 // a desk's real task activity in a window with the factory's jobs and prints each
-// mismatch with a reason code (`src/factory/reconcile.js`); it only reads.
+// mismatch with a reason code (`src/factory/reconcile.js`); it only reads. `loop` is the
+// detached loop worker (`src/factory/loop-worker.js`, started by `hooks/loop-start.cjs`
+// at session start): it runs the improvement steps once and prints one line of codes
+// and integers, with no path, name or id in it.
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
@@ -59,7 +63,7 @@ import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
 import { factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -444,6 +448,20 @@ export async function runReconcileCommand({ argv, env, git = "git" }) {
   })
 }
 
+const LOOP_USAGE = "Usage: factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]"
+
+/** Runs `loop`: one run of the improvement steps for the desk and person given (`src/factory/loop-worker.js`); returns codes and integers only. `impls`, `pluginVersion` and the rest of `extra` are test seams. */
+export async function runLoopCommand({ argv, env, pluginVersion = deskVersion(), ...extra }) {
+  const options = parseOptions(argv)
+  const person = options?.get("person-prefix") ?? ""
+  if (options === null || [...options.keys()].some((key) => key !== "desk" && key !== "person-prefix") || (options.has("desk") && !path.isAbsolute(options.get("desk"))) || !/^(?:|desks\/[A-Za-z0-9][A-Za-z0-9._-]*)$/u.test(person)) {
+    throw new Error(LOOP_USAGE)
+  }
+  const { runLoopWorker } = await import("../src/factory/loop-worker.js")
+  const { impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl } = extra
+  return runLoopWorker(env, { deskRoot: options.get("desk") ?? null, personPrefix: person, pluginVersion, impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl })
+}
+
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
 export async function runConsentCommand({ argv, env }) {
   const options = parseOptions(argv)
@@ -482,6 +500,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       "kaizen-check": runKaizenCheckCommand,
       andon: runAndonCommand,
       reconcile: runReconcileCommand,
+      loop: runLoopCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)

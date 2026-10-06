@@ -28,7 +28,8 @@ var KNOWN_ABIS = { "16": "93", "17": "102", "18": "108", "19": "111", "20": "115
 var TOOL_NAMES = [
   "task_create", "task_update", "task_archive", "task_move", "task_focus", "task_signoff", "track_create", "track_update", "track_rename", "friction_add", "lesson_add", "desk_save",
   "desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread", "desk_reindex",
-  "desk_status", "desk_doctor"
+  "desk_status", "desk_doctor",
+  "improvement_open", "improvement_next", "improvement_update"
 ];
 var ANSWERING_TOOLS = ["desk_status", "desk_doctor"];
 var FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];

@@ -33,10 +33,9 @@
 //   1. factory: whether the bound desk's store has a consent decision, and a
 //      detached `factory.js finalize` for finished jobs whose facts are not
 //      delivered yet (mcp/src/factory/boot-check.js);
-//   2. labels: finished jobs whose waste labels are not complete yet, and a
-//      detached `factory.js evaluate --pending` that prepares their evaluator
-//      briefs again, and finished jobs whose labels are quarantined and will
-//      not be delivered, reported without a repair
+//   2. labels: what the plugin's own evaluator is doing about the finished jobs
+//      whose waste labels are not complete yet, and the finished jobs whose
+//      labels are quarantined, as status lines and never a repair
 //      (mcp/src/factory/boot-check.js);
 //   3. andon: the open andon issues the last start-time refresh recorded for
 //      each contributing store, one line per store, without a repair
@@ -51,11 +50,16 @@
 //      (spec §5) is actually registered in this plugin's own hooks.json or
 //      copilot-hooks.json, reported as a Desk problem: block when it is not
 //      (mcp/src/runtime/host-enforcement-registration.js). A no-op on every
-//      other host -- Codex has no boot-check registry wired in Desk at all.
+//      other host -- Codex has no boot-check registry wired in Desk at all;
+//   7. improvement: the open improvement cards and the oldest one's age, or an
+//      unreadable card folder, as one status line, without a repair
+//      (mcp/src/factory/boot-check.js). The labels, andon and improvement
+//      checks say nothing in a noninteractive session and read the cards once.
 //
 // `startFactory` starts factory-start.cjs (sweep, then flush and refresh andon
-// for every consented store) detached; the hooks call it after their output
-// is built, and only when a store has `contribute: true`.
+// for every consented store) detached, and then loop-start.cjs (the loop worker's
+// launcher); the hooks call it after their output is built, and only when a
+// store has `contribute: true`.
 //
 // The hook runs in whatever `node` the host puts first on PATH, so all of
 // this keeps to what Node 16 has, and the boot path never searches for a
@@ -73,6 +77,8 @@ const { pathToFileURL } = require("node:url");
 // Loaded only by the detached launchers, never on the boot path.
 const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
 const runtime = (name) => import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", name)).href);
+// A headless evaluator session hears nothing from the boot checks and starts nothing (mcp/src/factory/headless-flag.js).
+const isHeadless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
 // Set on the repair a launcher re-executes in a compatible Node, so it runs the repair itself.
 const REPAIR_NODE_ENV = "DESK_TIDY_REPAIR_NODE";
 // The launcher may spend the bootstrap's full probe budget: nothing waits on it.
@@ -332,25 +338,76 @@ const factoryCheck = {
   },
 };
 
+/**
+ * The improvement cards, read once for the checks of one start and kept in `ctx.shared`: null when no desk is bound.
+ * The read carries no deadline of its own, so one check's budget never spoils the answer for the next; each check then
+ * keeps to its own deadline with `withinDeadline`.
+ */
+function improvementCards(ctx) {
+  ctx.shared.improvement ??= (async () => {
+    const root = await boundRoot(ctx);
+    if (!root) return null;
+    const [{ improvementBootCheck }, { improvementPerson }] = await Promise.all([runtime("factory/boot-check.js"), runtime("desk/improvement-person.js")]);
+    // The person the Desk tools resolve, from what is known without a network call; a crew desk whose person is not known is said, never read as empty.
+    const who = await improvementPerson({ deskRoot: root, env: ctx.env, now: Date.now() }).catch(() => ({ status: "unresolved", reason: "invalid_member" }));
+    if (who.status !== "ok") return { status: "unchecked", reason: who.reason };
+    return improvementBootCheck({ deskRoot: root, personPrefix: who.personPrefix, env: ctx.env, now: Date.now() });
+  })();
+  return ctx.shared.improvement;
+}
+
+function withinDeadline(ctx) {
+  if (performance.now() >= ctx.deadline) throw Object.assign(new Error("improvement cards read past the check's deadline"), { code: "boot_check_budget" });
+}
+
+// No line in a session with no operator in it (a headless factory session, an unattended or CI run), and none of these lines starts a repair:
+// the plugin runs the evaluator itself.
 const labelsCheck = {
   id: "labels",
-  budgetMs: 40,
+  budgetMs: 60,
   async run(ctx) {
-    const { labelsBootCheck, labelsLine, labelsQuarantinedLine } = await runtime("factory/boot-check.js");
-    const { count, quarantined } = labelsBootCheck({ env: ctx.env });
-    const lines = [...(count > 0 ? [labelsLine(count)] : []), ...(quarantined > 0 ? [labelsQuarantinedLine(quarantined)] : [])];
-    if (lines.length === 0) return {};
-    return { line: lines.join("; "), repair: count > 0 ? { command: compatibleCommand(FACTORY_SCRIPT, "evaluate", "--pending") } : undefined };
+    const [{ isNoninteractive }, { labelsBootCheck, labelsLine, labelsQuarantinedLine, cardOpenState, loopWorkerLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    if (isNoninteractive(ctx.env)) return {};
+    const labels = labelsBootCheck({ env: ctx.env });
+    // Where the loop worker's last run was not a normal one, the line says so even when no label waits.
+    const worker = loopWorkerLine({ env: ctx.env });
+    if (labels.count === 0 && labels.quarantined === 0) return worker === "" ? {} : { line: worker };
+    const cards = await improvementCards(ctx);
+    withinDeadline(ctx);
+    const lines = [
+      ...(labels.count > 0 ? [labelsLine(labels, { cardOpen: cardOpenState(cards, "loop_alarm:headless_blocked") })] : []),
+      ...(labels.quarantined > 0 ? [labelsQuarantinedLine(labels.quarantined, { cardOpen: cardOpenState(cards, "loop_alarm:labels_quarantined") })] : []),
+    ];
+    return { line: [...lines, ...(worker === "" ? [] : [worker])].join("; ") };
   },
 };
 
 const andonCheck = {
   id: "andon",
-  budgetMs: 20,
+  budgetMs: 30,
   async run(ctx) {
-    const { andonBootCheck, andonLine } = await runtime("factory/boot-check.js");
+    const [{ isNoninteractive }, { andonBootCheck, andonLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    if (isNoninteractive(ctx.env)) return {};
     const found = andonBootCheck({ env: ctx.env });
-    return found.length === 0 ? {} : { line: found.map(({ store, issues }) => andonLine(store, issues)).join("; ") };
+    if (found.length === 0) return {};
+    const cards = await improvementCards(ctx);
+    withinDeadline(ctx);
+    const openKeys = cards === null || cards.status !== "ok" ? null : cards.open_keys;
+    return { line: found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true })).join("; ") };
+  },
+};
+
+// The open improvement cards, or an unreadable card folder said out loud; nothing when no desk is bound or no card is open.
+const improvementCheck = {
+  id: "improvement",
+  budgetMs: 80,
+  async run(ctx) {
+    const [{ isNoninteractive }, { improvementLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    if (isNoninteractive(ctx.env)) return {};
+    const cards = await improvementCards(ctx);
+    withinDeadline(ctx);
+    const line = improvementLine(cards);
+    return line === "" ? {} : { line };
   },
 };
 
@@ -474,6 +531,7 @@ async function runBootChecks(options = {}) {
     spawnGit = spawnSync,
   } = options;
   const env = options.env ?? process.env;
+  if (isHeadless(env)) return "";
   // The real time every check took, charged against the total budget.
   let used = 0;
   const shared = {};
@@ -644,10 +702,20 @@ async function migrationLine({ host, env = process.env, sessionFolder, budgetMs,
 /** Starts factory-start.cjs detached when a store has `contribute: true`; resolves whether it started. Never rejects. */
 async function startFactory({ env = process.env, launch = launchCommand } = {}) {
   try {
+    if (isHeadless(env)) return false;
     const { hasContributingStore } = await runtime("factory/boot-check.js");
     if (!hasContributingStore(env)) return false;
-    await launch(compatibleCommand(path.join(__dirname, "factory-start.cjs")), env);
-    return true;
+    let delivery = false;
+    try {
+      await launch(compatibleCommand(path.join(__dirname, "factory-start.cjs")), env);
+      delivery = true;
+    } catch { /* the loop worker below does not wait on delivery */ }
+    // The loop worker (loop-start.cjs) starts after delivery, in its own detached process; neither start depends on the other. Switched off, it starts nothing at all.
+    // Session start writes nothing for the off switch: the session-start line reads it from the environment, and the health record reads it when it is next written.
+    if (require("../mcp/src/factory/loop-switch.cjs").isLoopEnabled(env)) {
+      try { await launch(compatibleCommand(path.join(__dirname, "loop-start.cjs")), env); } catch { /* the loop retries at the next session start */ }
+    }
+    return delivery;
   } catch {
     return false;
   }
@@ -765,9 +833,9 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 module.exports = {
-  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck],
-  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck,
-  runBootChecks, startFactory, migrationLine, launchCommand, recordSkipped,
+  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck, improvementCheck],
+  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck, improvementCheck,
+  runBootChecks, startFactory, boundRoot, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };
 

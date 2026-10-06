@@ -155,6 +155,16 @@ async function route(env, deskRoot) {
   return recorded.length === 0 ? undefined : recorded[0].routing.store
 }
 
+/**
+ * `fingerprintOf(env, { plugin, frictionClass, title }) -> Promise<string>`: the 32 hex the filer embeds in a card's
+ * marker (an HMAC under this machine's secret of the plugin, the class and the normalized title). Rejects when the
+ * factory state cannot give the secret.
+ */
+export async function fingerprintOf(env, { plugin, frictionClass, title }) {
+  const secret = await readMachineSecret(env)
+  return createHmac("sha256", secret).update(`${plugin}\n${frictionClass}\n${normalizeTitle(title)}`).digest("hex").slice(0, 32)
+}
+
 async function recentFilings(env, store, now) {
   const filed = (await readStatus(env)).kaizen_filed ?? {}
   const times = Array.isArray(filed[store]) ? filed[store].filter((at) => typeof at === "string" && now - Date.parse(at) < DAY_MS) : []
@@ -190,8 +200,7 @@ export async function fileKaizenCard(env, { deskRoot, title, body, plugin = "des
       const local = await readJobsIndex(env)
       if (evidenceJobs.some((job) => Object.hasOwn(local, job))) return { result: "evidence_jobs_local", store }
     }
-    const secret = await readMachineSecret(env)
-    const fingerprint = createHmac("sha256", secret).update(`${plugin}\n${frictionClass}\n${normalizeTitle(title)}`).digest("hex").slice(0, 32)
+    const fingerprint = await fingerprintOf(env, { plugin, frictionClass, title })
     const card = open ? publicCard({ plugin, frictionClass, signal, evidenceJobs, fingerprint }) : privateCard({ title, body, plugin, signal, evidenceJobs, fingerprint })
     if (!isGeneric(card.title) || (!open && !isGeneric(body))) return { result: "not_generic", store }
     const marker = `${FINGERPRINT_PREFIX}${fingerprint} -->`
@@ -208,3 +217,4 @@ export async function fileKaizenCard(env, { deskRoot, title, body, plugin = "des
     throw error
   }
 }
+export { route as storeFor }

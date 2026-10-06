@@ -25,6 +25,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import {
   clearEvaluationRequest,
+  expireEvaluationRequest,
   factoryStateRoot,
   listEvaluationRequests,
   quarantine,
@@ -485,7 +486,10 @@ test("pending requests are cleared when complete and quarantined when expired or
   assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION })).jobs.map((job) => job.result), ["no_sessions", "no_sessions"])
   const later = Date.parse(first.requested_at) + 31 * 24 * 60 * 60 * 1000
   assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION, now: later })).jobs.map((job) => job.result), ["expired", "expired"])
-  assert.equal(JSON.parse(await fs.readFile(path.join(root, "evaluate-requests", "quarantine", `${JOB}.json`), "utf8")).reason, "expired")
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "evaluate-requests", "expired", `${JOB}.json`), "utf8")).reason, "expired")
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "evaluate-requests", "expired", `${other}.json`), "utf8")).reason, "expired")
+  await assert.rejects(fs.stat(path.join(root, "evaluate-requests", "quarantine", `${JOB}.json`)), "an expired request is not in the unread quarantine folder")
+  assert.deepEqual(await listEvaluationRequests(env), [], "an expired request is no longer waiting")
 
   await requestEvaluation(env, { job: JOB, deskRoot })
   await setConsent(env, { store: STORE, contribute: false })
@@ -501,6 +505,7 @@ test("pending requests are cleared when complete and quarantined when expired or
   assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION })).jobs, [{ result: "complete", job: JOB, briefs: [] }])
   assert.deepEqual(await listEvaluationRequests(env), [])
   await assert.rejects(clearEvaluationRequest(env, JOB, "Not A Code"), /reason/u)
+  await assert.rejects(expireEvaluationRequest(env, "not a job"), /job/u)
 }))
 
 test("a session of another job in the index, or one that can never publish, is not counted", () => scratch(async (env) => {

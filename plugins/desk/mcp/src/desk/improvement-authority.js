@@ -1,0 +1,3 @@
+// The one wording of the standing authority an agent reads when it takes an improvement card.
+// It lives in its own file with no imports, so session start can say it without loading the tool module and its database.
+export const AUTHORITY = "This card is standing, pre-authorized work. Decide and fix under the desk's own rules: open the pull request, run the checks, and merge where the repository lets you merge and the desk's instructions say to. Ask the operator only for a true gate: spending money on their payment methods, credentials or accounts only they can act in, or an irreversible destructive action. Record every ruling in the countermeasure pull request; the card links to it."

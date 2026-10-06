@@ -29,6 +29,12 @@ const boot = () => {
 }
 const DAY = 24 * 60 * 60 * 1000
 
+// A session start in an ordinary interactive session, whatever runs the tests (a CI runner sets CI; a headless Claude run sets the entry point).
+const interactive = (env) => {
+  const clean = { ...env }
+  for (const name of ["CI", "GITHUB_ACTIONS", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED", "DESK_FACTORY_HEADLESS"]) delete clean[name]
+  return clean
+}
 const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
 const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 
@@ -36,8 +42,8 @@ const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 // The registry.
 // ---------------------------------------------------------------------------
 
-test("the registry runs its checks in order: factory, then labels, then desk-health, then workspace-tidy, then host-enforcement", () => {
-  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy", "host-enforcement", "hook-dependencies"])
+test("the registry runs its checks in order: factory, then labels, then desk-health, then workspace-tidy, then host-enforcement, then hook-dependencies, then improvement", () => {
+  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy", "host-enforcement", "hook-dependencies", "improvement"])
   assert.equal(boot().TOTAL_BUDGET_MS, 300)
   assert.ok(boot().checks.every((entry) => entry.budgetMs <= 300))
 })
@@ -244,9 +250,10 @@ test("the factory check starts one detached finalize for finished jobs whose fac
   assert.deepEqual(none, repairs, "a pending request is finalized whatever person prefix the task tools bound it under")
 }))
 
-test("the labels check names how many finished tasks have no waste labels and starts evaluate --pending", () => scratch(async ({ env, desk }) => {
+test("the labels check names how many finished jobs wait for labels and what the plugin is doing, and starts nothing", () => scratch(async ({ env, desk }) => {
   const { runBootChecks, labelsCheck } = boot()
   const repairs = []
+  env = interactive(env)
   const run = (options = {}) => runBootChecks({ ...quiet, host: "claude", env, checks: [labelsCheck], checkBudgets: { labels: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command), ...options })
   // No consent, or nothing retained: silent, and no factory state is created.
   assert.equal(await run(), "")
@@ -256,17 +263,17 @@ test("the labels check names how many finished tasks have no waste labels and st
   await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
   await requestEvaluation(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", deskRoot: desk })
   await fs.writeFile(path.join(await factoryStateRoot(env), "evaluate-requests", "notes.txt"), "x")
-  assert.equal(await run(), "Desk boot pre-checks: Factory: 2 finished tasks have no waste labels yet; run the evaluator for them in the background")
-  assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", path.join(PLUGIN, "mcp", "scripts", "factory.js"), "evaluate", "--pending"]], "evaluate --pending starts through the compatible-Node launcher")
+  assert.equal(await run(), "Desk boot pre-checks: Factory evaluator: 2 finished jobs wait for labels (oldest 0 days); the plugin labels them in the background, no result recorded yet")
+  assert.deepEqual(repairs, [], "the plugin runs the evaluator itself: the boot check starts no repair")
   // Labels quarantined with their facts are reported, and a job whose every session is held back is not counted as waiting.
   const root = await factoryStateRoot(env)
   await indexJob(env, "5e6f708192a3b4c5d6e7f8091a2b3c4d", "claude-code-00000001-0000-4000-8000-000000000001.json")
   await quarantine(env, STORE, "labels/5e6f708192a3b4c5d6e7f8091a2b3c4d/00000001-0000-4000-8000-000000000001.json", "facts_quarantined", { facts: "claude-code-00000001-0000-4000-8000-000000000001.json" })
-  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background; Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+  assert.equal(await run(), "Desk boot pre-checks: Factory evaluator: 1 finished job waits for labels (oldest 0 days); the plugin labels them in the background, no result recorded yet; Factory: 1 finished job has quarantined waste labels; no card is open for it yet")
   // Quarantined labels alone are reported without a repair.
   await fs.rm(path.join(root, "evaluate-requests", "9f2c4b1a7d3e5f60718293a4b5c6d7e8.json"))
   repairs.length = 0
-  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 finished job has quarantined waste labels; no card is open for it yet")
   assert.deepEqual(repairs, [])
   // A declined store keeps the check silent.
   await setConsent(env, { store: STORE, contribute: false, account: "contributor" })
@@ -318,12 +325,13 @@ test("startFactory starts factory-start.cjs detached only when a store has contr
   assert.equal(await startFactory({ env, launch }), false)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   assert.equal(await startFactory({ env, launch }), true)
-  assert.deepEqual(launched.map((entry) => entry.command), [[process.execPath, BOOT, "--compatible", START]], "delivery starts through the compatible-Node launcher")
+  assert.deepEqual(launched.map((entry) => entry.command), [[process.execPath, BOOT, "--compatible", START], [process.execPath, BOOT, "--compatible", path.join(HOOKS, "loop-start.cjs")]], "delivery, then the loop worker's launcher, start through the compatible-Node launcher")
   assert.equal(launched[0].childEnv, env)
   assert.equal(await startFactory({ env, launch: async () => { throw new Error("spawn failed") } }), false)
 }))
 
-test("the andon check names each contributing store's open andon issues in one line, with no repair", () => scratch(async ({ env }) => {
+test("the andon check names each contributing store's open andon issues in one line, with no repair", () => scratch(async ({ env: raw }) => {
+  const env = interactive(raw)
   const { runBootChecks, andonCheck } = boot()
   const repairs = []
   const run = () => runBootChecks({ ...quiet, host: "claude", env, checks: [andonCheck], checkBudgets: { andon: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
@@ -332,7 +340,7 @@ test("the andon check names each contributing store's open andon issues in one l
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await setConsent(env, { store: "acme/work", contribute: true, account: "worker" })
   await writeStatus(env, { andon: { [STORE]: { checked_at: "2026-09-27T12:00:00.000Z", issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: "2026-09-27T12:00:00.000Z", issues: [] } } })
-  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 open andon issue in ourostack/factory (#41); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)")
+  assert.equal(await run(), "Desk boot pre-checks: Factory: 1 open andon issue in ourostack/factory (#41); it has no improvement card yet, and gets one at the next background step")
   assert.deepEqual(repairs, [])
 }))
 
