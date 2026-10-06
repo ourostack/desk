@@ -372,8 +372,8 @@ function checkpointClock({ exhaustedAtCheckpoint, exhaustedFromFirstStep = false
   let reached = 0
   const now = () => {
     const stack = new Error().stack
-    if (!stack.includes("remaining")) return 0
-    if (!stack.includes("budgetedTimeout")) {
+    if (!stack.includes("at remaining (")) return 0
+    if (!stack.includes("at budgetedTimeout (")) {
       reached += 1
       return reached >= exhaustedAtCheckpoint ? 999_999 : 0
     }

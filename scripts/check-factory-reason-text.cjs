@@ -6,8 +6,9 @@
 // `no_turn_records` and the store had no text for it. This check reads the store's text table (a shallow, read-only
 // fetch of site/src/format.js at main) and fails, naming each reason, when Desk can emit one the store does not carry.
 //
-// Exit codes: 0 every reason has text, or the store could not be read (reported as NOT CHECKED, never as passed);
-// 1 a reason has no text, or the store's file no longer has a reason table this check can read.
+// Exit codes: 0 every reason has text; 1 a reason has no text, the store could not be read (reported as NOT CHECKED:
+// unknown never passes, and the store lives on GitHub, so an unreachable store means CI is impaired anyway), or the
+// store's file no longer has a reason table this check can read.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -33,10 +34,21 @@ function compareReasons({ deskReasons, storeSource }) {
   return { state: "checked", missing: [...deskReasons].filter((reason) => !codes.has(reason)).sort() };
 }
 
-/** Every reason Desk can emit with display text of its own: the table the pipeline's reports and rollups read. */
+/**
+ * Every reason the store can be asked to display, from all of Desk's reason sources: the report's table (facts, report,
+ * outcome, label and attention-rollup reasons), the attention figure's own reasons and their text, and the published
+ * facts' `unavailableReason` enum. A new reason in any of them is checked. The store keeps all of these in one table
+ * (`REASON_TEXT` in site/src/format.js); its other word lists (refusal and return categories) are not reasons.
+ */
 async function deskReasonCodes(root) {
-  const report = await import(pathToFileURL(path.join(root, "plugins", "desk", "mcp", "src", "factory", "pipeline", "report.js")).href);
-  return Object.keys(report.REASON_TEXT);
+  const factory = (file) => import(pathToFileURL(path.join(root, "plugins", "desk", "mcp", "src", "factory", file)).href);
+  const [report, attention, schema] = await Promise.all([factory("pipeline/report.js"), factory("pipeline/attention.js"), factory("schema.js")]);
+  return [...new Set([
+    ...Object.keys(report.REASON_TEXT),
+    ...Object.keys(report.ATTENTION_REASON_TEXT),
+    ...attention.ATTENTION_REASONS,
+    ...schema.ENUMS.unavailableReason,
+  ])].sort();
 }
 
 /** The store's file text, or `{ error }` when it cannot be fetched after a few attempts. */
@@ -64,8 +76,8 @@ async function run({ env = process.env, root = repoRoot, fetchImpl, attempts, ti
   } else {
     const fetched = await fetchStoreSource({ url, fetchImpl, attempts, timeoutMs });
     if (fetched.error !== undefined) {
-      const message = `Factory store reason text NOT CHECKED: could not read ${url} (${fetched.error}). Desk's ${deskReasons.length} reasons were not compared with the store, so this is not a pass.`;
-      return { code: 0, lines: [`::warning title=Factory store reason text not checked::${message}`], summary: `## Factory store reason text: NOT CHECKED\n\n${message}\n` };
+      const message = `Factory store reason text NOT CHECKED: could not read ${url} (${fetched.error}). Desk's ${deskReasons.length} reasons were not compared with the store, so this is not a pass and the step fails.`;
+      return { code: 1, lines: [`::error title=Factory store reason text not checked::${message}`], summary: `## Factory store reason text: NOT CHECKED\n\n${message}\n` };
     }
     storeSource = fetched.source;
   }

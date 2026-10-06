@@ -7,19 +7,27 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { REASON_TEXT } from "../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { REASON_TEXT, ATTENTION_REASON_TEXT } from "../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { ATTENTION_REASONS } from "../../../../../plugins/desk/mcp/src/factory/pipeline/attention.js"
+import { ENUMS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
 const require = createRequire(import.meta.url)
 const check = require("../../../../../scripts/check-factory-reason-text.cjs")
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 
 const storeFile = (codes) => `(function () {\n  "use strict";\n  const REASON_TEXT = {\n${codes.map((code) => `    ${code}: "words for ${code}",\n`).join("")}    // a comment\n  };\n  function hasReasonText() {}\n})()\n`
-const all = Object.keys(REASON_TEXT)
+const all = [...new Set([...Object.keys(REASON_TEXT), ...Object.keys(ATTENTION_REASON_TEXT), ...ATTENTION_REASONS, ...ENUMS.unavailableReason])]
 
 test("the reasons the check reads from Desk are the ones Desk's reports carry, and there are some", async () => {
   const codes = await check.deskReasonCodes(repoRoot)
   assert.deepEqual(codes.sort(), [...all].sort())
   assert.ok(codes.includes("no_turn_records"))
+})
+
+test("the checked set holds every reason source: the report table, the attention reasons and their text, and the published facts enum", async () => {
+  const codes = new Set(await check.deskReasonCodes(repoRoot))
+  for (const reason of [...Object.keys(REASON_TEXT), ...Object.keys(ATTENTION_REASON_TEXT), ...ATTENTION_REASONS, ...ENUMS.unavailableReason]) assert.ok(codes.has(reason), `${reason} is checked`)
+  for (const reason of ["not_recorded", "desk_public", "host_does_not_record", "host_records_partly"]) assert.ok(codes.has(reason), `${reason} is checked`)
 })
 
 test("a store with text for every Desk reason passes", () => {
@@ -52,13 +60,13 @@ test("run passes only when every reason has text", async () => {
   assert.match(result.lines[0], /all \d+ Desk reasons have display text/u)
 })
 
-test("an unreachable store is reported as NOT CHECKED with a warning, never as a pass", async () => {
+test("an unreachable store fails the step and is reported as NOT CHECKED, never as a pass", async () => {
   let attempts = 0
   const down = async () => { attempts += 1; throw new Error("getaddrinfo ENOTFOUND") }
   const result = await check.run({ env: {}, root: repoRoot, fetchImpl: down, attempts: 2 })
   assert.equal(attempts, 2)
-  assert.equal(result.code, 0)
-  assert.match(result.lines[0], /^::warning .*NOT CHECKED.*ENOTFOUND.*not a pass/u)
+  assert.equal(result.code, 1)
+  assert.match(result.lines[0], /^::error .*NOT CHECKED.*ENOTFOUND.*not a pass/u)
   assert.match(result.summary, /NOT CHECKED/u)
   assert.doesNotMatch(result.summary, /checked\n/u)
   const refused = await check.run({ env: {}, root: repoRoot, fetchImpl: respond("", 503), attempts: 1 })
@@ -129,10 +137,10 @@ test("the command exits 1 and names the missing reason", () => withStoreFile(all
   assert.match(result.written, /FAILED.*no_turn_records/su)
 }))
 
-test("the command exits 0 with a NOT CHECKED warning when the store cannot be reached", () => {
+test("the command exits 1 with a NOT CHECKED error when the store cannot be reached", () => {
   const result = cli({ FACTORY_REASON_TEXT_URL: "http://127.0.0.1:1/format.js" })
-  assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /^::warning .*NOT CHECKED/u)
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stdout, /^::error .*NOT CHECKED/u)
   assert.match(result.written, /NOT CHECKED/u)
 })
 

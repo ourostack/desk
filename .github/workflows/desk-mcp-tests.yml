@@ -164,18 +164,31 @@ jobs:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         # A shard that has not finished after 10 minutes (a whole shard job takes about 2 to 3) is stuck, not slow. The
-        # watchdog prints what is still running and which test file each process belongs to, so a hang names its test
-        # instead of ending as a silent 30-minute timeout with no output. It stops the shard so the run fails there.
+        # shard runs in its own process group so the watchdog can stop exactly it and everything it started: it prints
+        # what is still running (the deepest node process names the test file that is not finishing), then signals
+        # that group and no other process. A stopped shard exits non-zero, so the run fails there with output.
         run: |
+          setsid npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard" &
+          shard=$!
           (
-            sleep 600
-            echo "::error title=Coverage shard ${SHARD} is stuck::still running after 10 minutes; the process tree follows, and the deepest node process names the test file that is not finishing."
-            ps -eo pid,ppid,etimes,stat,args --forest | cut -c1-400
-            pkill -TERM -P "$$" || true
+            sleep 600 & sleeper=$!
+            trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
+            wait "$sleeper"
+            echo "::error title=Coverage shard ${SHARD} is stuck::still running after 10 minutes; the process tree follows."
+            ps -eo pid,pgid,ppid,etimes,stat,args --forest | cut -c1-400
+            touch "$RUNNER_TEMP/shard-stuck"
+            kill -TERM -- "-$shard" 2>/dev/null || true
+            sleep 10
+            kill -KILL -- "-$shard" 2>/dev/null || true
           ) &
           watchdog=$!
-          trap 'kill "$watchdog" 2>/dev/null || true' EXIT
-          npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard"
+          status=0
+          wait "$shard" || status=$?
+          kill "$watchdog" 2>/dev/null || true
+          wait "$watchdog" 2>/dev/null || true
+          # A shard the watchdog stopped fails even if it exited 0 on the signal.
+          if [ -e "$RUNNER_TEMP/shard-stuck" ]; then exit 1; fi
+          exit "$status"
 
       # A failed shard still writes its manifest with its status, so it is uploaded too and the merge names it.
       - name: Retain the shard's raw coverage
@@ -243,7 +256,7 @@ jobs:
         run: node scripts/test-desk-docs.cjs
 
       # Every reason Desk can publish needs display text in the factory store, whose site build stops on one it has no words for.
-      # A store that cannot be reached is reported as not checked in the log and the job summary, never as a pass.
+      # A store that cannot be reached fails the step (summary: NOT CHECKED); unknown never passes.
       - name: Check the factory store has text for every Desk reason
         run: node scripts/check-factory-reason-text.cjs
 

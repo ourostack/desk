@@ -16,7 +16,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { REPEAT_TIMEOUT_THRESHOLD } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 import { protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
-import { processesWithCwdUnder, removeFixtureAfter, slowGit } from "../_process_hygiene.js"
+import { processesWithCwdUnder, reapProcessesUnder, removeFixtureAfter, slowGit } from "../_process_hygiene.js"
 
 const require = createRequire(import.meta.url)
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
@@ -174,4 +174,9 @@ test("the real hook process denies with the plain reason every time, and adds th
   // Git is signalled before the hook exits; the loop only waits for the OS to finish ending it, and has no bearing on what is asserted.
   for (let attempt = 0; attempt < 200 && (await stillRunning()).length > 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 50))
   assert.deepEqual(await stillRunning(), [])
+  // The only thing the hook may leave is the detached filer it started on purpose (a Node process, launched detached with ignored stdio and never awaited: "launchCommand starts detached with ignored stdio and never waits for the child" in factory/start_hook.test.js). Whatever remains is Node, and once reaped nothing replaces it: the hook is gone and spawned no second helper.
+  assert.ok(processesWithCwdUnder(f.root).every((entry) => /^node(?:\.exe)?$/u.test(entry.command)), JSON.stringify(processesWithCwdUnder(f.root)))
+  await reapProcessesUnder(f.root)
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.deepEqual(processesWithCwdUnder(f.root), [], "nothing is left after the filer is reaped, and nothing restarted it")
 })

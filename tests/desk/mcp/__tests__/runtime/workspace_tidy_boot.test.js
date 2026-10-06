@@ -204,7 +204,7 @@ cp.spawn = function(file, args, options) {
   return child;
 };
 require("node:module").syncBuiltinESMExports();
-require(${JSON.stringify(fileURLToPath(hookPath))}).runBootChecks = ((run) => options => run({...options, launch: async () => {}}))(require(${JSON.stringify(fileURLToPath(hookPath))}).runBootChecks);
+require(${JSON.stringify(fileURLToPath(hookPath))}).runBootChecks = ((run) => options => run({...options, launch: async () => {}, totalBudgetMs: 60000, checkBudgets: {"workspace-tidy": 60000}}))(require(${JSON.stringify(fileURLToPath(hookPath))}).runBootChecks);
 // Only the tidy check's inspection is under test here; Desk's migration check has its own budget and tests.
 require(${JSON.stringify(fileURLToPath(hookPath))}).migrationLine = async () => "";
 process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.stringify({born, exited:Date.now(), children})));
@@ -222,7 +222,8 @@ process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.strin
   const timing = JSON.parse(await fs.readFile(proof, "utf8"))
   assert.equal(timing.children.length, 1)
   assert.ok(timing.children.every((entry) => entry.closed), "every exact owned child closed")
-  // The stand-in child never exits by itself, so it can only have closed because the hook cancelled it, and the hook can only have exited because it stopped waiting for it. No wall-clock bound: a loaded machine slows process start, not the cancellation.
+  // The stand-in child never exits by itself, so it can only have closed because the hook cancelled it. The whole-check budget and the check's own budget are lifted to 60 s in the hook process (the preload above), so neither can have ended it: only the inspection's own cancellation, which is the subject, is left. No wall-clock bound: a loaded machine slows process start, not the cancellation.
+  assert.ok(timing.exited - timing.born < 60000, "the hook ended before the lifted budgets, so the inspection's own cancellation ended the child")
   for (const entry of timing.children) assert.throws(() => process.kill(entry.pid, 0), { code: "ESRCH" })
 })
 
