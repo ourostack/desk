@@ -145,7 +145,7 @@ test("a lost readiness controller is re-elected in the background by the survivi
   assert.equal(search.isError, false)
   const write = await second.call("task_create", { track: "ops", slug: "after-owner-loss", title: "Survivor write" })
   assert.equal(write.isError, false, JSON.stringify(write.payload))
-  assert.equal((await second.statusUntil((payload) => payload.state === "ready")).readiness.state !== "unavailable", true)
+  assert.equal((await second.statusUntil((payload) => payload.state === "ready" && payload.readiness)).readiness.state !== "unavailable", true)
 })
 
 test("a deliberate git switch mid-session stays put: writes go read-only with the doctor fix, and switching back restores ready", async (t) => {
