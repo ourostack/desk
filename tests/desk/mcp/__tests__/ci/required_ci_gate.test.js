@@ -70,7 +70,7 @@ test("only a deploy key may push past the ruleset, and a repository admin may by
 test("the release push job reads the deploy key from the release environment, in a step of its own", () => {
   const { jobs } = workflow("desk-release.yml")
   assert.equal(jobs.push.environment, "release")
-  const holders = jobs.push.steps.filter((step) => JSON.stringify(step).includes("DESK_RELEASE_DEPLOY_KEY"))
+  const holders = jobs.push.steps.filter((step) => JSON.stringify(step.env ?? {}).includes("DESK_RELEASE_DEPLOY_KEY"))
   assert.deepEqual(holders.map((step) => step.name), ["Write the deploy key"])
   const push = jobs.push.steps.find((step) => step.name === "Verify and push the release")
   assert.match(push.run, /trap 'rm -f "\$key"' EXIT/u)
