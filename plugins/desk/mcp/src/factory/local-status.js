@@ -271,8 +271,8 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
 function machineSecretOrNull(dir) {
   const file = path.join(dir, "machine-secret")
   try {
-    const stat = lstatSync(file)
-    if (!stat.isFile() || stat.size !== 32) return null
+    // A link (or anything but a plain file) is never followed; the size is checked on the bytes actually read.
+    if (!lstatSync(file).isFile()) return null
     const bytes = readFileSync(file)
     return bytes.length === 32 ? new Uint8Array(bytes) : null
   } catch {
