@@ -148,11 +148,22 @@ function fail(label, message) {
 }
 
 /**
+ * One environment variable by name, ignoring case. Windows names variables without regard to case, but a plain object
+ * copy of `process.env` does not, and Git Bash hands a child `SYSTEMROOT` where the Windows shell hands `SystemRoot`.
+ */
+export function windowsEnvironmentValue(env, name) {
+  if (typeof env[name] === "string") return env[name]
+  const wanted = name.toLowerCase()
+  const found = Object.keys(env).find((key) => key.toLowerCase() === wanted && typeof env[key] === "string")
+  return found === undefined ? undefined : env[found]
+}
+
+/**
  * Resolve the operating system's own ACL provider, or fail before the caller
  * creates anything. Returns the absolute provider path.
  */
 export function assertWindowsAclAvailable({ env = process.env, label = DEFAULT_LABEL } = {}) {
-  const systemRoot = typeof env.SystemRoot === "string" ? env.SystemRoot.trim() : ""
+  const systemRoot = (windowsEnvironmentValue(env, "SystemRoot") ?? "").trim()
   if (systemRoot === "") {
     fail(
       label,

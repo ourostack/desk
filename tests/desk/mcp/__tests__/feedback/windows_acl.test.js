@@ -22,6 +22,7 @@ import {
   assertWindowsAclAvailable,
   protectWindowsPaths,
 } from "../../../../../plugins/desk/mcp/src/feedback/windows-acl.js"
+import { windowsEnvironmentValue } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 import { nativeProbe, writePosixNodeProvider } from "./_helpers.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
@@ -80,6 +81,20 @@ test("assertWindowsAclAvailable resolves the fixed provider under SystemRoot", a
   try {
     const providerPath = await mkProvider(base, ECHO_PROVIDER)
     assert.equal(assertWindowsAclAvailable({ env: { SystemRoot: base } }), providerPath)
+  } finally {
+    await fs.rm(base, { recursive: true, force: true })
+  }
+})
+
+test("assertWindowsAclAvailable finds SystemRoot under any capitalization, as a Git Bash child's copied environment spells it", async () => {
+  const base = await mkBase()
+  try {
+    const providerPath = await mkProvider(base, ECHO_PROVIDER)
+    for (const name of ["SYSTEMROOT", "systemroot", "SystemRoot"]) {
+      assert.equal(assertWindowsAclAvailable({ env: { [name]: base } }), providerPath, name)
+    }
+    assert.equal(windowsEnvironmentValue({ Path: "x" }, "PATH"), "x")
+    assert.equal(windowsEnvironmentValue({ PATH: 1 }, "Path"), undefined)
   } finally {
     await fs.rm(base, { recursive: true, force: true })
   }

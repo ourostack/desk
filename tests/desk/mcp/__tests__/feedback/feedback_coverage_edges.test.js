@@ -5,6 +5,7 @@ import path from "node:path"
 import { protectWindowsPaths } from "../../../../../plugins/desk/mcp/src/feedback/windows-acl.js"
 import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { mkFeedbackFixture, writePosixNodeProvider, cleanup } from "./_helpers.js"
+import { osEnv } from "../_os_env.js"
 
 const posix = { skip: process.platform === "win32" ? "POSIX stand-in and permission-race witnesses" : false }
 
@@ -35,7 +36,7 @@ process.stdout.write(JSON.stringify({ status: "ok", results: request.paths.map(e
 test("a real SQLite constructor failure after file inspection never reaches the store callback", posix, async (t) => {
   const fixture = await mkFeedbackFixture()
   t.after(() => cleanup(fixture.base))
-  const binding = { deskRoot: fixture.deskRoot, env: { XDG_STATE_HOME: fixture.stateHome } }
+  const binding = { deskRoot: fixture.deskRoot, env: osEnv({ XDG_STATE_HOME: fixture.stateHome }) }
   const { dbPath } = await resolvePrivateStore(binding)
   const chmod = fs.chmod.bind(fs)
   let raced = false
@@ -71,7 +72,7 @@ test("an explicit plugin root supplies the preview version the entry records", a
   await fs.writeFile(path.join(pluginRoot, "plugin.json"), `${JSON.stringify({ name: "desk", version: "9.9.9-fixture" }, null, 2)}\n`, "utf8")
 
   const captured = await withPrivateStore(
-    { deskRoot: fixture.deskRoot, person: "rowan", pluginRoot, env: { XDG_STATE_HOME: fixture.stateHome } },
+    { deskRoot: fixture.deskRoot, person: "rowan", pluginRoot, env: osEnv({ XDG_STATE_HOME: fixture.stateHome }) },
     (store) => store.capture({ text: "an explicitly bound preview note", taskRef: null }),
   )
 

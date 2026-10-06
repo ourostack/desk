@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { assertActionable, firstSentence } from "./_guard_text.js"
 import { fixture } from "./_guard_fixture.js"
 import { askGateHook } from "../../../../../plugins/desk/mcp/src/runtime/ask-gate.js"
@@ -86,7 +86,7 @@ test("every denial the guard builds for a real command opens with the fix, in Ba
 })
 
 test("the hook's own denials (the 9 s deadline and a crash) open with the fix", async () => {
-  const { deadlineDecision } = await import(path.join(hooks, "protected-checkout.cjs"))
+  const { deadlineDecision } = await import(pathToFileURL(path.join(hooks, "protected-checkout.cjs")).href)
   const { decision } = await deadlineDecision({ rawInput: JSON.stringify({ tool_input: { command: "git status" } }), host: "claude", deadlineMs: 1, env: { ...process.env, DESK_STATE_DIR: mkdtempSync(path.join(tmpdir(), "lint-deadline-")) } })
   assertActionable(assert, decision.permissionDecisionReason, "deadline")
   const crashed = spawnSync(process.execPath, [path.join(hooks, "protected-checkout.cjs"), "claude"], { input: "not json", encoding: "utf8" })

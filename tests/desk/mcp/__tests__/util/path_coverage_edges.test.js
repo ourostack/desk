@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { syncBuiltinESMExports } from "node:module"
-import { isPathContained, resolveDeskRootWithSource, resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { deskRelativePath, isPathContained, resolveDeskRootWithSource, resolveWriteTarget, toDeskPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 async function temporaryRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-path-coverage-"))
@@ -99,4 +99,10 @@ test("confinement rejects the actual win32 cross-drive relative result on any te
     t.mock.restoreAll()
     syncBuiltinESMExports()
   }
+})
+
+test("desk paths are spelled with / whatever the platform's separator is", () => {
+  assert.equal(toDeskPath("track\\task\\task.md", "\\"), "track/task/task.md")
+  assert.equal(toDeskPath("track/task/task.md", "/"), "track/task/task.md")
+  assert.equal(deskRelativePath(path.join(path.sep, "desk"), path.join(path.sep, "desk", "a", "b.md")), "a/b.md")
 })

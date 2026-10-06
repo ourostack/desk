@@ -34,6 +34,7 @@ import {
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { factoryStateRoot, readConsent, setConsent, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
+import { osEnv } from "../_os_env.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
@@ -41,7 +42,7 @@ const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
 async function scratch(run) {
   const rawBase = mkdtempSync(path.join(os.tmpdir(), "desk-factory-cli-"))
   const base = await fs.realpath(rawBase)
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   try {
     return await run(env)
   } finally {

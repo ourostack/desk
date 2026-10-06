@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { today } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
+import { osEnv } from "../_os_env.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -237,7 +238,7 @@ test("friction_add rejects malformed system friction before writing anything", a
 
 test("friction_add with file_card uses the factory's filer by default, which files nothing without a known route", async () => {
   const root = await mkTempDeskRoot()
-  const env = { HOME: root, XDG_STATE_HOME: path.join(path.dirname(root), `${path.basename(root)}-state`) }
+  const env = osEnv({ HOME: root, XDG_STATE_HOME: path.join(path.dirname(root), `${path.basename(root)}-state`) })
   const result = await friction_add({ deskRoot: root, input: { about: "system", file_card: true, title: "A generic title", body: "The friction." }, env })
   assert.equal(result.kaizen, "route_unknown")
 })

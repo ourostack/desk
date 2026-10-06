@@ -19,6 +19,7 @@ import { resolveProtectedStore, withProtectedStore } from "../../../../../plugin
 import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/factory/test-state-guard.js"
 import { mkFakeRealRoot } from "../_fake_real_root.js"
 import { cleanup, mkFeedbackFixture as mkStoreFixture } from "../feedback/_helpers.js"
+import { osEnv } from "../_os_env.js"
 
 // These cases are about POSIX store layout, refusals, journalling and message
 // parity — not about macOS extended-ACL mechanics, which no assertion here
@@ -59,7 +60,7 @@ function expectedPartition(realDeskRoot, alias) {
 test("the extracted primitive keeps the feedback store exactly where it already was", async () => {
   const fixture = await mkStoreFixture()
   try {
-    const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome })
     const viaFeedback = await resolvePrivateStore({
       deskRoot: fixture.deskRoot,
       person: "rowan",
@@ -96,7 +97,7 @@ test("the extracted primitive keeps the feedback store exactly where it already 
 test("a second store gets its own namespace, never the feedback database", async () => {
   const fixture = await mkStoreFixture()
   try {
-    const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome })
     const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: POSIX_PLATFORM }
     const feedback = await resolveProtectedStore({ ...binding, ...FEEDBACK })
     const second = await resolveProtectedStore({ ...binding, ...SECOND })
@@ -113,7 +114,7 @@ test("a second store gets its own namespace, never the feedback database", async
 test("each binding gets its own partition and one binding cannot address another", async () => {
   const fixture = await mkStoreFixture()
   try {
-    const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome })
     const base = { deskRoot: fixture.deskRoot, env, platform: POSIX_PLATFORM, ...SECOND }
     const rowan = await resolveProtectedStore({ ...base, person: "rowan" })
     const quinn = await resolveProtectedStore({ ...base, person: "quinn" })
@@ -134,7 +135,7 @@ test("each binding gets its own partition and one binding cannot address another
 test("the primitive creates owner-only directories and an owner-only database", async () => {
   const fixture = await mkStoreFixture()
   try {
-    const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome })
     const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: process.platform }
     const opened = await withProtectedStore(
       { ...binding, ...SECOND, schemaSql: "CREATE TABLE IF NOT EXISTS probe (id TEXT PRIMARY KEY);" },
@@ -164,7 +165,7 @@ test("the primitive refuses a state home inside a Git checkout", async () => {
         resolveProtectedStore({
           deskRoot: fixture.deskRoot,
           person: "rowan",
-          env: { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome },
+          env: osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }),
           platform: POSIX_PLATFORM,
           ...SECOND,
         }),
@@ -183,7 +184,7 @@ test("the primitive refuses to write a private store inside the desk workspace",
         resolveProtectedStore({
           deskRoot: fixture.deskRoot,
           person: "rowan",
-          env: { HOME: fixture.base, XDG_STATE_HOME: path.join(fixture.deskRoot, "state") },
+          env: osEnv({ HOME: fixture.base, XDG_STATE_HOME: path.join(fixture.deskRoot, "state") }),
           platform: POSIX_PLATFORM,
           ...SECOND,
         }),
@@ -205,7 +206,7 @@ test("under a node:test run, the primitive refuses a real (non-temp) state home 
         resolveProtectedStore({
           deskRoot: fixture.deskRoot,
           person: "rowan",
-          env: { HOME: fixture.base, XDG_STATE_HOME: path.join(fakeReal, "state") },
+          env: osEnv({ HOME: fixture.base, XDG_STATE_HOME: path.join(fakeReal, "state") }),
           platform: POSIX_PLATFORM,
           ...SECOND,
         }),
@@ -221,7 +222,7 @@ test("under a node:test run, the primitive refuses a real (non-temp) state home 
 test("the primitive refuses a symlinked path component and a hard-linked database", async () => {
   const fixture = await mkStoreFixture()
   try {
-    const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome })
     const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: POSIX_PLATFORM, ...SECOND }
     const { storeDir, dbPath } = await resolveProtectedStore(binding)
 
@@ -256,7 +257,7 @@ test("the primitive refuses a symlinked path component and a hard-linked databas
 test("the primitive opens the database with DELETE journalling and secure_delete", async () => {
   const fixture = await mkStoreFixture()
   try {
-    const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome })
     const pragmas = await withProtectedStore(
       {
         deskRoot: fixture.deskRoot,
@@ -294,7 +295,7 @@ test("the primitive closes the database even when the body throws", async () => 
     const binding = {
       deskRoot: fixture.deskRoot,
       person: "rowan",
-      env: { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome },
+      env: osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }),
       platform: process.platform,
       ...SECOND,
       schemaSql: "CREATE TABLE IF NOT EXISTS probe (id TEXT PRIMARY KEY);",
@@ -335,7 +336,7 @@ const FEEDBACK_MESSAGES = {
 test("extraction leaves every desk_feedback protection message byte-for-byte unchanged", async () => {
   const fixture = await mkStoreFixture()
   try {
-    const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome })
     const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: POSIX_PLATFORM }
     const { storeDir, dbPath } = await resolvePrivateStore(binding)
 
@@ -387,7 +388,7 @@ test("extraction leaves the desk_feedback Git and workspace refusals byte-for-by
         resolvePrivateStore({
           deskRoot: fixture.deskRoot,
           person: "rowan",
-          env: { HOME: fixture.base, XDG_STATE_HOME: insideWorkspace },
+          env: osEnv({ HOME: fixture.base, XDG_STATE_HOME: insideWorkspace }),
           platform: POSIX_PLATFORM,
         }),
       (error) => {
@@ -408,7 +409,7 @@ test("extraction leaves the desk_feedback Git and workspace refusals byte-for-by
           resolvePrivateStore({
             deskRoot: gitFixture.deskRoot,
             person: "rowan",
-            env: { HOME: gitFixture.base, XDG_STATE_HOME: gitFixture.stateHome },
+            env: osEnv({ HOME: gitFixture.base, XDG_STATE_HOME: gitFixture.stateHome }),
             platform: POSIX_PLATFORM,
           }),
         (error) => {

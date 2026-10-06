@@ -12,6 +12,7 @@ import * as path from "node:path"
 
 import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { mkFeedbackFixture, useStateHome, useHome, cleanup } from "./_helpers.js"
+import { osEnv } from "../_os_env.js"
 
 async function modeOf(target) {
   return (await fs.stat(target)).mode & 0o777
@@ -236,7 +237,7 @@ test("private store refuses Windows storage without the native ACL provider", as
           deskRoot: fixture.deskRoot,
           person: "rowan",
           platform: "win32",
-          env: { XDG_STATE_HOME: fixture.stateHome },
+          env: osEnv({ XDG_STATE_HOME: fixture.stateHome }),
         }),
       /Windows ACL protection.*SystemRoot/u,
     )
@@ -299,7 +300,7 @@ test("private store falls back to the home state directory when XDG_STATE_HOME i
 test("private store resolves a home from the OS when the environment has none", async () => {
   const fixture = await mkFeedbackFixture()
   try {
-    const env = { XDG_STATE_HOME: fixture.stateHome }
+    const env = osEnv({ XDG_STATE_HOME: fixture.stateHome })
     assert.equal(env.HOME, undefined, "this case must exercise the OS home fallback")
     const implicitBinding = await resolvePrivateStore({ deskRoot: fixture.deskRoot, env })
     const explicitUnbound = await resolvePrivateStore({

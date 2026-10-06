@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { createRequire } from "node:module"
+import { pathToFileURL } from "node:url"
 import { backfillPluginSources, registrySource } from "../../../../../plugins/desk/mcp/src/factory/plugin-registry.js"
 import { deriveMarker } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { factoryStateRoot, readMarker, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -246,7 +247,7 @@ test("loadEndHook answers the module from the named root or its own, and null fr
   const mirror = path.join(ctx.base, "mirror", "mcp", "src", "factory")
   await fs.mkdir(mirror, { recursive: true })
   await fs.copyFile(new URL(source, import.meta.url), path.join(mirror, "end-hook.js"))
-  const mirrored = await import(path.join(mirror, "end-hook.js"))
+  const mirrored = await import(pathToFileURL(path.join(mirror, "end-hook.js")).href)
   assert.equal(mirrored.loadEndHook({ DESK_PLUGIN_ROOT: path.join(ctx.base, "nowhere") }), null)
   // And the registry's own answer for a mirror is covered above by the broken-environment case.
 }))

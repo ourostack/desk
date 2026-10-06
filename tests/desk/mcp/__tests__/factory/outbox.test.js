@@ -48,6 +48,7 @@ import {
   withNamedLock,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeRealPath } from "../_fake_real_root.js"
+import { osEnv } from "../_os_env.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
 
@@ -86,7 +87,7 @@ async function scratch(run) {
   // `factoryStateRoot`'s own realpath resolution returns.
   const rawBase = mkdtempSync(path.join(os.tmpdir(), "desk-factory-outbox-"))
   const base = await fs.realpath(rawBase)
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   try {
     return await run(env, base)
   } finally {
@@ -170,14 +171,14 @@ test("factoryStateRoot defaults to process.env when no env is given", () => scra
 }))
 
 test("factoryStateRoot falls back to os.homedir() when HOME itself is unset or blank, as long as XDG_STATE_HOME is explicit", () => scratch(async (env) => {
-  assert.equal(await factoryStateRoot({ XDG_STATE_HOME: env.XDG_STATE_HOME }), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
-  assert.equal(await factoryStateRoot({ HOME: "   ", XDG_STATE_HOME: env.XDG_STATE_HOME }), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
+  assert.equal(await factoryStateRoot(osEnv({ XDG_STATE_HOME: env.XDG_STATE_HOME })), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
+  assert.equal(await factoryStateRoot(osEnv({ HOME: "   ", XDG_STATE_HOME: env.XDG_STATE_HOME })), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
 }))
 
 test("factoryStateRoot expands a ~ XDG_STATE_HOME against HOME, and ignores a blank one", () => scratch(async (env) => {
-  const expanded = await factoryStateRoot({ HOME: env.HOME, XDG_STATE_HOME: "~/custom-state" })
+  const expanded = await factoryStateRoot(osEnv({ HOME: env.HOME, XDG_STATE_HOME: "~/custom-state" }))
   assert.equal(expanded, path.join(env.HOME, "custom-state", "ouroboros-skills", "desk", "factory"))
-  const blank = await factoryStateRoot({ HOME: env.HOME, XDG_STATE_HOME: "   " })
+  const blank = await factoryStateRoot(osEnv({ HOME: env.HOME, XDG_STATE_HOME: "   " }))
   assert.equal(blank, path.join(env.HOME, ".local", "state", "ouroboros-skills", "desk", "factory"))
 }))
 
@@ -201,7 +202,7 @@ test("factoryStateRoot refuses a symlinked ancestor of XDG_STATE_HOME before cre
   const linkedStateHome = path.join(base, "linked-state")
   symlinkSync(realTarget, linkedStateHome)
   await assert.rejects(
-    () => factoryStateRoot({ HOME: env.HOME, XDG_STATE_HOME: path.join(linkedStateHome, "sub") }),
+    () => factoryStateRoot(osEnv({ HOME: env.HOME, XDG_STATE_HOME: path.join(linkedStateHome, "sub") })),
     /Git checkout/u,
   )
   // Nothing was created inside the checkout by the refused call.
