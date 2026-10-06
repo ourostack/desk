@@ -510,7 +510,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     for (const token of tokens) {
       const name = token.parts && /^[A-Za-z_]\w*(?==)/u.exec(token.parts[0].text)?.[0]
       const leading = words.every((word) => /^[A-Za-z_]\w*=/u.test(word))
-      words.push(await expand(token, state, false, name ? { name, real: leading || words[0] === "export" || words[0] === "env", word: token } : undefined))
+      words.push(await expand(token, state, false, name ? { name, real: leading || ["export", "env", "declare", "typeset", "local", "readonly"].includes(words[0]), word: token } : undefined))
     }
     if (words[0] === "pwd" && words.length === 1) return state.cwd
     // Read-only Git that names the checkout or its branch is answered from the file system.
@@ -648,7 +648,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     for (const word of node.words.slice(leading)) {
       const assignment = /^[A-Za-z_]\w*=/u.test(word.parts[0].text)
       const split = !(assignment && args[0] === "export")
-      const origin = assignment ? { name: /^[A-Za-z_]\w*/u.exec(word.parts[0].text)[0], real: args[0] === "export" || args[0] === "env", word } : undefined
+      const origin = assignment ? { name: /^[A-Za-z_]\w*/u.exec(word.parts[0].text)[0], real: ["export", "env", "declare", "typeset", "local", "readonly"].includes(args[0]), word } : undefined
       args.push(...(split ? await expand(word, state, true, origin) : [await expand(word, state, false, origin)]))
     }
     if (!args.length) return [{ ...local, status: true }]

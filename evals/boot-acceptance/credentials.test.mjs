@@ -78,10 +78,22 @@ test("the token variable read, printed, counted, tested or sent counts, and the 
 })
 
 test("git's and gh's credential helpers and git's credential files count", () => {
-  for (const command of ["git credential fill", "git -C /x credential fill", "git -c a=b credential approve", "echo url=https://github.com | git credential-osxkeychain get", "echo host=github.com | gh auth git-credential get", "cat ~/.git-credentials", "ls ~/.config/gh/", "cat ~/.config/git/credentials", "cd /x; ls ~/.config/gh"]) {
+  for (const command of ["git credential fill", "git -C /x credential fill", "git -c a=b credential approve", "echo url=https://github.com | git credential-osxkeychain get", "echo host=github.com | gh auth git-credential get", "cat ~/.git-credentials", "cat ~/.config/gh/*", "grep -r x ~/.config/gh", "cat ~/.config/git/credentials", "ls -la ~/.config/gh/hosts.yml"]) {
     assert.equal(kinds(command).length > 0, true, command)
   }
-  for (const command of ["git status", "git config credential.helper", "git commit -m 'credential helper docs'", "ls ~/.config/ghostty", "git log --oneline"]) assert.deepEqual(kinds(command), [], command)
+  for (const command of ["git status", "git config credential.helper", "git commit -m 'credential helper docs'", "ls ~/.config/ghostty", "git log --oneline", "ls ~/.config/gh", "ls -la ~/.config/gh/", "mkdir -p ~/.config/gh"]) assert.deepEqual(kinds(command), [], command)
+})
+
+test("a mention of gh auth token is text, and only a gh that is run counts, as the guard says", () => {
+  for (const command of ["git commit -m 'explain gh auth token'", "node scripts/test.js \"gh auth token\"", "npm test -- -t \"gh auth token\"", "claude -p \"explain gh auth token\"", "vim docs/gh-auth-token.md", "make test-gh-auth-token", "echo 'gh auth token'", "grep -rn 'gh auth token' docs", "gh auth token --help"]) {
+    assert.equal(kinds(command).includes("gh auth token outside the shim's allowed parent"), false, command)
+  }
+  for (const command of ["bash -c 'gh auth token'", "sudo gh auth token", "x=1; gh auth token", "xargs gh auth token", "eval 'gh auth token'"]) assert.equal(kinds(command).includes("gh auth token outside the shim's allowed parent"), true, command)
+})
+
+test("awk and jq that read the environment count", () => {
+  for (const command of ["awk 'BEGIN{print ENVIRON[\"GH_TOKEN\"]}'", "jq -n 'env.GH_TOKEN'", "jq -n '$ENV | keys'", "gh api x --jq 'env.GH_TOKEN'"]) assert.deepEqual(kinds(command), ["environment read by awk or jq"], command)
+  for (const command of ["jq .env file.json", "jq '.env' file.json", "awk '{print $1}' f", "gh api x --jq .login"]) assert.deepEqual(kinds(command), [], command)
 })
 
 test("a finding carries the rule and a shortened, token-redacted command, never a token value", () => {

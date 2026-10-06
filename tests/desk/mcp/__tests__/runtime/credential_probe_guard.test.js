@@ -48,7 +48,7 @@ const HARMLESS = [
   "gh auth status", "gh auth status 2>&1; ls -la ~/Desktop", "gh auth status --hostname github.com", "gh auth login --hostname github.com", "gh auth refresh -s workflow",
   "git status", "git push origin main", "gh pr list --repo a/b", "ls hosts.yml", "echo hi", "cat ~/.config/ghostty/config", "git config credential.helper",
   "git commit -m 'document gh auth token usage and hosts.yml'", "gh pr create --body 'use GH_TOKEN=$(gh auth token --user x) git push'", "grep -rn 'gh auth token' docs",
-  "echo 'gh auth token'", "printenv HOME", "printenv PATH | tr : '\\n'", "env FOO=1 node x.js", "security list-keychains", "git log --oneline",
+  "echo 'gh auth token'", "node scripts/test.js \"gh auth token\"", "claude -p \"explain gh auth token\"", "make test-gh-auth-token", "gh auth token --help", "ls ~/.config/gh", "mkdir -p ~/.config/gh", "env | grep -i path", "printenv HOME", "printenv PATH | tr : '\\n'", "env FOO=1 node x.js", "security list-keychains", "git log --oneline",
   "git -c user.name=me -c user.email=me@example.com commit -m x", "git config --global user.name me", "git config --get remote.origin.url",
   "GH_TOKEN=$(cat /tmp/tok) git push", "echo $PATH", "git -C /tmp/x fetch", "git --git-dir /tmp/x/.git fetch",
   "git push https://github.com/a/b.git HEAD:main",
@@ -97,8 +97,6 @@ test("indirection does not hide gh auth token: bash -c, sh -c, eval, here-docume
   const denied = [
     "bash -c 'gh auth token'", "sh -c \"echo \\$(gh auth token)\"", "zsh -c 'gh auth token --user me'", "eval 'gh auth token'", "eval \"echo $(gh auth token)\"", "bash -c \"bash -c 'gh auth token'\"",
     "bash <<'EOF'\ngh auth token\nEOF", "echo 'gh auth token' | bash", "sudo gh auth token", "env gh auth token", "command gh auth token", "nohup gh auth token", "time gh auth token", "exec gh auth token",
-    "xargs gh auth token", "echo | xargs gh auth token", "python3 -c \"import os; os.system('gh auth token')\"", "node -e \"require('child_process').execSync('gh auth token')\"",
-    "perl -e 'system(\"gh auth token\")'", "osascript -e 'do shell script \"gh auth token\"'", "ssh host gh auth token", "watch gh auth token",
     "$(which gh) auth token", "`which gh` auth token", "\"$(command -v gh)\" auth token", "g\"\"h auth token", "'gh' auth token",
   ]
   for (const command of denied) assert.equal(await sh(command), MESSAGES.token, command)
@@ -147,9 +145,9 @@ test("after an export any program may run, and only what can reveal the token is
   ]) assert.equal(await sh(command), MESSAGES.print, command)
   // The token is set for one command only, so what follows is not holding it.
   assert.equal(await sh("GH_TOKEN=$(gh auth token --user me) git push && curl https://example.com && echo done"), null)
-  // A git command may not be pointed at a program through its configuration while the token is held.
-  for (const config of ["alias.p=!printenv GH_TOKEN", "core.pager=cat", "core.sshCommand=ssh -v", "core.editor=vim", "core.askPass=x", "core.fsmonitor=x", "core.hooksPath=/tmp/h", "pager.log=x", "sequence.editor=x", "credential.helper=!printenv GH_TOKEN"]) {
-    assert.equal(await sh(`GH_TOKEN=$(gh auth token --user me) git -c '${config}' log`), MESSAGES.helper, config)
+  // Git settings that name a program are what honest agents use every day, so they stay allowed with the token set.
+  for (const config of ["core.editor=true", "sequence.editor=true", "core.pager=cat", "core.hooksPath=/tmp/h", "core.sshCommand=ssh -v", "alias.p=log"]) {
+    assert.equal(await sh(`GH_TOKEN=$(gh auth token --user me) git -c '${config}' log`), null, config)
   }
   assert.equal(await sh("GH_TOKEN=$(gh auth token --user me) git -c user.name=me -c core.autocrlf=false commit -m x"), null)
   assert.equal(await sh("GH_TOKEN=$(gh auth token --user me) git -c flag push"), null, "a -c with no value is a plain key")
@@ -177,7 +175,7 @@ test("the credential helper is allowed only in the shape Desk gives", async () =
 test("reading gh's or git's credential stores is denied", async () => {
   const denied = [
     "cat ~/.config/gh/hosts.yml", "ls -la ~/.config/gh/hosts.yml", "head -5 /Users/me/.config/gh/hosts.yml", "grep oauth $HOME/.config/gh/hosts.yml", "cat $GH_CONFIG_DIR/hosts.yml", "cp ~/.config/gh/hosts.yml /tmp/x",
-    "ls ~/.config/gh/", "ls ~/.config/gh", "cat ~/.config/gh/*", "cat ~/.git-credentials", "cat /home/me/.git-credentials", "git config credential.helper store; cat ~/.git-credentials", "cat ~/.netrc", "cat ~/.config/git/credentials",
+    "cat ~/.config/gh/*", "cat ~/.git-credentials", "cat /home/me/.git-credentials", "git config credential.helper store; cat ~/.git-credentials", "cat ~/.netrc", "cat ~/.config/git/credentials",
     "cat < ~/.config/gh/hosts.yml", "cat <~/.git-credentials", "wc -c < '/home/me/.git-credentials'", "bash -c 'cat ~/.config/gh/hosts.yml'", "eval 'cat ~/.git-credentials'", "cat ~/.copilot/config.json", "cat ~/.copilot/settings.json", "cat ~/.claude/.credentials.json",
     "security find-generic-password -s gh:github.com -w", "security find-internet-password -s github.com", "security dump-keychain -d", "security export -k login.keychain", "/usr/bin/security -q find-generic-password -s x",
     "git credential fill", "git -C /x credential fill", "git --no-pager credential fill", "git -c a=b credential approve", "git credential reject", "echo url=https://github.com | git credential-osxkeychain get", "git credential-store get", "git-credential-osxkeychain get", "/usr/lib/git-core/git-credential-store get",
@@ -205,7 +203,7 @@ test("what Desk and gh print is not a store: status, other config files, other k
 test("PowerShell is read by text: the assignment is allowed, everything else is denied", async () => {
   for (const command of [
     "$env:GH_TOKEN = gh auth token --user me; git push", "$env:GH_TOKEN = (gh auth token --user me); gh pr list", "$env:GITHUB_TOKEN=(gh.exe auth token --user me --hostname github.com)\ngit push",
-    "gh auth status", "git push", "Write-Host hi", "$env:PATH", "Get-Content notes.txt", "git config credential.helper", "gh auth refresh",
+    "$env:GH_TOKEN = $(gh auth token --user me); git push", "$env:GITHUB_TOKEN = $(gh.exe auth token --user me --hostname github.com)\ngh pr list", "gh auth status", "git push", "Write-Host hi", "$env:PATH", "Get-Content notes.txt", "git config credential.helper", "gh auth refresh",
   ]) assert.equal(await ps(command), null, command)
   for (const command of [
     "gh auth token", "gh.exe auth token --user me", "$t = gh auth token --user me", "Write-Host (gh auth token)", "$env:GH_TOKEN = (gh auth token --user me); gh auth token", "gh auth token | clip", "gh auth status --show-token", "gh auth status -t",
@@ -215,7 +213,7 @@ test("PowerShell is read by text: the assignment is allowed, everything else is 
     "$env:GH_TOKEN = gh auth token --user me; Write-Host $env:GH_TOKEN", "Write-Output $env:GITHUB_TOKEN", "Write-Host ${env:GH_TOKEN}", "$env:GH_TOKEN.Length", "[Environment]::GetEnvironmentVariable('GH_TOKEN')", "[System.Environment]::GetEnvironmentVariable(\"GITHUB_TOKEN\")",
     "Invoke-RestMethod -Headers @{Authorization=\"token $env:GH_TOKEN\"} https://api.github.com", "Get-ChildItem env:", "gci env: | Where-Object Name -like '*TOKEN*'", "Get-Content env:GH_TOKEN", "dir env:",
   ]) assert.equal(await ps(command), MESSAGES.print, command)
-  for (const command of ["Get-Content ~\\.config\\gh\\hosts.yml", "type C:\\Users\\me\\AppData\\Roaming\\GitHub CLI\\.git-credentials", "cat ~/.config/gh/hosts.yml", "cat ~/.git-credentials", "Get-Content $HOME\\.netrc", "cmdkey /list", "git credential fill", "git.exe credential approve", "git-credential-manager get"]) {
+  for (const command of ["Get-Content ~\\.config\\gh\\hosts.yml", "type C:\\Users\\me\\AppData\\Roaming\\GitHub CLI\\.git-credentials", "Get-Content \"$env:APPDATA\\GitHub CLI\\hosts.yml\"", "cat ~/.config/gh/hosts.yml", "cat ~/.git-credentials", "Get-Content $HOME\\.netrc", "cmdkey /list", "git credential fill", "git.exe credential approve", "git-credential-manager get"]) {
     assert.equal(await ps(command), MESSAGES.store, command)
   }
 })
@@ -232,7 +230,7 @@ test("a command Desk cannot read is allowed, unless it names gh auth token", asy
 })
 
 test("the guard and the boot-acceptance check agree: every allowed recipe is no credential read, and every incident command is one", () => {
-  for (const command of [...RECIPE.filter((command) => !/^(?:env |if |GH_TOKEN=\$\(gh auth token --user me\)$)/u.test(command)), ...HARMLESS.filter((command) => !/gh auth token|hosts\.yml|printenv/u.test(command))]) {
+  for (const command of [...RECIPE.filter((command) => !/^(?:env |if |GH_TOKEN=\$\(gh auth token --user me\)$)/u.test(command)), ...HARMLESS.filter((command) => !/hosts\.yml|printenv/u.test(command))]) {
     const kinds = credentialReads([{ name: "Bash", input: { command } }]).map((read) => read.kind)
     assert.deepEqual(kinds.filter((kind) => /token|credential/u.test(kind)), [], command)
   }
@@ -240,6 +238,7 @@ test("the guard and the boot-acceptance check agree: every allowed recipe is no 
     "gh auth status 2>&1; echo \"---\"; ls -la ~/.config/gh/hosts.yml 2>&1",
     "GH_TOKEN=$(gh auth token --user arimendelow --hostname github.com 2>&1) && echo \"Token retrieved (${#GH_TOKEN} chars)\" || echo \"Failed: $GH_TOKEN\"",
     "gh api -H \"Authorization: token $GH_TOKEN\" /user", "gh auth token", "echo $(gh auth token)", "cat ~/.git-credentials", "git credential fill", "gh auth git-credential get", "gh auth status --show-token",
+    "awk 'BEGIN{print ENVIRON[\"X\"]}'", "jq -n 'env.X'", "gh api x --jq 'env.X'", "ps eww -p 1", "cat ~/.config/gh/*", "bash -c 'gh auth token'",
   ]) assert.ok(credentialReads([{ name: "Bash", input: { command } }]).length > 0, command)
 })
 
@@ -269,6 +268,60 @@ test("every denial opens with the fix in at most 120 characters, and names what 
     assert.match(text, /report its error as it is/u, key)
   }
   assert.match(MESSAGES.token, /^Use `GH_TOKEN=\$\(gh auth token --user <account>\) git \.\.\.` or `gh \.\.\.` directly/u)
+})
+
+test("what a mention is, and what honest scripts do, is allowed: names, arguments, git settings, listing gh's folder", async () => {
+  for (const command of [
+    "node scripts/test.js \"gh auth token\"", "npm test -- -t \"gh auth token\"", "claude -p \"explain gh auth token\"", "vim docs/gh-auth-token.md", "make test-gh-auth-token", "python3 -c \"print('gh auth token')\"",
+    "xargs echo gh auth token", "gh auth token --help", "GH_TOKEN=$(gh auth token --user=a) git push", "GH_TOKEN=$(gh auth token --user=a --hostname=github.com) gh pr list",
+    "declare -x GH_TOKEN=$(gh auth token --user a); git push", "f(){ local GH_TOKEN=$(gh auth token --user a); git push; }; f", "readonly GH_TOKEN=$(gh auth token --user a); git push",
+    "ls ~/.config/gh", "ls -la ~/.config/gh/", "mkdir -p ~/.config/gh", "ls ~/.config", "env | grep -i path", "env | grep -i node | sort", "declare -p PATH", "declare -x PATH=/bin", "set -e; git status", "printenv HOME",
+    "ps aux", "ps -ef", "ps -p 1 -o command=", "gh api x --jq .login", "gh api x -q '.env'", "awk '{print $1}' f", "bash -c 'git push'", "set -e; GH_TOKEN=$(gh auth token --user a) git push",
+  ]) assert.equal(await sh(command), null, command)
+  // Known limits: what a deny-list cannot win and the guard does not chase.
+  for (const command of ["xargs gh auth token", "python3 -c \"import os; os.system('gh auth token')\"", "ssh host gh auth token", "x=GH_TOKEN; echo ${!x}"]) assert.equal(await sh(command), null, command)
+})
+
+test("environment dumps are denied when they can show the token, and a dump filtered to no secret is allowed", async () => {
+  for (const command of ["env", "printenv", "set", "export -p", "declare -x", "declare", "typeset -p", "env | sort", "env | grep -i token", "env | grep -i secret", "printenv | wc -l", "set | grep -i key", "env | grep .", "cd /tmp && env"]) {
+    assert.equal(await sh(command), MESSAGES.print, command)
+  }
+  for (const command of [
+    "export GH_TOKEN=$(gh auth token --user a); env | grep -i path", "export GH_TOKEN=$(gh auth token --user a); set | grep PATH", "export GH_TOKEN=$(gh auth token --user a); declare -p",
+    "GH_TOKEN=$(gh auth token --user a) env | grep -i path", "GH_TOKEN=$(gh auth token --user a) printenv", "export GH_TOKEN=$(gh auth token --user a); printenv GH_TOKEN", "declare -p GH_TOKEN", "typeset -x GITHUB_TOKEN",
+    "ps eww -p 1", "ps -E", "ps aeww", "ps axe", "ps e", "ps -Eww -p 1",
+    "awk 'BEGIN{print ENVIRON[\"HOME\"]}'", "gawk 'BEGIN{print ENVIRON[\"X\"]}'", "gh api x --jq 'env.GH_TOKEN'", "gh api x -q '$ENV|keys'", "gh api x --jq='env'", "jq -n 'env'",
+  ]) assert.equal(await sh(command), MESSAGES.print, command)
+})
+
+test("tracing the token and shell code that reads it are denied, in the same command as the assignment", async () => {
+  for (const command of [
+    "set -x; GH_TOKEN=$(gh auth token --user a) git push", "GH_TOKEN=$(gh auth token --user a) bash -x script.sh", "bash -x -c 'GH_TOKEN=$(gh auth token --user a) git push'", "set -o xtrace; export GH_TOKEN=$(gh auth token --user a)",
+    "export GH_TOKEN=$(gh auth token --user a); sh -x run.sh", "export GH_TOKEN=$(gh auth token --user a); bash -c 'echo ${GH_TOKEN}'", "export GH_TOKEN=$(gh auth token --user a); sh -c 'echo ${#GH_TOKEN}'",
+    "export GH_TOKEN=$(gh auth token --user a); bash -c 'set'", "export GH_TOKEN=$(gh auth token --user a); bash -c 'env'", "export GH_TOKEN=$(gh auth token --user a); bash -c \"export -p\"",
+  ]) assert.equal(await sh(command), MESSAGES.print, command)
+  assert.equal(await sh("set -x; git status"), null, "tracing without the token is no exposure")
+  assert.equal(await sh("export GH_TOKEN=$(gh auth token --user a); bash -c 'git push && npm test'"), null)
+})
+
+test("the gh folder is read through cd, $HOME, ./ and //, and only by programs that read", async () => {
+  const { mkdirSync, mkdtempSync, realpathSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const home = realpathSync(mkdtempSync(path.join(tmpdir(), "probe-home-")))
+  mkdirSync(path.join(home, ".config", "gh"), { recursive: true })
+  const before = process.env.HOME
+  process.env.HOME = home
+  try {
+    for (const command of [`cd ${home}/.config/gh && cat hosts.yml`, "cd $HOME/.config/gh && head hosts.yml", "cd ~/.config/gh; less hosts.yml", "cat $HOME/.config/gh/hosts.yml", "cat ~/.config/gh/./hosts.yml", "cat ~/.config//gh/hosts.yml",
+      "cat ./.config/gh/hosts.yml", "grep -r x ~/.config/gh", "head ~/.config/gh/*", "less $HOME/.config/gh/hosts.yml", "cat ~/.config/gh/../gh/hosts.yml"]) {
+      assert.equal(await sh(command), MESSAGES.store, command)
+    }
+    assert.equal(await sh("cd $HOME/.config/gh && ls"), null)
+    assert.equal(await sh("ls $HOME/.config/gh"), null)
+  } finally {
+    process.env.HOME = before
+    rmSync(home, { recursive: true, force: true })
+  }
 })
 
 const claude = (toolName, command, extra = {}) => ({ hook_event_name: "PreToolUse", tool_name: toolName, tool_input: { command }, cwd: process.cwd(), ...extra })
@@ -313,6 +366,31 @@ test("the hook script denies on Claude and Copilot, answers other commands at on
   assert.match(brokenClaude.stderr, /could not inspect this call, allowing it/u)
   const brokenCopilot = run("copilot", null, "gh token not json")
   assert.deepEqual([brokenCopilot.status, brokenCopilot.stdout], [0, "{}\n"])
+})
+
+test("the hook script reaches every rule: one command per rule, denied through the real .cjs on both hosts", () => {
+  const byRule = {
+    token: ["gh auth token", "echo $(gh auth token)", "gh auth status --show-token"],
+    print: ["echo $GH_TOKEN", "env", "printenv", "set", "export -p", "declare -x", "env | sort", "cat /proc/self/environ", "node -e 'console.log(process.env.GH_TOKEN)'", "ps eww -p 1", "awk 'BEGIN{print ENVIRON[\"X\"]}'",
+      "jq -n 'env'", "gh api x --jq 'env.X'", "export GH_TOKEN=$(gh auth token --user a); bash -c 'set'", "set -x; GH_TOKEN=$(gh auth token --user a) git push", "export GH_TOKEN=$(gh auth token --user a); env"],
+    store: ["cat ~/.config/gh/hosts.yml", "cat ~/.git-credentials", "git credential fill", "security find-generic-password -s x", "cat < ~/.netrc", "gh auth git-credential get"],
+    helper: ["git -c credential.helper='!gh auth token' push"],
+  }
+  for (const [rule, commands] of Object.entries(byRule)) {
+    for (const command of commands) {
+      const claudeResult = run("claude", claude("Bash", command))
+      assert.equal(claudeResult.status, 0, command)
+      assert.equal(JSON.parse(claudeResult.stdout).hookSpecificOutput?.permissionDecisionReason, MESSAGES[rule], `claude: ${command}`)
+      const copilotResult = run("copilot", copilot("bash", command))
+      assert.equal(JSON.parse(copilotResult.stdout).permissionDecisionReason, MESSAGES[rule], `copilot: ${command}`)
+    }
+  }
+  const powershell = run("claude", claude("PowerShell", "Write-Host $env:GH_TOKEN"))
+  assert.equal(JSON.parse(powershell.stdout).hookSpecificOutput.permissionDecisionReason, MESSAGES.print)
+  // What the prefilter answers at once is still allowed, and so are the allowed shapes it lets through.
+  for (const command of ["ls -la", "git status", "env | grep -i path", "GH_TOKEN=$(gh auth token --user a) gh api x | jq .", "export GH_TOKEN=$(gh auth token --user a); cd /tmp && node run.mjs"]) {
+    for (const [host, payload] of [["claude", claude("Bash", command)], ["copilot", copilot("bash", command)]]) assert.deepEqual(JSON.parse(run(host, payload).stdout), {}, `${host}: ${command}`)
+  }
 })
 
 test("both hook manifests wire the guard on shell tools", () => {

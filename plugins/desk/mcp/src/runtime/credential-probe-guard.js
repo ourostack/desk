@@ -5,18 +5,29 @@
 // (${#GH_TOKEN} chars)" || echo "Failed: $GH_TOKEN"` (the failure branch prints the token or its error) and `gh api -H
 // "Authorization: token $GH_TOKEN"`. The text rule did not hold, so the call is denied.
 //
-// Deny by default for anything that involves `gh auth token`. The token may be read in exactly these ways:
+// This is a poka-yoke for an honest agent's clumsy probes, not a security boundary. It stops accidental exposure of the token; it
+// does not try to beat an agent that is working around it, and a shell deny-list could not. Known limits (left out on purpose):
+// `${!v}` indirection, gh aliases, GIT_* and GH_* environment variables that name a program, globbed or interpreter file reads,
+// inline interpreter code beyond naming the variable, wrappers that run a command from text (xargs, find -exec, ssh, docker) and
+// PowerShell reflection.
+//
+// Deny by default for `gh auth token` that is executed. The token may be read in exactly these ways:
 //   1. A real assignment of GH_TOKEN or GITHUB_TOKEN whose whole value is one `gh auth token [--user X] [--hostname H]`
-//      substitution (stderr may go to /dev/null), as a prefix to a command (`GH_TOKEN=$(...) git push`), or exported
-//      (`export GH_TOKEN=$(...)`). Child processes may inherit it, but nothing may print it, dump the environment or name it in inline code.
+//      substitution (stderr may go to /dev/null), as a prefix to a command (`GH_TOKEN=$(...) git push`), exported
+//      (`export GH_TOKEN=$(...)`) or declared (`declare -x`, `local`). Child processes may inherit it, but nothing may print it,
+//      dump the environment, trace it (`set -x`, `bash -x`) or name it in inline code.
 //   2. Inside a git credential helper passed with -c, in the one shape Desk gives:
 //      `credential.helper='!f(){ echo username=x-access-token; echo password=$(gh auth token --user X); };f'`.
 // Denied: printing, counting or testing the token variable; `gh auth token` with its output going anywhere else (stdout, a file,
-// a pipe, another variable, a URL or an Authorization header); `gh auth status --show-token`; reading gh's or git's credential
-// stores (`hosts.yml`, `.git-credentials`, `security find-*-password`, `git credential fill`, `gh auth git-credential`). It reads
-// Bash through the same inspector as the other guards, so compound commands, `bash -c`, `eval`, pipelines and substitutions are
-// judged command by command; PowerShell is read by text. It never runs anything, and any error fails open (the hook entry point
-// allows the call), except that a command the inspector cannot read and that names `gh auth token` is denied.
+// a pipe, another variable, a URL or an Authorization header); `gh auth status --show-token`; an environment dump that can show
+// the token (`env`, `printenv`, `set`, `export -p`, `declare -x`, `/proc/*/environ`, `ps e`, jq or awk reading the environment)
+// unless it is filtered to something that is no secret; reading gh's or git's credential stores (`hosts.yml`, `.git-credentials`,
+// `security find-*-password`, `git credential fill`, `gh auth git-credential`). A mention of `gh auth token` in an argument
+// (a commit message, a test name, a file name) is never denied. It reads Bash through the same inspector as the other guards, so
+// compound commands, `bash -c`, `eval`, pipelines and substitutions are judged command by command; PowerShell is read by text.
+// It never runs anything, and any error fails open (the hook entry point allows the call), except that a command the inspector
+// cannot read and that names `gh auth token` is denied.
+import * as path from "node:path"
 import { inspectShell, tokenizeShell } from "./shell-commands.js"
 import { copilotDeny, copilotToolCalls } from "./copilot-hook-payload.js"
 
@@ -36,7 +47,7 @@ const UNKNOWN = "\0"
 const TOKEN_VARIABLES = new Set(["GH_TOKEN", "GITHUB_TOKEN"])
 
 const ACCOUNT = "[A-Za-z0-9][A-Za-z0-9_.-]*"
-const GH_CALL = `gh auth token(?: (?:--user|-u) ${ACCOUNT})?(?: (?:--hostname|-h) ${ACCOUNT})?`
+const GH_CALL = `gh auth token(?: (?:--user|-u)[ =]${ACCOUNT})?(?: (?:--hostname|-h)[ =]${ACCOUNT})?`
 const IDENTITY = "echo username=[A-Za-z0-9_.@-]+"
 // The one credential-helper text Desk gives, in the two orders git accepts, written with `gh auth token` or with the exported variable.
 const HELPER_VALUES = [
@@ -53,8 +64,10 @@ function isHelper(arg) {
   return HELPER_VALUES.some((expression) => expression.test(value))
 }
 
-// Credential stores, as paths: a path that ends in one of these (or a directory that holds them).
-const STORE_PATH = /(?:^|\/)(?:gh\/hosts\.yml|\.git-credentials|\.netrc|\.config\/git\/credentials|\.copilot\/(?:config|settings)\.json|\.claude\/\.credentials\.json)$|^\/hosts\.yml$|(?:^|\/)\.config\/gh(?:\/\*?)?$/u
+// Credential stores, as normalized paths: a file, or the directory that holds them (which only a program that reads contents may name).
+const STORE_FILE = /(?:^|\/)(?:gh\/hosts\.yml|\.git-credentials|\.netrc|\.config\/git\/credentials|\.copilot\/(?:config|settings)\.json|\.claude\/\.credentials\.json)$|^\/hosts\.yml$/u
+const STORE_DIRECTORY = /(?:^|\/)\.config\/gh(?:\/\*)?$/u
+const READERS = new Set(["cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "ag", "ack", "sed", "awk", "gawk", "cp", "strings", "xxd", "od", "base64", "bat", "tar", "zip"])
 const STORE_REDIRECT = /<\s*["']?[^\s"'<>;&|]*(?:gh\/hosts\.yml|\.git-credentials|\.netrc|\.config\/git\/credentials)/u
 // A reference to the token variable (`$GH_TOKEN`, `${#GH_TOKEN}`, `${GH_TOKEN:-x}`) in text the shell expands: unquoted or double-quoted,
 // in an argument, a redirection target or a here-string. Single-quoted text is data, so the credential helper's `$GH_TOKEN` passes.
@@ -63,14 +76,17 @@ function referencesToken(command) {
   return tokenizeShell(command).some((token) => (token.heredoc !== undefined && !token.literal && TOKEN_REFERENCE.test(token.heredoc)) || token.parts?.some((part) => part.expand && TOKEN_REFERENCE.test(part.text)))
 }
 const KEYCHAIN = /^(?:find-[a-z]*-?password|dump-keychain|export)$/u
-// Programs that only show or search the text they are given, so a mention of `gh auth token` in their arguments is data.
-const TEXT_ONLY = new Set(["git", "gh", "echo", "printf", "grep", "egrep", "fgrep", "rg", "ag", "ack", "cat", "head", "tail", "less", "more", "diff", "wc", "sed", "jq", "tee", "mkdir", "touch", "cp", "mv", "ls", "test", "[", "true", "false", "sleep", "date", "pwd", "basename", "dirname", "sort", "uniq", "cut", "tr", "whoami", "hostname", "uname", "rm"])
 const INTERPRETERS = new Set(["node", "nodejs", "deno", "bun", "python", "python2", "python3", "perl", "ruby", "php", "lua", "awk", "gawk", "osascript"])
 const INLINE_TOKEN = /(?:GH|GITHUB)_TOKEN|%ENV\b|os\.environ\s*[,)]|process\.env\s*[,)]/u
-// `set` or `export -p` or `declare -x` alone lists every variable. The inspector does not visit builtins, so this reads the text.
-const ENV_DUMP = /(?:^|[;&|(\n]\s*)(?:set|export\s+-p|(?:declare|typeset)\s+-[xp]\w*)\s*(?=$|[;&|)\n])/u
+// A statement that lists every variable: `env`, `printenv`, `set`, `export -p`, `declare -x` with no name after it. The inspector does not
+// visit builtins, so this reads the text. A dump piped to `grep PATH` shows no secret unless the token is set in the same command.
+const ENV_DUMP = /(?:^|[;&|(\n]\s*)(?:env|printenv|set|export\s+-p|(?:declare|typeset)(?:\s+-[A-Za-z]+)*)[ \t]*(?=$|[;&|)\n])/gu
+const DUMP_FILTER = /^[ \t]*\|[ \t]*(?:grep|egrep|fgrep|rg)[ \t]+(?:-\S+[ \t]+)*(\S+)/u
+const SECRETISH = /token|secret|key|pass|gh_|github|auth|cred|copilot|\*|\./iu
+const TRACE = /(?:^|[;&|(\n]\s*)set\s+(?:-[A-Za-z]*x|-o\s+xtrace)|\b(?:bash|sh|zsh|dash|ksh)\s+(?:-\S+\s+)*-[A-Za-z]*x\b/u
+const SHELL_CODE = /\b(?:bash|sh|zsh|dash|ksh)\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*c\s+("(?:[^"\\]|\\.)*"|'[^']*')/gu
+const CODE_READS_TOKEN = /\$\{?[#!]?\s*(?:GH|GITHUB)_TOKEN|(?:^|[;&|(\s])(?:set|env|printenv|export\s+-p)\s*(?:$|[;&|)])/u
 const GIT_VALUE_OPTIONS = new Set(["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"])
-const EXECUTABLE_KEYS = /^(?:core\.(?:sshcommand|pager|editor|askpass|fsmonitor|hookspath)|alias\..+|pager\..+|sequence\.editor)$/iu
 
 /** The subcommand of a git call (`git -c k=v -C dir credential fill` is `credential`), or "". */
 function gitSubcommand(args) {
@@ -87,8 +103,10 @@ function judgeGhAuth(args, via, seen) {
   if (rest[0] === "git-credential") return MESSAGES.store
   if (rest[0] === "status") return rest.some((arg) => arg === "--show-token" || /^-[A-Za-z]*t[A-Za-z]*$/u.test(arg)) ? MESSAGES.token : null
   if (rest[0] !== "token") return null
-  // Only `--user X` and `--hostname H` (or -u, -h) with plain values may follow.
-  const options = rest.slice(1)
+  // Asking for help prints no token.
+  if (rest.includes("--help")) return null
+  // Only `--user X` and `--hostname H` (or -u, -h, and the `--user=X` form) with plain values may follow.
+  const options = rest.slice(1).flatMap((arg) => (/^--?[a-z]+=/u.test(arg) ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg]))
   for (let i = 0; i < options.length; i += 2) {
     if (!["--user", "-u", "--hostname", "-h"].includes(options[i]) || !new RegExp(`^${ACCOUNT}$`, "u").test(options[i + 1] ?? "")) return MESSAGES.token
   }
@@ -106,12 +124,16 @@ function judgeGhAuth(args, via, seen) {
   return null
 }
 
+/** Whether `ps` is asked to show each process's environment (`-E`, BSD `e`, `eww`). */
+const psEnvironment = (args) => args.some((arg) => /^-[A-Za-z]*E/u.test(arg) || (/^[A-Za-z]+$/u.test(arg) && arg.includes("e")))
+
 /** The reason to deny one visited command, or null. `seen` records that an allowed `gh auth token` ran. */
 function judgeCall({ name, args, env, cwd, via, computed }, seen) {
   if (name === "security" && args.some((arg) => KEYCHAIN.test(arg))) return MESSAGES.store
   if (name.startsWith("git-credential")) return MESSAGES.store
-  const bareHosts = /\.config\/gh\/?$/u.test(cwd) && args.includes("hosts.yml")
-  if (bareHosts || args.some((arg) => STORE_PATH.test(arg))) return MESSAGES.store
+  const paths = args.map((arg) => path.posix.normalize(arg))
+  const bareHosts = /(?:^|\/)\.config\/gh$/u.test(cwd) && args.includes("hosts.yml")
+  if (bareHosts || paths.some((arg) => STORE_FILE.test(arg) || (READERS.has(name) && STORE_DIRECTORY.test(arg)))) return MESSAGES.store
   const sub = name === "git" ? gitSubcommand(args) : ""
   if (sub === "credential" || sub.startsWith("credential-")) return MESSAGES.store
   if (name === "gh" && args.includes("auth")) {
@@ -122,10 +144,15 @@ function judgeCall({ name, args, env, cwd, via, computed }, seen) {
   if (args.some((arg) => arg.includes(SENTINEL) || /^\/proc\/(?:self|\d+)\/environ$/u.test(arg))) return MESSAGES.print
   // A program Desk could not name that is given `auth token` is `gh auth token` by another name.
   if (computed && args.includes("auth") && args.includes("token")) return MESSAGES.token
-  // `env` with no command (the inspector reports it with an empty name) and `printenv` list the environment, token included.
-  if ((name === "" || name === "printenv") && (args.length === 0 || args.some((arg) => /TOKEN/iu.test(arg)))) return MESSAGES.print
-  // `gh auth token` named in the arguments of a program that could run it (`xargs gh auth token`, `python -c "..."`).
-  if (!TEXT_ONLY.has(name) && /\bgh(?:\.exe)?\b[\s\S]*\bauth\b[\s\S]*\btoken\b/u.test(args.join(" "))) return MESSAGES.token
+  // The environment, token included: `printenv NAME`, `ps e`, `awk ENVIRON`, jq or gh --jq reading `env`, `declare -p GH_TOKEN`.
+  const reads = (filter) => /(?:^|[^.\w])env\b|\$ENV/u.test(filter)
+  const jq = name === "jq" ? args : name === "gh" ? args.filter((arg, i) => args[i - 1] === "--jq" || args[i - 1] === "-q" || arg.startsWith("--jq=")) : []
+  if (jq.some(reads) || (name === "printenv" && args.some((arg) => /TOKEN/iu.test(arg))) || (name === "ps" && psEnvironment(args)) || ((name === "awk" || name === "gawk") && args.some((arg) => arg.includes("ENVIRON")))) return MESSAGES.print
+  if ((name === "declare" || name === "typeset") && args.some((arg) => !arg.includes("=") && /TOKEN/iu.test(arg))) return MESSAGES.print
+  // `env` with no command (the inspector reports it with an empty name) and `printenv` list the environment: denied here while the
+  // token is set in the same command, and otherwise by the text check, which lets a filtered listing through.
+  const holds = seen.token && [...TOKEN_VARIABLES].some((variable) => env[variable] !== undefined && env[variable] !== SENTINEL && env[variable].includes(UNKNOWN))
+  if (holds && (name === "" || name === "printenv")) return MESSAGES.print
   if (name === "git") {
     // A mention of the token in a `-c` option or a `git config` value is allowed only as the helper Desk gives.
     const inConfig = sub === "config" ? args : args.filter((arg, i) => args[i - 1] === "-c")
@@ -133,36 +160,35 @@ function judgeCall({ name, args, env, cwd, via, computed }, seen) {
   }
   // Inline interpreter code that names the token variable (`node -e`, `python -c`, `perl -e`, `ruby -e`) reads and can print it.
   if (INTERPRETERS.has(name) && args.some((arg) => /^-[A-Za-z]*[ecpE]$|^--(?:eval|print)$/u.test(arg)) && args.some((arg) => INLINE_TOKEN.test(arg))) return MESSAGES.print
-  // jq reads the environment through `env` and `$ENV`.
-  if (name === "jq" && args.some((arg) => /(?:^|[^.\w])env\b|\$ENV/u.test(arg))) return MESSAGES.print
-  // `declare -x` and `declare -p` list every variable, token included.
-  if ((name === "declare" || name === "typeset") && (args.length === 0 || args.some((arg) => /^-[A-Za-z]*[xp]/u.test(arg)))) return MESSAGES.print
-  // A child process that only inherits the variable is no exposure, so any program may run while it is set, but a script that is
-  // handed the variable by name (`bash -c 'echo $GH_TOKEN'`) is, and git may not be pointed at a program through its configuration.
-  const holds = seen.token && [...TOKEN_VARIABLES].some((variable) => env[variable] !== undefined && env[variable] !== SENTINEL && env[variable].includes(UNKNOWN))
-  if (holds) {
-    if (name !== "git" && name !== "gh" && seen.mentions && args.some((arg) => arg.includes(UNKNOWN))) return MESSAGES.print
-    if (name === "git") {
-      for (let i = 0; i < args.length; i++) {
-        if (args[i] !== "-c") continue
-        const at = (args[i + 1] ?? "").indexOf("=")
-        const [key, value] = at < 0 ? [args[i + 1] ?? "", ""] : [args[i + 1].slice(0, at), args[i + 1].slice(at + 1)]
-        if (EXECUTABLE_KEYS.test(key) || (value.startsWith("!") && !isHelper(args[i + 1]))) return MESSAGES.helper
-      }
-    }
-  }
+  // A child process that only inherits the variable is no exposure, but a script that is handed the variable by name
+  // (`eval 'echo $GH_TOKEN'`) is.
+  if (holds && name !== "git" && name !== "gh" && seen.mentions && args.some((arg) => arg.includes(UNKNOWN))) return MESSAGES.print
   return null
 }
 
-const POWERSHELL_ASSIGNMENT = new RegExp(`(?:^|[;\\n])\\s*\\$env:(?:GH|GITHUB)_TOKEN\\s*=\\s*\\(?\\s*${GH_CALL.replace("gh auth", "gh(?:\\.exe)? auth")}\\s*\\)?\\s*(?=[;\\n]|$)`, "giu")
+const POWERSHELL_ASSIGNMENT = new RegExp(`(?:^|[;\\n])\\s*\\$env:(?:GH|GITHUB)_TOKEN\\s*=\\s*(?:\\$?\\(\\s*)?${GH_CALL.replace("gh auth", "gh(?:\\.exe)? auth")}\\s*\\)?\\s*(?=[;\\n]|$)`, "giu")
 
 /** The reason to deny a PowerShell command, read by text, or null. */
 export function judgePowerShell(command) {
-  // The one allowed read: `$env:GH_TOKEN = gh auth token --user X` (or in parentheses) on its own, then git or gh.
+  // The one allowed read: `$env:GH_TOKEN = gh auth token --user X` (or in parentheses or `$(...)`) on its own, then git or gh.
   const rest = command.replace(POWERSHELL_ASSIGNMENT, ";")
   if (/\bgh(?:\.exe)?\s+auth\s+(?:token|git-credential)\b|--show-token|\bgh(?:\.exe)?\s+auth\s+status\b[^;\n|]*\s-t\b/iu.test(rest)) return MESSAGES.token
   if (/\$\{?env:(?:GH|GITHUB)_TOKEN\b|\[(?:System\.)?Environment\]::GetEnvironmentVariable\(\s*['"](?:GH|GITHUB)_TOKEN|\b(?:gci|ls|dir|Get-ChildItem|gi|Get-Item)\s+env:|\bGet-Content\s+env:/iu.test(rest)) return MESSAGES.print
-  if (/(?:^|[\\/\s'"])(?:gh[\\/]hosts\.yml|\.git-credentials|\.netrc)\b|\bcmdkey\b[^;\n]*\/list|\bgit(?:\.exe)?\s+credential\b|git-credential-/iu.test(rest)) return MESSAGES.store
+  if (/(?:^|[\\/\s'"])(?:gh[\\/]hosts\.yml|GitHub CLI[\\/]hosts\.yml|\.git-credentials|\.netrc)\b|\bcmdkey\b[^;\n]*\/list|\bgit(?:\.exe)?\s+credential\b|git-credential-/iu.test(rest)) return MESSAGES.store
+  return null
+}
+
+/** The reason to deny a command that, once inspected, set the token in this command, or null: tracing it, a shell script that reads it, a dump of the environment. */
+function judgeHeld(command, seen) {
+  if (seen.token) {
+    if (TRACE.test(command)) return MESSAGES.print
+    for (const match of command.matchAll(SHELL_CODE)) if (CODE_READS_TOKEN.test(match[1].slice(1, -1))) return MESSAGES.print
+  }
+  // An environment dump is denied when the token is set in the same command or when nothing filters it, and allowed when it is piped to a grep for something that is no secret.
+  for (const match of command.matchAll(ENV_DUMP)) {
+    const filter = DUMP_FILTER.exec(command.slice(match.index + match[0].length))
+    if (seen.token || filter === null || SECRETISH.test(filter[1])) return MESSAGES.print
+  }
   return null
 }
 
@@ -170,19 +196,16 @@ export function judgePowerShell(command) {
 async function judgeBash(command, cwd) {
   const seen = {}
   let reason = STORE_REDIRECT.test(command) ? MESSAGES.store : null
-  if (ENV_DUMP.test(command)) return MESSAGES.print
   seen.mentions = TOKEN_REFERENCE.test(command)
   try {
     if (referencesToken(command)) return MESSAGES.print
-    await inspectShell({
-      command, cwd, env: Object.fromEntries([...TOKEN_VARIABLES].map((variable) => [variable, SENTINEL])), powershell: false,
-      visit: (event) => { reason ??= judgeCall(event, seen) },
-    })
+    const env = { HOME: process.env.HOME, ...Object.fromEntries([...TOKEN_VARIABLES].map((variable) => [variable, SENTINEL])) }
+    await inspectShell({ command, cwd, env, powershell: false, visit: (event) => { reason ??= judgeCall(event, seen) } })
   } catch {
     // A command the inspector cannot read is allowed, unless it names `gh auth token`.
     reason ??= /\bgh\b[^\n]*\bauth\b[^\n]*\btoken\b|--show-token/u.test(command) ? MESSAGES.unreadable : null
   }
-  return reason
+  return reason ?? judgeHeld(command, seen)
 }
 
 /** The reason to deny a shell command, or null. A command it cannot read is allowed unless it names `gh auth token`; the hook entry point allows the call on any other error. */
