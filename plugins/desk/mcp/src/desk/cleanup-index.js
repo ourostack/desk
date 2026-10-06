@@ -35,7 +35,7 @@ export function readCleanupIndex(deskRoot, env = process.env) {
 const stillOpen = (deskRoot, rel) => cardFiles(deskRoot, rel).some((file) => existsSync(file) && openResources(readFileSync(file, "utf8")).length > 0)
 
 /** Record that the card at `rel` was just written: it goes first when it has an open row, and every card with none left, or gone, is dropped. */
-export function recordCleanupCard(deskRoot, folder, hasOpen, env = process.env) {
+export function recordCleanupCard(deskRoot, folder, hasOpen, env) {
   // An archived card is listed by its live folder name, as the lookup in `cardFiles` expects.
   const rel = path.basename(path.dirname(folder)) === "_archive" ? path.join(path.dirname(path.dirname(folder)), path.basename(folder)) : folder
   const file = cleanupIndexPath(deskRoot, env)

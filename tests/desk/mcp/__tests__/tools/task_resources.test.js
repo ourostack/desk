@@ -312,3 +312,12 @@ test("a write drops listed cards whose rows are all closed or that have no Resou
   await task_update({ deskRoot: root, input: { track: "t", slug: "other", resource: { identity: "branch:o/widgets#feat/o" } } })
   assert.deepEqual(readCleanupIndex(root), ["t/other"])
 })
+
+test("a listed finished card with nothing due adds nothing, and a resource call for a card that is nowhere is refused", async () => {
+  const { root, where } = await unfinished((root) => update(root, DONE))
+  await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
+  await update(root, { resource: { identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "gone" } })
+  await fs.writeFile(cleanupIndexPath(root), JSON.stringify({ cards: ["t/chain"] }))
+  assert.equal("cleanup" in activeTasks(root), false)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "ghost", resource: { identity: "branch:o/widgets#x" } } }), /task does not exist at t\/ghost/u)
+})
