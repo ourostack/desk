@@ -65,8 +65,8 @@ test("deskProblemCard renders the mechanism, Desk version, host and fix attempt 
 })
 
 test("deskProblemCard handles empty raw text without throwing, and titles it generically", () => {
-  const { title, body } = deskProblemCard({ mechanism: "ask-gate" })
-  assert.match(title, /^ask gate/u)
+  const { title, body } = deskProblemCard({ mechanism: "desk-sync" })
+  assert.match(title, /^desk sync/u)
   assert.match(body, /Error: /u)
 })
 

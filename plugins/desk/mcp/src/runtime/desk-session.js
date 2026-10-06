@@ -20,6 +20,7 @@ import { DOCTOR_REPAIRS } from "./front-door.js"
 import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
+import { holdStateBranch } from "../util/git-stage.js"
 import { inspectStateBranch, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
@@ -245,6 +246,7 @@ export function createDeskSession(deps) {
     context.policyKey = policyKey
     context.activation = activation.activationStatus
     context.stateBranchName = activation.stateBranch
+    holdStateBranch(activation.stateBranch)
     const policy = activation.readinessPolicy
 
     if (!context.runtimeServer) {

@@ -12,7 +12,7 @@ import { REFUSAL_REASONS, RETURN_REASONS, parseReturn } from "../../../../../plu
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { TOOL_IMPLS, callTool } from "../../../../../plugins/desk/mcp/src/server.js"
-import { deferredToolsLoadHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
+import { deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 import { toolKind } from "../../../../../plugins/desk/mcp/src/factory/tool-kinds.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
@@ -547,7 +547,7 @@ test("every place that lists the tools lists task_signoff", () => {
   assert.ok(read("scripts/test-desk-docs.cjs").includes('"task_signoff"'))
   assert.ok(read("scripts/audit-codex-plugin-cache.cjs").includes('"task_signoff"'))
   assert.ok(read("plugins/desk/mcp/README.md").includes("`task_signoff`"))
-  for (const host of ["claude", "copilot"]) assert.ok(deferredToolsLoadHint(host).includes("task_signoff"), host)
+  for (const host of ["claude", "copilot"]) assert.ok(deferredToolsHint(host).includes("task_signoff"), host)
   assert.equal(toolKind({ host: "copilot-cli", name: "desk-task_signoff" }), "desk")
   assert.equal(toolKind({ host: "claude-code", name: "mcp__plugin_desk_desk__task_signoff" }), "desk")
 })

@@ -1,7 +1,7 @@
 // A local, per-machine throttle on spawning the detached failure-contract
 // filer (spec.md §1, Part 5 fix round). Before this, a mechanism that keeps
-// failing the same way -- ask-gate's catch-all on every call that
-// hits it -- spawned a fresh `file-desk-problem.js` process every single
+// failing the same way -- a boot check on every session start
+// that hits it -- spawned a fresh `file-desk-problem.js` process every single
 // time, each one doing an account lookup and `gh` calls. The outbox's own
 // fingerprint and named lock already stop a duplicate *issue*; this throttle
 // stops the local *spawning* storm before it ever reaches that point.

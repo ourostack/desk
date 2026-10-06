@@ -52,6 +52,8 @@ for (const [name, dir] of Object.entries(locations)) {
   originalMkdir(dir, { recursive: true, mode: 0o700 })
   process.env[name] = dir
 }
+// Desk commits only on the branch it expects (`main` unless the remote or the host says otherwise), so a fixture repository must start on `main`, whatever the machine's own default is.
+fs.writeFileSync(path.join(home, ".gitconfig"), "[init]\n\tdefaultBranch = main\n")
 // os.homedir() reads USERPROFILE on Windows.
 if (process.platform === "win32") process.env.USERPROFILE = home
 // Git for Windows commonly sets autocrlf and safecrlf in its system config.

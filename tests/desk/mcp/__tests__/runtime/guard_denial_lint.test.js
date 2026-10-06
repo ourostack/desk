@@ -11,7 +11,6 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { assertActionable, firstSentence } from "./_guard_text.js"
-import { askGateHook } from "../../../../../plugins/desk/mcp/src/runtime/ask-gate.js"
 import { assertNotRealStateUnderTest as assertNotRealRuntimeState } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
 import { assertNotRealStateUnderTest as assertNotRealFactoryState } from "../../../../../plugins/desk/mcp/src/factory/test-state-guard.js"
 import { hookScript } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
@@ -29,11 +28,6 @@ test("the rule: a first sentence of at most 120 characters that starts with a ve
   assert.throws(() => assertActionable(assert, "Desk denies this. Use git status."), /imperative verb/u)
   assert.throws(() => assertActionable(assert, `Use ${"x".repeat(120)}. Why.`), /over 120/u)
   assert.throws(() => assertActionable(assert, 5), /is text/u)
-})
-
-test("the ask gate denial opens with the fix", () => {
-  const gated = askGateHook({ tool_name: "Write", tool_input: { file_path: "/home/u/.claude/plugins/data/desk/desk.activation.json" }, cwd: "/home/u" }, "claude", { CLAUDE_CODE_SESSION_ATTENDED: "0" })
-  return gated.then((result) => assertActionable(assert, result.hookSpecificOutput.permissionDecisionReason, "ask-gate"))
 })
 
 test("the pre-commit card guard's refusal opens with the fix, naming the staged card", (t) => {
@@ -70,7 +64,7 @@ test("every file under plugins/desk that emits a denial is accounted for in this
   // Files that build a denial's own text, with how many sites each has. A new guard adds its messages to the tests above
   // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
-    "mcp/src/runtime/ask-gate.js": 2, "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
+    "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2,
     // Its `unresolved` is a sync outcome, not a denial.
     "mcp/src/runtime/session-sync.js": 6,

@@ -356,6 +356,33 @@ SessionEnd = [{ hooks = [{ type = "command", command = "echo custom" }] }]
   assert.doesNotMatch(result.generatedConfig, /factory-end\.cjs/u)
 })
 
+test("re-activation replaces an old generated block that pinned memories and registered host-enforcement.cjs", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const oldBlock = `# BEGIN desk activation: desk@3.2.0-alpha.150 mode=global-personal owner=desk-activation
+[features]
+memories = false
+
+[[hooks.PreToolUse]]
+matcher = "*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "node \\"plugins/desk/hooks/host-enforcement.cjs\\" codex"
+
+[[hooks.SessionEnd]]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "node \\"plugins/desk/hooks/factory-end.cjs\\" codex"
+timeout = 3
+# END desk activation
+`
+  const result = materializeCodexActivation(activationInput("global-personal", { existingConfig: `${existingConfig}\n${oldBlock}` }))
+  assert.doesNotMatch(result.generatedConfig, /host-enforcement|PreToolUse|memories/u)
+  assert.equal((result.generatedConfig.match(/factory-end\.cjs/gu) ?? []).length, 1)
+  assert.equal((result.generatedConfig.match(/BEGIN desk activation/gu) ?? []).length, 1)
+})
+
 test("Codex activation leaves the operator's own [[hooks.SessionEnd]] table alone", async () => {
   const { materializeCodexActivation } = await loadCodexAdapter()
   const own = `${existingConfig}

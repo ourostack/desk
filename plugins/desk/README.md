@@ -142,10 +142,7 @@ Desk installs a git `pre-commit` hook in the desk (marker line `# desk-card-comm
 #### Removing the card guard
 Run `node -e 'import("<desk plugin>/mcp/src/desk/card-commit-guard.js").then(m=>console.log(m.uninstallCardGuard(process.argv[1])))' <desk root>`, or delete `.git/hooks/pre-commit` (or the hook in your `core.hooksPath`) and rename `pre-commit.desk-chained`, if present, back to `pre-commit`. Boot installs the hook again on the next session start, so to keep it off, set `core.hooksPath` to a folder Desk should leave alone (tracked) or remove the plugin.
 
-### the ask gate
-In a noninteractive Claude Code session (`CLAUDE_CODE_SESSION_ATTENDED=0`), a `PreToolUse` hook (`hooks/ask-gate.cjs`) denies the write that binds a desk, because no one is there to answer first-run's question. It is not wired on Copilot CLI (Copilot hooks carry no attended-or-not signal) or on Codex.
-
-Desk's other hooks run at its own boundaries: session start and end, the factory capture, and the card guard on the desk repository above. The harness owns its tools and the shell.
+Desk's hooks run at its own boundaries: session start and end, the factory capture, and the card guard on the desk repository above. The harness owns its tools and the shell.
 
 On Codex, Desk registers only the `SessionEnd` capture hook; Codex skips an untrusted hook silently and there is no automatable trust grant.
 

@@ -23,6 +23,34 @@ import * as path from "node:path"
 const GIT_TIMEOUT_MS = 10_000
 const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT" // the same name `desk/card-commit-guard.js` exports; kept literal so this module stays dependency-free
 
+let heldStateBranch = null
+
+/** The session's configured state branch, or null for none. The session sets it when it admits a desk, so every commit below can check the checkout is where Desk commits. */
+export function holdStateBranch(name) {
+  heldStateBranch = typeof name === "string" && name.trim() !== "" ? name : null
+}
+
+/**
+ * Why Desk must not commit in `root` right now, or null when it may: the checkout is on a detached HEAD, or on a branch other than the one Desk commits on.
+ * That branch is the configured state branch when there is one, otherwise the remote's default branch (`origin/HEAD`), otherwise `main`.
+ * A Git read that cannot run (status other than 0, or 1 for a detached HEAD) is not a refusal here: the commit itself then fails and says why.
+ */
+export function commitBranchRefusal(root, spawnGit) {
+  const head = run(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
+  const status = head?.status
+  if (status !== 0 && status !== 1) return null
+  const found = status === 0 ? String(head.stdout ?? "").trim() : ""
+  let expected = heldStateBranch
+  if (expected === null) {
+    const remote = run(spawnGit, root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
+    const name = remote.status === 0 ? String(remote.stdout).trim() : ""
+    expected = name.startsWith("origin/") ? name.slice("origin/".length) : "main"
+  }
+  if (found === expected) return null
+  const where = found === "" ? "a detached HEAD" : `branch \`${found}\``
+  return `Desk did not commit: the desk checkout is on ${where}, and Desk commits only on \`${expected}\`. Switch the checkout to \`${expected}\` and save again.`
+}
+
 function run(spawnGit, root, args, extra = {}) {
   return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
 }
@@ -95,6 +123,8 @@ export function indexEntries(root, relPaths, spawnGit) {
  * staged, and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`; never throws on a Git failure.
  */
 export function commitIndexPaths(root, relPaths, entries, message, spawnGit) {
+  const refusal = commitBranchRefusal(root, spawnGit)
+  if (refusal !== null) return { ok: false, stderr: refusal }
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
   try {
     const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
@@ -137,6 +167,8 @@ export function stagePaths(root, relPaths, spawnGit) {
  * and reported as `{ ok: false, stderr: "timeout" }`.
  */
 export function commitPaths(root, relPaths, message, spawnGit) {
+  const refusal = commitBranchRefusal(root, spawnGit)
+  if (refusal !== null) return { ok: false, stderr: refusal }
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })

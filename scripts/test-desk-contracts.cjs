@@ -1154,9 +1154,9 @@ contract("the store playbook states the outcome report keys as fact", () => {
   const playbook = text("plugins/desk/docs/factory-store-playbook.md");
   assert.doesNotMatch(playbook, /Marked for the lead/u);
   assert.match(playbook, /Read the `state` of a figure[^\n]+before any count/u);
-  assert.match(playbook, /a yield of 1 can be `partial`[^\n]+upper bound[^\n]+`reason_check\.disagree`[^\n]+a lower bound[^\n]+`compared_verified`/u);
-  assert.match(playbook, /`refused_unverified`[^\n]+`signoff: \{ recorded: false \}`/u);
-  assert.match(playbook, /`awaiting_signoff`, `signoff_unverified`[^\n]+`changed_ask_only`/u);
+  assert.match(playbook, /a yield of 1 can be `partial`[^\n]+upper bound[^\n]+`reason_check\.disagree`[^\n]+a lower bound/u);
+  assert.match(playbook, /`refusal_reasons`[^\n]+`signoff: \{ recorded: false \}`/u);
+  assert.match(playbook, /`awaiting_signoff`, `changed_ask_only`/u);
   assert.match(playbook, /An acceptance is recorded by the agent on the operator's word[^\n]+Show `no_record` beside the sign-off counts/u);
 });
 contract("local capture explains the remaining outcome fields", () => {

@@ -412,11 +412,11 @@ test("the build publishes first-pass yield with what it counted and what it left
   const rollup = JSON.parse(readFileSync(path.join(out, "rollups", "outcomes.json"), "utf8"))
   assert.deepEqual(Object.keys(rollup), ["attention", "first_pass_yield", "groupings", "rework", "schema", "signoff"])
   assert.deepEqual(rollup.first_pass_yield, {
-    state: "partial", value: 0.5, reasons: ["awaiting_signoff"], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 1, signoff_unverified: 0, changed_ask_only: 0,
+    state: "partial", value: 0.5, reasons: ["awaiting_signoff"], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 1, changed_ask_only: 0,
     excluded: [{ reason: "history_not_recorded", jobs: 1 }],
   })
   assert.equal(rollup.rework.state, "partial")
-  assert.deepEqual(rollup.rework.reason_check, { state: "partial", compared: 1, disagree: 0, compared_verified: 1, reasons: ["history_not_recorded"] })
+  assert.deepEqual(rollup.rework.reason_check, { state: "partial", compared: 1, disagree: 0, reasons: ["history_not_recorded"] })
   const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
   assert.match(page, /at most 1 of 2 delivered jobs passed first time \(upper bound 50\.00%/u)
   assert.match(page, /Left out of the count: 1 job \(the task card does not record what was sent back\)\./u)

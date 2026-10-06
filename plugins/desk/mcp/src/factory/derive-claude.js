@@ -209,7 +209,7 @@ function isToolResultLine(line) {
 // content (text, image, or string); and it isn't made up only of tool
 // results. Only ever called on a line already known to be `type: "user"`
 // (from `handleUserLine`).
-export function isHumanPromptLine(line) {
+function isHumanPromptLine(line) {
   if (line.isMeta || line.isCompactSummary) return false
   if (line.promptSource === "system") return false
   const originKind = line.origin?.kind

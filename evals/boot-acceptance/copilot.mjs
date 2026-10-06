@@ -442,7 +442,6 @@ export function compactCopilotTranscript(text) {
  */
 export const COPILOT_NOT_APPLICABLE = [
   "dollar cost: Copilot reports premium requests, not USD (summary.premium_requests holds the figure); there is no per-run budget cap",
-  "the ask gate: Copilot gives hooks no attended-or-not signal, so the ask gate has no Copilot counterpart",
   "hook-denied notes: a refusal reaches the checks as Claude's `PreToolUse:<Tool> hook error:` text (normalized from Copilot's `Denied by preToolUse hook`), so a refusal reads the same on both hosts",
 ]
 

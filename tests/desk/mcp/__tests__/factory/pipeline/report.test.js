@@ -625,7 +625,7 @@ test("the rollups page section names the sign-off counts, or says they are not r
     "## Sign-off", "", "Sign-off: not recorded in any session of this store.", "",
   ])
   const signoff = {
-    recorded: true, jobs: 9, accepted: 3, accepted_unverified: 0, delivered_unsigned: 2, refused: 1, refused_unverified: 0, reopened: 0, not_recorded: 1, not_delivered: 1,
+    recorded: true, jobs: 9, accepted: 3, delivered_unsigned: 2, refused: 1, reopened: 0, not_recorded: 1, not_delivered: 1,
     no_record: 2, jobs_without_work_record: 1,
     refusal_reasons: { not_what_was_asked: 0, defect: 1, changed_ask: 0, incomplete: 0, other: 0 },
     waits: { signed: { lt_1h: 1, lt_1d: 2, lt_7d: 0, ge_7d: 0 }, unsigned: { lt_1h: 0, lt_1d: 0, lt_7d: 2, ge_7d: 0 } },
@@ -671,7 +671,7 @@ test("the rollups page says what was sent back, where it was caught and how ofte
     at_review: { agent_error: 0, changed_ask: 0, new_information: 0, external: 0 },
     after_delivery: { agent_error: 2, changed_ask: 1, new_information: 0, external: 0 },
   }
-  assert.equal(section({ state: "measured", reasons: [], n: 3, N: 3, returns, changed_ask: 1, reason_check: { state: "measured", reasons: [], compared: 4, disagree: 1, compared_verified: 3 } }), [
+  assert.equal(section({ state: "measured", reasons: [], n: 3, N: 3, returns, changed_ask: 1, reason_check: { state: "measured", reasons: [], compared: 4, disagree: 1 } }), [
     "- Jobs with returns recorded: 3 of 3.",
     "- Returns caught in the task: new_information 1. At review: none. After delivery: agent_error 2, changed_ask 1.",
     "- Returns that were changed asks: 1.",
