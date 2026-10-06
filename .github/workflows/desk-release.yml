@@ -230,14 +230,17 @@ jobs:
         run: |
           set -euo pipefail
           head="$(git rev-parse HEAD)"
-          candidates="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --search "-label:$LABEL" --limit 200 --json number,mergeCommit --jq '.[] | select(.mergeCommit != null) | "\(.number) \(.mergeCommit.oid)"')"
+          # Only the last 30 days: older pull requests are not commented on, and a first run stays small.
+          since="${MARK_SINCE:-$(date -u -d '30 days ago' +%F)}"
+          candidates="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --search "-label:$LABEL merged:>=$since" --limit 200 --json number,mergeCommit --jq '.[] | select(.mergeCommit != null) | "\(.number) \(.mergeCommit.oid)"')"
           created=false
           marked=0
           while read -r number commit; do
             [ -n "$number" ] || continue
-            # Carried only when a release commit by the release bot follows its merge commit on main.
+            # Carried only when a release commit follows its merge commit on main. A release commit is the workflow's own: the bot's
+            # exact author email, and a subject that is exactly "Release Desk <version>".
             git merge-base --is-ancestor "$commit" "$head" 2>/dev/null || continue
-            subject="$(git log --reverse --ancestry-path --format=%s --extended-regexp --author='github-actions\[bot\]' --grep='^Release Desk [0-9]' "$commit..$head" | sed -n 1p)"
+            subject="$(git log --reverse --ancestry-path --format=%s --extended-regexp --author='^github-actions\[bot\] <41898282\+github-actions\[bot\]@users\.noreply\.github\.com>$' --grep='^Release Desk [0-9]' "$commit..$head" | grep -E -m 1 '^Release Desk [0-9]+\.[0-9]+\.[0-9]+(-alpha\.[0-9]+)?$' || true)"
             [ -n "$subject" ] || continue
             version="${subject#Release Desk }"
             if [ "$created" = false ]; then

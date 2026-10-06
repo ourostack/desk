@@ -256,7 +256,9 @@ test("the release workflow marks every released pull request that lacks the mark
   assert.equal(checkout.with["persist-credentials"], false)
   assert.equal(checkout.with["fetch-depth"], 0)
   const run = stepNamed(announce, "Comment on and label every released pull request that lacks the label").run
-  assert.match(run, /--search "-label:\$LABEL"/u)
+  assert.match(run, /--search "-label:\$LABEL merged:>=\$since"/u, "only recent pull requests")
+  assert.match(run, /since="\$\{MARK_SINCE:-\$\(date -u -d '30 days ago' \+%F\)\}"/u)
+  assert.match(run, /--author='\^github-actions\\\[bot\\\] <41898282\\\+github-actions\\\[bot\\\]@users\\\.noreply\\\.github\\\.com>\$'/u, "the bot's exact author")
   assert.match(run, /--grep='\^Release Desk \[0-9\]'/u, "the carrying release is found by its subject")
   assert.match(run, /grep -qxF -- "\$body"/u, "a rerun does not comment twice")
   assert.equal(announce.env.LABEL, "released")
@@ -271,10 +273,13 @@ function markingRun({ commentsOn = {}, mark }) {
   const dir = mkdtempSync(path.join(tmpdir(), "announce-"))
   const git = (...args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" })
   git("init", "-q", "-b", "main")
-  const commit = (name, message) => spawnSync("git", ["-C", dir, "-c", `user.name=${name}`, "-c", "user.email=u@example.com", "commit", "-q", "--allow-empty", "-m", message], { encoding: "utf8" })
+  const BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+  const commit = (name, message, email = "u@example.com") => spawnSync("git", ["-C", dir, "-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "-q", "--allow-empty", "-m", message], { encoding: "utf8" })
   const shaOf = {}
   for (const [name, message] of mark.history) {
-    commit(name === "bot" ? "github-actions[bot]" : "Dev", message)
+    if (name === "bot") commit("github-actions[bot]", message, BOT_EMAIL)
+    else if (name === "spoof") commit("github-actions[bot]", message)
+    else commit("Dev", message)
     shaOf[message] = git("rev-parse", "HEAD").stdout.trim()
   }
   const bin = path.join(dir, "bin")
@@ -290,16 +295,16 @@ ${commentCases}
 esac
 ${mark.failOn ? `case "$*" in *"${mark.failOn}"*) exit 1 ;; esac` : ""}
 `, { mode: 0o755 })
-  const env = { ...process.env, RUNNER_TEMP: dir, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: path.join(dir, "summary"), LABEL: "released" }
+  const env = { ...process.env, RUNNER_TEMP: dir, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: path.join(dir, "summary"), LABEL: "released", MARK_SINCE: "2026-09-06" }
   const result = spawnSync("bash", ["-c", run], { cwd: dir, env, encoding: "utf8" })
   const calls = existsSync(ghLog) ? readFileSync(ghLog, "utf8") : ""
   rmSync(dir, { recursive: true, force: true })
   return { result, calls }
 }
-const HISTORY = [["bot", "Release Desk 3.2.0-alpha.1"], ["dev", "first (#10)"], ["dev", "second (#11)"], ["bot", "Release Desk 3.2.0-alpha.2"], ["dev", "third (#12)"], ["bot", "Release Desk 3.2.0-alpha.3"], ["dev", "Release Desk 3.2.0-alpha.9 quoted by a person (#13)"], ["dev", "unreleased (#14)"]]
+const HISTORY = [["bot", "Release Desk 3.2.0-alpha.1"], ["dev", "first (#10)"], ["dev", "second (#11)"], ["bot", "Release Desk 3.2.0-alpha.2"], ["dev", "third (#12)"], ["bot", "Release Desk 3.2.0-alpha.3"], ["spoof", "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"], ["bot", "Not a release (#15)\n\nRelease Desk 3.2.0-alpha.8 only in the body"], ["bot", "Release Desk 3.2.0-alpha.1; rm -rf"], ["dev", "unreleased (#14)"]]
 
 test("marking labels each unlabeled released pull request with the first release after it, and skips unreleased ones", () => {
-  const { result, calls } = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"], [12, "third (#12)"], [14, "unreleased (#14)"], [13, "Release Desk 3.2.0-alpha.9 quoted by a person (#13)"]] } })
+  const { result, calls } = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"], [12, "third (#12)"], [14, "unreleased (#14)"], [13, "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"]] } })
   assert.equal(result.status, 0, result.stderr)
   assert.match(calls, /label create released --repo o\/r /u)
   for (const [number, version] of [[10, "alpha.2"], [11, "alpha.2"], [12, "alpha.3"]]) {
