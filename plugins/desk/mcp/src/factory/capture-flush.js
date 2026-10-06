@@ -30,6 +30,7 @@
 
 import { EMPTY_RECORD, captureFor, isCaptureInvalid } from "./capture-publish.js"
 import { CAPTURE_PATH } from "./capture-schema.js"
+import { loopSlotFrom } from "./loop-slot.js"
 import { gitBlobSha, readStatus, writeStatus } from "./outbox.js"
 
 export const CAPTURE_FLAG = 1
@@ -75,7 +76,8 @@ export function planCapture({ status, consent, store, intakeId, nowMs, mayBeOpen
   const coverage = freshCoverage(status, nowMs)
   if (coverage === null || nowMs < timeOf(cap.retry_after)) return none
   const sentBefore = (typeof cap.blob === "string" && SHA.test(cap.blob)) || Number.isSafeInteger(cap.pr)
-  const made = captureFor(coverage, { store, intakeId, sentBefore, contributing: contributingStores(consent) })
+  const loop = loopSlotFrom(isObject(status?.loop) ? status.loop.health : null, nowMs)
+  const made = captureFor(coverage, { store, intakeId, sentBefore, loop, contributing: contributingStores(consent) })
   if (isCaptureInvalid(made)) return { ...none, invalid: true }
   if (made === null || made.sha === cap.blob) return none
   const sentAt = timeOf(cap.sent_at)

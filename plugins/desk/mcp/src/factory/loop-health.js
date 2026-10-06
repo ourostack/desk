@@ -1,7 +1,7 @@
 // The loop's health record and its own alarms: the `measure` step.
 //
 // `buildLoopHealth` reads the improvement cards and the numbers the other steps left in `status.json` and builds
-// the `desk.factory.loop/1` record, kept on this machine (a later change flattens it to `loop_slot_v1` and delivers it): counts, ages, the last result of each step
+// the `desk.factory.loop/1` record, kept on this machine (`loop-slot.js` flattens it to the capture record's `loop_slot_v1`): counts, ages, the last result of each step
 // and the headless evaluator's state. Every number is a Count in the number-states shape every published factory number
 // uses, `{ state: "measured", value, reasons: [] }` or `{ state: "unavailable", value: null, reasons: [reason] }`, so a
 // number that could not be read never shows as 0. The record holds codes,
@@ -29,6 +29,7 @@ import { conditionOf, observeConditions } from "./loop-conditions.js"
 import { MIN_GAP_HOURS, STEPS, recordStep, staleSteps } from "./loop-status.js"
 import { readStatus, updateStatus } from "./outbox.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
+import { slotValid } from "./loop-slot.js"
 import { PATTERNS } from "./schema.js"
 
 export const AGE_ALARM_DAYS = 7
@@ -303,7 +304,7 @@ export function assembleLoop({ status, read, nowMs, version }) {
     worker: workerSection(loopStatus.worker),
   }
   const blocked = evaluator !== null && isObject(evaluator.headless) && isInteger(evaluator.headless.blocked_days) ? evaluator.headless.blocked_days : null
-  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid }, cards: cards.cards }
+  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid, slot_invalid: !slotValid(loop) }, cards: cards.cards }
 }
 
 function toMillis(now) {
@@ -355,6 +356,8 @@ export function loopAlarms(loop, signals = {}) {
   if (BLOCKING_STATES.includes(evaluator.headless.state) && isInteger(signals.blocked_days) && signals.blocked_days >= BLOCKED_DAYS_FOR_ALARM) alarms.push({ name: "headless_blocked", evidence: { blocked_days: signals.blocked_days } })
   if (isInteger(signals.cards_invalid) && signals.cards_invalid > 0) alarms.push({ name: "cards_invalid", evidence: { files: signals.cards_invalid } })
   if (measuredAbove(evaluator.labels_quarantined, 0)) alarms.push({ name: "labels_quarantined", evidence: { count: evaluator.labels_quarantined.value } })
+  // The record's own slot fails the store's rule, so the capture record goes without it: said once as an alarm, never silence.
+  if (signals.slot_invalid === true) alarms.push({ name: "capture_loop_slot", evidence: {} })
   for (const step of signals.attempted ?? []) if (STEPS.includes(step) && steps[step].stale) alarms.push({ name: `step_stale:${step}`, evidence: { failures: steps[step].failures.value } })
   return alarms
 }
