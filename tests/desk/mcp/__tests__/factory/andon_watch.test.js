@@ -50,10 +50,13 @@ test("the refresh records the store's open andon issues for tracked plugins that
   assert.deepEqual(andon["acme/work"], { checked_at: "2026-09-26T00:00:00.000Z", issues: [] }, "another store's record stays")
 }))
 
-test("a store without factory.json tracks nothing, and the record is capped", () => scratch(async ({ env }) => {
+test("a store without factory.json is config_missing and records nothing, never an empty list; a present empty config is a real look; the record is capped", () => scratch(async ({ env }) => {
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   const missing = fakeGh({ config: { code: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" }, issues: [issue(1)] })
-  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: missing.runner, now: NOW }), { result: "recorded", count: 0 })
+  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: missing.runner, now: NOW }), { result: "config_missing" })
+  assert.equal((await readStatus(env)).andon, undefined, "no record that reads as no open andon")
+  const empty = fakeGh({ config: content({ andon: { plugins: [] } }), issues: [issue(1)] })
+  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: empty.runner, now: NOW }), { result: "recorded", count: 0 })
   assert.deepEqual((await readStatus(env)).andon[STORE].issues, [])
   const many = fakeGh({ issues: Array.from({ length: MAX_RECORDED + 5 }, (_, index) => issue(index + 1)) })
   assert.deepEqual(await refreshAndon(env, { store: STORE, runner: many.runner, now: NOW }), { result: "recorded", count: MAX_RECORDED })

@@ -10,6 +10,7 @@ import * as path from "node:path"
 
 import { claimNext, readCards, updateCard, cardKey } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { conditionOf } from "../../../../../plugins/desk/mcp/src/factory/loop-conditions.js"
+import { reading } from "../../../../../plugins/desk/mcp/src/factory/improvement-verify.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { MAX_ISSUES_PER_KIND, runRouteIssuesStep } from "../../../../../plugins/desk/mcp/src/factory/route-issues.js"
 
@@ -192,14 +193,42 @@ test("each successful read observes the complete list; an issue that went away r
   assert.equal(status.loop.route_issues.andon_open, 1)
 }))
 
-test("a store whose build has no failing-build label simply has none; a store without factory.json tracks no andon issue", () => scratch(async (ctx) => {
+test("a store whose build has no failing-build label simply has none; a store without factory.json is config_missing and its andon kind is not observed", () => scratch(async (ctx) => {
+  // Reproduction r4: open andon #1 was present, then factory.json returns 404. That must never read as a clear look.
+  await run(ctx, { runner: fakeGh({ repos: { [STORE]: { andon: [andon(1)] } } }).runner })
+  const later = new Date(NOW.getTime() + 7 * 3600 * 1000)
   const { runner } = fakeGh({ repos: { [STORE]: { config: { code: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" }, andon: [andon(1)] } } })
-  const result = await run(ctx, { runner })
-  assert.deepEqual([result.ok, result.result], [true, "routed"])
-  assert.deepEqual(result.counts.open_now, { andon_open: 0, store_build_failing: 0, desk_problems_open: 0 })
+  const result = await run(ctx, { runner, now: later })
+  assert.deepEqual([result.ok, result.result], [false, "partly_read"])
+  assert.deepEqual(result.counts.failed, { andon: "config_missing" })
+  assert.deepEqual(result.counts.open_now, { store_build_failing: 0, desk_problems_open: 0 }, "no andon number from a store whose config is missing")
+  const status = await readStatus(ctx.env)
+  assert.deepEqual(conditionOf(status, cardKey("andon", `${STORE}#1`)).present, true, "still present: a missing config is not a look")
+  assert.equal(status.loop.route_issues.andon_open, undefined)
+  assert.equal(reading(status, { key: cardKey("andon", `${STORE}#1`), source: "andon" }, later.getTime() + 3600000).state === "recovered", false)
   const invalid = await run(ctx, { runner: fakeGh({ repos: { [STORE]: { config: content({ bogus: true }) } } }).runner })
   assert.deepEqual(invalid.counts.failed, { andon: "invalid_config" })
   assert.deepEqual(invalid.counts.kinds_read, ["store_build", "desk_problem"])
+  // A present config that tracks no plugins is a real look, and the issue reads as clear.
+  const empty = await run(ctx, { runner: fakeGh({ repos: { [STORE]: { config: content({ andon: { plugins: [] } }) } } }).runner, now: new Date(later.getTime() + 7 * 3600 * 1000) })
+  assert.deepEqual(empty.counts.failed, {})
+  assert.equal(conditionOf(await readStatus(ctx.env), cardKey("andon", `${STORE}#1`)).present, false)
+}))
+
+test("an andon issue still open but dropped from a shrunken plugin list stays present, opens no card and is not counted", () => scratch(async (ctx) => {
+  const crew = (number) => andon(number, { title: "Andon: crew 0.2.3 tool_retries other" })
+  await run(ctx, { runner: fakeGh({ repos: { [STORE]: { config: content({ andon: { plugins: ["crew", "desk"] } }), andon: [andon(1), crew(2)] } } }).runner })
+  const later = new Date(NOW.getTime() + 7 * 3600 * 1000)
+  const shrunk = await run(ctx, { runner: fakeGh({ repos: { [STORE]: { config: content({ andon: { plugins: ["desk"] } }), andon: [andon(1), crew(2), crew(3)] } } }).runner, now: later })
+  assert.deepEqual(shrunk.opened, [])
+  assert.equal(shrunk.counts.open_now.andon_open, 1)
+  let status = await readStatus(ctx.env)
+  assert.equal(conditionOf(status, cardKey("andon", `${STORE}#2`)).present, true, "still open, excluded only by the plugin list")
+  assert.equal(conditionOf(status, cardKey("andon", `${STORE}#3`)).state, "unavailable", "never recorded, so nothing to keep")
+  // Dismissed or closed, it reads as clear.
+  await run(ctx, { runner: fakeGh({ repos: { [STORE]: { config: content({ andon: { plugins: ["desk"] } }), andon: [andon(1), andon(2, { title: "Andon: crew 0.2.3 tool_retries other", labels: ["andon", "andon-dismissed"] })] } } }).runner, now: new Date(later.getTime() + 7 * 3600 * 1000) })
+  status = await readStatus(ctx.env)
+  assert.equal(conditionOf(status, cardKey("andon", `${STORE}#2`)).present, false)
 }))
 
 test("a token problem on one account fails only that account's stores; the healthy store still opens its cards", () => scratch(async (ctx) => {

@@ -13,9 +13,12 @@
 // resolves `{ result: "recorded", count }`. It records nothing and resolves
 // `{ result: <code> }` when the store is not contributing (`not_opted_in`),
 // has no account (`no_account`), `gh` is missing (`gh_missing`), the token
-// cannot be read (`auth_failed`), the store's `factory.json` is not valid
-// (`invalid_config`), or GitHub fails (the issues client's codes). A store
-// without `factory.json` tracks nothing, so its record is empty.
+// cannot be read (`auth_failed`), the store's `factory.json` is missing
+// (`config_missing`: a 404, so deleted, renamed or on another branch) or not
+// valid (`invalid_config`), or GitHub fails (the issues client's codes). A
+// missing `factory.json` is never read as "tracks nothing": that would hide
+// every open andon issue and read as clear (fail closed, ruling 2026-10-06).
+// Only a present, valid config may track no plugins.
 //
 // The session-start boot check (`boot-check.js` `andonBootCheck`) reads the
 // record synchronously and prints one line per store with open issues, so
@@ -34,8 +37,28 @@ export const BUILD_AUTHOR = "github-actions[bot]"
 /** The open andon issues the store's build opened for a tracked plugin and no one dismissed, lowest number first. Shared with the loop's route step. */
 export function trackedAndonIssues(issues, tracked) {
   return issues
-    .filter((issue) => !issue.pull_request && issue.author === BUILD_AUTHOR && !issue.labels.includes(DISMISSED_LABEL) && tracked.has(parseAndonTitle(issue.title)?.plugin))
+    .filter((issue) => buildAndon(issue) && tracked.has(parseAndonTitle(issue.title)?.plugin))
     .sort((left, right) => left.number - right.number)
+}
+
+/** Candidates for a tracked andon issue before the plugin filter: open issues the store's build opened and no one dismissed. */
+const buildAndon = (issue) => !issue.pull_request && issue.author === BUILD_AUTHOR && !issue.labels.includes(DISMISSED_LABEL)
+
+/**
+ * The open andon issues of `issues` the build opened and no one dismissed but whose plugin `tracked` leaves out, lowest number first.
+ * The loop keeps their ids present instead of reading a shrunken plugin list as a clear look. Shared with the loop's route step.
+ */
+export function untrackedAndonIssues(issues, tracked) {
+  return issues.filter((issue) => buildAndon(issue) && !tracked.has(parseAndonTitle(issue.title)?.plugin)).sort((left, right) => left.number - right.number)
+}
+
+/**
+ * `readAndonConfig(client) -> { ok: true, plugins } | { ok: false, code }`: the store's `factory.json` read through the issues client.
+ * A missing file is `config_missing`, never an empty plugin list. Shared with the loop's route step.
+ */
+export async function readAndonConfig(client) {
+  const text = await client.readFile("factory.json")
+  return text === null ? { ok: false, code: "config_missing" } : parseStoreConfig(text)
 }
 
 /** See the header. Never throws for GitHub or consent problems; each is a result code. */
@@ -50,8 +73,8 @@ export async function refreshAndon(env, { store, runner, now = Date.now }) {
   let issues
   try {
     const client = issuesClient({ runner, repo: store, token })
-    const config = parseStoreConfig(await client.readFile("factory.json"))
-    if (!config.ok) return { result: "invalid_config" }
+    const config = await readAndonConfig(client)
+    if (!config.ok) return { result: config.code === "config_missing" ? "config_missing" : "invalid_config" }
     const tracked = new Set(config.plugins)
     issues = trackedAndonIssues(await client.listIssues({ label: ANDON_LABEL, state: "open" }), tracked)
       .slice(0, MAX_RECORDED)
