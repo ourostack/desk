@@ -50,7 +50,9 @@
 //
 // `andonUnknown({ env, now })` names each contributing store whose andon
 // state is not known (no record, an unreadable `status.json`, a failed or a
-// stale refresh), and `andonUnknownLine` says so; see it.
+// stale refresh), or one entry with `store: null` (`consent_unreadable`) when
+// `consent.json` exists but cannot be read, and `andonUnknownLine` says so;
+// see it.
 //
 // `andonBootCheck({ env })` reads, when a store has `contribute: true`,
 // `status.json`'s `andon` record, which the start-time delivery refreshes
@@ -313,6 +315,8 @@ const ANDON_CODE = /^[a-z0-9_]{1,40}$/u
  * or `stale` (the last success is older than `ANDON_STALE_MS`). Never writes.
  */
 export function andonUnknown({ env, now = Date.now() }) {
+  // A consent file that exists and cannot be read hides which stores this machine contributes to: that is said, never read as none.
+  if (consentRecords(factoryStateDir(env)) === null) return [{ store: null, since: null, code: "consent_unreadable" }]
   const stores = contributingStores(env).sort()
   if (stores.length === 0) return []
   const status = readState(path.join(factoryStateDir(env), "status.json"), {})
@@ -334,6 +338,7 @@ export function andonUnknown({ env, now = Date.now() }) {
 
 /** The agent line for one `andonUnknown` entry. */
 export function andonUnknownLine({ store, since, code }) {
+  if (store === null) return `Factory: andon state unknown (${code}): consent.json cannot be read, so the stores this machine contributes to are unknown`
   return `Factory: andon state unknown for ${store} ${since === null ? "(never refreshed)" : `since ${since.slice(0, 10)}`} (${code})`
 }
 

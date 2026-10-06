@@ -48,7 +48,7 @@ async function deskFor(base, name, store) {
 async function marker(env, base, n, desk, extra = {}, host = "claude-code") {
   const log = path.join(base, `log-${n}.jsonl`)
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: log, cwd: base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString(), ...extra })
+  await writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: log, cwd: base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(), ...extra })
 }
 
 // Sessions 1..count delivered to the store and merged there, each from a desk declaring the store, with labels for the sessions in `labelled`.
@@ -163,9 +163,10 @@ test("an invalid declaration, or a desk folder that no longer resolves, freezes 
 test("a pruned marker keeps the derive-time route: a pending facts file and late labels publish, and nothing is deleted", () => scratch(async (ctx) => {
   const { github } = await delivered(ctx, 1)
   const root = await factoryStateRoot(ctx.env)
-  // Session 2 was derived while its marker lived, which the receipt records; then the marker was pruned. Session 1's labels arrive late.
+  // Session 2 was derived on a positive route while its marker lived, which the receipt records; then the marker was pruned. Session 1's
+  // labels arrive late.
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(2))).written, true)
-  await writeStatus(ctx.env, { derivations: { [nameOf(2)]: { store: STORE, marker: "x", binding_version: 4 } } })
+  await writeStatus(ctx.env, { derivations: { [nameOf(2)]: { store: STORE, checked_route: STORE, marker: "x", binding_version: 4 } } })
   await fs.rm(path.join(root, "markers", nameOf(1)))
   assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), session: sessionId(1) })).written, true)
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
@@ -175,18 +176,18 @@ test("a pruned marker keeps the derive-time route: a pending facts file and late
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`, `facts/${nameOf(2)}`, `labels/${job}/${sessionId(1)}.json`])
 }))
 
-test("an older hook's marker with no recorded route keeps the derive-time route: it publishes, and is never deleted", () => scratch(async (ctx) => {
+test("an older hook's marker with no recorded route is never published on the default route nothing checked, and never deleted", () => scratch(async (ctx) => {
   await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
   // The desk declares nothing, so its default route needs the overlay check this hook never recorded.
   const desk = await deskFor(ctx.base, "old-desk", null)
   await marker(ctx.env, ctx.base, 1, desk)
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
   const github = fakeGitHub()
-  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
-  github.mergeOpenPr()
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   await offline(ctx, github)
-  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+  assert.deepEqual(dataFiles(github), [])
+  const root = await factoryStateRoot(ctx.env)
+  assert.equal((await fs.readdir(root, { recursive: true })).some((file) => !file.startsWith("markers") && file.endsWith(nameOf(1))), true, "the copy stays on this machine")
 }))
 
 test("a copy left in an older store's outbox is stale once the receipt names the store the session moved to: never published, never deleted", () => scratch(async (ctx) => {
@@ -1014,6 +1015,40 @@ test("row 12: status.json lost while an intake PR is open: a machine that delive
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
   // With the entry written again, an idle flush is offline as before.
   await offline(ctx, github)
+}))
+
+test("row 12 variant: a look that fails offline is not the end: the entry keeps the PR as possibly open, and the next flush goes online and closes it", () => scratch(async (ctx) => {
+  let down = false
+  const { github } = await delivered(ctx, 1, { github: { intercept: (call) => (down && call.args[0] === "api" ? { code: 1, stdout: "", stderr: "error connecting to api.github.com\n" } : undefined) } })
+  await another(ctx)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  const open = github.pulls.at(-1)
+  await fs.rm(await outboxFile(ctx, 9))
+  await updateStatus(ctx.env, (status) => ({ ...status, last_flush: {} }))
+  down = true
+  assert.deepEqual(await run(ctx.env, github), { result: "offline" })
+  assert.equal((await lastFlush(ctx)).intake_pushed, true, "the look is still owed")
+  assert.equal(open.state, "open")
+  // A flush that ends before it reads the status (no consent) keeps it owed as well.
+  await updateStatus(ctx.env, (status) => ({ ...status, last_flush: {} }))
+  await setConsent(ctx.env, { store: STORE, contribute: false })
+  assert.deepEqual(await run(ctx.env, github), { result: "not_opted_in" })
+  assert.equal((await lastFlush(ctx)).intake_pushed, true)
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  down = false
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.equal(open.state, "closed")
+  assert.equal((await lastFlush(ctx)).intake_pushed, undefined)
+  await offline(ctx, github)
+}))
+
+test("review finding 8: a flush that went online and found nothing to change clears a carried account fault", () => scratch(async (ctx) => {
+  const { github } = await delivered(ctx, 1)
+  await updateStatus(ctx.env, (status) => ({ ...status, last_flush: { [STORE]: { ...status.last_flush[STORE], result: "nothing_pending", account_fault: "auth_failed", intake_pushed: true } } }))
+  const before = github.calls.length
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.ok(github.calls.length > before, "it went online")
+  assert.equal((await lastFlush(ctx)).account_fault, undefined)
 }))
 
 test("row 12 variant: a first flush on a machine that never delivered stays offline with nothing to do", () => scratch(async (ctx) => {

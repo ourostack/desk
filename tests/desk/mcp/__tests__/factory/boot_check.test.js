@@ -447,6 +447,10 @@ test("andonUnknown names every contributing store whose andon state is not known
   assert.deepEqual(andonUnknown({ env }), [])
   assert.equal(andonUnknownLine({ store: STORE, since: null, code: "not_refreshed" }), "Factory: andon state unknown for ourostack/factory (never refreshed) (not_refreshed)")
   assert.equal(andonUnknownLine({ store: STORE, since: "2026-01-01T00:00:00.000Z", code: "stale" }), "Factory: andon state unknown for ourostack/factory since 2026-01-01 (stale)")
+  // Review finding 12: a consent file that cannot be read hides which stores contribute; that is said, never read as none.
+  await fs.writeFile(path.join(root, "consent.json"), "{broken")
+  assert.deepEqual(andonUnknown({ env, now: NOW }), [{ store: null, since: null, code: "consent_unreadable" }])
+  assert.equal(andonUnknownLine(andonUnknown({ env, now: NOW })[0]), "Factory: andon state unknown (consent_unreadable): consent.json cannot be read, so the stores this machine contributes to are unknown")
 }))
 
 test("allTasks lists every readable card, live and archived, with no status or age filter, under the person prefix", () => scratch(async ({ desk }) => {

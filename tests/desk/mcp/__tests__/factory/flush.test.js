@@ -48,9 +48,11 @@ async function intakeBranch(env) {
   return `intake/${(await readConsent(env)).stores[STORE].intake_id}`
 }
 
+// With the derivation receipt a sweep of this Desk writes on a positive route (`checked_route`): a session whose marker is gone is here only on it.
 async function put(env, facts) {
   const written = await writeLocalFacts(env, STORE, facts)
   assert.equal(written.written, true, JSON.stringify(written))
+  await writeStatus(env, { derivations: { [written.name]: { store: STORE, checked_route: STORE } } })
   return written.name
 }
 
@@ -577,7 +579,7 @@ async function deskRepository(base, remote) {
 async function markerFor(env, desk, n) {
   const log = path.join(desk, "..", `log-${n}.jsonl`)
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: desk, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: desk, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
 }
 
 test("a public or unknown desk publishes machine-keyed job IDs without timing; a private desk keeps its job clock", () => scratch(async ({ base, env }) => {
@@ -594,7 +596,7 @@ test("a public or unknown desk publishes machine-keyed job IDs without timing; a
   await markerFor(env, publicDesk, 6)
   const unbound = path.join(base, "log-7.jsonl")
   await fs.writeFile(unbound, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(7), log_path: unbound, cwd: base, desk_root: null, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(7), log_path: unbound, cwd: base, desk_root: null, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   const withNullRepo = localFacts(4, { refs: { prs: [], commits: [{ repo: null, sha: "c".repeat(40) }], unresolved: { prs: 0, commits: 0 } } })
   const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3)), await put(env, withNullRepo), await put(env, localFacts(5)), await put(env, localFacts(6))]
   const github = fakeGitHub({ visibility: { "acme/public-desk": "public", "acme/private-desk": "private" } })
@@ -623,7 +625,7 @@ test("agreement table, flush row: a session with no marker keeps the desk its re
   await markerFor(env, privateDesk, 1)
   const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
   // Session 2's marker was pruned but its receipt names the private desk; session 3 has no marker and no receipt desk.
-  await writeStatus(env, { derivations: { [names[1]]: { desk_root: privateDesk, desk_repo: "acme/private-desk" }, [names[2]]: { binding_version: 5 } } })
+  await writeStatus(env, { derivations: { [names[1]]: { store: STORE, checked_route: STORE, desk_root: privateDesk, desk_repo: "acme/private-desk" }, [names[2]]: { store: STORE, checked_route: STORE, binding_version: 5 } } })
   const github = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
   assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
   const head = github.headFacts(STORE, await intakeBranch(env))
@@ -653,7 +655,7 @@ test("a session published while its desk was public is never published plain onc
   const desk = await deskRepository(base, "https://github.com/acme/flipped-desk.git")
   await markerFor(env, desk, 1)
   const name = await put(env, localFacts(1))
-  await writeStatus(env, { derivations: { [name]: { desk_root: desk, desk_repo: "acme/flipped-desk" } } })
+  await writeStatus(env, { derivations: { [name]: { store: STORE, checked_route: STORE, desk_root: desk, desk_repo: "acme/flipped-desk" } } })
   const github = fakeGitHub({ visibility: { "acme/flipped-desk": "public" } })
   assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
   const secret = await readMachineSecret(env)
@@ -681,9 +683,9 @@ test("a marker-less session whose root now holds another repository, or whose re
   const desk = await deskRepository(base, "https://github.com/acme/private-desk.git")
   const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
   await writeStatus(env, { derivations: {
-    [names[0]]: { desk_root: desk, desk_repo: "acme/old-desk" },
-    [names[1]]: { desk_root: desk },
-    [names[2]]: { desk_root: desk, desk_repo: "acme/private-desk" },
+    [names[0]]: { store: STORE, checked_route: STORE, desk_root: desk, desk_repo: "acme/old-desk" },
+    [names[1]]: { store: STORE, checked_route: STORE, desk_root: desk },
+    [names[2]]: { store: STORE, checked_route: STORE, desk_root: desk, desk_repo: "acme/private-desk" },
   } })
   const github = fakeGitHub({ visibility: { "acme/private-desk": "private", "acme/old-desk": "private" } })
   assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
@@ -709,9 +711,9 @@ test("a marker session whose desk root now holds another repository, or none, is
   const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
   // The receipts record the session's own desk, a public one for the first and the private one for the others.
   await writeStatus(env, { derivations: {
-    [names[0]]: { desk_root: swapped, desk_repo: "acme/public-desk" },
-    [names[1]]: { desk_root: gone, desk_repo: "acme/private-desk" },
-    [names[2]]: { desk_root: same, desk_repo: "acme/private-desk" },
+    [names[0]]: { store: STORE, checked_route: STORE, desk_root: swapped, desk_repo: "acme/public-desk" },
+    [names[1]]: { store: STORE, checked_route: STORE, desk_root: gone, desk_repo: "acme/private-desk" },
+    [names[2]]: { store: STORE, checked_route: STORE, desk_root: same, desk_repo: "acme/private-desk" },
   } })
   execFileSync("git", ["-C", gone, "remote", "set-url", "origin", "git@gitlab.com:acme/private-desk.git"])
   const github = fakeGitHub({ visibility: { "acme/other-private-desk": "private", "acme/private-desk": "private", "acme/public-desk": "public" } })
@@ -840,7 +842,7 @@ test("finalize does not call a job delivered while its sessions wait for a visib
   const name = await put(env, localFacts(1))
   const job = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
   await indexJob(env, job, name)
-  await writeStatus(env, { derivations: { [name]: { store: STORE, marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
+  await writeStatus(env, { derivations: { [name]: { store: STORE, checked_route: STORE, marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
   await requestFinalize(env, { job, deskRoot: desk })
   await writeVisibilityCache(env, { "acme/cached-desk": { visibility: "private", checked_at: hoursAgo(72) } })
   const failing = fakeGitHub({ visibility: { "acme/cached-desk": 500 } })
@@ -899,6 +901,7 @@ test("sessions the transform refuses or the published gate rejects are quarantin
   const broken = localFacts(8)
   broken.schema = "desk.factory.facts/1"
   await fs.writeFile(path.join(root, "outbox", "ourostack__factory", brokenName), `${JSON.stringify(broken)}\n`, { mode: 0o600 })
+  await writeStatus(env, { derivations: Object.fromEntries([invalid, mismatch, brokenName].map((name) => [name, { store: STORE, checked_route: STORE }])) })
   const transform = (local, options) => {
     assert.equal(options.visibility("Never/Seen"), "unknown")
     const out = toPublished(local, options)

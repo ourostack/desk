@@ -10,7 +10,9 @@
 //      `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` are
 //      read in that order. A missing manifest, or one with no top-level
 //      `desk` key, is skipped. A manifest that exists but can't be read or
-//      parsed as a JSON object is not: it might be the very overlay that
+//      parsed as a JSON object is not, and neither is a plugin folder the
+//      host lists that is missing or not a folder (a plugin mid-install, or a
+//      link that does not resolve): it might be the very overlay that
 //      declares a private store, so it holds the route as
 //      `invalid_declaration`, with a warning naming it (fail closed, ruling
 //      2026-10-06). One broken plugin, even an unrelated one, holds the
@@ -31,7 +33,10 @@
 //
 // The result carries `warnings`: `{ code, manifest }` for the manifest that
 // held the route, `code` being `manifest_unreadable` or `manifest_unparseable`
-// and `manifest` its local path, for `desk_doctor` to surface. Warnings stay
+// and `manifest` its local path (a missing plugin folder's own path, with
+// `manifest_unreadable`), for `desk_doctor` to surface. The codes stay these
+// two because an older Desk refuses a marker whose routing names any other;
+// `held-route.js` `holdReason` reads the finer reason from the path. Warnings stay
 // on this machine; they are never part of facts.
 //
 // `recheckRoute(routing, read)` reads again a route a session hook recorded
@@ -40,7 +45,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import * as path from "node:path"
 
 export const DEFAULT_STORE = "ourostack/factory"
@@ -109,22 +114,43 @@ function manifestDeclaration(file, warnings, read) {
   return declarationOf(json)
 }
 
-function overlayDeclaration(pluginDirs, warnings, read) {
+// Whether `dir` is an existing folder, following links: `true`, `false` (missing or not a folder), or `null` when it cannot be read.
+function folderState(dir, stat) {
+  try {
+    return stat(dir).isDirectory()
+  } catch (error) {
+    return error.code === "ENOENT" || error.code === "ENOTDIR" ? false : null
+  }
+}
+
+// What a plugin folder declares: `undefined` for nothing, else the declaration. A folder the host lists that is missing, is not a folder or
+// cannot be read holds the route with a warning naming it: the plugin may be mid-install, and it may be the overlay that declares a store.
+function folderDeclaration(dir, warnings, read, stat) {
+  if (folderState(dir, stat) !== true) {
+    warnings.push({ code: "manifest_unreadable", manifest: dir })
+    return invalid()
+  }
+  for (const manifest of MANIFESTS) {
+    const declaration = manifestDeclaration(path.join(dir, manifest), warnings, read)
+    if (declaration !== undefined) return declaration
+  }
+  return undefined
+}
+
+function overlayDeclaration(pluginDirs, warnings, read, stat) {
   for (const dir of Array.isArray(pluginDirs) ? pluginDirs : []) {
-    if (typeof dir !== "string") continue
-    for (const manifest of MANIFESTS) {
-      const declaration = manifestDeclaration(path.join(dir, manifest), warnings, read)
-      if (declaration !== undefined) return declaration
-    }
+    if (typeof dir !== "string" || !path.isAbsolute(dir)) continue
+    const declaration = folderDeclaration(dir, warnings, read, stat)
+    if (declaration !== undefined) return declaration
   }
   return null
 }
 
 /** `resolveStore({ deskRoot, pluginDirs }) -> { store, source, warnings }`; see the header. */
-export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync }) {
+export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync, stat = statSync }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveStore: deskRoot must be an absolute path")
   const warnings = []
-  const result = deskDeclaration(deskRoot, read) ?? overlayDeclaration(pluginDirs, warnings, read) ?? { store: DEFAULT_STORE, source: "default" }
+  const result = deskDeclaration(deskRoot, read) ?? overlayDeclaration(pluginDirs, warnings, read, stat) ?? { store: DEFAULT_STORE, source: "default" }
   return { ...result, warnings }
 }
 
@@ -138,18 +164,39 @@ export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync })
  * - the first one that now declares something decides: its store as `overlay`, or `invalid_declaration`;
  * - when all of them now declare nothing, the recorded store stands if the hook recorded one (a Desk before 2026-10-06 skipped a broken
  *   manifest and went on to the next overlay or the default). A hook from 2026-10-06 on records no store once a manifest is broken, so
- *   what the later plugins declared is not known, and the route stays held.
+ *   what the later plugins declared is not known, and the route stays held until the next complete plugin scan on that host settles it
+ *   (`held-route.js`).
+ *
+ * A warning may name a plugin folder instead of a manifest: one the host listed that is missing, is not a folder or cannot be read. It is
+ * read again as the hook reads a folder, and holds while it is still missing or any manifest in it is unreadable.
  *
  * A route that a read settles carries no warnings: the manifests it names are readable now.
  */
-export function recheckRoute(routing, read = readFileSync) {
+export function recheckRoute(routing, read = readFileSync, stat = statSync) {
   if (routing.warnings.length === 0) return routing
-  const held = { store: null, source: "invalid_declaration", warnings: routing.warnings }
-  for (const { manifest } of routing.warnings) {
+  const now = rereadWarnings(routing.warnings, read, stat)
+  if (now !== null && now !== undefined) return { ...now, warnings: [] }
+  return now === undefined && routing.store !== null ? { ...routing, warnings: [] } : { store: null, source: "invalid_declaration", warnings: routing.warnings }
+}
+
+/**
+ * Each manifest or plugin folder in `warnings` read again, in order: `null` when one is still unreadable or gone, else the first declaration
+ * one now makes, else `undefined` (every one of them reads and declares nothing).
+ */
+export function rereadWarnings(warnings, read = readFileSync, stat = statSync) {
+  for (const { manifest } of warnings) {
+    // A warning names a manifest, or a plugin folder the host listed that could not be read; a folder is read again as the hook reads one.
+    if (folderState(manifest, stat) === true) {
+      const found = []
+      const declaration = folderDeclaration(manifest, found, read, stat)
+      if (found.length > 0) return null
+      if (declaration !== undefined) return declaration
+      continue
+    }
     const { found, json } = readJson(manifest, read)
-    if (!found || !isObject(json)) return held
+    if (!found || !isObject(json)) return null
     const declaration = declarationOf(json)
-    if (declaration !== undefined) return { ...declaration, warnings: [] }
+    if (declaration !== undefined) return declaration
   }
-  return routing.store === null ? held : { ...routing, warnings: [] }
+  return undefined
 }

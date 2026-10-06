@@ -5,7 +5,7 @@ import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { DROPPED_KEY, KNOWN_KEY, MAX_KNOWN_ISSUES, SINCE_KEY, armKnownHits, compareVersions, knownHitsSince, recordKnownHit, recordLostHit } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
+import { DROPPED_KEY, KNOWN_KEY, MAX_KNOWN_ISSUES, MAX_PENDING_FILINGS, PENDING_KEY, SINCE_KEY, armKnownHits, beginFiling, compareVersions, endFiling, knownHitsSince, recordKnownHit, recordLostHit } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 async function scratch(run) {
@@ -277,4 +277,41 @@ test("recordLostHit writes nothing in a headless session and reports a status it
   assert.equal((await readStatus(env))[DROPPED_KEY], undefined)
   assert.deepEqual(await recordLostHit(env), { recorded: true }, "the default clock")
   assert.deepEqual(await recordLostHit({ HOME: "relative" }, { now: () => T1 }), { recorded: false, code: "status_write_failed" })
+}))
+
+test("review finding 11: a filing that started and never recorded its outcome (killed) reads as not_recorded for a window that includes it", () => scratch(async ({ env }) => {
+  await armKnownHits(env, { now: () => T1 })
+  const since = new Date(T1 + 1000).toISOString()
+  const token = await beginFiling(env, { now: () => T1 + 5000 })
+  assert.match(token, /^[0-9a-f]{16}$/u)
+  // The filer was killed here: the attempt stays.
+  assert.deepEqual(knownHitsSince(await readStatus(env), 123, "3.2.0", { since }), { state: "unavailable", reason: "not_recorded" })
+  assert.deepEqual(knownHitsSince(await readStatus(env), 123, "3.2.0", { since: new Date(T1 + 6000).toISOString() }), { state: "measured", hit: false }, "a later window is measured")
+  // A filing that finishes removes its attempt.
+  const done = await beginFiling(env, { now: () => T1 + 7000 })
+  await endFiling(env, done)
+  await endFiling(env, done)
+  await endFiling(env, null)
+  assert.deepEqual(Object.keys((await readStatus(env))[PENDING_KEY]), [token])
+  // Damage reads as damaged, and a time that does not parse is in every window.
+  assert.deepEqual(knownHitsSince({ ...armed(), [PENDING_KEY]: [] }, 123, "3.2.0", { since: SINCE }), { state: "unavailable", reason: "damaged" })
+  assert.deepEqual(knownHitsSince({ ...armed(), [PENDING_KEY]: { a: "soon" } }, 123, "3.2.0", { since: SINCE }), { state: "unavailable", reason: "not_recorded" })
+}))
+
+test("beginFiling keeps a bounded set, counting what it drops, and writes nothing headless or when the status cannot be written", () => scratch(async ({ env }) => {
+  await writeStatus(env, { [PENDING_KEY]: { bad: "x", ...Object.fromEntries(Array.from({ length: MAX_PENDING_FILINGS }, (_, i) => [`t${i}`, new Date(T1 + i).toISOString()])) } })
+  await beginFiling(env, { now: () => T1 + 100_000 })
+  const status = await readStatus(env)
+  assert.equal(Object.keys(status[PENDING_KEY]).length, MAX_PENDING_FILINGS)
+  assert.equal(Object.hasOwn(status[PENDING_KEY], "t0"), false, "the oldest went")
+  assert.equal(status[DROPPED_KEY].count, 2, "the damaged one and the oldest")
+  await writeStatus(env, { [PENDING_KEY]: "nope" })
+  await beginFiling(env)
+  assert.equal(Object.keys((await readStatus(env))[PENDING_KEY]).length, 1)
+  assert.equal(await beginFiling({ ...env, DESK_FACTORY_HEADLESS: "1" }), null)
+  assert.equal(await beginFiling({ HOME: "relative" }), null)
+  await endFiling({ HOME: "relative" }, "abc")
+  await writeStatus(env, { [PENDING_KEY]: "nope" })
+  await endFiling(env, "abc")
+  assert.equal((await readStatus(env))[PENDING_KEY], "nope")
 }))

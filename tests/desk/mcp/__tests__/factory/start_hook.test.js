@@ -241,9 +241,9 @@ test("the factory check starts one detached finalize for finished jobs whose fac
   await fs.writeFile(path.join(folder, "task.md"), `---\nstatus: done\nupdated: ${new Date(Date.now() - DAY).toISOString()}\n---\n`)
   const job = jobId({ deskRemote: `local:${await fs.realpath(desk)}`, personPrefix: "", track: "alpha", slug: "shipped" })
   await requestFinalize(env, { job, deskRoot: desk })
-  // A Claude Code plugin registry with no overlay: a missing registry holds the route, and with it every finalize.
+  // A Claude Code plugin registry that lists this Desk and no overlay: a missing registry, or one without this Desk, holds the route, and with it every finalize.
   await fs.mkdir(path.join(env.HOME, ".claude", "plugins"), { recursive: true })
-  await fs.writeFile(path.join(env.HOME, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {} }))
+  await fs.writeFile(path.join(env.HOME, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "desk@ourostack": [{ version: "1.0.0", installPath: PLUGIN }] } }))
   const repairs = []
   const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
   assert.equal(line, "")

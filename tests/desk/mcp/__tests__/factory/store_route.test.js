@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { DEFAULT_STORE, recheckRoute, resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
+import { DEFAULT_STORE, recheckRoute, rereadWarnings, resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
 
 // The result without its warnings; the warning tests below check those.
 function route(args) {
@@ -92,7 +92,7 @@ test("with neither a desk declaration nor an overlay, the default store is used"
     assert.deepEqual(route({ deskRoot: desk, pluginDirs: [] }), { store: "ourostack/factory", source: "default" })
     assert.deepEqual(route({ deskRoot: desk }), { store: "ourostack/factory", source: "default" })
     assert.deepEqual(route({ deskRoot: desk, pluginDirs: "not-a-list" }), { store: "ourostack/factory", source: "default" })
-    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [7, null, path.join(root, "missing")] }), { store: "ourostack/factory", source: "default" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [7, null, "relative"] }), { store: "ourostack/factory", source: "default" })
   })
 })
 
@@ -241,4 +241,30 @@ test("a clean resolution has no warnings, and the desk declaration reads no plug
 test("a relative or missing desk root is a caller bug", () => {
   assert.throws(() => resolveStore({ deskRoot: "desk", pluginDirs: [] }), TypeError)
   assert.throws(() => resolveStore({ pluginDirs: [] }), TypeError)
+})
+
+test("review finding 2: a plugin folder the host lists that is missing or not a folder holds the route, naming the folder", () => {
+  scratch((root) => {
+    const desk = makeDesk(root)
+    const missing = path.join(root, "missing")
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [missing] }), { store: null, source: "invalid_declaration", warnings: [{ code: "manifest_unreadable", manifest: missing }] })
+    const file = path.join(root, "file")
+    writeFileSync(file, "x")
+    assert.equal(resolveStore({ deskRoot: desk, pluginDirs: [file] }).store, null)
+    // A folder that cannot be read for another reason holds too.
+    const denied = { stat: () => { throw Object.assign(new Error("denied"), { code: "EACCES" }) } }
+    assert.equal(resolveStore({ deskRoot: desk, pluginDirs: [missing], ...denied }).store, null)
+    // Read again: still missing holds; a folder whose manifest is broken holds; one with no manifest declares nothing.
+    const warned = { store: null, source: "invalid_declaration", warnings: [{ code: "manifest_unreadable", manifest: missing }] }
+    assert.deepEqual(recheckRoute(warned), warned)
+    mkdirSync(missing)
+    writeFileSync(path.join(missing, "plugin.json"), "{ broken")
+    assert.deepEqual(recheckRoute(warned), warned)
+    writeFileSync(path.join(missing, "plugin.json"), JSON.stringify({ name: "x" }))
+    assert.deepEqual(recheckRoute(warned), warned, "declares nothing: what came after it was never recorded")
+    assert.deepEqual(recheckRoute({ ...warned, store: "ourostack/factory", source: "default" }), { store: "ourostack/factory", source: "default", warnings: [] })
+    writeFileSync(path.join(missing, "plugin.json"), JSON.stringify({ name: "x", desk: { factory: { store: "corp/private" } } }))
+    assert.deepEqual(recheckRoute(warned), { store: "corp/private", source: "overlay", warnings: [] })
+    assert.equal(rereadWarnings([{ code: "manifest_unreadable", manifest: missing }]).store, "corp/private")
+  })
 })

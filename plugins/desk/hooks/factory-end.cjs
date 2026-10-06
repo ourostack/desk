@@ -62,6 +62,8 @@ const ABSENT = Symbol("absent");
 const CONFLICT = Symbol("conflict");
 // How long the Stop hook may spend finding install sources before it names none.
 const SOURCE_BUDGET_MS = 400;
+// The time the hook spends settling other sessions' held routes, after its own work.
+const SETTLE_BUDGET_MS = 250;
 
 // The one GitHub repository a plugin was installed from, as `owner/repo`, or null when that is unknown or ambiguous.
 // Every lookup below fails closed: anything it cannot read, reach or tell apart gives null, and a null source is never named in a public store.
@@ -196,10 +198,13 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
   const dirs = [];
   let incomplete = false;
   let timedOut = false;
+  // Why the scan is incomplete, the first reason found, for the doctor: it names the hold and its remedy.
+  let reason = null;
+  const hold = (code) => { incomplete = true; reason ??= code; };
   const late = () => {
     if (performance.now() <= deadline) return false;
     timedOut = true;
-    incomplete = true;
+    hold("scan_deadline");
     return true;
   };
   // Each plugin records where it was installed from (`source`), which decides whether a public store may name it.
@@ -209,7 +214,7 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
   };
   const unknown = () => null;
   // Codex has no plugin registry Desk reads, so a Codex marker records no plugins and routes by the desk alone.
-  if (host === "codex") return { plugins, dirs, incomplete, timedOut };
+  if (host === "codex") return { plugins, dirs, incomplete, timedOut, reason };
   const sourceLate = () => performance.now() > sourceDeadline;
   if (host === "copilot") {
     // opendir bounds the enumeration as well as the number of file reads.
@@ -218,8 +223,10 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
       let entry;
       let scanned = 0;
       while ((entry = dir.readSync()) !== null) {
-        if (++scanned > 128 || dirs.length === 64) { incomplete = true; break; }
-        if (entry.isDirectory()) dirs.push(path.join(path.dirname(pluginRoot), entry.name));
+        if (++scanned > 128 || dirs.length === 64) { hold("too_many_plugins"); break; }
+        // A plugin installed as a link to its folder is a plugin too: the route reads it through the link, and a link that does not resolve
+        // to a folder holds the route (`store-route.js`).
+        if (entry.isDirectory() || entry.isSymbolicLink()) dirs.push(path.join(path.dirname(pluginRoot), entry.name));
       }
     } finally { dir.closeSync(); }
     // Agency sessions copy their plugins from Agency's cache; plain Copilot installs them from a marketplace.
@@ -241,32 +248,47 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
   } else {
     try {
       const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
-      const installed = JSON.parse(readSmallText(path.join(configDir, "plugins", "installed_plugins.json"), MAX_INPUT));
-      if (!installed.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
-      incomplete = Object.keys(installed.plugins).length > 64;
+      const registry = path.join(configDir, "plugins", "installed_plugins.json");
+      let installed;
+      try {
+        installed = JSON.parse(readSmallText(registry, MAX_INPUT));
+      } catch (error) {
+        throw new Error(error.code === "ENOENT" ? "registry_missing" : "registry_unreadable");
+      }
+      if (!installed?.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
+      if (Object.keys(installed.plugins).length > 64) hold("too_many_plugins");
       const marketplaceOf = sources ? claudeSources(configDir, readSmallText, PATTERNS, sourceLate) : unknown;
       for (const [key, records] of Object.entries(installed.plugins).slice(0, 64)) {
         const source = () => marketplaceOf(key);
         if (late()) break;
-        if (!Array.isArray(records)) { incomplete = true; continue; }
-        if (records.length > 64) incomplete = true;
+        if (!Array.isArray(records)) { hold("registry_unreadable"); continue; }
+        if (records.length > 64) hold("too_many_plugins");
         for (const record of records.slice(0, 64)) {
-          if (!record || typeof record !== "object") { incomplete = true; continue; }
+          if (!record || typeof record !== "object") { hold("registry_unreadable"); continue; }
           add(key.split("@")[0], record.version, source);
-          if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { incomplete = true; continue; }
+          if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { hold("registry_unreadable"); continue; }
           if (dirs.includes(record.installPath)) continue;
-          if (dirs.length === 64) incomplete = true;
+          if (dirs.length === 64) hold("too_many_plugins");
           else dirs.push(record.installPath);
         }
       }
-    } catch {
+      // A Desk the registry does not list was loaded another way (`claude --plugin-dir`), and so may any overlay beside it: the registry
+      // does not name the plugin set, so the route is held.
+      if (!late() && !dirs.some((dir) => samePath(dir, pluginRoot))) hold("desk_not_in_registry");
+    } catch (error) {
       // Missing metadata is represented by no plugin facts, never invented. A registry that is missing or unreadable could have named an
       // overlay that declares a private store, so the scan is incomplete and the route is held (fail closed, ruling 2026-10-06).
-      incomplete = true;
+      hold(error.message === "registry_missing" ? "registry_missing" : "registry_unreadable");
     }
   }
   late();
-  return { plugins, dirs, incomplete, timedOut };
+  return { plugins, dirs, incomplete, timedOut, reason };
+}
+
+// Whether two paths name the same folder, following links; a path that cannot be resolved is compared as written.
+function samePath(left, right) {
+  const real = (value) => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
+  return real(left) === real(right);
 }
 
 // A Codex thread spawned by another thread is not a session. SessionEnd never fires for one, but a payload or rollout that names a parent is refused anyway.
@@ -336,6 +358,9 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     } else if (supportsFinalize ?? cli.SUPPORTED_COMMANDS.includes("finalize")) {
       for (const job of await outbox.listFinalizeJobs(env)) await start(script, ["finalize", "--job", job], env, resolveOnce);
     }
+    // A complete plugin scan settles the held routes of this host's ended sessions whose cause has cleared (`held-route.js`), last, so it
+    // never delays this session's own marker or derive.
+    if (!incomplete) await (await runtime("src/factory/held-route.js")).settleHeldMarkers(env, { host, dirs, deadline: performance.now() + SETTLE_BUDGET_MS });
     return "written";
   } catch {
     // Hooks cannot veto lifecycle events. The retained marker is the retry path.

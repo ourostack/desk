@@ -48,7 +48,7 @@ async function setup(env) {
 async function putFacts(env, n) {
   const { name } = await writeLocalFacts(env, STORE, localFacts(n))
   assert.equal(typeof name, "string")
-  await writeStatus(env, { derivations: { [name]: { store: STORE } } })
+  await writeStatus(env, { derivations: { [name]: { store: STORE, checked_route: STORE } } })
 }
 
 async function putLabels(env, n, value = localLabels(n)) {
@@ -106,7 +106,7 @@ test("a private desk's labels keep their plain job, as its facts do", () => scra
   execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/private-desk.git"])
   const log = path.join(base, "log-1.jsonl")
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   await putFacts(env, 1)
   await putLabels(env, 1)
   const github = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
@@ -283,7 +283,7 @@ test("a desk whose visibility cannot be asked holds back its labels with its fac
   execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/private-desk.git"])
   const log = path.join(base, "log-1.jsonl")
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   await putFacts(env, 1)
   await putLabels(env, 1)
   await writeVisibilityCache(env, { "acme/private-desk": { visibility: "private", checked_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() } })

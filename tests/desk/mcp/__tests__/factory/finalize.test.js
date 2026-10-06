@@ -35,7 +35,7 @@ async function marker(ctx, n, updatedAt) {
   await fs.writeFile(log, "{}\n")
   const old = new Date(Date.now() - 60 * 60 * 1000)
   await fs.utimes(log, old, old)
-  await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.desk, desk_root: ctx.desk, end_reason: null, ended_at: null, plugins: [], updated_at: updatedAt })
+  await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.desk, desk_root: ctx.desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: updatedAt })
   return log
 }
 
@@ -46,7 +46,7 @@ async function jobFile(ctx, n) {
   const written = await writeLocalFacts(ctx.env, STORE, facts)
   assert.equal(written.written, true)
   await indexJob(ctx.env, JOB, written.name)
-  await writeStatus(ctx.env, { derivations: { [written.name]: { store: STORE, marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
+  await writeStatus(ctx.env, { derivations: { [written.name]: { store: STORE, checked_route: STORE, marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
   return written.name
 }
 

@@ -23,8 +23,8 @@
 // `unknown`, waiting for its route); `route_changed` counts its outbox files
 // and kept copies (`retracted-copies/`), not quarantined, whose session routes
 // elsewhere as the flush reads it (`session-route.js`: `away`, including a
-// finished retraction's tombstone, `stale` or `stalled`; a kept copy without a
-// positive route here is `stale`): the flush never publishes them there; `quarantined`
+// finished retraction's tombstone, `stale` or `stalled`; a copy without a
+// positive route here and no checked route here is `stale`): the flush never publishes them there; `quarantined`
 // counts its quarantined files; `last_flush` is the last flush's result
 // code, or `null`.
 //
@@ -42,8 +42,15 @@
 // `[{ store, times }]`. Like `orphans`, both are pushed to the doctor and the boot status, not only shown by `factory.js status`.
 //
 // The result carries store names, codes and counts only: never the machine
-// secret, an account, an intake ID, a token, a time, a local path or any
-// content. Manifest warnings keep their codes and drop their paths.
+// secret, an account, an intake ID, a token or any content, and no local
+// path or time except where a held route needs one to be fixed. Manifest
+// warnings keep their codes and drop their paths. `held_by` (this desk's
+// route is held now), `route_holds` (`{ count, reasons }`: the sessions the
+// last sweep counted as held, `held-route.js` `routeHolds`) and
+// `held_pruned` (`{ count, last_at }`: held sessions pruned uncaptured after
+// 90 days) name each hold's reason, the manifest or plugin folder to fix
+// (`path`, or `null` when the hook named none) and its remedy, so a hold is
+// never silent; the doctor and the boot print them.
 //
 // `factoryReportLink({ env, deskRoot, deskRemote, personPrefix, track, slug,
 // pluginDirs, pluginScanIncomplete })` is the task card's `factory_report`
@@ -73,6 +80,7 @@ import { readSmallText, validMarker } from "./marker.js"
 import { jobReportUrl } from "./pipeline/build.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
 import { captureCheckFindings, retentionFinding } from "./retention.js"
+import { HOLD_REMEDIES, holdReason } from "./held-route.js"
 import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, isFolder, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 
@@ -227,9 +235,9 @@ function placer(dir, receipts) {
   }
   let siblings = null
   const listSiblings = () => (siblings ??= outboxNames(path.join(dir, "markers")).map(markerOf).filter((marker) => marker !== null))
-  // `retracting` is the store's retracting records and tombstones, by name. `kept`: a copy in `retracted-copies/` is here only on a positive
-  // route, as the flush reads it; so is one whose recorded desk folder no longer resolves. Returns `{ place, positive }`.
-  return (store, name, retracting, kept) => {
+  // `retracting` is the store's retracting records and tombstones, by name. A session whose recorded desk folder no longer resolves is here
+  // only on a positive route, as the flush reads it. Returns `{ place, positive }`.
+  return (store, name, retracting) => {
     // An outbox name, like a labels key, ends in the 36-character session id and `.json`.
     const session = name.slice(-41, -5)
     const names = ENUMS.host.map((host) => `${host}-${session}.json`)
@@ -240,7 +248,7 @@ function placer(dir, receipts) {
     const place = sessionPlace(store, route, derivedStoreOf(receipts, names), records)
     const recorded = [marker?.desk_root, deskRoot].filter((root) => typeof root === "string")
     const gone = recorded.length > 0 && !recorded.some(isFolder)
-    return { place: place === "here" && route.kind !== "store" && (kept || gone) ? "stale" : place, positive: route.kind === "store" }
+    return { place: place === "here" && route.kind !== "store" && gone ? "stale" : place, positive: route.kind === "store" }
   }
 }
 
@@ -255,9 +263,10 @@ function storeEntry(dir, consents, store, lastFlush, place, now) {
   const keptDir = path.join(dir, RETRACTED_COPIES, slug)
   const kept = outboxNames(keptDir).filter((name) => !live.has(name))
   const listed = [...new Set([...live, ...kept])].filter((name) => !quarantined.has(name))
-  const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, records, !live.has(name)).place)))
-  // Kept copies with no positive route anywhere are frozen for good (never published, never deleted): counted, with the oldest one's age.
-  const frozen = kept.filter((name) => !place(store, name, records, true).positive)
+  const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, records).place)))
+  // Kept copies with no positive route anywhere that are not here on a checked route are frozen (never published, never deleted): counted, with
+  // the oldest one's age.
+  const frozen = kept.filter((name) => { const { place: where, positive } = place(store, name, records); return !positive && where !== "here" })
   const ages = frozen.map((name) => keptAgeDays(path.join(keptDir, name), now)).filter((days) => days !== null)
   const pending = listed.filter((name) => !away.has(name) && (delivered === UNREADABLE || !Object.hasOwn(delivered, name))).length
   const flush = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) ? lastFlush[store].result : null
@@ -276,7 +285,7 @@ function keptAgeDays(file, now) {
 }
 
 /** See the header. Never writes and never throws for missing or unreadable state. */
-export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanIncomplete = false }) {
+export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanIncomplete = false, pluginScanReason = null }) {
   const routing = route({ deskRoot, pluginDirs, pluginScanIncomplete })
   const dir = factoryStateDir(env)
   const records = consentRecords(dir)
@@ -305,7 +314,29 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
     ...(hung > 0 ? { orphans_hung: hung } : {}),
     ...(retention === null ? {} : { retention }),
     ...(captureCheck.length > 0 ? { capture_check_unavailable: captureCheck } : {}),
+    ...heldFields(routing, pluginScanReason, status === UNREADABLE ? {} : status),
   }
+}
+
+const HELD_PRUNED_SHOWN_MS = 30 * 24 * 60 * 60 * 1000
+const described = (reason, file) => ({ reason, path: file, remedy: HOLD_REMEDIES[reason] })
+
+// What holds routes, with the paths to fix and the remedy (`held-route.js`): this desk's own route now (`held_by`), the sessions the last sweep
+// counted as held (`route_holds`), and the held sessions pruned uncaptured (`held_pruned`). Present only when there is something to say.
+function heldFields(routing, scanReason, status) {
+  const fields = {}
+  if (routing.store === null && routing.warnings.length > 0) fields.held_by = routing.warnings.map(({ code, manifest }) => described(holdReason(manifest, { code }), manifest))
+  else if (routing.source === "plugin_scan_incomplete") fields.held_by = [described(Object.hasOwn(HOLD_REMEDIES, scanReason ?? "") ? scanReason : "plugin_scan_incomplete", null)]
+  const holds = status.route_holds
+  if (isPlainObject(holds) && Number.isSafeInteger(holds.count) && holds.count > 0 && Array.isArray(holds.reasons)) {
+    const reasons = holds.reasons.filter((entry) => isPlainObject(entry) && (entry.path === null || typeof entry.path === "string") && Number.isSafeInteger(entry.sessions))
+    fields.route_holds = { count: holds.count, reasons: reasons.map((entry) => ({ ...described(holdReason(entry.path, { code: entry.code }), entry.path), sessions: entry.sessions })) }
+  }
+  const pruned = status.held_pruned
+  // Said for 30 days after the last such prune: long enough to be read, never a standing line.
+  const recent = isPlainObject(pruned) && Date.now() - Date.parse(pruned.last_at) <= HELD_PRUNED_SHOWN_MS
+  if (recent && Number.isSafeInteger(pruned.count) && pruned.count > 0) fields.held_pruned = { count: pruned.count, last_at: pruned.last_at }
+  return fields
 }
 
 /**

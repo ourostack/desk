@@ -24,3 +24,8 @@ test("a fault is recorded, a look that used the account clears it, and an early 
     assert.equal(carriedAccountFault(early, { result: "offline", account_fault: "made_up" }), null, early)
   }
 })
+
+test("review finding 8: a flush that signed in to the account clears the fault whatever it ends with, nothing_pending after going online included", () => {
+  for (const early of EARLY) assert.equal(carriedAccountFault(early, { result: "auth_failed", account_fault: "auth_failed" }, { reachedAccount: true }), null, early)
+  for (const fault of ACCOUNT_FAULTS) assert.equal(carriedAccountFault(fault, { result: "nothing_pending" }, { reachedAccount: true }), fault)
+})

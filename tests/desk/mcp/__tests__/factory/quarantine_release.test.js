@@ -32,7 +32,7 @@ async function put(env, n, { labels = true } = {}) {
   facts.refs = { prs: [], commits: [], unresolved: { prs: 0, commits: 0 } }
   assert.equal((await writeLocalFacts(env, STORE, facts)).written, true)
   // The derivation receipt a sweep writes, so a held session is known to have been derived for this store.
-  await writeStatus(env, { derivations: { [`claude-code-${sessionId(n)}.json`]: { store: STORE } } })
+  await writeStatus(env, { derivations: { [`claude-code-${sessionId(n)}.json`]: { store: STORE, checked_route: STORE } } })
   if (labels) assert.equal((await writeLocalLabels(env, STORE, { ...structuredClone(LABELS), session: sessionId(n) })).written, true)
 }
 

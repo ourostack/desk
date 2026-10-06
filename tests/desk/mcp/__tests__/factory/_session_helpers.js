@@ -45,7 +45,9 @@ export async function session({ base, desk, env }, host = "claude-code") {
   await writeFile(log, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
   return {
     schema_version: 1, host, session_id: ID, log_path: log, cwd: desk, desk_root: desk,
-    end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString(),
+    end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(),
+    // The route the hook resolved, as a hook of this Desk records it: a session derived on it gets a checked route.
+    routing: { store: STORE, source: "default", warnings: [] },
   }
 }
 

@@ -35,7 +35,7 @@ function declare(deskRoot, store = STORE) {
 
 async function marker(env, { n = 1, host = "claude-code", deskRoot, routing, updatedAt = new Date().toISOString() }) {
   const log = path.join(env.HOME, `${n}.jsonl`)
-  await writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: log, cwd: env.HOME, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [], updated_at: updatedAt, ...(routing === undefined ? {} : { routing }) })
+  await writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: log, cwd: env.HOME, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: updatedAt, ...(routing === undefined ? {} : { routing }) })
 }
 
 // A fake gh: `auth token`, `GET repos/<store>` (visibility), the open kaizen issue list and issue creation.

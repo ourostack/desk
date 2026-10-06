@@ -28,12 +28,16 @@
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
+import { randomBytes } from "node:crypto"
+
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { updateStatus } from "./outbox.js"
 
 export const KNOWN_KEY = "desk_problem_known"
 export const DROPPED_KEY = "desk_problem_known_dropped"
 export const SINCE_KEY = "desk_problem_known_since"
+export const PENDING_KEY = "desk_problem_known_pending"
+export const MAX_PENDING_FILINGS = 32
 export const MAX_KNOWN_ISSUES = 50
 
 const VERSION_PATTERN = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?$/u
@@ -74,6 +78,7 @@ const validEntry = (entry) => entry !== null && typeof entry === "object" && Num
   && typeof entry.last_at === "string" && Number.isFinite(Date.parse(entry.last_at)) && parseVersion(entry.last_version) !== null
 
 const validTime = (value) => typeof value === "string" && Number.isFinite(Date.parse(value))
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 
 const validDropped = (dropped) => dropped !== null && typeof dropped === "object" && Number.isSafeInteger(dropped.count) && dropped.count >= 0
   && (dropped.last_dropped_at === null || validTime(dropped.last_dropped_at))
@@ -138,6 +143,46 @@ export async function recordLostHit(env, { now = Date.now } = {}) {
 }
 
 /**
+ * `beginFiling(env, { now }) -> token | null`: the filer is about to look for a Desk problem's issue. It records the attempt in
+ * `desk_problem_known_pending` (`{ <token>: <ISO time> }`) before any network step, and `endFiling` removes it once the outcome (a hit, a
+ * new issue, a cap hold or a drop) is recorded. A filer that is killed or dies before then leaves the attempt behind, and `knownHitsSince`
+ * reads a window that includes it as `not_recorded`, never a measured "no hit". At most `MAX_PENDING_FILINGS` are kept; an older one past
+ * that counts as a drop. `null` (headless, or the write failed) means nothing was recorded. Never throws.
+ */
+export async function beginFiling(env, { now = Date.now } = {}) {
+  if (isHeadless(env)) return null
+  const at = new Date(now()).toISOString()
+  const token = randomBytes(8).toString("hex")
+  try {
+    await updateStatus(env, (current) => {
+      const raw = current[PENDING_KEY]
+      const kept = isRecord(raw) ? Object.entries(raw).filter(([, value]) => validTime(value)) : []
+      const removed = (raw !== undefined && !isRecord(raw)) + (isRecord(raw) ? Object.keys(raw).length - kept.length : 0)
+      kept.sort((a, b) => Date.parse(b[1]) - Date.parse(a[1]))
+      const pending = [[token, at], ...kept.slice(0, MAX_PENDING_FILINGS - 1)]
+      return { ...current, [PENDING_KEY]: Object.fromEntries(pending), ...stamped(current, at, removed + Math.max(0, kept.length - (MAX_PENDING_FILINGS - 1))) }
+    })
+    return token
+  } catch {
+    return null
+  }
+}
+
+/** `endFiling(env, token)`: removes the attempt `beginFiling` recorded. Never throws; an attempt left behind reads as a drop. */
+export async function endFiling(env, token) {
+  if (token === null) return
+  try {
+    await updateStatus(env, (current) => {
+      if (!isRecord(current[PENDING_KEY]) || !Object.hasOwn(current[PENDING_KEY], token)) return current
+      const { [token]: _done, ...rest } = current[PENDING_KEY]
+      return { ...current, [PENDING_KEY]: rest }
+    })
+  } catch {
+    // Left behind, the attempt reads as a drop: fail closed.
+  }
+}
+
+/**
  * `armKnownHits(env, { now }) -> { armed: true } | { armed: false, code }`: stamps `recording_since` if the
  * status has none (the verify step calls it when a Desk-problem card starts being verified); an existing
  * start time is never moved. Never throws. Codes: `headless_session`, `status_write_failed`.
@@ -185,7 +230,11 @@ export function knownHitsSince(status, issueNumber, version, { since } = {}) {
   if (started === undefined) return unavailable("not_recorded")
   if (!validTime(started)) return unavailable("damaged")
   if (Date.parse(started) > sinceMs) return unavailable("not_recorded")
-  const droppedInWindow = dropped?.count > 0 && (dropped.last_dropped_at === null || Date.parse(dropped.last_dropped_at) >= sinceMs)
+  const pending = status[PENDING_KEY]
+  if (pending !== undefined && !isRecord(pending)) return unavailable("damaged")
+  // A filing that started in the window and never recorded its outcome (killed, or still running) may have lost a hit.
+  const pendingInWindow = pending !== undefined && Object.values(pending).some((at) => !validTime(at) || Date.parse(at) >= sinceMs)
+  const droppedInWindow = pendingInWindow || (dropped?.count > 0 && (dropped.last_dropped_at === null || Date.parse(dropped.last_dropped_at) >= sinceMs))
   if (map === undefined || !Object.hasOwn(map, issueNumber)) return droppedInWindow ? unavailable("not_recorded") : { state: "measured", hit: false }
   const entry = map[issueNumber]
   if (!validEntry(entry)) return unavailable("damaged")

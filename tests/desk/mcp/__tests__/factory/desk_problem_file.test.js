@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 import { deskProblemFingerprint, normalizeErrorSignature } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-template.js"
 import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
-import { DROPPED_KEY, KNOWN_KEY, knownHitsSince } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
+import { DROPPED_KEY, KNOWN_KEY, PENDING_KEY, knownHitsSince } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/file-desk-problem.js", import.meta.url))
@@ -450,4 +450,20 @@ test("scripts/file-desk-problem.js exits non-zero on a usage error (no --mechani
   const childEnv = { ...process.env, HOME: env.HOME, XDG_STATE_HOME: env.XDG_STATE_HOME, PATH: "" }
   const result = spawnSync(process.execPath, [SCRIPT], { env: childEnv, encoding: "utf8", cwd: base })
   assert.notEqual(result.status, 0)
+}))
+
+test("review finding 11: the filer records its attempt before the network step and clears it once the outcome is recorded, a throw included", () => scratch(async ({ env }) => {
+  const seen = []
+  const { runner: base } = fakeGh({ accounts: [], repos: {} })
+  const runner = async (args, options) => {
+    seen.push(Object.keys((await readStatus(env))[PENDING_KEY] ?? {}).length)
+    return base(args, options)
+  }
+  await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner })
+  assert.ok(seen.length > 0 && seen.every((count) => count === 1), "pending while the filer works")
+  assert.deepEqual((await readStatus(env))[PENDING_KEY], {})
+  // An attempt that throws (here, reading its own options) is still cleared, and counted as a drop.
+  const throwing = { rawText: "x", runner, get mechanism() { throw new Error("boom") } }
+  await assert.rejects(fileDeskProblem(env, throwing), /boom/u)
+  assert.deepEqual((await readStatus(env))[PENDING_KEY], {})
 }))

@@ -41,7 +41,7 @@ import { readFileSync } from "node:fs"
 
 import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX, deskProblemCard } from "./desk-problem-template.js"
-import { recordKnownHit, recordLostHit } from "./desk-problem-known.js"
+import { beginFiling, endFiling, recordKnownHit, recordLostHit } from "./desk-problem-known.js"
 import { chooseAccount, ghRunner } from "./flush.js"
 import { readConsent, readStatus, withNamedLock, writeStatus } from "./outbox.js"
 import { issuesClient } from "./store-issues.js"
@@ -114,21 +114,25 @@ async function selectAccount(env, { runner, now, deadlineMs }) {
  * concurrent second caller can still slip through.
  */
 export async function fileDeskProblem(env, options = {}) {
-  const { now = Date.now, recordLost = recordLostHit } = options
+  const { now = Date.now, recordLost = recordLostHit, begin = beginFiling, end = endFiling } = options
   // Any attempt that neither filed a new issue, nor recorded a known hit, nor held a new problem at the cap may have lost a recurrence of a
   // known issue: it is counted as a drop, so the verify step never reads it as a measured "no hit" (`desk-problem-known.js`).
   const lost = async () => {
     const counted = await Promise.resolve().then(() => recordLost(env, { now })).catch(() => ({ recorded: false, code: "record_failed" }))
     if (!counted.recorded && counted.code !== "headless_session") process.stderr.write(`desk-problem: lost_hit_not_recorded ${counted.code}\n`)
   }
+  // The attempt is recorded before any network step and cleared once its outcome is recorded, so a filer killed part way is a drop too.
+  const token = await begin(env, { now })
   let outcome
   try {
     outcome = await attemptFiling(env, options)
   } catch (error) {
     await lost()
+    await end(env, token)
     throw error
   }
   if (outcome.result === "not_filed" || outcome.hitLost === true) await lost()
+  await end(env, token)
   const { hitLost, ...result } = outcome
   return result
 }

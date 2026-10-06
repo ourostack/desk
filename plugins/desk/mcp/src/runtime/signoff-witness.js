@@ -3,7 +3,7 @@
 // A sign-off is a human's answer, and only the server may decide that it counts as one. The agent cannot write these records: hooks do, and the server reads them. Anything the witness cannot see is `unverified` with a reason code (`WITNESS_REASONS`); it never reads as accepted.
 //
 // Three pieces:
-//   1. A session file, `<state>/signoff-witness/<digest of the session id>.json`, `{ prompt_at, stop_at, prompts }`, times in milliseconds. The prompt hook sets `prompt_at` and counts `prompts`; the stop hook sets `stop_at`, for the main agent only. A session with more than one prompt and no stop record lost its stop (the stop hook failed or was off), which is not the same as a first turn that has not stopped yet: it reads `no_stop_record`. A host's prompt hook also fires for a scheduled task, a background subagent reporting back and a message from another session, so `prompt_at` alone proves no human.
+//   1. A session file, `<state>/signoff-witness/<digest of the session id>.json`, `{ prompt_at, stop_at, prompts, stops }`, times in milliseconds. The prompt hook sets `prompt_at` and counts `prompts`; the stop hook sets `stop_at` and counts `stops`, for the main agent only. Every turn before the one in progress should have stopped, so a session with more prompts than stops by more than one lost a stop (the stop hook failed or was off in some turn), even when an earlier turn's stop was recorded; that is not the same as a turn in progress that has not stopped yet: it reads `no_stop_record`. A host's prompt hook also fires for a scheduled task, a background subagent reporting back and a message from another session, so `prompt_at` alone proves no human.
 //   2. On Claude Code, a ticket. A `PreToolUse` hook on `task_signoff` denies a subagent's call, then reads the tail of the transcript for the last prompt-like root line and checks it carries `origin.kind: "human"`, and writes `<state>/signoff-ticket/<digest of track, slug, outcome>.json`. The server reads and deletes it; one older than two minutes is ignored.
 //   3. On Copilot, no ticket: the server reads the session file by `COPILOT_AGENT_SESSION_ID` and checks the last `user.message` in the session's event log for a `source`.
 //
@@ -84,18 +84,21 @@ function readJson(file) {
 
 function readSession(stateDir, sessionId) {
   const record = readJson(witnessFile(stateDir, sessionId))
-  return { prompt_at: asTime(record?.prompt_at), stop_at: asTime(record?.stop_at), prompts: Number.isSafeInteger(record?.prompts) && record.prompts > 0 ? record.prompts : 0 }
+  const count = (value) => (Number.isSafeInteger(value) && value > 0 ? value : 0)
+  return { prompt_at: asTime(record?.prompt_at), stop_at: asTime(record?.stop_at), prompts: count(record?.prompts), stops: count(record?.stops) }
 }
 
 // More than one prompt and no stop record: a stop the hook should have recorded is missing.
-const stopMissing = (session) => session.prompts > 1 && session.stop_at === null
+// Every turn before the one in progress should have stopped: more prompts than stops by more than one means a stop was lost, whether or not
+// an earlier stop was recorded.
+const stopMissing = (session) => session.prompts - session.stops > 1
 
 function setField(field, payload, { env = process.env, stateDir = resolveDeskStateDir({ env }), now = Date.now } = {}) {
   try {
     if (!hasText(payload?.session_id)) return {}
     const at = now()
     const session = readSession(stateDir, payload.session_id)
-    writeRecord(witnessFile(stateDir, payload.session_id), { ...session, [field]: at, ...(field === "prompt_at" ? { prompts: session.prompts + 1 } : {}) }, at)
+    writeRecord(witnessFile(stateDir, payload.session_id), { ...session, [field]: at, ...(field === "prompt_at" ? { prompts: session.prompts + 1 } : { stops: session.stops + 1 }) }, at)
   } catch {
     // No record means no witness, which is unverified: fail closed for the sign-off, quiet for the turn.
   }
@@ -322,7 +325,7 @@ export function witnessFor({ env, stateDir = resolveDeskStateDir({ env }), track
 }
 
 /**
- * Whether a human turn stood behind the sign-off: `{ verified, why }`. The caller passes the times in milliseconds: `deliveredAt` from the card's ISO time as `Date.parse` gives it, not rounded down to the second (a delivery a moment after the human line could then read as before it). A time that is not a number reads as not before the prompt, so a wiring mistake fails closed as `same_turn_as_delivery`. A `deliveredAt` that is absent (a card with no readable delivery time) is `no_delivery_time`, and `stopMissing` (the session lost a stop record) is `no_stop_record`: neither check is skipped (fail closed, ruling 2026-10-06). Verified only when `promptAt` is a finite number, `stopMissing` is not true, `stopAt` is absent or below it, `deliveredAt` is below it, `mainAgent` is exactly true and `humanOrigin` is exactly true. `why` is the first reason that applies, in the order of `WITNESS_REASONS` after `witnessed`.
+ * Whether a human turn stood behind the sign-off: `{ verified, why }`. The caller passes the times in milliseconds: `deliveredAt` from the card's ISO time as `Date.parse` gives it, not rounded down to the second (a delivery a moment after the human line could then read as before it). A time that is not a number reads as not before the prompt, so a wiring mistake fails closed as `same_turn_as_delivery`. A `deliveredAt` that is absent (a card with no readable delivery time) is `no_delivery_time`, and `stopMissing` (the session lost a stop record: more prompts than stops by more than the turn in progress, so a stop from an earlier turn never stands in for a lost one) is `no_stop_record`: neither check is skipped (fail closed, ruling 2026-10-06). Verified only when `promptAt` is a finite number, `stopMissing` is not true, `stopAt` is absent or below it, `deliveredAt` is below it, `mainAgent` is exactly true and `humanOrigin` is exactly true. `why` is the first reason that applies, in the order of `WITNESS_REASONS` after `witnessed`.
  */
 export function witnessVerdict(witness) {
   const { promptAt, stopAt, stopMissing: lost, deliveredAt, mainAgent, humanOrigin } = witness ?? {}
