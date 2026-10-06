@@ -1078,10 +1078,12 @@ function buildInstructionItems(ctx) {
   }
   // The sign-off line comes before the consent block: consent stays the last instruction of the text boot.
   signoffInstructions(ctx.unsigned, { noninteractive }).forEach((text) => add(text))
-  // An ask-and-stop blocker means the operator has one question to answer first: no consent line on this boot.
-  const consent = needsOperator(ctx) === null ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
+  // An ask-and-stop blocker means the operator has one question to answer first: no card pickup and no consent line on this boot.
+  const asked = needsOperator(ctx) !== null
+  // The improvement lines also come before the consent block.
+  if (!noninteractive && !asked) for (const text of improvementInstructions(improvement)) add(text)
+  const consent = !asked ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
   consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
-  if (!noninteractive) for (const text of improvementInstructions(improvement)) add(text)
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)

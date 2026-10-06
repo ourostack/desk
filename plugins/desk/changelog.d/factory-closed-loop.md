@@ -5,3 +5,5 @@ At session start, a line says how many cards are open and how old the oldest is,
 The plugin now starts the waste evaluator itself, only on a subscription sign-in. Under per-token billing or an unknown sign-in it does not run, spends nothing and says so at session start. `DESK_FACTORY_LOOP` set to anything other than `1`, `true`, `on` or `yes` turns the whole loop off, and `DESK_FACTORY_HEADLESS_EVALUATOR=0` turns the evaluator off alone. The factory documentation has a new "The improvement loop" section.
 
 The loop's health record states every number the way the rest of the factory does: `{ state, value, reasons }`, with `value: null` and the reason named when a number could not be read, never a bare 0.
+
+The loop's reconcile compares the desk only, so the two reasons that need the store's facts (`status_unobserved`, `store_only`) are reported as unavailable (`store_not_compared`), never as zero mismatches. Session start lists the improvement cards before the factory consent line, and says nothing about them while the operator has a question to answer first.

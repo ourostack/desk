@@ -1393,7 +1393,7 @@ contract("no skill or doc tells an agent to remove or change a billing or sign-i
   assert.match(section, /`disabled_would_bill`, `disabled` and `budget_exhausted` are shown on the health record and at session start and never carded/u);
   assert.match(section, /the agent changes nothing/u);
   assert.match(section, /Desk problem closes after 7 days quiet[^\n]*`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
-  assert.match(section, /`unavailable` with the reason `not_recorded`[\s\S]+written locally/u);
+  assert.match(section, /`unavailable` with the reason `not_recorded`[\s\S]+store_not_compared[\s\S]+kept on this machine/u);
   assert.match(text("plugins/desk/skills/desk-problem/SKILL.md"), /`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
   const start = text("plugins/desk/skills/session-start/details.md");
   const would = start.split("\n").find((line) => line.includes("(`disabled_would_bill`)"));
@@ -1475,7 +1475,7 @@ contract("the improvement-loop bounds in the doc are the constants in the code",
 requires(
   "plugins/desk/mcp/README.md",
   "the MCP readme lists the three improvement tools",
-  /## Tools exposed \(22\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 22 tools are wired/u,
+  /## Tools exposed \(23\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 23 tools are wired/u,
 );
 contract("the changelog fragment for the loop exists, has no heading and says what changed for the reader", () => {
   const fragment = text("plugins/desk/changelog.d/factory-closed-loop.md");

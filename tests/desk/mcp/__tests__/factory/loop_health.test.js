@@ -15,7 +15,7 @@ import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/r
 import { STEPS, recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import {
   AGE_ALARM_DAYS, STALE_AFTER_HOURS, STUCK_ALARM_DAYS, BLOCKING_STATES, HEADLESS_STATES,
-  buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
+  STORE_SIDE_REASONS, buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
 } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
 
 const DAY = 24 * 3600 * 1000
@@ -91,6 +91,7 @@ const measure = (ctx, seams = {}) => {
 const build = (ctx, seams = {}) => buildLoopHealth({ env: ctx.env, deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: NOW, ...seams })
 const M = (value) => ({ state: "measured", value, reasons: [] })
 const U = (reason) => ({ state: "unavailable", value: null, reasons: [reason] })
+const STORE = { status_unobserved: U("store_not_compared"), store_only: U("store_not_compared") }
 const headless = (patch = {}) => ({ state: "ran", day: "2026-10-05", jobs: 2, accepted: 1, rejected: 1, cost_usd: 0.5, cost_unreported_runs: 0, unsupported_jobs: 0, deferred_jobs: 0, blocked_days: 0, ...patch })
 const evaluator = (patch = {}, hl = {}) => ({ evaluator: { expired_total: 3, gave_up: 1, waiting: 4, headless: headless(hl), ...patch } })
 const keysOf = (value) => Object.keys(value).sort()
@@ -129,13 +130,13 @@ test("the record has exactly the contract's keys, every number is a Count, and a
   assert.equal(loop.written_at, NOW.toISOString())
   assert.equal(loop.desk_version, "3.2.0-alpha.9")
   assert.deepEqual(keysOf(loop.improvement), ["age_alarm_days", "by_source", "claim_expired", "claimed", "closed_confirmed_30d", "closed_unverified_30d", "oldest_in_verification_age_days", "oldest_open_age_days", "open", "reopened_30d", "reopened_from_verification", "shipped", "stuck_alarm_days", "verifying"])
-  assert.deepEqual([loop.improvement.age_alarm_days, loop.improvement.stuck_alarm_days], [7, 21])
+  assert.deepEqual([loop.improvement.age_alarm_days, loop.improvement.stuck_alarm_days], [M(7), M(21)])
   assert.deepEqual(keysOf(loop.improvement.by_source), ["andon", "desk_problem", "evaluator", "flush_health", "friction_candidate", "loop_alarm", "reconcile_class", "store_build"])
   assert.deepEqual(keysOf(loop.unsigned_deliveries), ["count", "oldest_age_days"])
   assert.deepEqual(keysOf(loop.alarms), ["andon_open", "desk_problems_open", "loop_alarms_open", "store_build_failing"])
   assert.deepEqual(keysOf(loop.evaluator), ["expired_total", "gave_up", "headless", "labels_quarantined", "oldest_wait_days", "waiting"])
   assert.deepEqual(keysOf(loop.evaluator.headless), ["accepted_today", "cap_per_day", "cost_usd_today", "jobs_today", "rejected_today", "state"])
-  assert.deepEqual(keysOf(loop.reconcile), ["desks", "last_ran_at", "mismatches", "window_days"])
+  assert.deepEqual(keysOf(loop.reconcile), ["desks", "last_ran_at", "mismatches", "store_side", "window_days"])
   assert.deepEqual(keysOf(loop.steps), [...STEPS].sort())
   assert.deepEqual(keysOf(loop.steps.route), ["expected_interval_hours", "failures", "last_ok_at", "last_ran_at", "last_result", "runs", "stale"])
   for (const [trail, value] of leaves(loop)) {
@@ -159,7 +160,7 @@ test("the record has exactly the contract's keys, every number is a Count, and a
   }
   walk(loop, "")
   assert.ok(counted > 40)
-  assert.deepEqual([...new Set(bare)].sort(), ["age_alarm_days", "expected_interval_hours", "stuck_alarm_days", "window_days"])
+  assert.deepEqual(bare, [], "no bare number: every number in the record is a Count")
   assert.equal(isCount(loop.improvement.open), true)
   assert.equal(isCount(loop.steps.route.runs), true)
   assert.equal(isCount(loop.reconcile.desks), true)
@@ -290,9 +291,9 @@ test("unsigned deliveries: absent is not_recorded with no alarm; a measured olde
   const absent = await build(ctx)
   assert.deepEqual(absent.unsigned_deliveries, { count: U("not_recorded"), oldest_age_days: U("not_recorded") })
   assert.deepEqual((await measure(ctx)).spy.calls[0].present, [])
-  await setStatus(ctx, { signoff: { unsigned: M(2), oldest_unsigned_age_days: M(7) } })
+  await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), unsigned: M(2), oldest_unsigned_age_days: M(7) } })
   assert.deepEqual((await measure(ctx)).spy.calls[0].present, [])
-  await setStatus(ctx, { signoff: { unsigned: M(2), oldest_unsigned_age_days: M(8) } })
+  await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), unsigned: M(2), oldest_unsigned_age_days: M(8) } })
   const out = await measure(ctx)
   assert.deepEqual(out.spy.calls[0].present, ["unsigned_age"])
   assert.equal((await allCards(ctx)).find((card) => card.key === "loop_alarm:unsigned_age").title, "A delivery has waited unsigned past the age threshold")
@@ -300,34 +301,57 @@ test("unsigned deliveries: absent is not_recorded with no alarm; a measured olde
 }))
 
 test("unsigned_age reads clear when the unsigned count is a measured 0; it is unread only when the count is unavailable or the count is above 0 with no age", () => scratch(async (ctx) => {
-  const unread = async (signoff) => { await setStatus(ctx, { signoff }); return unreadAlarms(await build(ctx), { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0 }).includes("unsigned_age") }
+  const unread = async (signoff) => { await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), ...signoff } }); return unreadAlarms(await build(ctx), { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0 }).includes("unsigned_age") }
   assert.equal(await unread({ unsigned: M(0), oldest_unsigned_age_days: U("none_unsigned") }), false)
   assert.equal(await unread({ unsigned: M(2), oldest_unsigned_age_days: U("none_unsigned") }), true)
   assert.equal(await unread({ unsigned: U("scan_failed"), oldest_unsigned_age_days: M(1) }), true)
   assert.equal(await unread({ unsigned: M(2), oldest_unsigned_age_days: M(1) }), false)
   await observeConditions(ctx.env, { source: "loop_alarm", present: ["unsigned_age"], now: ago(1) })
-  await setStatus(ctx, { signoff: { unsigned: M(0), oldest_unsigned_age_days: U("none_unsigned") } })
+  await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), unsigned: M(0), oldest_unsigned_age_days: U("none_unsigned") } })
   await measure(ctx, { observe: observeConditions, attempted: [...STEPS] })
   assert.equal(conditionOf(await readStatus(ctx.env), "loop_alarm:unsigned_age").present, false)
 }))
 
 test("damaged signoff values stay unavailable and the alarm keeps what was recorded", () => scratch(async (ctx) => {
-  await setStatus(ctx, { signoff: { unsigned: U("scan_failed"), oldest_unsigned_age_days: { state: "measured", value: -3 } } })
+  await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), unsigned: U("scan_failed"), oldest_unsigned_age_days: { state: "measured", value: -3 } } })
   assert.deepEqual((await build(ctx)).unsigned_deliveries, { count: U("scan_failed"), oldest_age_days: U("not_recorded") })
   await setStatus(ctx, { signoff: "oops" })
   assert.deepEqual((await build(ctx)).unsigned_deliveries, { count: U("not_recorded"), oldest_age_days: U("not_recorded") })
-  await setStatus(ctx, { signoff: { unsigned: { state: "unavailable", reason: "has a/slash" }, oldest_unsigned_age_days: { state: "measured", value: 1, extra: 1 } } })
+  await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), unsigned: { state: "unavailable", reason: "has a/slash" }, oldest_unsigned_age_days: { state: "measured", value: 1, extra: 1 } } })
   assert.deepEqual((await build(ctx)).unsigned_deliveries, { count: U("not_recorded"), oldest_age_days: U("not_recorded") })
+}))
+
+test("the unsigned-deliveries alarm reads the sign-off scan's own record: a lower bound above 7 days alarms, an old or undated scan is stale or not recorded and alarms nothing", () => scratch(async (ctx) => {
+  await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), unsigned: { state: "partial", value: 500, reason: "archive_cap" }, oldest_unsigned_age_days: { state: "partial", value: 30, reason: "archive_cap" } } })
+  assert.deepEqual(loopAlarms(await build(ctx), {}).map((alarm) => alarm.name), ["unsigned_age"])
+  await setStatus(ctx, { signoff: { checked_at: ago(5).toISOString(), unsigned: M(2), oldest_unsigned_age_days: M(30) } })
+  const stale = await build(ctx)
+  assert.deepEqual(stale.unsigned_deliveries, { count: U("stale"), oldest_age_days: U("stale") })
+  assert.deepEqual(loopAlarms(stale, {}), [])
+  await setStatus(ctx, { signoff: { unsigned: M(2), oldest_unsigned_age_days: M(30) } })
+  assert.deepEqual((await build(ctx)).unsigned_deliveries, { count: U("not_recorded"), oldest_age_days: U("not_recorded") })
+}))
+
+test("the store-side reconcile reasons are reported as not compared, never as a count or as none, and the record's constants are Counts", () => scratch(async (ctx) => {
+  await setStatus(ctx, { ...evaluator(), reconcile: { at: TIME, window_days: 7, desks: 2, desks_known: 2, desks_failed: 0, runs: { [RECONCILE_REASONS[0]]: { consecutive: 2, count: 3, clear: 0 }, status_unobserved: { consecutive: 1, count: 4, clear: 0 }, store_only: { consecutive: 1, count: 1, clear: 0 } }, warnings: [], last_result: "reconciled" } })
+  const loop = await build(ctx)
+  assert.deepEqual(loop.reconcile.mismatches, { [RECONCILE_REASONS[0]]: M(3) })
+  assert.deepEqual(loop.reconcile.store_side, { status_unobserved: U("store_not_compared"), store_only: U("store_not_compared") })
+  assert.deepEqual(STORE_SIDE_REASONS, ["status_unobserved", "store_only"])
+  assert.deepEqual([loop.reconcile.window_days, loop.improvement.age_alarm_days, loop.improvement.stuck_alarm_days, loop.steps.mirror.expected_interval_hours], [M(7), M(7), M(21), M(6)])
 }))
 
 test("a stored count reads back in the contract shape from either spelling and nothing else", () => scratch(async (ctx) => {
   const read = async (unsigned, oldest) => {
-    await setStatus(ctx, { signoff: { unsigned, oldest_unsigned_age_days: oldest } })
+    await setStatus(ctx, { signoff: { checked_at: NOW.toISOString(), unsigned, oldest_unsigned_age_days: oldest } })
     const { unsigned_deliveries: out } = await build(ctx)
     return [out.count, out.oldest_age_days]
   }
   assert.deepEqual(await read({ state: "measured", value: 2 }, { state: "unavailable", reason: "none_open" }), [M(2), U("none_open")])
   assert.deepEqual(await read({ state: "measured", value: 2, reasons: [] }, { state: "unavailable", value: null, reasons: ["none_open"] }), [M(2), U("none_open")])
+  assert.deepEqual(await read({ state: "partial", value: 4, reason: "archive_cap" }, { state: "partial", value: 9, reason: "cards_unreadable" }), [{ state: "partial", value: 4, reasons: ["archive_cap"] }, { state: "partial", value: 9, reasons: ["cards_unreadable"] }])
+  assert.deepEqual(await read({ state: "partial", value: 4, reasons: ["archive_cap"] }, { state: "partial", value: 1 }), [{ state: "partial", value: 4, reasons: ["archive_cap"] }, U("not_recorded")])
+  assert.deepEqual(await read({ state: "partial", value: 4, reason: "bad/slash" }, { state: "partial", value: -1, reason: "x" }), [U("not_recorded"), U("not_recorded")])
   assert.deepEqual(await read(5, null), [U("not_recorded"), U("not_recorded")])
   assert.deepEqual(await read({ state: "measured", value: 2, reasons: ["x"] }, { state: "unavailable", value: 0, reasons: ["none_open"] }), [U("not_recorded"), U("not_recorded")])
   assert.deepEqual(await read({ state: "unavailable", value: null, reasons: ["a", "b"] }, { state: "partial", value: 1 }), [U("not_recorded"), U("not_recorded")])
@@ -356,12 +380,12 @@ test("the steps section: a step that never ran, one that ran, and damaged step r
   await recordStep(ctx.env, "evaluate", { ok: true, result: "ran", now: ago(0.5) })
   await setLoop(ctx, { steps: { ...(await readStatus(ctx.env)).loop.steps, verify: { last_ran_at: "not a time", last_ok_at: "also not", last_result: "Bad Code/x", runs: -1, failures: "x", failures_in_a_row: 0 }, mirror: "oops" } })
   const { steps } = await build(ctx)
-  assert.deepEqual(steps.measure, { last_ran_at: null, last_ok_at: null, last_result: "never_ran", runs: M(0), failures: M(0), expected_interval_hours: 24, stale: false })
+  assert.deepEqual(steps.measure, { last_ran_at: null, last_ok_at: null, last_result: "never_ran", runs: M(0), failures: M(0), expected_interval_hours: M(24), stale: false })
   assert.equal(steps.evaluate.last_ran_at, ago(0.5).toISOString())
   assert.equal(steps.evaluate.last_result, "ran")
-  assert.equal(steps.evaluate.expected_interval_hours, 1)
-  assert.deepEqual([steps.route.expected_interval_hours, steps.mirror.expected_interval_hours, steps.reconcile.expected_interval_hours], [6, 6, 24])
-  assert.deepEqual(steps.verify, { last_ran_at: null, last_ok_at: null, last_result: "unknown", runs: U("not_recorded"), failures: U("not_recorded"), expected_interval_hours: 24, stale: true })
+  assert.deepEqual(steps.evaluate.expected_interval_hours, M(1))
+  assert.deepEqual([steps.route.expected_interval_hours, steps.mirror.expected_interval_hours, steps.reconcile.expected_interval_hours], [M(6), M(6), M(24)])
+  assert.deepEqual(steps.verify, { last_ran_at: null, last_ok_at: null, last_result: "unknown", runs: U("not_recorded"), failures: U("not_recorded"), expected_interval_hours: M(24), stale: true })
   assert.equal(steps.mirror.last_result, "never_ran")
   assert.deepEqual([steps.mirror.runs, steps.mirror.failures], [M(0), M(0)], "a step with no usable record is not a damaged counter")
   await setLoop(ctx, { steps: { ...(await readStatus(ctx.env)).loop.steps, route: { last_ran_at: TIME, last_ok_at: TIME, last_result: "routed", runs: "bad", failures: -1, failures_in_a_row: 0 } } })
@@ -476,17 +500,17 @@ test("cards the library set aside or could not read open cards_invalid", () => s
 }))
 
 test("the reconcile block: no summary is last_ran_at null with desks unavailable; a summary gives counts per reason", () => scratch(async (ctx) => {
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: null, window_days: 7, desks: U("not_recorded"), mismatches: {} })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: null, window_days: M(7), desks: U("not_recorded"), mismatches: {} , store_side: STORE })
   await setStatus(ctx, { reconcile: { at: null, last_result: "no_desks", runs: {} } })
   assert.equal((await build(ctx)).reconcile.last_ran_at, null)
   await setStatus(ctx, { reconcile: { at: TIME, window_days: 7, desks: 3, runs: { [RECONCILE_REASONS[0]]: { consecutive: 1, count: 4, clear: 0 }, [RECONCILE_REASONS[1]]: { consecutive: 0, count: 0, clear: 3 }, unknown_reason: { count: 1 }, "bad/key": { count: 2 }, [RECONCILE_REASONS[2]]: { count: -1 }, [RECONCILE_REASONS[3]]: "x" }, warnings: [], last_result: "reconciled" } })
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: 7, desks: M(3), mismatches: { [RECONCILE_REASONS[0]]: M(4), unknown_reason: M(1) } })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: M(3), mismatches: { [RECONCILE_REASONS[0]]: M(4), unknown_reason: M(1) } , store_side: STORE })
   await setStatus(ctx, { reconcile: { at: TIME, desks: "x", runs: "y" } })
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: 7, desks: U("runs_damaged"), mismatches: {} })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: U("runs_damaged"), mismatches: {} , store_side: STORE })
   await setStatus(ctx, { reconcile: { at: TIME, desks: 2 } })
   assert.deepEqual((await build(ctx)).reconcile.desks, U("runs_damaged"))
   await setStatus(ctx, { reconcile: { at: TIME, desks: "x", runs: {} } })
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: 7, desks: U("not_recorded"), mismatches: {} })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: U("not_recorded"), mismatches: {} , store_side: STORE })
   await setStatus(ctx, { reconcile: "x" })
   assert.equal((await build(ctx)).reconcile.last_ran_at, null)
 }))

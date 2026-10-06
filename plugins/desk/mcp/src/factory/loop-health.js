@@ -1,7 +1,7 @@
 // The loop's health record and its own alarms: the `measure` step.
 //
 // `buildLoopHealth` reads the improvement cards and the numbers the other steps left in `status.json` and builds
-// the `desk.factory.loop/1` record (the shape the store's site reads): counts, ages, the last result of each step
+// the `desk.factory.loop/1` record, kept on this machine (a later change flattens it to `loop_slot_v1` and delivers it): counts, ages, the last result of each step
 // and the headless evaluator's state. Every number is a Count in the number-states shape every published factory number
 // uses, `{ state: "measured", value, reasons: [] }` or `{ state: "unavailable", value: null, reasons: [reason] }`, so a
 // number that could not be read never shows as 0. The record holds codes,
@@ -66,14 +66,20 @@ export function count(value, reason = "not_recorded") {
 const measured = (value) => ({ state: "measured", value, reasons: [] })
 const unavailable = (reason) => ({ state: "unavailable", value: null, reasons: [reason] })
 
-/** A stored Count (as the sign-off package writes it) read back, or null when it is not one. */
+/** A stored Count (as the sign-off scan writes it: `{ state, value }`, `{ state: "partial", value, reason }` or `{ state: "unavailable", reason }`, or in the contract shape) read back as a Count, or null when it is not one. */
 function storedCount(value) {
   if (!isObject(value)) return null
   const keys = Object.keys(value).length
-  if (value.state === "measured" && isInteger(value.value) && (keys === 2 || (keys === 3 && Array.isArray(value.reasons) && value.reasons.length === 0))) return measured(value.value)
+  const contract = Array.isArray(value.reasons)
+  if (value.state === "measured") return isInteger(value.value) && (keys === 2 || (keys === 3 && contract && value.reasons.length === 0)) ? measured(value.value) : null
+  // A partial count is a lower bound: it keeps its value and names why it is partial.
+  if (value.state === "partial") {
+    const reason = keys === 3 ? (contract ? value.reasons[0] : value.reason) : undefined
+    return isInteger(value.value) && typeof reason === "string" && REASON.test(reason) ? { state: "partial", value: value.value, reasons: [reason] } : null
+  }
   if (value.state !== "unavailable") return null
-  // The older two-key spelling `{ state, reason }` and the contract's `{ state, value: null, reasons: [reason] }` both read back.
-  const reason = keys === 2 ? value.reason : keys === 3 && value.value === null && Array.isArray(value.reasons) && value.reasons.length === 1 ? value.reasons[0] : null
+  // The two-key spelling `{ state, reason }` and the contract's `{ state, value: null, reasons: [reason] }` both read back.
+  const reason = keys === 2 ? value.reason : keys === 3 && value.value === null && contract && value.reasons.length === 1 ? value.reasons[0] : undefined
   return typeof reason === "string" && REASON.test(reason) ? unavailable(reason) : null
 }
 
@@ -157,8 +163,10 @@ function recordedCount(holder, field, nowMs) {
   return count(holder[field])
 }
 
-function unsignedSection(signoff) {
-  const read = (name) => (isObject(signoff) ? storedCount(signoff[name]) : null) ?? unavailable("not_recorded")
+function unsignedSection(signoff, nowMs) {
+  // The scan records `checked_at` each time boot runs it; an old scan says nothing about now.
+  const fresh = isObject(signoff) ? freshness({ at: signoff.checked_at }, nowMs) : "not_recorded"
+  const read = (name) => (fresh !== "fresh" ? unavailable(fresh) : storedCount(signoff[name]) ?? unavailable("not_recorded"))
   return { count: read("unsigned"), oldest_age_days: read("oldest_unsigned_age_days") }
 }
 
@@ -186,16 +194,22 @@ function headlessSection(stored, today) {
   }
 }
 
+/** The two reconcile reasons that need the store's own facts. The loop does not clone the store in v0, so it never compares and never reports a count for them. */
+export const STORE_SIDE_REASONS = Object.freeze(["status_unobserved", "store_only"])
+
 function reconcileSection(summary) {
   const last = isObject(summary) ? isoOrNull(summary.at) : null
   const mismatches = {}
   if (last !== null && isObject(summary.runs)) {
     for (const reason of [...RECONCILE_REASONS, "unknown_reason"]) {
+      if (STORE_SIDE_REASONS.includes(reason)) continue
       const entry = summary.runs[reason]
       if (isObject(entry) && isInteger(entry.count) && entry.count > 0) mismatches[reason] = count(entry.count)
     }
   }
-  return { last_ran_at: last, window_days: RECONCILE_WINDOW_DAYS, desks: last === null ? unavailable("not_recorded") : !isObject(summary.runs) ? unavailable("runs_damaged") : count(summary.desks), mismatches }
+  // A reason the loop never checks is `unavailable`, never absent: an absent reason reads as "none found".
+  const storeSide = Object.fromEntries(STORE_SIDE_REASONS.map((reason) => [reason, unavailable("store_not_compared")]))
+  return { last_ran_at: last, window_days: count(RECONCILE_WINDOW_DAYS), desks: last === null ? unavailable("not_recorded") : !isObject(summary.runs) ? unavailable("runs_damaged") : count(summary.desks), mismatches, store_side: storeSide }
 }
 
 /** How often each step is expected to run: its minimum gap, and daily for the steps that run whenever the worker does. */
@@ -214,7 +228,7 @@ function stepsSection(status, nowMs) {
       // A step with no record has run 0 times; a record whose counter is damaged says nothing.
       runs: record === null ? count(0) : count(record.runs),
       failures: record === null ? count(0) : count(record.failures),
-      expected_interval_hours: expectedInterval(name),
+      expected_interval_hours: count(expectedInterval(name)),
       stale: stale.has(name),
     }]
   }))
@@ -259,8 +273,8 @@ export function assembleLoop({ status, read, nowMs, version }) {
     schema: RECORD_SCHEMA,
     written_at: new Date(nowMs).toISOString(),
     desk_version: version,
-    improvement: { ...cards.improvement, age_alarm_days: AGE_ALARM_DAYS, stuck_alarm_days: STUCK_ALARM_DAYS },
-    unsigned_deliveries: unsignedSection(stored.signoff),
+    improvement: { ...cards.improvement, age_alarm_days: count(AGE_ALARM_DAYS), stuck_alarm_days: count(STUCK_ALARM_DAYS) },
+    unsigned_deliveries: unsignedSection(stored.signoff, nowMs),
     alarms: {
       andon_open: recordedCount(routeIssues, "andon_open", nowMs),
       store_build_failing: recordedCount(routeIssues, "store_build_failing", nowMs),
@@ -315,7 +329,8 @@ export async function buildLoopHealth(input) {
 // ---------------------------------------------------------------------------
 // Alarms
 
-const measuredAbove = (value, threshold) => value.state === "measured" && value.value > threshold
+// A partial count is a lower bound, so a partial value above the threshold is above it.
+const measuredAbove = (value, threshold) => (value.state === "measured" || value.state === "partial") && value.value > threshold
 
 /**
  * `loopAlarms(loop, { attempted?, blocked_days?, cards_invalid? }) -> [{ name, evidence }]`: the alarms that hold now, in a fixed order. `evidence`
