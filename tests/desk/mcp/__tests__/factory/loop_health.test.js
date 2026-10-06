@@ -210,11 +210,12 @@ test("states, claims, by_source, closed counts and reopens are counted; by_sourc
   await make(ctx, "flush_health", "route_unknown", { state: "closed_confirmed", days: 9, fields: { reopened: 5 } })
   await make(ctx, "loop_alarm", "cards_invalid", { state: "verifying", days: 9, fields: { reopened: 7 } })
   const { improvement } = await build(ctx)
-  assert.deepEqual([improvement.open, improvement.claimed, improvement.claim_expired, improvement.shipped, improvement.verifying], [M(6), M(1), M(1), M(2), M(2)])
+  assert.deepEqual([improvement.open, improvement.claimed, improvement.claim_expired, improvement.shipped, improvement.verifying], [M(5), M(1), M(1), M(2), M(1)])
   assert.deepEqual([improvement.closed_confirmed_30d, improvement.closed_unverified_30d, improvement.reopened_30d, improvement.reopened_from_verification], [M(2), M(1), M(1), M(2)])
   const bySource = Object.fromEntries(Object.entries(improvement.by_source).map(([name, value]) => [name, value.value]))
   assert.deepEqual(bySource, { andon: 2, friction_candidate: 2, reconcile_class: 0, desk_problem: 0, store_build: 0, evaluator: 1, flush_health: 0, loop_alarm: 1 })
-  assert.equal(Object.values(bySource).reduce((sum, n) => sum + n, 0), improvement.open.value)
+  // The open count leaves loop alarm cards out (they are `loop_alarms_open`), so it is the by-source sum without them.
+  assert.equal(Object.values(bySource).reduce((sum, n) => sum + n, 0) - bySource.loop_alarm, improvement.open.value)
   assert.deepEqual(improvement.oldest_open_age_days, M(50))
 }))
 
@@ -644,3 +645,25 @@ test("every alarm name the step can open is in the card library's list", () => {
   for (const name of ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", ...STEPS.map((step) => `step_stale:${step}`)]) assert.ok(LOOP_ALARMS.includes(name), name)
   assert.deepEqual(RECONCILE_REASONS.length > 0, true)
 })
+
+test("a slot that fails the store's rule opens the capture_loop_slot alarm once, through the real measure step", () => scratch(async (ctx) => {
+  const card = { key: "andon:ourostack/factory#1", source: "andon", state: "closed_confirmed", last_opened_at: ago(1).toISOString(), closed_at: ago(1).toISOString(), recurrences: 0, reopened: 0 }
+  const huge = { cards: Array.from({ length: 1000001 }, () => card), set_aside_total: 0, unreadable_files: 0 }
+  const spy = observer()
+  const out = await measure(ctx, { readCardsImpl: async () => huge, observe: spy.observe })
+  assert.deepEqual([out.ok, out.result, out.counts.opened], [true, "measured", 1])
+  assert.ok(spy.calls[0].present.includes("capture_loop_slot"))
+  const stored = (await readStatus(ctx.env)).loop.health
+  assert.equal(stored.improvement.closed_confirmed_30d.value, 1000001)
+  assert.deepEqual((await allCards(ctx)).map((entry) => entry.key), ["loop_alarm:capture_loop_slot"])
+}))
+
+test("loop alarm cards are in no card count but loop_alarms_open: open, claimed, shipped and verifying", () => scratch(async (ctx) => {
+  await make(ctx, "loop_alarm", "headless_blocked", { state: "claimed", days: 1 })
+  await make(ctx, "loop_alarm", "cards_invalid", { state: "shipped", days: 1 })
+  await make(ctx, "loop_alarm", "unsigned_age", { state: "verifying", days: 1 })
+  await make(ctx, "loop_alarm", "labels_quarantined", { days: 1 })
+  await make(ctx, "andon", "ourostack/factory#1", { state: "claimed", days: 1 })
+  const { improvement, alarms } = await build(ctx)
+  assert.deepEqual([improvement.open, improvement.claimed, improvement.shipped, improvement.verifying, alarms.loop_alarms_open], [M(0), M(1), M(0), M(0), M(4)])
+}))

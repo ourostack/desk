@@ -181,7 +181,7 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
   assert.match(build, /node scripts\/release-desk\.cjs --date/u)
   assert.match(build, /node scripts\/check-release-integrity\.cjs/u)
-  assert.match(build, /"__tests__\/release\/\*\*\/\*\.test\.js"/u)
+  assert.match(build, /"\.\.\/\.\.\/\.\.\/tests\/desk\/mcp\/__tests__\/release\/\*\*\/\*\.test\.js"/u)
   const report = workflow.jobs.report
   assert.deepEqual(report.needs, ["build", "push"])
   assert.deepEqual(report.permissions, { issues: "write" })
@@ -206,7 +206,7 @@ test("the release workflow checks every release surface in a read-only job and p
     assert.match(checks, new RegExp(check, "u"), check)
   }
   for (const folder of ["release", "activation", "artifacts", "docs", "scripts"]) {
-    assert.ok(checks.includes(`"__tests__/${folder}/**/*.test.js"`), folder)
+    assert.ok(checks.includes(`"../../../tests/desk/mcp/__tests__/${folder}/**/*.test.js"`), folder)
   }
   assert.match(checks, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
   assert.match(checks, /echo "sha=\$sha"; echo "base=\$base"/u)

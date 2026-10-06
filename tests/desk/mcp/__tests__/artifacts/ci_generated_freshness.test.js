@@ -1260,7 +1260,11 @@ test("desk MCP CI runs committed artifact and host manifest verifiers", () => {
 test("desk MCP CI path filters include every host-facing freshness input", () => {
   const workflow = loadText(".github", "workflows", "desk-mcp-tests.yml")
 
-  for (const eventName of ["pull_request", "push"]) {
+  // Every pull request runs the workflow with no path filter, because main requires its "CI gate" job and a required check a
+  // filter skipped would never report (required_ci_gate.test.js). Only pushes to main are filtered.
+  assert.match(workflow, /^on:\n  pull_request:\n  push:\n/mu, "desk MCP CI runs on every pull request")
+
+  for (const eventName of ["push"]) {
     const filters = workflowPathFilters(workflow, eventName)
     assertPathFiltersCoverAll(
       filters,
