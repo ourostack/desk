@@ -138,6 +138,10 @@ function checkStartupHooks(skill) {
       claude: runClaudeHook({ env, cwd: codeRepo, projectDir: codeRepo }),
       copilot: runCopilotHook({ env, cwd: codeRepo, sessionCwd: codeRepo }),
     };
+    // Claude Code keeps only the first 2 KB of a SessionStart context that passes 10,000 characters (round AJ: with the foundation 400 characters longer, 13 of 17 runs
+    // over the limit never ran the boot, against 1 of 99 under it), so the boot imperative opens the context and the foundation follows it.
+    assert.ok(contexts.claude.startsWith("Desk startup:"), "claude startup must open with the Desk startup line, ahead of the foundation");
+    assert.ok(contexts.claude.indexOf("session-boot.js") < 2000, "claude startup must name the boot script inside the first 2 KB");
     for (const [host, context] of Object.entries(contexts)) {
       assert.equal(countOccurrences(context, foundation), 1, `${host} startup must inject the using-desk foundation exactly once`);
       const rfcLines = context.split("\n").filter((line) => line.startsWith("Desk RFC:"));
@@ -399,29 +403,40 @@ function main() {
     "When a Desk mechanism itself fails at its own job, `desk-problem` is the procedure",
   ]);
 
-  assertSectionPhrases(
-    section(skill, "Requirements that arrive during execution"),
-    "using-desk Requirements that arrive during execution",
-    [
-      "same durable task",
-      "governing spec",
-      "numbered plan",
-      "progress ledger",
-      "dependencies",
-      "sequencing",
-      "authority",
-      "tests",
-      "review evidence",
-      "invalidated evidence",
-      "unaffected authorized work moving",
-      "implementation and review gates",
-      "must not silently absorb contradictory scope",
-      "must not restart the whole task without cause",
-      "must not return control merely because the plan changed",
-    ],
-  );
+  // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.
+  assertSectionPhrases(section(skill, "Requirements that arrive during execution"), "using-desk Requirements that arrive during execution", [
+    "same durable task",
+    "implementation and review gates",
+    "silently absorb contradictory scope",
+    "restart the whole task without cause",
+    "return control merely because the plan changed",
+    "`work-orchestration` holds the procedure",
+  ]);
+  const owned = (name) => fs.readFileSync(path.join(pluginRoot, "skills", name, "SKILL.md"), "utf8");
+  assertSectionPhrases(section(owned("work-orchestration"), "Requirements that arrive during execution"), "work-orchestration Requirements that arrive during execution", [
+    "governing spec",
+    "numbered plan",
+    "progress ledger",
+    "dependencies",
+    "sequencing",
+    "authority",
+    "tests",
+    "review evidence",
+    "invalidated evidence",
+    "unaffected authorized work moving",
+    "implementation and review gates",
+    "must not silently absorb contradictory scope",
+    "must not restart the whole task without cause",
+    "must not return control merely because the plan changed",
+  ]);
 
   assertSectionPhrases(section(skill, "Visual proof when it helps"), "using-desk Visual proof when it helps", [
+    "bounded visual proof",
+    "rendered, installed, merged or rollout",
+    "terminal success line",
+    "`evidence-discipline` holds the procedure",
+  ]);
+  assertSectionPhrases(section(owned("evidence-discipline"), "Visual proof when it helps"), "evidence-discipline Visual proof when it helps", [
     "working or doing logs",
     "intermediate milestones",
     "pull request opened, reviewed, or merged states",
@@ -456,7 +471,7 @@ function main() {
     "no new authority",
     "no new durable task identity",
     "early-return framing is input, not authority",
-    "root retains final accountability",
+    "retains final accountability",
     "A child agent with a bounded brief follows the brief, not this text",
     "skips session-start, host probes, sync and any real-desk boot ceremony",
     "A child agent never calls task_focus.",
@@ -494,9 +509,9 @@ function main() {
   // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
   // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
   // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
-  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; a further addition has to justify its size.
+  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; then down to 8000 bytes (round AJ): the whole SessionStart context has to stay under Claude Code's 10,000-character limit, and `start_hook.test.js` holds it to 9,500 with long paths, so a further addition has to justify its size and make room by moving a procedure to the skill that owns it.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 8600, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,

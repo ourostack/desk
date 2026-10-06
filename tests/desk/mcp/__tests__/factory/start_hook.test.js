@@ -385,12 +385,14 @@ function runHook(host, env, desk) {
     : spawnSync("bash", [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env, encoding: "utf8" })
 }
 
-function expectedContext(host, env, desk) {
+// `checks` is the boot pre-checks line a speaking check adds ("\n\nDesk boot pre-checks: ..."). Both hosts add it to the startup
+// direction, which opens the context (Claude Code keeps only a 2 KB preview of a context past 10,000 characters, so the boot imperative leads).
+function expectedContext(host, env, desk, checks = "") {
   const skill = readFileSync(path.join(PLUGIN, "skills", "using-desk", "SKILL.md"), "utf8")
   const rfc = path.join(PLUGIN, "docs", "agentic-engineering-v2-rfc.md")
-  if (host === "copilot") return `${skill.trimEnd()}\n\nDesk RFC: ${rfc}\n\n${copilotStartupDirection({ env, sessionFolder: desk })}`
+  if (host === "copilot") return `${copilotStartupDirection({ env, sessionFolder: desk })}${checks}\n\n${skill.trimEnd()}\n\nDesk RFC: ${rfc}`
   // Bash command substitution drops the file's trailing newlines, as `trimEnd` does for the newline-only tail.
-  return `${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n\n${claudeStartupDirection({ env })}`
+  return `${claudeStartupDirection({ env })}${checks}\n\n${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n`
 }
 
 function envelope(host, context) {
@@ -416,8 +418,8 @@ for (const host of ["claude", "copilot"]) {
     const spokenRun = runHook(host, { ...hookEnv, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${speaking}`.trim() }, desk)
     assert.equal(spokenRun.status, 0, spokenRun.stderr)
     const spoken = JSON.parse(spokenRun.stdout)
-    assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, `${context}\n\nDesk boot pre-checks: one; two`)
-    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, `${context}\n\nDesk boot pre-checks: one; two`))
+    assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two"))
+    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two")))
     assert.equal(readFileSync(calls, "utf8"), "started\nstarted\n", "each start launches factory delivery once, after its output is built")
   }))
 }
@@ -476,3 +478,48 @@ test("the plugin scan stops at the check's deadline and the factory check is the
   assert.equal(line, "")
   assert.equal(recorded[0].reason, "budget")
 }))
+
+// ---------------------------------------------------------------------------
+// The size budget. Claude Code saves a SessionStart context over 10,000 characters to a file and shows a 2 KB preview, which cut the boot imperative off in round AJ.
+// ---------------------------------------------------------------------------
+
+const CONTEXT_BUDGET = 9500
+
+// One pending migration is the budgeted case. Three (a stale install) can pass 10,000 whatever the foundation does, so that case pins only that the boot imperative still
+// opens the context and names the boot script inside the first 2,000 characters, which Claude Code's preview always shows.
+for (const [host, pending] of [["claude", 1], ["copilot", 1], ["claude", 3], ["copilot", 3]]) {
+  test(`${host} session-start context with ${pending} pending migration${pending === 1 ? "" : "s"}, a cache-style plugin root, a long desk path and a pre-check line ${pending === 1 ? `stays within ${CONTEXT_BUDGET} characters` : "names the boot script in its first 2,000 characters"}`, () => scratch(async ({ base, env }) => {
+    const root = path.join(base, "Users", "someone.long-name", ".claude", "plugins", "cache", "ourostack", "desk", "3.2.0-alpha.196")
+    await fs.mkdir(path.dirname(root), { recursive: true })
+    await fs.symlink(PLUGIN, root)
+    const desk = path.join(base, "Users", "someone.long-name", "code", "organization-engineering", "personal-workspaces", "operator-desk-checkout")
+    await fs.mkdir(path.join(desk, "_meta"), { recursive: true })
+    await fs.mkdir(path.join(desk, "_archive"))
+    const { migrationLine } = await import("../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js")
+    const migration = migrationLine(["02-tidy", "03-move", "04-more"].slice(0, pending).map((id) => ({ id, state: "agent_work" })), root)
+    const precheck = "workspace-tidy deferred (0 listed); 1 task card with unreadable repos: greenhouse-ops/valve-firmware-flasher/task.md (repo ~/code/valve-firmware not found); their repositories were not inspected"
+    const preload = path.join(base, "budget-preload.cjs")
+    await fs.writeFile(preload, `
+const boot = require(${JSON.stringify(BOOT)});
+boot.checks.splice(0, boot.checks.length, { id: "fixture", budgetMs: 100, run: async () => ({ line: ${JSON.stringify(precheck)} }) });
+boot.migrationLine = async () => ${JSON.stringify(migration)};
+boot.startFactory = async () => true;
+`)
+    const hookEnv = { ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() }
+    const run = host === "copilot"
+      ? spawnSync(process.execPath, [path.join(root, "hooks", "copilot-session-start.cjs")], { env: hookEnv, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
+      : spawnSync("bash", [path.join(root, "hooks", "session-start.sh"), path.join(root, "skills", "using-desk", "SKILL.md")], { env: hookEnv, encoding: "utf8" })
+    assert.equal(run.status, 0, run.stderr)
+    const parsed = JSON.parse(run.stdout)
+    const context = parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext
+    assert.match(context, /Desk boot pre-checks: workspace-tidy deferred/u, "the pre-check line is in the measured context")
+    assert.match(context, /Desk migrations: 02-tidy is pending/u, "the migration line is in the measured context")
+    assert.ok(context.startsWith("Desk startup:"), "the startup line leads")
+    // The paths come from wherever this test runs, so measure with fixed ones: a cache-style plugin root (77 characters, ~/.claude/plugins/cache/ourostack/desk/3.2.0-alpha.196 under a long user name) and a 97-character desk path.
+    const CACHE_ROOT = "/Users/someone.long-name/.claude/plugins/cache/ourostack/desk/3.2.0-alpha.196"
+    const LONG_DESK = "/Users/someone.long-name/code/organization-engineering/personal-workspaces/operator-desk-checkout"
+    const measured = [[desk, LONG_DESK], [root, CACHE_ROOT], [await fs.realpath(PLUGIN), CACHE_ROOT]].reduce((text, [from, to]) => text.split(from).join(to), context)
+    assert.ok(measured.indexOf("session-boot.js") >= 0 && measured.indexOf("session-boot.js") < 2000, "the boot script is named inside the first 2,000 characters, where Claude Code's preview reaches")
+    if (pending === 1) assert.ok(measured.length <= CONTEXT_BUDGET, `the SessionStart context is ${measured.length} characters with typical long paths; it must stay at most ${CONTEXT_BUDGET} so Claude Code (limit 10,000) shows all of it. Tighten the foundation or the startup line.`)
+  }))
+}

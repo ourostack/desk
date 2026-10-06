@@ -41,7 +41,7 @@ export function bootCommand(script = BOOT_SCRIPT) {
 // reads like a finished status. So it says in its own words that the boot has not run, gives the exact command, and
 // calls the `Desk boot pre-checks:` line (when present) a pre-check, not the boot, without spelling its prefix so a hook with no such line never mentions one.
 export function startDirection(command = bootCommand()) {
-  return `The boot has not run yet: this line and any pre-check line after it are a pointer and a few quick checks, not a scan of the workspace. Run \`${command}\` now, before other work and before anything else, including your first reply and any search of files or folders (add \`--task "<what the operator named>"\` when their first message names a task). Nothing else counts as the boot: searching for the desk, a task or a repo yourself is not a substitute, and a reply before the boot has run is wrong. Then do what its \`instructions\` say; \`desk:session-start\` explains the result. A child agent with a bounded brief follows the brief instead and skips this.`
+  return `The boot has not run yet: this line and any pre-check line are a pointer and quick checks, not a workspace scan. Run \`${command}\` now, before other work and before anything else, including your first reply and any search of files or folders (add \`--task "<what the operator named>"\` when their first message names a task). Nothing else counts as the boot: searching for the desk, a task or a repo yourself is not a substitute, and a reply before the boot has run is wrong. Then do what its \`instructions\` say; \`desk:session-start\` explains the result. A child agent with a bounded brief follows the brief instead and skips this.`
 }
 const START = startDirection()
 
@@ -104,7 +104,7 @@ function composeStartupDirection(bound) {
     return `Desk startup: Desk cannot use the desk it is bound to (${bound.unavailable.message}) desk_status reports root_unavailable with the fix (${remedy}), and Desk recovers in place once the folder exists. ${START}`
   }
   if (!root) return DESK_SETUP_DIRECTION
-  return `Desk startup: $DESK is ${root} (${sourceLabel(bound.source)}). ${START} An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound, so use that root if the two differ.`
+  return `Desk startup: $DESK is ${root} (${sourceLabel(bound.source)}). ${START} An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound; use it if they differ.`
 }
 
 // Claude: the server takes CLAUDE_PROJECT_DIR as the project folder, so one
