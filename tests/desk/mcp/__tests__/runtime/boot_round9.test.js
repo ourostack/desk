@@ -367,6 +367,18 @@ test("boot hands every card to the local-only recorder, and a recorder that thro
   assert.equal(threw.status, "ready")
 })
 
+test("boot resolves the state branch from the same activation config the session uses and hands it to the local-only recorder", async () => {
+  const root = await desk()
+  const config = path.join(root, "activation.json")
+  await fs.writeFile(config, JSON.stringify({ schema_version: 1, desk: { root, state_branch: "desk-state" } }))
+  const seen = []
+  const configured = await boot(root, { env: { DESK: root, DESK_ACTIVATION_CONFIG: config }, localOnlyFn: async (args) => { seen.push(args.stateBranch) } })
+  assert.equal(configured.status, "ready")
+  const plain = await boot(root, { localOnlyFn: async (args) => { seen.push(args.stateBranch) } })
+  assert.equal(plain.status, "ready")
+  assert.deepEqual(seen, ["desk-state", null])
+})
+
 test("active_tasks carries each task's next step on one line, whole and redacted, and null when the card has none", async () => {
   const root = await mkTempRoot("desk-next-step-")
   const card = (slug, body) => fs.mkdir(path.join(root, "ops", slug), { recursive: true }).then(() => fs.writeFile(path.join(root, "ops", slug, "task.md"), `---\ntitle: ${slug}\nstatus: processing\nupdated: '2026-01-02T00:00:00Z'\n---\n\n${body}`))

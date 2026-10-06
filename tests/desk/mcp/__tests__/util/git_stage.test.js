@@ -18,7 +18,6 @@ import {
   stagePaths,
   commitPaths,
   commitIndexPaths,
-  holdStateBranch,
   indexEntries,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
@@ -171,71 +170,79 @@ test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call t
   assert.deepEqual(result, { ok: false, stderr: "timeout" })
 })
 
-// Desk commits only where it is meant to: the state branch when one is configured, else the remote's default branch, else main. Off that branch, or on a detached HEAD, nothing is committed and the answer says why.
-async function repoWithChange() {
+// Desk stages and commits only where it is meant to. A detached HEAD is always refused. With a configured state branch the checkout must be on it; with none configured it must be on the branch origin/HEAD names when the remote has one, and any named branch will do otherwise. A caller that was not told (undefined) gets only the detached-HEAD rule.
+async function repoWithChange(branch = "main") {
   const root = await mkTempRepo()
+  git(root, ["switch", "-q", "-c", branch])
   await fs.writeFile(path.join(root, "a.txt"), "one\n")
   git(root, ["add", "--", "a.txt"])
   git(root, ["commit", "-q", "-m", "first"])
   await fs.writeFile(path.join(root, "a.txt"), "two\n")
-  git(root, ["add", "--", "a.txt"])
   return root
 }
 
-test("commitPaths commits on main, the fallback branch when the remote names no default", async () => {
-  const root = await repoWithChange()
-  assert.equal(git(root, ["symbolic-ref", "--short", "HEAD"]).trim(), "main")
-  assert.equal(commitPaths(root, ["a.txt"], "on main", spawnSync).ok, true)
-  assert.equal(lastCommitMessage(root), "on main")
+const originHead = (root, name) => {
+  git(root, ["update-ref", `refs/remotes/origin/${name}`, "HEAD"])
+  git(root, ["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${name}`])
+}
+
+test("with no remote default and no state branch, any named branch is allowed, master and feature included", async () => {
+  for (const branch of ["master", "feature"]) {
+    const root = await repoWithChange(branch)
+    assert.equal(stagePaths(root, ["a.txt"], spawnSync, null).ok, true, branch)
+    assert.equal(commitPaths(root, ["a.txt"], `on ${branch}`, spawnSync, null).ok, true, branch)
+    assert.equal(lastCommitMessage(root), `on ${branch}`)
+  }
 })
 
-test("commitPaths refuses off the expected branch, names both branches and commits nothing", async () => {
-  const root = await repoWithChange()
-  git(root, ["switch", "-q", "-c", "feature"])
-  const result = commitPaths(root, ["a.txt"], "off branch", spawnSync)
-  assert.equal(result.ok, false)
-  assert.match(result.stderr, /on branch `feature`/u)
-  assert.match(result.stderr, /only on `main`/u)
-  assert.equal(lastCommitMessage(root), "first")
-  assert.equal(commitCount(root), 1)
-})
-
-test("commitPaths refuses a detached HEAD", async () => {
+test("a detached HEAD is refused by stage and commit whatever the caller knows, and nothing is staged", async () => {
   const root = await repoWithChange()
   git(root, ["switch", "-q", "--detach"])
-  const result = commitPaths(root, ["a.txt"], "detached", spawnSync)
-  assert.equal(result.ok, false)
-  assert.match(result.stderr, /a detached HEAD/u)
+  for (const known of [undefined, null, "main"]) {
+    const staged = stagePaths(root, ["a.txt"], spawnSync, known)
+    assert.equal(staged.ok, false)
+    assert.match(staged.stderr, /detached HEAD/u)
+    assert.equal(commitPaths(root, ["a.txt"], "detached", spawnSync, known).ok, false)
+  }
+  assert.equal(git(root, ["diff", "--cached", "--name-only"]).trim(), "")
   assert.equal(commitCount(root), 1)
 })
 
-test("commitPaths expects the remote's default branch when origin/HEAD names one", async () => {
-  const root = await repoWithChange()
-  git(root, ["branch", "-m", "trunk"])
-  git(root, ["update-ref", "refs/remotes/origin/trunk", "HEAD"])
-  git(root, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"])
-  assert.equal(commitPaths(root, ["a.txt"], "on trunk", spawnSync).ok, true)
-  git(root, ["switch", "-q", "-c", "main"])
-  await fs.writeFile(path.join(root, "a.txt"), "three\n")
-  git(root, ["add", "--", "a.txt"])
-  const refused = commitPaths(root, ["a.txt"], "wrong", spawnSync)
-  assert.equal(refused.ok, false)
-  assert.match(refused.stderr, /only on `trunk`/u)
+test("with the remote's default branch known, staging and committing off it are refused and name both branches", async () => {
+  const root = await repoWithChange("trunk")
+  originHead(root, "trunk")
+  git(root, ["switch", "-q", "-c", "feature"])
+  const staged = stagePaths(root, ["a.txt"], spawnSync, null)
+  assert.equal(staged.ok, false)
+  assert.match(staged.stderr, /on branch `feature`/u)
+  assert.match(staged.stderr, /only on `trunk`/u)
+  assert.equal(commitPaths(root, ["a.txt"], "off", spawnSync, null).ok, false)
+  assert.equal(git(root, ["diff", "--cached", "--name-only"]).trim(), "")
+  git(root, ["switch", "-q", "trunk"])
+  assert.equal(stagePaths(root, ["a.txt"], spawnSync, null).ok, true)
+  assert.equal(commitPaths(root, ["a.txt"], "on trunk", spawnSync, null).ok, true)
 })
 
-test("commitPaths and commitIndexPaths expect the configured state branch", async (t) => {
-  t.after(() => holdStateBranch(null))
-  const root = await repoWithChange()
-  holdStateBranch("desk-state")
-  const refused = commitPaths(root, ["a.txt"], "not state", spawnSync)
-  assert.equal(refused.ok, false)
-  assert.match(refused.stderr, /on branch `main`/u)
-  assert.match(refused.stderr, /only on `desk-state`/u)
+test("a configured state branch is the one branch Desk writes on, whatever the remote's default is", async () => {
+  const root = await repoWithChange("main")
+  originHead(root, "main")
+  const wrong = stagePaths(root, ["a.txt"], spawnSync, "desk-state")
+  assert.equal(wrong.ok, false)
+  assert.match(wrong.stderr, /on branch `main`/u)
+  assert.match(wrong.stderr, /only on `desk-state`/u)
+  git(root, ["add", "--", "a.txt"])
   const entries = indexEntries(root, ["a.txt"], spawnSync)
-  const viaIndex = commitIndexPaths(root, ["a.txt"], entries, "not state either", spawnSync)
-  assert.equal(viaIndex.ok, false)
-  assert.match(viaIndex.stderr, /only on `desk-state`/u)
+  assert.equal(commitIndexPaths(root, ["a.txt"], entries, "wrong", spawnSync, "desk-state").ok, false)
+  assert.equal(commitPaths(root, ["a.txt"], "wrong", spawnSync, "desk-state").ok, false)
   git(root, ["switch", "-q", "-c", "desk-state"])
-  assert.equal(commitPaths(root, ["a.txt"], "on state", spawnSync).ok, true)
+  assert.equal(stagePaths(root, ["a.txt"], spawnSync, "desk-state").ok, true)
+  assert.equal(commitPaths(root, ["a.txt"], "on state", spawnSync, "desk-state").ok, true)
   assert.equal(commitCount(root), 2)
+})
+
+test("a caller that was not told is only held to the detached-HEAD rule", async () => {
+  const root = await repoWithChange("feature")
+  originHead(root, "trunk")
+  assert.equal(stagePaths(root, ["a.txt"], spawnSync).ok, true)
+  assert.equal(commitPaths(root, ["a.txt"], "untold", spawnSync).ok, true)
 })

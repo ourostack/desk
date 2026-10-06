@@ -20,8 +20,7 @@ import { DOCTOR_REPAIRS } from "./front-door.js"
 import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
-import { holdStateBranch } from "../util/git-stage.js"
-import { inspectStateBranch, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
+import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
@@ -246,7 +245,6 @@ export function createDeskSession(deps) {
     context.policyKey = policyKey
     context.activation = activation.activationStatus
     context.stateBranchName = activation.stateBranch
-    holdStateBranch(activation.stateBranch)
     const policy = activation.readinessPolicy
 
     if (!context.runtimeServer) {
@@ -543,6 +541,11 @@ export function createDeskSession(deps) {
       context.headTriggered = true
       admission.refresh({ force: true, waitMs: 0 })
       return refusal(name, "write")
+    }
+    // With no state branch configured, the checkout still has to be on a branch Desk may write on: refuse before any tool touches a file.
+    const branch = await inspectWriteBranch({ root: context.root.root, branch: context.stateBranchName, git })
+    if (!branch.ok) {
+      return degradedResult(name, { ...admission.snapshot().diagnostic, state: admission.snapshot().state, ...writeBranchProblem(branch) }, REQUIREMENT_TEXT.write)
     }
     const controller = context.admission?.controller
     if (controller && await controllerAnswers(controller)) return runtimeCall(name, input, signal, context.admission)
