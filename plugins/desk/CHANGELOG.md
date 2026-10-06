@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.196 — 2026-10-06
+
+The task-status guard now also denies a shell command that stages or commits a live task card by hand: `git add`, `git stage`, `git update-index --add` or `git commit` naming `<track>/<task>/task.md`. The denial leads with the fix, "Call task_update ...", and says Desk commits every card itself, so no git follows a card tool. Round AG: after `task_update` had committed the card and said to run no git for it, a Claude agent ran `git add` and `git commit` of the card anyway (a no-op, but a bypass attempt). A conflicted card may still be staged to finish a merge. The command carries no exception: pathspec, glob and `-A`, `.` or `-u` forms name no card and stay with the desk's pre-commit hook, which still refuses a real hand commit of a card.
+
+The tidy migration no longer tells its agent to stage a task card by hand (`task_create` commits the card itself), and neither the pre-commit hook's refusal nor the task-lifecycle skill tells an agent about the variable Desk's own commits set. The hook is now version 5 and rewrites itself on the next boot.
+
+The boot-acceptance harness now reads a clone whose source or folder sits in a shell variable (`REPO_URL="https://..."` then `git clone "$REPO_URL"`), which it used to take for a clone of the fixture's own desk. It counts a repo's name, or its task's name, as present only in wording that states what is here ("is cloned", "is ready", "is here"), never a clone verb by the agent ("I cloned ... into ..."). It reads a request to the operator ("or have it pushed there first") as no push claim, judged on the verb's own clause, and it now looks past a conditional first occurrence of "pushed" to a later one in the same sentence.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.195 — 2026-10-06
 
 Desk now counts each machine's root sessions on disk, host by host (Claude Code, Copilot CLI and Codex), and says what became of them. Every session is in exactly one bucket: derived (facts are made and placed with their store), held (not allowed to go yet, for example no consent or a quarantined copy), frozen (cannot be published now, which includes every orphan that is not current), pending (marked and waiting to be derived), not seen (the capture hook never marked it) and, for Claude Code, outside a desk. The counts reach the local status file as `coverage`, with `coverage_failed` when a pass fails and a local-only `coverage_cache`. A bucket Desk cannot tell is absent, never zero, and a host that is capped or unreadable carries no counts. Counting reads folder listings only; Codex reads at most the first line of each rollout file.
