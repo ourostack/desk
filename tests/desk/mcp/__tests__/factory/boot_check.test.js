@@ -406,7 +406,7 @@ test("andonBootCheck returns the recorded open andon issues of each contributing
 test("allTasks lists every readable card, live and archived, with no status or age filter, under the person prefix", () => scratch(async ({ desk }) => {
   const { allTasks } = await load()
   await card(path.join(desk, "live", "one"), { status: "active", updated: iso(NOW - 400 * DAY) })
-  await card(path.join(desk, "live", "_archive", "two"), { status: "done" })
+  await card(path.join(desk, "live", "_archive", "two"), { status: "done", extra: "factory_report_unavailable: visibility_not_known\n" })
   await card(path.join(desk, "_archive", "gone", "three"), { status: "cancelled" })
   await card(path.join(desk, "_archive", "gone", "_archive", "four"), { status: "drafting" })
   await card(path.join(desk, "desks", "bo", "theirs", "five"))
@@ -417,6 +417,7 @@ test("allTasks lists every readable card, live and archived, with no status or a
   const found = allTasks({ deskRoot: desk }).map(({ track, slug, archived, status }) => `${track}/${slug} ${archived} ${status}`).sort()
   assert.deepEqual(found, ["gone/four true drafting", "gone/three true cancelled", "live/bare false null", "live/one false active", "live/two true done"])
   assert.equal(allTasks({ deskRoot: desk })[0].updated !== undefined, true)
+  assert.deepEqual(allTasks({ deskRoot: desk }).filter((task) => task.report_unavailable !== null).map(({ slug, report_unavailable }) => `${slug} ${report_unavailable}`), ["two visibility_not_known"])
   assert.deepEqual(allTasks({ deskRoot: desk, personPrefix: "desks/bo" }).map(({ track, slug }) => `${track}/${slug}`), ["theirs/five"])
   assert.throws(() => allTasks({ deskRoot: desk, personPrefix: "bo" }), /personPrefix/)
 }))

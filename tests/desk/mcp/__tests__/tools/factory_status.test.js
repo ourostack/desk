@@ -225,6 +225,7 @@ test("the factory summary says how many delivered tasks await sign-off", async (
   const partial = (value) => ({ state: "partial", value, reason: "archive_cap" })
   assert.equal(line({ unsigned: partial(500), oldest_unsigned_age_days: partial(30), not_recorded: partial(1) }), "  sign-off: at least 500 delivered tasks await sign-off, oldest at least 30 days; at least 1 delivered before sign-off was recorded")
   assert.equal(line({ unsigned: m(2), oldest_unsigned_age_days: { state: "unavailable", reason: "age_unknown" }, not_recorded: m(0) }), "  sign-off: 2 delivered tasks await sign-off, oldest age unknown")
+  assert.equal(line({ unsigned: partial(0), oldest_unsigned_age_days: { state: "unavailable", reason: "archive_cap" }, not_recorded: m(0) }), "  sign-off: no delivered task found awaiting sign-off, but not every card was read (archive_cap)", "a cut scan that found none never says none await")
   const failed = { state: "unavailable", reason: "scan_failed" }
   assert.equal(line({ unsigned: failed, oldest_unsigned_age_days: failed, not_recorded: failed }), "  sign-off: not checked (scan_failed)")
   assert.equal(line(undefined), undefined, "a status with no sign-off figures prints no sign-off line")

@@ -102,7 +102,7 @@ test("no receipts, a non-object receipt, a relative root and a missing derivatio
   assert.deepEqual(await runReconcileStep(env, { now: NOW, reconcileImpl: never.impl }), { ok: true, result: "no_desks" })
   assert.equal(never.calls.length, 0)
   const { reconcile } = await readStatus(env)
-  assert.deepEqual(reconcile, { at: null, window_days: 7, desks_known: 0, desks: 0, desks_failed: 0, runs: {}, warnings: [], last_result: "no_desks" })
+  assert.deepEqual(reconcile, { at: null, window_days: 7, desks_known: 0, desks: 0, desks_failed: 0, runs: {}, warnings: [], last_result: "no_desks", report_link_unavailable: null })
 }))
 
 test("the summary holds counts and codes only, by a deep scan", () => scratch(async (env) => {
@@ -110,7 +110,7 @@ test("the summary holds counts and codes only, by a deep scan", () => scratch(as
   const { impl } = fake(withReasons({ pr_open: 1 }, { warnings: ["consent_unreadable", "Not A Code /Users/x", "status_unreadable", "status_unreadable"] }))
   await runReconcileStep(env, { now: NOW, reconcileImpl: impl })
   const { reconcile } = await readStatus(env)
-  assert.deepEqual(Object.keys(reconcile).sort(), ["at", "desks", "desks_failed", "desks_known", "last_result", "runs", "warnings", "window_days"])
+  assert.deepEqual(Object.keys(reconcile).sort(), ["at", "desks", "desks_failed", "desks_known", "last_result", "report_link_unavailable", "runs", "warnings", "window_days"])
   assert.deepEqual(reconcile.warnings, ["consent_unreadable", "unknown_warning", "status_unreadable"])
   const strings = []
   const walk = (value, key) => {
@@ -181,7 +181,7 @@ test("a failed result keeps the previous summary, records reconcile_failed and s
 test("a first failure writes an empty summary with no completed run, not a clean one", () => scratch(async (env) => {
   await writeStatus(env, receipts("/d/a"))
   await runReconcileStep(env, { now: NOW, reconcileImpl: fake({ ok: false }).impl })
-  assert.deepEqual((await readStatus(env)).reconcile, { at: null, window_days: 7, desks_known: 0, desks: 0, desks_failed: 0, runs: {}, warnings: [], last_result: "reconcile_failed" })
+  assert.deepEqual((await readStatus(env)).reconcile, { at: null, window_days: 7, desks_known: 0, desks: 0, desks_failed: 0, runs: {}, warnings: [], last_result: "reconcile_failed", report_link_unavailable: null })
 }))
 
 test("a thrown error, an invalid result and a Git failure are ok false with a code and never throw", () => scratch(async (env) => {
@@ -239,8 +239,8 @@ test("an invalid clock is refused by name before anything runs", () => scratch(a
 }))
 
 test("summarizeReconcile keeps counts and codes only", () => {
-  assert.deepEqual(summarizeReconcile(withReasons({ held: 2, weird: 1 }, { warnings: ["a_code"] })), { counts: { held: 2, unknown_reason: 1 }, warnings: ["a_code"] })
-  assert.deepEqual(summarizeReconcile({ ok: true, counts: { by_reason: { held: 0 } } }), { counts: {}, warnings: [] })
+  assert.deepEqual(summarizeReconcile(withReasons({ held: 2, weird: 1 }, { warnings: ["a_code"] })), { counts: { held: 2, unknown_reason: 1 }, warnings: ["a_code"], links: null })
+  assert.deepEqual(summarizeReconcile({ ok: true, counts: { by_reason: { held: 0 } } }), { counts: {}, warnings: [], links: null })
   assert.equal(summarizeReconcile({ ok: false }), null)
 })
 
@@ -301,15 +301,15 @@ test("a hostile previous summary and desk record are rebuilt from known fields o
     reconcile: { at: "/Users/x/secret", desks: "many", desks_known: -4, warnings: ["/Users/x/secret", "ok_code", 7], extra: "/Users/x", runs: { "/Users/x/secret": { consecutive: 9, count: 9, clear: 0 } } },
     loop: { reconcile_desks: {
       "/Users/x/secret": { at: NOW.toISOString(), reasons: { held: { streak: 1, count: 1, clear: 0 } } },
-      [good]: { at: NOW.toISOString(), reasons: { "/Users/x/secret": { streak: 3, count: 3, clear: 0 }, held: { streak: 2, count: 1, clear: 0 }, not_delivered: "x" } },
+      [good]: { at: NOW.toISOString(), reasons: { "/Users/x/secret": { streak: 3, count: 3, clear: 0 }, held: { streak: 2, count: 1, clear: 0 }, not_delivered: "x" }, links: { cards: 1, archived: 0, by_reason: { "/Users/x/secret": 1 } } },
       "0123456789abcdef": { at: "bad", reasons: {} },
       fedcba9876543210: { at: NOW.toISOString(), reasons: "nope" },
     } },
   })
   await runReconcileStep(env, { now: later(1), reconcileImpl: fake(clean).impl, desks: [] })
   const status = await readStatus(env)
-  assert.deepEqual(Object.keys(status.reconcile).sort(), ["at", "desks", "desks_failed", "desks_known", "last_result", "runs", "warnings", "window_days"])
-  assert.deepEqual(status.reconcile, { at: null, window_days: 7, desks_known: 0, desks: 0, desks_failed: 0, runs: { held: { consecutive: 2, count: 1, clear: 0 } }, warnings: ["ok_code"], last_result: "no_desks" })
+  assert.deepEqual(Object.keys(status.reconcile).sort(), ["at", "desks", "desks_failed", "desks_known", "last_result", "report_link_unavailable", "runs", "warnings", "window_days"])
+  assert.deepEqual(status.reconcile, { at: null, window_days: 7, desks_known: 0, desks: 0, desks_failed: 0, runs: { held: { consecutive: 2, count: 1, clear: 0 } }, warnings: ["ok_code"], last_result: "no_desks", report_link_unavailable: null })
   assert.deepEqual(Object.keys(status.loop.reconcile_desks).sort(), ["fedcba9876543210", good].sort())
   assert.deepEqual(Object.keys(status.loop.reconcile_desks[good].reasons).sort(), ["held"])
   assert.ok(!JSON.stringify(status).includes("secret"))
@@ -347,4 +347,33 @@ test("a desk not reconciled for more than 14 days is dropped, with its reasons, 
   assert.equal(status.reconcile.runs.held, undefined)
   assert.equal(status.reconcile.desks_known, 2)
   assert.ok(!(keyOf("/d/a") in status.loop.reconcile_desks))
+}))
+
+const withLinks = (links) => ({ ok: true, counts: { by_reason: {}, report_link_unavailable: links }, tasks: [], mismatches: [] })
+
+test("summarizeReconcile keeps the report-link count field by field, and drops a damaged one rather than guess", () => {
+  const links = { cards: 2, archived: 1, by_reason: { visibility_not_known: 1, unrecognized: 1 } }
+  assert.deepEqual(summarizeReconcile(withLinks(links)).links, links)
+  for (const damaged of ["x", { cards: -1, archived: 0, by_reason: {} }, { cards: 1, archived: "1", by_reason: {} }, { cards: 1, archived: 0, by_reason: null },
+    { cards: 1, archived: 0, by_reason: { "a hand-written secret": 1 } }, { cards: 1, archived: 0, by_reason: { desk_not_private: -2 } }]) {
+    assert.equal(summarizeReconcile(withLinks(damaged)).links, null, JSON.stringify(damaged))
+  }
+})
+
+test("the summary sums each desk's latest report-link count, keeps a skipped desk's, and is null until one is recorded", () => scratch(async (env) => {
+  const desks = ["/d/a", "/d/b", "/d/c", "/d/d"]
+  await runReconcileStep(env, { now: NOW, reconcileImpl: () => clean, desks: ["/d/z"] })
+  assert.equal((await readStatus(env)).reconcile.report_link_unavailable, null, "a run whose result carries no count is not zero cards")
+  const counts = {
+    "/d/a": { cards: 2, archived: 1, by_reason: { visibility_not_known: 1, desk_not_private: 1 } },
+    "/d/b": { cards: 1, archived: 1, by_reason: { visibility_not_known: 1 } },
+    "/d/c": { cards: 0, archived: 0, by_reason: {} },
+  }
+  await runReconcileStep(env, { now: NOW, reconcileImpl: (options) => withLinks(counts[options.deskRoot]), desks })
+  assert.deepEqual((await readStatus(env)).reconcile.report_link_unavailable, { cards: 3, archived: 2, by_reason: { visibility_not_known: 2, desk_not_private: 1 } })
+  // Two hours later only the fourth desk is due; the other three keep their latest counts, and a desk with none adds nothing.
+  await runReconcileStep(env, { now: later(2), reconcileImpl: () => clean, desks })
+  const status = await readStatus(env)
+  assert.deepEqual(status.reconcile.report_link_unavailable, { cards: 3, archived: 2, by_reason: { visibility_not_known: 2, desk_not_private: 1 } })
+  assert.deepEqual(status.loop.reconcile_desks[keyOf("/d/a")].links, counts["/d/a"])
 }))

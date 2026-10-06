@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url"
 
 import { factoryStateRoot, markDelivered, quarantine, readMachineSecret, setConsent, writeLocalFacts, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { factoryBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
-import { jobLink } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
+import { jobReportUrl } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { main as factoryCli } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
 
@@ -204,20 +205,54 @@ test("status carries no machine secret, account, intake ID, token, path or conte
 test("the report link is written only when the resolved store has consent, and matches factory.js job-link", () => scratch(async ({ desk, env }) => {
   const { factoryReportLink } = await load()
   const task = { env, deskRoot: desk, deskRemote: "https://github.com/example-user/example-desk.git", personPrefix: "desks/alice", track: "track", slug: "finished-work" }
-  assert.equal(factoryReportLink(task), null, "undecided: no link")
+  assert.deepEqual(factoryReportLink(task), { link: null }, "undecided: the factory is not in use, so there is no link and no reason")
   await setConsent(env, { store: STORE, contribute: false })
-  assert.equal(factoryReportLink(task), null, "declined: no link")
+  assert.deepEqual(factoryReportLink(task), { link: null }, "declined: no link and no reason")
   await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
-  const link = factoryReportLink(task)
-  assert.equal(link, jobLink({ store: STORE, deskRemote: task.deskRemote, personPrefix: "desks/alice", track: "track", slug: "finished-work" }))
+  await fs.writeFile(path.join(await factoryStateRoot(env), "visibility.json"), JSON.stringify({ "example-user/example-desk": { visibility: "private", checked_at: new Date().toISOString() } }))
+  const { link } = factoryReportLink(task)
+  const plain = jobId({ deskRemote: task.deskRemote, personPrefix: "desks/alice", track: "track", slug: "finished-work" })
+  assert.equal(link, jobReportUrl({ store: STORE, job: plain }), "a desk known private links its plain job ID")
   const printed = await cli(env, "job-link", "--store", STORE, "--desk-remote", task.deskRemote, "--person-prefix", "desks/alice", "--track", "track", "--slug", "finished-work")
   assert.equal(link, printed.link)
   assert.match(link, /^https:\/\/github\.com\/ourostack\/factory\/blob\/reports\/jobs\/[0-9a-f]{32}\.md$/u)
-  assert.equal(factoryReportLink({ ...task, pluginScanIncomplete: true }), null, "held routing: no link")
+  assert.deepEqual(factoryReportLink({ ...task, pluginScanIncomplete: true }), { link: null }, "held routing: no link")
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: OTHER })
-  assert.equal(factoryReportLink(task), null, "the desk's own store has no consent yet")
+  assert.deepEqual(factoryReportLink(task), { link: null }, "the desk's own store has no consent yet")
   await setConsent(env, { store: OTHER, contribute: true, account: "example-user" })
-  assert.match(factoryReportLink(task), /^https:\/\/github\.com\/example-org\/team-factory\/blob\/reports\/jobs\//u)
+  assert.match(factoryReportLink(task).link, /^https:\/\/github\.com\/example-org\/team-factory\/blob\/reports\/jobs\//u)
+}))
+
+test("only a desk known private gets a link; any other desk gets a reason and never any job ID, plain or keyed", () => scratch(async ({ desk, env }) => {
+  const { factoryReportLink, publishedJobId } = await load()
+  const remote = "https://github.com/example-user/example-desk.git"
+  const task = { env, deskRoot: desk, deskRemote: remote, personPrefix: "", track: "track", slug: "finished-work" }
+  const plain = jobId({ deskRemote: remote, personPrefix: "", track: "track", slug: "finished-work" })
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const root = await factoryStateRoot(env)
+  const visibility = (answer, checkedAt = new Date().toISOString()) => fs.writeFile(path.join(root, "visibility.json"), JSON.stringify({ "example-user/example-desk": { visibility: answer, checked_at: checkedAt } }))
+  const printed = (deskRemote = remote) => cli(env, "job-link", "--store", STORE, "--desk-remote", deskRemote, "--track", "track", "--slug", "finished-work")
+
+  assert.deepEqual(publishedJobId({ env, deskRemote: remote, job: plain }), { job: null, reason: "visibility_not_known" }, "no visibility answer yet")
+  assert.deepEqual(factoryReportLink(task), { link: null, reason: "visibility_not_known" })
+  assert.deepEqual(await printed(), { link: null, reason: "visibility_not_known" })
+  await visibility("private", "2020-01-01T00:00:00.000Z")
+  assert.deepEqual(factoryReportLink(task), { link: null, reason: "visibility_not_known" }, "an expired answer is no answer")
+  await fs.writeFile(path.join(root, "visibility.json"), "not json")
+  assert.deepEqual(factoryReportLink(task), { link: null, reason: "visibility_not_known" }, "an unreadable cache is no answer")
+
+  // The machine secret is irrelevant: even with one, a public desk's card names no keyed ID, which would tie the card to the store's job.
+  await readMachineSecret(env)
+  for (const answer of ["public", "unknown"]) {
+    await visibility(answer)
+    assert.deepEqual(publishedJobId({ env, deskRemote: remote, job: plain }), { job: null, reason: "desk_not_private" }, answer)
+    assert.deepEqual(factoryReportLink(task), { link: null, reason: "desk_not_private" }, answer)
+    assert.deepEqual(await printed(), { link: null, reason: "desk_not_private" }, answer)
+  }
+  assert.deepEqual(factoryReportLink({ ...task, deskRemote: `local:${desk}` }), { link: null, reason: "desk_not_private" }, "a desk with no GitHub repository is never known private")
+  await visibility("internal")
+  assert.deepEqual(factoryReportLink(task), { link: jobReportUrl({ store: STORE, job: plain }) }, "internal keeps job timing, as private does")
+  await assert.rejects(cli(env, "job-link", "--store", "not a store", "--desk-remote", remote, "--track", "track", "--slug", "finished-work"))
 }))
 
 test("unsafe or malformed state files read as unreadable, never as a guess", () => scratch(async ({ base, desk, env }) => {

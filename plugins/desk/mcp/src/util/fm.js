@@ -199,7 +199,9 @@ function collectionFollows(patched, from) {
  * deep -- `task_archive`'s `evidence: { kind, ref, recorded_at }`) becomes
  * a `key:` header plus one indented `subkey: value` line per own entry
  * (`encodeFieldLines`), the trailing comment, if any, moving to that header
- * line. The file's own line ending (LF or CRLF) is kept.
+ * line. A field whose value is `undefined` is removed with its own
+ * continuation lines, and an absent one is left absent. The file's own line
+ * ending (LF or CRLF) is kept.
  *
  * Returns `null` — the caller's cue to fall back to a full parse + re-dump
  * instead — when `rawText` has no `---`-fenced frontmatter to patch at
@@ -244,12 +246,20 @@ export function patchFrontmatterFields(rawText, fields) {
     if (BLOCK_SCALAR_VALUE.test(value) || (value === "" && collectionFollows(patched, index + 1))) {
       while (dropEnd < patched.length && (patched[dropEnd] === "" || /^\s/u.test(patched[dropEnd]))) dropEnd += 1
     }
-    const encodedLines = encodeFieldLines(match[1], remaining.get(match[1]))
+    const next = remaining.get(match[1])
+    remaining.delete(match[1])
+    if (next === undefined) {
+      patched.splice(index, dropEnd - index)
+      index -= 1
+      continue
+    }
+    const encodedLines = encodeFieldLines(match[1], next)
     if (comment) encodedLines[0] = `${encodedLines[0]} ${comment}`
     patched.splice(index, dropEnd - index, ...encodedLines)
-    remaining.delete(match[1])
   }
-  for (const [key, value] of remaining) patched.push(...encodeFieldLines(key, value))
+  for (const [key, value] of remaining) {
+    if (value !== undefined) patched.push(...encodeFieldLines(key, value))
+  }
   return [...patched, ...lines.slice(end)].join(eol)
 }
 
@@ -268,7 +278,11 @@ export async function patchMarkdownFrontmatter(filePath, fields) {
     return
   }
   const parsed = matter(raw)
-  await writeMarkdown(filePath, { ...parsed.data, ...fields }, parsed.content)
+  const data = { ...parsed.data, ...fields }
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) delete data[key]
+  }
+  await writeMarkdown(filePath, data, parsed.content)
 }
 
 /** Check whether a path exists (file OR directory). */

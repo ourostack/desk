@@ -231,17 +231,31 @@ async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, sta
   if (TERMINAL_STATUSES.has(status)) await requestTaskEvaluation({ deskRoot, env, identity })
 }
 
-// The `factory_report` link written on the transition to `done`, or `null`
-// when the desk's resolved store has no consent. It is deterministic and
-// resolves once the store merges the job's facts; done never waits for it,
-// and nothing here can fail the task update.
+// The task's factory report answer, `{ link }` or `{ link: null, reason? }` (`local-status.js` `factoryReportLink`): asked on the
+// transition to `done`, and on any later update of a card that records why it has no link. A link is deterministic, so done never waits
+// for delivery, and nothing here can fail the task operation: a job identity that cannot be read is the reason `job_identity_unavailable`.
 async function factoryReportFor({ deskRoot, person, track, slug, env }) {
   try {
     const { root, prefix, deskRemote, track: birthTrack, slug: birthSlug } = await taskJob({ deskRoot, person, track, slug })
     return reportLink({ env, deskRoot: root, deskRemote, personPrefix: prefix, track: birthTrack, slug: birthSlug })
   } catch {
-    return null
+    return { link: null, reason: "job_identity_unavailable" }
   }
+}
+
+// The card fields one report answer sets: `factory_report` (the link) or `factory_report_unavailable` (the reason code, and nothing else),
+// each `undefined` (removed from the card) when the answer does not carry it, so an older link or reason never outlives a newer answer.
+// Without consent the factory is not in use for the desk, and both are removed.
+function reportFields(report) {
+  return { factory_report: report.link ?? undefined, factory_report_unavailable: report.link === null ? report.reason : undefined }
+}
+
+// What a tool result says about the report answer: the reason a card has no link, always, and the link itself when this call filled it
+// in on a card that already was done (`filled`); a new delivery's link is on the card, as before.
+function reportResult(report, filled) {
+  if (report === null) return {}
+  if (report.link !== null) return filled ? { factory_report: report.link } : {}
+  return report.reason === undefined ? {} : { factory_report_unavailable: report.reason }
 }
 
 // Optional runtime fields the operator (or harness) may pass at create time.
@@ -277,9 +291,16 @@ export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 const RECORD_KEYS = ["signoff", "flow", "returns", "returns_damaged"]
 const RECORD_REFUSAL = "these records are written by the task tools; to record an answer call task_signoff"
 
+// The report link fields are the task tools' answer about the factory report, never the caller's: a hand-set link could name any job on a
+// public desk's card, and a hand-set reason would not be a reason code.
+const REPORT_KEYS = ["factory_report", "factory_report_unavailable"]
+const REPORT_REFUSAL = "`factory_report` and `factory_report_unavailable` are written by the task tools: the move to done writes the link or the reason it has none, and a later update fills a missing link by itself"
+
 function refuseRecordKeys(tool, ...sources) {
   for (const source of sources) {
-    if (source != null && RECORD_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${RECORD_REFUSAL}`)
+    if (source == null) continue
+    if (RECORD_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${RECORD_REFUSAL}`)
+    if (REPORT_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${REPORT_REFUSAL}`)
   }
 }
 
@@ -691,7 +712,7 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  * "failed", reason }` on the result, omitted entirely on a normal, silent
  * success, when the file was already dirty, or on a non-Git desk.
  *
- * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note? } (when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
+ * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note?, factory_report?, factory_report_unavailable? } (`factory_report_unavailable` is the reason code a card that reached done has no report link, and `factory_report` the link when this call filled it in on such a card; when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
  * `next_step_note` when the call added a note or changed the status without passing `next_step`: the card's current next
  * step, or null, and a reminder; `report_as` and `report_note` whenever the status is not terminal: the sentence to
  * report the task with, and a line against calling it done)
@@ -791,6 +812,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // A backwards move without a reason is refused here, before anything is written or requested.
   const returnReason = checkReturnReason(existing.data, { to: merged.status, returnReason: values.return_reason })
   let delivered = null
+  let report = null
   if (merged.status === "done" && existing.data.status !== "done") {
     await assertDoneEvidence(evidence, deskRoot, "task_update", {
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
@@ -801,8 +823,16 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     })
     merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
     delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
-    const link = await factoryReportFor({ deskRoot, person, track, slug, env })
-    if (link !== null) merged.factory_report = link
+    report = await factoryReportFor({ deskRoot, person, track, slug, env })
+  } else if (Object.hasOwn(existing.data, "factory_report_unavailable")) {
+    // A card that reached done without a link is asked again on every later update, so a link that can now be named is filled in.
+    report = await factoryReportFor({ deskRoot, person, track, slug, env })
+  }
+  if (report !== null) {
+    for (const [key, value] of Object.entries(reportFields(report))) {
+      if (value === undefined) delete merged[key]
+      else merged[key] = value
+    }
   }
 
   // Every status change keeps the card's record (`flow`, and `returns` when work went backwards), not only a move to done.
@@ -811,6 +841,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     Object.assign(merged, kept)
     // A return from done leaves no current signoff: the card has one current delivery, and its history is in `returns`.
     if (kept.flow !== undefined && kept.signoff === undefined) delete merged.signoff
+    // Nor its evidence: the proof of a delivery that was sent back no longer says the task is done. The next `done` records its own.
+    if (existing.data.status === "done") delete merged.evidence
   }
 
   let newBody = existing.content
@@ -835,6 +867,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
+  Object.assign(result, reportResult(report, delivered === null))
   if (returnReason !== undefined) {
     const line = parseReturn(merged.returns.at(-1))
     result.return_recorded = `${line.from} to ${line.to}, ${line.reason}, caught ${line.caught}`
@@ -884,6 +917,30 @@ async function archivedTaskStatus(archivedFile) {
   } catch {
     return null
   }
+}
+
+// A card already in `_archive/` that records why it has no report link (`factory_report_unavailable`) is asked again whenever task_archive is
+// called for it, which is the one tool path that reaches an archived card; `factory reconcile` counts such cards (`report_link_unavailable`).
+// Returns the result fields: the filled link or the current reason, `commit` when committing the card failed, and
+// `factory_report_unchanged: true` when the answer is the one the card already records, so nothing was written or committed.
+async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush }) {
+  let data
+  try {
+    data = (await readMarkdown(archivedFile)).data
+  } catch {
+    return {}
+  }
+  if (!Object.hasOwn(data, "factory_report_unavailable")) return {}
+  const report = await factoryReportFor({ deskRoot, person, track, slug, env })
+  const fields = reportFields(report)
+  // The same answer the card already records changes nothing: no write and no commit (an empty commit would read as a failed one).
+  if (Object.entries(fields).every(([key, value]) => data[key] === value)) return { ...reportResult(report, false), factory_report_unchanged: true }
+  await patchMarkdownFrontmatter(archivedFile, fields)
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
+  const root = path.resolve(personPrefix(deskRoot, person))
+  const commit = stageAndCommitMove(root, [archivedFile], `task_archive: ${track}/${slug} report link`, spawnGit)
+  if (commit === undefined && isGitRepository(root, spawnGit)) schedulePush({ root: deskRoot })
+  return { ...reportResult(report, true), ...(commit === undefined ? {} : { commit }) }
 }
 
 // An archive never changes the held focus: the factory credits a declared task until the next `task_focus` call, so the held focus
@@ -981,10 +1038,12 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
 
   if (!srcExists && dstExists) {
     const archivedStatus = await archivedTaskStatus(archivedFile)
+    const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
     return withArchiveFocus(statusContext, { track, slug }, {
       status: "already_archived",
       path: relPath(deskRoot, archivedFile),
+      ...refilled,
     })
   }
   if (!srcExists && !dstExists) {
@@ -1018,6 +1077,14 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
         await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME })
         archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
       }
+      // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
+      // with the folder untouched, never after a move it would leave unpatched and uncommitted.
+      archiveBump.updated = nowIso()
+      try {
+        archiveBump.record = applyMove(sourceCard.data, { to: archiveBump.status, at: archiveBump.updated })
+      } catch (error) {
+        throw new Error(`task_archive: nothing was moved. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused (${error.message}). Set the card's status with task_update first (a move back from done takes \`return_reason\`), then archive it.`)
+      }
     }
   }
 
@@ -1041,25 +1108,30 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const filePath = await target([track, "_archive", slug, "task.md"])
   let finalStatus = null
   let delivered = null
+  let report = null
   if (await pathExists(filePath)) {
     const existing = await readMarkdown(filePath)
     finalStatus = existing.data.status
+    // Patch only the fields this archive changes (`status:`, `updated:`, the record, `evidence:` and the report link fields) in place:
+    // every other byte of the card — quoting, date formats, block scalars, key order — survives.
+    const patchFields = {}
     if (archiveBump) {
-      // Patch only `status:`/`updated:`/`evidence:`/`factory_report:` in
-      // place: every other byte of the card — quoting, date formats, block
-      // scalars, key order — survives.
-      const updated = nowIso()
+      const { updated } = archiveBump
       // Every status change the archive makes keeps the card's record, the cancel bump included.
-      const patchFields = { status: archiveBump.status, updated, ...applyMove(existing.data, { to: archiveBump.status, at: updated }) }
+      Object.assign(patchFields, { status: archiveBump.status, updated, ...archiveBump.record })
       if (archiveBump.status === "done") {
         patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
         delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
-        const link = await factoryReportFor({ deskRoot, person, track, slug, env })
-        if (link !== null) patchFields.factory_report = link
+        report = await factoryReportFor({ deskRoot, person, track, slug, env })
       }
+      finalStatus = archiveBump.status
+    }
+    // A card that records why it has no report link is asked again whenever it is archived, so archiving never makes the reason permanent.
+    if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable")) report = await factoryReportFor({ deskRoot, person, track, slug, env })
+    if (report !== null) Object.assign(patchFields, reportFields(report))
+    if (Object.keys(patchFields).length > 0) {
       await patchMarkdownFrontmatter(filePath, patchFields)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-      finalStatus = archiveBump.status
     }
   }
 
@@ -1073,6 +1145,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const result = { status: "archived", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
+  Object.assign(result, reportResult(report, delivered === null))
   return withArchiveFocus(statusContext, { track, slug }, result)
 }
 

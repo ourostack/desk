@@ -52,13 +52,13 @@ import { pathToFileURL } from "node:url"
 import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
-import { orphanPassLine, ownVersion } from "../src/factory/local-status.js"
+import { orphanPassLine, ownVersion, publishedJobId } from "../src/factory/local-status.js"
 import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { normalizeTimestamp } from "../src/factory/time.js"
 import { reconcile } from "../src/factory/reconcile.js"
-import { build, jobLink, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
+import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
@@ -302,9 +302,12 @@ const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-r
  * `--track`/`--slug` as-is, so a renamed or moved card's report will not be
  * found there; pass `--desk <desk root>` (the same value the task tools see)
  * to resolve the card's birth path first, exactly as the task tools and the
- * boot check do, so the link matches the job they already agree on.
+ * boot check do, so the link matches the job they already agree on. It
+ * follows the task card's rule (`publishedJobId`): only a desk known private
+ * gets a link, to its plain job ID; any other desk prints
+ * `{ link: null, reason }` (`desk_not_private` or `visibility_not_known`).
  */
-export async function runJobLinkCommand({ argv }) {
+export async function runJobLinkCommand({ argv, env = process.env }) {
   const options = parseOptions(argv)
   const required = ["store", "desk-remote", "track", "slug"]
   const allowed = [...required, "person-prefix", "desk"]
@@ -326,15 +329,12 @@ export async function runJobLinkCommand({ argv }) {
     track = birth.track
     slug = birth.slug
   }
-  return {
-    link: jobLink({
-      store: options.get("store"),
-      deskRemote: options.get("desk-remote"),
-      personPrefix,
-      track,
-      slug,
-    }),
-  }
+  const store = options.get("store")
+  const deskRemote = options.get("desk-remote")
+  // A bad store fails with the usage error before any state is read.
+  jobReportUrl({ store, job: "0".repeat(32) })
+  const published = publishedJobId({ env, deskRemote, job: jobId({ deskRemote, personPrefix, track, slug }) })
+  return published.job === null ? { link: null, reason: published.reason } : { link: jobReportUrl({ store, job: published.job }) }
 }
 
 /** The installed Desk plugin's version, which the evaluator's labels carry. */

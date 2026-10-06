@@ -10,6 +10,7 @@ export const RECONCILE_REASONS = Object.freeze([
   "log_missing",
   "stale_binding",
   "receipt_too_old",
+  "own_activity_cut",
   "focus_disagrees",
   "not_delivered",
   "quarantined",

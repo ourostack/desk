@@ -16,8 +16,14 @@
 //
 // Measures. A number that may be missing is never a bare number, 0, null or a string: it is `{ state, value }` (`measure`), `state` one of
 // `measured` (with `value`), `not_recorded` (the receipt or facts cannot say), `not_checked` (the check was not run, as `status_unobserved`
-// without `--store`) or `withheld` (the desk keeps no job timing, so the pipeline publishes no timeline). A total over several is
-// `{ state, value, of, not_recorded }`: `of` were measured, `not_recorded` were not, and `value` is a floor when `not_recorded` is above zero.
+// without `--store`) or `withheld` (the desk keeps no job timing, so the pipeline publishes no timeline). A total over sessions is
+// `{ state, value, sessions, sessions_not_recorded }`: `sessions` were measured, `sessions_not_recorded` were not, and `value` (in its own unit:
+// milliseconds, directories or commits, never sessions) is a floor when `sessions_not_recorded` is above zero.
+//
+// `counts.report_link_unavailable` is desk-wide, not limited to the window: `{ cards, archived, by_reason }` over every card, live or archived,
+// that records why it has no report link (`factory_report_unavailable`), `by_reason` keyed by the three reason codes and `unrecognized` for
+// any other text, which is never echoed. A live card fills its link on its next task_update; an archived one when task_archive is called for
+// it again. `desk_not_private` is meant to last.
 //
 // Story. Each listed task carries `story`: its bound sessions by start, each with `active_ms` (a measure: the session's turn, tool and subagent
 // time cut to the job exactly as the pipeline publishes it, `jobActiveMs`, never a segment's wall span; `not_recorded` where the pipeline would
@@ -26,8 +32,8 @@
 // than BINDING_VERSION, or none). `counts.bound_by` counts the story entries each way. The top-level `sessions` lists each story session once
 // with the receipt's two measures, `segments_capped_ms` and `repository_evidence_unavailable` (the receipt's `repo_unresolved`: directories
 // that no longer exist), each a measure that is `not_recorded` when the receipt predates it; `counts` gives their totals. `counts.mentioned`
-// is a total over the sessions that recorded their own activity for this desk (`of`; `not_recorded` counts this desk's sessions in the window
-// that did not, and sessions recorded for another desk are in neither); it is `not_recorded` when none did.
+// is a total over the sessions that recorded their own activity for this desk (`sessions`; `sessions_not_recorded` counts this desk's sessions in
+// the window that did not, and sessions recorded for another desk are in neither); it is `not_recorded` when none did.
 //
 // Reasons, per task with real work (first that explains it wins; see the table in the task report):
 //   card_missing   no readable card (a task with no card is never a job)
@@ -37,9 +43,12 @@
 //                  is never blamed on a marker: nothing ties an unbound marker to a task. A real commit inside
 //                  the own activity of a session bound to another task is `counts.mentioned`, not a mismatch.
 //   not_opted_in, route_changed, held, log_missing   the bound session's marker, pipeline order
-//   stale_binding  receipt below BINDING_VERSION
+//   stale_binding  receipt below BINDING_VERSION: `binding_version_<n>` when the session's marker is there (the next sweep derives it again),
+//                  else an `orphan_` detail saying whether the orphan pass can still rebuild it (see `staleDetail`)
 //   receipt_too_old  no bound session, and a real commit that no recorded own activity owns but a session of this desk overlaps whose receipt
 //                  predates `own_activity` (it names this desk, or binds one of its tasks): it may have made the commit, so `not_bound` would be untrue
+//   own_activity_cut  the same, for a session whose receipt holds the binder's full OWN_ACTIVITY_SPANS spans and was still running after the
+//                  last one: its own activity past that span was not kept (`sessions_<n>`)
 //   focus_disagrees  the receipt says a declared stretch held none of the job's own events (reported in addition)
 //   quarantined, not_delivered   the outbox file is held, or was never delivered
 //   pr_open        delivered, and the store's intake pull request is still open
@@ -47,7 +56,9 @@
 //   status_unobserved  with `--store`: the card's status differs from the latest status the store observed
 //                  for the job (a transition on a card outside a session's focus is not recorded). Observations are
 //                  ordered by when each is known to hold: the end of the published file that made it, or a terminal
-//                  status's card `updated` when later; an open session counts only as far as its published file goes
+//                  status's card `updated` when later; an open session counts only as far as its published file goes. When the
+//                  latest observations tie and disagree (nothing places them), the check is not run for that task:
+//                  `counts.status_unobserved` then carries `not_checked: <tasks>` and `reason: "observations_unordered"`
 // `store_only`: a store job whose session falls in the window while the desk shows no real activity for it. A
 // job the desk cannot map to a task (unknown, or keyed and not known on this machine) prints `job: null`. On a
 // keyed (public) desk the store's job ids are keyed, so `store_only` fires only for jobs with local facts on this
@@ -62,24 +73,28 @@
 // Privacy: names tracks and slugs only for the desk given; details are short codes and counts, never prompt
 // text, file contents, store names, a local path (the desk is named by its person alias only) or the machine secret.
 //
-// `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
+// `src/factory/**` imports only `node:` built-ins and other `src/factory/` files, with one exception, as in `derive-run.js`:
+// `../desk/crew-roster.js` (the one crew rule, which imports only `node:` built-ins), so a stale binding's detail names a crew desk the
+// way the orphan pass decides it.
 
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 
-import { checkPersonPrefix, jobId, taskCommitRule } from "./binding.js"
+import { OWN_ACTIVITY_SPANS, checkPersonPrefix, jobId, taskCommitRule } from "./binding.js"
 import { allTasks, consentDecision, consentRecords, factoryStateDir, readState } from "./boot-check.js"
-import { BINDING_VERSION } from "./derive-run.js"
+import { crewWorkspace } from "../desk/crew-roster.js"
+import { BINDING_VERSION, ORPHAN_HUNG_STRIKES } from "./derive-run.js"
 import { deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { createDeskReaders, gitEnv, parseNameStatus, readDeskRemote } from "./desk-repo.js"
+import { ownVersion } from "./local-status.js"
 import { readSmallText, validMarker } from "./marker.js"
 import { PUBLISHED_LIMITS, validatePublishedBytes } from "./published-schema.js"
 import { REFUSALS, keyedJobId } from "./publish.js"
 import { jobActiveMs } from "./pipeline/timeline.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
-import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, markerRoute, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
+import { RETRACTED_COPIES, declared, derivedStoreOf, deskRootOf, markerRoute, routeProven, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -173,8 +188,9 @@ function realOf(file) {
 
 // The one way this report gives a number that may be missing: `{ state, value }`, `state` one of `measured`, `not_recorded` (the receipt
 // or facts cannot say), `not_checked` (the check was not run) or `withheld` (the desk withholds job timing), and `value` only when measured.
-// A total adds `of` (how many were measured) and `not_recorded` (how many were not), so a measured total is a floor when `not_recorded` is
-// above zero. A consumer reads `state` first and never sums a raw field.
+// A total adds `sessions` (how many sessions were measured) and `sessions_not_recorded` (how many were not), so a measured total is a floor
+// when `sessions_not_recorded` is above zero; `value` keeps its own unit (milliseconds, directories, commits), never sessions. A consumer reads
+// `state` first and never sums a raw field.
 function measure(state, value, population = {}) {
   return { state, ...(state === "measured" ? { value } : {}), ...population }
 }
@@ -182,7 +198,7 @@ function measure(state, value, population = {}) {
 // The total of measures over a population: measured when any was, with how many were and were not.
 function totalOf(measures) {
   const recorded = measures.filter((item) => item.state === "measured")
-  return measure(recorded.length === 0 ? "not_recorded" : "measured", recorded.reduce((sum, item) => sum + item.value, 0), { of: recorded.length, not_recorded: measures.length - recorded.length })
+  return measure(recorded.length === 0 ? "not_recorded" : "measured", recorded.reduce((sum, item) => sum + item.value, 0), { sessions: recorded.length, sessions_not_recorded: measures.length - recorded.length })
 }
 
 const isSpan = (item) => isPlainObject(item) && Number.isFinite(item.start_ms) && Number.isFinite(item.end_ms)
@@ -208,6 +224,19 @@ function activeMsOf(facts, binding, startedMs, created) {
   } catch {
     return measure("not_recorded")
   }
+}
+
+const REPORT_REASONS = new Set(["desk_not_private", "visibility_not_known", "job_identity_unavailable"])
+
+// The desk's cards that record why they have no report link: how many, how many are archived, and how many by reason code.
+function reportLinkUnavailable(cards) {
+  const missing = cards.filter((card) => card.report_unavailable !== null)
+  const byReason = {}
+  for (const card of missing) {
+    const reason = REPORT_REASONS.has(card.report_unavailable) ? card.report_unavailable : "unrecognized"
+    byReason[reason] = (byReason[reason] ?? 0) + 1
+  }
+  return { cards: missing.length, archived: missing.filter((card) => card.archived).length, by_reason: byReason }
 }
 
 /**
@@ -241,7 +270,8 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
 
   const readers = createDeskReaders({ deskRoot: root, personPrefix, git })
   const rule = taskCommitRule({ alias, isCardHousekeeping: readers.isCardHousekeeping })
-  const cards = new Map(allTasks({ deskRoot: root, personPrefix }).map((card) => [`${card.track}/${card.slug}`, card]))
+  const cardList = allTasks({ deskRoot: root, personPrefix })
+  const cards = new Map(cardList.map((card) => [`${card.track}/${card.slug}`, card]))
   const deskRemote = readDeskRemote({ deskRoot: root, git }) || `local:${root}`
 
   // job IDs, computed as the task tools compute them (birth path, then `jobId`).
@@ -323,8 +353,10 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const list = receiptOf(name)?.focus_disagrees
     return Array.isArray(list) && list.includes(job)
   }
+  // A receipt measure counts only from a current receipt: an older binder's value (its `segments_capped_ms: 0` among them) is not this binder's.
   const measureOf = (name, field) => {
-    const value = receiptOf(name)?.[field]
+    const receipt = receiptOf(name)
+    const value = isCurrent(receipt) ? receipt[field] : undefined
     return Number.isSafeInteger(value) && value >= 0 ? measure("measured", value) : measure("not_recorded")
   }
   const sameDesk = new Map()
@@ -338,7 +370,10 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const named = typeof receipt?.desk_root === "string" && isThisDesk(receipt.desk_root)
     if (!Array.isArray(receipt?.own_activity)) return { kind: "unrecorded", named, own: [] }
     if (!named) return { kind: "elsewhere", own: [] }
-    return { kind: "here", own: receipt.own_activity.filter((span) => Array.isArray(span) && Number.isFinite(span[0]) && Number.isFinite(span[1])).map(([from, to]) => [start + from, start + to]) }
+    const own = receipt.own_activity.filter((span) => Array.isArray(span) && Number.isFinite(span[0]) && Number.isFinite(span[1])).map(([from, to]) => [start + from, start + to])
+    // The binder keeps at most OWN_ACTIVITY_SPANS spans, in time order, so a full list may have been cut: past its last span it says nothing.
+    const cutAt = receipt.own_activity.length >= OWN_ACTIVITY_SPANS && own.length > 0 ? Math.max(...own.map(([, to]) => to)) : null
+    return { kind: "here", own, cutAt }
   }
   // A retracted session's kept copy (`retracted-copies/`, see `session-route.js`) is evidence like any outbox file, and what `route_changed` reports.
   const seen = new Set()
@@ -520,6 +555,26 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     return ELSEWHERE_DETAIL[sessionPlace(session.slug.replace("__", "/"), route, derivedStoreOf(status.derivations, names), records)]
   }
 
+  // Why a stale receipt is stale. With its marker, the next sweep derives the session again (`binding_version_<n>`). Without one it is an
+  // orphan, which only the orphan pass (`derive-run.js` `rebuildOrphans`) can rebuild, and only a Claude Code session whose desk declares the
+  // store holding it: `orphan_host_not_rebuilt` (another host), `orphan_derive_failed` (frozen after repeated interrupted derives under this
+  // Desk), `orphan_crew_desk`, `orphan_route_unknown` (its desk does not declare this store), else `orphan_binding_version_<n>` (the pass may
+  // still rebuild it). So a session no sweep will fix never reads like one the next sweep fixes.
+  const staleDetail = (session, marker, receipt) => {
+    const version = `binding_version_${Number.isSafeInteger(receipt?.binding_version) ? receipt.binding_version : "none"}`
+    if (marker !== null) return version
+    if (!session.name.startsWith("claude-code-")) return "orphan_host_not_rebuilt"
+    const hung = status.orphans?.hung?.[session.name]
+    if (isPlainObject(hung) && hung.version === ownVersion() && Number.isSafeInteger(hung.strikes) && hung.strikes >= ORPHAN_HUNG_STRIKES) return "orphan_derive_failed"
+    const deskRoot = receipt?.desk_root
+    if (typeof deskRoot === "string") {
+      if (crewWorkspace(deskRoot).crew) return "orphan_crew_desk"
+      const route = declared(deskRoot)
+      if (route.kind !== "store" || route.store.toLowerCase() !== session.slug.replace("__", "/").toLowerCase()) return "orphan_route_unknown"
+    }
+    return `orphan_${version}`
+  }
+
   // Why one outbox file's session is not delivered facts in the store, or `null` when it is.
   const sessionProblem = (session, inStore) => {
     const moved = elsewhere(session)
@@ -528,7 +583,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const fromMarker = marker === null ? null : markerProblem(session.name, marker)
     if (fromMarker !== null) return fromMarker
     const receipt = receiptOf(session.name)
-    if (!isCurrent(receipt)) return { reason: "stale_binding", detail: `binding_version_${Number.isSafeInteger(receipt?.binding_version) ? receipt.binding_version : "none"}` }
+    if (!isCurrent(receipt)) return { reason: "stale_binding", detail: staleDetail(session, marker, receipt) }
     const held = readState(path.join(dir, "quarantine", session.slug, session.name), undefined)
     if (held !== undefined) return { reason: "quarantined", detail: `refused_${REFUSAL_CODES.has(held?.reason) ? held.reason : "other"}` }
     if (!Object.hasOwn(deliveredOf(session.slug), session.name)) return { reason: "not_delivered", detail: "outbox_only" }
@@ -565,7 +620,10 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     return info.kind === "unrecorded" && (info.named || [...info.jobs].some((job) => deskJobs.has(job)))
   }
   const unsaidAt = (ms) => [...sessionInfo.entries()].filter(([, info]) => unsaid(info) && info.start <= ms && ms <= info.end).map(([name]) => name)
+  // The sessions whose recorded own activity was cut before this time while the session still ran: they may have made the commit.
+  const cutAround = (ms) => [...sessionInfo.entries()].filter(([, info]) => info.cutAt != null && info.cutAt < ms && info.start <= ms && ms <= info.end).map(([name]) => name)
   const mentioned = new Set() // shas of real commits made by a session bound to another task
+  let unordered = 0 // tasks whose latest store observations tie and disagree
   const housekeeping = []
 
   for (const task of [...tasks.values()].sort((a, b) => byKey(a.key, b.key))) {
@@ -575,13 +633,16 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     // placed (`receipt_too_old`); one that every overlapping session could have claimed and none did leaves the task not bound.
     let unowned = 0
     const undetermined = new Set()
+    const cut = new Set()
     const realCommits = task.commits.filter((commit) => commit.class === "real")
     for (const commit of realCommits) {
       const owners = ownersOf(commit.ms)
       if (owners.some((owner) => owner.jobs.has(task.job))) continue
       if (owners.some((owner) => owner.jobs.size > 0)) mentioned.add(commit.sha)
-      else if (owners.length === 0 && unsaidAt(commit.ms).length > 0) unsaidAt(commit.ms).forEach((name) => undetermined.add(name))
-      else unowned += 1
+      else if (owners.length === 0 && unsaidAt(commit.ms).length + cutAround(commit.ms).length > 0) {
+        unsaidAt(commit.ms).forEach((name) => undetermined.add(name))
+        cutAround(commit.ms).forEach((name) => cut.add(name))
+      } else unowned += 1
     }
     const real = realCommits.length > 0 || bound.length > 0
     const storeId = storeIdOf(task.job)
@@ -600,6 +661,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       if (bound.length === 0) {
         if (unowned > 0) push(task, "not_bound", `unbound_markers_${deskMarkers.length}`)
         if (undetermined.size > 0) push(task, "receipt_too_old", `own_activity_not_recorded_${undetermined.size}`)
+        if (cut.size > 0) push(task, "own_activity_cut", `sessions_${cut.size}`)
       } else {
         const problem = taskProblem(bound, storeSessions !== null && storeSessions.length > 0)
         if (problem !== null) push(task, problem.reason, problem.detail)
@@ -609,9 +671,14 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       if (!ENUMS.jobStatus.includes(task.card.status)) push(task, "invalid_status", "status_outside_lifecycle")
       else if (storeSessions !== null) {
         // The latest status the store observed for the job, when the card has since moved on without a session seeing it.
+        // Observations tied at the latest place (nothing places them, or they end together) have no order: when they disagree, which one is
+        // latest is not known, so the check is counted as not run for this task rather than read as a mismatch.
         const created = createdMs(task.card)
-        const seen = storeSessions.filter((session) => session.observed !== null).sort((a, b) => observedAt(a, created) - observedAt(b, created)).at(-1)
-        if (seen !== undefined && seen.observed !== task.card.status) push(task, "status_unobserved", "card_status_not_in_store")
+        const placed = storeSessions.filter((session) => session.observed !== null).map((session) => ({ status: session.observed, at: observedAt(session, created) }))
+        const latestAt = Math.max(...placed.map((item) => item.at))
+        const latest = new Set(placed.filter((item) => item.at === latestAt).map((item) => item.status))
+        if (latest.size > 1) unordered += 1
+        else if (latest.size === 1 && !latest.has(task.card.status)) push(task, "status_unobserved", "card_status_not_in_store")
       }
     }
 
@@ -655,7 +722,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     if (count > 0) byReason[reason] = count
   }
   const outTasks = report.map(({ mismatched, ...rest }) => rest)
-  // Each session that tells a task's story, once, with the receipt's two measures: how much time the segment cap dropped, and how many
+  // Each session that tells a task's story, once, with the receipt's two measures: how much time the segment cap took from its task, and how many
   // directories no longer existed, so no repository evidence is available for them. A receipt that predates a measure says `not_recorded`.
   const storied = new Map()
   const boundBy = { focus: 0, inferred: 0, subagent_only: 0, not_recorded: 0 }
@@ -670,7 +737,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   // Real commits made by a session bound to another task, which only a receipt that records own activity can say: not recorded where none does.
   const holding = [...sessionInfo.values()].filter((info) => overlaps(info.start, info.end))
   const recordedSessions = holding.filter((info) => info.kind === "here").length
-  const mentionedCount = measure(recordedSessions === 0 ? "not_recorded" : "measured", mentioned.size, { of: recordedSessions, not_recorded: holding.filter(unsaid).length })
+  const mentionedCount = measure(recordedSessions === 0 ? "not_recorded" : "measured", mentioned.size, { sessions: recordedSessions, sessions_not_recorded: holding.filter(unsaid).length })
   return {
     ok: true,
     window: { since, until },
@@ -682,9 +749,10 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     unbound_markers: deskMarkers.map(({ name, marker }) => ({ session: name.slice(0, -5), ...(markerProblem(name, marker) ?? { reason: null, detail: "marker_not_bound" }) })),
     counts: {
       tasks: report.length, matched: report.filter((item) => !item.mismatched).length, mismatched: mismatches.length, by_reason: byReason, mentioned: mentionedCount,
-      status_unobserved: storeCompared ? measure("measured", byReason.status_unobserved ?? 0) : measure("not_checked", undefined, storeDir === null ? {} : { reason: "visibility_not_known" }),
+      status_unobserved: storeCompared ? measure("measured", byReason.status_unobserved ?? 0, unordered > 0 ? { not_checked: unordered, reason: "observations_unordered" } : {}) : measure("not_checked", undefined, storeDir === null ? {} : { reason: "visibility_not_known" }),
       bound_by: boundBy, segments_capped_ms: totalOf(sessions.map((session) => session.segments_capped_ms)),
       repository_evidence_unavailable: totalOf(sessions.map((session) => session.repository_evidence_unavailable)),
+      report_link_unavailable: reportLinkUnavailable(cardList),
     },
     ...(warnings.size > 0 ? { warnings: [...warnings] } : {}),
   }

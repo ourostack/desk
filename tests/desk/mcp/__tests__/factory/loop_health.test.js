@@ -136,7 +136,7 @@ test("the record has exactly the contract's keys, every number is a Count, and a
   assert.deepEqual(keysOf(loop.alarms), ["andon_open", "desk_problems_open", "loop_alarms_open", "store_build_failing"])
   assert.deepEqual(keysOf(loop.evaluator), ["expired_total", "gave_up", "headless", "labels_quarantined", "oldest_wait_days", "waiting"])
   assert.deepEqual(keysOf(loop.evaluator.headless), ["accepted_today", "cap_per_day", "cost_usd_today", "jobs_today", "rejected_today", "state"])
-  assert.deepEqual(keysOf(loop.reconcile), ["desks", "last_ran_at", "mismatches", "store_side", "window_days"])
+  assert.deepEqual(keysOf(loop.reconcile), ["desks", "last_ran_at", "mismatches", "report_link_unavailable", "store_side", "window_days"])
   assert.deepEqual(keysOf(loop.steps), [...STEPS].sort())
   assert.deepEqual(keysOf(loop.steps.route), ["expected_interval_hours", "failures", "last_ok_at", "last_ran_at", "last_result", "runs", "stale"])
   for (const [trail, value] of leaves(loop)) {
@@ -500,18 +500,29 @@ test("cards the library set aside or could not read open cards_invalid", () => s
   assert.equal((await allCards(ctx)).find((card) => card.key === "loop_alarm:cards_invalid").title, "Improvement card files were set aside as invalid")
 }))
 
+const NO_LINKS = { cards: U("not_recorded"), archived: U("not_recorded"), by_reason: {} }
+
+test("the reconcile block shows the cards still waiting for a report link, as Counts, and never zero when none were counted", () => scratch(async (ctx) => {
+  await setStatus(ctx, { reconcile: { at: TIME, desks: 1, runs: {}, report_link_unavailable: { cards: 3, archived: 2, by_reason: { visibility_not_known: 2, desk_not_private: 1, "Bad Key": 4 } } } })
+  assert.deepEqual((await build(ctx)).reconcile.report_link_unavailable, { cards: M(3), archived: M(2), by_reason: { visibility_not_known: M(2), desk_not_private: M(1) } })
+  await setStatus(ctx, { reconcile: { at: TIME, desks: 1, runs: {}, report_link_unavailable: null } })
+  assert.deepEqual((await build(ctx)).reconcile.report_link_unavailable, NO_LINKS, "a run before the count existed is not zero cards")
+  await setStatus(ctx, { reconcile: { at: TIME, desks: 1, runs: {}, report_link_unavailable: { cards: -1, archived: "x", by_reason: {} } } })
+  assert.deepEqual((await build(ctx)).reconcile.report_link_unavailable, NO_LINKS, "a damaged count reads unavailable")
+}))
+
 test("the reconcile block: no summary is last_ran_at null with desks unavailable; a summary gives counts per reason", () => scratch(async (ctx) => {
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: null, window_days: M(7), desks: U("not_recorded"), mismatches: {} , store_side: STORE })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: null, window_days: M(7), desks: U("not_recorded"), mismatches: {}, store_side: STORE, report_link_unavailable: NO_LINKS })
   await setStatus(ctx, { reconcile: { at: null, last_result: "no_desks", runs: {} } })
   assert.equal((await build(ctx)).reconcile.last_ran_at, null)
   await setStatus(ctx, { reconcile: { at: TIME, window_days: 7, desks: 3, runs: { [RECONCILE_REASONS[0]]: { consecutive: 1, count: 4, clear: 0 }, [RECONCILE_REASONS[1]]: { consecutive: 0, count: 0, clear: 3 }, unknown_reason: { count: 1 }, "bad/key": { count: 2 }, [RECONCILE_REASONS[2]]: { count: -1 }, [RECONCILE_REASONS[3]]: "x" }, warnings: [], last_result: "reconciled" } })
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: M(3), mismatches: { [RECONCILE_REASONS[0]]: M(4), unknown_reason: M(1) } , store_side: STORE })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: M(3), mismatches: { [RECONCILE_REASONS[0]]: M(4), unknown_reason: M(1) }, store_side: STORE, report_link_unavailable: NO_LINKS })
   await setStatus(ctx, { reconcile: { at: TIME, desks: "x", runs: "y" } })
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: U("runs_damaged"), mismatches: {} , store_side: STORE })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: U("runs_damaged"), mismatches: {}, store_side: STORE, report_link_unavailable: NO_LINKS })
   await setStatus(ctx, { reconcile: { at: TIME, desks: 2 } })
   assert.deepEqual((await build(ctx)).reconcile.desks, U("runs_damaged"))
   await setStatus(ctx, { reconcile: { at: TIME, desks: "x", runs: {} } })
-  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: U("not_recorded"), mismatches: {} , store_side: STORE })
+  assert.deepEqual((await build(ctx)).reconcile, { last_ran_at: TIME, window_days: M(7), desks: U("not_recorded"), mismatches: {}, store_side: STORE, report_link_unavailable: NO_LINKS })
   await setStatus(ctx, { reconcile: "x" })
   assert.equal((await build(ctx)).reconcile.last_ran_at, null)
 }))
