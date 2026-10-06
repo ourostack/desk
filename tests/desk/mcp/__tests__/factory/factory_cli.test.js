@@ -85,6 +85,20 @@ test("status returns local factory health without exposing marker paths or secre
   assert.equal(result.markers, 0)
   assert.equal(result.finalize, 0)
   assert.equal(output.includes(env.HOME), false)
+  assert.equal(result.orphan_pass, "orphan pass: no record yet")
+}))
+
+test("status prints one line for the orphan pass: what it did, or the class it failed with", () => scratch(async (env) => {
+  const { writeStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  const run = async () => {
+    let output = ""
+    assert.equal(await main({ argv: ["status"], env, write: (text) => { output += text }, logError: () => assert.fail("status must succeed") }), 0)
+    return JSON.parse(output).orphan_pass
+  }
+  await writeStatus(env, { orphans: { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:05.000Z", examined: 2, unexamined: 1, pending: 0, frozen: { no_facts: 1 }, last_wrap_at: null, sweeps_in_walk: 1 } })
+  assert.equal(await run(), "orphan pass: ran 2026-10-06T00:00:05.000Z, examined 2, unexamined 1, pending 0, frozen 1, last full walk never, 1 sweeps into the walk")
+  await writeStatus(env, { orphans: { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:05.000Z", last_wrap_at: null, sweeps_in_walk: 1, failed: "pass_failed" } })
+  assert.equal(await run(), "orphan pass: failed (pass_failed), last full walk never")
 }))
 
 test("derive refuses an arbitrary marker path without echoing it", () => scratch(async (env) => {

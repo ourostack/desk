@@ -106,7 +106,7 @@ const isFolder = (root) => {
 }
 
 // What a desk root declares now: a positive route for a store the desk itself declares, `unknown` for a present but invalid declaration.
-function declared(root) {
+export function declared(root) {
   if (typeof root !== "string" || !path.isAbsolute(root) || !isFolder(root)) return DERIVED
   const current = resolveStore({ deskRoot: root })
   if (current.source === "invalid_declaration") return UNKNOWN

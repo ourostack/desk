@@ -2,7 +2,9 @@
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
+import { isTaskSegment } from "./binding.js"
 import { LIMITS, PATTERNS, validPluginSource } from "./schema.js"
+import { shellEffects } from "./shell-git.js"
 
 export function comparePrRefs(a, b) {
   if (a.repo === b.repo) return a.number - b.number
@@ -126,4 +128,59 @@ export function addNullable(total, value) {
 export function withRequestedModel(agent, requested) {
   if (typeof requested === "string" && PATTERNS.modelId.test(requested) && requested !== agent.model) agent.requested_model = requested
   return agent
+}
+
+// `task_update` carries its status at the top level or in `frontmatter.status` (an object, or a JSON string). The frontmatter is read here and dropped.
+function frontmatterOf(input) {
+  let frontmatter = input.frontmatter
+  if (typeof frontmatter === "string") {
+    try {
+      frontmatter = JSON.parse(frontmatter)
+    } catch {
+      return null
+    }
+  }
+  return frontmatter !== null && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : null
+}
+
+const STATUS_ONLY_INPUT_KEYS = new Set(["track", "slug", "person", "frontmatter"])
+
+/** The `status` and `statusOnly` of a `task_update` input (ruling P1): status-only means no input key beyond track, slug, person and frontmatter, and a frontmatter holding a string `status` and nothing else. */
+export function deskCallStatus(input) {
+  const frontmatter = frontmatterOf(input)
+  const nested = frontmatter?.status
+  const status = input.status ?? (typeof nested === "string" ? nested : null)
+  const statusOnly = Object.keys(input).every((key) => STATUS_ONLY_INPUT_KEYS.has(key))
+    && frontmatter !== null && typeof nested === "string" && Object.keys(frontmatter).length === 1
+  return { status, statusOnly }
+}
+
+/** A `task_focus` input as `{ track, slug }`, `{ clear: true }`, or `null` when it names no valid task folder. */
+export function focusTarget(input) {
+  if (input.clear === true) return { clear: true }
+  return isTaskSegment(input.track) && isTaskSegment(input.slug) ? { track: input.track, slug: input.slug } : null
+}
+
+/** The focus a Desk tool call declares, as `{ track, slug }` or `{ clear: true }`, else `null`. `verb` is the tool's own name (`task_focus`, `task_create`, ...). A `task_focus` call declares its target; a `task_create` call declares the card it files only when its `focus` is the boolean `true`. */
+export function declaredFocus(verb, input) {
+  if (verb === "task_focus") return focusTarget(input)
+  if (verb !== "task_create" || input.focus !== true) return null
+  return isTaskSegment(input.track) && isTaskSegment(input.slug) ? { track: input.track, slug: input.slug } : null
+}
+
+/** The string entries of a `desk_save` input's `paths`. */
+export function deskSavePaths(input) {
+  return Array.isArray(input.paths) ? input.paths.filter((entry) => typeof entry === "string") : []
+}
+
+/** What one shell command does that binds a session: `commits` as `{ cwd, paths }` once per directory (the paths its `git add` and `git commit` name, in that directory), and the absolute files it `writes`. The command is tokenized once and dropped. */
+export function shellBinding({ command, cwd, home, dialect }) {
+  const effects = shellEffects({ command, cwd, home, dialect })
+  const operands = [...effects.adds, ...effects.commits]
+  const commits = []
+  for (const { cwd: directory } of effects.commits) {
+    if (commits.some((commit) => commit.cwd === directory)) continue
+    commits.push({ cwd: directory, paths: [...new Set(operands.filter((entry) => entry.cwd === directory).flatMap((entry) => entry.paths))] })
+  }
+  return { commits, writes: effects.writes }
 }

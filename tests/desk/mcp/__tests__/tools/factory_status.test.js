@@ -10,7 +10,7 @@ import * as path from "node:path"
 
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
-import { setConsent, writeLocalFacts, writeStatus, readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { setConsent, writeLocalFacts, writeMarker, writeStatus, readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, json, scratch } from "../factory/_session_helpers.js"
 
 const contextUrl = new URL("../../../../../plugins/desk/mcp/src/tools/factory-context.js", import.meta.url)
@@ -149,3 +149,63 @@ test("the doctor's summary names files routed elsewhere only when there are some
   assert.match(factorySummary(status(2)), /ourostack\/factory: yes, 1 pending, 2 routed elsewhere, 0 quarantined, no flush yet/u)
   assert.match(factorySummary(status(0)), /ourostack\/factory: yes, 1 pending, 0 quarantined, no flush yet/u)
 })
+
+test("desk_doctor reports a failed, interrupted or stalled orphan pass by its code, and says nothing for a healthy one", () => scratch(async ({ base, desk, env }) => {
+  const host = await plugins(base, env, { declare: false })
+  const orphans = (patch) => writeStatus(host.env, { orphans: { started_at: new Date().toISOString(), ran_at: new Date().toISOString(), cursor: null, last_wrap_at: null, sweeps_in_walk: 0, examined: 5, unexamined: 0, ...patch } })
+  await orphans({})
+  let body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(body.factory.orphans, undefined)
+  assert.equal(body.summary.includes("orphan pass"), false)
+  await orphans({ failed: "pass_failed" })
+  body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(body.factory.orphans, "pass_failed")
+  assert.match(body.summary, /\n  orphan pass needs attention: pass_failed\. Run `node mcp\/scripts\/factory\.js status` from the Desk plugin folder and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem\./u)
+  await orphans({ sweeps_in_walk: 9 })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, "walk_not_advancing")
+  const { ownVersion } = await import("../../../../../plugins/desk/mcp/src/factory/local-status.js")
+  await orphans({ hung: { "claude-code-a.json": { strikes: 2, version: "0.0.1" } } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, undefined, "strikes under another Desk version are no finding")
+  await orphans({ hung: { "claude-code-a.json": { strikes: 2, version: ownVersion() } } })
+  body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(body.factory.orphans, "orphans_hung")
+  assert.equal(body.factory.orphans_hung, 1, "reported by count")
+  assert.match(body.summary, /orphan pass needs attention: orphans_hung \(1 orphans hung\)\./u)
+  await orphans({ ran_at: "2020-01-01T00:00:00.000Z" })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, undefined, "no session ended lately: a machine that stopped contributing is not alarmed")
+  await writeMarker(host.env, { schema_version: 1, host: "claude-code", session_id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60", log_path: path.join(base, "log.jsonl"), cwd: desk, desk_root: desk, end_reason: "complete", ended_at: new Date().toISOString(), plugins: [], updated_at: new Date().toISOString() })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, undefined, "markers alone, without contribution switched on, do not alarm")
+  await setConsent(host.env, { store: STORE, contribute: true, account: "example-user" })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, "pass_stale")
+  await writeStatus(host.env, { orphans: { started_at: "2026-01-01T00:00:00.000Z", cursor: null, last_wrap_at: null, sweeps_in_walk: 0 } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, "pass_interrupted")
+}))
+
+test("desk_doctor reports sessions held back unasked for over seven days, with the command to run", () => scratch(async ({ base, desk, env }) => {
+  const host = await plugins(base, env, { declare: false })
+  await setConsent(host.env, { store: STORE, contribute: true, account: "example-user" })
+  const since = (days) => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+  await writeStatus(host.env, { last_flush: { [STORE]: { at: since(0), result: "nothing_pending", visibility_unasked: 2, visibility_unasked_since: since(3) } } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.visibility_unasked, undefined)
+  await writeStatus(host.env, { last_flush: { [STORE]: { at: since(0), result: "nothing_pending", visibility_unasked: 2, visibility_unasked_since: since(8) } } })
+  const body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.deepEqual(body.factory.visibility_unasked, [{ store: STORE, sessions: 2 }])
+  assert.match(body.summary, new RegExp(`${STORE}: 2 sessions wait because their desk's visibility could not be asked for over 7 days\\. Run .node mcp/scripts/factory\\.js flush --store ${STORE}. from the Desk plugin folder`, "u"))
+}))
+
+test("desk_doctor's store line says how many sessions wait for a visibility answer from the first deferral, and an unreadable start time is a deferral of unknown age", () => scratch(async ({ base, desk, env }) => {
+  const host = await plugins(base, env, { declare: false })
+  await setConsent(host.env, { store: STORE, contribute: true, account: "example-user" })
+  const at = new Date().toISOString()
+  await writeStatus(host.env, { last_flush: { [STORE]: { at, result: "nothing_pending", visibility_unasked: 2, visibility_unasked_since: at } } })
+  let body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(body.factory.stores[0].waiting_for_visibility, 2)
+  assert.match(body.summary, new RegExp(`${STORE}: yes, \\d+ pending, 2 waiting for a visibility answer, 0 quarantined, last flush nothing_pending`, "u"))
+  assert.equal(body.factory.visibility_unasked, undefined, "the 7-day finding waits for 7 days")
+  await writeStatus(host.env, { last_flush: { [STORE]: { at, result: "nothing_pending", visibility_unasked: 2, visibility_unasked_since: "garbage" } } })
+  body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.deepEqual(body.factory.visibility_unasked, [{ store: STORE, sessions: 2, age: "unknown" }])
+  assert.match(body.summary, /2 sessions wait because their desk's visibility could not be asked for an unknown time\. Run/u)
+  await writeStatus(host.env, { last_flush: { [STORE]: { at, result: "nothing_pending" } } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.stores[0].waiting_for_visibility, undefined)
+}))

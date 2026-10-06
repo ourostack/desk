@@ -158,6 +158,11 @@
 //     command, or `null` when unknown. A `cd` in an earlier call is not
 //     followed. Only the directory is kept, never the command. A call
 //     without both times, or lost at a resume, gives no event.
+//     The declared-focus events are in memory only: `focusCalls` (a successful
+//     `task_focus`), `spawns` (`{ agent, parent, at, task }` at the
+//     `subagent.started` time), `paths` on each `shellGitCommits` entry, shell
+//     redirect writes and `desk_save` paths in `fileWrites`, and `prRefs`,
+//     always empty (Copilot records no PR creation).
 //     `nativeCommitShas` is the session's `session_refs` commits (the same
 //     list as `commitShas`) as `{ sha, agent: 0 }`, which M3-4 binds
 //     directly; `session_refs` names no worker, so they count as the root's.
@@ -184,14 +189,15 @@ import { createInterface } from "node:readline"
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
-import { addNullable, compareByStart, comparePrRefs, countOrNull, withRequestedModel } from "./derive-common.js"
+import { addNullable, compareByStart, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, shellBinding, withRequestedModel } from "./derive-common.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
-import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
 
 const HOST = "copilot-cli"
 const DESK_TOOL = /(?:task_create|task_update|task_archive)$/u
+const FOCUS_TOOL = /(task_focus|task_create)$/u
+const SAVE_TOOL = /desk_save$/u
 const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$/gmu
 const PR_SHORT = /^([^/#\s]+\/[^/#\s]+)#(\d+)$/u
 const PR_URL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$/u
@@ -231,11 +237,24 @@ function deskCallOf(name, args, at) {
   const track = stringOrNull(args.track)
   const slug = stringOrNull(args.slug)
   if (track === null || slug === null) return null
-  return { at, name, track, slug, person: stringOrNull(args.person), status: stringOrNull(args.status) }
+  const { status, statusOnly } = deskCallStatus(args)
+  return { at, name, track, slug, person: stringOrNull(args.person), status: stringOrNull(status), statusOnly }
+}
+
+// The focus a `task_focus` call, or a `task_create` call with `focus: true`, declares, as `{ at, track, slug }` or `{ at, clear: true }`, else null.
+function focusOf(name, args, at) {
+  const verb = name === null ? undefined : FOCUS_TOOL.exec(name)?.[1]
+  if (verb === undefined || at === null || !isObject(args)) return null
+  const target = declaredFocus(verb, args)
+  return target === null ? null : { at, ...target }
 }
 
 function fileWritesOf(name, args, at) {
   if (at === null) return null
+  if (name !== null && SAVE_TOOL.test(name)) {
+    const saved = isObject(args) ? deskSavePaths(args) : []
+    return saved.length > 0 ? saved.map((savedPath) => ({ at, path: savedPath })) : null
+  }
   if (name === "create" || name === "edit") {
     const filePath = isObject(args) ? stringOrNull(args.path) : null
     return filePath === null ? null : [{ at, path: filePath }]
@@ -251,13 +270,12 @@ function fileWritesOf(name, args, at) {
   return writes.length > 0 ? writes : null
 }
 
-// The directories of the `git … commit` runs in a shell call, or null. The
-// command is read here and dropped.
-function gitCommitsOf(name, args, cwd) {
+// The `git … commit` runs (`{ cwd, paths }`) and the redirect writes of a shell call, or null. The command is read here and dropped.
+function shellOf(name, args, cwd) {
   const dialect = name === null || !Object.hasOwn(SHELL_DIALECT, name) ? undefined : SHELL_DIALECT[name]
   if (dialect === undefined || !isObject(args) || typeof args.command !== "string") return null
-  const cwds = gitCommitCwds({ command: args.command, cwd, home: os.homedir(), dialect })
-  return cwds.length > 0 ? cwds : null
+  const { commits, writes } = shellBinding({ command: args.command, cwd, home: os.homedir(), dialect })
+  return commits.length > 0 || writes.length > 0 ? { commits, writes } : null
 }
 
 function contextCwd(data) {
@@ -342,6 +360,8 @@ function createSessionFold() {
   const fileWrites = []
   const shellGitCommits = []
   const spawnTasks = []
+  const spawns = []
+  const focusCalls = []
   let sessionCwd = null
 
   const agentOf = (parentCall) => (parentCall === null ? 0 : subagentByCall.get(parentCall) ?? 0)
@@ -446,8 +466,9 @@ function createSessionFold() {
         // The prompt is matched here and dropped; only a validated pair is kept.
         spawnTask: name === "task" && isObject(data.arguments) ? parseDeskTaskLine(data.arguments.prompt) : null,
         desk: deskCallOf(name, data.arguments, at),
+        focus: focusOf(name, data.arguments, at),
         writes: fileWritesOf(name, data.arguments, at),
-        gitCommits: gitCommitsOf(name, data.arguments, sessionCwd),
+        shell: shellOf(name, data.arguments, sessionCwd),
       })
     },
     "tool.execution_complete"(data, at) {
@@ -463,9 +484,11 @@ function createSessionFold() {
         addTimed({ kind: "tool", agent: pending.agent, tool: pending.kind, outcome }, pending.start, at, "tool_durations")
       }
       if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, agent: pending.agent, ok: outcome === "ok" })
+      if (pending.focus !== null && outcome === "ok") focusCalls.push({ agent: pending.agent, ...pending.focus })
       if (pending.writes !== null && data.success === true) fileWrites.push(...pending.writes.map((write) => ({ ...write, agent: pending.agent })))
-      if (pending.gitCommits !== null && pending.start !== null && at !== null && data.success === true && outcome === "ok") {
-        for (const cwd of pending.gitCommits) shellGitCommits.push({ start: pending.start, end: at, cwd, agent: pending.agent })
+      if (pending.shell !== null && pending.start !== null && at !== null && data.success === true && outcome === "ok") {
+        for (const { cwd, paths } of pending.shell.commits) shellGitCommits.push({ start: pending.start, end: at, cwd, paths, agent: pending.agent })
+        if (pending.shell.writes.length > 0) fileWrites.push(...pending.shell.writes.map((written) => ({ at: pending.start, path: written, agent: pending.agent })))
       }
     },
     "permission.requested"(data, at) {
@@ -503,6 +526,7 @@ function createSessionFold() {
       const task = pendingTools.get(toolCallId)?.spawnTask ?? null
       const spawn = task === null ? null : { agent: n, track: task.track, slug: task.slug }
       if (spawn !== null) spawnTasks.push(spawn)
+      spawns.push({ agent: n, parent, at, task })
       pendingSubagents.set(toolCallId, { start: at, agent: parent, spawn })
     },
     "subagent.completed": endSubagent,
@@ -575,6 +599,8 @@ function createSessionFold() {
         fileWrites,
         shellGitCommits,
         spawnTasks,
+        spawns,
+        focusCalls,
         unfinishedCalls: lostCalls || pendingTools.size + pendingSubagents.size > 0,
         openTurns: lostTurns,
       }
@@ -826,6 +852,9 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
     shellGitCommits: state.shellGitCommits,
     nativeCommitShas: refs.commits.map((commit) => ({ sha: commit.sha, agent: 0 })),
     spawnTasks: state.spawnTasks,
+    focusCalls: state.focusCalls,
+    spawns: state.spawns,
+    prRefs: [],
   }
 
   return { facts, events }

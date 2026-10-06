@@ -630,19 +630,19 @@ after(() => {
 
 test("readTask reads status, created and updated from a live card's frontmatter, unquoting values", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(readTask("track", "live-task"), { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" })
+  assert.deepEqual(readTask("track", "live-task"), { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z", repos: [] })
 })
 
 test("readTask falls back to the _archive card, drops trailing comments and normalizes offsets to UTC", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
   // The working tree's current content, after the later housekeeping-only edit to `updated:`.
-  assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-05T10:30:00.000Z" })
+  assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-05T10:30:00.000Z", repos: [] })
 })
 
 test("readTask finds a card under a whole archived track, and one archived a second time within that archived track", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(readTask("birth-whole-track", "task-w"), { status: "drafting", created_at: null, updated_at: null })
-  assert.deepEqual(readTask("birth-doubly-archived", "task-d"), { status: "drafting", created_at: null, updated_at: null })
+  assert.deepEqual(readTask("birth-whole-track", "task-w"), { status: "drafting", created_at: null, updated_at: null, repos: [] })
+  assert.deepEqual(readTask("birth-doubly-archived", "task-d"), { status: "drafting", created_at: null, updated_at: null, repos: [] })
 })
 
 test("readTask returns null when no card exists, live or archived, or when the names are unsafe", () => {
@@ -653,15 +653,14 @@ test("readTask returns null when no card exists, live or archived, or when the n
   }
 })
 
-test("readTask gives nulls for fields it cannot read: no frontmatter, invalid values, unterminated, past 40 lines, or a folder", () => {
+test("readTask gives nulls for fields it cannot read: no frontmatter, invalid values, unterminated, or a folder", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
-  const empty = { status: null, created_at: null, updated_at: null }
+  const empty = { status: null, created_at: null, updated_at: null, repos: [] }
   assert.deepEqual(readTask("track", "no-frontmatter"), empty)
   assert.deepEqual(readTask("track", "bad-values"), empty)
   assert.deepEqual(readTask("track", "unterminated"), empty)
-  assert.deepEqual(readTask("track", "late-frontmatter"), empty)
   assert.deepEqual(readTask("track", "dir-card"), empty)
-  assert.deepEqual(readTask("track", "indented"), { status: "validating", created_at: null, updated_at: null })
+  assert.deepEqual(readTask("track", "indented"), { status: "validating", created_at: null, updated_at: null, repos: [] })
 })
 
 test("readTask treats a card it may not open as unreadable, and a track that is a file as no card", () => {
@@ -670,7 +669,7 @@ test("readTask treats a card it may not open as unreadable, and a track that is 
   write("file-track", "not a folder\n")
   chmodSync(path.join(desk, "track/locked/task.md"), 0o000)
   try {
-    assert.deepEqual(readTask("track", "locked"), { status: null, created_at: null, updated_at: null })
+    assert.deepEqual(readTask("track", "locked"), { status: null, created_at: null, updated_at: null, repos: [] })
     assert.equal(readTask("file-track", "x"), null)
   } finally {
     chmodSync(path.join(desk, "track/locked/task.md"), 0o644)
@@ -679,10 +678,204 @@ test("readTask treats a card it may not open as unreadable, and a track that is 
 
 test("readTask reads under the person prefix when one is given", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk, personPrefix: "desks/ari" })
-  assert.deepEqual(readTask("track", "person-task"), { status: "collaborating", created_at: "2026-09-21T00:00:00.000Z", updated_at: null })
+  assert.deepEqual(readTask("track", "person-task"), { status: "collaborating", created_at: "2026-09-21T00:00:00.000Z", updated_at: null, repos: [] })
   assert.equal(readTask("track", "live-task"), null)
   assert.throws(() => createDeskReaders({ deskRoot: desk, personPrefix: "people/ari" }), TypeError)
   assert.throws(() => createDeskReaders({ deskRoot: "relative" }), TypeError)
+})
+
+test("readTask reads the whole frontmatter block, so a field after line 40 still counts", () => {
+  const { readTask } = createDeskReaders({ deskRoot: desk })
+  assert.deepEqual(readTask("track", "late-frontmatter"), { status: "done", created_at: null, updated_at: null, repos: [] })
+  write("track/late-repos/task.md", `---\nstatus: done\n${"x: y\n".repeat(45)}repos:\n  - name: ourostack/desk\n---\n`)
+  assert.deepEqual(readTask("track", "late-repos").repos, ["ourostack/desk"])
+})
+
+const reposOf = (name, lines) => {
+  write(`track/${name}/task.md`, card(["status: done", ...lines]))
+  return createDeskReaders({ deskRoot: desk }).readTask("track", name).repos
+}
+
+test("readTask returns repos from a flow list and a block list of names", () => {
+  assert.deepEqual(reposOf("repos-flow", ["repos: [ourostack/desk, spoonjoy/spoonjoy-v2]"]), ["ourostack/desk", "spoonjoy/spoonjoy-v2"])
+  assert.deepEqual(reposOf("repos-block", ["repos:", "  - ourostack/desk", "  - spoonjoy/spoonjoy-v2", "title: after"]), ["ourostack/desk", "spoonjoy/spoonjoy-v2"])
+  assert.deepEqual(reposOf("repos-block-flush", ["repos:", "- ourostack/desk", "status: done"]), ["ourostack/desk"])
+})
+
+test("readTask returns repos from object entries and never a path, mode or other field", () => {
+  const repos = reposOf("repos-objects", [
+    "repos:",
+    "  - name: ourostack/teamscrawl",
+    "    mode: local",
+    "    local_path: '~/code/teamscrawl'",
+    "  - name: desk",
+    "    url: https://github.com/ourostack/desk",
+    "    mode: remote",
+    "  - name: ssh-form",
+    "    url: git@github.com:ourostack/ouro-work-substrate.git",
+    "  - name: plain",
+    "    url: https://example.com/not/github",
+    "  - name: bare-no-url",
+    "    local_path: /Users/someone/code/bare-no-url",
+    "    branches:",
+    "      - feature/x",
+    "    name: ignored-second-name",
+  ])
+  assert.deepEqual(repos, ["ourostack/teamscrawl", "ourostack/desk", "ourostack/ouro-work-substrate", "plain", "bare-no-url"])
+  assert.equal(JSON.stringify(repos).includes("/Users"), false)
+})
+
+test("readTask falls back to a GitHub url when the name is not a usable owner/name, and refuses dot segments", () => {
+  const repos = reposOf("repos-url-fallback", [
+    "repos:",
+    '  - name: "My Repo"',
+    "    url: https://github.com/ourostack/desk.git",
+    "  - name: ../x",
+    "    url: https://github.com/ourostack/ouro-work-substrate",
+    "  - name: ../x",
+    "  - name: ..",
+    "  - name: .",
+    "  - name: a/..",
+    "  - name: bad",
+    "    url: https://github.com/../x",
+    "  - name: My Repo",
+  ])
+  assert.deepEqual(repos, ["ourostack/desk", "ourostack/ouro-work-substrate", "bad"])
+})
+
+test("a trailing comment after a quoted value is dropped for status, created and updated too", () => {
+  write("track/quoted-comments/task.md", card(['status: "done" # finished', 'created: "2026-09-20T10:00:00Z" # born', "updated: '2026-09-25T09:00:00Z' # touched"]))
+  assert.deepEqual(createDeskReaders({ deskRoot: desk }).readTask("track", "quoted-comments"), { status: "done", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z", repos: [] })
+})
+
+test("readTask strips quotes from repos, skips empty or missing names, drops duplicates, and reads an empty or absent list as none", () => {
+  assert.deepEqual(reposOf("repos-quoted", ['repos: ["ourostack/desk", \'spoonjoy/spoonjoy-v2\', "ourostack/desk", "", {a: b}]']), ["ourostack/desk", "spoonjoy/spoonjoy-v2"])
+  assert.deepEqual(reposOf("repos-quoted-block", ["repos:", '  - "ourostack/desk" # note', "  - ''", "  - url: https://github.com/a/b", "    mode: remote", "  - name:"]), ["ourostack/desk"])
+  assert.deepEqual(reposOf("repos-empty", ["repos: []"]), [])
+  assert.deepEqual(reposOf("repos-scalar", ["repos: ourostack/desk"]), [])
+  assert.deepEqual(reposOf("repos-absent", []), [])
+  assert.deepEqual(reposOf("repos-blank", ["repos:"]), [])
+})
+
+// --- readTask follows renames ---------------------------------------------------------------
+
+function renameRepo(name) {
+  const repo = path.join(scratch, name)
+  mkdirSync(repo)
+  gitIn(repo, ["init", "-q", "-b", "main"])
+  return repo
+}
+const taskCard = (label) => fixtureCard(label, "processing")
+function moveIn(repo, from, to, at) {
+  mkdirSync(path.dirname(path.join(repo, to)), { recursive: true })
+  gitIn(repo, ["mv", from, to])
+  return commitIn(repo, at, `move ${from}`)
+}
+
+test("renamed task folder still found", () => {
+  const repo = renameRepo("rename-one")
+  writeIn(repo, "a/old/task.md", taskCard("rename-one"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/new", "2026-09-25T09:00:00Z")
+  const { readTask } = createDeskReaders({ deskRoot: repo })
+  assert.equal(readTask("a", "old").status, "processing")
+  assert.equal(readTask("b", "new").status, "processing")
+})
+
+test("a chain of two renames resolves, including into an archive and to a later reader after HEAD moves", () => {
+  const repo = renameRepo("rename-chain")
+  writeIn(repo, "a/old/task.md", taskCard("rename-chain"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/mid", "2026-09-25T09:00:00Z")
+  const { readTask } = createDeskReaders({ deskRoot: repo })
+  assert.equal(readTask("a", "old").status, "processing")
+  moveIn(repo, "b/mid", "c/new", "2026-09-25T10:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+  assert.equal(readTask("b", "mid").status, "processing")
+  moveIn(repo, "c/new", "c/_archive/new", "2026-09-25T11:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+  moveIn(repo, "c/_archive/new", "_archive/c/new", "2026-09-25T12:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+  moveIn(repo, "_archive/c/new", "_archive/c/_archive/new", "2026-09-25T13:00:00Z")
+  assert.equal(readTask("a", "old").status, "processing")
+})
+
+test("renames are read under the person prefix, and another person's or a non-card rename is ignored", () => {
+  const repo = renameRepo("rename-person")
+  writeIn(repo, "desks/ari/a/old/task.md", taskCard("rename-person-ari"))
+  writeIn(repo, "desks/bo/a/old/task.md", taskCard("rename-person-bo"))
+  writeIn(repo, "desks/ari/a/old/notes.md", "# Notes\n\nUnique notes for the person-prefix rename fixture.\n")
+  writeIn(repo, "a/old/deep/inner/task.md", taskCard("rename-person-deep"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "desks/ari/a/old", "desks/ari/b/new", "2026-09-25T09:00:00Z")
+  moveIn(repo, "desks/bo/a/old", "desks/bo/b/new", "2026-09-25T10:00:00Z")
+  moveIn(repo, "a/old/deep", "a/old/deeper", "2026-09-25T11:00:00Z")
+  const { readTask } = createDeskReaders({ deskRoot: repo, personPrefix: "desks/ari" })
+  assert.equal(readTask("a", "old").status, "processing")
+  assert.equal(createDeskReaders({ deskRoot: repo }).readTask("a", "old"), null)
+})
+
+test("two readers on one desk root and HEAD with different person prefixes each get their own renames", () => {
+  const repo = renameRepo("rename-two-prefixes")
+  writeIn(repo, "desks/ari/a/old/task.md", taskCard("two-prefixes-ari"))
+  writeIn(repo, "desks/bo/a/old/task.md", taskCard("two-prefixes-bo"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "desks/ari/a/old", "desks/ari/b/ari-new", "2026-09-25T09:00:00Z")
+  moveIn(repo, "desks/bo/a/old", "desks/bo/b/bo-new", "2026-09-25T10:00:00Z")
+  const ari = createDeskReaders({ deskRoot: repo, personPrefix: "desks/ari" })
+  const bo = createDeskReaders({ deskRoot: repo, personPrefix: "desks/bo" })
+  assert.equal(ari.readTask("a", "old").status, "processing")
+  assert.equal(bo.readTask("a", "old").status, "processing")
+})
+
+test("a card heavily edited in its rename commit is not followed, and reads null (the known limit of Git's rename detection)", () => {
+  const repo = renameRepo("rename-heavy")
+  writeIn(repo, "a/old/task.md", taskCard("rename-heavy-before"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  gitIn(repo, ["mv", "a/old", "b-new"])
+  writeIn(repo, "b-new/task.md", card(["status: done"], `# Completely different\n\n${"Entirely new text, nothing shared. ".repeat(20)}`))
+  commitIn(repo, "2026-09-25T09:00:00Z", "rename and rewrite")
+  assert.equal(createDeskReaders({ deskRoot: repo }).readTask("a", "old"), null)
+})
+
+test("resolveJobIdentity finds a renamed card, so it agrees with readTask on where it lives", () => {
+  const repo = renameRepo("rename-identity")
+  writeIn(repo, "a/old/task.md", taskCard("rename-identity"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/mid", "2026-09-25T09:00:00Z")
+  moveIn(repo, "b/mid", "c/new", "2026-09-25T10:00:00Z")
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "b", slug: "mid" }), { track: "a", slug: "old" })
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "c", slug: "new" }), { track: "a", slug: "old" })
+})
+
+test("a deleted, never-renamed folder returns null", () => {
+  const repo = renameRepo("rename-deleted")
+  writeIn(repo, "a/gone/task.md", taskCard("rename-deleted"))
+  writeIn(repo, "a/kept/task.md", taskCard("rename-deleted-kept"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/kept", "a/kept-renamed", "2026-09-25T09:00:00Z")
+  removeIn(repo, "a/gone/task.md")
+  commitIn(repo, "2026-09-25T10:00:00Z", "delete")
+  const { readTask } = createDeskReaders({ deskRoot: repo })
+  assert.equal(readTask("a", "gone"), null)
+  assert.equal(readTask("a", "kept").status, "processing")
+})
+
+test("a rename lookup in a desk that is not its own repository, has no commits, or whose Git fails gives null without throwing", () => {
+  const plain = path.join(scratch, "rename-plain")
+  mkdirSync(path.join(plain, "a/x"), { recursive: true })
+  assert.equal(createDeskReaders({ deskRoot: plain }).readTask("a", "old"), null)
+  const empty = renameRepo("rename-empty")
+  assert.equal(createDeskReaders({ deskRoot: empty }).readTask("a", "old"), null)
+  const repo = renameRepo("rename-gitfail")
+  writeIn(repo, "a/old/task.md", taskCard("rename-gitfail"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/old", "b/new", "2026-09-25T09:00:00Z")
+  const wrapper = path.join(scratch, "git-no-log.sh")
+  writeFileSync(wrapper, '#!/bin/sh\nfor arg in "$@"; do [ "$arg" = "log" ] && exit 1; done\nexec git "$@"\n')
+  chmodSync(wrapper, 0o755)
+  assert.equal(createDeskReaders({ deskRoot: repo, git: wrapper }).readTask("a", "old"), null)
+  assert.equal(createDeskReaders({ deskRoot: repo, git: path.join(scratch, "no-such-git") }).readTask("a", "old"), null)
 })
 
 // --- deskCommitsBetween: the commits this clone made -------------------------------------
@@ -1218,9 +1411,11 @@ test("readDeskRemote reads origin's URL, and is null with no origin or no reposi
 
 // --- The real readers drive binding end to end ---------------------------------------------
 
-function bindWith(windows) {
+// Each call is `[start, end, ...paths]`: a `git commit` shell call in the desk and the desk-relative paths its `git add` or `git commit` named.
+function bindWith(calls, events = {}) {
   return bindSession({
-    events: { shellGitCommits: windows.map(([start, end]) => ({ start, end, cwd: desk })) },
+    events: { ...events, shellGitCommits: calls.map(([start, end, ...paths]) => ({ start, end, cwd: desk, paths: paths.map((named) => path.join(desk, named)) })) },
+    session: { started_at: "2026-09-25T08:00:00.000Z", derived_through: "2026-09-26T09:00:00.000Z" },
     deskRoot: desk,
     deskRemote: null,
     personPrefix: "",
@@ -1229,45 +1424,50 @@ function bindWith(windows) {
 }
 const idOf = (track, slug) => jobId({ deskRemote: `local:${realpathSync(desk)}`, personPrefix: "", track, slug })
 const id = (slug) => idOf("track", slug)
-const byJob = (a, b) => (a.job < b.job ? -1 : 1)
 
-test("end to end: a session's git commit call in the desk binds the tasks its own commit changed", () => {
-  // shas.second touches live-task/notes with space.md and old-task/notes.md
-  // (real work on each), and old-task/task.md too, but that card is a
-  // brand-new add here, not identity/placement, so it is real content and
-  // would bind old-task on its own regardless: see isCardHousekeeping.
-  const jobs = bindWith([["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]])
-  assert.deepEqual(jobs.map(({ job, basis, observed }) => ({ job, basis, observed })).sort(byJob), [
-    { job: id("live-task"), basis: ["desk_commit"], observed: { status: "processing", at: null } },
-    { job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-05T10:30:00.000Z" } },
-  ].sort(byJob))
+test("end to end: a session's git commit call binds the task whose path it names, live or archived", () => {
+  const window = ["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]
+  const live = bindWith([[...window, "track/live-task/notes with space.md"]])
+  assert.deepEqual(live.map(({ job, basis, observed }) => ({ job, basis, observed })), [{ job: id("live-task"), basis: ["desk_commit"], observed: { status: "processing", at: null } }])
+  const archived = bindWith([[...window, "track/_archive/old-task/notes.md"]])
+  assert.deepEqual(archived.map(({ job, basis, observed }) => ({ job, basis, observed })), [{ job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-05T10:30:00.000Z" } }])
+  // The task folder itself is a named path too.
+  assert.deepEqual(bindWith([[...window, "track/live-task"]]).map(({ job }) => job), [id("live-task")])
+  // Naming both in one call is one event on each, which makes neither a candidate.
+  assert.deepEqual(bindWith([[...window, "track/live-task/notes with space.md", "track/_archive/old-task/notes.md"]]), [])
 })
 
-test("end to end: a real-git commit whose only change to an archived card is housekeeping (only `updated:` differs) binds nothing", () => {
+test("end to end: a real-git commit from the session's own refs whose only change to an archived card is housekeeping (only `updated:` differs) binds nothing", () => {
   // Finding 2: shas.oldTaskHousekeeping only bumps old-task's card's
   // `updated:` field; the body and every other field stay the same, so
-  // isCardHousekeeping must call it housekeeping and this window binds no job.
-  const jobs = bindWith([["2026-09-25T08:49:59.000Z", "2026-09-25T08:50:00.500Z"]])
-  assert.deepEqual(jobs, [])
+  // isCardHousekeeping must call it housekeeping and this commit binds no job.
+  assert.deepEqual(bindWith([], { nativeCommitShas: [{ sha: shas.oldTaskHousekeeping, agent: 0 }] }), [])
+  // shas.second is real work on live-task and old-task: two tasks, one event each, so neither is a candidate.
+  assert.deepEqual(bindWith([], { nativeCommitShas: [{ sha: shas.second, agent: 0 }] }), [])
 })
 
-test("end to end, two clones: a session in this clone never binds the other clone's commit, fetched here during its call", () => {
+test("end to end: a commit that lands while the session's git commit call runs binds nothing unless the call named its task", () => {
   // The other clone committed track/fetched-task at 08:40:00 and this clone
   // fetched it at 08:45; a session here had a git commit call spanning both.
   assert.deepEqual(bindWith([["2026-09-25T08:39:59.000Z", "2026-09-25T08:45:05.000Z"]]), [])
+  // This clone's own commit to track/old-task and track/live-task at 08:20:01 is inside this window too.
+  assert.deepEqual(bindWith([["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]]), [])
 })
 
-test("end to end, same clone: two sessions whose git commit calls overlap one commit both bind it (the documented ambiguity)", () => {
-  const first = bindWith([["2026-09-25T09:29:58.000Z", "2026-09-25T09:30:01.000Z"]])
+test("end to end, same clone: of two sessions whose git commit calls overlap one commit, only the one that named the task's path binds it", () => {
+  const first = bindWith([["2026-09-25T09:29:58.000Z", "2026-09-25T09:30:01.000Z", "track/other-task/notes.md"]])
   const second = bindWith([["2026-09-25T09:29:59.500Z", "2026-09-25T09:30:03.000Z"]])
   assert.deepEqual(first.map(({ job }) => job), [id("other-task")])
-  assert.deepEqual(second.map(({ job }) => job), [id("other-task")])
+  assert.deepEqual(second, [])
 })
 
 test("end to end: a real rename's job ID, through the real Git readers and bindSession together, is the birth path's, not the current path's (ourostack/desk#76)", () => {
-  const jobs = bindWith([["2026-09-26T08:00:19.000Z", "2026-09-26T08:00:20.500Z"]])
+  const jobs = bindWith([["2026-09-26T08:00:19.000Z", "2026-09-26T08:00:20.500Z", "birth-rename/new-slug/notes.md"]])
   assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: idOf("birth-rename", "origin-slug"), basis: ["desk_commit"] }])
   assert.notEqual(jobs[0].job, idOf("birth-rename", "new-slug"), "not the current (post-rename) path's own ID")
+  // A session that touched the task under its old name, before the rename, is the same job.
+  const before = bindWith([["2026-09-26T08:00:00.000Z", "2026-09-26T08:00:01.000Z", "birth-rename/origin-slug/task.md"], ["2026-09-26T08:00:19.000Z", "2026-09-26T08:00:20.500Z", "birth-rename/new-slug/notes.md"]])
+  assert.deepEqual(before.map(({ job }) => job), [idOf("birth-rename", "origin-slug")])
 })
 
 test("readDeskRemote shares one deadline across its Git calls and throws on reaching it", () => {
@@ -1304,3 +1504,182 @@ test("readDeskRemote never reads a Git call killed by its time limit or a signal
   assert.equal(readDeskRemote({ deskRoot: "/desk", spawn: ordinary([{ status: 0, signal: null, stdout: "\n" }, { status: 1, signal: null, stdout: "" }]) }), null, "an ordinary failure is still no remote")
   assert.equal(readDeskRemote({ deskRoot: "/desk", spawn: ordinary([{ status: 128, signal: null, stdout: "" }]) }), null)
 })
+
+// --- repoOfPath: the code repository a path outside the desk is in --------------
+
+// A desk and code repositories built for one test; `run` gets their folder and a git that logs each call it is given.
+function withRepos(run) {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "desk-repo-of-path-")))
+  try {
+    const repo = (name, remote) => {
+      const folder = path.join(root, name)
+      mkdirSync(folder, { recursive: true })
+      gitIn(folder, ["init", "-q", "-b", "main"])
+      if (remote !== null) gitIn(folder, ["remote", "add", "origin", remote])
+      return folder
+    }
+    const log = path.join(root, "git-calls.log")
+    const loggingGit = path.join(root, "logging-git.sh")
+    writeFileSync(loggingGit, `#!/bin/sh\necho "$*" >> '${log}'\nexec git "$@"\n`, { mode: 0o755 })
+    const gitCalls = () => spawnSync("cat", [log], { encoding: "utf8" }).stdout.split("\n").filter((line) => line !== "")
+    return run({ root, repo, loggingGit, gitCalls })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+test("repoOfPath names a path's repository as lowercase owner/name, for every remote form, from any depth, and for a file that is gone", () => withRepos(({ root, repo }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const { repoOfPath } = createDeskReaders({ deskRoot })
+  const scp = repo("scp", "git@github.com:OurOStack/Desk.git")
+  const https = repo("https", "https://user:token@GitHub.com/Spoonjoy/Spoonjoy-V2/")
+  const ssh = repo("ssh", "ssh://git@example.com:2222/Group/Sub/Tool.git")
+  mkdirSync(path.join(scp, "src", "deep"), { recursive: true })
+  writeFileSync(path.join(scp, "src", "deep", "file.js"), "x\n")
+  assert.equal(repoOfPath(scp), "ourostack/desk")
+  assert.equal(repoOfPath(path.join(scp, "src", "deep", "file.js")), "ourostack/desk")
+  assert.equal(repoOfPath(path.join(scp, "src", "deep")), "ourostack/desk")
+  // The nearest directory that still exists decides: a deleted file, in a folder that is gone too, is still in its repository.
+  assert.equal(repoOfPath(path.join(scp, "gone", "also-gone", "file.js")), "ourostack/desk")
+  assert.equal(repoOfPath(path.join(https, "README.md")), "spoonjoy/spoonjoy-v2")
+  assert.equal(repoOfPath(path.join(ssh, "a.txt")), "sub/tool", "the last two path parts of a longer remote path")
+  // A linked worktree's `.git` is a file; the path is still in the repository.
+  writeFileSync(path.join(scp, "a.txt"), "a\n")
+  commitIn(scp, "2026-09-25T08:00:00Z", "first")
+  const linked = path.join(root, "linked")
+  gitIn(scp, ["worktree", "add", "-q", linked, "-b", "side"])
+  assert.equal(repoOfPath(path.join(linked, "a.txt")), "ourostack/desk")
+}))
+
+test("repoOfPath answers null for no repository, no remote, a remote with no owner and name, a missing folder tree, and anything that is not an absolute path", () => withRepos(({ root, repo }) => {
+  const { repoOfPath } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const plain = path.join(root, "plain")
+  mkdirSync(plain)
+  assert.equal(repoOfPath(path.join(plain, "file.txt")), null, "not a repository")
+  assert.equal(repoOfPath(path.join(root, "never", "was", "here.txt")), null, "nothing exists there, and nothing above it is a repository")
+  assert.equal(repoOfPath(path.join(repo("no-remote", null), "a.txt")), null)
+  assert.equal(repoOfPath(path.join(repo("local-remote", path.join(root, "some", "origin.git")), "a.txt")), null, "a local path is no owner/name")
+  assert.equal(repoOfPath(path.join(repo("one-part", "https://example.com/solo.git"), "a.txt")), null)
+  assert.equal(repoOfPath(path.join(repo("file-url", "file:///srv/git/tool.git"), "a.txt")), null)
+  assert.equal(repoOfPath(path.join(repo("dots", "https://example.com/../tool"), "a.txt")), null, "an unsafe owner is no name")
+  for (const bad of ["relative/path.js", "", null, undefined, 7]) assert.equal(repoOfPath(bad), null)
+}))
+
+test("repoLookup tells a repository, a true none and evidence that is not available apart", () => withRepos(({ root, repo }) => {
+  const { repoLookup, repoOfPath } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  assert.deepEqual(repoLookup(path.join(code, "a.txt")), { repo: "ourostack/desk" })
+  assert.deepEqual(repoLookup(path.join(code, "gone", "deep", "a.txt")), { repo: "ourostack/desk" }, "a deleted file is still in its repository")
+  const plain = path.join(root, "plain")
+  mkdirSync(plain)
+  assert.deepEqual(repoLookup(plain), { none: true }, "an existing folder in no repository is a true none")
+  assert.deepEqual(repoLookup(repo("no-origin", null)), { none: true }, "a repository with no origin is a true none")
+  assert.deepEqual(repoLookup(path.join(root, "desk", "sub")), { none: true }, "the desk itself, even for a folder not made yet")
+  for (const unknown of ["relative/dir", "", null, undefined, 7]) assert.deepEqual(repoLookup(unknown), { none: true })
+  assert.equal(repoOfPath(plain), null)
+  assert.equal(repoOfPath(path.join(code, "a.txt")), "ourostack/desk")
+}))
+
+test("repoLookup says unavailable for a folder that is gone (ENOENT) or under a file (ENOTDIR)", () => withRepos(({ root, repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  mkdirSync(path.join(root, "plain"))
+  assert.deepEqual(repoLookup(path.join(root, "vanished")), { unavailable: true }, "ENOENT")
+  assert.deepEqual(repoLookup(path.join(root, "vanished", "deeper", "out.txt")), { unavailable: true })
+  const file = path.join(root, "plain", "file.txt")
+  writeFileSync(file, "x")
+  assert.deepEqual(repoLookup(path.join(file, "child")), { unavailable: true }, "ENOTDIR")
+  assert.deepEqual(repoLookup(file), { none: true }, "a file that exists is looked up by its folder")
+  assert.deepEqual(repoLookup(path.join(repo("no-remote", null), "src")), { unavailable: true }, "a folder that never existed in a repository with no origin")
+}))
+
+test("a deleted file is not lost evidence when its own folder exists, and is when its folder is gone", () => withRepos(({ root, repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const file = { maybeFile: true }
+  const plain = path.join(root, "plain")
+  mkdirSync(plain)
+  assert.deepEqual(repoLookup(path.join(plain, "gone.txt"), file), { none: true }, "an existing folder in no repository")
+  assert.deepEqual(repoLookup(path.join(repo("no-origin", null), "gone.txt"), file), { none: true }, "an existing repository with no origin")
+  assert.deepEqual(repoLookup(path.join(repo("code", "git@github.com:OurOStack/Desk.git"), "gone.txt"), file), { repo: "ourostack/desk" })
+  assert.deepEqual(repoLookup(path.join(root, "vanished", "gone.txt"), file), { unavailable: true }, "its folder is gone too")
+  assert.deepEqual(repoLookup(path.join(plain, "gone.txt")), { unavailable: true }, "asked as a folder, a missing path is a folder that is gone")
+}))
+
+test("repoLookup names a nested repository root itself, and a file by the repository that holds its folder", () => withRepos(({ repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const parent = repo("parent", "git@github.com:Some/Parent.git")
+  const nested = path.join(parent, "nested")
+  mkdirSync(nested)
+  gitIn(nested, ["init", "-q", "-b", "main"])
+  gitIn(nested, ["remote", "add", "origin", "git@github.com:Some/Nested.git"])
+  writeFileSync(path.join(nested, "a.txt"), "x")
+  assert.deepEqual(repoLookup(nested), { repo: "some/nested" })
+  assert.deepEqual(repoLookup(path.join(nested, "a.txt")), { repo: "some/nested" })
+  assert.deepEqual(repoLookup(parent), { repo: "some/parent" })
+}))
+
+test("repoLookup says unavailable for a stat error that is not a missing folder, such as a permission error", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => withRepos(({ root, repo }) => {
+  const { repoLookup } = createDeskReaders({ deskRoot: repo("desk", "git@github.com:Me/My-Desk.git") })
+  const locked = path.join(root, "locked")
+  mkdirSync(path.join(locked, "inner"), { recursive: true })
+  chmodSync(locked, 0)
+  try {
+    assert.deepEqual(repoLookup(path.join(locked, "inner")), { unavailable: true })
+    assert.deepEqual(repoLookup(path.join(locked, "inner", "gone", "x.txt")), { unavailable: true })
+  } finally {
+    chmodSync(locked, 0o755)
+  }
+}))
+
+test("repoLookup says unavailable when Git fails or times out, and none when Git cleanly reports no origin", () => withRepos(({ root, repo }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  const script = (name, body) => {
+    const file = path.join(root, name)
+    writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    return file
+  }
+  assert.deepEqual(createDeskReaders({ deskRoot, git: script("failing.sh", "exit 128") }).repoLookup(code), { unavailable: true })
+  assert.deepEqual(createDeskReaders({ deskRoot, git: path.join(root, "no-such-git") }).repoLookup(code), { unavailable: true })
+  assert.deepEqual(createDeskReaders({ deskRoot, git: script("slow.sh", "sleep 5"), timeoutMs: 100 }).repoLookup(code), { unavailable: true }, "a timeout")
+  assert.deepEqual(createDeskReaders({ deskRoot, git: script("unset.sh", "exit 1") }).repoLookup(code), { none: true }, "exit 1 is `config --get` reporting no origin")
+}))
+
+test("repoOfPath answers null when Git fails or is missing", () => withRepos(({ root, repo }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  const failing = path.join(root, "failing-git.sh")
+  writeFileSync(failing, "#!/bin/sh\nexit 128\n", { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot, git: failing }).repoOfPath(path.join(code, "a.txt")), null)
+  assert.equal(createDeskReaders({ deskRoot, git: path.join(root, "no-such-git") }).repoOfPath(path.join(code, "a.txt")), null)
+  assert.equal(createDeskReaders({ deskRoot }).repoOfPath(path.join(code, "a.txt")), "ourostack/desk")
+}))
+
+test("repoOfPath asks Git once per repository and remembers each directory", () => withRepos(({ repo, loggingGit, gitCalls }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  const code = repo("code", "git@github.com:OurOStack/Desk.git")
+  mkdirSync(path.join(code, "src"))
+  const { repoOfPath } = createDeskReaders({ deskRoot, git: loggingGit })
+  const before = gitCalls().length
+  for (const file of ["a.js", "b.js", "src/c.js", "src/d.js", "src/missing/e.js"]) assert.equal(repoOfPath(path.join(code, file)), "ourostack/desk")
+  const calls = gitCalls().slice(before).filter((line) => line.includes("remote.origin.url"))
+  // One call for the repository and one for the desk's own remote, however many paths and directories.
+  assert.deepEqual(calls.map((line) => line.split(" ")[1]), [code, deskRoot])
+  // A second set of readers has its own memory.
+  assert.equal(createDeskReaders({ deskRoot, git: loggingGit }).repoOfPath(path.join(code, "a.js")), "ourostack/desk")
+  assert.equal(gitCalls().slice(before).filter((line) => line.includes("remote.origin.url")).length, 4)
+}))
+
+test("repoOfPath answers null for the desk repository itself: a path inside the desk, and another clone of the desk's remote", () => withRepos(({ root, repo, loggingGit, gitCalls }) => {
+  const deskRoot = repo("desk", "git@github.com:Me/My-Desk.git")
+  mkdirSync(path.join(deskRoot, "track", "task"), { recursive: true })
+  const { repoOfPath } = createDeskReaders({ deskRoot, git: loggingGit })
+  assert.equal(repoOfPath(path.join(deskRoot, "track", "task", "notes.md")), null)
+  assert.equal(repoOfPath(deskRoot), null)
+  assert.deepEqual(gitCalls().filter((line) => line.includes("remote.origin.url")), [], "a path inside the desk needs no Git call")
+  // The same remote, spelled another way, checked out elsewhere (a second clone or a worktree of the desk).
+  assert.equal(repoOfPath(path.join(repo("desk-again", "https://github.com/me/my-desk"), "track", "x.md")), null)
+  // A desk with no remote still names other repositories, and a desk root that does not exist reads as no desk remote.
+  const local = createDeskReaders({ deskRoot: repo("local-desk", null) })
+  assert.equal(local.repoOfPath(path.join(repo("code", "git@github.com:OurOStack/Desk.git"), "a.js")), "ourostack/desk")
+  assert.equal(createDeskReaders({ deskRoot: path.join(root, "no-desk-here") }).repoOfPath(path.join(root, "code", "a.js")), "ourostack/desk")
+}))

@@ -982,3 +982,50 @@ test("desk_doctor requires repeated misses and reports a supervisor's refusal wi
   assert.equal(requests, 1)
   assert.equal(session.admission.snapshot().repair, null)
 })
+
+test("task_focus answers without write authority or a write gate, and one focus is held for the whole session", async (t) => {
+  const seen = []
+  const runtime = fakeRuntime({
+    callTool: async ({ name, statusContext }) => {
+      seen.push({ name, focus: statusContext.focus, admission: statusContext.admission })
+      return { content: [{ type: "text", text: JSON.stringify({ status: "ok", tool: name }) }] }
+    },
+  })
+  const { session } = await makeSession(t, { runtime, inputs: { policy: { ...unsupported, write_authority: "person" } } })
+  await session.admission.refresh()
+  assert.equal(requirementMet("write", session.context), false, "this session has no write authority")
+  assert.equal(payload(await session.callTool({ name: "task_focus", input: { clear: true } })).status, "ok")
+  await session.callTool({ name: "desk_search", input: {} })
+  await session.callTool({ name: "task_focus", input: { clear: true } })
+  const focusCalls = seen.filter((call) => call.name === "task_focus")
+  assert.equal(focusCalls.length, 2)
+  assert.equal(focusCalls[0].focus, focusCalls[1].focus, "the same holder reaches every call")
+  assert.equal(seen.find((call) => call.name === "desk_search").focus, focusCalls[0].focus)
+  assert.equal(focusCalls[0].admission, undefined)
+  assert.equal(focusCalls[0].focus.get(), null)
+})
+
+test("task_focus waits a bounded time for admission still running, then declares without write authority", async (t) => {
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const runtime = fakeRuntime()
+  // Admission loads the runtime late: the call waits for it, inside the bound.
+  const slow = await makeSession(t, { runtime, loadRuntime: async () => { await gate; return { runtimeServer: runtime, runtimeStatus: {} } }, inputs: { policy: { ...unsupported, write_authority: "person" } } })
+  const pending = slow.session.callTool({ name: "task_focus", input: { clear: true } })
+  await flush()
+  release()
+  const answered = payload(await pending)
+  assert.equal(answered.status, "ok")
+  assert.equal(requirementMet("write", slow.session.context), false, "the declaration gained no write authority")
+})
+
+test("task_focus refuses with the existing message when admission does not finish in the bound", async (t) => {
+  const late = new Promise((resolve) => setTimeout(() => resolve({ outcome: { state: "degraded", code: "artifact_integrity_invalid", fix: "refresh", diagnostic: { reason: "missing_pack" } } }), 400))
+  const { session } = await makeSession(t, { focusWaitMs: 30, loadRuntime: () => late })
+  const started = Date.now()
+  const refused = payload(await session.callTool({ name: "task_focus", input: { clear: true } }))
+  assert.equal(refused.status, "degraded")
+  assert.equal(refused.tool, "task_focus")
+  assert.match(refused.summary, /the desk root and the Desk runtime/u)
+  assert.ok(Date.now() - started < 2000)
+})

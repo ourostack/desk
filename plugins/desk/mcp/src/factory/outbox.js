@@ -87,6 +87,7 @@ import {
   protectLeafFile,
   realpathExistingPrefix,
 } from "./os-protect.js"
+import { freshVisibility } from "./desk-visibility.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { LABELS_SCHEMA, validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
@@ -97,7 +98,6 @@ import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
 const MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const VISIBILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
@@ -760,6 +760,34 @@ const removeNames = (names) => (current) => Object.fromEntries(Object.entries(cu
 const ownNames = (names) => [...new Set(names)].filter((name) => typeof name === "string" && (OUTBOX_NAME_PATTERN.test(name) || LABELS_KEY_PATTERN.test(name)))
 
 /**
+ * `outboxCopies(env, host) -> { store, name }[]`: the facts files in every store's outbox for `host` (`<host>-<session_id>.json`), by store
+ * and name. A store folder is named from its store by `storeSlug`; one that does not read back to a valid store is skipped.
+ */
+export async function outboxCopies(env, host) {
+  const root = await factoryStateRoot(env)
+  const copies = []
+  for (const slug of await listDirSafe(path.join(root, "outbox"))) {
+    const store = slug.replace("__", "/")
+    if (!PATTERNS.prRepo.test(store) || storeSlug(store) !== slug) continue
+    for (const name of await listRegularFiles(path.join(root, "outbox", slug), OUTBOX_NAME_PATTERN)) if (name.startsWith(`${host}-`)) copies.push({ store, name })
+  }
+  return copies
+}
+
+/** `retractionNames(env) -> Set<string>`: the facts file names that any store has a retracting record or tombstone for, or keeps a retracted copy of. */
+export async function retractionNames(env) {
+  const root = await factoryStateRoot(env)
+  const names = new Set()
+  for (const file of (await listDirSafe(path.join(root, "retracting"))).filter((entry) => /^[^.].*\.json$/u.test(entry))) {
+    for (const name of Object.keys(await readJsonFileSafe(path.join(root, "retracting", file), {}, process.platform))) names.add(name)
+  }
+  for (const slug of await listDirSafe(path.join(root, RETRACTED_COPIES))) {
+    for (const name of await listRegularFiles(path.join(root, RETRACTED_COPIES, slug), OUTBOX_NAME_PATTERN)) names.add(name)
+  }
+  return names
+}
+
+/**
  * `markRetracting(env, store, items)`: a session's delete has been pushed. Each `{ name, path, blob }` moves from delivered to retracting: the
  * retracting record is written first and the delivered records are dropped second, so a crash between the two leaves both, which the next flush
  * reads as retracting; the local files stay, so the session can publish again if it routes back.
@@ -887,6 +915,21 @@ export async function recordRoutes(env, routes, { platform = process.platform, r
   }, { platform, env, runner }, isStatusShape)
 }
 
+/**
+ * `recordDeskUnprotected(env, names)`: marks the derivation receipt of each facts file in `names` (a receipt is created when there is none)
+ * with `desk_unprotected: true`, the other keys unchanged. The flush sets it when it publishes a session whose desk's visibility is not
+ * known private. It never clears: a session that was ever published under a desk that was not known private is withheld once its marker is
+ * gone, whatever its desk says now (`flush.js` `deskRepositories`). Local only, never published.
+ */
+export async function recordDeskUnprotected(env, names, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
+    const derivations = { ...current.derivations }
+    for (const name of names) derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), desk_unprotected: true }
+    return { ...current, derivations }
+  }, { platform, env, runner }, isStatusShape)
+}
+
 function assertVisibilityEntries(patch) {
   for (const [key, entry] of Object.entries(patch)) {
     requirePlainObject(entry, `patch[${JSON.stringify(key)}]`)
@@ -899,13 +942,7 @@ function assertVisibilityEntries(patch) {
 export async function readVisibilityCache(env, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   const cache = await readJsonFileSafe(path.join(root, "visibility.json"), {}, platform)
-  const nowMs = Date.parse(now())
-  const fresh = {}
-  for (const [key, entry] of Object.entries(cache)) {
-    if (!isPlainObject(entry)) continue
-    if (nowMs - Date.parse(entry.checked_at) <= VISIBILITY_TTL_MS) fresh[key] = entry
-  }
-  return fresh
+  return freshVisibility(cache, Date.parse(now()))
 }
 
 /** Merges validated `patch` entries into `visibility.json` (also holds the desk's own remote, keyed by its normalized form). Concurrent patches are serialized so none is lost. */

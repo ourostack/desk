@@ -133,7 +133,7 @@ import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
-import { normalizeRemote } from "./binding.js"
+import { deskTimingKept, deskVisibilityOf, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { readDeskRemote } from "./desk-repo.js"
 import { BINDING_VERSION, deriveFile, sweep as sweepMarkers } from "./derive-run.js"
 import {
@@ -153,6 +153,7 @@ import {
   pendingLabels,
   quarantine,
   readConsent,
+  recordDeskUnprotected,
   recordRoutes,
   readDelivered,
   readJobsIndex,
@@ -208,7 +209,6 @@ const HOSTS = Object.freeze(["claude-code", "copilot-cli", "codex-cli"])
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const RATE_LIMIT = /rate limit/iu
 const OFFLINE = /error connecting to|could not resolve|no such host|dial tcp|connection refused|connection reset|network is unreachable|i\/o timeout|TLS handshake timeout|timed out/iu
-const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
 const TIMEOUT = Symbol("timeout")
 // Everything `pendingFiles` is asked about in the listing pass: bytes no
 // delivered record can match, so every outbox file that is not quarantined
@@ -480,14 +480,12 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 // ---------------------------------------------------------------------------
 
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
-const githubRepoOfRemote = (remote) => (remote === null ? null : GITHUB_REMOTE.exec(normalizeRemote(remote))?.[1] ?? null)
 
-async function deskRepositories(markers, { deadline, now }) {
+async function deskRepositories(markers, { deadline, now, receipts }) {
   const byName = new Map()
   const remotes = new Map()
-  for (const marker of markers) {
-    const root = marker.desk_root
-    if (root === null) continue
+  // The GitHub repository a desk root's remote names, read once per root.
+  const repositoryOf = (root) => {
     if (!remotes.has(root)) {
       let remote
       try {
@@ -497,7 +495,28 @@ async function deskRepositories(markers, { deadline, now }) {
       }
       remotes.set(root, githubRepoOfRemote(remote))
     }
-    byName.set(`${marker.host}-${marker.session_id}.json`, remotes.get(root))
+    return remotes.get(root)
+  }
+  for (const marker of markers) {
+    if (marker.desk_root === null) continue
+    const name = `${marker.host}-${marker.session_id}.json`
+    const current = repositoryOf(marker.desk_root)
+    // The receipt's recorded repository is the session's own desk: when the root now names another repository, or none, the desk is uncertain
+    // and the session is published in its protected form. A receipt that recorded none (an older one) keeps the root's answer.
+    const recorded = receipts[name]?.desk_repo
+    byName.set(name, typeof recorded === "string" && !(typeof current === "string" && current.toLowerCase() === recorded.toLowerCase()) ? null : current)
+  }
+  // A session with no marker (pruned, or rebuilt from its transcript) keeps its desk's protection only when the desk is certainly the one it ran
+  // under: its receipt recorded the desk root and the desk's GitHub repository (`desk_repo`), the root still names that same repository, and
+  // no earlier flush published the session under a desk that was not known private (`desk_unprotected`). Anything else (no root, no recorded
+  // repository, another repository now at that path, a root that no longer resolves) leaves the desk unknown, so the session is withheld.
+  for (const name of Object.keys(receipts)) {
+    if (byName.has(name)) continue
+    const root = deskRootOf(receipts, [name])
+    const recorded = receipts[name]?.desk_repo
+    if (root === undefined || typeof recorded !== "string" || receipts[name]?.desk_unprotected === true) continue
+    const current = repositoryOf(root)
+    if (typeof current === "string" && current.toLowerCase() === recorded.toLowerCase()) byName.set(name, current)
   }
   return byName
 }
@@ -513,12 +532,13 @@ function referencedRepos(facts) {
   return repos
 }
 
-async function resolveVisibility(env, client, account, repos, nowIso) {
+// `force` is the repositories (lower case) asked again whatever the cache holds.
+async function resolveVisibility(env, client, account, repos, nowIso, force = new Set()) {
   const cache = await readVisibilityCache(env, { now: nowIso })
-  const known = new Map(Object.entries(cache).map(([repo, entry]) => [repo.toLowerCase(), entry.visibility]))
+  const known = visibilityMap(cache)
   const patch = {}
   for (const repo of [...new Set(repos.map((name) => name.toLowerCase()))].sort()) {
-    if (known.has(repo)) continue
+    if (known.has(repo) && !force.has(repo)) continue
     await client.session(account)
     let answer = await client.api("GET", `repos/${repo}`)
     // The account's own token can 403 or 404 a repository that is genuinely public: a fine-grained token
@@ -547,7 +567,7 @@ function publishOne(local, name, { transform, known, desk, store, secret }) {
     out = transform(local, {
       visibility: (repo) => known.get(repo.toLowerCase()) ?? "unknown",
       // Every GitHub desk remote was resolved with the references; anything else is unknown.
-      deskVisibility: desk ? known.get(desk.toLowerCase()) : "unknown",
+      deskVisibility: deskVisibilityOf(desk, known),
       // The store was resolved with them too; an unknown store is treated as public.
       storeVisibility: known.get(store.toLowerCase()) ?? "unknown",
       machineSecret: secret,
@@ -577,7 +597,7 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
   const desk = factsNamesOf(local.session).map((name) => desks.get(name)).find((repo) => typeof repo === "string")
   let out
   try {
-    out = toPublishedLabels(local, { deskVisibility: desk === undefined ? "unknown" : known.get(desk.toLowerCase()), machineSecret: secret })
+    out = toPublishedLabels(local, { deskVisibility: deskVisibilityOf(desk, known), machineSecret: secret })
   } catch {
     return { reason: "invalid" }
   }
@@ -926,7 +946,7 @@ async function deliver(env, context) {
   const parse = ({ localBytes }) => JSON.parse(localBytes.toString("utf8"))
   const parsed = candidates.filter(({ name }) => here(name)).map((item) => ({ name: item.name, held: item.quarantine, local: parse(item) }))
   const parsedLabels = labelCandidates.filter(({ name }) => here(name)).map((item) => ({ key: item.name, local: parse(item) }))
-  const desks = await deskRepositories(markers, { deadline, now })
+  const desks = await deskRepositories(markers, { deadline, now, receipts })
   // What a file needs resolved: the repositories it references, its desk remote, and the store when it names a plugin.
   const reposOf = ({ name, local }) => [
     ...referencedRepos(local),
@@ -935,6 +955,7 @@ async function deliver(env, context) {
   ]
   const labelsReposOf = ({ local }) => factsNamesOf(local?.session).map((name) => desks.get(name)).filter((repo) => typeof repo === "string")
   const ordinary = parsed.filter(({ held }) => held === null)
+  const askedAfter = nowIso()
   const known = await resolveVisibility(env, client, account, [...ordinary.flatMap(reposOf), ...parsedLabels.flatMap(labelsReposOf)], nowIso)
   // A held file is a retry, never a reason to stop for a repository it cannot resolve: its repositories resolve one file at a time, and a file whose repositories cannot all be resolved keeps its record and waits for a later flush.
   // A file whose repositories are all known already needs no lookup, and no state-root check, so an unchanged held file costs nothing.
@@ -951,13 +972,37 @@ async function deliver(env, context) {
       unresolved.add(item.name)
     }
   }
+  // A session goes out in its plain form only on a private or internal answer asked in this flush: a desk's kept answer that was not asked since
+  // this flush began is asked again, once per desk, whatever its age. A public or unknown answer already withholds and is never asked about. A desk
+  // whose question fails publishes nothing this flush: its sessions stay pending (never published protected and marked), and the count is recorded.
+  const deskRepos = [...new Set([...parsed.map(({ name }) => desks.get(name)), ...parsedLabels.flatMap(labelsReposOf)].filter((repo) => typeof repo === "string").map((repo) => repo.toLowerCase()))]
+  const dated = await readVisibilityCache(env, { now: nowIso })
+  // A desk whose fresh answer failed stays unknown for the rest of this flush, whatever the cache still holds.
+  const distrusted = new Set()
+  for (const repo of deskRepos.filter((repo) => deskTimingKept(known.get(repo)) && !(dated[repo]?.checked_at >= askedAfter))) {
+    try {
+      known.set(repo, (await resolveVisibility(env, client, account, [repo], nowIso, new Set([repo]))).get(repo))
+    } catch {
+      // Whatever stopped the question (offline, a deadline, a refusal), this desk is not known private now; the flush's own deadline check ends it later.
+      known.set(repo, "unknown")
+      distrusted.add(repo)
+    }
+  }
+  const desksOfSession = (names) => names.map((name) => desks.get(name)).filter((repo) => typeof repo === "string").map((repo) => repo.toLowerCase())
+  const deferredName = (name) => desksOfSession([name]).some((repo) => distrusted.has(repo))
+  const deferredLabels = (local) => desksOfSession(factsNamesOf(local?.session)).some((repo) => distrusted.has(repo))
+  const deferred = new Set(parsed.filter(({ name }) => deferredName(name)).map(({ name }) => name))
+  progress.visibilityUnasked = new Set([...deferred].map(sessionOfName)).size
+  // A session published under a desk not known private is marked, so it is never published under a later, more open reading once its marker is gone.
+  const unprotected = parsed.filter(({ name }) => !deferred.has(name) && receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
+  if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
   const secret = await readMachineSecret(env)
   // Where this Desk would publish the outbox files `names` of away sessions now, as `{ path, sha }` by name: used only to find this machine's
   // files in the store, never sent and never quarantined.
   const republish = async (names) => {
     const facts = [...candidates, ...keptCandidates].filter(({ name, quarantine: held }) => names.has(name) && held === null && !name.startsWith("labels/")).map((item) => ({ name: item.name, local: parse(item) }))
     const labels = [...labelCandidates, ...keptCandidates].filter(({ name }) => names.has(name) && name.startsWith("labels/")).map((item) => ({ key: item.name, local: parse(item) }))
-    for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) known.set(repo, visibility)
+    for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) if (!distrusted.has(repo)) known.set(repo, visibility)
     const found = new Map()
     for (const { name, local } of facts) {
       const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
@@ -975,6 +1020,7 @@ async function deliver(env, context) {
   const publishedFile = new Map()
   const released = []
   for (const { name, held, local } of parsed) {
+    if (deferred.has(name)) continue
     const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (out.file) publishedFile.set(name, out.file)
     if (held !== null) {
@@ -991,6 +1037,7 @@ async function deliver(env, context) {
   const labelsByKey = new Map()
   const publishLabels = async (items) => {
     for (const { key, local } of items) {
+      if (deferredLabels(local)) continue
       const out = publishLabelsOne(local, key, { known, desks, secret })
       if (out.bytes) labelsByKey.set(key, out)
       else await quarantine(env, store, key, out.reason)
@@ -1164,7 +1211,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, intakePushed: null, intakePrs: null }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, visibilityUnasked: null, intakePushed: null, intakePrs: null }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -1181,6 +1228,9 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     const routeUnknown = progress.routeUnknown ?? before?.route_unknown
     const retractionStalled = progress.retractionStalled ?? before?.retraction_stalled
     const newerFormat = progress.newerFormat ?? before?.newer_format
+    // Sessions held back for want of a fresh visibility answer, and since when this has gone on without a flush that could ask.
+    const unasked = progress.visibilityUnasked ?? before?.visibility_unasked
+    const unaskedSince = progress.visibilityUnasked === null ? before?.visibility_unasked_since : progress.visibilityUnasked > 0 ? before?.visibility_unasked_since ?? new Date(now()).toISOString() : undefined
     const refused = progress.refused ?? list(before?.refused_retractions)
     // Only a flush that pushed sets it, and only one that found nothing to change, and no PR left open, clears it.
     const intakePushed = progress.intakePushed ?? before?.intake_pushed === true
@@ -1199,6 +1249,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           ...(Number.isSafeInteger(routeUnknown) && routeUnknown > 0 ? { route_unknown: routeUnknown } : {}),
           ...(Number.isSafeInteger(retractionStalled) && retractionStalled > 0 ? { retraction_stalled: retractionStalled } : {}),
           ...(Number.isSafeInteger(newerFormat) && newerFormat > 0 ? { newer_format: newerFormat } : {}),
+          ...(Number.isSafeInteger(unasked) && unasked > 0 ? { visibility_unasked: unasked, ...(typeof unaskedSince === "string" ? { visibility_unasked_since: unaskedSince } : {}) } : {}),
           ...(refused.length > 0 ? { retractions_refused: refused.length, refused_retractions: refused } : {}),
           ...(intakePushed ? { intake_pushed: true } : {}),
           ...(intakePrs.length > 0 ? { intake_prs: intakePrs } : {}),

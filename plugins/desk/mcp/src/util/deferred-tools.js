@@ -11,10 +11,10 @@
 const CLAUDE_HINT =
   "If your host defers tools, Desk's may be listed by name without being loaded: load the exact ones you need before first use " +
   "(Claude Code: ToolSearch `select:mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status`; every Desk tool is `mcp__plugin_desk_desk__<name>`: " +
-  "task_update, task_create, task_move, task_archive, desk_status, desk_search and the rest)."
+  "task_update, task_create, task_move, task_archive, task_focus, desk_status, desk_search and the rest)."
 
 const COPILOT_HINT =
-  "Desk's tools are named `desk-<name>` here, such as `desk-task_update`, `desk-task_create`, `desk-task_move`, `desk-task_archive` and `desk-desk_status`: " +
+  "Desk's tools are named `desk-<name>` here, such as `desk-task_update`, `desk-task_create`, `desk-task_move`, `desk-task_archive`, `desk-task_focus` and `desk-desk_status`: " +
   "call them as tools (never through the shell), and if one is not in your tool list, look it up by that name before concluding it is missing."
 
 const GENERIC_HINT =

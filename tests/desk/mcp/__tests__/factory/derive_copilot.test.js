@@ -338,8 +338,8 @@ test("binding events: Desk task tools with track and slug, and only successful f
   try {
     const { events } = await derive(home, SESSIONS.full)
     assert.deepEqual(events.deskToolCalls, [
-      { at: at(25), name: "desk-task_update", track: `${SENTINEL}-track`, slug: `${SENTINEL}-slug`, person: null, status: `${SENTINEL}-status`, agent: 0, ok: true },
-      { at: at(27), name: "desk-task_create", track: `${SENTINEL}-track`, slug: `${SENTINEL}-other`, person: `${SENTINEL}-person`, status: null, agent: 0, ok: false },
+      { at: at(25), name: "desk-task_update", track: `${SENTINEL}-track`, slug: `${SENTINEL}-slug`, person: null, status: `${SENTINEL}-status`, statusOnly: false, agent: 0, ok: true },
+      { at: at(27), name: "desk-task_create", track: `${SENTINEL}-track`, slug: `${SENTINEL}-other`, person: `${SENTINEL}-person`, status: null, statusOnly: false, agent: 0, ok: false },
     ])
     assert.deepEqual(events.fileWrites, [
       { at: at(10), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md`, agent: 0 },
@@ -974,12 +974,12 @@ test("only a successful bash or powershell git commit call becomes a shellGitCom
   )
   const { facts, events } = await deriveText(lines)
   assert.deepEqual(events.shellGitCommits, [
-    { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, agent: 0 },
-    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, agent: 0 },
-    { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, agent: 0 },
-    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed`, agent: 0 },
-    { start: at(17), end: at(18), cwd: null, agent: 0 },
-    { start: at(22), end: at(23), cwd: null, agent: 0 },
+    { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, paths: [], agent: 0 },
+    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, paths: [], agent: 0 },
+    { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, paths: [], agent: 0 },
+    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed`, paths: [], agent: 0 },
+    { start: at(17), end: at(18), cwd: null, paths: [], agent: 0 },
+    { start: at(22), end: at(23), cwd: null, paths: [], agent: 0 },
   ])
   assert.ok(!JSON.stringify(facts).includes(COMMIT_MESSAGE_SENTINEL))
   assert.ok(!JSON.stringify(facts).includes(SENTINEL), "the planted directories never reach facts")
@@ -997,7 +997,7 @@ test("a session.start with no readable context leaves the directory unknown", as
     ev("tool.execution_complete", 4, { toolCallId: "g2", success: true }),
   ]
   const { events } = await deriveText(lines)
-  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, agent: 0 }, { start: at(3), end: at(4), cwd: "/abs", agent: 0 }])
+  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, paths: [], agent: 0 }, { start: at(3), end: at(4), cwd: "/abs", paths: [], agent: 0 }])
 })
 
 test("nativeCommitShas carries this session's session_refs commits, which bind directly", async () => {
@@ -1114,4 +1114,196 @@ test("spawn prompts: each worker gets its own Desk-Task line; a malformed or rep
   const { events } = await deriveText(lines)
   assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "one" }, { agent: 5, track: "eng", slug: "two" }])
   assert.ok(!JSON.stringify(events.spawnTasks).includes(SENTINEL))
+})
+
+// --- Declared focus: focus calls, spawns, own-commit paths, shell writes, status ---
+
+test("a successful task_focus call becomes a focusCall at its start time; failed and invalid ones yield nothing, and it is not a deskToolCall", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { facts, events } = await deriveText([
+    start(ev),
+    ...run("f1", 1, "desk-task_focus", { track: "desk-plugin", slug: "some-task" }), // 1
+    ...run("f2", 3, "desk-task_focus", { track: "other", slug: "failed" }, { success: false }),
+    ...run("f3", 5, "desk-task_focus", { clear: true }), // 5
+    ...run("f4", 7, "desk-task_focus", { track: "..", slug: "bad" }),
+    ...run("f5", 9, "desk-task_focus", {}),
+    ...run("f6", 11, "desk-task_focus", "not an object"),
+    ...run("f7", 13, "desk-task_focus", { track: 4, slug: "x", note: SENTINEL }),
+    ev("tool.execution_start", 15, { toolCallId: "f8", toolName: null, arguments: { clear: true } }),
+    ev("tool.execution_complete", 16, { toolCallId: "f8", success: true }),
+  ])
+  assert.deepEqual(events.focusCalls, [
+    { agent: 0, at: at(1), track: "desk-plugin", slug: "some-task" },
+    { agent: 0, at: at(5), clear: true },
+  ])
+  assert.deepEqual(events.deskToolCalls, [])
+  assert.equal(JSON.stringify(facts).includes("some-task"), false)
+  assertValid(facts)
+})
+
+test("a subagent's task_focus call carries the subagent's agent number", async () => {
+  const ev = eventWriter()
+  const { events } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "t1", toolName: "task", arguments: { prompt: "x" } }),
+    ev("subagent.started", 2, { toolCallId: "t1", model: "gpt-5.2" }),
+    ev("tool.execution_start", 3, { toolCallId: "f1", toolName: "desk-task_focus", arguments: { track: "a", slug: "b" }, parentToolCallId: "t1" }),
+    ev("tool.execution_complete", 4, { toolCallId: "f1", success: true }),
+  ])
+  assert.deepEqual(events.focusCalls, [{ agent: 1, at: at(3), track: "a", slug: "b" }])
+})
+
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { facts, events } = await deriveText([
+    start(ev),
+    ...run("c1", 1, "desk-task_create", { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }), // 1
+    ...run("c2", 3, "desk-task_create", { track: "desk-plugin", slug: "parked", focus: false }),
+    ...run("c3", 5, "desk-task_create", { track: "desk-plugin", slug: "truthy", focus: "true" }),
+    ...run("c4", 7, "desk-task_create", { track: "desk-plugin", slug: "failed", focus: true }, { success: false }),
+    ...run("c5", 9, "desk-task_create", { track: "..", slug: "bad", focus: true }),
+    ...run("c6", 11, "desk-task_create", { track: "desk-plugin", focus: true }),
+    ...run("c7", 13, "desk-task_create", { track: "desk-plugin", slug: "plain" }),
+    ...run("c8", 15, "desk-task_update", { track: "desk-plugin", slug: "updated", focus: true }),
+    ...run("c9", 17, "desk-task_create", "not an object"),
+  ])
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: at(1), track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assertValid(facts)
+})
+
+test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
+  const ev = eventWriter()
+  const inputs = [
+    { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },
+    { track: "a", slug: "b", frontmatter: { status: "done" }, progress: "x" },
+    { track: "a", slug: "b", person: "p", frontmatter: { status: "doing" } },
+    { track: "a", slug: "b", status: "blocked" },
+    { track: "a", slug: "b", frontmatter: { status: "done", title: "t" } },
+    { track: "a", slug: "b", frontmatter: "not json" },
+    { track: "a", slug: "b", frontmatter: "[1]" },
+    { track: "a", slug: "b", frontmatter: 7 },
+    { track: "a", slug: "b", frontmatter: { status: 4 } },
+    { track: "a", slug: "b", frontmatter: {} },
+    { track: "a", slug: "b" },
+  ]
+  const lines = [start(ev)]
+  inputs.forEach((input, index) => lines.push(
+    ev("tool.execution_start", 1 + index * 2, { toolCallId: `u${index}`, toolName: "desk-task_update", arguments: input }),
+    ev("tool.execution_complete", 2 + index * 2, { toolCallId: `u${index}`, success: true }),
+  ))
+  const { events } = await deriveText(lines)
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [
+    { status: "done", statusOnly: true },
+    { status: "done", statusOnly: false },
+    { status: "doing", statusOnly: true },
+    { status: "blocked", statusOnly: false },
+    { status: "done", statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+  ])
+})
+
+test("a top-level status that is not a string reads as no status", async () => {
+  const ev = eventWriter()
+  const { events } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "u1", toolName: "desk-task_update", arguments: { track: "a", slug: "b", status: 5 } }),
+    ev("tool.execution_complete", 2, { toolCallId: "u1", success: true }),
+  ])
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [{ status: null, statusOnly: false }])
+})
+
+test("every subagent appears in spawns with its parent, its subagent.started time and its task, and prRefs is empty", async () => {
+  const ev = eventWriter()
+  const { events, facts } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "t1", toolName: "task", arguments: { prompt: "Desk-Task: eng/one" } }),
+    ev("subagent.started", 2, { toolCallId: "t1", model: "gpt-5.2" }), // 2
+    ev("tool.execution_start", 3, { toolCallId: "t2", toolName: "task", arguments: { prompt: "no line" }, parentToolCallId: "t1" }),
+    ev("subagent.started", 4, { toolCallId: "t2", model: "gpt-5.2" }),
+  ])
+  assert.deepEqual(events.spawns, [
+    { agent: 1, parent: 0, at: at(2), task: { track: "eng", slug: "one" } },
+    { agent: 2, parent: 1, at: at(4), task: null },
+  ])
+  assert.deepEqual(events.prRefs, [])
+  assert.equal("prRefs" in facts, false)
+})
+
+test("a bash git add and commit gives shellGitCommits paths, a redirect gives fileWrites, only when the call succeeded", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, command, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: { command } }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { events, facts } = await deriveText([
+    start(ev),
+    ...run("g1", 1, "bash", "git add t/s/task.md && git commit -qm x"), // 1
+    ...run("g2", 3, "bash", "echo hi > out.txt"), // 3
+    ...run("g3", 5, "bash", "echo no > failed.txt && git add f.md && git commit -m x", { success: false }),
+    ...run("g4", 7, "bash", "git commit -m x"),
+    ...run("g5", 9, "powershell", "Set-Content -Path a.txt x"),
+  ])
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: `/tmp/${SENTINEL}`, paths: [`/tmp/${SENTINEL}/t/s/task.md`] },
+    { cwd: `/tmp/${SENTINEL}`, paths: [] },
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+    { at: at(3), path: `/tmp/${SENTINEL}/out.txt`, agent: 0 },
+  ])
+  assert.equal(JSON.stringify(facts).includes("task.md"), false)
+})
+
+test("desk_save paths become fileWrites when the call succeeded, and a failed, pathless or malformed call gives none", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: "desk-desk_save", arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { events } = await deriveText([
+    start(ev),
+    ...run("d1", 1, { paths: ["notes/a.md", "notes/b.md", 5] }), // 1
+    ...run("d2", 3, { paths: ["failed.md"] }, { success: false }),
+    ...run("d3", 5, { content: "x" }),
+    ...run("d4", 7, "not an object"),
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+    { at: at(1), path: "notes/a.md", agent: 0 },
+    { at: at(1), path: "notes/b.md", agent: 0 },
+  ])
+  assert.deepEqual(events.deskToolCalls, [])
+})
+
+test("sentinel: the focus, spawn, path and write events never carry prompt, command or content text, and facts stay clean", async () => {
+  const ev = eventWriter()
+  const { events, facts } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "s1", toolName: "desk-task_focus", arguments: { track: "a", slug: "b", note: SENTINEL } }),
+    ev("tool.execution_complete", 2, { toolCallId: "s1", success: true, result: { content: SENTINEL } }),
+    ev("tool.execution_start", 3, { toolCallId: "s2", toolName: "bash", arguments: { command: `echo ${SENTINEL} > out.txt && git add x.md && git commit -m ${SENTINEL}` } }),
+    ev("tool.execution_complete", 4, { toolCallId: "s2", success: true }),
+    ev("tool.execution_start", 5, { toolCallId: "s3", toolName: "desk-desk_save", arguments: { paths: ["p.md"], content: SENTINEL } }),
+    ev("tool.execution_complete", 6, { toolCallId: "s3", success: true }),
+    ev("tool.execution_start", 7, { toolCallId: "s4", toolName: "task", arguments: { prompt: `${SENTINEL}\nDesk-Task: a/b` } }),
+    ev("subagent.started", 8, { toolCallId: "s4", model: "gpt-5.2" }),
+  ])
+  assert.equal(JSON.stringify(events.fileWrites).includes("echo"), false)
+  assert.equal(JSON.stringify(events.spawns).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
 })

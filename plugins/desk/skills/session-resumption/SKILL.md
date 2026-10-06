@@ -72,7 +72,7 @@ The two cycles include graceful handover and abrupt mid-batch interruption, with
 $DESK/<track>/<task>/task.md
 ```
 
-note: `status`, `planning_complete` (if set), `repos[]`, any `collaborating`/`blocked` reason fields. the card is the memory of what was happening; read it before reaching for anything else.
+note: `status`, `planning_complete` (if set), `repos[]`, any `collaborating`/`blocked` reason fields. the card is the memory of what was happening; read it before reaching for anything else. Then the main agent calls `task_focus` for this task, unless `session-start` already did.
 
 ## Check the repo workspaces
 

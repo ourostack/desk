@@ -99,3 +99,21 @@ export function localDate(now = new Date()) {
   const two = (value) => String(value).padStart(2, "0")
   return `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`
 }
+
+/**
+ * The last `count` entries of the card's `## Progress log` section (the first such heading outside a fenced code
+ * block), oldest first: each list item is one entry, trimmed of its bullet and cut to `cap` characters with an
+ * ellipsis. A card with no such section has no entries.
+ */
+export function recentProgress(body, count, cap) {
+  const { lines, fenced } = scan(body)
+  const heading = lines.findIndex((line, index) => !fenced[index] && line.trim() === PROGRESS_HEADING)
+  if (heading === -1) return []
+  const entries = []
+  for (let index = heading + 1; index < lines.length && (fenced[index] || !/^## /u.test(lines[index])); index += 1) {
+    if (fenced[index] || !LIST_ITEM.test(lines[index])) continue
+    const entry = lines[index].replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, "").trim()
+    if (entry !== "") entries.push(entry.length > cap ? `${entry.slice(0, cap - 1)}…` : entry)
+  }
+  return entries.slice(-count)
+}

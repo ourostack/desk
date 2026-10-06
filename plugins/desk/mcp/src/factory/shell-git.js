@@ -1,11 +1,13 @@
-// Finds `git … commit` invocations in one shell command and says which
-// directory each ran in. Binding (M3-4) matches a desk commit to the
+// Finds `git … commit` and `git … add` invocations in one shell command, says
+// which directory each ran in and which paths it names, and lists the files
+// the command writes with `>`, `>>` and `tee`. Binding (M3-4) matches a desk commit to the
 // session's own `git commit` calls by time, because agents commit with
 // `git commit -q`, which prints no hash.
 //
 // Privacy. The command is read in memory only. `gitCommitCwds` returns
-// directories and nothing else: never the command, the commit message, an
-// option or any other argument. Callers keep the directories in binding
+// directories and nothing else; `shellEffects` returns directories and
+// absolute paths: never the command, the commit message, an option or any
+// other argument. Callers keep the directories in binding
 // events, which never leave the machine and never reach facts.
 //
 // What it understands. It splits the command into simple commands on
@@ -60,6 +62,17 @@ const GIT_OPTIONS_WITH_VALUE = new Set(["-c", "--namespace", "--super-prefix", "
 const GIT_ELSEWHERE_OPTION = /^--(?:git-dir|work-tree)(?:=|$)/u
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u
 const EXPORTS = new Set(["export", "declare", "typeset", "readonly"])
+const PATH_SUBCOMMANDS = new Set(["commit", "add"])
+const WRITE_OPERATORS = new Set([">", ">>", ">|"])
+// Per subcommand: flags that mean "the whole tree", and options whose value is
+// the next word (and so is not a path).
+const WHOLE_TREE_SHORT = { commit: new Set(["a"]), add: new Set(["A", "u"]) }
+const WHOLE_TREE_LONG = { commit: new Set(["all"]), add: new Set(["all", "update"]) }
+const VALUE_SHORT = { commit: new Set(["m", "F", "C", "c", "t"]), add: new Set() }
+const VALUE_LONG = {
+  commit: new Set(["message", "file", "author", "date", "reuse-message", "reedit-message", "template", "cleanup", "trailer", "fixup", "squash", "pathspec-from-file"]),
+  add: new Set(["pathspec-from-file"]),
+}
 
 const DIALECTS = {
   posix: {
@@ -315,19 +328,13 @@ function commandStart(words) {
   return index
 }
 
-// After a `--git-dir`/`--work-tree` option: `null` if this is still a commit
-// (its directory is unknown), `undefined` if not.
-function scanToCommit(words, index) {
-  let next = index + 1
-  if (!words[index].text.includes("=")) next += 1
-  while (next < words.length && words[next].text.startsWith("-")) next += words[next].text === "-C" || GIT_OPTIONS_WITH_VALUE.has(words[next].text) ? 2 : 1
-  return next < words.length && words[next].text === "commit" ? null : undefined
-}
-
-// The directory a `git … commit` in `words` (starting after `git`) runs in,
-// `undefined` when it is not a commit.
-function gitCommitDirectory(words, start, current, options) {
+// The `git … commit` or `git … add` invocation in `words` (starting after
+// `git`): its subcommand, the `-C` steps, whether `--git-dir`/`--work-tree`
+// points Git elsewhere, and the words after the subcommand. `undefined` when
+// it is neither.
+function gitInvocation(words, start) {
   const steps = []
+  let elsewhere = false
   let index = start
   while (index < words.length) {
     const text = words[index].text
@@ -335,7 +342,8 @@ function gitCommitDirectory(words, start, current, options) {
       steps.push(words[index + 1])
       index += 2
     } else if (GIT_ELSEWHERE_OPTION.test(text)) {
-      return scanToCommit(words, index)
+      elsewhere = true
+      index += text.includes("=") ? 1 : 2
     } else if (GIT_OPTIONS_WITH_VALUE.has(text)) {
       index += 2
     } else if (text.startsWith("-")) {
@@ -344,8 +352,60 @@ function gitCommitDirectory(words, start, current, options) {
       break
     }
   }
-  if (index >= words.length || words[index].text !== "commit") return undefined
-  return steps.reduce((directory, step) => applyStep(directory, step, options), current)
+  if (index >= words.length || !PATH_SUBCOMMANDS.has(words[index].text)) return undefined
+  return { subcommand: words[index].text, steps, elsewhere, operands: words.slice(index + 1) }
+}
+
+// The absolute paths a `git add` or `git commit` names, resolved against
+// `directory`. Option words and the values of options that take one are
+// skipped; `--` ends the options and is not itself a path. A whole-tree
+// flag (`-A`, `--all`, `-u`, `-a`, `-am`) or the operand `.` names no
+// specific path, so the list is empty then.
+function gitNamedPaths(subcommand, operands, directory, options) {
+  const wholeShort = WHOLE_TREE_SHORT[subcommand]
+  const wholeLong = WHOLE_TREE_LONG[subcommand]
+  const valueShort = VALUE_SHORT[subcommand]
+  const valueLong = VALUE_LONG[subcommand]
+  const named = []
+  let wholeTree = false
+  let optionsDone = false
+  for (let index = 0; index < operands.length; index += 1) {
+    const { text } = operands[index]
+    if (!optionsDone && text === "--") {
+      optionsDone = true
+    } else if (!optionsDone && text.startsWith("--")) {
+      const [name, ...attached] = text.slice(2).split("=")
+      if (wholeLong.has(name)) wholeTree = true
+      else if (attached.length === 0 && valueLong.has(name)) index += 1
+    } else if (!optionsDone && text.startsWith("-") && text.length > 1) {
+      for (let at = 1; at < text.length; at += 1) {
+        if (wholeShort.has(text[at])) {
+          wholeTree = true
+        } else if (valueShort.has(text[at])) {
+          if (at === text.length - 1) index += 1
+          break
+        }
+      }
+    } else if (text !== "" && text !== ".") {
+      named.push(operands[index])
+    }
+  }
+  if (wholeTree) return []
+  const paths = []
+  for (const word of named) {
+    const resolved = applyStep(directory, word, options)
+    if (resolved !== null && !paths.includes(resolved)) paths.push(resolved)
+  }
+  return paths
+}
+
+// Resolves the file a redirection or `tee` writes, or `null` when it is not a
+// literal path (`/dev/...`, a variable, a command substitution).
+function writeTarget(current, word, options) {
+  if (word === undefined || word.op || word.scope) return null
+  const resolved = applyStep(current, word, options)
+  if (resolved === null || resolved.startsWith("/dev/")) return null
+  return resolved
 }
 
 function changeDirectory(args, current, options) {
@@ -359,27 +419,34 @@ function changeDirectory(args, current, options) {
 }
 
 /**
- * `gitCommitCwds({ command, cwd, home, dialect }) -> Array<string | null>`:
- * the directory of each `git … commit` in `command`, in order and without
- * repeats; `null` for one whose directory can't be known. `cwd` is the
- * directory the command started in, `home` the user's home folder, and
- * `dialect` is `"posix"` (default) or `"powershell"`. Nothing else from the
- * command is ever returned.
+ * `shellEffects({ command, cwd, home, dialect }) -> { commits, adds, writes }`:
+ * what one shell command does that the factory binds a session by, in order.
+ * `commits` and `adds` hold one `{ cwd, paths }` per `git … commit` and
+ * `git … add`: `cwd` as in `gitCommitCwds` (`null` when unknown) and `paths`
+ * the absolute files the command names (`[]` for `-A`, `.`, `-a`, `-am`).
+ * `writes` lists the absolute files that `>`, `>>` and `tee` write. It never
+ * throws: a command it cannot read gives empty lists.
  */
-export function gitCommitCwds({ command, cwd, home, dialect = "posix" }) {
-  // Most shell calls never mention a commit; they are not tokenized at all.
-  if (typeof command !== "string" || !command.includes("commit")) return []
+export function shellEffects({ command, cwd, home, dialect = "bash" }) {
+  const effects = { commits: [], adds: [], writes: [] }
+  // Most shell calls never touch any of these; they are not tokenized at all.
+  if (typeof command !== "string" || !/commit|add|tee|>/u.test(command)) return effects
   const options = { dialect: DIALECTS[dialect] ?? DIALECTS.posix, home }
   const { dialect: shell } = options
   let current = typeof cwd === "string" ? cwd : null
   // Once GIT_DIR or GIT_WORK_TREE is set for the rest of the command.
   let elsewhere = false
-  const found = []
+  const note = (target) => {
+    if (target !== null && !effects.writes.includes(target)) effects.writes.push(target)
+  }
   for (const raw of tokenize(command, shell)) {
     if (raw[0].scope) {
       current = null
       continue
     }
+    raw.forEach((word, index) => {
+      if (word.op && WRITE_OPERATORS.has(word.text)) note(writeTarget(current, raw[index + 1], options))
+    })
     const words = withoutRedirections(raw)
     const start = commandStart(words)
     const prefixSetsGitEnv = words.slice(0, start).some((word) => shell.gitEnv.test(word.text))
@@ -394,11 +461,38 @@ export function gitCommitCwds({ command, cwd, home, dialect = "posix" }) {
       current = changeDirectory(words.slice(start + 1), current, options)
     } else if (shell.stack.has(name)) {
       current = null
+    } else if (name === "tee") {
+      let optionsDone = false
+      for (const word of words.slice(start + 1)) {
+        if (!optionsDone && word.text === "--") optionsDone = true
+        else if (optionsDone || !word.text.startsWith("-")) note(writeTarget(current, word, options))
+      }
     } else if (name === "git") {
-      let directory = gitCommitDirectory(words, start + 1, current, options)
-      if (directory !== undefined && (elsewhere || prefixSetsGitEnv)) directory = null
-      if (directory !== undefined && !found.includes(directory)) found.push(directory)
+      const invocation = gitInvocation(words, start + 1)
+      if (invocation === undefined) continue
+      const directory =
+        invocation.elsewhere || elsewhere || prefixSetsGitEnv
+          ? null
+          : invocation.steps.reduce((where, step) => applyStep(where, step, options), current)
+      const paths = gitNamedPaths(invocation.subcommand, invocation.operands, directory, options)
+      effects[invocation.subcommand === "commit" ? "commits" : "adds"].push({ cwd: directory, paths })
     }
+  }
+  return effects
+}
+
+/**
+ * `gitCommitCwds({ command, cwd, home, dialect }) -> Array<string | null>`:
+ * the directory of each `git … commit` in `command`, in order and without
+ * repeats; `null` for one whose directory can't be known. `cwd` is the
+ * directory the command started in, `home` the user's home folder, and
+ * `dialect` is `"posix"` (default) or `"powershell"`. Nothing else from the
+ * command is ever returned.
+ */
+export function gitCommitCwds({ command, cwd, home, dialect = "posix" }) {
+  const found = []
+  for (const { cwd: directory } of shellEffects({ command, cwd, home, dialect }).commits) {
+    if (!found.includes(directory)) found.push(directory)
   }
   return found
 }

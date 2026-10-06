@@ -1,93 +1,124 @@
-// Binding: decides which Desk tasks (jobs) one session worked on, from the
-// in-memory binding events a deriver returns (`derive-claude.js`,
-// `derive-copilot.js`).
+// Binding: decides which Desk tasks (jobs) one session worked on, and which of
+// its workers belong to each, from the in-memory events a deriver returns
+// (`derive-claude.js`, `derive-codex.js`, `derive-copilot.js`).
 //
-// A session binds task T when any of these holds (research §4, M3-4 brief):
-//   - `desk_tool`: a successful Desk task tool call (`task_create`,
-//     `task_update`, `task_archive`) names T. Its valid `status` values
-//     become T's `transitions`, `at` being the call time, in time order.
-//     The person desk is the caller's `personPrefix`: Desk's task tools take
-//     it from the server's `--person` flag, never from the call.
-//   - `file_write`: a successful file write lands in T's folder,
+// A job is one durable outcome, recorded as one task card. Everything a
+// session tree does while working an outcome belongs to that outcome's job:
+// the controller (worker 0), every subagent, and the time spent briefing,
+// waiting on and reading back from them. Mentioning, filing, tidying or
+// updating another card is not working on it, and binds nothing.
+//
+// The controller's timeline (`focus.js` has the rules). Worker 0's
+// `task_focus` calls, and its `task_create` calls with `focus: true`
+// (`events.focusCalls` holds both), cut the session into declared stretches. A stretch with no declaration is inferred from the session
+// tree's evidence events:
+//   - `write`: a file write under a task's folder,
 //     `<deskRoot>/[<personPrefix>/]<track>/<task>/…` or
-//     `<track>/_archive/<task>/…`.
-//   - `desk_commit`: a desk commit changed files in T's folder, and either
-//     (a) this clone made the commit (a commit, initial-commit, amend or
-//     merge-commit reflog entry, from `deskCommitsBetween`) at a time
-//     inside one of the session's own
-//     successful `git … commit` shell calls that ran in the desk
-//     (`events.shellGitCommits`), or (b) the commit is one of the session's
-//     native refs (`events.nativeCommitShas`, Copilot's `session_refs`) and
-//     exists in the desk. Agents rarely use the Desk task tools and commit
-//     with `git commit -q`, which prints no hash, so the commit basis never
-//     depends on hashes in tool output: the Claude deriver's
-//     `events.commitShas`, scraped from output, never binds, since `git log`
-//     output alone would bind other sessions' commits. Desk history is read
-//     once per session, over the span from the first call's start to the
-//     last call's end, and each commit is then matched to the calls.
-//     Commits fetched or pulled from another clone or machine have no
-//     `commit` entry here, so they never bind; a commit later rebased keeps
-//     its original entry and time.
-//     One ambiguity remains: two sessions on the same clone whose successful
-//     `git commit` calls overlap in time both bind a commit made in the
-//     overlap. It is rare, and it only adds that session's time to the job,
-//     so both are bound rather than guessing which one made it.
-// Reads never bind (no deriver emits them). Paths outside the desk, relative
-// paths, and paths under `_meta/`, `_friction/`, `_planning/`, the top-level
-// `_archive/`, a dot folder, or directly in a track (such as `track.md`) bind
-// nothing.
+//     `<track>/_archive/<task>/…` (`events.fileWrites`: file tools, shell
+//     redirects and `desk_save` paths; a relative path is a `desk_save` path
+//     and resolves against the desk root).
+//   - `tool`: a successful Desk task tool call naming the task
+//     (`events.deskToolCalls`), other than `task_create` and a status-only
+//     `task_update`. The person desk is the caller's `personPrefix`: Desk's
+//     task tools take it from the server's `--person` flag, never from the call.
+//   - `spawn`: a subagent's brief carrying a `Desk-Task:` line for the task
+//     (`events.spawns`), at the spawn's time, as its parent's event.
+//   - `commit`: one of the session's own `git … commit` shell calls whose
+//     `git add` or `git commit` names a path at or under the task's folder
+//     (`events.shellGitCommits[].paths`). A call naming no path (`git add -A`,
+//     `git add .`, `git commit -am`) counts for nothing, and so does one naming
+//     more than MASS_COMMIT_TASKS tasks, a sweep. Desk history is never read by
+//     time: another session's commit that lands while this one's `git commit`
+//     runs binds nothing. A commit from the session's native refs
+//     (`events.nativeCommitShas`, Copilot's `session_refs`) that exists in the
+//     desk is the session's own too, and counts for the tasks it changed
+//     (`taskCommitRule`). It has no time, so it counts toward candidacy only
+//     and never earns a task time over another.
+//   - `repo`: work in a code repository. A file write outside the desk, one of
+//     the session's `git … commit` calls that ran outside the desk or named a
+//     path there (one event for each repository the call touches, at its
+//     start), and a pull request the session created (`events.prRefs` with
+//     `created: true`). `repoLookup` names the repository a path is in; a path
+//     it cannot name is no evidence, never a guess, and its directory is
+//     counted in `repoUnresolved` only when the evidence was not available. A `repo` event counts only for the one card
+//     that lists the repository and has another event (`focus.js`).
+// Events of a subagent bound by a `Desk-Task:` line, and of the subagents
+// below it, are left out: that subtree has its own job. Reads never bind (no
+// deriver emits them). Paths outside the desk, and paths under `_meta/`,
+// `_friction/`, `_planning/`, the top-level `_archive/`, a dot folder, or
+// directly in a track (such as `track.md`) name no task. A task whose card is
+// found neither live nor archived is not a task: its events are dropped, a
+// focus on it holds its stretch for no job, and a `Desk-Task:` line for it is
+// ignored.
 //
-// A `desk_commit` whose only change inside a task's folder is the card
-// itself, `task.md` (matched case-insensitively), binds only when that
-// change is real. The commit's diff of the card is read
-// (`isCardHousekeeping`), and the touch is dropped when the card was
-// renamed or moved with no content change (an exact, R100-equivalent
-// rename) or when the only lines that differ are frontmatter `title:`,
-// `track:` or `updated:`. A changed `status`, a changed body (so a
-// checkbox toggle or a progress note binds), or any other changed
-// frontmatter field makes it a real touch, and it binds. A `file_write`
-// cannot be read this way: the deriver hands the binder a path only, never
-// the write's or edit's content, so a bare-card `file_write` always binds,
-// the same as any other write in the folder — that is how a hand-edited
-// card (`skills/task-lifecycle` has agents toggle checkboxes and add
-// progress notes this way, since `task_update` cannot) still counts as
-// work. `task_update`, `task_create` and `task_archive` bind their task
-// precisely through `desk_tool` either way. A task whose card is found
-// neither live nor archived is not a job. A session with no jobs gets
-// `jobs: []`.
+// Workers. Worker 0 is in every job that holds part of its timeline. Each
+// subagent is in at most one job, chosen in this order: the task of its
+// `Desk-Task:` line; else, for a nested subagent, its parent's job; else the
+// job that held the controller's timeline when it was spawned
+// (`events.spawns[].at`). A subagent with no spawn time, spawned while the
+// controller had no job, or whose parent cannot be traced, is in no job. A
+// subagent's own touches never create a job, and a subagent that keeps
+// running, or is resumed, after the controller moves on keeps its job.
 //
-// Output. `{ jobs: LocalJob[] }`, sorted by job ID, where `LocalJob` is
-// `{ job, basis, task_created_at, transitions, observed }`: the hashed job
-// ID only, never a track, slug, title or path. `basis` follows
-// `ENUMS.jobBasis` order. `task_created_at` is the card's `created`, or
-// `null` when unreadable. `observed` is the card's status now — `{ status,
-// at }`, `at` being the card's `updated` for a terminal status (`done`,
-// `cancelled`) and otherwise `null` — or `null` when the card has no valid
-// status. Jobs and transitions are capped at the facts limits.
+// Output. `{ jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs }`.
+//   - `jobs` is `LocalJob[]`, sorted by job ID: `{ job, basis, agents,
+//     task_created_at, transitions, observed, segments? }`, the hashed job ID
+//     only, never a track, slug, title or path. `agents` lists the job's
+//     workers. `segments` are the spans of the session, in milliseconds from
+//     its start, that worker 0's timeline gives the job. They are present
+//     exactly when `agents` lists worker 0, even for a session with one job, so
+//     a cleared or unbound stretch is never counted; no two jobs' segments
+//     overlap; and a job keeps at most `LIMITS.jobSegments` (`capSegments`).
+//     `basis` follows `ENUMS.jobBasis` order: `desk_tool` for a declared task
+//     or `tool` evidence, `file_write`, `desk_commit` and `spawn_brief` for the
+//     other evidence of a job worker 0 is in, `spawn_brief` for a subagent's
+//     own line and `inherited` for a subagent placed by its parent or its spawn
+//     time. `transitions` are the valid statuses of the session's successful
+//     task tool calls on that job, `at` being the call time, in time order; a
+//     status change on a card that is not one of the session's jobs is not
+//     recorded. `task_created_at` is the card's `created`, or `null` when
+//     unreadable. `observed` is the card's status now — `{ status, at }`, `at`
+//     being the card's `updated` for a terminal status (`done`, `cancelled`)
+//     and otherwise `null` — or `null` when the card has no valid status.
+//     Jobs and transitions are capped at the facts limits.
+//   - `boundBy` maps a job ID to `focus` or `inferred`, for the jobs worker 0
+//     is in. `disagrees` lists the declared jobs with a stretch that holds
+//     none of their own events and ten or more on another task.
+//   - `ownActivity` is up to 500 `[start_ms, end_ms]` spans, in milliseconds
+//     from the session's start (they may run before it or past its end): the
+//     session's `git commit` calls that ran in the desk and each successful
+//     task tool call widened by a minute each way, merged where they touch.
+//     `factory reconcile` matches desk commits to the session with it.
+//   - `repoUnresolved` is how many distinct directories outside the desk the
+//     session wrote or committed in whose repository evidence was not
+//     available: the directory is gone (ENOENT, ENOTDIR), any other stat
+//     error, or Git failed or timed out. A directory that exists and is in no
+//     repository, or in one with no origin, is a true none and is not
+//     counted. A number, never a path.
+//   - `segmentsCappedMs` is the time the segment cap dropped (`capSegments`
+//     reports it): 0 only when nothing was dropped.
+// These five are local only (`derive-run.js` keeps them in the derivation
+// receipt) and never reach facts.
 //
-// Controller segments. When the controller (worker 0) has evidence of its
-// own for two or more jobs and the caller passes the session's
-// `started_at` and `derived_through`, each of those jobs also gets
-// `segments`: the spans of the session, in milliseconds from its start,
-// that worker 0's evidence gives to the job (`controllerSegments`). The
-// pipeline clips worker 0's time to them and credits worker 0's PRs by them,
-// so the controller's time is split across its jobs instead of copied into
-// each. A session whose controller binds one job gets no `segments`.
+// Without the session's `started_at` and `derived_through` there is no
+// timeline, so worker 0 is in no job. Without `agents` the session is read as
+// worker 0 alone, and every event as its own.
 //
 // A job's ID hashes its task's *birth* path, not the path a touch was
-// matched against: once a task is found (`readTask` answers), `entry.track`
-// and `entry.slug` are handed to `resolveJobIdentity`, which is where the
-// desk's Git decides whether the task has ever been renamed or moved (the
-// controller ruling in ourostack/desk#76). This is how a track rename or a
-// task move keeps one job's history in one place instead of starting a new
-// job at zero.
+// matched against: once a task is found (`readTask` answers), its track and
+// slug are handed to `resolveJobIdentity`, which is where the desk's Git
+// decides whether the task has ever been renamed or moved (the controller
+// ruling in ourostack/desk#76). Evidence is keyed by that birth path, so a
+// task renamed in the middle of a session is still one task and one job.
 //
 // Dependencies are injected so tests can fake them (`desk-repo.js` has the
-// real ones): `readTask(track, slug)`, `deskCommitsBetween(startIso,
-// endIso)`, `gitCommitTaskPaths(sha)`, `isCardHousekeeping(sha, path)` and
-// `resolveJobIdentity(track, slug)`. The desk root is passed in rather than
-// resolved here: `src/util/paths.js` is outside `src/factory`, so the
-// caller resolves it (with `resolveDeskRootWithSource`) and hands it over.
+// real ones): `readTask(track, slug)`, `gitCommitTaskPaths(sha)`,
+// `isCardHousekeeping(sha, path)`, `resolveJobIdentity(track, slug)` and
+// `repoLookup(absolutePath)`, which answers `{ repo: "owner/name" }`,
+// `{ none: true }` (a true none) or `{ unavailable: true }`. The
+// desk root is passed in rather than resolved here: `src/util/paths.js` is
+// outside `src/factory`, so the caller resolves it (with
+// `resolveDeskRootWithSource`) and hands it over.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -96,6 +127,7 @@ import { createHash } from "node:crypto"
 import { realpathSync } from "node:fs"
 import * as path from "node:path"
 
+import { capSegments, controllerTimeline } from "./focus.js"
 import { ENUMS, LIMITS, PATTERNS } from "./schema.js"
 import { DESK_MARKER } from "./shell-git.js"
 
@@ -171,6 +203,12 @@ const CARD_FILE = "task.md"
 
 // A desk commit spanning more tasks than this is a sweep and binds none.
 const MASS_COMMIT_TASKS = 3
+
+const CREATE_CALL = /task_create$/u
+// A task tool call commits the card within moments; a minute each way covers Git's whole seconds and a slow push.
+const TOOL_CALL_REACH_MS = 60000
+const OWN_ACTIVITY_SPANS = 500
+const KIND_BASIS = Object.freeze({ tool: "desk_tool", write: "file_write", commit: "desk_commit", spawn: "spawn_brief" })
 
 /**
  * `{ track, slug, bare }` for desk-relative path segments naming a path
@@ -256,64 +294,6 @@ function msOf(value) {
 }
 
 /**
- * `controllerSegments({ evidence, keys, startedMs, endMs })`: the controller's
- * session split among its jobs, as `Map(key -> [{ start_ms, end_ms, shared? }])`,
- * or `null` when it cannot be split (then no job gets `segments` and the
- * pipeline counts worker 0's whole time in each of its jobs, marked partial).
- *
- * `evidence` is worker 0's binding evidence, `{ key, start, end }` in epoch
- * milliseconds (`start` null when the evidence has no time; an instant has
- * `end === start`), and `keys` the jobs worker 0 binds. Times are clamped to
- * the session, `[0, endMs - startedMs]`. Evidence starting at one instant forms
- * a group. The stretch from one group's start to the next group's belongs to
- * the group's jobs, the stretch before the first group to the first group's,
- * and the last group's runs to the session's end. A span covered by a timed
- * piece (a commit window, a spawn) also belongs to its job. A stretch with
- * more than one job is held by each of them, marked `shared`. Adjacent pieces
- * of one job with the same marking merge. No split when a job has no timed
- * evidence, a job would end with no time at all (its evidence clamped to the
- * session's end, say), or any job would need more than `LIMITS.jobSegments`
- * segments.
- */
-export function controllerSegments({ evidence, keys, startedMs, endMs }) {
-  const total = endMs - startedMs
-  const clamp = (ms) => Math.min(total, Math.max(0, ms - startedMs))
-  const items = evidence
-    .filter((item) => keys.has(item.key) && item.start !== null)
-    .map((item) => ({ key: item.key, start: clamp(item.start), end: clamp(Math.max(item.start, item.end)) }))
-    .sort((x, y) => x.start - y.start || x.end - y.end || (x.key < y.key ? -1 : x.key > y.key ? 1 : 0))
-  const timedKeys = new Set(items.map((item) => item.key))
-  if ([...keys].some((key) => !timedKeys.has(key))) return null
-
-  const spans = items.filter((item) => item.end > item.start)
-  const bounds = [...new Set([0, total, ...items.flatMap((item) => [item.start, item.end])])].sort((x, y) => x - y)
-  const segments = new Map([...keys].map((key) => [key, []]))
-  // The jobs of the latest group to start; before the first evidence, the first group's.
-  const groupAt = (instant) => new Set(items.filter((item) => item.start === instant).map((item) => item.key))
-  let group = groupAt(items[0].start)
-  let next = 0
-  for (let index = 0; index < bounds.length - 1; index += 1) {
-    const start = bounds[index]
-    const end = bounds[index + 1]
-    if (next < items.length && items[next].start <= start) {
-      while (next < items.length && items[next].start <= start) next += 1
-      group = groupAt(items[next - 1].start)
-    }
-    const owners = new Set([...group, ...spans.filter((item) => item.start <= start && start < item.end).map((item) => item.key)])
-    const shared = owners.size > 1
-    for (const key of owners) {
-      const list = segments.get(key)
-      const last = list.at(-1)
-      if (last !== undefined && last.end_ms === start && Object.hasOwn(last, "shared") === shared) last.end_ms = end
-      else list.push(shared ? { start_ms: start, end_ms: end, shared: true } : { start_ms: start, end_ms: end })
-    }
-  }
-  const lists = [...segments.values()]
-  if (lists.some((list) => list.length === 0)) return null
-  return lists.some((list) => list.length > LIMITS.jobSegments) ? null : segments
-}
-
-/**
  * `taskCommitRule({ alias, isCardHousekeeping })` -> `(sha, taskPaths) => { tasks, real, touched, mass }`:
  * how one desk commit counts toward tasks, shared by the binder and `factory reconcile`.
  * `touched` is every task a path names. `real` leaves out a bare card whose diff in that commit
@@ -346,175 +326,262 @@ function requireFunction(value, name) {
 
 /**
  * `bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix,
- * readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
- * resolveJobIdentity }) -> { jobs: LocalJob[] }`. `agents` is the facts'
- * `agents[]` (`{ n, parent }`), used for ancestry; each job lists the
- * workers bound to it in `agents`. Every event counts as worker 0 without it. `deskRemote` is the desk's
- * `origin` URL, or empty when it has none (the job IDs then use `local:`
- * plus the desk root). `session` is the facts' `session` (`started_at` and
- * `derived_through` are read); without it, or without `agents`, no job gets
- * `segments`.
+ * readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity,
+ * repoLookup }) -> { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs }`; the
+ * header describes each. `agents` is the facts' `agents[]` (`{ n, parent }`),
+ * used for ancestry. `session` is the facts' `session` (`started_at` and
+ * `derived_through` are read). `deskRemote` is the desk's `origin` URL, or
+ * empty when it has none (the job IDs then use `local:` plus the desk root).
  */
-export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity }) {
+export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoLookup }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
-  requireFunction(deskCommitsBetween, "deskCommitsBetween")
   requireFunction(gitCommitTaskPaths, "gitCommitTaskPaths")
   requireFunction(isCardHousekeeping, "isCardHousekeeping")
   requireFunction(resolveJobIdentity, "resolveJobIdentity")
+  // One reader with three answers, so a caller cannot take evidence that is not available for a true none; a caller that omits it is an error.
+  requireFunction(repoLookup, "repoLookup")
   if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
   // One unpublished desk reached through a symlink and through its real path is one desk.
   const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
   const roots = deskRootsOf(deskRoot)
   const source = events ?? {}
 
-  // "track/slug" -> { track, slug, transitions: [] }, and worker -> ("track/slug" -> basis Set).
-  const tasks = new Map()
-  const evidence = new Map()
-  // Without `agents` (a legacy caller) every event is the root worker's (0).
+  // Without `agents` the session is worker 0 alone, and every event is its own.
   const hasAgents = Array.isArray(agents)
+  const workers = hasAgents ? agents : [{ n: 0, parent: null }]
   const agentOf = (item) => (hasAgents && Number.isInteger(item?.agent) && item.agent >= 0 ? item.agent : 0)
-  // With `agents`, a worker it does not list contributes no evidence: the
-  // facts could not name it in a job's `agents`, and the validator refuses that.
-  const listed = new Set((hasAgents ? agents : []).map((worker) => worker?.n))
+  // A worker `agents` does not list contributes nothing: the facts could not name it in a job's `agents`.
+  const listed = new Set(workers.map((worker) => worker?.n))
   const parents = new Map()
-  for (const worker of hasAgents ? agents : []) {
+  for (const worker of workers) {
     if (Number.isInteger(worker?.n) && Number.isInteger(worker.parent)) parents.set(worker.n, worker.parent)
   }
-  // Worker 0's evidence with its time, for its segments: `{ key, start, end }` in epoch ms.
-  const controller = []
-  // `start` and `end` (epoch ms, `start` null when untimed) place the evidence in time.
-  const touch = (agent, task, basis, start = null, end = start) => {
-    if (hasAgents && !listed.has(agent)) return { transitions: [] }
-    const key = `${task.track}/${task.slug}`
-    if (!tasks.has(key)) tasks.set(key, { track: task.track, slug: task.slug, transitions: [] })
-    if (!evidence.has(agent)) evidence.set(agent, new Map())
-    const own = evidence.get(agent)
-    if (!own.has(key)) own.set(key, new Set())
-    own.get(key).add(basis)
-    if (agent === 0) controller.push({ key, start, end })
-    return tasks.get(key)
+  const startedMs = msOf(session?.started_at)
+  const endMs = msOf(session?.derived_through)
+
+  // Tasks by birth key, `{ key, birth, card, transitions }`, each card read once per name it was touched under.
+  const tasks = new Map()
+  const named = new Map()
+  const taskOf = ({ track, slug }) => {
+    const name = `${track}/${slug}`
+    if (!named.has(name)) {
+      const card = readTask(track, slug)
+      let task = null
+      if (card !== null && card !== undefined) {
+        const birth = resolveJobIdentity(track, slug)
+        const key = `${birth.track}/${birth.slug}`
+        if (!tasks.has(key)) tasks.set(key, { key, birth, card, transitions: [] })
+        task = tasks.get(key)
+      }
+      named.set(name, task)
+    }
+    return named.get(name)
   }
-  // Worker 0's spawn calls, timed by the spawning call: they place worker 0 in time but bind nothing for it.
-  const spawnSpans = []
-  // The tasks a commit's paths bind (`taskCommitRule` judges).
-  const rule = taskCommitRule({ alias, isCardHousekeeping })
-  const commitTasks = (sha, taskPaths) => rule(sha, taskPaths).tasks
+  // Where a path an event names lies: `{ segments }`, its desk-relative segments, or `{ outside }`, its absolute path outside the
+  // desk; `null` for no path. A relative path is taken from the desk root.
+  const locate = (value) => {
+    if (typeof value !== "string" || value === "") return null
+    const absolute = path.resolve(roots[0], expandDeskMarker(value, roots[0]))
+    const segments = segmentsInDesk(absolute, roots)
+    return segments === null ? { outside: absolute } : { segments }
+  }
+  // The `{ track, slug }` desk segments name: a path inside a task folder, or (`folder`) the folder itself.
+  const nameOf = (segments, folder = false) => taskOfSegments(folder ? [...segments, CARD_FILE] : segments, alias)
+  // The repository holding an absolute path outside the desk, or `null`; `directory` is counted when it cannot be named.
+  const unresolved = new Set()
+  const repoAt = (lookup, directory = lookup, options = undefined) => {
+    const found = repoLookup(lookup, options)
+    if (typeof found?.repo === "string" && found.repo !== "") return found.repo
+    // A true none is nothing lost. Anything else, including an answer that is none of the three, is evidence that was not available.
+    if (found?.none !== true) unresolved.add(directory)
+    return null
+  }
+
+  // The session tree's evidence, `{ at, key, kind, agent }` (`at` in epoch ms, null when unknown), and its own activity spans in epoch ms.
+  const evidence = []
+  const spans = []
+  const note = (item, name, kind, at) => {
+    const agent = agentOf(item)
+    const task = name === null || !listed.has(agent) ? null : taskOf(name)
+    if (task !== null) evidence.push({ at, key: task.key, kind, agent })
+  }
 
   for (const call of asArray(source.deskToolCalls)) {
-    if (call?.ok !== true || !isTaskSegment(call.track) || !isTaskSegment(call.slug)) continue
-    const entry = touch(agentOf(call), { track: call.track, slug: call.slug }, "desk_tool", msOf(call.at))
-    if (ENUMS.jobStatus.includes(call.status) && isTime(call.at)) entry.transitions.push({ to: call.status, at: call.at })
+    if (call?.ok !== true) continue
+    const at = msOf(call.at)
+    if (at !== null) spans.push([at - TOOL_CALL_REACH_MS, at + TOOL_CALL_REACH_MS])
+    if (!isTaskSegment(call.track) || !isTaskSegment(call.slug) || !listed.has(agentOf(call))) continue
+    const task = taskOf(call)
+    if (task === null) continue
+    if (ENUMS.jobStatus.includes(call.status) && at !== null) task.transitions.push({ to: call.status, at: call.at })
+    // Filing a card, or only moving its status, is not working on it.
+    const filing = typeof call.name === "string" && CREATE_CALL.test(call.name)
+    if (!filing && call.statusOnly !== true) evidence.push({ at, key: task.key, kind: "tool", agent: agentOf(call) })
   }
 
   for (const write of asArray(source.fileWrites)) {
-    const segments = segmentsInDesk(write?.path, roots)
-    const task = segments === null ? null : taskOfSegments(segments, alias)
-    if (task !== null) touch(agentOf(write), task, "file_write", msOf(write.at))
-  }
-
-  // A brief naming a task with a card is that worker's own evidence.
-  for (const spawn of asArray(source.spawnTasks)) {
-    if (!isTaskSegment(spawn?.track) || !isTaskSegment(spawn.slug)) continue
-    const card = readTask(spawn.track, spawn.slug)
-    if (card === null || card === undefined) continue
-    const child = agentOf(spawn)
-    touch(child, { track: spawn.track, slug: spawn.slug }, "spawn_brief")
-    if (hasAgents && listed.has(child) && parents.get(child) === 0) {
-      const start = msOf(spawn.start)
-      const end = msOf(spawn.end)
-      if (start !== null && end !== null) spawnSpans.push({ key: `${spawn.track}/${spawn.slug}`, start, end })
+    const place = locate(write?.path)
+    if (place === null || !listed.has(agentOf(write))) continue
+    if (place.segments !== undefined) {
+      note(write, nameOf(place.segments), "write", msOf(write.at))
+      continue
     }
+    const repo = repoAt(path.dirname(place.outside))
+    if (repo !== null) evidence.push({ at: msOf(write.at), repo, kind: "repo", agent: agentOf(write) })
   }
 
-  const windows = []
+  // Each subagent's spawn time, and the task of its `Desk-Task:` line when that card exists.
+  const spawnedAt = new Map()
+  const briefed = new Map()
+  for (const spawn of asArray(source.spawns)) {
+    const child = spawn?.agent
+    if (!Number.isInteger(child) || child < 1 || !listed.has(child)) continue
+    const at = msOf(spawn.at)
+    if (at !== null) spawnedAt.set(child, at)
+    if (!isTaskSegment(spawn.task?.track) || !isTaskSegment(spawn.task.slug)) continue
+    const task = taskOf(spawn.task)
+    if (task === null) continue
+    briefed.set(child, task.key)
+    // The brief is its parent's event; with no parent on record it is nobody's.
+    evidence.push({ at, key: task.key, kind: "spawn", agent: parents.get(child) })
+  }
+
   for (const call of asArray(source.shellGitCommits)) {
     if (!isTime(call?.start) || !isTime(call.end) || call.end < call.start) continue
-    if (segmentsInDesk(expandDeskMarker(call.cwd, roots[0]), roots) === null) continue
-    windows.push({ start: floorToSecond(call.start), end: call.end, agent: agentOf(call) })
-  }
-  if (windows.length > 0) {
-    const first = windows.reduce((earliest, window) => (window.start < earliest ? window.start : earliest), windows[0].start)
-    const last = windows.reduce((latest, window) => (window.end > latest ? window.end : latest), windows[0].end)
-    for (const commit of asArray(deskCommitsBetween(first, last))) {
-      const at = commit?.committed_at
-      if (!isTime(at)) continue
-      const owners = windows.filter((window) => at >= window.start && at <= window.end)
-      if (owners.length === 0) continue
-      const bound = commitTasks(commit.sha, commit.taskPaths)
-      for (const owner of owners) for (const task of bound) touch(owner.agent, task, "desk_commit", msOf(owner.start), msOf(owner.end))
+    if (segmentsInDesk(expandDeskMarker(call.cwd, roots[0]), roots) !== null) spans.push([Date.parse(floorToSecond(call.start)), Date.parse(call.end)])
+    if (!listed.has(agentOf(call))) continue
+    const names = new Map()
+    const repos = new Set()
+    const cwd = locate(call.cwd)
+    // A directory that is not absolute says nothing about where the call ran.
+    if (cwd?.outside !== undefined && path.isAbsolute(call.cwd)) repos.add(repoAt(cwd.outside))
+    for (const entry of asArray(call.paths)) {
+      const place = locate(entry)
+      if (place === null) continue
+      if (place.segments === undefined) {
+        // The entry itself: a path that is a nested repository root names its own repository, a file is looked up by its folder.
+        repos.add(repoAt(place.outside, path.dirname(place.outside), { maybeFile: true }))
+        continue
+      }
+      const name = nameOf(place.segments, true)
+      if (name !== null) names.set(`${name.track}/${name.slug}`, name)
     }
+    for (const repo of repos) if (repo !== null) evidence.push({ at: Date.parse(call.start), repo, kind: "repo", agent: agentOf(call) })
+    if (names.size > MASS_COMMIT_TASKS) continue
+    for (const name of names.values()) note(call, name, "commit", Date.parse(call.start))
   }
 
+  // The tasks a native commit's paths count for (`taskCommitRule` judges).
+  const rule = taskCommitRule({ alias, isCardHousekeeping })
   for (const entry of asArray(source.nativeCommitShas)) {
     const sha = entry?.sha
     if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha)) continue
     const found = gitCommitTaskPaths(sha)
-    if (found?.exists === true) for (const task of commitTasks(sha, found.taskPaths)) touch(agentOf(entry), task, "desk_commit")
+    if (found?.exists === true) for (const name of rule(sha, found.taskPaths).tasks) note(entry, name, "commit", null)
   }
 
-  // Only a task with a card is a job.
-  const cards = new Map()
-  for (const key of tasks.keys()) {
-    const task = tasks.get(key)
-    const card = readTask(task.track, task.slug)
-    if (card !== null && card !== undefined) cards.set(key, card)
+  for (const ref of asArray(source.prRefs)) {
+    if (ref?.created === true && typeof ref.repo === "string") evidence.push({ at: msOf(ref.at), repo: ref.repo, kind: "repo", agent: agentOf(ref) })
   }
-  const ownJobs = new Map() // worker -> Map(key -> basis Set), jobs with a card only
-  for (const [agent, own] of evidence) {
-    const kept = new Map([...own].filter(([key]) => cards.has(key)))
-    if (kept.size > 0) ownJobs.set(agent, kept)
-  }
-  // A worker with no evidence of its own inherits from its nearest ancestor
-  // that has some, when that ancestor binds exactly one job; the walk stops
-  // at the first ancestor with evidence, and at a cycle or unknown parent.
-  const bound = new Map(ownJobs) // worker -> Map(key -> basis Set)
-  for (const worker of hasAgents ? agents : []) {
-    if (!Number.isInteger(worker?.n) || ownJobs.has(worker.n)) continue
-    const seen = new Set([worker.n])
-    let ancestor = parents.get(worker.n)
-    while (ancestor !== undefined && !seen.has(ancestor) && !ownJobs.has(ancestor)) {
-      seen.add(ancestor)
-      ancestor = parents.get(ancestor)
+
+  // Where a subagent's job comes from: `{ line }`, the task of the nearest `Desk-Task:` line from itself upward,
+  // or `{ top }`, its ancestor that worker 0 spawned; neither when its ancestry cannot be traced.
+  const originOf = (agent) => {
+    const seen = new Set()
+    let current = agent
+    while (!seen.has(current)) {
+      if (briefed.has(current)) return { line: briefed.get(current) }
+      seen.add(current)
+      const parent = parents.get(current)
+      if (parent === 0) return { top: current }
+      current = parent
     }
-    const inherited = ancestor === undefined || seen.has(ancestor) ? null : ownJobs.get(ancestor)
-    if (inherited !== null && inherited.size === 1) bound.set(worker.n, new Map([[inherited.keys().next().value, new Set(["inherited"])]]))
+    return {}
   }
 
-  // The controller's session split among its jobs, when it binds several.
-  const startedMs = msOf(session?.started_at)
-  const endMs = msOf(session?.derived_through)
-  const controllerKeys = new Set(ownJobs.get(0)?.keys() ?? [])
-  const split = hasAgents && controllerKeys.size > 1 && startedMs !== null && endMs !== null && endMs >= startedMs
-    ? controllerSegments({ evidence: [...controller, ...spawnSpans], keys: controllerKeys, startedMs, endMs })
-    : null
+  // Worker 0's timeline, `[{ key, start, end }]` in epoch ms.
+  let timeline = { segments: [], boundBy: new Map(), disagrees: new Set() }
+  // The time the segment cap dropped (`capSegments` reports it); 0 when nothing was dropped, which includes a session with no timeline.
+  let segmentsCappedMs = 0
+  let kept = []
+  if (startedMs !== null && endMs !== null && endMs >= startedMs && listed.has(0)) {
+    const focusCalls = []
+    for (const call of asArray(source.focusCalls)) {
+      if (agentOf(call) !== 0) continue
+      const at = msOf(call?.at)
+      if (call?.clear === true) focusCalls.push({ agent: 0, at, clear: true })
+      else if (isTaskSegment(call?.track) && isTaskSegment(call.slug)) {
+        // A focus on a task whose card is gone still ends the stretch before it, and binds nothing.
+        const task = taskOf(call)
+        focusCalls.push(task === null ? { agent: 0, at, clear: true } : { agent: 0, at, key: task.key })
+      }
+    }
+    kept = evidence.filter((event) => listed.has(event.agent) && originOf(event.agent).line === undefined)
+    const cards = new Map([...tasks].map(([key, task]) => [key, { repos: asArray(task.card.repos) }]))
+    timeline = controllerTimeline({ events: { focusCalls, evidence: kept }, startMs: startedMs, endMs, cards })
+    const capped = capSegments({ segments: timeline.segments, main: timeline.main, cap: LIMITS.jobSegments })
+    timeline.segments = capped.segments
+    segmentsCappedMs = capped.droppedMs
+  }
+  // The task holding worker 0's timeline at a time; the session's last instant belongs to its last segment.
+  const controllerAt = (at) => {
+    if (at === undefined) return undefined
+    const time = Math.min(endMs, Math.max(startedMs, at))
+    return timeline.segments.find((segment) => segment.start <= time && (time < segment.end || (time === endMs && segment.end === endMs)))?.key
+  }
+
+  // Task key -> Map(worker -> how it got there).
+  const members = new Map()
+  const join = (key, agent, basis) => {
+    if (!members.has(key)) members.set(key, new Map())
+    members.get(key).set(agent, basis)
+  }
+  for (const segment of timeline.segments) join(segment.key, 0, null)
+  for (const worker of workers) {
+    const n = worker?.n
+    if (!Number.isInteger(n) || n < 1) continue
+    const { line, top } = originOf(n)
+    if (line !== undefined) join(line, n, briefed.has(n) ? "spawn_brief" : "inherited")
+    else if (controllerAt(spawnedAt.get(top)) !== undefined) join(controllerAt(spawnedAt.get(top)), n, "inherited")
+  }
 
   const jobs = []
-  for (const [key, card] of cards) {
-    const entry = tasks.get(key)
-    const basis = new Set()
-    const workers = []
-    for (const [agent, own] of bound) {
-      if (!own.has(key)) continue
-      workers.push(agent)
-      for (const item of own.get(key)) basis.add(item)
-    }
+  const ids = new Map()
+  for (const [key, task] of tasks) {
+    const own = members.get(key)
+    if (own === undefined) continue
+    const basis = new Set([...own.values()])
+    if (timeline.boundBy.get(key) === "focus") basis.add("desk_tool")
+    // The evidence that placed worker 0 here; a job only subagents hold rests on their lines alone.
+    if (own.has(0)) for (const event of kept) if (event.key === key) basis.add(KIND_BASIS[event.kind])
+    const { card } = task
     const status = ENUMS.jobStatus.includes(card.status) ? card.status : null
     let observedAt = null
     if (status !== null && TERMINAL.has(status) && isTime(card.updated_at)) observedAt = card.updated_at
-    const birth = resolveJobIdentity(entry.track, entry.slug)
+    const segments = timeline.segments.filter((segment) => segment.key === key).map((segment) => ({ start_ms: segment.start - startedMs, end_ms: segment.end - startedMs }))
+    const id = jobId({ deskRemote: remote, personPrefix, track: task.birth.track, slug: task.birth.slug })
+    ids.set(key, id)
     jobs.push({
-      job: jobId({ deskRemote: remote, personPrefix, track: birth.track, slug: birth.slug }),
+      job: id,
       basis: ENUMS.jobBasis.filter((item) => basis.has(item)),
-      // A legacy caller passes no `agents`: the key is left out, which reads as every worker.
-      ...(hasAgents ? { agents: workers.sort((x, y) => x - y) } : {}),
+      agents: [...own.keys()].sort((x, y) => x - y),
       task_created_at: isTime(card.created_at) ? card.created_at : null,
-      transitions: entry.transitions.sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0)).slice(0, LIMITS.jobTransitions),
+      transitions: task.transitions.sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0)).slice(0, LIMITS.jobTransitions),
       observed: status === null ? null : { status, at: observedAt },
-      ...(split?.has(key) ? { segments: split.get(key) } : {}),
+      ...(segments.length > 0 ? { segments } : {}),
     })
   }
   jobs.sort((a, b) => (a.job < b.job ? -1 : 1))
-  return { jobs: jobs.slice(0, LIMITS.jobs) }
+
+  const boundBy = Object.fromEntries([...timeline.boundBy].map(([key, how]) => [ids.get(key), how]).sort(([a], [b]) => (a < b ? -1 : 1)))
+  const disagrees = [...timeline.disagrees].map((key) => ids.get(key)).sort()
+  const ownActivity = []
+  for (const [start, end] of startedMs === null ? [] : spans.sort((a, b) => a[0] - b[0] || a[1] - b[1])) {
+    const last = ownActivity.at(-1)
+    if (last !== undefined && start - startedMs <= last[1]) last[1] = Math.max(last[1], end - startedMs)
+    else ownActivity.push([start - startedMs, end - startedMs])
+  }
+  return { jobs: jobs.slice(0, LIMITS.jobs), boundBy, disagrees, ownActivity: ownActivity.slice(0, OWN_ACTIVITY_SPANS), repoUnresolved: unresolved.size, segmentsCappedMs }
 }

@@ -322,6 +322,7 @@
     "tests/desk/mcp/__tests__/tools/track_row.test.js": 1.5,
     "tests/desk/mcp/__tests__/tools/task_progress_notes.test.js": 1.5,
     "tests/desk/mcp/__tests__/tools/task_create.test.js": 0.6,
+    "tests/desk/mcp/__tests__/tools/task_focus.test.js": 0.6,
     "tests/desk/mcp/__tests__/tools/task_update.test.js": 1.7,
     "tests/desk/mcp/__tests__/tools/thread.test.js": 0.9,
     "tests/desk/mcp/__tests__/tools/tidy_staging.test.js": 1.8,

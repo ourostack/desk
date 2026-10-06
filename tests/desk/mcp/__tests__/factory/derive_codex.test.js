@@ -502,9 +502,9 @@ test("shell outcomes, retries, commits, MCP names, patches and PRs", () => withH
   assert.deepEqual(facts.counts.tool_failures, { shell: 3, edit: 1, desk: 1 }, "c2, c5 and r6; the failed patch; the failed desk call")
   assert.deepEqual(events.fileWrites.map(({ path: file }) => file), ["/work/repo/rel/new.md", "/abs/moved.md", "/work/repo/a.md", "/abs/shell.md"])
   assert.deepEqual(events.deskToolCalls, [
-    { at: at(33), name: "mcp__desk__task_create", track: "trk", slug: "one", person: "pat", status: "drafting", agent: 0, ok: true },
-    { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, agent: 0, ok: false },
-    { at: at(37), name: "mcp__desk__task_archive", track: "trk", slug: "three", person: null, status: null, agent: 0, ok: true },
+    { at: at(33), name: "mcp__desk__task_create", track: "trk", slug: "one", person: "pat", status: "drafting", statusOnly: false, agent: 0, ok: true },
+    { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, statusOnly: false, agent: 0, ok: false },
+    { at: at(37), name: "mcp__desk__task_archive", track: "trk", slug: "three", person: null, status: null, statusOnly: false, agent: 0, ok: true },
   ])
   assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 7, agent: 0, at_ms: 52000 }])
   assert.equal(facts.counts.tool_calls.desk, 4)
@@ -790,4 +790,177 @@ test("a codex marker's end stands until a later model or tool record, then the s
   const quiet = codexMarker(ctx)
   writeFileSync(quiet.log_path, `${readFileSync(quiet.log_path, "utf8")}${JSON.stringify({ timestamp: later, type: "event_msg", payload: { type: "token_count" } })}\n`)
   assert.equal((await reconcileMarker(quiet)).ended_at, END, "a token count after the end is not activity")
+}))
+
+// --- Declared focus: focus calls, spawns, own-commit paths, shell writes, PRs, status ---
+
+test("a successful task_focus call becomes a focusCall at its call time; failed, running and invalid ones yield nothing, and it is not a deskToolCall", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "f1", "task_focus", { track: "desk-plugin", slug: "some-task" }, "mcp__desk__"), // 1
+    output(2, "f1", "ok"),
+    call(3, "f2", "task_focus", { track: "other", slug: "failed" }, "mcp__desk__"),
+    output(4, "f2", "Process exited with code 1"),
+    call(5, "f3", "task_focus", { clear: true }, "mcp__desk__"), // 5
+    output(6, "f3", "ok"),
+    call(7, "f4", "task_focus", { track: "..", slug: "bad" }, "mcp__desk__"),
+    output(8, "f4", "ok"),
+    call(9, "f5", "task_focus", {}, "mcp__desk__"),
+    output(10, "f5", "ok"),
+    call(11, "f6", "mcp__desk__task_focus", { track: 4, slug: "x", note: SENTINEL }),
+    output(12, "f6", "ok"),
+    call(13, "f7", "task_focus", { track: "a", slug: "b" }, "mcp__desk__"),
+    output(14, "f7", "Process running with session ID 3"),
+  ]
+  const { facts, events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.focusCalls, [
+    { agent: 0, at: at(1), track: "desk-plugin", slug: "some-task" },
+    { agent: 0, at: at(5), clear: true },
+  ])
+  assert.deepEqual(events.deskToolCalls, [])
+  assert.equal(JSON.stringify(facts).includes("some-task"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "c1", "task_create", { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }, "mcp__desk__"), // 1
+    output(2, "c1", "ok"),
+    call(3, "c2", "task_create", { track: "desk-plugin", slug: "parked", focus: false }, "mcp__desk__"),
+    output(4, "c2", "ok"),
+    call(5, "c3", "task_create", { track: "desk-plugin", slug: "truthy", focus: "true" }, "mcp__desk__"),
+    output(6, "c3", "ok"),
+    call(7, "c4", "task_create", { track: "desk-plugin", slug: "failed", focus: true }, "mcp__desk__"),
+    output(8, "c4", "Process exited with code 1"),
+    call(9, "c5", "task_create", { track: "..", slug: "bad", focus: true }, "mcp__desk__"),
+    output(10, "c5", "ok"),
+    call(11, "c6", "task_create", { track: "desk-plugin", focus: true }, "mcp__desk__"),
+    output(12, "c6", "ok"),
+    call(13, "c7", "task_create", { track: "desk-plugin", slug: "plain" }, "mcp__desk__"),
+    output(14, "c7", "ok"),
+    call(15, "c8", "task_update", { track: "desk-plugin", slug: "updated", focus: true }, "mcp__desk__"),
+    output(16, "c8", "ok"),
+  ]
+  const { facts, events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: at(1), track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], [undefined, true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
+test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", () => withHome(async (home) => {
+  const inputs = [
+    { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },
+    { track: "a", slug: "b", frontmatter: { status: "done" }, progress: "x" },
+    { track: "a", slug: "b", person: "p", frontmatter: { status: "doing" } },
+    { track: "a", slug: "b", status: "blocked" },
+    { track: "a", slug: "b", frontmatter: { status: "done", title: "t" } },
+    { track: "a", slug: "b", frontmatter: "not json" },
+    { track: "a", slug: "b", frontmatter: "[1]" },
+    { track: "a", slug: "b", frontmatter: 7 },
+    { track: "a", slug: "b", frontmatter: { status: 4 } },
+    { track: "a", slug: "b", frontmatter: {} },
+    { track: "a", slug: "b" },
+  ]
+  const lines = [meta()]
+  inputs.forEach((input, index) => lines.push(call(1 + index * 2, `u${index}`, "task_update", input, "mcp__desk__"), output(2 + index * 2, `u${index}`, "ok")))
+  const { events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [
+    { status: "done", statusOnly: true },
+    { status: "done", statusOnly: false },
+    { status: "doing", statusOnly: true },
+    { status: "blocked", statusOnly: false },
+    { status: "done", statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+  ])
+}))
+
+test("every child appears in spawns with its parent, the spawn_agent call's time and its task; a v2 child with no link uses its first record time", () => withHome(async (home) => {
+  const [V1, V2, V3] = [uuid(2), uuid(3), uuid(4)]
+  const rootLines = [
+    meta(),
+    call(10, "s1", "spawn_agent", { message: "Desk-Task: trk/slug-a\nbrief" }, "multi_agent_v1"), // 10
+    output(11, "s1", JSON.stringify({ agent_id: V1 })),
+    call(12, "s2", "spawn_agent", { message: "x" }), // v2: no id in the output
+    output(13, "s2", JSON.stringify({ task_name: "t" })),
+  ]
+  put(home, V1, at(20), [meta({ id: V1, parent: ROOT, startIso: at(20) }), item(2, { type: "message", role: "user", content: "no task line" }, at(20))])
+  put(home, V2, at(21), [meta({ id: V2, parent: ROOT, startIso: at(21) }), item(1, { type: "message", role: "user", content: "Desk-Task: trk/slug-b" }, at(21))])
+  put(home, V3, at(22), [meta({ id: V3, parent: V1, startIso: at(22) })])
+  const { events } = await deriveRoot(home, rootLines)
+  assert.deepEqual(events.spawns, [
+    { agent: 1, parent: 0, at: at(10), task: { track: "trk", slug: "slug-a" } },
+    { agent: 2, parent: 0, at: at(21), task: { track: "trk", slug: "slug-b" } },
+    { agent: 3, parent: 1, at: at(22), task: null },
+  ])
+}))
+
+test("a shell git add and commit gives shellGitCommits paths, a redirect gives fileWrites, desk_save gives its paths, only when the call succeeded", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    turnContext(0.5, ROOT_MODEL, { cwd: "/w" }),
+    call(1, "g1", "exec_command", { cmd: "git add t/s/task.md && git commit -qm x" }),
+    output(2, "g1", "Process exited with code 0\nok"),
+    call(3, "g2", "exec_command", { cmd: "echo hi > out.txt" }),
+    output(4, "g2", "Process exited with code 0\nok"),
+    call(5, "g3", "exec_command", { cmd: "echo no > failed.txt && git add f.md && git commit -m x" }),
+    output(6, "g3", "Process exited with code 1\nfailed"),
+    call(7, "g4", "exec_command", { cmd: "git commit -m x" }),
+    output(8, "g4", "Process exited with code 0\nok"),
+    call(9, "d1", "desk_save", { paths: ["notes/a.md", "notes/b.md", 5] }, "mcp__desk__"),
+    output(10, "d1", "saved"),
+    call(11, "d2", "desk_save", { paths: ["failed.md"] }, "mcp__desk__"),
+    output(12, "d2", "Process exited with code 1"),
+    call(13, "d3", "desk_save", { content: "x" }, "mcp__desk__"),
+    output(14, "d3", "saved"),
+  ]
+  const { events, facts } = await deriveRoot(home, lines)
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: "/w", paths: ["/w/t/s/task.md"] },
+    { cwd: "/w", paths: [] },
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+    { at: at(3), path: "/w/out.txt", agent: 0 },
+    { at: at(9), path: "notes/a.md", agent: 0 },
+    { at: at(9), path: "notes/b.md", agent: 0 },
+  ])
+  assert.deepEqual(events.deskToolCalls, [], "desk_save is not a deskToolCall")
+  assert.equal(JSON.stringify(facts).includes("task.md"), false)
+}))
+
+test("a gh pr create result becomes a prRefs event with created true", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "r1", "exec_command", { cmd: "gh pr create --fill" }),
+    output(2, "r1", "Process exited with code 0\nhttps://github.com/acme/widgets/pull/7\n"),
+    call(3, "r2", "exec_command", { cmd: "gh pr create" }),
+    output(4, "r2", "Process exited with code 1\nhttps://github.com/acme/widgets/pull/8"),
+  ]
+  const { events, facts } = await deriveRoot(home, lines)
+  assert.deepEqual(events.prRefs, [{ agent: 0, at: at(2), repo: "acme/widgets", created: true }])
+  assert.equal("prRefs" in facts, false)
+}))
+
+test("sentinel: the focus, spawn, path, write and PR events never carry prompt, command or content text", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "s1", "task_focus", { track: "a", slug: "b", note: SENTINEL }, "mcp__desk__"),
+    output(2, "s1", SENTINEL),
+    call(3, "s2", "exec_command", { cmd: `echo ${SENTINEL} > out.txt && git add x.md && git commit -m ${SENTINEL}`, workdir: "/w" }),
+    output(4, "s2", `Process exited with code 0\n${SENTINEL}`),
+    call(5, "s3", "desk_save", { paths: ["p.md"], content: SENTINEL }, "mcp__desk__"),
+    output(6, "s3", SENTINEL),
+    call(7, "s4", "spawn_agent", { message: `${SENTINEL}\nDesk-Task: a/b` }),
+    output(8, "s4", SENTINEL),
+  ]
+  const { events, facts } = await deriveRoot(home, lines)
+  for (const key of ["focusCalls", "spawns", "shellGitCommits", "fileWrites", "prRefs"]) assert.equal(JSON.stringify(events[key]).includes(SENTINEL), false, key)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
 }))

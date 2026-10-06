@@ -35,6 +35,7 @@ const COPILOT_SEARCH = new Set(["grep", "glob"])
 const COPILOT_DESK_SUFFIXES = [
   "task_create", "task_update", "task_archive", "track_create", "track_update",
   "friction_add", "lesson_add", "desk_status", "desk_search", "desk_recall",
+  "task_focus", "desk_save", "task_move",
 ]
 
 function copilotToolKind(name) {

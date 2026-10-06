@@ -51,7 +51,7 @@ test("the exported active-tool audit defaults its required inventory for absent,
   const absent = audit.auditActiveTools(null)
   assert.equal(absent.provided, false)
   assert.equal(absent.status, "not_checked")
-  assert.ok(absent.required.includes("desk_status") && absent.required.includes("desk_doctor"))
+  assert.ok(absent.required.includes("desk_status") && absent.required.includes("desk_doctor") && absent.required.includes("task_focus"))
   const empty = audit.auditActiveTools(new Set())
   assert.equal(empty.status, "fail")
   assert.deepEqual(empty.missing, absent.required)

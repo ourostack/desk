@@ -5,7 +5,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { normalizePublished, stableStringify } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
-import { buildJobTimeline, buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
+import { ACTIVE_KINDS, buildJobTimeline, buildTimelines, jobActiveMs } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FACTS = path.join(here, "..", "fixtures", "store", "facts")
@@ -146,4 +146,93 @@ test("a per-worker binding keeps only its workers' intervals, and a binding with
   assert.deepEqual(timeline.intervals.map((item) => item.agent), [1])
   delete session.jobs[0].agents
   assert.deepEqual([...new Set(buildJobTimeline(CLOSED, [session]).intervals.map((item) => item.agent))], [0, 1])
+})
+
+function twoJobSession(aSegments, bSegments) {
+  const base = structuredClone(sessions[2])
+  const bindings = [
+    { job: CLOSED, agents: [0], basis: ["desk_tool"], session_offset_ms: 0, transitions: [], observed: null },
+    { job: OPEN, agents: [0], basis: ["desk_tool"], session_offset_ms: 0, transitions: [], observed: null },
+  ]
+  if (aSegments) bindings[0].segments = aSegments
+  if (bSegments) bindings[1].segments = bSegments
+  return { ...base, jobs: bindings }
+}
+const sharedWith = (job, session) => buildJobTimeline(job, [session]).sessions[0].shared_with
+
+test("shared_with counts the other bindings whose segments overlap, and only those", () => {
+  const first = [{ start_ms: 0, end_ms: 2000 }]
+  const second = [{ start_ms: 2000, end_ms: 4000 }]
+  const disjoint = twoJobSession(first, second)
+  assert.equal(sharedWith(CLOSED, disjoint), 0)
+  assert.equal(sharedWith(OPEN, disjoint), 0)
+  const overlapping = twoJobSession(first, [{ start_ms: 1000, end_ms: 4000 }])
+  assert.equal(sharedWith(CLOSED, overlapping), 1)
+  assert.equal(sharedWith(OPEN, overlapping), 1)
+})
+
+test("shared_with keeps jobs.length - 1 for a binding without segments, and an unsegmented one overlaps everything", () => {
+  const legacy = twoJobSession(null, null)
+  assert.equal(sharedWith(CLOSED, legacy), 1)
+  const mixed = twoJobSession([{ start_ms: 0, end_ms: 2000 }], null)
+  assert.equal(sharedWith(CLOSED, mixed), 1)
+  assert.equal(sharedWith(OPEN, mixed), 1)
+})
+
+test("a job held only by subagents shares the session with no other job unless they share an agent", () => {
+  const THIRD = "cccccccccccccccccccccccccccccccc"
+  const binding = (job, agents, segments) => ({ job, agents, basis: ["spawn_brief"], session_offset_ms: 0, transitions: [], observed: null, ...(segments ? { segments } : {}) })
+  const session = (...jobs) => ({ ...structuredClone(sessions[2]), jobs })
+  // The controller's job beside two jobs held by different subagents: nothing is shared.
+  const three = session(binding(CLOSED, [0], [{ start_ms: 0, end_ms: 3600000 }]), binding(OPEN, [1]), binding(THIRD, [2]))
+  for (const job of [CLOSED, OPEN, THIRD]) assert.equal(sharedWith(job, three), 0, job)
+  // Two jobs that name the same subagent do overlap, as does a subagent-only job beside a legacy whole-session binding.
+  const sameAgent = session(binding(OPEN, [1]), binding(THIRD, [1, 2]))
+  assert.equal(sharedWith(OPEN, sameAgent), 1)
+  assert.equal(sharedWith(THIRD, sameAgent), 1)
+  const legacy = session(binding(OPEN, [1]), { job: THIRD, basis: ["desk_tool"], session_offset_ms: 0, transitions: [], observed: null })
+  assert.equal(sharedWith(OPEN, legacy), 1)
+})
+
+// ---- jobActiveMs: the one rule for a job's active time in one session, shared with `factory reconcile` ----
+
+const iv = (kind, agent, start_ms, end_ms) => ({ kind, agent, start_ms, end_ms })
+const SESSION = { duration_ms: 1000, intervals: [iv("turn", 0, 0, 300), iv("tool", 0, 100, 200), iv("human_wait", 0, 300, 500), iv("subagent", 1, 250, 600), iv("turn", 0, 800, 1200), iv("turn", 0, -50, 100)] }
+
+test("jobActiveMs unions the active kinds, so overlapping workers count once, and leaves waits out", () => {
+  assert.deepEqual([...ACTIVE_KINDS].sort(), ["subagent", "tool", "turn"])
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: 0 }), 600)
+})
+
+test("jobActiveMs drops, never clamps, an interval outside the session, as publishing does", () => {
+  assert.equal(jobActiveMs({ duration_ms: 1000, intervals: [iv("turn", 0, 0, 100), iv("turn", 0, 900, 1001), iv("turn", 0, -1, 50)] }, { session_offset_ms: 5 }), 100)
+})
+
+test("jobActiveMs is null where the pipeline publishes nothing: a job with no session offset", () => {
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: null }), null)
+})
+
+test("jobActiveMs for a legacy job with no segments keeps every interval, and with agents keeps only those workers", () => {
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: 0, agents: [0, 1] }), 600)
+  assert.equal(jobActiveMs(SESSION, { session_offset_ms: 0, agents: [1] }), 350)
+})
+
+test("jobActiveMs for a session shared by two jobs clips worker 0 to each job's segments and keeps subagents whole", () => {
+  const first = { session_offset_ms: 0, agents: [0, 1], segments: [{ start_ms: 0, end_ms: 150 }] }
+  const second = { session_offset_ms: 0, agents: [0], segments: [{ start_ms: 150, end_ms: 400 }] }
+  assert.equal(jobActiveMs(SESSION, first), 500)
+  assert.equal(jobActiveMs(SESSION, second), 150)
+})
+
+test("the pipeline's timeline and jobActiveMs agree on one session and job", () => {
+  const session = structuredClone(sessions[0])
+  const binding = session.jobs[0]
+  const timeline = buildJobTimeline(binding.job, [session])
+  const union = []
+  for (const interval of timeline.intervals.filter((item) => ACTIVE_KINDS.has(item.kind)).sort((a, b) => a.start_ms - b.start_ms)) {
+    const last = union.at(-1)
+    if (last !== undefined && interval.start_ms <= last[1]) last[1] = Math.max(last[1], interval.end_ms)
+    else union.push([interval.start_ms, interval.end_ms])
+  }
+  assert.equal(jobActiveMs({ duration_ms: session.session.duration_ms, intervals: session.intervals }, binding), union.reduce((total, [a, b]) => total + b - a, 0))
 })

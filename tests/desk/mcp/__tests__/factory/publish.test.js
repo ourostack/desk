@@ -612,13 +612,15 @@ const FAKE_DESK = `/tmp/${SENTINEL}/desk`
 function bindFixture(facts, events) {
   const { jobs } = bindSession({
     events,
+    agents: facts.agents,
+    session: facts.session,
     deskRoot: FAKE_DESK,
     deskRemote: `git@github.com:${SENTINEL}/desk.git`,
     personPrefix: "",
     readTask: (track) => (track.length % 2 === 0
       ? { status: "done", created_at: "2026-09-20T08:00:00.000Z", updated_at: "2026-09-25T08:00:30.000Z" }
       : { status: "processing", created_at: null, updated_at: null }),
-    deskCommitsBetween: () => [],
+    repoLookup: () => ({ none: true }),
     gitCommitTaskPaths: () => ({ exists: false }),
     isCardHousekeeping: () => false,
     resolveJobIdentity: (track, slug) => ({ track, slug }),

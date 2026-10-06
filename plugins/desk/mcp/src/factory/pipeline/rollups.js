@@ -50,6 +50,7 @@
 
 import { LABEL_WASTES, checkLabelsAgainstFacts } from "../label-schema.js"
 import { covered, retryCoverage, splitSessions } from "./formulas.js"
+import { bindingsOverlap } from "./timeline.js"
 import { compareVersions } from "./versions.js"
 
 export const ROLLUPS_SCHEMA = "desk.factory.rollups/1"
@@ -210,9 +211,12 @@ function wasteTotals(stretches) {
 // The job's muda measures, and each labeled session's waste totals for the
 // Pareto's per-session sums (`null` unless every session is labeled).
 function mudaMeasures(timeline, labelsByJobSession) {
-  const labeled = timeline.sessions.flatMap((session) => {
+  const labeled = timeline.sessions.flatMap((session, index) => {
     const entry = labelsByJobSession.get(`${timeline.job}/${session.id}`)
-    return entry === undefined ? [] : [{ key: `${session.host}/${session.id}`, totals: wasteTotals(entry.stretches) }]
+    if (entry === undefined) return []
+    // The binding's own segments (absent for a legacy or subagent-only binding) say whether another job's time overlaps it.
+    const binding = timeline.source_sessions[index].jobs.find((candidate) => candidate.job === timeline.job)
+    return [{ key: `${session.host}/${session.id}`, totals: wasteTotals(entry.stretches), ...(Object.hasOwn(binding, "segments") ? { segments: binding.segments } : {}) }]
   })
   if (labeled.length < timeline.sessions.length) {
     const excluded = { excluded: labeled.length === 0 ? "not_labeled" : "partial" }
@@ -306,11 +310,11 @@ function pareto(records) {
   const excluded = countReasons(records.flatMap((record) => "excluded" in record.measures.muda_time ? [record.measures.muda_time.excluded] : []), "jobs")
   // Each session once: the first labeled job by job ID supplies its totals.
   const sessions = new Map()
-  const jobsPerSession = new Map()
+  const bindingsPerSession = new Map()
   for (const record of [...labeled].sort((left, right) => compareText(left.job, right.job))) {
     for (const session of record.muda_sessions) {
       if (!sessions.has(session.key)) sessions.set(session.key, session.totals)
-      jobsPerSession.set(session.key, (jobsPerSession.get(session.key) ?? 0) + 1)
+      bindingsPerSession.set(session.key, [...(bindingsPerSession.get(session.key) ?? []), session])
     }
   }
   const base = {
@@ -318,7 +322,7 @@ function pareto(records) {
     jobs_labeled: labeled.length,
     jobs_excluded: excluded,
     sessions_labeled: sessions.size,
-    sessions_shared: [...jobsPerSession.values()].filter((count) => count > 1).length,
+    sessions_shared: [...bindingsPerSession.values()].filter((bindings) => bindings.some((left, index) => bindings.slice(index + 1).some((right) => bindingsOverlap(left, right)))).length,
   }
   if (labeled.length === 0) return { ...base, muda_time_ms: null, wastes: [] }
   const sums = Object.fromEntries(LABEL_WASTES.map((waste) => [waste, [...sessions.values()].reduce((sum, totals) => sum + totals[waste], 0)]))
