@@ -921,7 +921,8 @@ async function archivedTaskStatus(archivedFile) {
 
 // A card already in `_archive/` that records why it has no report link (`factory_report_unavailable`) is asked again whenever task_archive is
 // called for it, which is the one tool path that reaches an archived card; `factory reconcile` counts such cards (`report_link_unavailable`).
-// Returns the result fields: the filled link or the current reason, and `commit` when committing the card failed.
+// Returns the result fields: the filled link or the current reason, `commit` when committing the card failed, and
+// `factory_report_unchanged: true` when the answer is the one the card already records, so nothing was written or committed.
 async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush }) {
   let data
   try {
@@ -931,7 +932,10 @@ async function refillArchivedReport({ deskRoot, person, track, slug, env, archiv
   }
   if (!Object.hasOwn(data, "factory_report_unavailable")) return {}
   const report = await factoryReportFor({ deskRoot, person, track, slug, env })
-  await patchMarkdownFrontmatter(archivedFile, reportFields(report))
+  const fields = reportFields(report)
+  // The same answer the card already records changes nothing: no write and no commit (an empty commit would read as a failed one).
+  if (Object.entries(fields).every(([key, value]) => data[key] === value)) return { ...reportResult(report, false), factory_report_unchanged: true }
+  await patchMarkdownFrontmatter(archivedFile, fields)
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
   const root = path.resolve(personPrefix(deskRoot, person))
   const commit = stageAndCommitMove(root, [archivedFile], `task_archive: ${track}/${slug} report link`, spawnGit)

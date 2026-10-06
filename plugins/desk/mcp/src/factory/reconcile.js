@@ -17,12 +17,13 @@
 // Measures. A number that may be missing is never a bare number, 0, null or a string: it is `{ state, value }` (`measure`), `state` one of
 // `measured` (with `value`), `not_recorded` (the receipt or facts cannot say), `not_checked` (the check was not run, as `status_unobserved`
 // without `--store`) or `withheld` (the desk keeps no job timing, so the pipeline publishes no timeline). A total over sessions is
+// `{ state, value, sessions, sessions_not_recorded }`: `sessions` were measured, `sessions_not_recorded` were not, and `value` (in its own unit:
+// milliseconds, directories or commits, never sessions) is a floor when `sessions_not_recorded` is above zero.
+//
 // `counts.report_link_unavailable` is desk-wide, not limited to the window: `{ cards, archived, by_reason }` over every card, live or archived,
 // that records why it has no report link (`factory_report_unavailable`), `by_reason` keyed by the three reason codes and `unrecognized` for
 // any other text, which is never echoed. A live card fills its link on its next task_update; an archived one when task_archive is called for
 // it again. `desk_not_private` is meant to last.
-// `{ state, value, sessions, sessions_not_recorded }`: `sessions` were measured, `sessions_not_recorded` were not, and `value` (in its own unit:
-// milliseconds, directories or commits, never sessions) is a floor when `sessions_not_recorded` is above zero.
 //
 // Story. Each listed task carries `story`: its bound sessions by start, each with `active_ms` (a measure: the session's turn, tool and subagent
 // time cut to the job exactly as the pipeline publishes it, `jobActiveMs`, never a segment's wall span; `not_recorded` where the pipeline would
@@ -225,11 +226,6 @@ function activeMsOf(facts, binding, startedMs, created) {
   }
 }
 
-/**
- * `reconcile({ deskRoot, personPrefix, since, until, storeDir, env, git })`: see the header. `deskRoot` is an
- * absolute path, `since` and `until` exact UTC timestamps with `since < until`. Returns the report, or
- * `{ ok: false, error }` for a desk that cannot be read; never throws.
- */
 const REPORT_REASONS = new Set(["desk_not_private", "visibility_not_known", "job_identity_unavailable"])
 
 // The desk's cards that record why they have no report link: how many, how many are archived, and how many by reason code.
@@ -243,6 +239,11 @@ function reportLinkUnavailable(cards) {
   return { cards: missing.length, archived: missing.filter((card) => card.archived).length, by_reason: byReason }
 }
 
+/**
+ * `reconcile({ deskRoot, personPrefix, since, until, storeDir, env, git })`: see the header. `deskRoot` is an
+ * absolute path, `since` and `until` exact UTC timestamps with `since < until`. Returns the report, or
+ * `{ ok: false, error }` for a desk that cannot be read; never throws.
+ */
 export function reconcile(options) {
   try {
     return run(options)

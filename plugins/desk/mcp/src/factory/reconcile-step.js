@@ -7,14 +7,18 @@
 // Summary shape (a contract read by the card-routing step and the health record; counts and codes only):
 //   status.reconcile = { at: <UTC time of the last completed run> | null, window_days: 7,
 //     desks_known: <desks the last completed run knew of>, desks: <desks reconciled in it>, desks_failed: <desks that failed in it>,
-//     runs: { <reason code | "unknown_reason">: { consecutive, count, clear } }, warnings: [<code>], last_result: <code> }
+//     runs: { <reason code | "unknown_reason">: { consecutive, count, clear } }, warnings: [<code>], last_result: <code>,
+//     report_link_unavailable: { cards, archived, by_reason: { <reason code | "unrecognized">: n } } | null }
+// `report_link_unavailable` sums each tracked desk's latest `counts.report_link_unavailable` (its cards, live or archived, that record
+// why they have no factory report link), so the health record shows cards still waiting for a link; `null` when no tracked desk has one
+// recorded (a run before this field, or no completed run).
 // The unit of a streak is one desk's own daily reconcile, kept per desk (below) and changed only when that desk was
 // reconciled; a desk that was skipped, over the cap or failed keeps its streaks. `runs.<reason>` is derived from the known
 // desks: `count` is the sum of each desk's latest count, `consecutive` the highest per-desk run of days the reason was
 // present, `clear` the lowest per-desk run of clean days among desks that ever showed it.
 // The summary is rebuilt from known fields on every write, and a `runs` key is kept only for a known reason code.
 // Per-desk bookkeeping is path-keyed, so it lives outside the summary, in
-// `status.loop.reconcile_desks.<first 16 hex of sha256(desk root)> = { at, reasons: { <reason>: { streak, count, clear } } }`,
+// `status.loop.reconcile_desks.<first 16 hex of sha256(desk root)> = { at, reasons: { <reason>: { streak, count, clear } }, links }`,
 // and no desk path is ever written to the summary. At most 20 desks are tracked: past that, the desks reconciled longest ago
 // are dropped with their streaks. A tracked desk not reconciled for more than `DESK_STALE_DAYS` (14) is dropped before the summary
 // is derived (its folder is gone or its receipts were pruned), so its count and streaks cannot hold a reason open forever.
@@ -45,8 +49,30 @@ const isObject = (value) => typeof value === "object" && value !== null && !Arra
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0
 const reasonCode = (reason) => (RECONCILE_REASONS.includes(reason) ? reason : UNKNOWN_REASON)
 const deskKey = (root) => createHash("sha256").update(root).digest("hex").slice(0, 16)
+const LINK_REASONS = new Set(["desk_not_private", "visibility_not_known", "job_identity_unavailable", "unrecognized"])
 
-/** `summarizeReconcile(result) -> { counts: { <reason>: n }, warnings: [code] } | null`: counts per reason (a reason outside the shared list is counted under `unknown_reason`) and warning codes (a malformed one is `unknown_warning`); `null` for a result that is not a completed report. */
+/** A reconcile result's `counts.report_link_unavailable` read field by field: `{ cards, archived, by_reason }` with counts only and known reason keys, or `null` when it is absent or damaged. */
+function linkCounts(value) {
+  if (!isObject(value) || !isCount(value.cards) || !isCount(value.archived) || !isObject(value.by_reason)) return null
+  const entries = Object.entries(value.by_reason)
+  if (!entries.every(([reason, n]) => LINK_REASONS.has(reason) && isCount(n))) return null
+  return { cards: value.cards, archived: value.archived, by_reason: Object.fromEntries(entries) }
+}
+
+/** The summary's `report_link_unavailable`: the sum over tracked desks that recorded one, or `null` when none did. */
+function deriveLinks(trackedDesks) {
+  const recorded = Object.values(trackedDesks).map((desk) => desk.links).filter((links) => links !== null)
+  if (recorded.length === 0) return null
+  const total = { cards: 0, archived: 0, by_reason: {} }
+  for (const links of recorded) {
+    total.cards += links.cards
+    total.archived += links.archived
+    for (const [reason, n] of Object.entries(links.by_reason)) total.by_reason[reason] = (total.by_reason[reason] ?? 0) + n
+  }
+  return total
+}
+
+/** `summarizeReconcile(result) -> { counts: { <reason>: n }, warnings: [code], links } | null`: `links` is `counts.report_link_unavailable` read by `linkCounts` (or `null`); counts per reason (a reason outside the shared list is counted under `unknown_reason`) and warning codes (a malformed one is `unknown_warning`); `null` for a result that is not a completed report. */
 export function summarizeReconcile(result) {
   if (!isObject(result) || result.ok !== true || !isObject(result.counts) || !isObject(result.counts.by_reason)) return null
   if (result.warnings !== undefined && !Array.isArray(result.warnings)) return null
@@ -55,7 +81,7 @@ export function summarizeReconcile(result) {
   const counts = {}
   for (const [reason, count] of entries) if (count > 0) counts[reasonCode(reason)] = (counts[reasonCode(reason)] ?? 0) + count
   const warnings = [...new Set((result.warnings ?? []).map((code) => (typeof code === "string" && WARNING_CODE.test(code) ? code : UNKNOWN_WARNING)))].slice(0, MAX_WARNINGS)
-  return { counts, warnings }
+  return { counts, warnings, links: linkCounts(result.counts.report_link_unavailable) }
 }
 
 function desksOf(status) {
@@ -102,7 +128,7 @@ function readTracked(stored) {
     for (const [reason, value] of Object.entries(isObject(entry.reasons) ? entry.reasons : {})) {
       if (KNOWN_RUN_KEYS.has(reason) && isObject(value)) reasons[reason] = { streak: isCount(value.streak) ? value.streak : 0, count: isCount(value.count) ? value.count : 0, clear: isCount(value.clear) ? value.clear : 0 }
     }
-    tracked[key] = { at: entry.at, reasons }
+    tracked[key] = { at: entry.at, reasons, links: linkCounts(entry.links) }
   }
   return tracked
 }
@@ -180,7 +206,7 @@ export async function runReconcileStep(env, { now, reconcileImpl = reconcile, de
       if (completed) {
         const warnings = new Set(failures.length > 0 ? ["desk_unreadable"] : [])
         for (const { deskRoot, summary: deskSummary } of done) {
-          tracked[deskKey(deskRoot)] = { at, reasons: stepDesk(tracked[deskKey(deskRoot)], deskSummary.counts) }
+          tracked[deskKey(deskRoot)] = { at, reasons: stepDesk(tracked[deskKey(deskRoot)], deskSummary.counts), links: deskSummary.links }
           for (const code of deskSummary.warnings) warnings.add(code)
         }
         summary = { at, desks_known: new Set([...candidates.map(deskKey), ...freshDesks().map(([key]) => key)]).size, desks: done.length, desks_failed: failures.length, warnings: [...warnings].slice(0, MAX_WARNINGS) }
@@ -190,7 +216,7 @@ export async function runReconcileStep(env, { now, reconcileImpl = reconcile, de
       const loop = isObject(current.loop) ? current.loop : {}
       return {
         ...current,
-        reconcile: { at: summary.at, window_days: RECONCILE_WINDOW_DAYS, desks_known: summary.desks_known, desks: summary.desks, desks_failed: summary.desks_failed, runs: deriveRuns(trimmed), warnings: summary.warnings, last_result: result },
+        reconcile: { at: summary.at, window_days: RECONCILE_WINDOW_DAYS, desks_known: summary.desks_known, desks: summary.desks, desks_failed: summary.desks_failed, runs: deriveRuns(trimmed), warnings: summary.warnings, last_result: result, report_link_unavailable: deriveLinks(trimmed) },
         loop: { ...loop, reconcile_desks: trimmed },
       }
     })

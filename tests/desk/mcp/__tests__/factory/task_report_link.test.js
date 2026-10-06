@@ -280,15 +280,24 @@ test("a card already in _archive/ with a reason is reached by calling task_archi
   const file = "track/_archive/finished-work/task.md"
   assert.equal((await card(desk, file)).factory_report_unavailable, "visibility_not_known")
 
+  const head = git(desk, "rev-parse", "HEAD").toString()
+  const bytes = await fs.readFile(path.join(desk, file), "utf8")
+  const pushesBefore = pushes.length
   const again = await task_archive({ deskRoot: desk, env, schedulePush, input: { track: "track", slug: "finished-work" } })
   assert.equal(again.status, "already_archived")
   assert.equal(again.factory_report_unavailable, "visibility_not_known", "still unknown: the reason is reported, not hidden")
+  assert.equal(again.factory_report_unchanged, true, "the same answer says nothing changed")
+  assert.equal(Object.hasOwn(again, "commit"), false, "no empty commit, so no false commit failure")
+  assert.equal(git(desk, "rev-parse", "HEAD").toString(), head, "nothing was committed")
+  assert.equal(await fs.readFile(path.join(desk, file), "utf8"), bytes, "nothing was written")
+  assert.equal(pushes.length, pushesBefore, "nothing to push")
 
   await visibility(env, "private")
   const before = pushes.length
   const filled = await task_archive({ deskRoot: desk, env, schedulePush, input: { track: "track", slug: "finished-work" } })
   assert.equal(filled.status, "already_archived")
   assert.equal(filled.factory_report, expectedLink())
+  assert.equal(Object.hasOwn(filled, "factory_report_unchanged"), false)
   assert.equal(Object.hasOwn(filled, "commit"), false, "the card's commit succeeded")
   assert.equal(pushes.length, before + 1, "the commit is pushed like every other card commit")
   const data = await card(desk, file)
