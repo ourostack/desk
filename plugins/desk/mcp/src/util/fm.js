@@ -6,6 +6,7 @@
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
+import { randomBytes } from "node:crypto"
 import { nfc } from "@adraffy/ens-normalize"
 import matter from "gray-matter"
 import { caseFold } from "unicode-case-folding"
@@ -70,18 +71,26 @@ export function serializeMarkdown(data, content) {
 }
 
 /** Write a markdown file with frontmatter, creating parent dirs as needed. */
+// Errors a rename over a card gives when something holds it open (an editor, antivirus, OneDrive on Windows): the card is then written in place.
+const HELD_OPEN = new Set(["EPERM", "EBUSY", "EACCES"])
+
 export async function writeMarkdown(filePath, data, content, { atomic = false } = {}) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   if (!atomic) return fs.writeFile(filePath, serializeMarkdown(data, content), "utf8")
   // Written beside the card and renamed over it (over what a symlinked card points at), so a reader sees the old card or the new one.
+  // The temporary name is unique to this write, and the card keeps its file mode.
   const target = await fs.realpath(filePath)
-  const temporary = `${target}.${process.pid}.tmp`
+  const temporary = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`
+  const text = serializeMarkdown(data, content)
   try {
-    await fs.writeFile(temporary, serializeMarkdown(data, content), "utf8")
+    await fs.writeFile(temporary, text, "utf8")
+    await fs.chmod(temporary, (await fs.stat(target)).mode & 0o7777)
     await fs.rename(temporary, target)
   } catch (error) {
-    await fs.rm(temporary, { force: true })
-    throw error
+    // A failed cleanup never hides the error that led to it.
+    await fs.rm(temporary, { force: true }).catch(() => {})
+    if (!HELD_OPEN.has(error.code)) throw error
+    await fs.writeFile(target, text, "utf8")
   }
 }
 
