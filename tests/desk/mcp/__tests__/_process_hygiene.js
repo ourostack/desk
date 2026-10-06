@@ -72,7 +72,13 @@ export function removeFixtureAfter(t, root) {
       let left
       try { left = readdirSync(root) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
       if (left.length === 0) return
-      throw new Error(`${error.message}; still in the folder: ${left.join(", ")}`)
+      const why = []
+      for (const name of left.slice(0, 3)) {
+        try { rmSync(path.join(root, name), { recursive: true, force: true }) } catch (inner) { why.push(`${inner.code} ${inner.path ?? name}: ${inner.message}`) }
+      }
+      let rest = ""
+      try { rest = readdirSync(root, { recursive: true }).slice(0, 40).join(", ") } catch { /* diagnostic only */ }
+      throw new Error(`${error.message}; still in the folder: ${left.join(", ")}; removing the first ones says: ${why.join(" | ")}; remaining entries: ${rest}`)
     }
   })
 }
