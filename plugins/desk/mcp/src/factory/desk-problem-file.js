@@ -212,8 +212,9 @@ export async function runFileDeskProblemCli({ argv = process.argv.slice(2), env 
   try {
     await fileDeskProblem(env, { mechanism, rawText: reason, fixAttempt: options.get("fix-attempt") ?? "not recorded", host: options.get("host") ?? "unknown" })
   } finally {
-    // The outcome (or the drop for a failed attempt) is recorded: the launcher's stamp is no longer a pending launch (`filer-launch.js`).
-    endLaunch(env, { mechanism, signature: reason })
+    // The outcome (or the drop for a failed attempt) is recorded: the launcher's stamp is no longer a pending launch (`filer-launch.js`). A
+    // launcher whose stamp is keyed by something other than the reason (protected-checkout keys it by the command) names it.
+    endLaunch(env, { mechanism, signature: options.get("launch-signature") ?? reason })
   }
   return 0
 }

@@ -6,7 +6,7 @@
 // reads, so a marker recorded while an overlay was unreadable never routes to the default store, and is corrected once the overlay reads.
 // A Claude Code or Copilot CLI marker that recorded a default route beside no plugins at all came from a scan that read nothing (an older
 // hook read a missing registry as empty), so it is held the same way. A held route whose cause cleared without a declaration stays held:
-// only the desk's own declaration, or a manifest the session itself loaded, releases it (`held-route.js`). A default route recorded with warnings, or beside no plugins, never
+// only the desk's own declaration, or a manifest the session itself loaded that now declares a store other than the public one, releases it (`held-route.js`). A default route recorded with warnings, or beside no plugins, never
 // proves a Codex default route either.
 // `proofIndex(markers)` and `provenBy(marker, index)` (together `routeProven(marker, siblings)`) are the one R3 proof of a Codex default
 // route: a Claude Code or Copilot CLI marker for the same desk, within `ROUTE_PROOF_WINDOW_MS` (30 days), that routed by default after

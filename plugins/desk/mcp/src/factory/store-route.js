@@ -165,6 +165,9 @@ export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync, s
  * - when all of them now declare nothing, the recorded store stands if the hook recorded one (a Desk before 2026-10-06 skipped a broken
  *   manifest and went on to the next overlay or the default). A hook from 2026-10-06 on records no store once a manifest is broken, so
  *   what the later plugins declared is not known, and the route stays held: only a declaration releases it (`held-route.js`).
+ * - a read never releases a route to the public store (`DEFAULT_STORE`), whether a manifest now declares it or an older Desk recorded it:
+ *   the file read now may not be the plugin the session ran with (a Copilot plugin folder carries no version, so another plugin can take
+ *   its place), so the route stays held. Only the desk's own declaration routes a held session to the public store.
  *
  * A warning may name a plugin folder instead of a manifest: one the host listed that is missing, is not a folder or cannot be read. It is
  * read again as the hook reads a folder, and holds while it is still missing or any manifest in it is unreadable.
@@ -174,8 +177,9 @@ export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync, s
 export function recheckRoute(routing, read = readFileSync, stat = statSync) {
   if (routing.warnings.length === 0) return routing
   const now = rereadWarnings(routing.warnings, read, stat)
-  if (now !== null && now !== undefined) return { ...now, warnings: [] }
-  return now === undefined && routing.store !== null ? { ...routing, warnings: [] } : { store: null, source: "invalid_declaration", warnings: routing.warnings }
+  const settled = now === undefined ? routing : now
+  if (settled === null || settled.store === null || settled.store === DEFAULT_STORE) return { store: null, source: "invalid_declaration", warnings: routing.warnings }
+  return { ...settled, warnings: [] }
 }
 
 /**

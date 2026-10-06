@@ -458,11 +458,17 @@ const hostEnforcementCheck = {
   budgetMs: 20,
   async run(ctx) {
     if (ctx.host !== "claude" && ctx.host !== "copilot") return {};
-    const { hookRegistrationDeskProblem } = await runtime("runtime/host-enforcement-registration.js");
+    const [{ hookRegistrationDeskProblem }, { shouldLaunchFiler }] = await Promise.all([
+      runtime("runtime/host-enforcement-registration.js"), runtime("runtime/filer-throttle.js"),
+    ]);
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
     let repairCommand = null;
     const fileProblem = async ({ host, reason }) => {
-      repairCommand = compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "host-enforcement", "--reason", reason || "unknown", "--host", host || "unknown", "--fix-attempt", HOST_ENFORCEMENT_FIX_ATTEMPT);
+      // The throttle writes its pending stamp before the launch, as every other launcher does, so a filer that never starts reads as a
+      // drop, not a measured "no hit" (`factory/filer-launch.js`); the filer clears it under the same reason.
+      const filed = reason || "unknown";
+      if (!shouldLaunchFiler({ env: ctx.env, mechanism: "host-enforcement", signature: filed })) return { file: "filing already queued (within the last hour)" };
+      repairCommand = compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "host-enforcement", "--reason", filed, "--host", host || "unknown", "--fix-attempt", HOST_ENFORCEMENT_FIX_ATTEMPT);
       return { file: "filing in background" };
     };
     const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot, env: ctx.env, fileProblem });

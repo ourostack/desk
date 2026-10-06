@@ -111,7 +111,7 @@ test("a Copilot overlay whose plugin.json cannot be parsed holds the route", () 
   assert.deepEqual(saved.routing, { store: null, source: "invalid_declaration", warnings: [{ code: "manifest_unparseable", manifest: path.join(plugins, "corp", "plugin.json") }] })
 }))
 
-test("an existing marker that recorded the default after skipping a broken overlay is held, then corrected by the next sweep", () => scratch(async (ctx) => {
+test("an existing marker that recorded the default after skipping a broken overlay is held, and a reread never releases it to the public store", () => scratch(async (ctx) => {
   const marker = await session(ctx)
   const { manifest } = await claudeHome(ctx, TRUNCATED)
   // What a Desk before 2026-10-06 wrote: the default store, with the broken overlay only as a warning.
@@ -127,8 +127,31 @@ test("an existing marker that recorded the default after skipping a broken overl
   assert.deepEqual(await deriveMarker(ctx.env, legacy, { quietMs: 0, requireStored: true }), { result: "held", store: null })
   await fs.writeFile(manifest, HEALTHY)
   assert.equal(places(), "away", "the overlay reads again: the session belongs to the private store, so the public copy is retracted")
+  // Review round 2, M2: the warned path now declares nothing (an overlay update moved its declaration, or another plugin took the folder).
+  // The older Desk's recorded default is not proof, so the session stays held.
   await fs.writeFile(manifest, JSON.stringify({ name: "corp", version: "1.0.0" }))
-  assert.equal(places(), "here", "the overlay declares nothing: the recorded default was right after all")
+  assert.equal(places(), "unknown", "the overlay declares nothing: still held, never the recorded public default")
+  assert.deepEqual(await deriveMarker(ctx.env, legacy, { quietMs: 0, requireStored: true }), { result: "held", store: null })
+  await fs.writeFile(manifest, JSON.stringify({ name: "other", desk: { factory: { store: STORE } } }))
+  assert.equal(places(), "unknown", "a plugin at the warned path that declares the public store does not release it either")
+}))
+
+test("review round 2, M1: a different plugin swapped into a held Copilot plugin folder cannot release the session to the public store", () => scratch(async (ctx) => {
+  // A Copilot plugin folder carries no version, so the file at the warned path may be another plugin than the one the session ran with.
+  const folder = path.join(ctx.base, ".copilot/installed-plugins/corp")
+  const manifest = path.join(folder, "plugin.json")
+  await fs.mkdir(folder, { recursive: true })
+  const routing = { store: null, source: "invalid_declaration", warnings: [{ code: "manifest_unparseable", manifest }] }
+  const held = { ...(await session(ctx)), host: "copilot-cli", end_reason: "other", ended_at: recent(), updated_at: recent(), plugins: [{ name: "corp", version: "1.0.0" }], routing }
+  await writeMarker(ctx.env, held)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  for (const swapped of [{ name: "other", desk: { factory: { store: STORE } } }, { name: "other" }]) {
+    await fs.writeFile(manifest, JSON.stringify(swapped))
+    assert.deepEqual(markerRoute(held), { store: null, source: "invalid_declaration", warnings: routing.warnings })
+    assert.deepEqual(await deriveMarker(ctx.env, held, { quietMs: 0, requireStored: true }), { result: "held", store: null })
+  }
+  await fs.writeFile(manifest, JSON.stringify({ name: "corp", desk: { factory: { store: PRIVATE } } }))
+  assert.deepEqual(markerRoute(held), { store: PRIVATE, source: "overlay", warnings: [] }, "a private declaration at its own path still releases it")
 }))
 
 test("a default route recorded with a warning never proves a Codex default route", () => scratch(async (ctx) => {

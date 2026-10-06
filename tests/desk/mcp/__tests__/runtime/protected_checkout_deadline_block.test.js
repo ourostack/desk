@@ -14,7 +14,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
-import { REPEAT_TIMEOUT_THRESHOLD } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
+import { REPEAT_TIMEOUT_THRESHOLD, commandSignature } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 import { protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { processesWithCwdUnder, reapProcessesUnder, removeFixtureAfter, slowGit } from "../_process_hygiene.js"
 
@@ -93,6 +93,7 @@ test("deadlineDecision adds a Desk problem: protected-checkout block and queues 
   assert.equal(calls[0].mechanism, "protected-checkout")
   assert.equal(calls[0].host, "claude")
   assert.match(calls[0].reason, /repeated timeout \(3x\)/u)
+  assert.equal(calls[0].launchSignature, commandSignature("git checkout topic"), "the filer is told which throttle stamp to clear")
 })
 
 test("deadlineDecision throttles the filer spawn to once per hour even though the block keeps rendering on every later repeated timeout", async (t) => {

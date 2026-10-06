@@ -2,7 +2,7 @@
 // or does not list Desk, too many plugins, a scan cut short) records a held route: no store, so the session is never derived or published.
 // A hold is released only by something that positively declares a store for that session: every reader routes a desk that declares its
 // store in `_meta/factory.json` to it, and reads the warned manifests again (`store-route.js` `recheckRoute`), so a manifest the session
-// itself loaded that now declares a store routes it there. Nothing infers the default store for a held session: another session's plugin
+// itself loaded that now declares a store other than the public one routes it there. Nothing infers the default store for a held session: another session's plugin
 // scan says nothing about the plugins this one ran with (a `claude --plugin-dir` overlay, another config folder, an overlay uninstalled
 // since), so a hold whose cause cleared without a declaration waits. A held marker is kept for 90 days (`outbox.js` `listMarkers`),
 // counted with its reason by the sweep for `desk_doctor` and the boot line (`routeHolds`), and reported once pruned (`held_pruned`), so a
@@ -56,7 +56,7 @@ export const HOLD_REMEDIES = Object.freeze({
   too_many_plugins: "remove plugins until at most 64 are installed, or declare the store in the desk's `_meta/factory.json`",
   scan_deadline: "nothing; the next session reads the plugin list again",
   plugin_scan_incomplete: REMEDY_SCAN,
-  needs_declaration: "the plugin reads now but declares no store, and the plugins this session ran with cannot be read again; declare the store in the desk's `_meta/factory.json` to release it, or it is pruned after 90 days",
+  needs_declaration: "the plugin reads now but declares no private store, and the plugins this session ran with cannot be read again; declare the store in the desk's `_meta/factory.json` to release it, or it is pruned after 90 days",
 })
 
 /**
