@@ -563,14 +563,6 @@ jobs:
         run: |
           node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/feedback/windows_acl.test.js ../../../tests/desk/mcp/__tests__/feedback/windows_store.test.js ../../../tests/desk/mcp/__tests__/feedback/source_mirror.test.js ../../../tests/desk/mcp/__tests__/factory/outbox_windows.test.js
 
-      # The protected-checkout guard reads PowerShell with a hand-written tokenizer. This asks PowerShell's own parser (pwsh is on the runner)
-      # for every command each allowed corpus command would run, and fails when one runs git or a launcher the guard did not judge.
-      # The same test runs on Linux in the coverage shards, where it skips cleanly if pwsh is absent.
-      - name: Check the protected-checkout guard against PowerShell's own parser on Windows
-        working-directory: plugins/desk/mcp
-        run: |
-          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/runtime/protected_checkout_pwsh_differential.test.js
-
       # Both host MCP configs start Desk through mcp/bootstrap.cjs with whatever node the host has, so native Windows must complete a real MCP handshake through it.
       - name: Complete an MCP handshake through the Desk bootstrap on Windows
         working-directory: plugins/desk/mcp

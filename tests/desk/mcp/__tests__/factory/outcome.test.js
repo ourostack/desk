@@ -100,10 +100,10 @@ test("readRecord reads a full record and reads a malformed signoff as absent", (
 
 test("readRecord reads a malformed part as null, never as a guess", () => {
   const signoff = readRecord({ signoff: { state: "accepted", at: "yesterday", verified: "yes", reason: "nonsense" } }).signoff
-  assert.deepEqual(signoff, { state: "accepted", at: null, verified: null, reason: null })
-  assert.equal(readRecord({ signoff: { state: "accepted", verified: 1 } }).signoff.verified, null)
+  assert.deepEqual(signoff, { state: "accepted", at: null, reason: null })
+  assert.equal(readRecord({ signoff: { state: "accepted", verified: 1 } }).signoff.verified, undefined)
   assert.equal(readRecord({ signoff: { state: "accepted", verified: false } }).signoff.verified, false)
-  assert.equal(readRecord({ signoff: { state: "accepted", verified: "true" } }).signoff.verified, null)
+  assert.equal(readRecord({ signoff: { state: "accepted", verified: "true" } }).signoff.verified, undefined)
   const flow = readRecord({
     flow: { since: "born", rev: -1, reached: "sleeping", first_validating_at: 7, first_delivered_at: "", delivered_at: {}, deliveries: 1.5 },
   }).flow
@@ -177,7 +177,7 @@ test("recordFromLines reads null, empty, comment and unindented-list forms", () 
     "flow: {}",
   ]
   const read = recordFromLines(lines)
-  assert.deepEqual(read.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.deepEqual(read.signoff, { state: "delivered_unsigned", at: null, reason: null })
   assert.deepEqual(read.returns, [fullData().returns[0]])
   assert.equal(read.flow.rev, null)
   assert.deepEqual(recordFromLines(["returns: []"]).returns, [])
@@ -219,7 +219,7 @@ test("deliver marks the card delivered_unsigned, counts the delivery and raises 
   const snapshot = frozen(before)
   const after = deliver(before, { at: T3 })
   assert.deepEqual(before, snapshot)
-  assert.deepEqual(after.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.deepEqual(after.signoff, { state: "delivered_unsigned", at: null, reason: null })
   assert.equal(after.flow.delivered_at, T3)
   assert.equal(after.flow.first_delivered_at, T1)
   assert.equal(after.flow.deliveries, 2)
@@ -254,7 +254,7 @@ test("a second delivery keeps first_delivered_at and resets signoff", () => {
   assert.equal(second.flow.first_delivered_at, T1)
   assert.equal(second.flow.delivered_at, T3)
   assert.equal(second.flow.deliveries, 2)
-  assert.deepEqual(second.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.deepEqual(second.signoff, { state: "delivered_unsigned", at: null, reason: null })
 })
 
 test("deliver refuses a time that is not an ISO time", () => {
@@ -294,10 +294,10 @@ test("sign writes the acceptance or the refusal, raises rev and never mutates it
   const accepted = sign(record, { status: "done", outcome: "accepted", verified: true, at: T2 })
   assert.deepEqual(record, snapshot)
   assert.equal(accepted.changed, true)
-  assert.deepEqual(accepted.record.signoff, { state: "accepted", at: T2, verified: true, reason: null })
+  assert.deepEqual(accepted.record.signoff, { state: "accepted", at: T2, reason: null })
   assert.equal(accepted.record.flow.rev, 2)
   const refused = sign(record, { status: "done", outcome: "refused", reason: "incomplete", returnReason: "agent_error", verified: false, at: T2 })
-  assert.deepEqual(refused.record.signoff, { state: "refused", at: T2, verified: false, reason: "incomplete" })
+  assert.deepEqual(refused.record.signoff, { state: "refused", at: T2, reason: "incomplete" })
   assert.deepEqual(refused.record.returns, [])
 })
 
@@ -313,38 +313,17 @@ test("sign on a done card with no record adopts a flow and records the sign-off"
   assert.equal(outcomeState(result.record, "done"), "accepted")
 })
 
-test("sign reads anything but true as unwitnessed", () => {
-  const result = sign(delivered(), { status: "done", outcome: "accepted", verified: "yes", at: T2 })
-  assert.equal(result.record.signoff.verified, false)
+test("sign ignores a verified argument and writes no verified flag", () => {
+  const result = sign(delivered(), { status: "done", outcome: "accepted", verified: true, at: T2 })
+  assert.equal(Object.hasOwn(result.record.signoff, "verified"), false)
 })
 
-test("an unwitnessed sign never replaces a witnessed record", () => {
-  const witnessed = sign(delivered(), { status: "done", outcome: "accepted", verified: true, at: T2 }).record
-  const repeat = sign(witnessed, { status: "done", outcome: "accepted", verified: false, at: T3 })
-  assert.equal(repeat.changed, false)
-  assert.deepEqual(repeat.record, witnessed)
-  assert.equal(
-    codeOf(() => sign(witnessed, { status: "done", outcome: "refused", reason: "defect", returnReason: "agent_error", verified: false, at: T3 })),
-    "evidence_lower",
-  )
-})
-
-test("an unwitnessed repeat of the same refusal over a witnessed one changes nothing", () => {
-  const args = { status: "done", outcome: "refused", reason: "defect", returnReason: "agent_error", at: T3 }
-  const held = sign(delivered(), { ...args, verified: true, at: T2 }).record
-  const repeat = sign(held, { ...args, verified: false })
-  assert.equal(repeat.changed, false)
-  assert.deepEqual(repeat.record, held)
-})
-
-test("a witnessed sign replaces an unwitnessed one", () => {
-  const unwitnessed = sign(delivered(), { status: "done", outcome: "accepted", verified: false, at: T2 }).record
-  const same = sign(unwitnessed, { status: "done", outcome: "accepted", verified: true, at: T3 })
-  assert.equal(same.changed, true)
-  assert.deepEqual(same.record.signoff, { state: "accepted", at: T3, verified: true, reason: null })
-  const other = sign(unwitnessed, { status: "done", outcome: "refused", reason: "defect", returnReason: "agent_error", verified: true, at: T3 })
+test("sign over a legacy card that carries verified replaces it by outcome alone", () => {
+  const legacy = { ...delivered(), signoff: { state: "accepted", at: T2, verified: false, reason: null } }
+  assert.equal(sign(legacy, { status: "done", outcome: "accepted", at: T3 }).changed, false)
+  const other = sign(legacy, { status: "done", outcome: "refused", reason: "defect", returnReason: "agent_error", at: T3 })
   assert.equal(other.changed, true)
-  assert.equal(other.record.signoff.state, "refused")
+  assert.deepEqual(other.record.signoff, { state: "refused", at: T3, reason: "defect" })
 })
 
 test("a different outcome at the same evidence replaces the record", () => {
@@ -356,17 +335,15 @@ test("a different outcome at the same evidence replaces the record", () => {
 })
 
 test("repeating the same sign changes nothing", () => {
-  for (const verified of [true, false]) {
-    const first = sign(delivered(), { status: "done", outcome: "accepted", verified, at: T2 }).record
-    const again = sign(first, { status: "done", outcome: "accepted", verified, at: T3 })
-    assert.equal(again.changed, false)
-    assert.deepEqual(again.record, first)
-  }
+  const first = sign(delivered(), { status: "done", outcome: "accepted", at: T2 }).record
+  const again = sign(first, { status: "done", outcome: "accepted", at: T3 })
+  assert.equal(again.changed, false)
+  assert.deepEqual(again.record, first)
 })
 
-test("a witnessed repeat of a witnessed record changes nothing and does not raise rev", () => {
-  const first = sign(delivered(), { status: "done", outcome: "refused", reason: "defect", returnReason: "agent_error", verified: true, at: T2 }).record
-  const again = sign(first, { status: "done", outcome: "refused", reason: "other", returnReason: "external", verified: true, at: T3 })
+test("repeating a refusal with other reasons changes nothing and does not raise rev", () => {
+  const first = sign(delivered(), { status: "done", outcome: "refused", reason: "defect", returnReason: "agent_error", at: T2 }).record
+  const again = sign(first, { status: "done", outcome: "refused", reason: "other", returnReason: "external", at: T3 })
   assert.equal(again.changed, false)
   assert.equal(again.record.flow.rev, first.flow.rev)
 })
@@ -420,7 +397,7 @@ test("outcomeSnapshot returns the times as the card holds them and does not inve
   assert.deepEqual(outcomeSnapshot(record, { status: "done", now: T3, evidenceAt: "2020-01-01T00:00:00.000Z" }), {
     rev: 2,
     state: "accepted",
-    verified: true,
+    verified: null,
     reason: null,
     deliveries: 1,
     delivered_at: T1,
@@ -712,14 +689,16 @@ test("a return line round-trips through formatReturn and parseReturn, with and w
   const plain = entry()
   assert.equal(formatReturn(plain), `${R1} validating processing agent_error at_review`)
   assert.deepEqual(parseReturn(formatReturn(plain)), plain)
-  const refused = entry({ from: "done", caught: "after_delivery", refusal: "defect", refusal_verified: true })
-  assert.equal(formatReturn(refused), `${R1} done processing agent_error after_delivery refused=defect verified`)
+  const refused = entry({ from: "done", caught: "after_delivery", refusal: "defect", refusal_verified: null })
+  assert.equal(formatReturn(refused), `${R1} done processing agent_error after_delivery refused=defect`)
   assert.deepEqual(parseReturn(formatReturn(refused)), refused)
-  const unverified = entry({ from: "done", caught: "after_delivery", refusal: "other", refusal_verified: false })
-  assert.equal(formatReturn(unverified).endsWith("refused=other unverified"), true)
-  assert.deepEqual(parseReturn(formatReturn(unverified)), unverified)
-  assert.equal(formatReturn(entry({ from: "done", caught: "after_delivery", refusal: "defect", refusal_verified: null })).endsWith("refused=defect unverified"), true)
-  const card = fullData().returns
+  // A line written before Desk dropped the witness still reads, and writes back without the token.
+  for (const [token, flag] of [["verified", true], ["unverified", false]]) {
+    const legacy = parseReturn(`${R1} done processing agent_error after_delivery refused=defect ${token}`)
+    assert.equal(legacy.refusal_verified, flag)
+    assert.equal(formatReturn(legacy), `${R1} done processing agent_error after_delivery refused=defect`)
+  }
+  const card = fullData().returns.map((line) => line.replace(/ verified$/u, ""))
   assert.deepEqual(card.map((line) => formatReturn(parseReturn(line))), card)
 })
 
@@ -813,14 +792,12 @@ test("refuse appends the return with both reasons, resets reached and keeps the 
   const before = frozen(signed)
   const next = refuse(signed, { at: T2, reason: "defect", returnReason: "agent_error", verified: true })
   assert.deepEqual(signed, before)
-  assert.deepEqual(next.returns, [`${T2} done processing agent_error after_delivery refused=defect verified`])
+  assert.deepEqual(next.returns, [`${T2} done processing agent_error after_delivery refused=defect`])
   assert.equal(next.flow.reached, "processing")
   assert.equal(next.flow.rev, signed.flow.rev + 1)
   assert.deepEqual(next.signoff, signed.signoff)
   assert.equal(outcomeState(next, "processing"), "refused")
-  const unwitnessed = refuse(signed, { at: T2, reason: "other", returnReason: "external", verified: false })
-  assert.equal(unwitnessed.returns[0].endsWith("refused=other unverified"), true)
-  assert.equal(refuse(signed, { at: T2, reason: "other", returnReason: "external" }).returns[0].endsWith("unverified"), true)
+  assert.equal(refuse(signed, { at: T2, reason: "other", returnReason: "external", verified: false }).returns[0].endsWith("refused=other"), true)
   assert.equal(refuse(legacyRefused(), { at: T2, reason: "defect", returnReason: "agent_error", verified: true }).flow.since, "adopted")
 })
 

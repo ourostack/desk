@@ -431,29 +431,6 @@ test("Claude hook and MCP configuration stay plugin-relative and non-manual", ()
   assert.doesNotMatch(JSON.stringify(mcp), /\$\{pluginRoot\}/u)
 })
 
-test("Claude registers the Desk-only enforcement hooks: a PreToolUse deny and a UserPromptSubmit naming recorder", () => {
-  const hooks = loadJson("plugins", "desk", "hooks", "hooks.json")
-
-  const enforcement = hooks.hooks.PreToolUse.find((entry) => entry.hooks.some((hook) => hook.command.includes("host-enforcement.cjs")))
-  assert.ok(enforcement, "hooks.json's PreToolUse array must register host-enforcement.cjs")
-  for (const surface of ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck"]) {
-    assert.ok(new RegExp(`^(?:${enforcement.matcher})$`, "u").test(surface), `matcher must cover ${surface}`)
-  }
-  assert.ok(new RegExp(`^(?:${enforcement.matcher})$`, "u").test("mcp__claude_ai_Claude_Docs__create"), "matcher must cover Claude Docs MCP tools")
-  for (const notDenied of ["TaskStop", "TaskOutput", "TodoWrite", "Agent", "SendMessage"]) {
-    assert.ok(!new RegExp(`^(?:${enforcement.matcher})$`, "u").test(notDenied), `matcher must not cover ${notDenied}`)
-  }
-  assert.equal(
-    enforcement.hooks[0].command,
-    "node \"${CLAUDE_PLUGIN_ROOT}/hooks/host-enforcement.cjs\" claude",
-  )
-  assert.equal(typeof enforcement.hooks[0].timeout, "number")
-
-  const naming = hooks.hooks.UserPromptSubmit
-  assert.ok(Array.isArray(naming) && naming.length >= 1, "hooks.json must register a UserPromptSubmit hook")
-  assert.ok(naming.some((entry) => entry.hooks.some((hook) => hook.command.includes("desk-naming.cjs"))), "UserPromptSubmit must run desk-naming.cjs")
-})
-
 test("hooks.json registers sync-end.cjs under SessionEnd, not Stop (M4-6 Part 3, Review Focus: never raise on every turn)", () => {
   const hooks = loadJson("plugins", "desk", "hooks", "hooks.json")
   const registeredUnder = (event) => hooks.hooks[event].some((entry) => entry.hooks.some((hook) => hook.command.includes("sync-end.cjs")))

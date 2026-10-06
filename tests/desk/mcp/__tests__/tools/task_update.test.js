@@ -787,7 +787,7 @@ test("a move to done marks the card delivered_unsigned with the delivery time", 
   assert.equal((await readFront(file)).data.flow.deliveries, 0)
   await task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
   const { data } = await readFront(file)
-  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, reason: null })
   assert.equal(data.flow.since, "created")
   assert.equal(data.flow.reached, "done")
   assert.equal(data.flow.rev, 1)

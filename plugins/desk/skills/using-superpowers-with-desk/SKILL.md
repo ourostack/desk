@@ -91,7 +91,7 @@ Also pass the mapper's close-out rule in both brief types: every child returns e
 
 When the work is the factory itself, invoke factory-work first and put its review questions in every reviewer brief.
 
-This rule is passed through the adapter, not patched into the vendored Superpowers templates. A [protected-checkout denial](../../docs/protected-checkouts.md) applies to parent agents and subagents alike; it does not grant ownership of a different checkout.
+This rule is passed through the adapter, not patched into the vendored Superpowers templates. Owning your own worktree is the rule above; it does not grant ownership of a different checkout.
 
 Do not create a competing `.superpowers/sdd` tree. Keep canonical Git-backed Desk/Crew state on main through its established write protocol; an intentional alpha applies to the approved code artifact, not a competing workspace-state branch. An explicitly absent file fails; never replace that failure with an inferred plan, a mock receipt or a fallback workspace. The mapper returns `cleanupPaths: []`, which is no deletion authority, and a printed evidence path is neither proof of protection nor permission.
 

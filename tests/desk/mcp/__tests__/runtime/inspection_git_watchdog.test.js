@@ -10,16 +10,16 @@ import { blockedRepo, posixOnly, removeFixtureAfter } from "../_process_hygiene.
 
 test("the watchdog never fires on a Git read that answers, and the in-process timeout still reports ETIMEDOUT", { skip: posixOnly }, async (t) => {
   const quick = blockedRepo(t)
-  const result = await readInspectionGit(quick.prot, ["--version"], {})
+  const result = await readInspectionGit(quick.prot, ["--version"])
   assert.equal(result.ok, true)
   assert.match(result.stdout, /^git version /u)
-  await assert.rejects(() => readInspectionGit(quick.prot, ["symbolic-ref", "HEAD"], {}, { timeoutMs: 300 }), { code: "ETIMEDOUT" })
+  await assert.rejects(() => readInspectionGit(quick.prot, ["symbolic-ref", "HEAD"], { timeoutMs: 300 }), { code: "ETIMEDOUT" })
   assert.equal(liveInspectionChildren(), 0)
 })
 
 test("a Git read that fails reports the exit code rather than hanging", { skip: posixOnly }, async (t) => {
   const quick = blockedRepo(t)
-  const result = await readInspectionGit(quick.root, ["rev-parse", "--git-dir"], { GIT_DIR: path.join(quick.root, "missing") })
+  const result = await readInspectionGit(quick.root, ["cat-file", "-t", "deadbeef"])
   assert.equal(result.ok, false)
   assert.equal(result.code, 128)
 })
@@ -79,7 +79,7 @@ test("reapOnSignal delivers the signal again only when nobody else listens for i
 test("two concurrent reads share one set of handlers, and the handlers are gone once both finish", { skip: posixOnly }, async (t) => {
   const quick = blockedRepo(t)
   const before = process.listenerCount("exit")
-  const both = Promise.all([readInspectionGit(quick.root, ["--version"], {}), readInspectionGit(quick.root, ["--version"], {})])
+  const both = Promise.all([readInspectionGit(quick.root, ["--version"]), readInspectionGit(quick.root, ["--version"])])
   assert.equal(liveInspectionChildren(), 2)
   assert.equal(process.listenerCount("exit"), before + 1)
   await both
@@ -98,7 +98,7 @@ test("a SIGTERM delivered to a process with a live read kills that read's Git an
   process.on("SIGTERM", host)
   t.after(() => process.removeListener("SIGTERM", host))
   const before = process.listenerCount("SIGTERM")
-  const read = readInspectionGit(f.prot, ["symbolic-ref", "HEAD"], {}, { timeoutMs: 60000 })
+  const read = readInspectionGit(f.prot, ["symbolic-ref", "HEAD"], { timeoutMs: 60000 })
   assert.equal(process.listenerCount("SIGTERM"), before + 1)
   await new Promise((resolve) => setTimeout(resolve, 300))
   process.emit("SIGTERM", "SIGTERM")
@@ -131,14 +131,14 @@ async function assertHookGone(f) {
 
 test("an in-process timeout kills Git's helper as well as Git", { skip: posixOnly }, async (t) => {
   const f = fsmonitorRepo(t)
-  await assert.rejects(() => readInspectionGit(f.root, f.args, {}, { timeoutMs: 1500 }), { code: "ETIMEDOUT" })
+  await assert.rejects(() => readInspectionGit(f.root, f.args, { timeoutMs: 1500 }), { code: "ETIMEDOUT" })
   await assertHookGone(f)
 })
 
 test("an abort kills Git's helper as well as Git", { skip: posixOnly }, async (t) => {
   const f = fsmonitorRepo(t)
   const controller = new AbortController()
-  const read = readInspectionGit(f.root, f.args, {}, { signal: controller.signal, timeoutMs: 60000 })
+  const read = readInspectionGit(f.root, f.args, { signal: controller.signal, timeoutMs: 60000 })
   for (let attempt = 0; attempt < 50 && !existsSync(f.pidFile); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100))
   controller.abort()
   await assert.rejects(read, { name: "AbortError" })
@@ -158,18 +158,18 @@ test("a wrapper that fails before exec is retried once with bare Git and then re
   resetWatchdogForTests()
   t.after(resetWatchdogForTests)
   const f = fakePerl(t, 'echo "exec failed: No such file or directory" >&2; exit 127')
-  const first = await readInspectionGit(f.root, ["--version"], {}, { watchdog: f.file })
+  const first = await readInspectionGit(f.root, ["--version"], { watchdog: f.file })
   assert.equal(first.ok, true)
   assert.match(first.stdout, /^git version /u)
   assert.equal(watchdogIsBroken(), true)
-  const second = await readInspectionGit(f.root, ["--version"], {})
+  const second = await readInspectionGit(f.root, ["--version"])
   assert.equal(second.ok, true)
 })
 
 test("a wrapper that cannot start at all is retried with bare Git", { skip: posixOnly }, async (t) => {
   resetWatchdogForTests()
   t.after(resetWatchdogForTests)
-  const result = await readInspectionGit(tmpdir(), ["--version"], {}, { watchdog: "/nonexistent/desk-no-such-perl" })
+  const result = await readInspectionGit(tmpdir(), ["--version"], { watchdog: "/nonexistent/desk-no-such-perl" })
   assert.equal(result.ok, true)
   assert.equal(watchdogIsBroken(), true)
 })
@@ -178,10 +178,10 @@ test("a Git failure is never mistaken for a broken wrapper, even with exit 127 o
   resetWatchdogForTests()
   t.after(resetWatchdogForTests)
   const plain127 = fakePerl(t, "exit 127")
-  const first = await readInspectionGit(plain127.root, ["--version"], {}, { watchdog: plain127.file })
+  const first = await readInspectionGit(plain127.root, ["--version"], { watchdog: plain127.file })
   assert.deepEqual([first.ok, first.code], [false, 127])
   const other = fakePerl(t, 'echo "exec failed: x" >&2; exit 5')
-  const second = await readInspectionGit(other.root, ["--version"], {}, { watchdog: other.file })
+  const second = await readInspectionGit(other.root, ["--version"], { watchdog: other.file })
   assert.deepEqual([second.ok, second.code], [false, 5])
   assert.equal(watchdogIsBroken(), false)
 })
@@ -189,11 +189,11 @@ test("a Git failure is never mistaken for a broken wrapper, even with exit 127 o
 test("a missing working directory is not blamed on the wrapper", { skip: posixOnly }, async (t) => {
   resetWatchdogForTests()
   t.after(resetWatchdogForTests)
-  await assert.rejects(readInspectionGit("/nonexistent/desk-no-such-cwd", ["--version"], {}), /ENOENT/u)
+  await assert.rejects(readInspectionGit("/nonexistent/desk-no-such-cwd", ["--version"]), /ENOENT/u)
   assert.equal(watchdogIsBroken(), false)
 })
 
 test("output past the 1 MiB limit kills Git and is reported as an error", { skip: posixOnly }, async (t) => {
   const f = fsmonitorRepo(t)
-  await assert.rejects(() => readInspectionGit(f.root, ["-c", "alias.big=!head -c 1300000 /dev/zero", "big"], {}, { timeoutMs: 10000 }), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" })
+  await assert.rejects(() => readInspectionGit(f.root, ["-c", "alias.big=!head -c 1300000 /dev/zero", "big"], { timeoutMs: 10000 }), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" })
 })

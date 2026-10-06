@@ -1,5 +1,5 @@
 // task_update's `note` and `next_step`: the only way an agent records progress on a task card, because a direct
-// edit of the card is denied (runtime/task-status-guard.js).
+// edit of the card is refused by the desk repository's pre-commit hook.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"

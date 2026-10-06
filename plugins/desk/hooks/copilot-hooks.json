@@ -21,56 +21,6 @@
         "bash": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
         "timeoutSec": 3
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot stop",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot stop",
-        "timeoutSec": 5
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" stop",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" stop",
-        "timeoutSec": 5
-      }
-    ],
-    "preToolUse": [
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot",
-        "timeoutSec": 10
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/process-kill-guard.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/process-kill-guard.cjs\" copilot",
-        "timeoutSec": 10
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/credential-probe-guard.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/credential-probe-guard.cjs\" copilot",
-        "timeoutSec": 10
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
-        "timeoutSec": 10
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/task-status-guard.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/task-status-guard.cjs\" copilot",
-        "timeoutSec": 10
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot check",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot check",
-        "timeoutSec": 10
       }
     ],
     "sessionStart": [
@@ -81,37 +31,11 @@
         "timeoutSec": 5
       }
     ],
-    "postToolUse": [
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot track",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot track",
-        "timeoutSec": 5
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot record",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot record",
-        "timeoutSec": 5
-      }
-    ],
     "userPromptSubmitted": [
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot prompt",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot prompt",
-        "timeoutSec": 5
-      },
       {
         "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
-        "timeoutSec": 5
-      },
-      {
-        "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" prompt",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/signoff-witness.cjs\" prompt",
         "timeoutSec": 5
       }
     ]

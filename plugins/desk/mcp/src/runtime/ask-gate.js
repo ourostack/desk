@@ -53,7 +53,7 @@ const CONFIRMED_UNATTENDED = "0"
 const GATED_TOOLS = new Set(["Write", "Edit", "Bash", "PowerShell"])
 const ACTIVATION_FILENAME = "desk.activation.json"
 
-// Best-effort only, unlike protected-checkout's real shell-command inspector.
+// Best-effort only.
 // Deny-by-default: once the filename appears in the command text, the
 // command is denied unless every `;`/`&&`/`||`/`|`-separated segment is
 // plainly one of a short read-only allowlist, with none of the tokens that

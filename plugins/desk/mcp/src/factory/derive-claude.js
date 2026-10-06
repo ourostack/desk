@@ -218,7 +218,7 @@ export function isHumanPromptLine(line) {
   return hasTextOrImage && !isAllToolResult
 }
 
-// A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, the same rules the sign-off witness uses (`humanMark` in `signoff-witness.js`). `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
+// A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
 function isHumanTurnLine(line) {
   if (line.isSidechain === true || line.isMeta === true) return false
   if (Object.hasOwn(line, "scheduledTaskId") || Object.hasOwn(line, "scheduledFireId")) return false

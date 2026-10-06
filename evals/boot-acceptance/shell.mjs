@@ -255,7 +255,7 @@ export function simpleCommands(command, depth = 0) {
   for (const raw of rawCommands(text)) {
     raw.words = raw.words.map((word) => expandVars(word, vars))
     for (const redirect of raw.redirects) redirect.target = expandVars(redirect.target, vars)
-    // `REPO_URL="https://..."` on a line of its own: later commands name the repository through `"$REPO_URL"` (round AG, elsewhere-clone run 2).
+    // `REPO_URL="https://..."` on a line of its own: later commands name the repository through `"$REPO_URL"` (round AG, Copilot run 2).
     if (raw.words.length > 0 && raw.redirects.length === 0 && raw.words.every((word) => ASSIGNMENT.test(word))) {
       // A value the shell computes (`$(cmd)`, which the tokenizer leaves as a bare `$`, or a backtick) is unknown: later uses stay as written, never a half-built string.
       for (const word of raw.words) {
@@ -478,9 +478,8 @@ export function remoteFetches(command, { cwd, home } = {}) {
 // Task card writes (round 12)
 // ---------------------------------------------------------------------------
 
-// The script write forms of the plugin's own Bash guard (`plugins/desk/mcp/src/runtime/shell-card-writes.js`, `SCRIPT_WRITE_PATTERNS`); round12.test.mjs
-// checks the two lists are the same, so the harness and the guard read the same forms.
-export const SCRIPT_WRITE_PATTERNS = [
+// The forms in which a script writes a file; a command that matches one and names a task card counts as a card write (`cardShellWrites`).
+const SCRIPT_WRITE_PATTERNS = [
   /\b(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|renameSync|truncateSync)\s*\(/u,
   /\bfs\s*\.\s*(?:promises\s*\.\s*)?(?:rename|writeFile|appendFile|copyFile|truncate)\s*\(/u,
   /\b(?:open|openSync)\s*\([^)]*,\s*(?:mode\s*=\s*)?["'][^"']*[wax+][^"']*["']/u,

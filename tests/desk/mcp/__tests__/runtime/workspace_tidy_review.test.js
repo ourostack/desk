@@ -118,7 +118,7 @@ test("R7 endpoint normalization is exact, supports Git push spellings and exclud
 test("R5 an already-cancelled Git inspection spawns no continuing process", async () => {
   const controller = new AbortController()
   controller.abort()
-  await assert.rejects(readInspectionGit(process.cwd(), ["status"], {}, { signal: controller.signal }), /abort/i)
+  await assert.rejects(readInspectionGit(process.cwd(), ["status"], { signal: controller.signal }), /abort/i)
   const result = await inspectWorkspace({ deskRoot: process.cwd(), signal: controller.signal })
   assert.equal(result.complete, false)
   assert.match(result.issues[0], /budget/)
@@ -128,7 +128,7 @@ test("R5 an already-cancelled Git inspection spawns no continuing process", asyn
 const slowGit = (seconds) => ["-c", `alias.slow=!sleep ${seconds}`, "slow"]
 
 test("a Git inspection that runs out of time says so, with the limit it was given", async () => {
-  await assert.rejects(readInspectionGit(process.cwd(), slowGit(1), {}, { timeoutMs: 100 }), /Git inspection timed out after 100 ms: git -c alias\.slow=!sleep 1 slow/u)
+  await assert.rejects(readInspectionGit(process.cwd(), slowGit(1), { timeoutMs: 100 }), /Git inspection timed out after 100 ms: git -c alias\.slow=!sleep 1 slow/u)
 })
 
 test("workspace tidy gives each Git call longer than the hooks' 2 s, so a loaded machine does not turn repairs into retained worktrees", async () => {

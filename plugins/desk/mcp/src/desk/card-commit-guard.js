@@ -2,10 +2,8 @@
 // `desks/<alias>/`) is refused unless Desk itself is committing.
 //
 // Why (boot acceptance round E, run 8): an agent rewrote a live card with a node script and committed it by hand, which skips
-// every check `task_update` makes (valid transitions, `done` evidence, the dated progress note). The tool-call guard
-// (`runtime/task-status-guard.js`) sees host Edit/Write calls and, best effort, shell commands that name a card; it cannot see
-// a script that builds the path in pieces. This hook is the other layer: whatever wrote the file, the commit that records it
-// has to come from Desk. Desk's own commits all go through `util/git-stage.js`'s `commitPaths`, which sets `DESK_TOOL_COMMIT=1`
+// every check `task_update` makes (valid transitions, `done` evidence, the dated progress note). Whatever wrote the
+// file, the commit that records it has to come from Desk. Desk's own commits all go through `util/git-stage.js`'s `commitPaths`, which sets `DESK_TOOL_COMMIT=1`
 // for the git call; the one hand-run commit Desk's own flows ask for (the one-time tidy, `migrations/02-tidy-desk.md`) sets it too.
 //
 // What counts as a change to a live card: a card added or modified in the commit, a type change, or a rename that also edits it

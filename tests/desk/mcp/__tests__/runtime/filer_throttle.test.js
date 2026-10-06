@@ -25,7 +25,7 @@ test("the first qualifying event always launches", (t) => {
 test("10 consecutive qualifying events for the same mechanism and signature spawn exactly one filer", (t) => {
   const { env } = fixtureEnv(t)
   const launches = []
-  for (let index = 0; index < 10; index += 1) launches.push(shouldLaunchFiler({ env, mechanism: "protected-checkout", signature: "same command" }))
+  for (let index = 0; index < 10; index += 1) launches.push(shouldLaunchFiler({ env, mechanism: "boot-check", signature: "same command" }))
   assert.deepEqual(launches, [true, ...Array(9).fill(false)])
 })
 
