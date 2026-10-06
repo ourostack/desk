@@ -50,10 +50,13 @@ test("the refresh records the store's open andon issues for tracked plugins that
   assert.deepEqual(andon["acme/work"], { checked_at: "2026-09-26T00:00:00.000Z", issues: [] }, "another store's record stays")
 }))
 
-test("a store without factory.json tracks nothing, and the record is capped", () => scratch(async ({ env }) => {
+test("a store without factory.json is config_missing and records nothing, never an empty list; a present empty config is a real look; the record is capped", () => scratch(async ({ env }) => {
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   const missing = fakeGh({ config: { code: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" }, issues: [issue(1)] })
-  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: missing.runner, now: NOW }), { result: "recorded", count: 0 })
+  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: missing.runner, now: NOW }), { result: "config_missing" })
+  assert.deepEqual((await readStatus(env)).andon, { [STORE]: { failure: "config_missing", failed_at: "2026-09-27T12:00:00.000Z" } }, "no issue list that reads as no open andon, and the failure recorded")
+  const empty = fakeGh({ config: content({ andon: { plugins: [] } }), issues: [issue(1)] })
+  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: empty.runner, now: NOW }), { result: "recorded", count: 0 })
   assert.deepEqual((await readStatus(env)).andon[STORE].issues, [])
   const many = fakeGh({ issues: Array.from({ length: MAX_RECORDED + 5 }, (_, index) => issue(index + 1)) })
   assert.deepEqual(await refreshAndon(env, { store: STORE, runner: many.runner, now: NOW }), { result: "recorded", count: MAX_RECORDED })
@@ -63,7 +66,7 @@ test("a store without factory.json tracks nothing, and the record is capped", ()
   assert.deepEqual(Object.keys((await readStatus(env)).andon), [STORE])
 }))
 
-test("the refresh records nothing without consent, an account, gh, a token, a valid factory.json or GitHub", () => scratch(async ({ env }) => {
+test("the refresh records no list without consent, an account, gh, a token, a valid factory.json or GitHub, and records each failure", () => scratch(async ({ env }) => {
   const { calls, runner } = fakeGh()
   assert.deepEqual(await refreshAndon(env, { store: STORE, runner }), { result: "not_opted_in" })
   await setConsent(env, { store: STORE, contribute: false, account: "contributor" })
@@ -80,7 +83,9 @@ test("the refresh records nothing without consent, an account, gh, a token, a va
   const forbidden = { code: 1, stdout: "", stderr: "gh: Forbidden (HTTP 403)" }
   assert.deepEqual(await refreshAndon(env, { store: STORE, runner: fakeGh({ config: forbidden }).runner }), { result: "http_403" })
   assert.deepEqual(await refreshAndon(env, { store: STORE, runner: fakeGh({ issues: () => forbidden }).runner }), { result: "http_403" })
-  assert.equal((await readStatus(env)).andon, undefined)
+  // Each failure is recorded beside the last good list, for the boot line; consent problems before any look record nothing of their own.
+  assert.equal((await readStatus(env)).andon[STORE].failure, "http_403")
+  assert.equal((await readStatus(env)).andon[STORE].issues, undefined)
   const failAfterAuth = async (args) => { if (args[0] === "auth") return { code: 0, stdout: TOKEN }; throw new Error("api boom") }
   await assert.rejects(refreshAndon(env, { store: STORE, runner: failAfterAuth }), /api boom/u)
 }))
@@ -90,4 +95,22 @@ test("the refresh uses the real clock when none is given", () => scratch(async (
   const before = Date.now()
   await refreshAndon(env, { store: STORE, runner: fakeGh().runner })
   assert.ok(Date.parse((await readStatus(env)).andon[STORE].checked_at) >= before - 1000)
+}))
+
+test("a failed refresh keeps the last good list and records its failure beside it; a later success clears it", () => scratch(async ({ env }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: fakeGh({ issues: [issue(41)] }).runner, now: NOW }), { result: "recorded", count: 1 })
+  const later = () => Date.parse("2026-09-28T12:00:00.000Z")
+  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: fakeGh({ auth: { code: 1, stdout: "" } }).runner, now: later }), { result: "auth_failed" })
+  assert.deepEqual((await readStatus(env)).andon[STORE], { checked_at: "2026-09-27T12:00:00.000Z", issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }], failure: "auth_failed", failed_at: "2026-09-28T12:00:00.000Z" })
+  await setConsent(env, { store: STORE, contribute: true })
+  assert.deepEqual(await refreshAndon(env, { store: STORE, runner: fakeGh().runner, now: later }), { result: "no_account" })
+  assert.equal((await readStatus(env)).andon[STORE].failure, "no_account")
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await refreshAndon(env, { store: STORE, runner: fakeGh().runner, now: later })
+  assert.deepEqual((await readStatus(env)).andon[STORE], { checked_at: "2026-09-28T12:00:00.000Z", issues: [] })
+  // A misshapen record is replaced by the failure alone.
+  await writeStatus(env, { andon: { [STORE]: [] } })
+  await refreshAndon(env, { store: STORE, runner: fakeGh({ auth: { code: 1, stdout: "" } }).runner, now: later })
+  assert.deepEqual((await readStatus(env)).andon[STORE], { failure: "auth_failed", failed_at: "2026-09-28T12:00:00.000Z" })
 }))

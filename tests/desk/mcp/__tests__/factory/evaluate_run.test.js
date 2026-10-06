@@ -298,7 +298,7 @@ async function seed(env, { marker = true } = {}) {
     await fs.writeFile(log, "{}\n")
     await writeMarker(env, {
       schema_version: 1, host: "claude-code", session_id: SESSION, log_path: log, cwd: env.HOME, desk_root: null,
-      end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [], updated_at: new Date().toISOString(),
+      end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(),
     })
     return log
   }

@@ -85,12 +85,25 @@ const CLEAN = { promptAt: 100, stopAt: 50, deliveredAt: 60, mainAgent: true, hum
 
 test("a prompt then a sign-off call in a later turn than the delivery is witnessed", () => {
   assert.deepEqual(witnessVerdict(CLEAN), { verified: true, why: "witnessed" })
-  assert.deepEqual(witnessVerdict({ ...CLEAN, stopAt: undefined, deliveredAt: undefined }), { verified: true, why: "witnessed" })
-  assert.deepEqual(witnessVerdict({ ...CLEAN, stopAt: null, deliveredAt: null }), { verified: true, why: "witnessed" })
+  assert.deepEqual(witnessVerdict({ ...CLEAN, stopAt: undefined }), { verified: true, why: "witnessed" })
+  assert.deepEqual(witnessVerdict({ ...CLEAN, stopAt: null, stopMissing: false }), { verified: true, why: "witnessed" })
+})
+
+test("reproduction r2: a card with no readable delivery time is no_delivery_time, never verified", () => {
+  for (const deliveredAt of [undefined, null]) assert.deepEqual(witnessVerdict({ ...CLEAN, deliveredAt }), { verified: false, why: "no_delivery_time" })
+  // A time that is not a number still reads as not before the prompt.
+  assert.deepEqual(witnessVerdict({ ...CLEAN, deliveredAt: "60" }), { verified: false, why: "same_turn_as_delivery" })
+  assert.deepEqual(witnessVerdict({ ...CLEAN, deliveredAt: Number.NaN }), { verified: false, why: "same_turn_as_delivery" })
+})
+
+test("a lost stop record is no_stop_record, ahead of the stop and delivery checks", () => {
+  assert.deepEqual(witnessVerdict({ ...CLEAN, stopAt: null, stopMissing: true }), { verified: false, why: "no_stop_record" })
+  assert.deepEqual(witnessVerdict({ ...CLEAN, stopAt: null, stopMissing: true, deliveredAt: undefined }), { verified: false, why: "no_stop_record" })
+  assert.deepEqual(witnessVerdict({ ...CLEAN, humanOrigin: false, stopMissing: true }), { verified: false, why: "not_human_origin" })
 })
 
 test("the closed list of reasons is exported", () => {
-  assert.deepEqual(WITNESS_REASONS, ["witnessed", "no_witness", "subagent", "subagent_not_ruled_out", "not_human_origin", "human_origin_unknown", "no_prompt_since_stop", "same_turn_as_delivery"])
+  assert.deepEqual(WITNESS_REASONS, ["witnessed", "no_witness", "subagent", "subagent_not_ruled_out", "not_human_origin", "human_origin_unknown", "no_stop_record", "no_prompt_since_stop", "no_delivery_time", "same_turn_as_delivery"])
 })
 
 test("a sign-off in the turn that delivered the work is unverified as same_turn_as_delivery", () => {
@@ -140,18 +153,57 @@ test("the reasons apply in the order no_witness, subagent, subagent_not_ruled_ou
 test("the prompt hook sets prompt_at and the stop hook sets stop_at, each keeping the other", () => {
   const stateDir = fresh("state")
   assert.deepEqual(recordPrompt({ session_id: "s1" }, { stateDir, now: () => 100 }), {})
-  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: null })
+  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: null, prompts: 1, stops: 0 })
   assert.deepEqual(recordStop({ hook_event_name: "Stop", session_id: "s1" }, { stateDir, now: () => 200 }), {})
-  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: 200 })
+  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: 200, prompts: 1, stops: 1 })
   recordPrompt({ session_id: "s1" }, { stateDir, now: () => 300 })
-  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 300, stop_at: 200 })
+  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 300, stop_at: 200, prompts: 2, stops: 1 })
   assert.equal(statSync(witnessFile(stateDir, "s1")).mode & 0o777, 0o600)
+})
+
+test("more prompts than stops by more than the turn in progress marks a stop as lost, on Claude Code and on Copilot; a first turn does not", () => {
+  // First turn: one prompt, no stop yet. Not lost.
+  const first = signoff({ lines: [human(T0)], promptHookAt: T0 + 200, deliveredAt: T0 - 60_000 })
+  assert.equal(first.witness.stopMissing, undefined)
+  assert.deepEqual(first.verdict, { verified: true, why: "witnessed" })
+  // Two prompts and the stop hook never wrote: lost.
+  const stateDir = fresh("state")
+  recordPrompt({ session_id: "s1" }, { stateDir, now: () => T0 - 30_000 })
+  recordPrompt({ session_id: "s1" }, { stateDir, now: () => T0 + 200 })
+  issueTicket(signoffCall(stateDir, callTranscript(human(T0))), { ...FAST, stateDir, now: () => T0 + 60_000 })
+  assert.equal(JSON.parse(readFileSync(ticketFile(stateDir, TASK), "utf8")).stop_missing, true)
+  const witness = witnessFor({ env: CLAUDE_ENV, stateDir, ...TASK, now: () => T0 + 61_000 })
+  assert.equal(witness.stopMissing, true)
+  assert.deepEqual(witnessVerdict({ ...witness, deliveredAt: T0 - 60_000 }), { verified: false, why: "no_stop_record" })
+  // A stop recorded in a later turn never stands in for the one that was lost: three prompts and one stop is still a lost stop.
+  recordStop({ hook_event_name: "Stop", session_id: "s1" }, { stateDir, now: () => T0 + 70_000 })
+  recordPrompt({ session_id: "s1" }, { stateDir, now: () => T0 + 80_000 })
+  issueTicket(signoffCall(stateDir, callTranscript(human(T0 + 79_000))), { ...FAST, stateDir, now: () => T0 + 90_000 })
+  assert.equal(JSON.parse(readFileSync(ticketFile(stateDir, TASK), "utf8")).stop_missing, true)
+  // Every turn stopped: not lost.
+  const clean = fresh("state")
+  for (const at of [T0 - 30_000, T0 + 200]) {
+    recordPrompt({ session_id: "s1" }, { stateDir: clean, now: () => at })
+    if (at < T0) recordStop({ hook_event_name: "Stop", session_id: "s1" }, { stateDir: clean, now: () => at + 1000 })
+  }
+  issueTicket(signoffCall(clean, callTranscript(human(T0))), { ...FAST, stateDir: clean, now: () => T0 + 60_000 })
+  assert.equal(JSON.parse(readFileSync(ticketFile(clean, TASK), "utf8")).stop_missing, undefined)
+  // Copilot reads the same session file.
+  const copilotState = fresh("state")
+  recordPrompt({ session_id: "c1" }, { stateDir: copilotState, now: () => 100 })
+  recordPrompt({ session_id: "c1" }, { stateDir: copilotState, now: () => 200 })
+  const copilot = witnessFor({ env: { COPILOT_AGENT_SESSION_ID: "c1" }, stateDir: copilotState, ...TASK, now: () => 300, copilotOptions: { eventsPath: path.join(copilotState, "missing-events.jsonl") } })
+  assert.equal(copilot.stopMissing, true)
+  // A session file with a damaged count starts it again.
+  writeFileSync(witnessFile(copilotState, "c1"), JSON.stringify({ prompt_at: 100, stop_at: null, prompts: "x" }))
+  recordPrompt({ session_id: "c1" }, { stateDir: copilotState, now: () => 400 })
+  assert.equal(JSON.parse(readFileSync(witnessFile(copilotState, "c1"), "utf8")).prompts, 1)
 })
 
 test("a stop recorded before any prompt leaves prompt_at empty", () => {
   const stateDir = fresh("state")
   recordStop({ session_id: "s1" }, { stateDir, now: () => 200 })
-  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: null, stop_at: 200 })
+  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: null, stop_at: 200, prompts: 0, stops: 1 })
 })
 
 test("a corrupt session file is replaced by the next record", () => {
@@ -159,10 +211,10 @@ test("a corrupt session file is replaced by the next record", () => {
   mkdirSync(path.dirname(witnessFile(stateDir, "s1")), { recursive: true })
   writeFileSync(witnessFile(stateDir, "s1"), "{not json")
   recordPrompt({ session_id: "s1" }, { stateDir, now: () => 100 })
-  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: null })
+  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: null, prompts: 1, stops: 0 })
   writeFileSync(witnessFile(stateDir, "s1"), "[1]")
   recordStop({ session_id: "s1" }, { stateDir, now: () => 200 })
-  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: null, stop_at: 200 })
+  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: null, stop_at: 200, prompts: 0, stops: 1 })
 })
 
 test("a subagent's stop does not move stop_at", () => {
@@ -170,7 +222,7 @@ test("a subagent's stop does not move stop_at", () => {
   recordPrompt({ session_id: "s1" }, { stateDir, now: () => 100 })
   recordStop({ hook_event_name: "SubagentStop", session_id: "s1" }, { stateDir, now: () => 200 })
   recordStop({ hook_event_name: "Stop", session_id: "s1", agent_id: "agent-1" }, { stateDir, now: () => 300 })
-  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: null })
+  assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: null, prompts: 1, stops: 0 })
 })
 
 test("a payload with no session id records nothing, and a refused state folder never throws", () => {

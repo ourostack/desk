@@ -35,10 +35,10 @@ export function factoryPluginScan(env) {
   const hook = loadEndHook(env)
   try {
     const { metadata } = hook
-    const { dirs, incomplete } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
-    return { dirs, incomplete }
+    const { dirs, incomplete, reason = null } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
+    return { dirs, incomplete, reason }
   } catch {
-    return { dirs: [], incomplete: true }
+    return { dirs: [], incomplete: true, reason: null }
   }
 }
 
@@ -65,8 +65,8 @@ function storedLoop(env) {
 
 /** `factoryLocalStatus` for `deskRoot` (or no desk) with this host's plugin set, the sign-off counts, and `loop`: the stored loop record or `null`. */
 export function factoryStatus({ env, deskRoot }) {
-  const { dirs, incomplete } = factoryPluginScan(env)
-  const status = { ...factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete }), loop: withLoopSwitch(storedLoop(env), env) }
+  const { dirs, incomplete, reason } = factoryPluginScan(env)
+  const status = { ...factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete, pluginScanReason: reason }), loop: withLoopSwitch(storedLoop(env), env) }
   return deskRoot === null || deskRoot === undefined ? status : { ...status, signoff: signoffCounts(deskRoot) }
 }
 
@@ -117,7 +117,9 @@ export function reportLink({ env, deskRoot, deskRemote, personPrefix, track, slu
 
 /**
  * The factory findings that need someone to act, one plain sentence each, as both the doctor's summary and the plain-text boot print them: the
- * orphan pass, local retention, and each contributed store whose own capture check keeps failing (the boot prefixes each with `Factory: `). Store names, codes and counts only.
+ * orphan pass, local retention, each contributed store whose own capture check keeps failing, this desk's route held now, the ended sessions
+ * held because their route cannot be read, and held sessions pruned uncaptured (the boot prefixes each with `Factory: `). Store names, codes
+ * and counts only, except that a hold names the manifest or plugin folder to fix, with its remedy.
  */
 export function factoryFindingLines(status) {
   if (!isPlainObject(status)) return []
@@ -125,8 +127,17 @@ export function factoryFindingLines(status) {
   if (status.orphans !== undefined) lines.push(`orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
   if (status.retention !== undefined) lines.push(`local retention needs attention: ${status.retention}. ${RETENTION_FINDING_ADVICE}`)
   for (const { store, times } of status.capture_check_unavailable ?? []) lines.push(`${store}: capture record not landing, the store's own check could not read it ${times} times in a row. ${CAPTURE_CHECK_ADVICE(store)}`)
+  for (const hold of status.held_by ?? []) lines.push(`this desk's route is held, so its sessions are never published: ${holdText(hold)}`)
+  if (status.route_holds !== undefined) {
+    lines.push(`${status.route_holds.count} ended ${status.route_holds.count === 1 ? "session is" : "sessions are"} held because the store they route to cannot be read; they are never published until it can.`)
+    for (const hold of status.route_holds.reasons) lines.push(`  ${holdText(hold)} (${hold.sessions} ${hold.sessions === 1 ? "session" : "sessions"})`)
+  }
+  if (status.held_pruned !== undefined) lines.push(`${status.held_pruned.count} held ${status.held_pruned.count === 1 ? "session was" : "sessions were"} pruned after 90 days without being captured, the last on ${status.held_pruned.last_at.slice(0, 10)}.`)
   return lines
 }
+
+// One hold: its reason, the manifest or plugin folder to fix, and the remedy.
+const holdText = ({ reason, path: file, remedy }) => `${reason}${file === null ? "" : ` at ${file}`}: ${remedy}`
 
 /** The human-readable "Factory" section desk_doctor adds to its summary: store names, codes and counts only. */
 export function factorySummary(status, { now = Date.now() } = {}) {
@@ -148,7 +159,6 @@ export function factorySummary(status, { now = Date.now() } = {}) {
   for (const entry of status.stores) {
     if (entry.kept_frozen > 0) lines.push(`  ${entry.store}: ${entry.kept_frozen} kept copies have no route back and are never published (oldest ${entry.kept_frozen_oldest_days === null ? "of unknown age" : `${entry.kept_frozen_oldest_days} days`}); this is the fail-closed cost of a session whose route can no longer be shown, not a fault.`)
   }
-  if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
   if (status.signoff) lines.push(signoffLine(status.signoff))
   lines.push(...loopLines(status.loop, now))
   return lines.join("\n")

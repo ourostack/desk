@@ -47,7 +47,7 @@ const reroute = (desk, store) => fs.writeFile(path.join(desk, "_meta", "factory.
 async function marker(env, base, n, desk, extra = {}) {
   const log = path.join(base, `log-${n}.jsonl`)
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString(), ...extra })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(), ...extra })
 }
 
 // Session 9, routed to the store, so a flush goes online for a reason of its own.
@@ -463,17 +463,112 @@ test("a desk folder renamed as it reroutes (P2): with its marker fresh and every
   assert.notEqual(mainBlob(github, 1), undefined)
 }))
 
-test("a labels-only quarantine holds nothing (P8): a session that still routes here publishes its facts after the marker and status.json are lost", () => scratch(async (ctx) => {
+test("a labels-only quarantine holds nothing (P8): a session that still routes here publishes its facts after its marker is lost", () => scratch(async (ctx) => {
   await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
-  await marker(ctx.env, ctx.base, 1, await deskFor(ctx.base, "desk-1", STORE))
+  const desk = await deskFor(ctx.base, "desk-1", STORE)
+  await marker(ctx.env, ctx.base, 1, desk)
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
   assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), session: sessionId(1) })).written, true)
   await quarantine(ctx.env, STORE, `labels/${LABELS.job}/${sessionId(1)}.json`, "too_large")
+  // The receipt this Desk's derive wrote on the session's positive route. (With status.json lost too, the copy is frozen: no checked route.)
+  await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, checked_route: STORE, desk_root: desk } } })
   await loseMarker(ctx)
-  await loseStatus(ctx)
   const github = fakeGitHub()
   assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
   github.mergeOpenPr()
   assert.notEqual(mainBlob(github, 1), undefined)
   assert.deepEqual(await keptSessions(ctx.env, STORE), [])
+}))
+
+// ---------------------------------------------------------------------------
+// A session with no marker is here only on a route this Desk checked (#193 fix round 1, finding 1).
+// ---------------------------------------------------------------------------
+
+const DEFAULT_ROUTING = { store: STORE, source: "default", warnings: [] }
+const DESK_PLUGIN = [{ name: "desk", version: "3.2.0" }]
+const receipt = (ctx, desk, extra = {}) => writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, desk_root: desk, ...extra } } })
+
+test("upgrade after 30 days: a copy an older Desk derived, whose marker was pruned before this Desk ever read it, is never published from the receipt alone", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  // A desk that declares nothing; the session ran beside an overlay the older hook could not read, and its marker (which named it) is gone.
+  const desk = await deskFor(ctx.base, "desk-1", null)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  // The older Desk's receipt: its sweep's `store`, and the `route` its flush recorded from the default route it wrongly trusted.
+  await receipt(ctx, desk, { route: STORE })
+  const github = fakeGitHub()
+  await onlineAgain(ctx, github)
+  assert.deepEqual([...github.mainFiles().keys()], [`facts/${nameOf(9)}`], "only the session with a positive route is published")
+  assert.equal(await keptHas(ctx, 1), true, "frozen: kept out of the outbox, never published, never deleted")
+  // The sweep agrees: it never records the receipt's store as checked.
+  await sweep(ctx.env, { quietMs: 0 })
+  assert.equal((await readStatus(ctx.env)).derivations[nameOf(1)].checked_route, undefined)
+}))
+
+test("the same with status.json lost: no receipt is no checked route, so the copy is frozen", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  await deskFor(ctx.base, "desk-1", null)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  const github = fakeGitHub()
+  await onlineAgain(ctx, github)
+  assert.deepEqual([...github.mainFiles().keys()], [`facts/${nameOf(9)}`])
+}))
+
+test("no over-blocking: a session whose route this Desk checked is published once its marker is pruned", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  const desk = await deskFor(ctx.base, "desk-1", null)
+  await marker(ctx.env, ctx.base, 1, desk, { routing: DEFAULT_ROUTING, plugins: DESK_PLUGIN })
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  // A flush that is offline still places the session and records its checked route before it goes online.
+  const down = fakeGitHub({ intercept: (call) => (call.args[0] === "api" ? { code: 1, stdout: "", stderr: "error connecting to api.github.com\n" } : undefined) })
+  assert.deepEqual(await run(ctx.env, down), { result: "offline" })
+  assert.equal((await readStatus(ctx.env)).derivations[nameOf(1)].checked_route, STORE)
+  await loseMarker(ctx)
+  const github = fakeGitHub()
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.notEqual(mainBlob(github, 1), undefined)
+}))
+
+test("a desk folder missing during one sweep, then back: the kept copy of a default-route session returns and is published (#176 re-review N1)", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  const desk = await deskFor(ctx.base, "desk-1", null)
+  await marker(ctx.env, ctx.base, 1, desk, { routing: DEFAULT_ROUTING, plugins: DESK_PLUGIN })
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  // The sweep sees the positive route and records it as checked in the session's receipt.
+  await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, desk_root: desk } } })
+  await sweep(ctx.env, { quietMs: 0 })
+  assert.equal((await readStatus(ctx.env)).derivations[nameOf(1)].checked_route, STORE)
+  await loseMarker(ctx)
+  // The volume is unmounted for one sweep: the copy is kept, frozen.
+  await fs.rename(desk, `${desk}-away`)
+  await sweep(ctx.env, { quietMs: 0 })
+  assert.equal(await keptHas(ctx, 1), true)
+  const github = fakeGitHub()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" }, "frozen while the folder is gone")
+  // Back: the checked route places it here again, the copy comes home and is published.
+  await fs.rename(`${desk}-away`, desk)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  assert.equal(await keptHas(ctx, 1), false)
+  github.mergeOpenPr()
+  assert.notEqual(mainBlob(github, 1), undefined)
+}))
+
+test("a session that left this store has another checked route: its kept copy never comes back on the store it left", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  const desk = await deskFor(ctx.base, "desk-1", STORE)
+  await marker(ctx.env, ctx.base, 1, desk, { routing: DEFAULT_ROUTING, plugins: DESK_PLUGIN })
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, desk_root: desk, checked_route: STORE } } })
+  // The desk moves to another store whose consent is off: only the sweep sees it, and it records the new checked route.
+  await reroute(desk, OTHER)
+  await sweep(ctx.env, { quietMs: 0 })
+  assert.equal(await keptHas(ctx, 1), true)
+  assert.equal((await readStatus(ctx.env)).derivations[nameOf(1)].checked_route, OTHER)
+  // The marker is pruned and the desk drops its declaration: no positive route, and the last checked one is elsewhere.
+  await loseMarker(ctx)
+  await fs.rm(path.join(desk, "_meta", "factory.json"))
+  const github = fakeGitHub()
+  await onlineAgain(ctx, github)
+  assert.deepEqual([...github.mainFiles().keys()], [`facts/${nameOf(9)}`])
+  assert.equal(await keptHas(ctx, 1), true)
 }))

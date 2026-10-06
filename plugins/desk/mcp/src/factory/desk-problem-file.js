@@ -41,7 +41,8 @@ import { readFileSync } from "node:fs"
 
 import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX, deskProblemCard } from "./desk-problem-template.js"
-import { recordKnownHit } from "./desk-problem-known.js"
+import { beginFiling, endFiling, recordKnownHit, recordLostHit } from "./desk-problem-known.js"
+import { endLaunch } from "./filer-launch.js"
 import { chooseAccount, ghRunner } from "./flush.js"
 import { readConsent, readStatus, withNamedLock, writeStatus } from "./outbox.js"
 import { issuesClient } from "./store-issues.js"
@@ -95,7 +96,8 @@ async function selectAccount(env, { runner, now, deadlineMs }) {
 
 /**
  * `fileDeskProblem(env, { mechanism, rawText, fixAttempt, host, runner, now, deadlineMs })
- * -> { result: "filed" | "known" | "held_cap" | "not_filed", url?, reason?, body? }`.
+ * -> { result: "filed" | "known" | "held_cap" | "not_filed", url?, reason?, body? }`. A `not_filed` attempt, a known hit that could
+ * not be recorded, and an unexpected throw each count a drop (`recordLostHit`), since a recurrence may be among them.
  * `url` is the issue URL for `"filed"`/`"known"`; `reason` (`"deadline"` when the whole attempt ran out
  * of time, `"no_suitable_account"`, or a `gh`/HTTP error code) and a paste-ready `body` (title and body
  * joined) come with `"not_filed"`. Never throws.
@@ -112,9 +114,33 @@ async function selectAccount(env, { runner, now, deadlineMs }) {
  * file it twice; the fingerprint and the cap counter alone check-then-act outside a lock, which a
  * concurrent second caller can still slip through.
  */
-export async function fileDeskProblem(env, {
+export async function fileDeskProblem(env, options = {}) {
+  const { now = Date.now, recordLost = recordLostHit, begin = beginFiling, end = endFiling } = options
+  // Any attempt that neither filed a new issue, nor recorded a known hit, nor held a new problem at the cap may have lost a recurrence of a
+  // known issue: it is counted as a drop, so the verify step never reads it as a measured "no hit" (`desk-problem-known.js`).
+  const lost = async () => {
+    const counted = await Promise.resolve().then(() => recordLost(env, { now })).catch(() => ({ recorded: false, code: "record_failed" }))
+    if (!counted.recorded && counted.code !== "headless_session") process.stderr.write(`desk-problem: lost_hit_not_recorded ${counted.code}\n`)
+  }
+  // The attempt is recorded before any network step and cleared once its outcome is recorded, so a filer killed part way is a drop too.
+  const token = await begin(env, { now })
+  let outcome
+  try {
+    outcome = await attemptFiling(env, options)
+  } catch (error) {
+    await lost()
+    await end(env, token)
+    throw error
+  }
+  if (outcome.result === "not_filed" || outcome.hitLost === true) await lost()
+  await end(env, token)
+  const { hitLost, ...result } = outcome
+  return result
+}
+
+async function attemptFiling(env, {
   mechanism, rawText = "", fixAttempt = "not recorded", host = "unknown", runner = ghRunner({ env }), now = Date.now, deadlineMs = DEFAULT_DEADLINE_MS, recordKnown = recordKnownHit,
-} = {}) {
+}) {
   const signature = normalizeErrorSignature(rawText)
   const fingerprint = deskProblemFingerprint(mechanism, signature)
   const deskVersion = ownDeskVersion()
@@ -142,8 +168,9 @@ export async function fileDeskProblem(env, {
         // A known problem is hit again: count it, with the running Desk version, so a recurrence after the fix is visible.
         // The count never changes the result; a failed write leaves one stable code on stderr.
         const recorded = await Promise.resolve().then(() => recordKnown(env, existing.number, { version: deskVersion, now })).catch(() => ({ recorded: false, code: "record_failed" }))
-        if (!recorded.recorded && recorded.code !== "headless_session") process.stderr.write(`desk-problem: known_hit_not_recorded ${recorded.code}\n`)
-        return { result: "known", url: existing.url }
+        const hitLost = !recorded.recorded && recorded.code !== "headless_session"
+        if (hitLost) process.stderr.write(`desk-problem: known_hit_not_recorded ${recorded.code}\n`)
+        return { result: "known", url: existing.url, hitLost }
       }
 
       const at = now()
@@ -181,11 +208,13 @@ export async function runFileDeskProblemCli({ argv = process.argv.slice(2), env 
   }
   const mechanism = options.get("mechanism")
   if (typeof mechanism !== "string" || mechanism === "") throw new Error("file-desk-problem.js: --mechanism <name> is required")
-  await fileDeskProblem(env, {
-    mechanism,
-    rawText: options.get("reason") ?? "",
-    fixAttempt: options.get("fix-attempt") ?? "not recorded",
-    host: options.get("host") ?? "unknown",
-  })
+  const reason = options.get("reason") ?? ""
+  try {
+    await fileDeskProblem(env, { mechanism, rawText: reason, fixAttempt: options.get("fix-attempt") ?? "not recorded", host: options.get("host") ?? "unknown" })
+  } finally {
+    // The outcome (or the drop for a failed attempt) is recorded: the launcher's stamp is no longer a pending launch (`filer-launch.js`). A
+    // launcher whose stamp is keyed by something other than the reason (protected-checkout keys it by the command) names it.
+    endLaunch(env, { mechanism, signature: options.get("launch-signature") ?? reason })
+  }
   return 0
 }

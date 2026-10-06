@@ -90,7 +90,10 @@ export function repeatedTimeoutDeskProblem({ command, env = process.env, now, de
   if (typeof command !== "string" || command.trim() === "") return { count: 0, block: null, shouldFile: false }
   const count = recordTimeout({ env, command, now })
   if (count < REPEAT_TIMEOUT_THRESHOLD) return { count, block: null, shouldFile: false }
-  const shouldFile = shouldLaunchFiler({ env, mechanism: "protected-checkout", signature: commandSignature(command), now })
+  // The throttle stamp is keyed by the command, not the filed reason (its count changes), so the caller passes this `signature` to the filer
+  // as `--launch-signature`, and the filer clears the same stamp once it records an outcome (`factory/filer-launch.js`).
+  const signature = commandSignature(command)
+  const shouldFile = shouldLaunchFiler({ env, mechanism: "protected-checkout", signature, now })
   const reason = `the same command has now timed out ${count} times in a row at protected-checkout's own ${deadlineMs ?? 9000} ms deadline`
   const block = formatDeskProblem({
     mechanism: "protected-checkout",
@@ -101,5 +104,5 @@ export function repeatedTimeoutDeskProblem({ command, env = process.env, now, de
     file: shouldFile ? "filing in background" : "filing already queued (within the last hour)",
     tell: `Desk's protected-checkout guard has now timed out ${count} times in a row on the same command. Filing this now so it gets fixed; the command stays denied so nothing unsafe happens meanwhile.`,
   })
-  return { count, block, shouldFile }
+  return { count, block, shouldFile, signature }
 }
