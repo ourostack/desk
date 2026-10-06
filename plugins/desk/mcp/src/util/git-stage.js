@@ -90,13 +90,11 @@ export function indexEntries(root, relPaths, spawnGit) {
 }
 
 /**
- * Commits exactly what the index holds at `relPaths`, never what the working tree holds there: it builds a temporary index from HEAD, copies in the real index's
+ * Commits exactly what the index holds at `relPaths` (`entries`, from `indexEntries` for the same paths), never what the working tree holds there: it builds a temporary index from HEAD, copies in the real index's
  * entry for each path (or removes the path when the real index has none), and commits that index. The real index is untouched, so other staged work stays
  * staged, and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`; never throws on a Git failure.
  */
-export function commitIndexPaths(root, relPaths, message, spawnGit) {
-  const entries = indexEntries(root, relPaths, spawnGit)
-  if (entries === null) return { ok: false, stderr: "git could not read the index" }
+export function commitIndexPaths(root, relPaths, entries, message, spawnGit) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
   try {
     const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }

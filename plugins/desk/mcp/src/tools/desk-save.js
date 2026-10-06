@@ -173,12 +173,12 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
       throw new Error(`desk_save: unstage ${card} (git restore --staged -- <path>) and change that task card with task_update; a tidy commits a task card only as a move or a delete, not an edit`)
     }
   }
-  const entries = indexEntries(deskRoot, cards, spawnGit)
+  const entries = indexEntries(deskRoot, rels, spawnGit)
   if (entries === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not read the index" } }
-  if (entries.some((entry) => entry.mode !== "100644" && entry.mode !== "100755")) {
+  if (entries.filter((entry) => isCard(entry.path)).some((entry) => entry.mode !== "100644" && entry.mode !== "100755")) {
     throw new Error("desk_save: a task card in `paths` is not a regular file (a link, for example); restore it with git restore --staged and git restore, then pass only the moved cards")
   }
-  const committed = commitIndexPaths(deskRoot, rels, tidyTrailer(message), spawnGit)
+  const committed = commitIndexPaths(deskRoot, rels, entries, tidyTrailer(message), spawnGit)
   if (!committed.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
   schedulePush({ root: deskRoot })
   return { status: "committed" }

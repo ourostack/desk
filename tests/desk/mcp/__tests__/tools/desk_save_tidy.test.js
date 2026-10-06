@@ -218,6 +218,8 @@ test("git failures are reported, not thrown", async () => {
   assert.equal((await run(failing("read-tree"))).commit.reason, "read-tree failed")
   assert.equal((await run(failing("update-index"))).commit.reason, "update-index failed")
   assert.equal((await run(failing("commit"))).commit.reason, "commit failed")
+  const slow = (cmd, args, options) => (args[2] === "commit" ? { status: null, stdout: "", stderr: "", error: Object.assign(new Error("slow"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, options))
+  assert.equal((await run(slow)).commit.reason, "timeout")
 })
 
 test("the temporary index leaves the real index and the working tree alone", async () => {
