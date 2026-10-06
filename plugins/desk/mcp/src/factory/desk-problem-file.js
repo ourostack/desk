@@ -135,7 +135,7 @@ export async function fileDeskProblem(env, options = {}) {
 
 async function attemptFiling(env, {
   mechanism, rawText = "", fixAttempt = "not recorded", host = "unknown", runner = ghRunner({ env }), now = Date.now, deadlineMs = DEFAULT_DEADLINE_MS, recordKnown = recordKnownHit,
-} = {}) {
+}) {
   const signature = normalizeErrorSignature(rawText)
   const fingerprint = deskProblemFingerprint(mechanism, signature)
   const deskVersion = ownDeskVersion()
