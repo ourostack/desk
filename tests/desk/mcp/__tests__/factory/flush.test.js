@@ -726,25 +726,33 @@ async function cachedDesk(context, { cached, hours, truth }) {
   const github = fakeGitHub({ visibility: { "acme/cached-desk": truth } })
   const result = await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
   const asked = apiCalls(github, "GET", /^repos\/acme\/cached-desk$/u).length
-  const plain = result.result === "delivered_pr_open" && (await storedJobs(github, env, name)).some((job) => job.session_offset_ms !== null)
-  return { result, asked, plain, github, env, name }
+  const delivered = result.result === "delivered_pr_open"
+  const plain = delivered && (await storedJobs(github, env, name)).some((job) => job.session_offset_ms !== null)
+  return { result, asked, plain, stored: delivered, github, env, name }
 }
 
-test("plain publishing rests on a private answer no older than a day: an older one is asked again, and a desk now public is published protected", () => scratch(async (context) => {
-  const stale = await cachedDesk(context, { cached: "private", hours: 72, truth: "public" })
-  assert.equal(stale.asked, 1, "asked afresh")
-  assert.equal(stale.plain, false, "the desk is public now: protected form")
-  assert.equal((await readVisibilityCache(stale.env))["acme/cached-desk"].visibility, "public", "and the answer is kept")
+test("a desk made public within the hour publishes nothing plain: its private answer is asked again whatever its age", () => scratch(async (context) => {
+  const turned = await cachedDesk(context, { cached: "private", hours: 1, truth: "public" })
+  assert.equal(turned.asked, 1, "asked afresh although the answer was an hour old")
+  assert.equal(turned.plain, false, "the desk is public now: protected form")
+  assert.equal((await readVisibilityCache(turned.env))["acme/cached-desk"].visibility, "public", "and the answer is kept")
 }))
 
-test("a private answer asked afresh and still private publishes plain; one inside a day is not asked again", () => scratch(async (context) => {
-  const asked = await cachedDesk(context, { cached: "private", hours: 72, truth: "private" })
-  assert.deepEqual([asked.asked, asked.plain], [1, true])
+test("a private answer asked afresh and still private publishes plain, with one ask per desk per flush", () => scratch(async (context) => {
+  const young = await cachedDesk(context, { cached: "private", hours: 1, truth: "private" })
+  assert.deepEqual([young.asked, young.plain], [1, true])
 }))
 
-test("a private answer inside a day is trusted without asking", () => scratch(async (context) => {
-  const young = await cachedDesk(context, { cached: "private", hours: 12, truth: "public" })
-  assert.deepEqual([young.asked, young.plain], [0, true])
+test("a desk never asked before is asked once, not twice, in a flush", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/new-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  const github = fakeGitHub({ visibility: { "acme/new-desk": "private" } })
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  assert.equal(apiCalls(github, "GET", /^repos\/acme\/new-desk$/u).length, 1)
+  assert.ok((await storedJobs(github, env, name)).some((job) => job.session_offset_ms !== null))
 }))
 
 test("a protected form never needs a fresh answer: a public answer inside seven days is used without asking, even if the desk is private now", () => scratch(async (context) => {
@@ -752,11 +760,31 @@ test("a protected form never needs a fresh answer: a public answer inside seven 
   assert.deepEqual([open.asked, open.plain], [0, false])
 }))
 
-test("when the fresh question cannot be answered the desk reads unknown and the session is published protected", () => scratch(async (context) => {
+test("an unknown cached answer inside seven days makes no call and publishes protected", () => scratch(async (context) => {
+  const unknown = await cachedDesk(context, { cached: "unknown", hours: 1, truth: "private" })
+  assert.deepEqual([unknown.asked, unknown.plain], [0, false])
+}))
+
+test("when the fresh question cannot be answered the desk's sessions wait: nothing is published, the count is recorded, and nothing is marked", () => scratch(async (context) => {
   const failed = await cachedDesk(context, { cached: "private", hours: 72, truth: 500 })
   assert.equal(failed.asked, 1)
-  assert.equal(failed.plain, false)
-  assert.equal((await readStatus(failed.env)).derivations[failed.name].desk_unprotected, true, "and it is marked as published under a desk not known private")
+  assert.equal(failed.result.result, "nothing_pending", "nothing else to deliver")
+  assert.equal(failed.stored, false, "no file of this session reached the store")
+  const flushEntry = (await readStatus(failed.env)).last_flush[STORE]
+  assert.equal(flushEntry.visibility_unasked, 1)
+  assert.match(flushEntry.visibility_unasked_since, /^\d{4}-/u)
+  assert.equal((await readStatus(failed.env)).derivations?.[failed.name]?.desk_unprotected, undefined, "a transient failure loses no credit for good")
+  // A second flush that still cannot ask keeps the first time; one that can ask publishes and clears the record.
+  const { flush } = await load()
+  const again = fakeGitHub({ visibility: { "acme/cached-desk": 500 } })
+  await flush(failed.env, { store: STORE, runner: again.runner, anonymousLookup: again.anonymousLookup })
+  assert.equal((await readStatus(failed.env)).last_flush[STORE].visibility_unasked_since, flushEntry.visibility_unasked_since)
+  const working = fakeGitHub({ visibility: { "acme/cached-desk": "private" } })
+  assert.equal((await flush(failed.env, { store: STORE, runner: working.runner, anonymousLookup: working.anonymousLookup })).result, "delivered_pr_open")
+  assert.ok((await storedJobs(working, failed.env, failed.name)).some((job) => job.session_offset_ms !== null), "published plain once the desk could be asked")
+  const after = (await readStatus(failed.env)).last_flush[STORE]
+  assert.equal(after.visibility_unasked, undefined)
+  assert.equal(after.visibility_unasked_since, undefined)
 }))
 
 // ---------------------------------------------------------------------------

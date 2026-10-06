@@ -190,8 +190,6 @@ export const DEFAULT_DEADLINE_MS = 120000
 export const FINALIZE_QUIET_MS = 5000
 
 const LOCK_STALE_MS = 10 * 60 * 1000
-/** The oldest a desk's private answer may be when a session is published in its plain form; the cache itself trusts an answer for seven days. */
-const DESK_ANSWER_FRESH_MS = 24 * 60 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
@@ -957,6 +955,7 @@ async function deliver(env, context) {
   ]
   const labelsReposOf = ({ local }) => factsNamesOf(local?.session).map((name) => desks.get(name)).filter((repo) => typeof repo === "string")
   const ordinary = parsed.filter(({ held }) => held === null)
+  const askedAfter = nowIso()
   const known = await resolveVisibility(env, client, account, [...ordinary.flatMap(reposOf), ...parsedLabels.flatMap(labelsReposOf)], nowIso)
   // A held file is a retry, never a reason to stop for a repository it cannot resolve: its repositories resolve one file at a time, and a file whose repositories cannot all be resolved keeps its record and waits for a later flush.
   // A file whose repositories are all known already needs no lookup, and no state-root check, so an unchanged held file costs nothing.
@@ -973,27 +972,29 @@ async function deliver(env, context) {
       unresolved.add(item.name)
     }
   }
-  // Plain (unprotected) publishing rests on a private answer no older than a day: a desk's answer that says private, internal or kept timing and was checked
-  // longer ago is asked again, and when asking fails the desk reads unknown, so its sessions publish in their protected form. A public or unknown
-  // answer needs no fresh answer, because it already withholds.
+  // A session goes out in its plain form only on a private or internal answer asked in this flush: a desk's kept answer that was not asked since
+  // this flush began is asked again, once per desk, whatever its age. A public or unknown answer already withholds and is never asked about. A desk
+  // whose question fails publishes nothing this flush: its sessions stay pending (never published protected and marked), and the count is recorded.
   const deskRepos = [...new Set([...parsed.map(({ name }) => desks.get(name)), ...parsedLabels.flatMap(labelsReposOf)].filter((repo) => typeof repo === "string").map((repo) => repo.toLowerCase()))]
   const dated = await readVisibilityCache(env, { now: nowIso })
   // A desk whose fresh answer failed stays unknown for the rest of this flush, whatever the cache still holds.
   const distrusted = new Set()
-  const aged = deskRepos.filter((repo) => deskTimingKept(known.get(repo)) && !(Date.parse(nowIso()) - Date.parse(dated[repo]?.checked_at) <= DESK_ANSWER_FRESH_MS))
-  if (aged.length > 0) {
+  for (const repo of deskRepos.filter((repo) => deskTimingKept(known.get(repo)) && !(dated[repo]?.checked_at >= askedAfter))) {
     try {
-      for (const [repo, visibility] of await resolveVisibility(env, client, account, aged, nowIso, new Set(aged))) if (aged.includes(repo)) known.set(repo, visibility)
+      known.set(repo, (await resolveVisibility(env, client, account, [repo], nowIso, new Set([repo]))).get(repo))
     } catch {
-      // Whatever stopped the question (offline, a deadline, a refusal), these desks are not known private; the flush's own deadline check ends it later.
-      for (const repo of aged) {
-        known.set(repo, "unknown")
-        distrusted.add(repo)
-      }
+      // Whatever stopped the question (offline, a deadline, a refusal), this desk is not known private now; the flush's own deadline check ends it later.
+      known.set(repo, "unknown")
+      distrusted.add(repo)
     }
   }
+  const desksOfSession = (names) => names.map((name) => desks.get(name)).filter((repo) => typeof repo === "string").map((repo) => repo.toLowerCase())
+  const deferredName = (name) => desksOfSession([name]).some((repo) => distrusted.has(repo))
+  const deferredLabels = (local) => desksOfSession(factsNamesOf(local?.session)).some((repo) => distrusted.has(repo))
+  const deferred = new Set(parsed.filter(({ name }) => deferredName(name)).map(({ name }) => name))
+  progress.visibilityUnasked = new Set([...deferred].map(sessionOfName)).size
   // A session published under a desk not known private is marked, so it is never published under a later, more open reading once its marker is gone.
-  const unprotected = parsed.filter(({ name }) => receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
+  const unprotected = parsed.filter(({ name }) => !deferred.has(name) && receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
   if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
   const secret = await readMachineSecret(env)
   // Where this Desk would publish the outbox files `names` of away sessions now, as `{ path, sha }` by name: used only to find this machine's
@@ -1019,6 +1020,7 @@ async function deliver(env, context) {
   const publishedFile = new Map()
   const released = []
   for (const { name, held, local } of parsed) {
+    if (deferred.has(name)) continue
     const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (out.file) publishedFile.set(name, out.file)
     if (held !== null) {
@@ -1035,6 +1037,7 @@ async function deliver(env, context) {
   const labelsByKey = new Map()
   const publishLabels = async (items) => {
     for (const { key, local } of items) {
+      if (deferredLabels(local)) continue
       const out = publishLabelsOne(local, key, { known, desks, secret })
       if (out.bytes) labelsByKey.set(key, out)
       else await quarantine(env, store, key, out.reason)
@@ -1208,7 +1211,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, intakePushed: null, intakePrs: null }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, visibilityUnasked: null, intakePushed: null, intakePrs: null }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -1225,6 +1228,9 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     const routeUnknown = progress.routeUnknown ?? before?.route_unknown
     const retractionStalled = progress.retractionStalled ?? before?.retraction_stalled
     const newerFormat = progress.newerFormat ?? before?.newer_format
+    // Sessions held back for want of a fresh visibility answer, and since when this has gone on without a flush that could ask.
+    const unasked = progress.visibilityUnasked ?? before?.visibility_unasked
+    const unaskedSince = progress.visibilityUnasked === null ? before?.visibility_unasked_since : progress.visibilityUnasked > 0 ? before?.visibility_unasked_since ?? new Date(now()).toISOString() : undefined
     const refused = progress.refused ?? list(before?.refused_retractions)
     // Only a flush that pushed sets it, and only one that found nothing to change, and no PR left open, clears it.
     const intakePushed = progress.intakePushed ?? before?.intake_pushed === true
@@ -1243,6 +1249,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           ...(Number.isSafeInteger(routeUnknown) && routeUnknown > 0 ? { route_unknown: routeUnknown } : {}),
           ...(Number.isSafeInteger(retractionStalled) && retractionStalled > 0 ? { retraction_stalled: retractionStalled } : {}),
           ...(Number.isSafeInteger(newerFormat) && newerFormat > 0 ? { newer_format: newerFormat } : {}),
+          ...(Number.isSafeInteger(unasked) && unasked > 0 ? { visibility_unasked: unasked, ...(typeof unaskedSince === "string" ? { visibility_unasked_since: unaskedSince } : {}) } : {}),
           ...(refused.length > 0 ? { retractions_refused: refused.length, refused_retractions: refused } : {}),
           ...(intakePushed ? { intake_pushed: true } : {}),
           ...(intakePrs.length > 0 ? { intake_prs: intakePrs } : {}),

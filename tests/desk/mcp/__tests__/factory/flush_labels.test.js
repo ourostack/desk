@@ -15,7 +15,7 @@ import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { checkLabelsAgainstFacts, validateLabelsBytes } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import {
-  factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker,
+  factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeVisibilityCache,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
@@ -269,4 +269,25 @@ test("holdLabels answers the quarantined facts, keeps an earlier labels record a
   await assert.rejects(holdLabels(env, STORE, { job: "nope", session: sessionId(1) }), /job/u)
   await assert.rejects(holdLabels(env, STORE, { job: JOB, session: "../x" }), /session/u)
   await assert.rejects(quarantine(env, STORE, keyOf(3), "facts_quarantined", { facts: "../x.json" }), /facts/u)
+}))
+
+test("a desk whose visibility cannot be asked holds back its labels with its facts, and both go once it can", () => scratch(async ({ base, env }) => {
+  await setup(env)
+  const desk = path.join(base, "private-desk")
+  await fs.mkdir(desk)
+  execFileSync("git", ["init", "-q", desk])
+  execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/private-desk.git"])
+  const log = path.join(base, "log-1.jsonl")
+  await fs.writeFile(log, "{}\n")
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await putFacts(env, 1)
+  await putLabels(env, 1)
+  await writeVisibilityCache(env, { "acme/private-desk": { visibility: "private", checked_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() } })
+  const down = fakeGitHub({ visibility: { "acme/private-desk": 500 } })
+  assert.equal((await flush(env, { store: STORE, runner: down.runner, anonymousLookup: down.anonymousLookup })).result, "nothing_pending")
+  assert.deepEqual(await delivered(env), {}, "nothing was delivered or recorded")
+  const up = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
+  assert.equal((await flush(env, { store: STORE, runner: up.runner, anonymousLookup: up.anonymousLookup })).result, "delivered_pr_open")
+  const files = up.headFiles(STORE, await branch(env))
+  assert.ok(files.has(`labels/${JOB}/${sessionId(1)}.json`) && files.has(`facts/${nameOf(1)}`))
 }))
