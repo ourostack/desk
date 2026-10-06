@@ -63,7 +63,8 @@ export async function reapProcessesUnder(root) {
 export function removeFixtureAfter(t, root) {
   t.after(async () => {
     await reapProcessesUnder(root)
-    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    // Windows holds a folder for a moment after the last process in it exits (virus scan, indexer), so retry longer there.
+    rmSync(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 40 : 5, retryDelay: process.platform === "win32" ? 250 : 100 })
   })
 }
 

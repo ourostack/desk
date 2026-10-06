@@ -853,7 +853,7 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
   }
 })
 
-test("source mirror admission rejects Windows and backslash paths on POSIX hosts", async () => {
+test("source mirror admission rejects Windows and backslash paths on POSIX hosts", { skip: process.platform === "win32" ? "the fixture files named C:\\payload.js and \\\\server\\share\\payload.js cannot exist on Windows, where the colon and the backslash are path syntax" : false }, async () => {
   const {
     resolveAdmittedSourceMirror,
     syncSourceMirror,

@@ -396,7 +396,13 @@ for (const host of ["claude", "copilot"]) {
     assert.equal(quietRun.status, 0, quietRun.stderr)
     const context = expectedContext(host, hookEnv, desk)
     const hasJq = spawnSync("jq", ["--version"]).status === 0
-    if (host === "copilot" || hasJq) assert.equal(quietRun.stdout, envelope(host, context), "silent boot checks leave the output byte-identical")
+    if (host === "copilot" || hasJq) {
+      const wanted = envelope(host, context)
+      // On a mismatch, name the first differing byte with its neighbours: the full strings are too long for a failure log.
+      const at = [...quietRun.stdout].findIndex((char, index) => char !== wanted[index])
+      const near = (text) => JSON.stringify(text.slice(Math.max(0, at - 60), at + 80))
+      assert.equal(quietRun.stdout, wanted, `silent boot checks leave the output byte-identical; first difference at ${at} of ${quietRun.stdout.length} (expected ${wanted.length}): got ${near(quietRun.stdout)} expected ${near(wanted)}`)
+    }
     const parsed = JSON.parse(quietRun.stdout)
     assert.equal(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, context)
     assert.doesNotMatch(quietRun.stdout, /Desk boot pre-checks:/u)
