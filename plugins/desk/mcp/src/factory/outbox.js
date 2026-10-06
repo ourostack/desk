@@ -915,6 +915,21 @@ export async function recordRoutes(env, routes, { platform = process.platform, r
   }, { platform, env, runner }, isStatusShape)
 }
 
+/**
+ * `recordDeskUnprotected(env, names)`: marks the derivation receipt of each facts file in `names` (a receipt is created when there is none)
+ * with `desk_unprotected: true`, the other keys unchanged. The flush sets it when it publishes a session whose desk's visibility is not
+ * known private. It never clears: a session that was ever published under a desk that was not known private is withheld once its marker is
+ * gone, whatever its desk says now (`flush.js` `deskRepositories`). Local only, never published.
+ */
+export async function recordDeskUnprotected(env, names, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
+    const derivations = { ...current.derivations }
+    for (const name of names) derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), desk_unprotected: true }
+    return { ...current, derivations }
+  }, { platform, env, runner }, isStatusShape)
+}
+
 function assertVisibilityEntries(patch) {
   for (const [key, entry] of Object.entries(patch)) {
     requirePlainObject(entry, `patch[${JSON.stringify(key)}]`)

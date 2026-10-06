@@ -133,7 +133,7 @@ import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
-import { deskVisibilityOf, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
+import { deskTimingKept, deskVisibilityOf, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { readDeskRemote } from "./desk-repo.js"
 import { BINDING_VERSION, deriveFile, sweep as sweepMarkers } from "./derive-run.js"
 import {
@@ -153,6 +153,7 @@ import {
   pendingLabels,
   quarantine,
   readConsent,
+  recordDeskUnprotected,
   recordRoutes,
   readDelivered,
   readJobsIndex,
@@ -497,11 +498,15 @@ async function deskRepositories(markers, { deadline, now, receipts = {} }) {
     }
     byName.set(`${marker.host}-${marker.session_id}.json`, remotes.get(root))
   }
-  // A session with no marker (pruned, or rebuilt from its transcript) keeps the desk its receipt recorded, so a private desk's session keeps its protected form and its real job. With neither, the desk stays unknown and the session is withheld.
+  // A session with no marker (pruned, or rebuilt from its transcript) keeps its desk's protection only when the desk is certainly the one it ran
+  // under: its receipt recorded the desk root and the desk's GitHub repository (`desk_repo`), the root still names that same repository, and
+  // no earlier flush published the session under a desk that was not known private (`desk_unprotected`). Anything else (no root, no recorded
+  // repository, another repository now at that path, a root that no longer resolves) leaves the desk unknown, so the session is withheld.
   for (const name of Object.keys(receipts)) {
     if (byName.has(name)) continue
     const root = deskRootOf(receipts, [name])
-    if (root === undefined || root === null) continue
+    const recorded = receipts[name]?.desk_repo
+    if (root === undefined || typeof recorded !== "string" || receipts[name]?.desk_unprotected === true) continue
     if (!remotes.has(root)) {
       let remote
       try {
@@ -511,7 +516,8 @@ async function deskRepositories(markers, { deadline, now, receipts = {} }) {
       }
       remotes.set(root, githubRepoOfRemote(remote))
     }
-    byName.set(name, remotes.get(root))
+    const current = remotes.get(root)
+    if (typeof current === "string" && current.toLowerCase() === recorded.toLowerCase()) byName.set(name, current)
   }
   return byName
 }
@@ -965,6 +971,9 @@ async function deliver(env, context) {
       unresolved.add(item.name)
     }
   }
+  // A session published under a desk not known private is marked, so it is never published under a later, more open reading once its marker is gone.
+  const unprotected = parsed.filter(({ name }) => receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
+  if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
   const secret = await readMachineSecret(env)
   // Where this Desk would publish the outbox files `names` of away sessions now, as `{ path, sha }` by name: used only to find this machine's
   // files in the store, never sent and never quarantined.

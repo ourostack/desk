@@ -609,7 +609,7 @@ test("agreement table, flush row: a session with no marker keeps the desk its re
   await markerFor(env, privateDesk, 1)
   const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
   // Session 2's marker was pruned but its receipt names the private desk; session 3 has no marker and no receipt desk.
-  await writeStatus(env, { derivations: { [names[1]]: { desk_root: privateDesk }, [names[2]]: { binding_version: 5 } } })
+  await writeStatus(env, { derivations: { [names[1]]: { desk_root: privateDesk, desk_repo: "acme/private-desk" }, [names[2]]: { binding_version: 5 } } })
   const github = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
   assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
   const head = github.headFacts(STORE, await intakeBranch(env))
@@ -625,6 +625,62 @@ test("agreement table, flush row: a session with no marker keeps the desk its re
   const withheld = read(names[2])
   assert.deepEqual(withheld.jobs.map((job) => job.job).sort(), plain.map(keyed).sort())
   assert.ok(withheld.jobs.every((job) => job.session_offset_ms === null))
+}))
+
+// What a store file says about a session's jobs, read back from the fake GitHub.
+async function storedJobs(github, env, name) {
+  const head = github.headFacts(STORE, await intakeBranch(env))
+  return JSON.parse(github.blobs.get(head.get(name).sha)).jobs
+}
+
+test("a session published while its desk was public is never published plain once its marker is gone, even when the desk is private now", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/flipped-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  await writeStatus(env, { derivations: { [name]: { desk_root: desk, desk_repo: "acme/flipped-desk" } } })
+  const github = fakeGitHub({ visibility: { "acme/flipped-desk": "public" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const secret = await readMachineSecret(env)
+  const keyed = GOLDEN.jobs.map((job) => createHmac("sha256", secret).update(job.job).digest("hex").slice(0, 32)).sort()
+  assert.deepEqual((await storedJobs(github, env, name)).map((job) => job.job).sort(), keyed, "published keyed while public")
+  assert.equal((await readStatus(env)).derivations[name].desk_unprotected, true, "the flush marks it")
+  // The marker is pruned and the desk turned private (its answer is fresh in the cache).
+  await fs.rm(path.join(await factoryStateRoot(env), "markers", `claude-code-${sessionId(1)}.json`))
+  await writeVisibilityCache(env, { "acme/flipped-desk": { visibility: "private", checked_at: new Date().toISOString() } })
+  // A changed local copy (the session derived again) goes out again: it must still publish keyed.
+  const again = localFacts(1)
+  again.session.ended_at = "2026-09-25T09:31:00.000Z"
+  again.session.derived_through = again.session.ended_at
+  await put(env, again)
+  const result = (await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result
+  assert.equal(result, "delivered_pr_open", "the changed copy was published again")
+  const jobs = await storedJobs(github, env, name)
+  assert.deepEqual(jobs.map((job) => job.job).sort(), keyed, "still keyed: never less protected than it was published")
+  assert.ok(jobs.every((job) => job.session_offset_ms === null))
+}))
+
+test("a marker-less session whose root now holds another repository, or whose receipt recorded no repository, is withheld", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
+  await writeStatus(env, { derivations: {
+    [names[0]]: { desk_root: desk, desk_repo: "acme/old-desk" },
+    [names[1]]: { desk_root: desk },
+    [names[2]]: { desk_root: desk, desk_repo: "acme/private-desk" },
+  } })
+  const github = fakeGitHub({ visibility: { "acme/private-desk": "private", "acme/old-desk": "private" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const secret = await readMachineSecret(env)
+  const keyed = GOLDEN.jobs.map((job) => createHmac("sha256", secret).update(job.job).digest("hex").slice(0, 32)).sort()
+  for (const name of [names[0], names[1]]) {
+    const jobs = await storedJobs(github, env, name)
+    assert.deepEqual(jobs.map((job) => job.job).sort(), keyed, name)
+    assert.ok(jobs.every((job) => job.session_offset_ms === null), name)
+  }
+  assert.deepEqual((await storedJobs(github, env, names[2])).map((job) => job.job), GOLDEN.jobs.map((job) => job.job), "the same repository, recorded, never unprotected: plain")
 }))
 
 // ---------------------------------------------------------------------------
