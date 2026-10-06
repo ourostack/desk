@@ -1808,6 +1808,17 @@ test("bootOnce: delivered tasks that await sign-off are listed, the one instruct
   assert.equal(JSON.stringify(signoff).includes("shipped"), false)
 })
 
+test("bootOnce: with consent undecided and one unsigned delivery, the sign-off line comes before consent, and consent stays the last instruction", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "shipped", DELIVERED_CARD("Shipped thing", new Date(Date.now() - 86_400_000).toISOString()))
+  const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
+  const list = result.text_instructions
+  const signoff = list.findIndex((line) => /awaits sign-off/u.test(line))
+  assert.ok(signoff !== -1 && signoff < list.length - 1, "the sign-off instruction is present and not last")
+  assert.match(list.at(-1), /^Factory consent is undecided/u)
+  assert.ok(result.instructions.findIndex((line) => /awaits sign-off/u.test(line)) < result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided")))
+})
+
 test("bootOnce: a noninteractive session lists the tasks but is given no sign-off instruction; a desk with nothing unsigned has no section", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "shipped", DELIVERED_CARD("Shipped thing", new Date(Date.now() - 86_400_000).toISOString()))

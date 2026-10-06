@@ -400,7 +400,7 @@ function publishHumanTurns(turns, startedMs, durationMs, flag) {
   const kept = []
   for (const turn of turns) {
     const atMs = Date.parse(turn.at) - startedMs
-    if (atMs < 0 || atMs > durationMs) {
+    if (!intervalInSession(atMs, atMs, durationMs)) {
       flag("human_turns", "source_unreadable")
       continue
     }

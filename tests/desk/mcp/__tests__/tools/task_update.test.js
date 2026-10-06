@@ -923,6 +923,19 @@ test("the side-state route still needs a reason", async () => {
   assert.equal((await readFront(file)).data.returns.length, 1)
 })
 
+test("the top-level status field is a return too: refused without a reason, recorded with one", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await validatingCard(root, "alias-return")
+  const before = await fs.readFile(file, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-return", status: "processing" }, finalize: async () => {} }), (error) => error.message === REFUSAL)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "alias-return", status: "processing", return_reason: "agent_error" }, finalize: async () => {} })
+  assert.equal(result.return_recorded, "validating to processing, agent_error, caught at_review")
+  const { data } = await readFront(file)
+  assert.equal(data.status, "processing")
+  assert.match(data.returns[0], /^\S+ validating processing agent_error at_review$/u)
+})
+
 test("a return_reason on a forward move or an unchanged status is refused in one sentence that says to drop it", async () => {
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "no-spray", title: "T" } })
