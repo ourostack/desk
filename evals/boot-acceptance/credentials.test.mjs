@@ -35,9 +35,9 @@ test("an environment listing for TOKEN, KEY or SECRET, piped or direct", () => {
 test("gh and Copilot credential files", () => {
   for (const command of ["cat ~/.config/gh/hosts.yml", "grep oauth $GH_CONFIG_DIR/hosts.yml", "cat /x/home/.copilot/config.json", "python3 -c \"open('.copilot/settings.json')\"", "cat $COPILOT_HOME/config.json"]) assert.deepEqual(kinds(command), ["credential file read"], command)
   // Claude's own sign-in file is linked into the run's HOME, so an agent that reads it is a credential read; the harness's own link is no tool call.
-  assert.deepEqual(kinds("cat ~/.claude/.credentials.json"), ["credential file read"])
+  assert.deepEqual(kinds("cat ~/.claude/.credentials.json"), ["credential file read"]) // a run never sets CLAUDE_CONFIG_DIR
   assert.deepEqual(credentialReads([{ name: "Read", input: { file_path: "/h/.claude/.credentials.json" } }]).map((r) => r.kind), ["credential file read"])
-  assert.deepEqual(kinds("cat ~/.claude/settings.json"), [])
+  assert.deepEqual(kinds("cat ~/.claude/settings.json"), []) // a run never sets CLAUDE_CONFIG_DIR
   assert.deepEqual(credentialReads([{ name: "Read", input: { file_path: "/h/.config/gh/hosts.yml" } }]).map((r) => r.kind), ["credential file read"])
   assert.deepEqual(credentialReads([{ name: "Read", input: { file_path: "/h/.copilot/config.json" } }]).length, 1)
   assert.deepEqual(credentialReads([{ name: "Read", input: { file_path: "/h/fixture/desk/AGENTS.md" } }]), [])

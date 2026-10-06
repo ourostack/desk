@@ -18,7 +18,7 @@
 // to the real HOME: `Library/Keychains`, which is a read path only (macOS
 // login-keychain lookup), never written by anything Desk or this harness
 // does, and, since Claude Code 2.1.290 (it keeps its sign-in in
-// `~/.claude/.credentials.json` as well), that one file. The credentials file is
+// the credentials file in the Claude profile folder as well), that one file. The credentials file is
 // only ever linked, never copied: a copy would let a token refresh inside a run
 // rotate the operator's refresh token and break their real session, while one
 // linked file stays one file. Everything else starts empty.
@@ -460,12 +460,14 @@ export function breakOriginForFailure(deskRoot) {
 // Per-run HOME isolation.
 // ---------------------------------------------------------------------------
 
-/** Claude Code's own sign-in file under `~/.claude` (2.1.290 and later keep it here as well as in the keychain). */
+/** Claude Code's own sign-in file in its profile folder (2.1.290 and later keep it there as well as in the keychain). */
 export const CLAUDE_CREDENTIALS = ".credentials.json"
+/** The profile folder under a HOME. A run never gets CLAUDE_CONFIG_DIR (buildChildEnv), so the profile is this folder under the run's own HOME, and the operator's is the same name under the real one. */
+export const CLAUDE_PROFILE = ".claude" // a run never gets CLAUDE_CONFIG_DIR
 
 /** Whether the run should link the operator's Claude sign-in file: Claude host, no `CLAUDE_CODE_OAUTH_TOKEN` in the environment, and the file exists. */
 export function claudeCredentialsLink({ host, env = process.env, realHome = REAL_HOME }) {
-  return host === "claude" && !env.CLAUDE_CODE_OAUTH_TOKEN && existsSync(path.join(realHome, ".claude", CLAUDE_CREDENTIALS))
+  return host === "claude" && !env.CLAUDE_CODE_OAUTH_TOKEN && existsSync(path.join(realHome, CLAUDE_PROFILE, CLAUDE_CREDENTIALS))
 }
 
 /**
@@ -510,7 +512,7 @@ export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude", k
   const claudeDir = path.join(homeDir, ".claude") // the run never gets CLAUDE_CONFIG_DIR (buildChildEnv), so Claude Code's profile is under this home
   mkdirSync(claudeDir, { recursive: true })
   // Claude Code's sign-in file, linked and never copied (see the header). Only `settings.json` is written into this folder by the harness, so nothing here replaces the link with a file.
-  if (credentials) symlinkSync(path.join(realHome, ".claude", CLAUDE_CREDENTIALS), path.join(claudeDir, CLAUDE_CREDENTIALS))
+  if (credentials) symlinkSync(path.join(realHome, CLAUDE_PROFILE, CLAUDE_CREDENTIALS), path.join(claudeDir, CLAUDE_CREDENTIALS))
   writeFileSync(path.join(claudeDir, "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)
   return homeDir
 }

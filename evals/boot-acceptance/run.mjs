@@ -303,7 +303,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   // `--outside-desk`: the session opens in an ordinary folder under the run's temp dir, with no `_meta`/`_archive` and no saved binding anywhere.
   const sessionFolder = args.outsideDesk ? path.join(runTmp, "plain-project") : deskRoot
   if (args.outsideDesk) mkdirSync(sessionFolder, { recursive: true })
-  // The login keychain, and Claude Code's `~/.claude/.credentials.json` when it exists (2.1.290 and later), are linked (never copied) into the run's HOME only for Claude Code without `CLAUDE_CODE_OAUTH_TOKEN` (its sign-in reads them); `gh` reaches the operator's login through the shim, never through this HOME.
+  // The login keychain, and Claude Code's credentials file in its profile folder when it exists (2.1.290 and later), are linked (never copied) into the run's HOME only for Claude Code without `CLAUDE_CODE_OAUTH_TOKEN` (its sign-in reads them); `gh` reaches the operator's login through the shim, never through this HOME.
   const keychain = args.host === "claude" && !process.env.CLAUDE_CODE_OAUTH_TOKEN
   createIsolatedHome({ homeDir, sharedCacheDir, host: args.host, keychain, ghAccounts: false, credentials: claudeCredentialsLink({ host: args.host }) })
   // The `watering-schedule-api` card records `~/code/greenhouse-irrigation`;
