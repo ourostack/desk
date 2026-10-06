@@ -35,7 +35,7 @@ function declare(deskRoot, store = STORE) {
 
 async function marker(env, { n = 1, host = "claude-code", deskRoot, routing, updatedAt = new Date().toISOString() }) {
   const log = path.join(env.HOME, `${n}.jsonl`)
-  await writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: log, cwd: env.HOME, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [], updated_at: updatedAt, ...(routing === undefined ? {} : { routing }) })
+  await writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: log, cwd: env.HOME, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: updatedAt, ...(routing === undefined ? {} : { routing }) })
 }
 
 // A fake gh: `auth token`, `GET repos/<store>` (visibility), the open kaizen issue list and issue creation.
@@ -169,6 +169,20 @@ test("a Codex marker's default route proves nothing, so kaizen files only by a C
   assert.equal(created().length, 0)
   await marker(env, { n: 2, host: "claude-code", deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: new Date(Date.now() - 1000).toISOString() })
   assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, STORE)
+}))
+
+test("a recorded default route whose overlay manifest could not be read files nothing until that manifest reads", () => scratch(async ({ env, deskRoot, base }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await setConsent(env, { store: WORK_STORE, contribute: true, account: "worker" })
+  const { runner, created } = fakeGh({ repo: { private: true } })
+  const manifest = path.join(base, "plugins", "corp", "plugin.json")
+  mkdirSync(path.dirname(manifest), { recursive: true })
+  writeFileSync(manifest, "{ truncated")
+  await marker(env, { n: 1, deskRoot, routing: { source: "default", store: STORE, warnings: [{ code: "manifest_unparseable", manifest }] } })
+  assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner }), { result: "store_invalid" })
+  assert.equal(created().length, 0, "never the public default store")
+  writeFileSync(manifest, JSON.stringify({ name: "corp", desk: { factory: { store: WORK_STORE } } }))
+  assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, WORK_STORE)
 }))
 
 test("two recorded routings for the desk with the same time still give one route", () => scratch(async ({ env, deskRoot }) => {

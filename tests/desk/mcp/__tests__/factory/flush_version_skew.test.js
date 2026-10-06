@@ -48,7 +48,7 @@ async function deliver(ctx, count) {
     desks.push(desk)
     const log = path.join(ctx.base, `log-${n}.jsonl`)
     await fs.writeFile(log, "{}\n")
-    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
     assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(n))).written, true)
     assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), session: sessionId(n) })).written, true)
   }
@@ -137,7 +137,7 @@ test("facts or labels with keys a newer Desk wrote are skipped and counted as ne
   for (const n of [1, 2, 3, 4, 5]) {
     const log = path.join(ctx.base, `log-${n}.jsonl`)
     await fs.writeFile(log, "{}\n")
-    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   }
   const extra = localFacts(1)
   extra.session.at_ms = 5
@@ -183,7 +183,7 @@ test("a session whose receipt records a newer binding version is skipped and cou
   await reroute(desk, STORE)
   const log = path.join(ctx.base, "log.jsonl")
   await fs.writeFile(log, "{}\n")
-  await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
   const { writeStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, marker: "x", binding_version: 999 } } })

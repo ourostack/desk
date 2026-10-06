@@ -338,10 +338,12 @@ test("concurrent derivation serializes one session instead of overwriting freshe
 
 test("routing snapshot survives plugin cleanup, desk declaration wins, and warnings never enter facts", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
-  const marker = { ...await session(ctx), routing: { source: "overlay", store: "example/other", warnings: [{ code: "manifest_unreadable", manifest: path.join(ctx.base, "missing/plugin.json") }] } }
+  const clean = { ...await session(ctx), routing: { source: "overlay", store: "example/other", warnings: [] } }
   await setConsent(ctx.env, { store: STORE, contribute: true })
-  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "not_opted_in", store: "example/other" })
-  assert.equal((await readStatus(ctx.env)).routing_warnings.length, 1)
+  assert.deepEqual(await deriveMarker(ctx.env, clean), { result: "not_opted_in", store: "example/other" })
+  // A route recorded while a manifest could not be read is held while that manifest is gone: it might have declared another store.
+  const marker = { ...clean, routing: { ...clean.routing, warnings: [{ code: "manifest_unreadable", manifest: path.join(ctx.base, "missing/plugin.json") }] } }
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
   await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: STORE })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
   const root = await factoryStateRoot(ctx.env)
@@ -485,7 +487,8 @@ async function codexMarker(ctx) {
 }
 
 async function sibling(ctx, overrides) {
-  const marker = { ...await session(ctx), session_id: SIBLING_ID, ended_at: CODEX_AT, updated_at: new Date().toISOString(), routing: DEFAULT_ROUTING, ...overrides }
+  // A Claude Code or Copilot hook that read its plugin set lists Desk itself; a default route beside no plugins proves nothing.
+  const marker = { ...await session(ctx), session_id: SIBLING_ID, ended_at: CODEX_AT, updated_at: new Date().toISOString(), plugins: [{ name: "desk", version: "1.0.0" }], routing: DEFAULT_ROUTING, ...overrides }
   if (Object.hasOwn(overrides, "routing") && overrides.routing === undefined) delete marker.routing
   await writeMarker(ctx.env, marker)
   return marker
@@ -525,6 +528,8 @@ test("a Codex marker stays held for a distant, other-desk or overlay-routed sibl
   await held("sibling without a desk")
   await sibling(ctx, { host: "codex-cli" })
   await held("another Codex marker proves nothing")
+  await sibling(ctx, { plugins: [] })
+  await held("a sibling whose scan read no plugins (review finding 7)")
 }))
 
 test("a qualifying Claude or Copilot sibling releases the Codex marker, including through a symlinked desk path", () => scratch(async (ctx) => {

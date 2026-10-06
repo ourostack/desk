@@ -15,7 +15,7 @@ import { crewWorkspace } from "../desk/crew-roster.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { outcomeSnapshot } from "./outcome.js"
-import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, recordRoutes, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
 import { githubRepoOfRemote } from "./desk-visibility.js"
@@ -23,6 +23,7 @@ import { ENUMS, LIMITS, isPlainObject } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
 import { RETRACTED_COPIES, declared, deskRootOf, markerRoute, proofIndex, provenBy, sessionRoute } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
+import { routeHolds } from "./held-route.js"
 
 async function sourceStamp(file) {
   const stat = await fs.lstat(file)
@@ -200,7 +201,6 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     const refusal = admit === null ? null : await admit()
     if (refusal !== null) return { result: "refused", store, reason: refusal }
     const name = `${marker.host}-${marker.session_id}.json`
-    if (route.warnings.length) await writeStatus(env, { routing_warnings: route.warnings })
     if (store === null) return { result: "held", store }
     if ((await readConsent(env)).stores[store]?.contribute !== true) return { result: "not_opted_in", store }
     if (marker.host === "codex-cli" && route.source === "default" && !provenBy(marker, await siblings())) return { result: "held", store: null, reason: "route_unverified" }
@@ -264,7 +264,10 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     // is what the flush compares with the desk root's repository once the marker is pruned, so a session is published under its desk's
     // protection only when the desk is certainly the same one; a receipt without it is uncertain. `desk_unprotected` (set by the flush) is carried over.
     const deskRepo = githubRepoOfRemote(deskRemote)?.toLowerCase()
-    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, repo_unresolved: repoUnresolved, segments_capped_ms: segmentsCappedMs, ...(deskRepo === undefined ? {} : { desk_repo: deskRepo }), ...(receipt?.desk_unprotected === true ? { desk_unprotected: true } : {}), ...before } } })
+    // `checked_route` is the store this derive checked, written only on a positive route (an older hook's default route with no overlay check
+    // is not one), so a session whose marker is later pruned is placed on it (`session-route.js`).
+    const checked = route.source === "default" && !marker.routing && marker.host !== "codex-cli" ? {} : { checked_route: store }
+    await writeStatus(env, { derivations: { [name]: { store, ...checked, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, repo_unresolved: repoUnresolved, segments_capped_ms: segmentsCappedMs, ...(deskRepo === undefined ? {} : { desk_repo: deskRepo }), ...(receipt?.desk_unprotected === true ? { desk_unprotected: true } : {}), ...before } } })
     return { result: "written", store }
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }
@@ -618,6 +621,8 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
     summary[result] += 1
     if (reason === "route_unverified") summary.route_unverified += 1
   }
+  // Every held route is counted with its reason (`held-route.js`), for `desk_doctor` and the boot line: a hold is never silent.
+  await writeStatus(env, { route_holds: { ...routeHolds(markers), at: new Date().toISOString() } }).catch(() => {})
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.
   Object.assign(summary, await rebuildOrphans(env, { quietMs, markers }))
   // "Away" is made durable as soon as anything shows it: every session with a copy in some store's outbox is routed as the flush routes it
@@ -636,6 +641,15 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
       return memo.get(session)
     }
     summary.kept_elsewhere = (await keepCopiesElsewhere(env, routeOf)).length
+    // A positive route seen here is checked: it is recorded, as the flush records it, so the session keeps it once its marker is pruned.
+    const checked = {}
+    for (const [session, target] of memo) {
+      if (typeof target !== "string") continue
+      const names = ENUMS.host.map((host) => `${host}-${session}.json`).filter((name) => isPlainObject(receipts?.[name]))
+      const deskRoot = bySession.get(session)?.desk_root ?? deskRootOf(receipts, names)
+      for (const name of names.filter((name) => receipts[name].checked_route !== target && typeof deskRoot === "string")) checked[name] = { store: target, deskRoot }
+    }
+    if (Object.keys(checked).length > 0) await recordRoutes(env, checked)
   } catch {
     // The flush of each consented store still moves the copies of its sessions that are not here; this step is the second line for the rest.
     summary.kept_elsewhere = null

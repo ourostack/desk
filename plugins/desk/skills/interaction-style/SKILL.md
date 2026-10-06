@@ -2,19 +2,20 @@
 name: interaction-style
 description: >-
   Hard rules about how worker talks to the operator: one decision group per
-  message; tidy and announce, never a naming proposal; frontloading what the
-  human must supply; TaskCreate, TodoWrite and host memory, plan, review or
-  autopilot commands versus the desk; act on confident decisions; respond in
-  words before editing on new operator input;
-  start announced parallel work in the same message; desk paths anchored in
-  prose; time-to-first-action discipline (authorization as scope, ask only
-  when blocked, no phantom limits, constrained questions); brevity in response
-  prose; the remote substrate boundary; and invocation guidance. Always-on for
-  response composition; invoke whenever new operator input arrives mid-work,
-  before returning control or stopping short of agreed scope, when presenting
-  several decisions, creating, moving or renaming a track or task, tidying
-  the desk, aligning on new work or when the human is about to step away, or
-  responding to a harness nudge about TaskCreate or its own memory.
+  message; no question forms; few, long conversations; staying in a
+  human-opened conversation; coaching; tidy and announce, never a naming
+  proposal; frontloading what the human must supply; host task, memory, plan
+  and autopilot commands versus the desk; act on
+  confident decisions; respond in words before editing on new input; start
+  announced parallel work in the same message; desk paths anchored in prose;
+  time-to-first-action discipline (authorization as scope, ask only when
+  blocked, no phantom limits); brevity; the remote
+  substrate boundary; and invocation guidance. Always-on for response
+  composition; invoke whenever new operator input arrives mid-work, before
+  returning control or stopping short of agreed scope, when presenting several
+  decisions, creating, moving or renaming a track or task, tidying the desk,
+  aligning on new work or when the human is about to step away, or responding
+  to a harness nudge about TaskCreate or its own memory.
 ---
 
 # Interaction style
@@ -173,6 +174,18 @@ If none of these is true, proceed. Don't ask "for safety". Before returning cont
 
 A "please review" moment for your own work (a plan, a draft, captured notes, a finished change) goes to `superpowers:requesting-code-review` or a check you run yourself, not to the operator. The operator reviews only what needs a person: the genuine human gates `using-desk` lists, plus cross-team posture such as how to frame an escalation or when to push back.
 
+### No question forms
+
+Converse in normal chat, one decision group at a time, and ask only when genuinely blocked. Do not use form-style question interfaces (for example a host's structured-question tool, such as `ask_user`) with the operator: they make stream-of-thought input and cursor control painful.
+
+### Few, long conversations
+
+Plan for few, long conversations, not many short ones: the human will talk something through for as long as it takes, but only a few times, and may be away for long stretches. So gather everything that needs them into one sitting: ask for the principles behind a decision rather than each instance of it, then decide the instances yourself, record them as rulings and keep going. Between sittings, keep a running agenda on the task card (questions that are truly theirs, each with the evidence and a recommendation) instead of asking as they come up, and never end a status update with a question that can wait for the agenda.
+
+### Stay in a conversation the human opens
+
+When the human opens a conversation (a question, an idea, "let's talk"), stay in it: design talk goes through `superpowers:brainstorming`, already-authorized background work may continue, and nothing new starts on that topic until they close it or say go.
+
 ### No phantom limits
 
 Context size, elapsed time, "it's big", "pragmatic" and "scope creep" are not reasons to stop short of the agreed scope. The host manages context compression, there is no deadline unless the operator names one, and "I don't know exactly how" is not "I can't": the pattern is almost always already in the codebase, grep-able and adaptable. If you catch yourself framing work as "I'll defer this as a follow-up" or "let me ship a WIP PR at this point", ask why; if the answer is one of those anxiety words, it is a flinch, so keep going. These phrases are flinches whatever the justification around them: "context is getting deep", "the proper autonomous thing would be to...", "this should be split across sessions", "framework-shape gap", "let me summarize progress and hand off". If the remaining work has no unresolved design decision and no external blocker, proceed. There are only three valid stops: a real blocker (an external dependency, ambiguity that needs the operator, an unmerged dependency), all work complete, or an explicit stop from the operator. Verified resource exhaustion is different, and `session-resumption` covers it.
@@ -324,3 +337,7 @@ Two correct phrasings:
 - **Attribute the right surface explicitly.** "Inside the session, invoke skill `connect-helper:perspectives`." This is correct for the Skill tool surface but only inside a running agent.
 
 This rule is downstream of `../evidence-discipline/SKILL.md` → "Messages over models" / "Discover before invent" — the prompt's authoritative lists are right there; check before naming.
+
+## 10. Coaching the collaboration
+
+Recognize these failure patterns: steps handed over one at a time; micromanagement or hovering; a one-shot request with no alignment; the human acting as glue, relaying output or asking how and then doing it; work pulled back mid-flight by either side; the same correction twice, which means context is missing: record it durably in the desk. Say once, briefly, "let's step back and reset how we're working" with a concrete adjustment, then carry on; it never becomes a recurring gate or widens your authority. Ambitious delegation is welcome: shape an overbroad ask into an assessable outcome rather than shrinking it.

@@ -14,6 +14,8 @@ import { strict as assert } from "node:assert"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { pendingLaunchTimes } from "../../../../../plugins/desk/mcp/src/factory/filer-launch.js"
+import { runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -51,7 +53,7 @@ test("the real registration in this checkout's own copilot-hooks.json passes wit
 test("Copilot: a present registration under a fixture plugin root produces no line", async () => {
   const root = fixturePluginRoot(REGISTERED_COPILOT, "copilot-hooks.json")
   try {
-    const line = await runBootChecks({ host: "copilot", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck] })
+    const line = await runBootChecks({ host: "copilot", env: { PLUGIN_ROOT: root, HOME: root }, checks: [hostEnforcementCheck] })
     assert.equal(line, "")
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -67,7 +69,7 @@ for (const [host, unregistered, fileName] of [["claude", UNREGISTERED, "hooks.js
       // process is spawned here, so this stays fast and deterministic regardless of gh, the network or
       // this check's own 20 ms budget -- the point of queuing a repair instead of filing inline.
       const line = await runBootChecks({
-        host, env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck],
+        host, env: { PLUGIN_ROOT: root, HOME: root }, checks: [hostEnforcementCheck],
         launchRepair: async (command, env) => { launched.push({ command, env }) },
       })
       assert.match(line, /Desk problem: host-enforcement/)
@@ -89,7 +91,7 @@ test("an unreadable hooks.json (no file at all) also surfaces the block, never t
   const root = fixturePluginRoot(null)
   try {
     const line = await runBootChecks({
-      host: "claude", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck],
+      host: "claude", env: { PLUGIN_ROOT: root, HOME: root }, checks: [hostEnforcementCheck],
       launchRepair: async () => {},
     })
     assert.match(line, /Desk problem: host-enforcement/)
@@ -105,7 +107,7 @@ test("the check's own run() never launches or awaits the filer itself: it only h
     // from the `repair` field run() returns. So even a launcher that would hang forever cannot affect
     // run()'s own timing, proven here by calling it directly with none supplied.
     const startedAt = performance.now()
-    const { line, repair } = await hostEnforcementCheck.run({ host: "claude", env: { PLUGIN_ROOT: root } })
+    const { line, repair } = await hostEnforcementCheck.run({ host: "claude", env: { PLUGIN_ROOT: root, HOME: root } })
     assert.ok(performance.now() - startedAt < 500, "hostEnforcementCheck.run() must resolve on its own, with no launcher involved")
     assert.match(line, /Desk problem: host-enforcement/)
     assert.match(line, /file: filing in background/)
@@ -118,8 +120,28 @@ test("the check's own run() never launches or awaits the filer itself: it only h
 test("a present registration under a fixture plugin root produces no line", async () => {
   const root = fixturePluginRoot(REGISTERED)
   try {
-    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck] })
+    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root, HOME: root }, checks: [hostEnforcementCheck] })
     assert.equal(line, "")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("review round 2, M5: a launch writes a pending stamp first, so a filer that never starts reads as a drop; the next boot within the hour does not launch again; the filer clears it", async () => {
+  const root = fixturePluginRoot(UNREGISTERED)
+  const env = { PLUGIN_ROOT: root, HOME: root }
+  try {
+    const first = await hostEnforcementCheck.run({ host: "claude", env })
+    assert.ok(Array.isArray(first.repair.command))
+    // The repair was never launched: the stamp written before it stays pending.
+    assert.equal(pendingLaunchTimes(env).length, 1)
+    const again = await hostEnforcementCheck.run({ host: "claude", env })
+    assert.equal(again.repair, undefined)
+    assert.match(again.line, /file: filing already queued \(within the last hour\)/)
+    // The filer runs with the arguments the repair carries (it cannot file here) and clears the stamp.
+    const argv = first.repair.command.slice(first.repair.command.indexOf("--mechanism"))
+    assert.equal(await runFileDeskProblemCli({ argv, env: { ...env, PATH: "" } }), 0)
+    assert.deepEqual(pendingLaunchTimes(env), [])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

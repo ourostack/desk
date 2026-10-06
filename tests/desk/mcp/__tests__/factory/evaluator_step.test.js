@@ -598,7 +598,7 @@ test("the runner is told the folder of each session log the briefs name", () => 
   const id = sessionId(10)
   await writeMarker(env, {
     schema_version: 1, host: "claude-code", session_id: id, log_path: log, cwd: base, desk_root: null,
-    end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [], updated_at: new Date().toISOString(),
+    end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(),
   })
   const options = seams()
   await step(env, options)

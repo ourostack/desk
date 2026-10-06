@@ -102,10 +102,11 @@ function commandTextFromRawInput(raw) {
 
 const headless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
 
-function defaultSpawnFiler({ mechanism, reason, host, env = process.env }) {
+function defaultSpawnFiler({ mechanism, reason, host, launchSignature, env = process.env }) {
   const { compatibleCommand, launchCommand } = require("./boot-checks.cjs");
   const script = path.join(__dirname, "..", "mcp", "scripts", "file-desk-problem.js");
-  const command = compatibleCommand(script, "--mechanism", mechanism, "--reason", reason || "unknown", "--host", host || "unknown");
+  // `--launch-signature` names the throttle stamp this launch wrote, so the filer clears that one, not one keyed by its reason.
+  const command = compatibleCommand(script, "--mechanism", mechanism, "--reason", reason || "unknown", "--host", host || "unknown", "--launch-signature", launchSignature);
   // Fire-and-forget, exactly like ask-gate.cjs's own filer: not awaited, and its own rejection swallowed.
   launchCommand(command, env).catch(() => {});
 }
@@ -132,7 +133,7 @@ async function deadlineDecision({ rawInput, host, deadlineMs, env = process.env,
       block = result.block;
       if (result.shouldFile && !headless(env)) {
         try {
-          spawnFiler({ mechanism: "protected-checkout", reason: `repeated timeout (${result.count}x)`, host, env });
+          spawnFiler({ mechanism: "protected-checkout", reason: `repeated timeout (${result.count}x)`, host, launchSignature: result.signature, env });
         } catch {
           // Best-effort: the block still reports "filing in background" honestly enough -- the next repeated timeout tries again.
         }

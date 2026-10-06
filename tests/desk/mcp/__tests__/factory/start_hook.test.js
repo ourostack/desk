@@ -241,6 +241,9 @@ test("the factory check starts one detached finalize for finished jobs whose fac
   await fs.writeFile(path.join(folder, "task.md"), `---\nstatus: done\nupdated: ${new Date(Date.now() - DAY).toISOString()}\n---\n`)
   const job = jobId({ deskRemote: `local:${await fs.realpath(desk)}`, personPrefix: "", track: "alpha", slug: "shipped" })
   await requestFinalize(env, { job, deskRoot: desk })
+  // A Claude Code plugin registry that lists this Desk and no overlay: a missing registry, or one without this Desk, holds the route, and with it every finalize.
+  await fs.mkdir(path.join(env.HOME, ".claude", "plugins"), { recursive: true })
+  await fs.writeFile(path.join(env.HOME, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "desk@ourostack": [{ version: "1.0.0", installPath: PLUGIN }] } }))
   const repairs = []
   const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
   assert.equal(line, "")
@@ -342,8 +345,14 @@ test("the andon check names each contributing store's open andon issues in one l
   assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills")), false)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await setConsent(env, { store: "acme/work", contribute: true, account: "worker" })
-  await writeStatus(env, { andon: { [STORE]: { checked_at: "2026-09-27T12:00:00.000Z", issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: "2026-09-27T12:00:00.000Z", issues: [] } } })
+  // No refresh has run yet for either store: said out loud, never silent.
+  assert.equal(await run(), "Desk boot pre-checks: Factory: andon state unknown for acme/work (never refreshed) (not_refreshed); Factory: andon state unknown for ourostack/factory (never refreshed) (not_refreshed)")
+  const at = new Date().toISOString()
+  await writeStatus(env, { andon: { [STORE]: { checked_at: at, issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: at, issues: [] } } })
   assert.equal(await run(), "Desk boot pre-checks: Factory: 1 open andon issue in ourostack/factory (#41); it has no improvement card yet, and gets one at the next background step")
+  // A failed refresh after the last good one: unknown, beside the last known issues.
+  await writeStatus(env, { andon: { [STORE]: { checked_at: at, issues: [{ number: 41, title: "x" }], failure: "auth_failed", failed_at: new Date(Date.parse(at) + 1000).toISOString() }, "acme/work": { checked_at: at, issues: [] } } })
+  assert.equal(await run(), `Desk boot pre-checks: Factory: andon state unknown for ourostack/factory since ${at.slice(0, 10)} (auth_failed); Factory: 1 open andon issue in ourostack/factory (#41); it has no improvement card yet, and gets one at the next background step`)
   assert.deepEqual(repairs, [])
 }))
 
@@ -483,7 +492,8 @@ test("the plugin scan stops at the check's deadline and the factory check is the
 // The size budget. Claude Code saves a SessionStart context over 10,000 characters to a file and shows a 2 KB preview, which cut the boot imperative off in round AJ.
 // ---------------------------------------------------------------------------
 
-const CONTEXT_BUDGET = 9500
+// 300 characters under Claude Code's hard limit of 10,000; the measurement below already uses long worst-case paths.
+const CONTEXT_BUDGET = 9700
 
 // One pending migration is the budgeted case. Three (a stale install) can pass 10,000 whatever the foundation does, so that case pins only that the boot imperative still
 // opens the context and names the boot script inside the first 2,000 characters, which Claude Code's preview always shows.

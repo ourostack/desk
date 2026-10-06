@@ -68,6 +68,20 @@ On failure, failure blocks only descendants: independent ready nodes already dis
 
 Final behavioral scheduling proof — that dispatch, serialization and acceptance actually execute this way at runtime — belongs to a later task; this section ships the source contract and the real caller/provider witnesses only.
 
+## Choosing and briefing agents
+
+Choose each subagent's model deliberately, by the work's need for capability. Pick from whatever model family the host offers rather than inheriting the default, and reserve the most capable, most expensive tier for work that needs it, usually the root agent's own synthesis and judgment. Use the smallest, fastest tier for mechanical retrieval or lookup work and a mid tier for real engineering, analysis, drafting or review. A launch mode that copies the parent's context and model (for example, a fork) is fine when inheriting the full context is genuinely worth the top-tier cost; make that a conscious choice, not a default.
+
+A child brief bounds the work and leaves the method to the child; a handoff to a peer that owns its task is not a brief. A handoff never tells that agent how to do its work. Put yourself in its shoes: it owns its task and its method, and you do not know its state. Do not presume what it has done, where it stopped or what blocks it. Say what you would want to hear in its position: what your own side changed and intends to touch, what was decided, where the edges are, what you would like from it, and how to reach you. No step lists, no commands. Keep the message short and point to the task card.
+
+## Merging and the terminal state
+
+If a repository will let you merge, merge when confident. Being inside the operator's work boundary does not by itself require their approval. Do not ask the human to approve a pull request unless the repository or platform itself enforces a human approval (a required reviewer, a branch policy) or they asked for it on that work. When a platform does enforce one, request it with the exact reviewed head and status and resume after it. You own the whole terminal state either way: prepare the PR, wait for checks, review, merge, deploy, smoke, clean up, and never report completion while the PR remains open.
+
+## The factory itself
+
+When the work is the factory itself, invoke `factory-work` first. Start from Lean, not as a lens applied on request: before you propose, design or judge anything, name the governing Lean concept (the full improvement cycle, plan, do, check, act, is one of them), and carry a "Lean reading" section in every factory design and plan.
+
 ## Requirements that arrive during execution
 
 Keep a material new requirement on the same durable task: update the governing spec, numbered plan and progress ledger before implementation, evaluate dependencies, sequencing, authority, tests and review evidence, name any invalidated evidence, keep unaffected authorized work moving, and send the affected path back through the normal implementation and review gates; the agent must not silently absorb contradictory scope, must not restart the whole task without cause, and must not return control merely because the plan changed.

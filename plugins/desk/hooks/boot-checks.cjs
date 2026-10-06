@@ -386,14 +386,16 @@ const andonCheck = {
   id: "andon",
   budgetMs: 30,
   async run(ctx) {
-    const [{ isNoninteractive }, { andonBootCheck, andonLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    const [{ isNoninteractive }, { andonBootCheck, andonLine, andonUnknown, andonUnknownLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
     if (isNoninteractive(ctx.env)) return {};
+    // An andon state that is not known is said out loud, never left to read as "no open andon".
+    const unknown = andonUnknown({ env: ctx.env }).map(andonUnknownLine);
     const found = andonBootCheck({ env: ctx.env });
-    if (found.length === 0) return {};
+    if (found.length === 0) return unknown.length === 0 ? {} : { line: unknown.join("; ") };
     const cards = await improvementCards(ctx);
     withinDeadline(ctx);
     const openKeys = cards === null || cards.status !== "ok" ? null : cards.open_keys;
-    return { line: found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true })).join("; ") };
+    return { line: [...unknown, ...found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true }))].join("; ") };
   },
 };
 
@@ -456,11 +458,17 @@ const hostEnforcementCheck = {
   budgetMs: 20,
   async run(ctx) {
     if (ctx.host !== "claude" && ctx.host !== "copilot") return {};
-    const { hookRegistrationDeskProblem } = await runtime("runtime/host-enforcement-registration.js");
+    const [{ hookRegistrationDeskProblem }, { shouldLaunchFiler }] = await Promise.all([
+      runtime("runtime/host-enforcement-registration.js"), runtime("runtime/filer-throttle.js"),
+    ]);
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
     let repairCommand = null;
     const fileProblem = async ({ host, reason }) => {
-      repairCommand = compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "host-enforcement", "--reason", reason || "unknown", "--host", host || "unknown", "--fix-attempt", HOST_ENFORCEMENT_FIX_ATTEMPT);
+      // The throttle writes its pending stamp before the launch, as every other launcher does, so a filer that never starts reads as a
+      // drop, not a measured "no hit" (`factory/filer-launch.js`); the filer clears it under the same reason.
+      const filed = reason || "unknown";
+      if (!shouldLaunchFiler({ env: ctx.env, mechanism: "host-enforcement", signature: filed })) return { file: "filing already queued (within the last hour)" };
+      repairCommand = compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "host-enforcement", "--reason", filed, "--host", host || "unknown", "--fix-attempt", HOST_ENFORCEMENT_FIX_ATTEMPT);
       return { file: "filing in background" };
     };
     const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot, env: ctx.env, fileProblem });

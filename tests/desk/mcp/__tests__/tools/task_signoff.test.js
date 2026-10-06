@@ -452,7 +452,7 @@ test("a legacy done task that is refused gets a flow, a return and its place at 
   assert.equal(data.returns.length, 1)
 })
 
-test("the time of delivery for the verdict is the flow's, else the evidence's, and absent only when both are unreadable", async () => {
+test("the time of delivery for the verdict is the flow's, else the evidence's, and no_delivery_time when both are unreadable", async () => {
   const root = await mkTempDeskRoot()
   // A legacy card delivered "later" than the human turn: same turn.
   const late = await legacyDone(root, "legacy-late", { kind: "pr", ref: PR_EVIDENCE.ref, recorded_at: new Date(FUTURE).toISOString() })
@@ -463,13 +463,14 @@ test("the time of delivery for the verdict is the flow's, else the evidence's, a
   const fallback = await delivered(root, "flow-unreadable")
   await rewrite(fallback, (data) => { data.flow.delivered_at = "not a time"; data.evidence.recorded_at = new Date(FUTURE).toISOString() })
   assert.equal((await sign(root, "flow-unreadable", { outcome: "accepted" })).unverified_because, "same_turn_as_delivery")
-  // Both unreadable: absent, so it does not stand in the way.
+  // Both unreadable: absent, so the answer cannot be shown to come after the delivery (reproduction r2).
   const neither = await delivered(root, "both-unreadable")
   await rewrite(neither, (data) => { data.flow.delivered_at = "not a time"; data.evidence.recorded_at = "nor this" })
-  assert.equal((await sign(root, "both-unreadable", { outcome: "accepted" })).verified, true)
-  // No evidence time at all on a card with no flow: absent.
+  const unread = await sign(root, "both-unreadable", { outcome: "accepted" })
+  assert.deepEqual([unread.verified, unread.unverified_because], [false, "no_delivery_time"])
+  // No evidence time at all on a card with no flow: absent too.
   const bare = await legacyDone(root, "no-evidence-time", { kind: "pr", ref: PR_EVIDENCE.ref })
-  assert.equal((await sign(root, "no-evidence-time", { outcome: "accepted" })).verified, true)
+  assert.equal((await sign(root, "no-evidence-time", { outcome: "accepted" })).unverified_because, "no_delivery_time")
   assert.ok(bare)
   // A readable evidence time that is a Date (a YAML reader may make one) is used too.
   const dated = await delivered(root, "evidence-date")
@@ -493,7 +494,9 @@ const NOTES = {
   subagent_not_ruled_out: "Desk could not tell the main agent from a subagent, so the answer is kept as unverified. Repeat the call from the main agent in a later turn, on a host where Desk can see it.",
   not_human_origin: "This turn did not start with a message from the operator. Record the answer after the operator replies.",
   human_origin_unknown: "Desk could not tell whether the operator's message started this turn, so the answer is kept as unverified. Repeat the call in a later turn after the operator replies.",
+  no_stop_record: "Desk lost the record of this session's last stop, so it cannot tell whether the operator replied since. Record the answer after the operator's next reply.",
   no_prompt_since_stop: "No operator message has arrived since you last stopped. Record the answer after the operator replies.",
+  no_delivery_time: "This card has no delivery time Desk can read, so it cannot tell the answer came after the delivery. Deliver the task again through task_update, then record the answer after the operator replies.",
   same_turn_as_delivery: "Record the answer in a later turn, after the operator has replied.",
 }
 const WITNESS_FOR = {
@@ -502,6 +505,7 @@ const WITNESS_FOR = {
   subagent_not_ruled_out: human({ mainAgent: null }),
   not_human_origin: human({ humanOrigin: false }),
   human_origin_unknown: human({ humanOrigin: null }),
+  no_stop_record: human({ stopAt: null, stopMissing: true }),
   no_prompt_since_stop: human({ stopAt: FUTURE }),
   same_turn_as_delivery: human({ promptAt: 1000, stopAt: 0 }),
 }

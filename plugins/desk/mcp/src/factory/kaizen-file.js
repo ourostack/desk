@@ -60,6 +60,7 @@ import { listMarkers, readConsent, readJobsIndex, readMachineSecret, readStatus,
 import { KAIZEN_LABEL } from "./pipeline/kaizen.js"
 import { MEASURE_IDS } from "./pipeline/rollups.js"
 import { PATTERNS } from "./schema.js"
+import { markerRoute } from "./session-route.js"
 import { issuesClient } from "./store-issues.js"
 import { resolveStore } from "./store-route.js"
 
@@ -152,7 +153,8 @@ async function route(env, deskRoot) {
   const recorded = (await listMarkers(env))
     .filter((marker) => marker.host !== "codex-cli" && marker.desk_root !== null && path.resolve(marker.desk_root) === path.resolve(deskRoot) && marker.routing !== undefined)
     .sort((left, right) => (left.updated_at < right.updated_at ? 1 : left.updated_at > right.updated_at ? -1 : 0))
-  return recorded.length === 0 ? undefined : recorded[0].routing.store
+  // Read as every marker reader reads it (`markerRoute`): a route recorded while a plugin manifest was unreadable is held.
+  return recorded.length === 0 ? undefined : markerRoute(recorded[0]).store
 }
 
 /**

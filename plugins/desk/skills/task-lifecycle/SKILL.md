@@ -109,7 +109,7 @@ Each transition has a checkpoint type declaring how humans interact at that gate
 
 ## State-change protocol
 
-Every transition writes the applicable durable surfaces in order. Commit-message-only is not sufficient: a new session must reconstruct what happened from the task, track and mapped progress/rulings. Consume the adapter's mapped `progressPath` and derived `rulingsPath`; an explicit provider progress file is not replaced by a universal `doing.md`. When the map resolves to `task.md`, update it in place rather than writing a duplicate progress record.
+Keep task state current as work moves. Every transition writes the applicable durable surfaces in order. Commit-message-only is not sufficient: a new session must reconstruct what happened from the task, track and mapped progress/rulings. Consume the adapter's mapped `progressPath` and derived `rulingsPath`; an explicit provider progress file is not replaced by a universal `doing.md`. When the map resolves to `task.md`, update it in place rather than writing a duplicate progress record.
 
 ### 1. Task card (`task.md`)
 

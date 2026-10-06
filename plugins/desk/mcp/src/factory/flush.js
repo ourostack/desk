@@ -78,8 +78,8 @@
 //   from a marker under 30 days old or, once it is gone, from the desk root
 //   the session's receipt recorded when that desk declares its store; an
 //   invalid declaration there makes it unknown; else the session keeps its
-//   last known route (the receipt's recorded `route`,
-//   else its `store`, else this store). A retraction still open with no
+//   last checked route (the receipt's `checked_route`, which only a positive
+//   route this Desk saw writes), and with none it is frozen. A retraction still open with no
 //   positive route is stalled; a finished retraction's tombstone keeps the
 //   session away. Three invariants hold. I1: only a `here` session is
 //   published, or released from quarantine, to the store; unknown, stale,
@@ -88,9 +88,9 @@
 //   outside `status.json`: the local copies of every session that is not
 //   here leave the outbox for `retracted-copies/` (the sweep does the same
 //   for every store a session no longer routes to, or for every store when
-//   it has no route at all), and a session with a kept copy, a held one with
-//   no derivation receipt, or one whose recorded desk folder no longer
-//   resolves, is here only on a positive route, else frozen. I2: an online flush
+//   it has no route at all), and a session is here again only on a
+//   positive route or a checked route here; one whose recorded desk folder
+//   no longer resolves is here only on a positive route, else frozen. I2: an online flush
 //   rebuilds the intake branch from the change set the current state wants
 //   (publishes plus the deletes still needed); when that set is empty it
 //   closes this machine's open intake PR and resets the branch. Every online
@@ -181,6 +181,7 @@ import {
   restoreRetractedCopies,
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
+import { carriedAccountFault } from "./flush-health.js"
 import { CHECK_UNAVAILABLE, captureOnBranch, dropPending, judge, namesRecord, planCapture, saveCheckUnavailable, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
@@ -205,8 +206,9 @@ const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
-// `capture_check_unavailable` is the store's own capture check failing to read the commits: its failure, not the files' and not the record's.
-const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge", CHECK_UNAVAILABLE])
+// Every `*_check_unavailable` (`capture_check_unavailable`, `intake_check_unavailable`, `corrections_check_unavailable`, ...) is one of the
+// store's own checks failing to run: its failure, not the files' and not the record's, so the files wait and go again, never quarantined.
+const STALE_INTAKE_CODES = { has: (code) => code === "merge_conflict" || code === "unexpected_merge" || code === CHECK_UNAVAILABLE || /^[a-z][a-z0-9_]*_check_unavailable$/u.test(code) }
 const MAX_COMMENTS = 300
 const MAX_BYTES = 24 * 1024 * 1024
 const MAX_OUTPUT = 64 * 1024 * 1024
@@ -864,6 +866,9 @@ async function openPr(client, { store, head, base, count, retracted }) {
 // The flush.
 // ---------------------------------------------------------------------------
 
+// Whether this machine ever delivered to, retracted from or was refused by the store (`readDelivered`).
+const deliveredBefore = (delivered) => Object.keys(delivered.blobs).length > 0 || Object.keys(delivered.retracting).length > 0 || Object.keys(delivered.retracted).length > 0 || delivered.quarantined.size > 0
+
 async function deliver(env, context) {
   const { store, client, now, deadline, transform, maxFiles, maxBytes, progress } = context
   const nowIso = () => new Date(now()).toISOString()
@@ -877,8 +882,9 @@ async function deliver(env, context) {
   const status = await readStatus(env)
   const prior = status.last_flush?.[store] ?? {}
   const priorRefused = new Set(list(prior.refused_retractions).filter((name) => typeof name === "string"))
-  // A batch pushed and not yet seen settled: the intake PR may be open, carrying changes the current state no longer wants.
-  const mayBeOpen = prior.intake_pushed === true
+  // A batch pushed and not yet seen settled: the intake PR may be open, carrying changes the current state no longer wants. So may one when this
+  // store has no last-flush entry (`status.json` lost or reset) on a machine that delivered here before: the flush goes online once to look.
+  const mayBeOpen = prior.intake_pushed === true || (!isPlainObject(status.last_flush?.[store]) && deliveredBefore(await readDelivered(env, store)))
   // The intake PRs pushed and not yet seen settled, by number and head (`owner:branch`): a PR under an earlier head (the route moved between
   // the store and a fork, or the account changed) is invisible under the current one, so it is closed by its number.
   const priorPrs = list(prior.intake_prs).filter((pr) => isPlainObject(pr) && Number.isSafeInteger(pr.number) && typeof pr.head === "string")
@@ -904,9 +910,6 @@ async function deliver(env, context) {
   progress.newerFormat = newer.size
   // The kept copies of sessions that left this store, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
-  // The sessions held (a facts quarantine record: a labels-only quarantine holds nothing) before anything is released.
-  const heldBefore = new Set([...delivered.quarantined].filter((name) => !LABELS_KEY.test(name)).map(sessionOfName))
-  const keptSet = new Set(keptNow)
   // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
   if (capture.invalid) await saveInvalid(env, store, now())
@@ -932,19 +935,18 @@ async function deliver(env, context) {
     const deskRoot = deskRootOf(receipts, names)
     const route = sessionRoute(marker, { siblings: () => markers, deskRoot })
     let place = sessionPlace(store, route, derivedStoreOf(receipts, names), recordsOf.get(session))
-    // "Here" without a positive route rests on records that can be lost, so it fails closed where anything says the session left: a kept copy
-    // (every session that was not here had its copies moved to `retracted-copies/`, below), a held copy with no receipt to say where it was
-    // derived, or a recorded desk folder that no longer resolves (moved or renamed: where it routes now cannot be read). Such a session is frozen (`stale`: never published, never deleted) until a positive route says here, so a lost, unreadable or
-    // stale `status.json`, or a pruned tombstone, can never read as "no record, so here" and publish what left this store.
-    // A desk folder that was recorded (the marker's or the receipt's) and no longer resolves says nothing about where the desk routes now: not here.
+    // "Here" without a positive route needs a route this Desk checked (`checked_route`, `session-route.js`): a lost or stale `status.json`, a
+    // pruned marker or tombstone, or an older Desk's receipt never reads as "no record, so here". Every positive route this Desk sees updates
+    // it, so a session that left this store has another checked route, and its kept copy (every session that was not here had its copies
+    // moved to `retracted-copies/`, below) stays away; one kept only while its desk folder was missing comes back once the folder resolves.
+    // A recorded desk folder that no longer resolves (moved or renamed: where it routes now cannot be read) is never here without a positive route.
     const recorded = [marker?.desk_root, deskRoot].filter((root) => typeof root === "string")
     const deskGone = recorded.length > 0 && !recorded.some(isFolder)
-    const unproven = keptSet.has(session) || (heldBefore.has(session) && derivedStoreOf(receipts, names) === undefined) || deskGone
-    if (place === "here" && route.kind !== "store" && unproven) place = "stale"
+    if (place === "here" && route.kind !== "store" && deskGone) place = "stale"
     places.set(session, place)
     if (route.kind !== "store") continue
     const root = marker?.desk_root ?? deskRoot
-    for (const name of names.filter((name) => localNames.includes(name) && (receipts[name]?.route !== route.store || receipts[name]?.desk_root !== root))) routes[name] = { store: route.store, deskRoot: root }
+    for (const name of names.filter((name) => localNames.includes(name) && (receipts[name]?.checked_route !== route.store || receipts[name]?.route !== route.store || receipts[name]?.desk_root !== root))) routes[name] = { store: route.store, deskRoot: root }
   }
   if (Object.keys(routes).length > 0) await recordRoutes(env, routes)
   // "Away" is durable outside `status.json`: the local copies of every session that is not here (away, stale, stalled or unknown, held or not,
@@ -1144,6 +1146,8 @@ async function deliver(env, context) {
 
   await client.session(account)
   const infoAnswer = await client.api("GET", `repos/${store}`)
+  // The account signed in and answered: whatever this flush ends with, a standing account fault is gone (`flush-health.js`).
+  progress.reachedAccount = true
   if (infoAnswer.status === 404) {
     // No intake PR can be open on a store that is not there: nothing is left to settle.
     progress.intakePushed = false
@@ -1303,10 +1307,13 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     const unasked = progress.visibilityUnasked ?? before?.visibility_unasked
     const unaskedSince = progress.visibilityUnasked === null ? before?.visibility_unasked_since : progress.visibilityUnasked > 0 ? before?.visibility_unasked_since ?? new Date(now()).toISOString() : undefined
     const refused = progress.refused ?? list(before?.refused_retractions)
-    // Only a flush that pushed sets it, and only one that found nothing to change, and no PR left open, clears it.
-    const intakePushed = progress.intakePushed ?? before?.intake_pushed === true
+    // Only a flush that pushed sets it, and only one that found nothing to change, and no PR left open, clears it. A store with no entry
+    // (`status.json` lost or reset) on a machine that delivered there before may have a PR open too: until a flush reaches the store and
+    // settles it, the entry keeps it as pushed, so a flush that ends early (offline, a deadline, no consent) never forgets to look.
+    const intakePushed = progress.intakePushed ?? (before?.intake_pushed === true || (!isPlainObject(before) && deliveredBefore(await readDelivered(env, store))))
     const intakePrs = progress.intakePrs ?? list(before?.intake_prs)
     const through = progress.rejectionsThrough ?? (Number.isSafeInteger(previous) ? previous : null)
+    const accountFault = carriedAccountFault(outcome.result, before, { reachedAccount: progress.reachedAccount === true })
     await writeStatus(env, {
       last_flush: {
         [store]: {
@@ -1324,6 +1331,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           ...(refused.length > 0 ? { retractions_refused: refused.length, refused_retractions: refused } : {}),
           ...(intakePushed ? { intake_pushed: true } : {}),
           ...(intakePrs.length > 0 ? { intake_prs: intakePrs } : {}),
+          ...(accountFault !== null ? { account_fault: accountFault } : {}),
         },
       },
     })
