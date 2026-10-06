@@ -14,10 +14,14 @@
 // under the operator's real HOME is to give the `claude` subprocess a
 // different HOME outright. A bare fake HOME breaks Claude Code's own
 // auth (it reads `~/Library/Keychains/login.keychain-db`, confirmed
-// empirically), so each isolated HOME gets exactly one thing symlinked back
+// empirically), so each isolated HOME gets exactly two things symlinked back
 // to the real HOME: `Library/Keychains`, which is a read path only (macOS
 // login-keychain lookup), never written by anything Desk or this harness
-// does. Everything else starts empty.
+// does, and, since Claude Code 2.1.290 (it keeps its sign-in in
+// `~/.claude/.credentials.json` as well), that one file. The credentials file is
+// only ever linked, never copied: a copy would let a token refresh inside a run
+// rotate the operator's refresh token and break their real session, while one
+// linked file stays one file. Everything else starts empty.
 
 import { spawnSync } from "node:child_process"
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, rmSync, realpathSync, copyFileSync } from "node:fs"
@@ -456,6 +460,14 @@ export function breakOriginForFailure(deskRoot) {
 // Per-run HOME isolation.
 // ---------------------------------------------------------------------------
 
+/** Claude Code's own sign-in file under `~/.claude` (2.1.290 and later keep it here as well as in the keychain). */
+export const CLAUDE_CREDENTIALS = ".credentials.json"
+
+/** Whether the run should link the operator's Claude sign-in file: Claude host, no `CLAUDE_CODE_OAUTH_TOKEN` in the environment, and the file exists. */
+export function claudeCredentialsLink({ host, env = process.env, realHome = REAL_HOME }) {
+  return host === "claude" && !env.CLAUDE_CODE_OAUTH_TOKEN && existsSync(path.join(realHome, ".claude", CLAUDE_CREDENTIALS))
+}
+
 /**
  * Builds an isolated HOME for one `claude` subprocess invocation.
  * `sharedCacheDir`, when given, is symlinked in as `.cache` so the
@@ -464,11 +476,11 @@ export function breakOriginForFailure(deskRoot) {
  * per run -- it holds no operator content, only Desk's own installed code.
  * Everything else in the isolated HOME starts empty.
  */
-export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude", keychain = host !== "copilot", ghAccounts = host !== "copilot" }) {
+export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude", keychain = host !== "copilot", ghAccounts = host !== "copilot", credentials = false, realHome = REAL_HOME }) {
   mkdirSync(homeDir, { recursive: true })
   mkdirSync(path.join(homeDir, "Library"), { recursive: true })
   // The login keychain is linked in only when the host cannot sign in without it (Claude Code, unless `CLAUDE_CODE_OAUTH_TOKEN` is set). Copilot signs in from an environment variable, and the `gh` shim reaches the operator's `gh` login through the real HOME (see `installGhShim` `realEnv`), so its run gets no link at all.
-  if (keychain) symlinkSync(path.join(REAL_HOME, "Library", "Keychains"), path.join(homeDir, "Library", "Keychains"))
+  if (keychain) symlinkSync(path.join(realHome, "Library", "Keychains"), path.join(homeDir, "Library", "Keychains"))
   if (sharedCacheDir) {
     mkdirSync(sharedCacheDir, { recursive: true })
     symlinkSync(sharedCacheDir, path.join(homeDir, ".cache"))
@@ -497,6 +509,8 @@ export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude", k
   if (host === "copilot") return homeDir // the Copilot profile and its attribution default are written by copilot.mjs `writeCopilotProfile`
   const claudeDir = path.join(homeDir, ".claude") // the run never gets CLAUDE_CONFIG_DIR (buildChildEnv), so Claude Code's profile is under this home
   mkdirSync(claudeDir, { recursive: true })
+  // Claude Code's sign-in file, linked and never copied (see the header). Only `settings.json` is written into this folder by the harness, so nothing here replaces the link with a file.
+  if (credentials) symlinkSync(path.join(realHome, ".claude", CLAUDE_CREDENTIALS), path.join(claudeDir, CLAUDE_CREDENTIALS))
   writeFileSync(path.join(claudeDir, "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)
   return homeDir
 }
