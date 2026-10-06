@@ -147,6 +147,21 @@ test("denies a Claude Code Write that would create a task card with status: done
   assertDenied(result)
 })
 
+test("denies a Write that creates a done task card in folders that do not exist yet, when the desk is reached through a link", () => {
+  const alias = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), "guard-alias-"))), "desk-link")
+  // A junction needs no privilege on Windows; on other systems it is an ordinary directory link.
+  symlinkSync(DESK, alias, "junction")
+  try {
+    const result = taskStatusGuardHook(
+      writeInput({ toolName: "Write", toolInput: { file_path: path.join(alias, "new-track", "new-task", "task.md"), content: "---\nstatus: done\n---\n" } }),
+      "claude",
+    )
+    assertDenied(result)
+  } finally {
+    rmSync(path.dirname(alias), { recursive: true, force: true })
+  }
+})
+
 test("denies a direct Edit of a real task card from processing to validating, and names the exact task_update call", () => {
   withCard(CARD, (file) => {
     const result = taskStatusGuardHook(

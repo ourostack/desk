@@ -85,15 +85,16 @@ function absolutePath(filePath, { cwd, home }) {
   return path.resolve(cwd, expanded)
 }
 
-/** The real path of the file, or of its parent plus the name when the file does not exist yet. */
+/** The real path of the file, or of its nearest existing ancestor plus the names below it when the file does not exist yet. */
 function realTarget(absolute) {
-  try {
-    return realpathSync.native(absolute)
-  } catch {
+  const missing = []
+  for (let dir = absolute; ; dir = path.dirname(dir)) {
     try {
-      return path.join(realpathSync.native(path.dirname(absolute)), path.basename(absolute))
+      return path.join(realpathSync.native(dir), ...missing)
     } catch {
-      return absolute
+      const parent = path.dirname(dir)
+      if (parent === dir) return absolute
+      missing.unshift(path.basename(dir))
     }
   }
 }

@@ -8,6 +8,11 @@ name: desk MCP tests on Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Only run test files whose path (under tests/desk/mcp/__tests__) matches this regular expression. Empty runs everything."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -55,17 +60,19 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --only "$env:ONLY_FILES"
         env:
           GIT_TERMINAL_PROMPT: "0"
+          ONLY_FILES: ${{ inputs.only }}
 
       - name: Run the suite (standard user)
         if: matrix.mode == 'standard'
         shell: pwsh
-        run: >
-          ./.github/scripts/run-as-standard-user.ps1
-          -WorkDir "$PWD"
-          -Command 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json'
+        run: |
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --only "' + $env:ONLY_FILES + '"'
+          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
+        env:
+          ONLY_FILES: ${{ inputs.only }}
 
       - name: Show the result in the job summary
         if: always()

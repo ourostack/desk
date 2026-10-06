@@ -1,6 +1,6 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 180000]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 420000] [--only <file regex>]
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
@@ -21,7 +21,10 @@ const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entr
 })
 const files = walk(testsRoot).sort()
 // Round-robin keeps a slow directory's files spread over the shards.
-const mine = files.filter((_, i) => i % total === index - 1)
+// --only <regex> narrows the run to matching files (relative to the tests folder, forward slashes) for quick investigation runs.
+const only = String(arg("--only", "") ?? "")
+const wanted = only === "" ? files : files.filter((f) => new RegExp(only, "u").test(path.relative(testsRoot, f).split(path.sep).join("/")))
+const mine = wanted.filter((_, i) => i % total === index - 1)
 
 // What is still running under the test process when it hit its time limit, so a hang names the stuck command.
 const describeDescendants = (rootPid) => {
