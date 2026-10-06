@@ -34,7 +34,9 @@ const UNVERIFIED_NOTES = {
   subagent_not_ruled_out: "Desk could not tell the main agent from a subagent, so the answer is kept as unverified. Repeat the call from the main agent in a later turn, on a host where Desk can see it.",
   not_human_origin: "This turn did not start with a message from the operator. Record the answer after the operator replies.",
   human_origin_unknown: "Desk could not tell whether the operator's message started this turn, so the answer is kept as unverified. Repeat the call in a later turn after the operator replies.",
+  no_stop_record: "Desk lost the record of this session's last stop, so it cannot tell whether the operator replied since. Record the answer after the operator's next reply.",
   no_prompt_since_stop: "No operator message has arrived since you last stopped. Record the answer after the operator replies.",
+  no_delivery_time: "This card has no delivery time Desk can read, so it cannot tell the answer came after the delivery. Deliver the task again through task_update, then record the answer after the operator replies.",
   same_turn_as_delivery: "Record the answer in a later turn, after the operator has replied.",
 }
 
