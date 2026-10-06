@@ -120,13 +120,27 @@ test("blocked and dropped need a reason, which is written into Evidence and clea
   assert.equal((await rows(file))[0].evidence, "branch up")
 })
 
-test("callers cannot set in review, merged or delivered: Desk derives them from the PR", async () => {
+test("callers cannot set in review, merged or delivered where Desk reads them from a GitHub PR or a delegated card", async () => {
   const { root, file } = await newCard()
   await update(root, { id: "a", depends_on: [], repo: "widgets" })
   for (const state of ["in review", "merged", "delivered", "Delivered"]) {
-    await assert.rejects(update(root, { id: "a", state, evidence: PR }), /cannot be set to .*: Desk sets in review, merged and delivered from the step's PR/u)
+    await assert.rejects(update(root, { id: "a", state, evidence: PR }), /cannot be set to .*: Desk sets in review, merged and delivered from the step's GitHub PR or delegated card/u)
   }
+  await assert.rejects(update(root, { id: "a", state: "delivered", evidence: "task:t/other" }), /Leave the state to Desk/u)
+  await assert.rejects(update(root, { id: "a", state: "merged", reason: PR }), /Leave the state to Desk/u)
   assert.equal((await rows(file))[0].state, "pending")
+})
+
+test("where Desk cannot read the state (an Azure DevOps PR, a commit) the agent declares it with evidence, and the answer says so", async () => {
+  const { root, file } = await newCard()
+  await update(root, { id: "a", depends_on: [], repo: "widgets" })
+  await assert.rejects(update(root, { id: "a", state: "merged" }), /cannot be set to merged without evidence/u)
+  const merged = await update(root, { id: "a", state: "merged", evidence: "https://dev.azure.com/o/p/_git/r/pullrequest/3" })
+  assert.match(merged.step_declared, /the state merged is agent-declared/u)
+  const delivered = await update(root, { id: "a", state: "delivered", evidence: "a1b2c3d4 on origin/main", expect: "merged" })
+  assert.equal(delivered.step.state, "delivered")
+  assert.equal((await rows(file))[0].state, "delivered")
+  assert.equal((await update(root, { id: "a", state: "delivered" })).step_declared, undefined)
 })
 
 test("dropping a step blocks its live dependents unless the call names them as still valid", async () => {

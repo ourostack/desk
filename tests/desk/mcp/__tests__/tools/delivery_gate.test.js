@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { readFileSync } from "node:fs"
-import { checkDelivery, findPullRequest, prDelivery, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
+import { checkDelivery, findPullRequests, prDelivery, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
@@ -244,8 +244,11 @@ test("task_archive refuses to bump an undelivered PR's task to done", async () =
   await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "archived", evidence: PR }, fetchFn: fakeGitHub().fetchFn }), /is not delivered yet/u)
 })
 
-test("findPullRequest finds the first GitHub pull request URL inside some text", () => {
-  assert.deepEqual(findPullRequest("blocked on https://github.com/o/r/pull/12/files (was: x)"), { repo: "o/r", number: 12, url: "https://github.com/o/r/pull/12" })
-  assert.equal(findPullRequest("https://dev.azure.com/o/p/_git/r/pullrequest/3"), null)
-  assert.equal(findPullRequest("waits on infra"), null)
+test("findPullRequests finds every distinct GitHub pull request URL inside some text", () => {
+  assert.deepEqual(findPullRequests("blocked on https://github.com/o/r/pull/12/files and https://github.com/o/r/pull/13 (was: https://github.com/o/r/pull/12)"), [
+    { repo: "o/r", number: 12, url: "https://github.com/o/r/pull/12" },
+    { repo: "o/r", number: 13, url: "https://github.com/o/r/pull/13" },
+  ])
+  assert.deepEqual(findPullRequests("https://dev.azure.com/o/p/_git/r/pullrequest/3"), [])
+  assert.deepEqual(findPullRequests("waits on infra"), [])
 })

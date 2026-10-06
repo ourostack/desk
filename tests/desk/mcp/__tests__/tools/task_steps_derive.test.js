@@ -5,6 +5,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { deriveSteps } from "../../../../../plugins/desk/mcp/src/desk/step-delivery.js"
 import { readSteps } from "../../../../../plugins/desk/mcp/src/desk/steps.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
@@ -61,7 +62,7 @@ test("a PR closed without merge leaves the declared state and says so", async ()
   const { root, file } = await newCard(`| a | — | widgets | in progress | ${url(1)} |`)
   const result = await update(root, note, github({ 1: { state: "closed" } }))
   assert.deepEqual(await rows(file), { a: "in progress" })
-  assert.deepEqual(result.steps_notes, [`step a: PR closed without merge (o/widgets#1); its state is left as in progress`])
+  assert.deepEqual(result.steps_notes, [`step a: PR closed without merge (o/widgets#1)`])
 })
 
 test("an answer GitHub cannot give leaves the cell and says it was not verified; a PR it does not know says so too", async () => {
@@ -161,15 +162,25 @@ test("offline, a step already delivered still counts and the answer says it was 
   assert.match(result.steps_notes[0], /^step a: not verified/u)
 })
 
-test("kind steps is refused on a card with no readable steps table, which keeps today's gate", async () => {
+test("kind steps is refused on a card with no steps table, which keeps today's gate; an empty table closes as now", async () => {
   const plain = await mkTempDeskRoot()
   await task_create({ deskRoot: plain, input: { track: "t", slug: "plain", title: "P", body: "## Outcome\n\nx\n" } })
   await assert.rejects(update(plain, { ...DONE, evidence: { kind: "steps" } }, undefined, "plain"), /needs a card with a readable `## Steps` table, and this card has none/u)
   await update(plain, { ...DONE, evidence: { kind: "non_code", ref: "https://example.com/proof" } }, undefined, "plain")
-  const broken = await newCard(`| a | nobody | — | pending | — |`, { repos: [] }, "broken")
-  await assert.rejects(update(broken.root, { ...DONE, evidence: { kind: "steps" } }, undefined, "broken"), /has none/u)
-  await update(broken.root, { ...DONE, evidence: { kind: "non_code", ref: "https://example.com/proof" } }, undefined, "broken")
-  assert.equal(((await readFront(broken.file)).data).status, "done")
+  const empty = await newCard("", { repos: [] }, "empty")
+  await assert.rejects(update(empty.root, { ...DONE, evidence: { kind: "steps" } }, undefined, "empty"), /has none/u)
+  await update(empty.root, { ...DONE, evidence: { kind: "non_code", ref: "https://example.com/proof" } }, undefined, "empty")
+  assert.equal((await readFront(empty.file)).data.status, "done")
+})
+
+test("a Steps heading over a table Desk cannot read refuses the done move, through task_update and task_archive", async () => {
+  const { root, file } = await newCard(`| a | nobody | — | pending | — |`, { repos: [] }, "broken")
+  const proof = { kind: "non_code", ref: "https://example.com/proof" }
+  for (const evidence of [proof, { kind: "steps" }]) {
+    await assert.rejects(update(root, { ...DONE, evidence }, undefined, "broken"), /has a `## Steps` table Desk cannot read, because step "a" depends on "nobody", which is not a step/u)
+  }
+  await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "broken", evidence: proof } }), /Desk cannot read, because step "a" depends on "nobody"/u)
+  assert.equal((await readFront(file)).data.status, "drafting")
 })
 
 test("task_archive closes a card with steps the same way: steps evidence, every step delivered or dropped", async () => {
@@ -218,4 +229,104 @@ test("a table another session breaks while the call waits on GitHub is left as t
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...note }, fetchFn: broken })
   assert.equal(result.steps_refreshed, undefined)
   assert.match(await fs.readFile(file, "utf8"), /\| a \| — \| widgets \| pending \|/u)
+})
+
+test("another session's frontmatter change during the GitHub wait survives the call", async () => {
+  const { root, file } = await newCard(`| a | — | widgets | pending | ${url(1)} |`)
+  const fake = github({ 1: {} })
+  const meanwhile = async (address, options) => {
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("status: drafting", "status: processing\nowner: ari"))
+    return fake.fetchFn(address, options)
+  }
+  await task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...note }, fetchFn: meanwhile })
+  const front = (await readFront(file)).data
+  assert.equal(front.status, "processing")
+  assert.equal(front.owner, "ari")
+  assert.deepEqual(await rows(file), { a: "in review" })
+})
+
+test("a row added during the wait blocks the close, and the close is checked against the card as it is then", async () => {
+  const { root, file } = await newCard(`| a | — | widgets | in review | ${url(1)} |`)
+  const fake = github({ 1: { merged: true, labels: ["released"] } })
+  let added = false
+  const meanwhile = async (address, options) => {
+    if (!added) await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(/(\| a \|[^\n]*\n)/u, "$1| z | — | widgets | pending | — |\n"))
+    added = true
+    return fake.fetchFn(address, options)
+  }
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...DONE, evidence: { kind: "steps" } }, fetchFn: meanwhile }), /not done: 1 step is not delivered or dropped: z is pending/u)
+  assert.equal((await readFront(file)).data.status, "drafting")
+})
+
+test("the ordinary refresh skips delivered steps and the done check reads them again; a contradicted delivered step blocks, an unreachable one stays", async () => {
+  const text = `| a | — | widgets | delivered | ${url(1)} |\n| b | — | widgets | delivered | ${url(2)} |\n| c | — | widgets | delivered | ${url(3)} |`
+  const { root, file } = await newCard(text)
+  const fake = github({ 1: { merged: true, labels: ["released"] }, 2: { state: "closed" }, 3: { merged: true } })
+  await update(root, note, fake)
+  assert.equal(fake.calls.length, 0, "an ordinary refresh does not ask about delivered steps")
+  await assert.rejects(update(root, { ...DONE, evidence: { kind: "steps" } }, fake), (error) => {
+    assert.match(error.message, /b is delivered \(PR closed without merge \(o\/widgets#2\)\)/u)
+    assert.match(error.message, /c is merged \(o\/widgets#3 is merged but not delivered/u)
+    assert.doesNotMatch(error.message, /a is/u)
+    return true
+  })
+  const quiet = await newCard(`| a | — | widgets | delivered | ${url(1)} |`, {}, "quiet")
+  await update(quiet.root, { ...DONE, evidence: { kind: "steps" } }, github({}, { down: true }), "quiet")
+  assert.equal((await readFront(quiet.file)).data.status, "done")
+  assert.deepEqual(await rows(file), { a: "delivered", b: "delivered", c: "delivered" })
+})
+
+test("at most four pull requests are asked about at once", async () => {
+  const text = [1, 2, 3, 4, 5, 6, 7].map((n) => `| s${n} | — | widgets | pending | ${url(n)} |`).join("\n")
+  const { root, file } = await newCard(text)
+  const fake = github(Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((n) => [n, {}])))
+  let running = 0
+  let most = 0
+  const slow = async (address, options) => {
+    running += 1
+    most = Math.max(most, running)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    running -= 1
+    return fake.fetchFn(address, options)
+  }
+  await task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...note }, fetchFn: slow })
+  assert.ok(most > 1 && most <= 4, `most in flight: ${most}`)
+  assert.equal(Object.values(await rows(file)).every((state) => state === "in review"), true)
+})
+
+test("a refresh past its total budget leaves the unchecked steps as they are, with one note", async () => {
+  const rows = [{ id: "a", state: "pending", evidence: url(1) }, { id: "b", state: "pending", evidence: url(2) }]
+  const hangs = () => new Promise(() => {})
+  const result = await deriveSteps(rows, { env: {}, fetchFn: hangs, totalBudgetMs: 30 })
+  assert.equal(result.changes.size, 0)
+  assert.deepEqual(result.notes, ["the steps refresh ran out of its 0.03-second budget; not checked, so left as they are: a, b"])
+  assert.match(result.why.get("a"), /not verified: o\/widgets#1 was not checked in time/u)
+})
+
+test("a step with several PRs takes the least advanced state; a closed one is noted without stopping the others; an unreadable one leaves the cell", async () => {
+  const two = (a, b) => `${url(a)} and ${url(b)}`
+  const { root, file } = await newCard([`| a | — | widgets | pending | ${two(1, 2)} |`, `| b | — | widgets | pending | ${two(3, 4)} |`, `| c | — | widgets | pending | ${two(4, 9)} |`, `| d | — | widgets | pending | ${two(5, 5)} |`].join("\n"))
+  const fake = github({ 1: { merged: true, labels: ["released"] }, 2: { merged: true }, 3: { state: "closed" }, 4: { merged: true, labels: ["released"] }, 5: {} })
+  const result = await update(root, note, fake)
+  assert.deepEqual(await rows(file), { a: "merged", b: "delivered", c: "pending", d: "in review" })
+  assert.deepEqual(result.steps_notes, ["step b: PR closed without merge (o/widgets#3)", "step c: GitHub does not know o/widgets#9, so its state is left as it is"])
+})
+
+test("a delegated step whose card is cancelled is blocked, with a note; a card that cannot be read is a note, never a failed call", async () => {
+  const { root, file } = await newCard("| a | — | widgets | pending | task:t/card-x |")
+  await task_create({ deskRoot: root, input: { track: "t", slug: "card-x", title: "X", status: "cancelled" } })
+  const result = await update(root, note)
+  assert.deepEqual(await rows(file), { a: "blocked" })
+  assert.deepEqual(result.steps_notes, ["step a: its card t/card-x is cancelled, so the step is blocked; decide whether to drop it"])
+  await assert.rejects(update(root, { ...DONE, evidence: { kind: "steps" } }), /a is blocked \(card cancelled \(t\/card-x\)\)/u)
+  const broke = await deriveSteps([{ id: "b", state: "pending", evidence: "task:t/y" }], { env: {}, cardStatus: async () => { throw new Error("EACCES") } })
+  assert.deepEqual(broke.notes, ["step b: its card t/y could not be read (EACCES), so its state is left as it is"])
+})
+
+test("task_archive writes the derived cells into the archived card and leaves its frontmatter alone", async () => {
+  const { root } = await newCard(`| a | — | widgets | in review | ${url(1)} |`)
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "chain", evidence: { kind: "steps" } }, fetchFn: github({ 1: { merged: true, labels: ["released"] } }).fetchFn })
+  const archived = await fs.readFile(path.join(root, "t", "_archive", "chain", "task.md"), "utf8")
+  assert.match(archived, /\| a \| — \| widgets \| delivered \| https:/u)
+  assert.match(archived, /^---\n[\s\S]*status: done[\s\S]*\n---\n/u)
 })

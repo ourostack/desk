@@ -35,12 +35,13 @@ const REQUEST_BUDGET_MS = 5000
 const FILE_PAGES = 3
 const GITHUB_PR = /^https:\/\/(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+)\/pull\/(\d+)(?:[/?#].*)?$/iu
 const MERGE = Object.freeze({ kind: "merge" })
-const PR_IN_TEXT = /https:\/\/(?:www\.)?github\.com\/([^/\s?#()]+)\/([^/\s?#()]+)\/pull\/(\d+)/iu
+const PR_IN_TEXT = /https:\/\/(?:www\.)?github\.com\/([^/\s?#()]+)\/([^/\s?#()]+)\/pull\/(\d+)/giu
 
-/** The first GitHub pull request URL inside some text, as `{ repo, number, url }`, or null. */
-export function findPullRequest(text) {
-  const match = PR_IN_TEXT.exec(text)
-  return match === null ? null : { repo: `${match[1]}/${match[2]}`, number: Number(match[3]), url: match[0] }
+/** Every distinct GitHub pull request URL inside some text, as `{ repo, number, url }`, in order. */
+export function findPullRequests(text) {
+  const found = new Map()
+  for (const match of text.matchAll(PR_IN_TEXT)) found.set(match[0].toLowerCase(), { repo: `${match[1]}/${match[2]}`, number: Number(match[3]), url: match[0] })
+  return [...found.values()]
 }
 
 async function github({ fetchFn, env, budgetMs }, route, accept = "application/vnd.github+json") {

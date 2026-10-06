@@ -12,6 +12,7 @@
 // and `delivered`, from the step's PR or delegated card (desk/step-delivery.js), and `setDerived` writes those cells.
 
 import { scan } from "../tools/task-body.js"
+import { isDerivable } from "./step-delivery.js"
 
 export const STEP_STATES = ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"]
 export const DERIVED_STATES = ["in review", "merged", "delivered"]
@@ -161,7 +162,7 @@ function withNewTable({ lines, fenced }, rows) {
 }
 
 /**
- * The body with one step row added or changed, and what it said: `{ body, row, blocked, ready }`, where `blocked` lists the
+ * The body with one step row added or changed, and what it said: `{ body, row, blocked, ready, declared }`, where `declared` says the state was set by the caller on evidence Desk cannot read, and `blocked` lists the
  * dependents a drop blocked and `ready` the steps this change made ready. `repos` is the card's repo names. Refuses, naming the row
  * and changing nothing, for a step Desk cannot place (see the task_update schema for the rules).
  */
@@ -184,13 +185,20 @@ export function applyStep(body, input, tool, repos) {
   }
   if (existing === undefined && (input.repo === undefined || input.depends_on === undefined)) refuse(`${named} is new, so it needs \`repo\` (a repo of the card, or "—") and \`depends_on\` (a list of step names, empty for none)`)
   const state = input.state === undefined ? (existing?.state ?? "pending") : String(input.state).trim().toLowerCase()
-  if (input.state !== undefined && DERIVED_STATES.includes(state)) refuse(`${named} cannot be set to ${state}: Desk sets in review, merged and delivered from the step's PR. Put the PR URL (or \`task:<track>/<slug>\` for a delegated step) in \`evidence\` and Desk derives the state`)
   const changed = existing === undefined || state !== existing.state
   if (existing !== undefined && existing.state !== "pending" && (input.depends_on !== undefined || input.repo !== undefined)) refuse(`${named} is ${existing.state}; its \`depends_on\` and \`repo\` change only while it is pending (set it to pending in one call, then rewire it in the next)`)
   if (existing !== undefined && SETTLED.includes(existing.state) && changed && input.expect === undefined) refuse(`${named} is ${existing.state}; moving it out of ${existing.state} needs \`expect: "${existing.state}"\`, so a step another session settled is not reopened by accident`)
   const reason = typeof input.reason === "string" ? input.reason.trim() : ""
   if (NEEDS_REASON.includes(state) && changed && reason === "") refuse(`${named} cannot become ${state} without a \`reason\``)
   const proof = reason === "" ? (typeof input.evidence === "string" ? input.evidence : "") : reason
+  // Desk derives in review, merged and delivered where it can read them (a GitHub pull request, a delegated card); elsewhere (an Azure DevOps pull request, a commit) the agent declares them, with evidence.
+  let declared = false
+  if (input.state !== undefined && DERIVED_STATES.includes(state) && changed) {
+    const shown = proof !== "" ? proof : evidenceBehind(existing)
+    if (isDerivable(shown)) refuse(`${named} cannot be set to ${state}: Desk sets in review, merged and delivered from the step's GitHub PR or delegated card, and its evidence has one. Leave the state to Desk`)
+    if (shown === "") refuse(`${named} cannot be set to ${state} without evidence: Desk derives the state from a GitHub PR URL (or \`task:<track>/<slug>\`) in \`evidence\`; for a PR or commit elsewhere, put it in \`evidence\` and the state is yours to declare`)
+    declared = true
+  }
   const depends = input.depends_on === undefined ? existing.depends_on : names(input.depends_on, "depends_on")
   let repo = existing?.repo ?? null
   if (input.repo !== undefined) repo = NONE.test(String(input.repo).trim()) ? null : String(input.repo).trim()
@@ -222,7 +230,7 @@ export function applyStep(body, input, tool, repos) {
     out = lines
   }
   const before = readyOf(rows)
-  return { body: out.join(read.eol), row, blocked, ready: readyOf(next).filter((item) => !before.includes(item)) }
+  return { body: out.join(read.eol), row, blocked, declared, ready: readyOf(next).filter((item) => !before.includes(item)) }
 }
 
 /**

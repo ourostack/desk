@@ -134,6 +134,10 @@ const DONE_EVIDENCE_REF_CHECKS = {
 // `card` carries what the check needs of the task itself: its recorded `repos`, the card file(s) the task lives in
 // (a `non_code` ref may not be the card, which any agent can write to say anything) and the git seams.
 async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
+  // A card with a `## Steps` heading Desk cannot read is not closed: its author meant it to have steps.
+  if (card.steps?.unreadable !== undefined) {
+    throw new Error(`${toolName}: this card has a \`## Steps\` table Desk cannot read, because ${card.steps.unreadable}, so it cannot tell whether the steps are delivered. Fix the table, then repeat this call with \`evidence: { kind: "steps" }\`.`)
+  }
   // A card with a readable `## Steps` table closes on its steps, refreshed just before this check, and on nothing else.
   if (card.steps != null) {
     if (evidence?.kind !== "steps") {
@@ -376,27 +380,52 @@ const cardStatusIn = (deskRoot, person) => async (track, slug) => {
 }
 
 // The evidence ref recorded when a card closes on its steps.
-function stepsRef({ rows, derived }) {
-  const states = rows.map((row) => derived.changes.get(row.id)?.state ?? row.state)
-  const count = (state) => states.filter((item) => item === state).length
+function stepsRef(rows) {
+  const count = (state) => rows.filter((row) => row.state === state).length
   return `all ${rows.length} steps settled: ${count("delivered")} delivered, ${count("dropped")} dropped`
 }
 
-// A card's steps with their states derived from their pull requests and delegated cards: `{ rows, derived }`, or null when the body has no readable table.
-async function refreshSteps(body, { deskRoot, person, env, fetchFn }) {
+const NO_DERIVATION = Object.freeze({ changes: new Map(), notes: [], why: new Map(), blocks: new Map() })
+
+// A card's steps with their states derived from their pull requests and delegated cards, or null when the body has no readable, non-empty table.
+// `mode` is "close" when the call moves the card to done (every step with a PR is read again).
+async function refreshSteps(body, { deskRoot, person, env, fetchFn, mode }) {
   const read = readSteps(body)
-  if (read.rows === undefined) return null
-  return { rows: read.rows, derived: await deriveSteps(read.rows, { env, fetchFn, cardStatus: cardStatusIn(deskRoot, person) }) }
+  if (read.rows === undefined || read.rows.length === 0) return null
+  return { derived: await deriveSteps(read.rows, { env, fetchFn, mode, cardStatus: cardStatusIn(deskRoot, person) }) }
 }
 
-// What the answer says about the refresh: the cells Desk changed, what it could not verify, and the steps the change made ready.
-function refreshAnswer(refresh, written, before, after) {
-  const ready = readyOf(after).filter((id) => !before.includes(id))
-  const moved = written.map((id) => `${id}: ${refresh.rows.find((row) => row.id === id).state} -> ${refresh.derived.changes.get(id).state}`)
+// The derived cells written into a card file in place, leaving its frontmatter bytes alone; true when a cell changed.
+async function writeDerivedCells(filePath, derived) {
+  const raw = await fs.readFile(filePath, "utf8")
+  const head = /^---\r?\n[\s\S]*?\r?\n---\r?\n/u.exec(raw)?.[0] ?? ""
+  const { body, written } = setDerived(raw.slice(head.length), derived.changes)
+  if (written.length > 0) await fs.writeFile(filePath, head + body)
+  return written.length > 0
+}
+
+// What the done check sees of a card body: null (no steps to close on), `{ unreadable }` (a heading over a table Desk cannot read), or `{ rows, derived }`.
+function stepsView(body, refresh) {
+  const read = readSteps(body)
+  if (!read.found) return null
+  if (read.rows === undefined) return { unreadable: read.reason }
+  return read.rows.length === 0 ? null : { rows: read.rows, derived: refresh?.derived ?? NO_DERIVATION }
+}
+
+// The derived cells written into a body, and what the answer says about it: the cells Desk changed, what it could not verify, the steps this made ready.
+function applyRefresh(body, derived) {
+  const before = readSteps(body).rows
+  const { body: next, written } = setDerived(body, derived.changes)
+  const was = new Map((before ?? []).map((row) => [row.id, row.state]))
+  const ready = readyOf(readSteps(next).rows ?? []).filter((id) => !readyOf(before ?? []).includes(id))
+  const moved = written.map((id) => `${id}: ${was.get(id)} -> ${derived.changes.get(id).state}`)
   return {
-    ...(moved.length === 0 ? {} : { steps_refreshed: moved }),
-    ...(refresh.derived.notes.length === 0 ? {} : { steps_notes: refresh.derived.notes }),
-    ready,
+    body: next,
+    answer: {
+      ...(moved.length === 0 ? {} : { steps_refreshed: moved }),
+      ...(derived.notes.length === 0 ? {} : { steps_notes: derived.notes }),
+      ready,
+    },
   }
 }
 
@@ -879,6 +908,11 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     )
   }
 
+  // The steps are refreshed from GitHub first, from this read of the card. The card is then read again, whole, and everything this call writes
+  // (its frontmatter, its step, the refreshed cells, the done check) is built from that second read, so nothing another session wrote during the wait is overwritten.
+  const seen = await readMarkdown(filePath)
+  const seenRepos = recordedRepos({ ...seen.data, ...(frontmatter ?? {}) }.repos).map((repo) => repo.name)
+  const refresh = await refreshSteps(step === undefined ? seen.content : applyStep(seen.content, step, "task_update", seenRepos).body, { deskRoot, person, env, fetchFn, mode: frontmatter?.status === "done" ? "close" : "ordinary" })
   const existing = await readMarkdown(filePath)
   assertLocalOnlyUnchanged(frontmatter?.repos, existing.data.repos)
   const merged = { ...existing.data, ...(frontmatter ?? {}) }
@@ -919,20 +953,31 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   let delivered = null
   let report = null
   let deliveryCheck = null
-  // A card with steps has them refreshed from their pull requests once per call (as the card will read after this call's own step, when it has one);
-  // the refresh is written with the rest of the call, and a move to done is checked against it.
+  // The card as it is now (read after the refresh's network wait): this call's step, the refreshed cells and the done check all apply to it, so nothing another session wrote meanwhile is lost.
+  let stepResult = null
+  let refreshed = null
+  let newBody = existing.content
   const repoNames = recordedRepos(merged.repos).map((repo) => repo.name)
-  const refresh = await refreshSteps(step === undefined ? existing.content : applyStep(existing.content, step, "task_update", repoNames).body, { deskRoot, person, env, fetchFn })
+  if (step !== undefined) {
+    stepResult = applyStep(newBody, step, "task_update", repoNames)
+    newBody = stepResult.body
+  }
+  if (refresh !== null) {
+    const applied = applyRefresh(newBody, refresh.derived)
+    newBody = applied.body
+    refreshed = applied.answer
+  }
+  const stepsNow = stepsView(newBody, refresh)
   if (merged.status === "done" && existing.data.status !== "done") {
     deliveryCheck = await assertDoneEvidence(evidence, deskRoot, "task_update", {
-      steps: refresh,
+      steps: stepsNow,
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
       repos: [...asList(existing.data.repos), ...asList(frontmatter.repos)],
       // Only these can earn the local-only exemption: repos added in this call never do (`done-evidence.js`).
       existingRepos: existing.data.repos, created: existing.data.created,
       files: [filePath], spawnGit, homeDir: env.HOME, env, fetchFn,
     })
-    merged.evidence = { kind: evidence.kind, ref: refresh === null ? evidence.ref : stepsRef(refresh), recorded_at: merged.updated }
+    merged.evidence = { kind: evidence.kind, ref: stepsNow === null ? evidence.ref : stepsRef(stepsNow.rows), recorded_at: merged.updated }
     delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
     report = await factoryReportFor({ deskRoot, person, track, slug, env })
   } else if (Object.hasOwn(existing.data, "factory_report_unavailable")) {
@@ -956,22 +1001,6 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     if (existing.data.status === "done") delete merged.evidence
   }
 
-  // A step is applied to the card as it is on disk right now, just before the write, so an `expect` holds against a change
-  // another session made while this call ran. Only the body is re-read: the frontmatter is written as this call built it, as for every task_update.
-  let stepResult = null
-  let refreshed = null
-  let newBody = existing.content
-  if (step !== undefined || refresh !== null) newBody = (await readMarkdown(filePath)).content
-  if (step !== undefined) {
-    stepResult = applyStep(newBody, step, "task_update", repoNames)
-    newBody = stepResult.body
-  }
-  if (refresh !== null) {
-    const before = readSteps(newBody).rows
-    const { body: derivedBody, written } = setDerived(newBody, refresh.derived.changes)
-    newBody = derivedBody
-    refreshed = refreshAnswer(refresh, written, readyOf(before ?? []), readSteps(newBody).rows ?? [])
-  }
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
   if (typeof body_append === "string" && body_append.length > 0) {
@@ -1045,11 +1074,12 @@ function refreshedAnswer({ ready, ...rest }, stepNote) {
 }
 
 // What the answer says about a step write: the row as it now stands, the dependents a drop blocked, and the steps it made ready.
-function stepAnswer({ row, blocked, ready }) {
+function stepAnswer({ row, blocked, ready, declared }) {
   const shown = { ...row }
   delete shown.line
   return {
     step: shown,
+    ...(declared ? { step_declared: `the state ${row.state} is agent-declared: Desk cannot read it from this evidence (it derives states only from a GitHub PR or a task: card)` } : {}),
     ...(blocked.length === 0 ? {} : { blocked_dependents: blocked }),
     ...(ready.length === 0 ? {} : { step_note: `now ready: ${ready.join(", ")}` }),
   }
@@ -1227,9 +1257,12 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
       } else {
-        const steps = await refreshSteps(sourceCard.content, { deskRoot, person, env, fetchFn })
-        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
-        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps) } }
+        // The steps are refreshed from GitHub first; the check then runs against the card as it is after that wait, so a row added meanwhile counts.
+        const refresh = await refreshSteps(sourceCard.content, { deskRoot, person, env, fetchFn, mode: "close" })
+        const live = await readMarkdown(srcFile)
+        const steps = stepsView(applyRefresh(live.content, (refresh ?? { derived: NO_DERIVATION }).derived).body, refresh)
+        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: live.data.repos, existingRepos: live.data.repos, created: live.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
+        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows) }, derived: refresh?.derived ?? NO_DERIVATION }
       }
       // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
       // with the folder untouched, never after a move it would leave unpatched and uncommitted.
@@ -1287,6 +1320,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       await patchMarkdownFrontmatter(filePath, patchFields)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
     }
+    // The cells Desk derived in the done check are written into the archived card, so it does not close over a stale state.
+    if (archiveBump?.derived !== undefined && (await writeDerivedCells(filePath, archiveBump.derived))) await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   }
 
   // Stage + commit the move (and any status bump above, already on disk by
