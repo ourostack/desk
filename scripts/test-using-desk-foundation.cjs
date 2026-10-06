@@ -508,6 +508,7 @@ function main() {
   // The foundation says to declare focus; each skill that chooses a task says where, once.
   for (const [name, phrase] of [
     ["session-start", "task_focus"],
+    ["session-start", "a new task is declared by `task_create` with `focus: true`"],
     ["session-resumption", "task_focus"],
     ["task-lifecycle", "task_focus"],
     ["task-lifecycle", "`clear: true`"],

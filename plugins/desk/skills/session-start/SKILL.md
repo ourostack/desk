@@ -44,7 +44,7 @@ If the desk already exists and still shows V1 evidence (durable desk state such 
 
 **Decide, don't ask.** Fix what you can fix yourself (a card's frontmatter, a repair, a tidy-up) and say so in one line. Bring the operator only a true human gate: an account or credential they must act in, a decision that is theirs, an irreversible action. The factory consent question never comes before the work the operator asked for.
 
-**Declare the task.** When the operator names or picks the task, the main agent calls `task_focus` once; `session-resumption` and `start-task` then skip theirs.
+**Declare the task.** When the operator names or picks the task, the main agent calls `task_focus` once; `session-resumption` then skips its call, and a new task is declared by `task_create` with `focus: true`.
 
 **Resume.** Hand a chosen task to `session-resumption`; its state machine lives in `task-lifecycle`. To start new work, follow `dual-input`. For the fuller dashboard, invoke `status`.
 
