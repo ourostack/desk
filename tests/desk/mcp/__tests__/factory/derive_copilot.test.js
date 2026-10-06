@@ -876,6 +876,17 @@ test("an unreadable subagent interval is flagged under tool_durations, a compact
   ])
 })
 
+test("a warning the driver's first load emits is swallowed, and the process's own emitter is back afterwards", () => {
+  const original = process.emitWarning
+  const driver = { DatabaseSync: class {} }
+  const loud = (name) => {
+    process.emitWarning(`${name} is experimental`, "ExperimentalWarning")
+    return driver
+  }
+  assert.equal(usageInternals.loadSqlite(loud), driver)
+  assert.equal(process.emitWarning, original)
+})
+
 test("the factory reader reports a missing, an unreadable or a driverless database without throwing", () => {
   const home = makeHome({ sessions: [] })
   const env = { COPILOT_HOME: home }
