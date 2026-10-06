@@ -387,6 +387,9 @@ function envelope(host, context) {
   return `${execFileSync("jq", ["-nc", "--arg", "c", context, "{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:$c}}"], { encoding: "utf8" }).trimEnd()}\n`
 }
 
+// jq.exe ends its line with CRLF on Windows; the line ending is whitespace to the JSON reader, so only the bytes before it must match.
+const jqLine = (stdout) => process.platform === "win32" ? stdout.replace(/\r\n$/u, "\n") : stdout
+
 for (const host of ["claude", "copilot"]) {
   test(`${host} session-start output is byte-identical when no boot check speaks, and gains exactly one line when they do`, () => scratch(async ({ env, desk, base }) => {
     const calls = path.join(base, "calls.txt")
@@ -396,9 +399,8 @@ for (const host of ["claude", "copilot"]) {
     assert.equal(quietRun.status, 0, quietRun.stderr)
     const context = expectedContext(host, hookEnv, desk)
     const hasJq = spawnSync("jq", ["--version"]).status === 0
-    const quietOut = process.platform === "win32" && host === "claude" ? quietRun.stdout.replace(/\r\n$/u, "\n") : quietRun.stdout
+    const quietOut = jqLine(quietRun.stdout)
     if (host === "copilot" || hasJq) {
-      // jq.exe ends its line with CRLF on Windows; the line ending is whitespace to the JSON reader, so only the bytes before it must match.
       const wanted = envelope(host, context)
       // On a mismatch, name the first differing byte with its neighbours: the full strings are too long for a failure log.
       const at = [...quietOut].findIndex((char, index) => char !== wanted[index])
@@ -414,7 +416,7 @@ for (const host of ["claude", "copilot"]) {
     assert.equal(spokenRun.status, 0, spokenRun.stderr)
     const spoken = JSON.parse(spokenRun.stdout)
     assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, `${context}\n\nDesk boot pre-checks: one; two`)
-    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, `${context}\n\nDesk boot pre-checks: one; two`))
+    if (host === "copilot" || hasJq) assert.equal(jqLine(spokenRun.stdout), envelope(host, `${context}\n\nDesk boot pre-checks: one; two`))
     assert.equal(readFileSync(calls, "utf8"), "started\nstarted\n", "each start launches factory delivery once, after its output is built")
   }))
 }

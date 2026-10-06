@@ -69,8 +69,8 @@ export function removeFixtureAfter(t, root) {
     } catch (error) {
       if (process.platform !== "win32") throw error
       let running = ""
-      try { running = execFileSync("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'git|node|perl|bash|sh' } | ForEach-Object { \"$($_.ProcessId) parent=$($_.ParentProcessId) $($_.Name) $($_.CommandLine)\" }"], { encoding: "utf8", timeout: 60000 }) } catch { /* diagnostic only */ }
-      throw new Error(`${error.message}; processes then running:\n${running}`)
+      try { running = execFileSync("powershell.exe", ["-NoProfile", "-Command", `Get-ChildItem -LiteralPath '${root}' -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { "\$($_.FullName) \$($_.Attributes)" }; Get-Acl -LiteralPath '${root}' | Format-List | Out-String`], { encoding: "utf8", timeout: 60000 }) } catch { /* diagnostic only */ }
+      throw new Error(`${error.message}; what is left in the folder:\n${running}`)
     }
   })
 }
