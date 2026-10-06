@@ -25,6 +25,15 @@ export async function makeIsolatedHome(prefix = "desk-handshake-") {
   return { root, home, desk, cache, runtimeCache }
 }
 
+// A host's environment has Git on PATH; the isolated one keeps only Node and System32 on Windows, where Git lives in its own folder (C:\\Program Files\\Git\\cmd). Desk runs `git` for its state-branch checks and fails open without it, so the folder that holds git.exe is added.
+function windowsGitDirectories() {
+  const found = []
+  for (const directory of String(process.env.PATH ?? "").split(";")) {
+    if (directory !== "" && existsSync(path.join(directory, "git.exe"))) found.push(directory)
+  }
+  return found.slice(0, 1)
+}
+
 /**
  * An environment built from scratch: nothing from the test process leaks in except TMPDIR.
  * On Windows the system variables a process needs to start are kept, and the per-user folders point into the fixture.
@@ -41,7 +50,7 @@ export function isolatedEnv({ home, desk, cache, runtimeCache }, overrides = {})
         USERPROFILE: home,
         APPDATA: path.join(home, "AppData", "Roaming"),
         LOCALAPPDATA: path.join(home, "AppData", "Local"),
-        PATH: [path.dirname(process.execPath), process.env.SystemRoot && path.join(process.env.SystemRoot, "System32")].filter(Boolean).join(";"),
+        PATH: [path.dirname(process.execPath), process.env.SystemRoot && path.join(process.env.SystemRoot, "System32"), ...windowsGitDirectories()].filter(Boolean).join(";"),
       }
     : {}
   const env = {
