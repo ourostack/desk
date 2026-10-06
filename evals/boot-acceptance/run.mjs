@@ -27,7 +27,7 @@ import * as process from "node:process"
 
 import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, addElsewhereCloneTask, materializeOfflineFork, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
-import { gateReport, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
+import { discountCancelledStart, gateReport, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
 import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactSecrets, writeGitConfig } from "./safety.mjs"
 import { COPILOT_DEFAULT_MODEL, COPILOT_TOKEN_VAR, GH_TOKEN_WARNING, META_TOOLS, authFailureProblem, compactCopilotTranscript, copilotFlags, copilotResumeArgs, findCopilotBinary, installCopilotPlugins, installedBootScript, notApplicableFor, parseCopilotTranscript, resolveCopilotAuth, shareCopilotPackageCache, writeCopilotProfile } from "./copilot.mjs"
 
@@ -393,7 +393,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     ctx.ghDenials = []
   }
   if (ctx.ghDenials.length) writeFileSync(path.join(runDir, "gh-denied.jsonl"), ctx.ghDenials.map((d) => JSON.stringify(d)).join("\n") + "\n")
-  const checkResult = scoreRun(scenario, ctx, args.host)
+  const checkResult = discountCancelledStart(scoreRun(scenario, ctx, args.host), gates)
 
   const counted = ctx.toolCalls.filter((t) => !META_TOOLS.has(t.name))
   const summary = {

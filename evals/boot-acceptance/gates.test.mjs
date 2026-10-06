@@ -8,7 +8,7 @@ import * as path from "node:path"
 import { test } from "node:test"
 
 import { parseArgs } from "./run.mjs"
-import { claudeGates, copilotGates, copilotGatesUnavailable, gateReport, parseEventLines, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
+import { claudeGates, copilotGates, discountCancelledStart, copilotGatesUnavailable, gateReport, parseEventLines, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
 
 const GH = ["gho", "_", "Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq0Pp9Oo8"].join("")
 const POINTER = "Desk boot is pending for this session: run `node /x/session-boot.js` first (one quick call), then answer this message."
@@ -215,8 +215,8 @@ test("Claude gates count Stop-hook feedback, Desk PreToolUse denials and Session
     { type: "user", message: { content: "a bare string message" } },
     { type: "result" },
   ]
-  assert.deepEqual(claudeGates(events), { events_saved: true, session_start: { fired: 2, injected: true }, stop_hook_feedback: 1, pre_tool_use_denials: 2 })
-  assert.deepEqual(claudeGates([]), { events_saved: true, session_start: { fired: 0, injected: false }, stop_hook_feedback: 0, pre_tool_use_denials: 0 })
+  assert.deepEqual(claudeGates(events), { events_saved: true, session_start: { fired: 2, injected: true, cancelled: 0 }, stop_hook_feedback: 1, pre_tool_use_denials: 2 })
+  assert.deepEqual(claudeGates([]), { events_saved: true, session_start: { fired: 0, injected: false, cancelled: 0 }, stop_hook_feedback: 0, pre_tool_use_denials: 0 })
 })
 
 test("gateReport picks the host's counter and says so when a Copilot run has no log", () => {
@@ -267,4 +267,23 @@ test("--outside-desk is a harness flag and is off by default", () => {
   const out = path.join(os.tmpdir(), "gates-outside-desk-out")
   assert.equal(parseArgs(["--out-dir", out]).outsideDesk, false)
   assert.equal(parseArgs(["--out-dir", out, "--outside-desk"]).outsideDesk, true)
+})
+
+test("a cancelled SessionStart hook is counted, and turns a failed run into an unknown one (round AA, slow-or-failing-status run 1)", () => {
+  const events = [
+    { type: "system", subtype: "hook_response", hook_event: "SessionStart", outcome: "success", output: '{"additionalContext":"x"}' },
+    { type: "system", subtype: "hook_response", hook_event: "SessionStart", outcome: "cancelled", output: "" },
+  ]
+  const gates = claudeGates(events)
+  assert.deepEqual(gates.session_start, { fired: 2, injected: true, cancelled: 1 })
+  const failed = { outcome: "fail", notes: ["FAIL: never ran session-boot.js"] }
+  const discounted = discountCancelledStart(failed, gates)
+  assert.equal(discounted.outcome, "unknown")
+  assert.match(discounted.notes[0], /^INFRASTRUCTURE: 1 SessionStart hook was cancelled/u)
+  assert.deepEqual(discounted.notes.slice(1), failed.notes)
+  assert.match(discountCancelledStart(failed, { session_start: { cancelled: 3 } }).notes[0], /3 SessionStart hooks were cancelled/u)
+  const passed = { outcome: "pass", notes: [] }
+  assert.equal(discountCancelledStart(passed, gates), passed)
+  assert.equal(discountCancelledStart(failed, claudeGates([])), failed)
+  assert.equal(discountCancelledStart(failed, { events_saved: false }), failed)
 })

@@ -173,16 +173,18 @@ const blockText = (block) => (Array.isArray(block.content) ? block.content.map((
  * What Claude Code's hooks did in one run, from its stream-json events (both turns, scenario first).
  * `stop_hook_feedback` counts the synthetic `Stop hook feedback:` messages (a Desk Stop hook that blocked the reply). `pre_tool_use_denials` counts tool
  * results worded `PreToolUse:<Tool> hook error:` (a Desk PreToolUse hook that denied the call; the permission layer's own refusals are not counted).
- * `session_start`: the hooks that ran at the start and whether any returned context.
+ * `session_start`: the hooks that ran at the start, whether any returned context, and how many Claude Code cancelled (a hook that outran its timeout, as on an overloaded machine: its context never reached the agent).
  */
 export function claudeGates(events) {
   let stopFeedback = 0
   let denials = 0
   let startHooks = 0
   let startContext = 0
+  let startCancelled = 0
   for (const event of events) {
     if (event.type === "system" && event.subtype === "hook_response" && event.hook_event === "SessionStart") {
       startHooks += 1
+      if (event.outcome === "cancelled") startCancelled += 1
       if (/additionalContext/u.test(String(event.output ?? ""))) startContext += 1
     }
     if (!Array.isArray(event.message?.content) || (event.type !== "user" && event.type !== "assistant")) continue
@@ -193,7 +195,7 @@ export function claudeGates(events) {
   }
   return {
     events_saved: true,
-    session_start: { fired: startHooks, injected: startContext > 0 },
+    session_start: { fired: startHooks, injected: startContext > 0, cancelled: startCancelled },
     stop_hook_feedback: stopFeedback,
     pre_tool_use_denials: denials,
   }
@@ -203,4 +205,14 @@ export function claudeGates(events) {
 export function gateReport({ host, claudeEvents = [], copilotEventsText = null }) {
   if (host === "copilot") return copilotEventsText === null ? { ...copilotGatesUnavailable } : copilotGates(parseEventLines(copilotEventsText))
   return claudeGates(claudeEvents)
+}
+
+/**
+ * A run whose start hook was cancelled never gave the agent what boot hands it, so a failure there says nothing about the agent: boot acceptance round AA, `slow-or-failing-status` run 1,
+ * lost Desk's start hook to a 10 s timeout on a machine at load 90 and then skipped boot. Returns the check result with a `fail` turned into `unknown` and the reason noted; any other result is unchanged.
+ */
+export function discountCancelledStart(checkResult, gates) {
+  const cancelled = gates?.session_start?.cancelled ?? 0
+  if (checkResult.outcome !== "fail" || cancelled === 0) return checkResult
+  return { ...checkResult, outcome: "unknown", notes: [`INFRASTRUCTURE: ${cancelled} SessionStart hook${cancelled === 1 ? " was" : "s were"} cancelled (timed out), so the agent never got that hook's context; the failures below may follow from that, not from the agent`, ...checkResult.notes] }
 }

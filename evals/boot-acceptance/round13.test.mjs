@@ -285,3 +285,11 @@ test("cleanupRunDir kills a real background process that names the run folder, t
     try { process.kill(-child.pid, "SIGKILL") } catch { /* gone */ }
   }
 })
+
+// Round AA: the first-hand replies that said the clone is absent in words the check did not know.
+test("missing-clone: Claude's \"doesn't exist\" and Copilot's \"is not available on this machine\" (round AA) report the clone as missing", () => {
+  const claude = "**Blocker:** The valve-firmware repo referenced in the task (`~/code/valve-firmware`) doesn't exist in this environment.\n\nWhich would you prefer?"
+  const copilot = "The `valve-firmware` repo is not available on this machine. Per the instructions, I need to ask where it is or have you push it from the other machine."
+  for (const reply of [claude, copilot]) assert.equal(check("missing-clone", BOOT_PLAIN, reply).outcome, "pass", reply)
+  assert.ok(failures(check("missing-clone", BOOT_PLAIN, "valve-firmware-flasher is processing; the next step is the dry-run flag.")).includes("never reported the task's local clone as missing"))
+})
