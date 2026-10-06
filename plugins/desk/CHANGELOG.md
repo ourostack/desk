@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.200 — 2026-10-06
+
+`task_update` no longer accepts a next step that Desk never reads. A Copilot agent in boot-acceptance round AL called `task_update` with `frontmatter: { next_step: ... }` three times. Each call answered `status: updated`, but Desk reads the next step from the card's `**Next step:**` paragraph, so the clone guard kept denying and the agent gave up on the operator. Now `frontmatter.next_step` (and any spelling that differs only in case, spaces, hyphens or underscores, plus `next`, `nextaction` and `nextsteps`) takes the same path as the top-level `next_step`: it rewrites the paragraph and leaves no key in the frontmatter. A call that gives both with different text is refused before anything is written. A call that changes the next step now answers with the new `next_step`, so the agent can see it took effect. The blocker family (`blocker`, `blockers`, `blocked`, `blockedby`, `blockedon`, `waitingon`, matched the same loose way) is refused with a message, because Desk reads a blocker from the body and there is no field that writes it. A non-string next step is refused naming `frontmatter.<key>`. Any other key written that starts with `next`, `block` or `wait` is reported back in `ignored_frontmatter_keys`, so the agent knows Desk will not read it.
+
+The clone guard's denial now names the field in its first line: "if so, use task_update next_step", and its second sentence gives `next_step: "<new step>"`.
+
+The boot-acceptance harness now reads "confirm it's been pushed" (also "it’s been" and "they've been") as a request to the operator, not as a claim that the agent pushed. "I can confirm it's been pushed" and "It's been pushed" are still claims.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.199 — 2026-10-06
 
 The desk MCP tests workflow now runs on every pull request, with no path filter, and ends in a new `CI gate` job that needs every other job in the workflow (the coverage shards, the offline eval shards, the test suite, the runtime packs and the Windows feedback job) and fails unless each one succeeded. Main's ruleset will require `CI gate`, `Validate skills` and `Claude Code plugin load`; a required check from a workflow that a path filter skipped would never report and would block the pull request for good. Pushes to main stay path-filtered. The coverage gate's workflow parity check (`assertCoverageCommandParity`) accepts a pull request trigger with no path filter, and still requires one that has a filter to cover `scripts/*.cjs`.
