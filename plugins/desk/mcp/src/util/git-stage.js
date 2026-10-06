@@ -57,6 +57,24 @@ export function hasUnstagedWork(root, relPaths, spawnGit) {
 }
 
 /**
+ * What is staged at `relPaths`, with renames detected: `[{ status, paths }]`, where `status` is git's letter plus a rename's similarity (`R100`, `D`, `A`, `M`)
+ * and `paths` is the old and new path of a rename or the one path otherwise. Returns `null` when Git fails, so a caller refusing on it fails safe.
+ */
+export function stagedChanges(root, relPaths, spawnGit) {
+  const result = run(spawnGit, root, ["diff", "--cached", "-M", "--name-status", "-z", "--", ...relPaths])
+  if (result.status !== 0) return null
+  const fields = result.stdout.split("\0")
+  const changes = []
+  for (let i = 0; i < fields.length && fields[i] !== ""; ) {
+    const status = fields[i]
+    const count = status.startsWith("R") || status.startsWith("C") ? 2 : 1
+    changes.push({ status, paths: fields.slice(i + 1, i + 1 + count) })
+    i += 1 + count
+  }
+  return changes
+}
+
+/**
  * `git add` exactly `relPaths` (relative to `root`). Returns `{ ok, stderr }`;
  * never throws on a Git failure. A call that runs past `GIT_TIMEOUT_MS` is
  * killed and reported as `{ ok: false, stderr: "timeout" }`.
