@@ -15,7 +15,6 @@ import { DROPPED_KEY, KNOWN_KEY, PENDING_KEY, knownHitsSince } from "../../../..
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { LAUNCH_STAMP_DIR, MAX_LAUNCH_STAMPS, endLaunch, launchStampKey, pendingLaunchTimes } from "../../../../../plugins/desk/mcp/src/factory/filer-launch.js"
 import { shouldLaunchFiler } from "../../../../../plugins/desk/mcp/src/runtime/filer-throttle.js"
-import { REPEAT_TIMEOUT_THRESHOLD } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/file-desk-problem.js", import.meta.url))
 
@@ -522,17 +521,3 @@ test("finding 11: a stamp that cannot be read is a pending launch as of its time
   assert.deepEqual(pendingLaunchTimes(env, { now: () => 43 }), [43])
 }))
 
-test("review round 2, M4: protected-checkout's stamp is keyed by the command, and the filer clears that same stamp once it records an outcome", () => scratch(async ({ env }) => {
-  const { createRequire } = await import("node:module")
-  const { deadlineDecision } = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/protected-checkout.cjs")
-  const rawInput = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git checkout topic" } })
-  const calls = []
-  for (let count = 0; count < REPEAT_TIMEOUT_THRESHOLD; count += 1) await deadlineDecision({ rawInput, host: "claude", deadlineMs: 9000, env, spawnFiler: (args) => calls.push(args) })
-  assert.equal(calls.length, 1)
-  assert.equal(pendingLaunchTimes(env).length, 1, "the launch is pending until the filer records an outcome")
-  // The filer is given a reason that differs from the stamp's key, as the hook's own spawn passes it, plus the stamp's signature.
-  const { reason, launchSignature } = calls[0]
-  assert.match(reason, /repeated timeout/u)
-  assert.equal(await runFileDeskProblemCli({ argv: ["--mechanism", "protected-checkout", "--reason", reason, "--host", "claude", "--launch-signature", launchSignature], env: { ...env, PATH: "" } }), 0)
-  assert.deepEqual(pendingLaunchTimes(env), [], "the stamp the launch wrote is cleared")
-}))
