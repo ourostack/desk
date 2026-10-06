@@ -190,6 +190,8 @@ export const DEFAULT_DEADLINE_MS = 120000
 export const FINALIZE_QUIET_MS = 5000
 
 const LOCK_STALE_MS = 10 * 60 * 1000
+/** The oldest a desk's private answer may be when a session is published in its plain form; the cache itself trusts an answer for seven days. */
+const DESK_ANSWER_FRESH_MS = 24 * 60 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
@@ -499,7 +501,12 @@ async function deskRepositories(markers, { deadline, now, receipts = {} }) {
   }
   for (const marker of markers) {
     if (marker.desk_root === null) continue
-    byName.set(`${marker.host}-${marker.session_id}.json`, repositoryOf(marker.desk_root))
+    const name = `${marker.host}-${marker.session_id}.json`
+    const current = repositoryOf(marker.desk_root)
+    // The receipt's recorded repository is the session's own desk: when the root now names another repository, or none, the desk is uncertain
+    // and the session is published in its protected form. A receipt that recorded none (an older one) keeps the root's answer.
+    const recorded = receipts[name]?.desk_repo
+    byName.set(name, typeof recorded === "string" && !(typeof current === "string" && current.toLowerCase() === recorded.toLowerCase()) ? null : current)
   }
   // A session with no marker (pruned, or rebuilt from its transcript) keeps its desk's protection only when the desk is certainly the one it ran
   // under: its receipt recorded the desk root and the desk's GitHub repository (`desk_repo`), the root still names that same repository, and
@@ -527,12 +534,13 @@ function referencedRepos(facts) {
   return repos
 }
 
-async function resolveVisibility(env, client, account, repos, nowIso) {
+// `force` is the repositories (lower case) asked again whatever the cache holds.
+async function resolveVisibility(env, client, account, repos, nowIso, force = new Set()) {
   const cache = await readVisibilityCache(env, { now: nowIso })
   const known = visibilityMap(cache)
   const patch = {}
   for (const repo of [...new Set(repos.map((name) => name.toLowerCase()))].sort()) {
-    if (known.has(repo)) continue
+    if (known.has(repo) && !force.has(repo)) continue
     await client.session(account)
     let answer = await client.api("GET", `repos/${repo}`)
     // The account's own token can 403 or 404 a repository that is genuinely public: a fine-grained token
@@ -965,6 +973,25 @@ async function deliver(env, context) {
       unresolved.add(item.name)
     }
   }
+  // Plain (unprotected) publishing rests on a private answer no older than a day: a desk's answer that says private, internal or kept timing and was checked
+  // longer ago is asked again, and when asking fails the desk reads unknown, so its sessions publish in their protected form. A public or unknown
+  // answer needs no fresh answer, because it already withholds.
+  const deskRepos = [...new Set([...parsed.map(({ name }) => desks.get(name)), ...parsedLabels.flatMap(labelsReposOf)].filter((repo) => typeof repo === "string").map((repo) => repo.toLowerCase()))]
+  const dated = await readVisibilityCache(env, { now: nowIso })
+  // A desk whose fresh answer failed stays unknown for the rest of this flush, whatever the cache still holds.
+  const distrusted = new Set()
+  const aged = deskRepos.filter((repo) => deskTimingKept(known.get(repo)) && !(Date.parse(nowIso()) - Date.parse(dated[repo]?.checked_at) <= DESK_ANSWER_FRESH_MS))
+  if (aged.length > 0) {
+    try {
+      for (const [repo, visibility] of await resolveVisibility(env, client, account, aged, nowIso, new Set(aged))) if (aged.includes(repo)) known.set(repo, visibility)
+    } catch {
+      // Whatever stopped the question (offline, a deadline, a refusal), these desks are not known private; the flush's own deadline check ends it later.
+      for (const repo of aged) {
+        known.set(repo, "unknown")
+        distrusted.add(repo)
+      }
+    }
+  }
   // A session published under a desk not known private is marked, so it is never published under a later, more open reading once its marker is gone.
   const unprotected = parsed.filter(({ name }) => receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
   if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
@@ -974,7 +1001,7 @@ async function deliver(env, context) {
   const republish = async (names) => {
     const facts = [...candidates, ...keptCandidates].filter(({ name, quarantine: held }) => names.has(name) && held === null && !name.startsWith("labels/")).map((item) => ({ name: item.name, local: parse(item) }))
     const labels = [...labelCandidates, ...keptCandidates].filter(({ name }) => names.has(name) && name.startsWith("labels/")).map((item) => ({ key: item.name, local: parse(item) }))
-    for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) known.set(repo, visibility)
+    for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) if (!distrusted.has(repo)) known.set(repo, visibility)
     const found = new Map()
     for (const { name, local } of facts) {
       const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })

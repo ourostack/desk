@@ -683,6 +683,82 @@ test("a marker-less session whose root now holds another repository, or whose re
   assert.deepEqual((await storedJobs(github, env, names[2])).map((job) => job.job), GOLDEN.jobs.map((job) => job.job), "the same repository, recorded, never unprotected: plain")
 }))
 
+test("a marker session whose desk root now holds another repository, or none, is published in its protected form", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const swapped = await deskRepository(base, "https://github.com/acme/other-private-desk.git")
+  const gone = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  const same = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  await markerFor(env, swapped, 1)
+  await markerFor(env, gone, 2)
+  await markerFor(env, same, 3)
+  const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
+  // The receipts record the session's own desk, a public one for the first and the private one for the others.
+  await writeStatus(env, { derivations: {
+    [names[0]]: { desk_root: swapped, desk_repo: "acme/public-desk" },
+    [names[1]]: { desk_root: gone, desk_repo: "acme/private-desk" },
+    [names[2]]: { desk_root: same, desk_repo: "acme/private-desk" },
+  } })
+  execFileSync("git", ["-C", gone, "remote", "set-url", "origin", "git@gitlab.com:acme/private-desk.git"])
+  const github = fakeGitHub({ visibility: { "acme/other-private-desk": "private", "acme/private-desk": "private", "acme/public-desk": "public" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const secret = await readMachineSecret(env)
+  const keyed = GOLDEN.jobs.map((job) => createHmac("sha256", secret).update(job.job).digest("hex").slice(0, 32)).sort()
+  for (const name of [names[0], names[1]]) {
+    const jobs = await storedJobs(github, env, name)
+    assert.deepEqual(jobs.map((job) => job.job).sort(), keyed, name)
+    assert.ok(jobs.every((job) => job.session_offset_ms === null), name)
+  }
+  assert.deepEqual((await storedJobs(github, env, names[2])).map((job) => job.job), GOLDEN.jobs.map((job) => job.job), "the same repository still: plain")
+}))
+
+const hoursAgo = (hours) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
+
+// One private-desk session with a marker, a cached answer of `cached` checked `hours` ago and a GitHub that says `truth`.
+async function cachedDesk(context, { cached, hours, truth }) {
+  const { base, env } = context
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/cached-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  await writeVisibilityCache(env, { "acme/cached-desk": { visibility: cached, checked_at: hoursAgo(hours) } })
+  const github = fakeGitHub({ visibility: { "acme/cached-desk": truth } })
+  const result = await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  const asked = apiCalls(github, "GET", /^repos\/acme\/cached-desk$/u).length
+  const plain = result.result === "delivered_pr_open" && (await storedJobs(github, env, name)).some((job) => job.session_offset_ms !== null)
+  return { result, asked, plain, github, env, name }
+}
+
+test("plain publishing rests on a private answer no older than a day: an older one is asked again, and a desk now public is published protected", () => scratch(async (context) => {
+  const stale = await cachedDesk(context, { cached: "private", hours: 72, truth: "public" })
+  assert.equal(stale.asked, 1, "asked afresh")
+  assert.equal(stale.plain, false, "the desk is public now: protected form")
+  assert.equal((await readVisibilityCache(stale.env))["acme/cached-desk"].visibility, "public", "and the answer is kept")
+}))
+
+test("a private answer asked afresh and still private publishes plain; one inside a day is not asked again", () => scratch(async (context) => {
+  const asked = await cachedDesk(context, { cached: "private", hours: 72, truth: "private" })
+  assert.deepEqual([asked.asked, asked.plain], [1, true])
+}))
+
+test("a private answer inside a day is trusted without asking", () => scratch(async (context) => {
+  const young = await cachedDesk(context, { cached: "private", hours: 12, truth: "public" })
+  assert.deepEqual([young.asked, young.plain], [0, true])
+}))
+
+test("a protected form never needs a fresh answer: a public answer inside seven days is used without asking, even if the desk is private now", () => scratch(async (context) => {
+  const open = await cachedDesk(context, { cached: "public", hours: 72, truth: "private" })
+  assert.deepEqual([open.asked, open.plain], [0, false])
+}))
+
+test("when the fresh question cannot be answered the desk reads unknown and the session is published protected", () => scratch(async (context) => {
+  const failed = await cachedDesk(context, { cached: "private", hours: 72, truth: 500 })
+  assert.equal(failed.asked, 1)
+  assert.equal(failed.plain, false)
+  assert.equal((await readStatus(failed.env)).derivations[failed.name].desk_unprotected, true, "and it is marked as published under a desk not known private")
+}))
+
 // ---------------------------------------------------------------------------
 // Quarantine: transform refusals, schema failures and store rejections.
 // ---------------------------------------------------------------------------
