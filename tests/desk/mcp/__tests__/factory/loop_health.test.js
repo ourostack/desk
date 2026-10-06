@@ -211,7 +211,7 @@ test("states, claims, by_source, closed counts and reopens are counted; by_sourc
   await make(ctx, "flush_health", "route_unknown", { state: "closed_confirmed", days: 9, fields: { reopened: 5 } })
   await make(ctx, "loop_alarm", "cards_invalid", { state: "verifying", days: 9, fields: { reopened: 7 } })
   const { improvement } = await build(ctx)
-  assert.deepEqual([improvement.open, improvement.claimed, improvement.claim_expired, improvement.shipped, improvement.verifying], [M(5), M(1), M(1), M(2), M(2)])
+  assert.deepEqual([improvement.open, improvement.claimed, improvement.claim_expired, improvement.shipped, improvement.verifying], [M(5), M(1), M(1), M(2), M(1)])
   assert.deepEqual([improvement.closed_confirmed_30d, improvement.closed_unverified_30d, improvement.reopened_30d, improvement.reopened_from_verification], [M(2), M(1), M(1), M(2)])
   const bySource = Object.fromEntries(Object.entries(improvement.by_source).map(([name, value]) => [name, value.value]))
   assert.deepEqual(bySource, { andon: 2, friction_candidate: 2, reconcile_class: 0, desk_problem: 0, store_build: 0, evaluator: 1, flush_health: 0, loop_alarm: 1 })
@@ -657,4 +657,14 @@ test("a slot that fails the store's rule opens the capture_loop_slot alarm once,
   const stored = (await readStatus(ctx.env)).loop.health
   assert.equal(stored.improvement.closed_confirmed_30d.value, 1000001)
   assert.deepEqual((await allCards(ctx)).map((entry) => entry.key), ["loop_alarm:capture_loop_slot"])
+}))
+
+test("loop alarm cards are in no card count but loop_alarms_open: open, claimed, shipped and verifying", () => scratch(async (ctx) => {
+  await make(ctx, "loop_alarm", "headless_blocked", { state: "claimed", days: 1 })
+  await make(ctx, "loop_alarm", "cards_invalid", { state: "shipped", days: 1 })
+  await make(ctx, "loop_alarm", "unsigned_age", { state: "verifying", days: 1 })
+  await make(ctx, "loop_alarm", "labels_quarantined", { days: 1 })
+  await make(ctx, "andon", "ourostack/factory#1", { state: "claimed", days: 1 })
+  const { improvement, alarms } = await build(ctx)
+  assert.deepEqual([improvement.open, improvement.claimed, improvement.shipped, improvement.verifying, alarms.loop_alarms_open], [M(0), M(1), M(0), M(0), M(4)])
 }))

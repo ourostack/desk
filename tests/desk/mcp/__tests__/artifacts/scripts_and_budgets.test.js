@@ -1400,8 +1400,10 @@ test("CI invokes artifact validation and watches artifact script inputs", () => 
   assertWorkflowJobRunsMcpScript(deskMcpJob, "desk-mcp-tests", "artifact:validate")
   assertWorkflowJobRunsMcpScript(deskMcpJob, "desk-mcp-tests", "artifact:snapshot:verify")
 
+  // Pull requests run with no path filter (main requires the "CI gate" job); only pushes to main are filtered.
+  assert.match(workflow, /^on:\n  pull_request:\n  push:\n/mu, "CI runs on every pull request")
+
   for (const [eventName, pathFilters] of [
-    ["pull_request", workflowPathFilters(workflow, "pull_request")],
     ["push", workflowPathFilters(workflow, "push")],
   ]) {
     assertIncludesAll(pathFilters, [

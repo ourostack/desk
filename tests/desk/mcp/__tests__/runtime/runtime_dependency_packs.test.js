@@ -2680,7 +2680,8 @@ test("runtime pack defaults retain host routing and surface filesystem failure w
 
 test("CI workflow verifies runtime dependency packs for release-maintained artifacts", () => {
   const workflow = readFileSync(path.join(repoRoot, ".github", "workflows", "desk-mcp-tests.yml"), "utf8")
-  const pullRequestPathFilters = workflowPathFilters(workflow, "pull_request")
+  // Every pull request runs this workflow with no path filter (main requires its "CI gate" job); only pushes to main are filtered.
+  assert.match(workflow, /^on:\n  pull_request:\n  push:\n/mu, "desk MCP CI runs on every pull request")
   const pushPathFilters = workflowPathFilters(workflow, "push")
   const deskMcpJob = workflowJob(workflow, "desk-mcp-tests")
 
@@ -2806,7 +2807,6 @@ test("CI workflow verifies runtime dependency packs for release-maintained artif
   assertWorkflowJobRunsMcpScript(deskMcpJob, "desk-mcp-tests", "runtime:deps-pack:build")
   assertWorkflowJobRunsMcpScript(deskMcpJob, "desk-mcp-tests", "runtime:deps-pack:verify")
   for (const [eventName, pathFilters] of [
-    ["pull_request", pullRequestPathFilters],
     ["push", pushPathFilters],
   ]) {
     assertIncludesAll(pathFilters, [

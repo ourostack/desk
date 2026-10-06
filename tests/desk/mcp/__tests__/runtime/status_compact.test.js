@@ -34,6 +34,30 @@ test("a ready desk whose detail is still loading says so in the summary and flag
   assert.equal(compactStatus({ ...ready, detail_pending: true, status: "admitting", state: "admitting" }).detail_pending, undefined, "only a ready desk is called ready")
 })
 
+test("a ready desk whose runtime status failed, or that carries no runtime detail, says why its root is empty", () => {
+  const failed = compactStatus({ status: "ok", state: "ready", status_error: "status exploded", admission: { summary: "ok", blockers: [] } })
+  assert.equal(failed.state, "ready")
+  assert.match(failed.summary, /^Desk is ready, but its runtime status failed \(status exploded\).*not a missing desk.*call desk_doctor\.$/u)
+  assert.equal(failed.status_error, "status exploded")
+  assert.deepEqual(failed.root, { path: null, source: null })
+  const bare = compactStatus({ status: "ok", state: "ready", admission: { summary: "ok", blockers: [] } })
+  assert.equal(bare.state, "ready")
+  assert.match(bare.summary, /^Desk is ready, but this answer carries no runtime detail .*not a missing desk.*desk_doctor to see why\.$/u)
+  assert.ok(!("status_error" in bare) && !("detail_pending" in bare))
+  assert.ok(!bare.summary.includes("{ detail: true }"), "detail: true returns the same thing here, so only desk_doctor is named")
+  const long = compactStatus({ status: "ok", state: "ready", status_error: `${"x".repeat(300)}\n    at stack frame`, admission: { summary: "ok", blockers: [] } })
+  assert.equal(long.status_error, `${"x".repeat(199)}…`)
+  assert.ok(long.summary.includes(`(${"x".repeat(199)}…)`) && !long.summary.includes("stack frame"))
+  assert.equal(compactStatus({ status: "ok", state: "ready", status_error: "boom\nsecond line", admission: { summary: "ok", blockers: [] } }).status_error, "boom")
+  for (const empty of ["", "  \n  "]) {
+    const unknown = compactStatus({ status: "ok", state: "ready", status_error: empty, admission: { summary: "ok", blockers: [] } })
+    assert.equal(unknown.status_error, "unknown error")
+    assert.match(unknown.summary, /failed \(unknown error\)/u)
+  }
+  assert.equal(compactStatus(ready).summary, "Desk is ready.")
+  assert.ok(!("status_error" in compactStatus({ ...ready, status: "admitting", state: "admitting", status_error: "x" })), "a desk that is not ready reports through its own fix")
+})
+
 test("a ready desk answers in one word with nothing to fix and pointers to the rest", () => {
   const compact = compactStatus(ready)
   assert.equal(compact.state, "ready")

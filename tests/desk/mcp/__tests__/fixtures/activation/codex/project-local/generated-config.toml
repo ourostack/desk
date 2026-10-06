@@ -2,7 +2,7 @@
 model = "gpt-5.4"
 approval_policy = "on-request"
 
-# BEGIN desk activation: desk@3.2.0-alpha.197 mode=project-local owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.198 mode=project-local owner=desk-activation
 [features]
 memories = false
 

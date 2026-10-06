@@ -116,6 +116,8 @@ function cardSection(read, nowMs) {
   }
   const cards = read.cards
   const inState = (...states) => cards.filter((card) => states.includes(card.state))
+  // Loop alarm cards are the loop's own and are counted in `loop_alarms_open`, so the four card counts leave them out, as the ages do.
+  const own = (state) => inState(state).filter((card) => card.source !== "loop_alarm")
   const live = (card) => isClaimLive(card, nowMs)
   const since = nowMs - WINDOW_DAYS * DAY_MS
   const closedWithin = (state) => cards.filter((card) => card.state === state && Date.parse(card.closed_at) >= since).length
@@ -128,12 +130,11 @@ function cardSection(read, nowMs) {
   return {
     cards,
     improvement: {
-      // Loop alarm cards are the loop's own and are counted in `loop_alarms_open`, so the open count leaves them out, as the ages do.
-      open: count(inState("open").filter((card) => card.source !== "loop_alarm").length),
-      claimed: count(inState("claimed").filter(live).length),
+      open: count(own("open").length),
+      claimed: count(own("claimed").filter(live).length),
       claim_expired: count(inState("claimed").filter((card) => !live(card)).length),
-      shipped: count(inState("shipped").length),
-      verifying: count(inState("verifying").length),
+      shipped: count(own("shipped").length),
+      verifying: count(own("verifying").length),
       oldest_open_age_days: oldest(inState("open", "claimed"), "none_open"),
       oldest_in_verification_age_days: oldest(inState("shipped", "verifying"), "none_in_verification"),
       closed_confirmed_30d: count(closedWithin("closed_confirmed")),
