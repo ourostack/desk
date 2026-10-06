@@ -301,10 +301,8 @@ function yieldSection(result) {
 // `n of N`, and an upper bound while the human's answer is still missing for any counted job.
 function yieldText(result) {
   if (result.state === "measured") return `- First-pass yield: ${result.n} of ${result.N} delivered jobs passed first time (${percentage(result.value)}).`
-  const pending = [
-    ...(result.awaiting_signoff > 0 ? [`${result.awaiting_signoff} waiting for sign-off`] : []),
-  ]
-  return `- First-pass yield: at most ${result.n} of ${result.N} delivered jobs passed first time (upper bound ${percentage(result.value)}; ${pending.join(", ")}).`
+  // A yield is partial only while a delivered job awaits its sign-off.
+  return `- First-pass yield: at most ${result.n} of ${result.N} delivered jobs passed first time (upper bound ${percentage(result.value)}; ${result.awaiting_signoff} waiting for sign-off).`
 }
 
 function reworkSection(rework) {
