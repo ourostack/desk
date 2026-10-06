@@ -25,12 +25,14 @@ esac
 test -z "$(git status --porcelain)" || { echo "::error::The working tree must be clean before the release is built."; exit 1; }
 base="$(git rev-parse HEAD)"
 original_ref="$(git symbolic-ref -q HEAD || true)"
+throwaway=plugins/desk/changelog.d/zz-release-dry-run-throwaway.md
 scratch="$(mktemp -d)"
 release_json="${RELEASE_JSON:-$scratch/release.json}"
 output() { [ -z "${RELEASE_OUTPUT:-}" ] || printf '%s\n' "$@" >> "$RELEASE_OUTPUT"; }
 
 restore() {
   rm -rf "$scratch"
+  [ "$dry_run" != true ] || rm -f "$throwaway"
   if [ "$dry_run" = true ]; then
     git reset --hard --quiet "$base"
     if [ -n "$original_ref" ]; then git checkout --quiet "${original_ref#refs/heads/}"; fi
@@ -39,6 +41,12 @@ restore() {
 trap restore EXIT
 [ "$dry_run" != true ] || git checkout --quiet --detach
 
+# A dry run with nothing pending would check nothing, so it folds a throwaway fragment: a pull request that changes only
+# scripts, tests or workflows still proves the next release builds and passes. The fold deletes it, and restore removes it
+# if the fold fails first.
+if [ "$dry_run" = true ] && [ -z "$(git ls-files 'plugins/desk/changelog.d/*.md' | grep -v '/README\.md$' || true)" ]; then
+  printf 'A throwaway fragment folded by the release dry run.\n' > "$throwaway"
+fi
 node scripts/release-desk.cjs --date "$(date -u +%F)" > "$release_json"
 if [ "$(node -p 'require(process.argv[1]).released' "$release_json")" != "true" ]; then
   echo "No changelog fragment is pending; nothing to release."
@@ -61,7 +69,7 @@ for check in validate-skills test-desk-docs test-desk-host-manifests test-desk-g
 done
 
 # A pattern that matches no file, or a run that counts no test, passes silently under node --test, which hid a release
-# whose Node tests matched none. Both fail here.
+# whose Node tests matched none. Both fail here (the count is of passing tests; skipped ones do not count).
 patterns=(release activation artifacts docs scripts)
 globs=()
 for name in "${patterns[@]}"; do globs+=("../../../tests/desk/mcp/__tests__/$name/**/*.test.js"); done
@@ -74,9 +82,10 @@ for name in "${patterns[@]}"; do globs+=("../../../tests/desk/mcp/__tests__/$nam
   tap="$scratch/tests.tap"
   node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test \
     --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination="$tap" "${globs[@]}"
-  ran="$(sed -n 's/^# tests \([0-9][0-9]*\)$/\1/p' "$tap")"
-  [ "${ran:-0}" -gt 0 ] || { echo "::error::The release test step ran ${ran:-0} tests; a step that runs no test is a failure."; exit 1; }
-  echo "The release test step ran $ran tests."
+  # Skipped and todo tests count in "# tests", and a file that registers no test counts as one pass, so only passes count.
+  ran="$(sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p' "$tap")"
+  [ "${ran:-0}" -gt 0 ] || { echo "::error::The release test step passed ${ran:-0} tests; a step that passes no test is a failure."; exit 1; }
+  echo "The release test step passed $ran tests."
 )
 
 output "released=true" "summary=$summary" "sha=$sha" "base=$base"

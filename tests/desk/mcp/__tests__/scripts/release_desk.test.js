@@ -259,3 +259,50 @@ test("the shared release script fails a test step that matches no file or runs n
   assert.match(text, /matches no test file/u)
   assert.match(text, /\[ "\$\{ran:-0\}" -gt 0 \]/u)
 })
+
+// Runs the real script in a temporary repository whose release scripts are stubs, so the dry run's own behaviour is exercised.
+function dryRunRepo({ tests }) {
+  const root = mkdtempSync(path.join(tmpdir(), "dry-run-"))
+  const put = (file, text) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
+    writeFileSync(path.join(root, file), text)
+  }
+  put("scripts/build-and-check-release.sh", readRepo("scripts/build-and-check-release.sh"))
+  put("scripts/release-desk.cjs", `const fs = require("node:fs"); const dir = "plugins/desk/changelog.d";
+const found = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.endsWith(".md") && n !== "README.md") : [];
+if (found.length) { for (const n of found) fs.rmSync(dir + "/" + n); fs.writeFileSync("plugins/desk/released.txt", "x"); }
+console.log(JSON.stringify({ released: found.length > 0, to: "9.9.9-alpha.1", fragments: found.map((n) => dir + "/" + n) }));\n`)
+  for (const name of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) put(`scripts/${name}.cjs`, "")
+  put(".claude-plugin/marketplace.json", "{}\n")
+  put("plugins/desk/changelog.d/README.md", "readme\n")
+  put("plugins/desk/mcp/package.json", "{}\n")
+  put("tests/desk/mcp/__tests__/_isolated_env.mjs", "")
+  for (const name of ["release", "activation", "artifacts", "docs", "scripts"]) put(`tests/desk/mcp/__tests__/${name}/a.test.js`, tests)
+  const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, encoding: "utf8" })
+  git("init", "-q", "-b", "main")
+  git("add", "--all")
+  git("commit", "-q", "-m", "start")
+  return { root, git, head: () => git("rev-parse", "HEAD").stdout.trim() }
+}
+const runDryRun = (repo) => spawnSync("bash", ["scripts/build-and-check-release.sh", "--dry-run"], { cwd: repo.root, encoding: "utf8", env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT")) })
+
+test("a dry run with no fragment pending still folds and checks a throwaway fragment, then restores the tree", () => {
+  const repo = dryRunRepo({ tests: 'require("node:test")("t", () => {})\n' })
+  const before = repo.head()
+  const result = runDryRun(repo)
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /builds and passes every check/u)
+  assert.equal(repo.head(), before)
+  assert.equal(repo.git("status", "--porcelain").stdout, "")
+  assert.equal(repo.git("branch", "--show-current").stdout.trim(), "main")
+  rmSync(repo.root, { recursive: true, force: true })
+})
+
+test("a dry run whose release tests are all skipped fails, because only passing tests count", () => {
+  const repo = dryRunRepo({ tests: 'require("node:test")("t", { skip: true }, () => {})\n' })
+  const result = runDryRun(repo)
+  assert.equal(result.status, 1, result.stdout + result.stderr)
+  assert.match(result.stdout + result.stderr, /passed 0 tests/u)
+  assert.equal(repo.git("status", "--porcelain").stdout, "")
+  rmSync(repo.root, { recursive: true, force: true })
+})
