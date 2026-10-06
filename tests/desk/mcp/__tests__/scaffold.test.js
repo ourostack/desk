@@ -97,10 +97,12 @@ test("path resolver — $DESK env var used when --root absent", async () => {
     mkdirSync(envRoot)
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
+    const prevProfile = process.env.USERPROFILE
     process.env.DESK = envRoot
     // Point HOME at a fresh empty dir so the fallback chain finds nothing
     // and $DESK is what wins.
     process.env.HOME = path.join(tmp, "empty-home")
+    process.env.USERPROFILE = process.env.HOME  // os.homedir() reads USERPROFILE on Windows
     mkdirSync(process.env.HOME)
     try {
       assert.equal(resolveDeskRoot(null), envRoot)
@@ -108,6 +110,8 @@ test("path resolver — $DESK env var used when --root absent", async () => {
       if (prevDesk === undefined) delete process.env.DESK
       else process.env.DESK = prevDesk
       process.env.HOME = prevHome
+      if (prevProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevProfile
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true })
@@ -124,13 +128,17 @@ test("path resolver — falls through $HOME canonical locations when env unset",
     makeDesk(path.join(fakeHome, "desk"))
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
+    const prevProfile = process.env.USERPROFILE
     delete process.env.DESK
     process.env.HOME = fakeHome
+    process.env.USERPROFILE = process.env.HOME  // os.homedir() reads USERPROFILE on Windows
     try {
       assert.equal(resolveDeskRoot(null), path.join(fakeHome, "desk"))
     } finally {
       if (prevDesk !== undefined) process.env.DESK = prevDesk
       process.env.HOME = prevHome
+      if (prevProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevProfile
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true })
@@ -149,13 +157,17 @@ test("path resolver — prefers desk over worker-workspace and never binds a wor
     makeDesk(path.join(fakeHome, "worker-workspace"))
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
+    const prevProfile = process.env.USERPROFILE
     delete process.env.DESK
     process.env.HOME = fakeHome
+    process.env.USERPROFILE = process.env.HOME  // os.homedir() reads USERPROFILE on Windows
     try {
       assert.equal(resolveDeskRoot(null), path.join(fakeHome, "desk"))
     } finally {
       if (prevDesk !== undefined) process.env.DESK = prevDesk
       process.env.HOME = prevHome
+      if (prevProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevProfile
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true })
@@ -171,13 +183,17 @@ test("path resolver — falls back to worker-workspace as last resort", async ()
     makeDesk(path.join(fakeHome, "worker-workspace"))
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
+    const prevProfile = process.env.USERPROFILE
     delete process.env.DESK
     process.env.HOME = fakeHome
+    process.env.USERPROFILE = process.env.HOME  // os.homedir() reads USERPROFILE on Windows
     try {
       assert.equal(resolveDeskRoot(null), path.join(fakeHome, "worker-workspace"))
     } finally {
       if (prevDesk !== undefined) process.env.DESK = prevDesk
       process.env.HOME = prevHome
+      if (prevProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevProfile
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true })
@@ -192,8 +208,10 @@ test("path resolver — fatal error lists every path tried", async () => {
     mkdirSync(fakeHome)
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
+    const prevProfile = process.env.USERPROFILE
     delete process.env.DESK
     process.env.HOME = fakeHome
+    process.env.USERPROFILE = process.env.HOME  // os.homedir() reads USERPROFILE on Windows
     try {
       assert.throws(
         () => resolveDeskRoot(null),
@@ -208,6 +226,8 @@ test("path resolver — fatal error lists every path tried", async () => {
       if (prevDesk === undefined) delete process.env.DESK
       else process.env.DESK = prevDesk
       process.env.HOME = prevHome
+      if (prevProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevProfile
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true })

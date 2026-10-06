@@ -88,7 +88,8 @@ export function startDesk(fixture, { args = [], env = {}, nodeArgs = [], entry =
     cwd: fixture.root,
     env: isolatedEnv(fixture, {
       DESK: undefined,
-      PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      // On Windows the isolated environment already holds this Node, System32 and Git on a ";"-separated PATH; a ":"-joined one would be a single unusable entry.
+      ...(process.platform === "win32" ? {} : { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` }),
       ...(entry === "launcher" ? { DESK_PLUGIN_ROOT: pluginRoot } : {}),
       ...env,
     }),

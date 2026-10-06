@@ -114,8 +114,10 @@ test("a missing repo with no clone source asks with the expanded path, and clone
   const home = path.join(root, "other-home")
   const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: home, gh, jq, taskQuery: "flash-valves", syncFn: async () => ({ state: "synced" }), factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }) })
   const first = result.text_instructions[0]
-  assert.ok(first.includes(`is not at its recorded path ${home}/code/valve-firmware (~/code/valve-firmware)`), first)
-  assert.ok(first.includes(`clone valve-firmware to ${home}/code/valve-firmware (or record the path they give)`), first)
+  // The expanded path is the machine's own spelling, so it carries the native separator.
+  const expanded = path.join(home, "code", "valve-firmware")
+  assert.ok(first.includes(`is not at its recorded path ${expanded} (~/code/valve-firmware)`), first)
+  assert.ok(first.includes(`clone valve-firmware to ${expanded} (or record the path they give)`), first)
 })
 
 test("the sync rule carries the summary's own reason for each failure, and for a pull that worked but left the desk's changes in conflict", async () => {

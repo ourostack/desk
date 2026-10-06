@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { main, parseArgs, resolveStartupStateBranch } from "../../../../../plugins/desk/mcp/index.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { osEnv } from "../_os_env.js"
 
 test("--state-branch is parsed, and the activation config's desk.state_branch is the fallback", async () => {
   assert.equal(parseArgs(["--state-branch", "main"]).stateBranch, "main")
@@ -85,7 +86,7 @@ test("the default stateHome follows HOME and XDG_STATE_HOME", async () => {
   const input = new PassThrough()
   const handle = await main({
     argv: ["--root", path.join(root, "missing")],
-    env: { HOME: root, XDG_STATE_HOME: path.join(root, "xdg-state") },
+    env: osEnv({ HOME: root, USERPROFILE: root, XDG_STATE_HOME: path.join(root, "xdg-state") }),
     cwd: root,
     input,
     output: new PassThrough(),
@@ -241,10 +242,10 @@ test("the shipped importer runs inspection and restore through the admission job
     prepared: { sourceMirrorPath: "/mirror", runtimeCacheDir: "/cache", target: "t", packDir: "/pack" },
     load: async (url) => {
       assert.match(url, /\/mirror\/src\/server\.js$/u)
-      return { configureRuntimeArtifacts: ({ pluginRoot }) => assert.equal(pluginRoot, "/plugin"), marker: 1 }
+      return { configureRuntimeArtifacts: ({ pluginRoot }) => assert.equal(pluginRoot, path.resolve("/plugin")), marker: 1 }
     },
   })
   assert.equal(loaded.marker, 1)
-  assert.deepEqual(loaded._deskRuntime, { plugin_root: "/plugin", runtime_cache_dir: "/cache", source_mirror_path: "/mirror", target: "t", pack_dir: "/pack", loaded_from_source_mirror: true })
+  assert.deepEqual(loaded._deskRuntime, { plugin_root: path.resolve("/plugin"), runtime_cache_dir: "/cache", source_mirror_path: "/mirror", target: "t", pack_dir: "/pack", loaded_from_source_mirror: true })
   assert.equal((await importPreparedRuntime({ mcpRoot: "/p/mcp", prepared: { sourceMirrorPath: "/m" }, load: async () => ({}) }))._deskRuntime.loaded_from_source_mirror, true)
 })

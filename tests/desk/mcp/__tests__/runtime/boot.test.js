@@ -1408,25 +1408,27 @@ test("resolveTaskQuery: a phrase that holds exactly one open task's slug or trac
 // ── repoStates, openPullRequests ─────────────────────────────────────────
 
 test("repoStates: fetches and reports branch and dirty state for each local repo of an open task, skipping everything else", () => {
+  // A card path is resolved to an absolute path, which on Windows gains a drive letter.
+  const clone = (name) => path.resolve("/clones", name)
   const calls = []
   const spawnGit = (cmd, args) => {
     calls.push(args.join(" "))
-    if (args.includes("fetch")) return { status: args[1] === "/clones/stale" ? 1 : 0, stdout: "" }
-    if (args[1] === "/clones/gone") return { status: 128, stdout: "" }
-    if (args[1] === "/clones/empty") return { status: 0, stdout: "" }
-    return { status: 0, stdout: args[1] === "/clones/dirty" ? "## feature...origin/feature\n M file\n" : "## main...origin/main\n" }
+    if (args.includes("fetch")) return { status: args[1] === clone("stale") ? 1 : 0, stdout: "" }
+    if (args[1] === clone("gone")) return { status: 128, stdout: "" }
+    if (args[1] === clone("empty")) return { status: 0, stdout: "" }
+    return { status: 0, stdout: args[1] === clone("dirty") ? "## feature...origin/feature\n M file\n" : "## main...origin/main\n" }
   }
   const open = (repos) => ({ track: "t", slug: "s", desk: null, data: { status: "processing", repos } })
   const local = (name, dir) => ({ name, local_path: dir, mode: "local" })
   const cards = [
-    open([local("clean", "/clones/clean"), local("dirty", "/clones/dirty"), local("stale", "/clones/stale"), local("gone", "/clones/gone"), local("empty", "/clones/empty")]),
+    open([local("clean", clone("clean")), local("dirty", clone("dirty")), local("stale", clone("stale")), local("gone", clone("gone")), local("empty", clone("empty"))]),
     open([{ name: "remote-only", local_path: "", mode: "remote" }, { name: "no-path", mode: "local" }, null]),
-    { track: "t", slug: "done", desk: null, data: { status: "done", repos: [local("finished", "/clones/clean")] } },
+    { track: "t", slug: "done", desk: null, data: { status: "done", repos: [local("finished", clone("clean"))] } },
     { track: "t", slug: "no-repos", desk: null, data: { status: "processing" } },
   ]
   const { states, pending } = repoStates({ cards, spawnGit, now: () => 0, deadline: 60000 })
   assert.deepEqual(pending, [])
-  assert.equal(states.find((state) => state.repo === "gone").local_path, "/clones/gone")
+  assert.equal(states.find((state) => state.repo === "gone").local_path, clone("gone"))
   assert.deepEqual(states.map((state) => [state.repo, state.present, state.branch, state.dirty, state.fetched]), [
     ["clean", true, "main", false, true],
     ["dirty", true, "feature", true, true],
@@ -1434,7 +1436,7 @@ test("repoStates: fetches and reports branch and dirty state for each local repo
     ["gone", false, undefined, undefined, undefined],
     ["empty", true, null, false, true],
   ])
-  assert.ok(calls.includes("-C /clones/clean fetch --quiet origin"))
+  assert.ok(calls.includes(`-C ${clone("clean")} fetch --quiet origin`))
 })
 
 test("repoStates: a repo past the wall-clock deadline is pending, not fetched", () => {
@@ -1773,9 +1775,9 @@ test("a relative local_path resolves against the desk root in repoStates and res
   const repos = [{ name: "w", local_path: "clones/w", mode: "local" }, { name: "h", local_path: "~/h", mode: "local" }]
   const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos } }]
   repoStates({ cards, root: deskRoot, spawnGit, homeDir: "/home/x", now: () => 0, deadline: 60000 })
-  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), "/home/x/h"])
+  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), path.resolve(deskRoot, "/home/x/h")])
   seen.length = 0
   const runner = async () => ({ code: 1, stdout: "", stderr: "" })
   await resolvePushAccounts({ root: deskRoot, cards, runner, spawnGit, homeDir: "/home/x" })
-  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), "/home/x/h"])
+  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), path.resolve(deskRoot, "/home/x/h")])
 })

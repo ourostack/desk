@@ -261,6 +261,22 @@ test("withCreatedDirs keeps the folders when the work succeeds, removes the ones
   assert.ok((await tree(root)).includes(path.join("a", "e", "f", "kept.txt")), "a folder with a file in it stays")
 })
 
+test("withCreatedDirs removes the folders it made when mkdir reports the first one in Windows extended-length spelling", async () => {
+  const root = await mkTempRoot("desk-round10-extended-")
+  const realMkdir = fs.mkdir
+  // Windows answers a recursive mkdir with `\\?\C:\...`; the prefix is added here so every platform exercises the comparison.
+  fs.mkdir = async (...args) => {
+    const first = await realMkdir(...args)
+    return typeof first === "string" ? `\\\\?\\${first.replace(/^\\\\\?\\/u, "")}` : first
+  }
+  try {
+    await assert.rejects(withCreatedDirs(path.join(root, "c", "d"), async () => { throw new Error("boom") }), /boom/u)
+  } finally {
+    fs.mkdir = realMkdir
+  }
+  assert.deepEqual(await tree(root), [])
+})
+
 test("a task_archive whose rename fails leaves no empty _archive folder", async () => {
   const root = await deskWithTask()
   const before = await tree(root)

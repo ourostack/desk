@@ -73,7 +73,8 @@ for (const scenario of [
       }
       assert.equal(result.isError, false, JSON.stringify(result.payload))
       const prefix = scenario.expectedPerson === null ? [] : ["desks", scenario.expectedPerson]
-      const expectedPath = path.join(...prefix, "ops", "authority-route", "task.md")
+      // Desk spells the paths it reports with "/" on every platform.
+      const expectedPath = path.posix.join(...prefix, "ops", "authority-route", "task.md")
       assert.equal(result.payload.path, expectedPath)
       assert.equal(desk.handle.session.context.person, scenario.expectedPerson)
       assert.equal(existsSync(path.join(root, expectedPath)), true)

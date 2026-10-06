@@ -11,6 +11,9 @@ import { mkTempRoot } from "./_temp_roots.js"
 import { mkFakeRealRoot } from "./_fake_real_root.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "../../../../plugins/desk/mcp/src/runtime/last-start.js"
 
+// A nested `node --test` of a factory or tools file writes private stores, and every protected write starts Windows PowerShell; boot_check.test.js alone ran 100 to 180 s on a CI runner, past the 120 s that macOS and Linux need.
+const NESTED_RUN_MS = process.platform === "win32" ? 360000 : 120000
+
 const inside = (child, parent) => !path.relative(parent, child).startsWith("..") && !path.isAbsolute(path.relative(parent, child))
 
 test("HOME and every XDG folder point into this run's temporary folder, never the real home", () => {
@@ -69,7 +72,7 @@ test("a factory test file run on its own with node --test never reads the machin
   const env = { ...process.env, HOME: machine, USERPROFILE: machine, DESK_TEST_REAL_HOME: machine }
   for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS", "NODE_TEST_CONTEXT"]) delete env[key]
   const { spawnSync } = await import("node:child_process")
-  const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "boot_check.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
+  const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "boot_check.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: NESTED_RUN_MS })
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
 })
 
@@ -87,7 +90,7 @@ test("a factory test file with no isolation import at all is still refused from 
     const env = { ...process.env, HOME: fakeReal, USERPROFILE: fakeReal }
     for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS"]) delete env[key]
     const { spawnSync } = await import("node:child_process")
-    const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "_uninsulated_state_guard_fixture.fixture.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
+    const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "_uninsulated_state_guard_fixture.fixture.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: NESTED_RUN_MS })
     assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
     assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard must refuse before creating anything under the fake real home")
   } finally {
@@ -114,7 +117,7 @@ test("a tools test file run on its own with node --test never writes the machine
   const env = { ...process.env, HOME: machine, USERPROFILE: machine, DESK_TEST_REAL_HOME: machine }
   for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS", "NODE_TEST_CONTEXT"]) delete env[key]
   const { spawnSync } = await import("node:child_process")
-  const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "tools", "task_archive.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
+  const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "tools", "task_archive.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: NESTED_RUN_MS })
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
   const listing = (dir) => (existsSync(dir) ? readdirSync(dir) : [])
   assert.deepEqual(listing(path.join(factoryDir, "finalize")), [], "task_archive's terminal-status transitions must never create real finalize requests under the machine's own home")

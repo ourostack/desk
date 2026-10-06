@@ -539,7 +539,11 @@ function prependNodeShimToPath(tempRoot, existingPath) {
   const binDir = ensureDir(path.join(tempRoot, "bin"));
   const invocationLogPath = path.join(tempRoot, "node-shim-invocations.log");
   if (process.platform === "win32") {
-    writeFileSync(path.join(binDir, "node.cmd"), `@echo node %*>>"${invocationLogPath}"\r\n@"${process.execPath}" %*\r\n`);
+    // Windows starts `node` only from a node.exe on PATH; a node.cmd shim is never found by a spawn without a shell. So the PATH holds this Node's own folder and the system folder, and nothing logs the launch.
+    return {
+      invocationLogPath,
+      path: [path.dirname(process.execPath), process.env.SystemRoot && path.join(process.env.SystemRoot, "System32")].filter(Boolean).join(path.delimiter),
+    };
   } else {
     const shimPath = path.join(binDir, "node");
     writeFileSync(shimPath, `#!/bin/sh\nprintf '%s\\n' "node $*" >> ${shellQuote(invocationLogPath)}\nexec ${shellQuote(process.execPath)} "$@"\n`);
@@ -645,6 +649,7 @@ describe("runtime cache and host launch contract", () => {
               DESK: "",
               DESK_RUNTIME_CACHE_DIR: runtimeCacheDir,
               HOME: homeDir,
+              USERPROFILE: homeDir,
               PATH: nodeShim.path,
               DESK_NODE_SYSTEM_PREFIX: ensureDir(path.join(tempRoot, "no-system-node")),
               // Version-manager folders from this machine must not reach the selector either.
@@ -741,6 +746,7 @@ describe("runtime cache and host launch contract", () => {
         DESK: deskRoot,
         DESK_RUNTIME_CACHE_DIR: ensureDir(path.join(tempRoot, "runtime-cache")),
         HOME: homeDir,
+        USERPROFILE: homeDir,
         XDG_STATE_HOME: path.join(tempRoot, "state"),
         XDG_CACHE_HOME: path.join(tempRoot, "cache"),
         PATH: nodeShim.path,
