@@ -17,7 +17,9 @@ name: Desk release
 # Main requires the CI gate before a change lands (.github/rulesets/main-requires-ci.json), and GitHub does not let a
 # ruleset bypass list name the workflow token (GitHub Actions is refused as a bypass actor). So the push uses a deploy
 # key with write access when the DESK_RELEASE_DEPLOY_KEY secret holds one; the ruleset lists deploy keys as a bypass
-# actor. Without the secret the push uses the workflow token, which only works while main has no such ruleset.
+# actor. The secret lives in the "release" environment, which only runs on main, because the key bypasses every rule and
+# a repository secret is readable by a pull request that adds a workflow. Without the secret the push uses the workflow
+# token, which only works while main has no such ruleset.
 
 on:
   push:
@@ -118,6 +120,7 @@ jobs:
     if: needs.build.outputs.released == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    environment: release
     permissions:
       contents: write
       # Only to dispatch a new run when main moves while a release is being checked.
@@ -138,6 +141,16 @@ jobs:
           name: desk-release
           path: ${{ runner.temp }}/desk-release
 
+      # Only this step holds the deploy key. It writes the key to a file, so the git, gh and ssh commands below never have the
+      # key in their environment.
+      - name: Write the deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.DESK_RELEASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "${DEPLOY_KEY:-}" ] || exit 0
+          (umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/release-deploy-key")
+
       # Runs git and the shell only. The build job ran dependency code, so nothing it produced is trusted until this step has
       # verified it: the bundle must hold the exact commit build checked, as the only commit on the main build started
       # from, changing only the release surfaces release-desk.cjs names (read from main, not run) and removing only
@@ -150,9 +163,10 @@ jobs:
           SHA: ${{ needs.build.outputs.sha }}
           BASE: ${{ needs.build.outputs.base }}
           SUMMARY: ${{ needs.build.outputs.summary }}
-          DEPLOY_KEY: ${{ secrets.DESK_RELEASE_DEPLOY_KEY }}
         run: |
           set -euo pipefail
+          key="$RUNNER_TEMP/release-deploy-key"
+          trap 'rm -f "$key"' EXIT
           [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::The build job handed over no valid commit."; exit 1; }
           git -c core.hooksPath=/dev/null fetch --quiet --no-tags "$RUNNER_TEMP/desk-release/release.bundle" "+refs/heads/main:refs/desk-release/checked"
           [ "$(git rev-parse refs/desk-release/checked)" = "$SHA" ] || { echo "::error::The release bundle does not hold the checked commit $SHA."; exit 1; }
@@ -171,9 +185,7 @@ jobs:
             echo "::error::The release commit changes $file ($status), which is not a release surface or a pending fragment."
             exit 1
           done < <(git diff --no-renames --name-status "$BASE" "$SHA")
-          if [ -n "${DEPLOY_KEY:-}" ]; then
-            key="$RUNNER_TEMP/release-deploy-key"
-            (umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$key")
+          if [ -f "$key" ]; then
             gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$RUNNER_TEMP/github-known-hosts"
             git remote set-url origin "git@github.com:$GITHUB_REPOSITORY.git"
             export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/github-known-hosts -o StrictHostKeyChecking=yes"
