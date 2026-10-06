@@ -4,7 +4,7 @@
 // carries it, and an open issue means the last release did not publish.
 //
 // Scope: only a desk with an open task card that names ourostack/desk is asked, because only that repo's workflow opens
-// this issue; other repos declare their delivery in `.desk/delivery.json` (see `tools/release-gate.js`) and have no alert yet.
+// this issue; other repos declare their delivery in `.desk/delivery.json` (see `tools/delivery-gate.js`) and have no alert yet.
 //
 // It must never slow or break boot, the same contract as `stale-desk.js`: the lookup starts in parallel with the rest of boot,
 // has a hard budget, caches its answer in Desk's state directory for ten minutes (an offline machine does not retry on every

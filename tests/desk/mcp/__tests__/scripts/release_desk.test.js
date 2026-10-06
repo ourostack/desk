@@ -181,18 +181,20 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.match(workflow.on.schedule[0].cron, /\S/u)
   assert.deepEqual(workflow.permissions, {})
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false })
-  assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "report"])
+  assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "announce", "report"])
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
   assert.match(build, /scripts\/build-and-check-release\.sh$/mu)
   assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)
   assert.match(sharedScript(), /node scripts\/check-release-integrity\.cjs/u)
   const report = workflow.jobs.report
-  assert.deepEqual(report.needs, ["build", "push"])
+  assert.deepEqual(report.needs, ["build", "push", "announce"])
   assert.deepEqual(report.permissions, { issues: "write" })
-  assert.equal(stepNamed(report, "Report the failed release").if, "needs.build.result == 'failure' || needs.push.result == 'failure'")
+  assert.equal(stepNamed(report, "Report the failed release").if, "needs.build.result == 'failure' || needs.push.result == 'failure' || needs.announce.result == 'failure'")
   assert.match(stepNamed(report, "Report the failed release").run, /gh issue create --repo "\$GITHUB_REPOSITORY" --title "\$ISSUE_TITLE"/u)
   // A run that handed its release to a new run leaves the issue open: its fragments are still pending.
   assert.match(stepNamed(report, "Close the release issue after a successful run").if, /needs\.push\.outputs\.handed_off != 'true'/u)
+  // A published release whose pull requests were not marked is a failure too: the done-gate would refuse them, and the issue is how the agent hears.
+  assert.match(stepNamed(report, "Close the release issue after a successful run").if, /needs\.announce\.result == 'success' \|\| needs\.announce\.result == 'skipped'/u)
   assert.doesNotMatch(text, /pull_request/u, "the release never runs for an unmerged pull request")
   assert.doesNotMatch(text, /--force/u, "a release never overwrites main")
 })
@@ -239,6 +241,98 @@ test("the release workflow checks every release surface in a read-only job and p
   const listed = spawnSync("sed", ["-n", allowed[0][1], path.join(repoRoot, "scripts", "release-desk.cjs")], { encoding: "utf8" }).stdout.trim().split("\n")
   assert.deepEqual(listed.sort(), [...release.DESK_VERSION_FILES, release.CHANGELOG].sort())
   assert.equal(report.permissions.issues, "write")
+})
+
+test("the release workflow marks every released pull request that lacks the mark, once, even on a run with nothing to release", () => {
+  const { workflow } = releaseWorkflow()
+  const { announce } = workflow.jobs
+  assert.deepEqual(announce.needs, ["build", "push"])
+  assert.match(announce.if, /needs\.build\.result == 'success'/u)
+  assert.doesNotMatch(announce.if, /outputs\.released/u, "a run with nothing to release still catches up")
+  assert.match(announce.if, /needs\.push\.outputs\.handed_off != 'true'/u)
+  assert.deepEqual(announce.permissions, { contents: "read", issues: "write", "pull-requests": "write" })
+  assert.doesNotMatch(JSON.stringify(announce), /secrets\.|DEPLOY_KEY|\bnpm\b|\bnode\b/u, "marking holds no deploy key and runs no dependency or repository code")
+  const checkout = stepNamed(announce, "Check out main")
+  assert.equal(checkout.with["persist-credentials"], false)
+  assert.equal(checkout.with["fetch-depth"], 0)
+  const run = stepNamed(announce, "Comment on and label every released pull request that lacks the label").run
+  assert.match(run, /--search "-label:\$LABEL merged:>=\$since"/u, "only recent pull requests")
+  assert.match(run, /since="\$\{MARK_SINCE:-\$\(date -u -d '30 days ago' \+%F\)\}"/u)
+  assert.match(run, /--author='\^github-actions\\\[bot\\\] <41898282\\\+github-actions\\\[bot\\\]@users\\\.noreply\\\.github\\\.com>\$'/u, "the bot's exact author")
+  assert.match(run, /--grep='\^Release Desk \[0-9\]'/u, "the carrying release is found by its subject")
+  assert.match(run, /grep -qxF -- "\$body"/u, "a rerun does not comment twice")
+  assert.equal(announce.env.LABEL, "released")
+  // The issue stays open until marking has succeeded.
+  assert.match(stepNamed(workflow.jobs.report, "Close the release issue after a successful run").if, /needs\.announce\.result == 'success'/u)
+})
+
+// Runs the marking step for real against a scratch history and a fake gh.
+function markingRun({ commentsOn = {}, mark }) {
+  const { workflow } = releaseWorkflow()
+  const run = stepNamed(workflow.jobs.announce, "Comment on and label every released pull request that lacks the label").run
+  const dir = mkdtempSync(path.join(tmpdir(), "announce-"))
+  const git = (...args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" })
+  git("init", "-q", "-b", "main")
+  const BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+  const commit = (name, message, email = "u@example.com") => spawnSync("git", ["-C", dir, "-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "-q", "--allow-empty", "-m", message], { encoding: "utf8" })
+  const shaOf = {}
+  for (const [name, message] of mark.history) {
+    if (name === "bot") commit("github-actions[bot]", message, BOT_EMAIL)
+    else if (name === "spoof") commit("github-actions[bot]", message)
+    else commit("Dev", message)
+    shaOf[message] = git("rev-parse", "HEAD").stdout.trim()
+  }
+  const bin = path.join(dir, "bin")
+  mkdirSync(bin)
+  const ghLog = path.join(dir, "gh.log")
+  const listing = mark.unlabeled.map(([number, message]) => `echo "${number} ${shaOf[message]}"`).join("\n")
+  const commentCases = Object.entries(commentsOn).map(([number, body]) => `  *"/issues/${number}/comments"*"--jq"*) echo "${body}" ;;`).join("\n")
+  writeFileSync(path.join(bin, "gh"), `#!/bin/sh
+echo "$*" >> "${ghLog}"
+case "$*" in
+  "pr list"*) ${listing || ":"} ;;
+${commentCases}
+esac
+${mark.failOn ? `case "$*" in *"${mark.failOn}"*) exit 1 ;; esac` : ""}
+`, { mode: 0o755 })
+  const env = { ...process.env, RUNNER_TEMP: dir, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: path.join(dir, "summary"), LABEL: "released", MARK_SINCE: "2026-09-06" }
+  const result = spawnSync("bash", ["-c", run], { cwd: dir, env, encoding: "utf8" })
+  const calls = existsSync(ghLog) ? readFileSync(ghLog, "utf8") : ""
+  rmSync(dir, { recursive: true, force: true })
+  return { result, calls }
+}
+const HISTORY = [["bot", "Release Desk 3.2.0-alpha.1"], ["dev", "first (#10)"], ["dev", "second (#11)"], ["bot", "Release Desk 3.2.0-alpha.2"], ["dev", "third (#12)"], ["bot", "Release Desk 3.2.0-alpha.3"], ["spoof", "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"], ["bot", "Not a release (#15)\n\nRelease Desk 3.2.0-alpha.8 only in the body"], ["bot", "Release Desk 3.2.0-alpha.1; rm -rf"], ["dev", "unreleased (#14)"]]
+
+test("marking labels each unlabeled released pull request with the first release after it, and skips unreleased ones", () => {
+  const { result, calls } = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"], [12, "third (#12)"], [14, "unreleased (#14)"], [13, "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"]] } })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(calls, /label create released --repo o\/r /u)
+  for (const [number, version] of [[10, "alpha.2"], [11, "alpha.2"], [12, "alpha.3"]]) {
+    assert.match(calls, new RegExp(`--method POST repos/o/r/issues/${number}/comments --field body=Released in Desk 3\\.2\\.0-${version.replace(".", "\\.")}`, "u"), `#${number}`)
+    assert.match(calls, new RegExp(`--method POST repos/o/r/issues/${number}/labels --raw-field labels\\[\\]=released`, "u"), `#${number}`)
+  }
+  // #13 sits after the last release by a person's commit that merely quotes a release subject; #14 is after it too.
+  assert.doesNotMatch(calls, /issues\/1[34]\/(comments|labels)/u)
+})
+
+test("announce failed on one release, the next release succeeds: the earlier release's pull requests are marked with their own version", () => {
+  // Alpha.2's marking failed (nothing was labeled). A later run, after alpha.3, still finds #10 and #11 unlabeled and marks them alpha.2.
+  const failed = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"]], failOn: "/issues/10/labels" } })
+  assert.notEqual(failed.result.status, 0, "a failed label call fails the job, so the issue stays open")
+  const caught = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"]] } })
+  assert.equal(caught.result.status, 0, caught.result.stderr)
+  assert.match(caught.calls, /issues\/10\/comments --field body=Released in Desk 3\.2\.0-alpha\.2/u)
+  assert.match(caught.calls, /issues\/11\/labels/u)
+})
+
+test("marking is safe to repeat: an existing comment is not repeated, and nothing to mark is a clean run", () => {
+  const { result, calls } = markingRun({ commentsOn: { 10: "Released in Desk 3.2.0-alpha.2" }, mark: { history: HISTORY, unlabeled: [[10, "first (#10)"]] } })
+  assert.equal(result.status, 0, result.stderr)
+  assert.doesNotMatch(calls, /--method POST repos\/o\/r\/issues\/10\/comments/u)
+  assert.match(calls, /--method POST repos\/o\/r\/issues\/10\/labels/u)
+  const none = markingRun({ mark: { history: HISTORY, unlabeled: [] } })
+  assert.equal(none.result.status, 0, none.result.stderr)
+  assert.doesNotMatch(none.calls, /POST|label create/u)
 })
 
 test("pull request CI dry-runs the release through the same script, and the CI gate waits for it", () => {
