@@ -55,27 +55,36 @@ const runGh = makeRunGh()
 // istanbul ignore next -- the real `gh` is chosen only when no fetch was injected; every test injects its own.
 const defaultRunner = (fetchFn) => (fetchFn === undefined ? runGh : undefined)
 
-// The token `gh` holds for github.com, or undefined. The lookup is made once per runner for the life of the process, failure included, and
-// concurrent callers share the one in flight, so a hanging `gh` costs one time limit, not one per call.
-function ghToken(run) {
-  if (!ghTokens.has(run)) {
-    ghTokens.set(
-      run,
-      (async () => {
-        try {
-          return String(await run(["auth", "token", "--hostname", "github.com"])).trim() || undefined
-        } catch {
-          return undefined
-        }
-      })(),
-    )
-  }
-  return ghTokens.get(run)
+const GH_FAILURE_MEMORY_MS = 60000
+
+// The token `gh` holds for github.com, or undefined. A token is kept for the life of the process; a failure is remembered for a minute (so
+// one slow or signed-out `gh` is not asked again on every call, yet a later `gh auth login` is noticed), and concurrent callers share the
+// one lookup in flight. `now` is a test seam.
+function ghToken(run, now) {
+  const hit = ghTokens.get(run)
+  if (hit !== undefined && (hit.token !== undefined || hit.pending || now() - hit.at < GH_FAILURE_MEMORY_MS)) return hit.promise
+  const entry = { pending: true, token: undefined, at: now() }
+  entry.promise = (async () => {
+    try {
+      entry.token = String(await run(["auth", "token", "--hostname", "github.com"])).trim() || undefined
+    } catch {
+      entry.token = undefined
+    }
+    entry.pending = false
+    entry.at = now()
+    return entry.token
+  })()
+  ghTokens.set(run, entry)
+  return entry.promise
 }
 
-async function github({ fetchFn, env, budgetMs, token: fromGh }, route, accept = "application/vnd.github+json") {
+// A token `gh` handed out was refused (revoked, or another account is now signed in): forget it, and treat that as a failed lookup for a minute.
+function forgetGhToken(run, now) {
+  ghTokens.set(run, { pending: false, token: undefined, at: now(), promise: Promise.resolve(undefined) })
+}
+
+async function send({ fetchFn, budgetMs, token }, route, accept) {
   const headers = { "User-Agent": "desk-delivery-gate", Accept: accept }
-  const token = [env.GH_TOKEN, env.GITHUB_TOKEN].find((value) => typeof value === "string" && value.trim() !== "") ?? fromGh
   if (token !== undefined) headers.Authorization = `Bearer ${token.trim()}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), budgetMs)
@@ -87,6 +96,17 @@ async function github({ fetchFn, env, budgetMs, token: fromGh }, route, accept =
   } finally {
     clearTimeout(timer)
   }
+}
+
+// `ask.token` is the token in use; `ask.gh` is set only when it came from `gh`. A 401 on a `gh` token drops it and repeats the request once
+// anonymously, so a revoked token cannot turn a public repo into not_verified. A token from the environment is the caller's choice and stays.
+async function github(ask, route, accept = "application/vnd.github+json") {
+  const answer = await send(ask, route, accept)
+  if (answer.status !== 401 || ask.gh === undefined) return answer
+  forgetGhToken(ask.gh.run, ask.gh.now)
+  ask.gh = undefined
+  ask.token = undefined
+  return send(ask, route, accept)
 }
 
 const parse = (text) => {
@@ -127,14 +147,15 @@ function usableRule(rule) {
  * Is pull request `repo`#`number` delivered? Never throws. `{ status: "delivered", basis }` (`basis` says why: "no delivery rule declared",
  * "merge", the label), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged }` with a ready sentence in `need`,
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
- * `fetchFn`, `budgetMs` (per request) and `ghRunner` (asks `gh` for a token) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
+ * `fetchFn`, `budgetMs` (per request), `ghRunner` (asks `gh` for a token) and `now` (the clock) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
  */
-export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner }) {
+export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner, now = Date.now }) {
   const runner = ghRunner ?? defaultRunner(fetchFn)
-  const inEnv = [env.GH_TOKEN, env.GITHUB_TOKEN].some((value) => typeof value === "string" && value.trim() !== "")
-  const token = inEnv || runner === undefined ? undefined : await ghToken(runner)
+  const envToken = [env.GH_TOKEN, env.GITHUB_TOKEN].find((value) => typeof value === "string" && value.trim() !== "")
+  const fromGh = envToken !== undefined || runner === undefined ? undefined : await ghToken(runner, now)
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
-  const ask = { fetchFn: fetchFn ?? globalThis.fetch, env, budgetMs, token }
+  const ask = { fetchFn: fetchFn ?? globalThis.fetch, budgetMs, token: envToken ?? fromGh, gh: undefined }
+  if (fromGh !== undefined) ask.gh = { run: runner, now }
   // The pull request comes first: it must exist, and its base branch says which copy of the rules applies.
   const prAnswer = await github(ask, `/repos/${repo}/pulls/${number}`)
   if (prAnswer.status === 404) {
@@ -202,13 +223,13 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
  * The done-gate's use of `prDelivery`: null when `evidence` is not a GitHub pull request URL (or a node:test run gave no fetch), otherwise
  * the answer, thrown as a refusal naming the pull request when it is `undelivered` or `not_found`. The caller reports `not_verified`.
  */
-export async function checkDelivery({ toolName, evidence, env = process.env, fetchFn, budgetMs, ghRunner }) {
+export async function checkDelivery({ toolName, evidence, env = process.env, fetchFn, budgetMs, ghRunner, now }) {
   const match = evidence.kind === "pr" ? GITHUB_PR.exec(evidence.ref.trim()) : null
   if (match === null) return null
   if (fetchFn === undefined && looksLikeNodeTestRunner(env)) return null
   const repo = `${match[1]}/${match[2]}`
   const number = Number(match[3])
-  const answer = await prDelivery({ repo, number, env, fetchFn, budgetMs, ghRunner })
+  const answer = await prDelivery({ repo, number, env, fetchFn, budgetMs, ghRunner, now })
   if (answer.status === "not_found") throw new Error(`${toolName}: ${evidence.ref.trim()} does not exist on GitHub, so nothing can carry it. Supply the URL of the pull request that did the work.`)
   if (answer.status === "undelivered") {
     const need = answer.unmet.map((entry) => entry.need).join(" and ")

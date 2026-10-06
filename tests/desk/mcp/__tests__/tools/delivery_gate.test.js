@@ -296,12 +296,65 @@ test("the real gh runner passes its arguments and time limit to execFile, and ma
   await assert.rejects(bad([]), /ENOENT/u)
 })
 
-test("concurrent gh lookups share one call, and a failed lookup is remembered for the process", async () => {
+test("concurrent gh lookups share one call", async () => {
   let asks = 0
-  const slowFail = async () => { asks += 1; await new Promise((resolve) => setTimeout(resolve, 10)); throw new Error("hang") }
-  await Promise.all([ask(fakeGitHub(), { ghRunner: slowFail }), ask(fakeGitHub(), { ghRunner: slowFail })])
-  await ask(fakeGitHub(), { ghRunner: slowFail })
+  const slow = async () => { asks += 1; await new Promise((resolve) => setTimeout(resolve, 10)); return "tok" }
+  await Promise.all([ask(fakeGitHub(), { ghRunner: slow }), ask(fakeGitHub(), { ghRunner: slow })])
   assert.equal(asks, 1)
+})
+
+test("a failed gh lookup is remembered for 60 seconds, then asked again; a token is kept for the process", async () => {
+  let clock = 1000
+  const now = () => clock
+  let asks = 0
+  let answer = null
+  const flaky = async () => { asks += 1; if (answer === null) throw new Error("timeout"); return answer }
+  await ask(fakeGitHub(), { ghRunner: flaky, now })
+  clock += 59000
+  await ask(fakeGitHub(), { ghRunner: flaky, now })
+  assert.equal(asks, 1, "within 60 seconds the failure is reused")
+  clock += 2000
+  answer = "late"
+  const late = fakeGitHub()
+  await ask(late, { ghRunner: flaky, now })
+  assert.equal(asks, 2, "after 60 seconds it asks again")
+  assert.equal(late.calls[0].options.headers.Authorization, "Bearer late")
+  clock += 10 * 60000
+  await ask(fakeGitHub(), { ghRunner: flaky, now })
+  assert.equal(asks, 2, "a token does not expire")
+})
+
+// A GitHub that refuses one token with 401 and answers everything else as the plain fake does.
+function refusing(bad) {
+  const fake = fakeGitHub()
+  const fetchFn = async (url, options) => {
+    if (options.headers.Authorization === `Bearer ${bad}`) { fake.calls.push({ url, options }); return { status: 401, text: async () => "" } }
+    return fake.fetchFn(url, options)
+  }
+  return { fetchFn, calls: fake.calls }
+}
+
+test("a 401 on a gh token drops it and repeats the request anonymously, for the rest of the call and the next minute", async () => {
+  let clock = 0
+  const now = () => clock
+  let asks = 0
+  const ghRunner = async () => { asks += 1; return "revoked" }
+  const fake = refusing("revoked")
+  const answer = await ask(fake, { ghRunner, now })
+  assert.equal(answer.status, "undelivered", "the public answer, not not_verified")
+  assert.equal(fake.calls[0].options.headers.Authorization, "Bearer revoked")
+  assert.equal(fake.calls[1].options.headers.Authorization, undefined)
+  assert.ok(fake.calls.slice(1).every((call) => call.options.headers.Authorization === undefined))
+  clock += 1000
+  await ask(fakeGitHub(), { ghRunner, now })
+  assert.equal(asks, 1, "the refused token is not asked for again at once")
+})
+
+test("a 401 on a token from the environment is left alone", async () => {
+  const fake = refusing("mine")
+  const answer = await ask(fake, { env: { GH_TOKEN: "mine" }, ghRunner: async () => assert.fail("gh must not run") })
+  assert.equal(answer.status, "not_verified")
+  assert.equal(fake.calls.length, 1)
 })
 
 test("a node:test run with no fetch of its own makes no request", async () => {
