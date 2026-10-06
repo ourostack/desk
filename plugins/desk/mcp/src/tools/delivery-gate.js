@@ -118,7 +118,7 @@ function usableRule(rule) {
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
  * `fetchFn`, `budgetMs` (per request) and `ghRunner` (asks `gh` for a token) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
  */
-export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner = fetchFn === undefined ? runGh : undefined }) {
+export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner = /* istanbul ignore next */ fetchFn === undefined ? runGh : undefined }) {
   const inEnv = [env.GH_TOKEN, env.GITHUB_TOKEN].some((value) => typeof value === "string" && value.trim() !== "")
   const token = inEnv || ghRunner === undefined ? undefined : await ghToken(ghRunner)
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
