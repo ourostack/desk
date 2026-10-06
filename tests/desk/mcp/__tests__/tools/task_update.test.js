@@ -672,6 +672,73 @@ test("task_update accepts a top-level `status` as an alias for `frontmatter.stat
   assert.equal((await readFront(filePath)).data.status, "paused")
 })
 
+test("task_update treats `frontmatter.next_step` (and its other spellings) as the top-level `next_step`: it writes the body paragraph, leaves no dead key, and echoes the step", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "alias-step", title: "T", body: "Intro\n\n**Next step:** old step\n" } })
+  const filePath = path.join(root, "t", "alias-step", "task.md")
+  for (const [key, step] of [["next_step", "one"], ["next step", "two"], ["next-step", "three"], ["nextStep", "four"]]) {
+    const result = await task_update({ deskRoot: root, input: { track: "t", slug: "alias-step", frontmatter: { [key]: step, category: "general" } } })
+    assert.equal(result.next_step, step)
+    const card = await readFront(filePath)
+    assert.match(card.content, new RegExp(`\\*\\*Next step:\\*\\* ${step}`))
+    assert.equal(Object.keys(card.data).some((name) => /next/i.test(name)), false, key)
+    assert.equal(card.data.category, "general")
+  }
+  // The same step in both places is fine; a different one is refused before the card is touched.
+  await task_update({ deskRoot: root, input: { track: "t", slug: "alias-step", next_step: "five", frontmatter: { next_step: "five" } } })
+  const before = await fs.readFile(filePath, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-step", next_step: "six", frontmatter: { next_step: "five" } } }), /`next_step` and `frontmatter.next_step` disagree/)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-step", frontmatter: { next_step: "six", nextStep: "seven" } } }), /`frontmatter.next_step` and `frontmatter.nextStep` disagree/)
+  assert.equal(await fs.readFile(filePath, "utf8"), before)
+  // An empty step is refused as the top-level one is.
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-step", frontmatter: { next_step: " " } } }), /`frontmatter.next_step` must be a non-empty string/)
+  // A top-level next_step alone echoes the step too, and the frontmatter may be absent.
+  assert.equal((await task_update({ deskRoot: root, input: { track: "t", slug: "alias-step", next_step: "eight" } })).next_step, "eight")
+})
+
+test("task_update matches next-step keys loosely, compares trimmed values, and names `frontmatter.<key>` when the bad value came through the alias", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "loose", title: "T", body: "**Next step:** old\n" } })
+  const filePath = path.join(root, "t", "loose", "task.md")
+  for (const [key, step] of [["Next step", "a"], ["NEXT_STEP", "b"], ["next", "c"], ["Next Action", "d"], ["nextaction", "e"]]) {
+    assert.equal((await task_update({ deskRoot: root, input: { track: "t", slug: "loose", frontmatter: { [key]: step } } })).next_step, step, key)
+  }
+  assert.equal(Object.keys((await readFront(filePath)).data).some((name) => /^next/i.test(name)), false)
+  // Trimmed values agree.
+  assert.equal((await task_update({ deskRoot: root, input: { track: "t", slug: "loose", next_step: " f ", frontmatter: { next: "f" } } })).next_step, "f")
+  const before = await fs.readFile(filePath, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "loose", frontmatter: { next_steps: ["x", "y"] } } }), /`frontmatter.next_steps` must be a non-empty string/)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "loose", frontmatter: { "Next step": "  " } } }), /`frontmatter.Next step` must be a non-empty string/)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "loose", next_step: ["x"], frontmatter: { next: "x" } } }), /`next_step` and `frontmatter.next` disagree/)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "loose", next_step: "g", frontmatter: { next: "h" } } }), /disagree/)
+  assert.equal(await fs.readFile(filePath, "utf8"), before)
+})
+
+test("task_update refuses the whole blocker family and reports other next/block/wait keys it wrote but Desk never reads", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "family", title: "T" } })
+  const filePath = path.join(root, "t", "family", "task.md")
+  const before = await fs.readFile(filePath, "utf8")
+  for (const key of ["blocker", "Blockers", "blocked", "blocked_by", "Blocked-On", "waiting on", "waitingOn"]) {
+    await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "family", frontmatter: { [key]: ["x"] } } }), new RegExp(`\\\`frontmatter.${key}\\\` is not read[^]*\\\`body_append\\\``), key)
+  }
+  assert.equal(await fs.readFile(filePath, "utf8"), before)
+  const plain = await task_update({ deskRoot: root, input: { track: "t", slug: "family", frontmatter: { category: "general", flavor: "x" } } })
+  assert.equal(Object.hasOwn(plain, "ignored_frontmatter_keys"), false)
+  const odd = await task_update({ deskRoot: root, input: { track: "t", slug: "family", frontmatter: { next_review: "soon", Blockage: "y", waits: "z", category: "c" } } })
+  assert.deepEqual(odd.ignored_frontmatter_keys, ["next_review", "Blockage", "waits"])
+  assert.equal((await readFront(filePath)).data.next_review, "soon")
+})
+
+test("task_update refuses `frontmatter.blocker`, which Desk would never read, and changes nothing", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "alias-blocker", title: "T" } })
+  const filePath = path.join(root, "t", "alias-blocker", "task.md")
+  const before = await fs.readFile(filePath, "utf8")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "alias-blocker", frontmatter: { blocker: "waiting on keys" } } }), /`frontmatter.blocker` is not read[^]*`body_append`/)
+  assert.equal(await fs.readFile(filePath, "utf8"), before)
+})
+
 test("task_update through the alias still refuses a bad status and still gates `done` on evidence", async () => {
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "alias-gate", title: "T" } })

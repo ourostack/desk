@@ -725,6 +725,19 @@ function requiredText(value, field) {
   return value
 }
 
+// Desk reads a card's next step and blocker from its body, so a frontmatter key that says either would be written and never read. Keys are matched loosely (case, spaces, hyphens and underscores do not count): the next step takes the same path as top-level `next_step`, and a blocker, which has no field that writes it, is refused.
+const looseKey = (key) => key.toLowerCase().replace(/[\s_-]/gu, "")
+const NEXT_STEP_KEYS = new Set(["nextstep", "nextsteps", "next", "nextaction"])
+const BLOCKER_KEYS = new Set(["blocker", "blockers", "blocked", "blockedby", "blockedon", "waitingon"])
+const LOOKS_BODY_READ = /^(?:next|block|wait)/u
+
+function refuseBodyOnlyKeys(frontmatter) {
+  const key = frontmatter == null ? undefined : Object.keys(frontmatter).find((name) => BLOCKER_KEYS.has(looseKey(name)))
+  if (key !== undefined) {
+    throw new Error(`task_update: \`frontmatter.${key}\` is not read: Desk takes a card's blocker from its body (a \`## Blocker\` section or a \`Blocker:\` line), so nothing was changed. Say the blocker with \`body_append\`, or in \`note\`.`)
+  }
+}
+
 export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
@@ -748,9 +761,30 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (values.status !== undefined && givenFrontmatter != null && Object.hasOwn(givenFrontmatter, "status") && givenFrontmatter.status !== values.status) {
     throw new Error("task_update: `status` and `frontmatter.status` disagree; pass the status once, as `status`")
   }
-  const frontmatter = values.status === undefined ? givenFrontmatter : { ...(givenFrontmatter ?? {}), status: values.status }
+  const statusMerged = values.status === undefined ? givenFrontmatter : { ...(givenFrontmatter ?? {}), status: values.status }
+  // Desk reads a card's next step and blocker from its body, so a frontmatter key of that name would be written and never read. The next step takes the same path as top-level `next_step`; a blocker has no field, so it is refused.
+  refuseBodyOnlyKeys(statusMerged)
+  const aliasKeys = statusMerged == null ? [] : Object.keys(statusMerged).filter((key) => NEXT_STEP_KEYS.has(looseKey(key)))
+  let frontmatter = statusMerged
+  let nextStepValue = values.next_step
+  let nextStepKey = "next_step"
+  if (aliasKeys.length > 0) {
+    frontmatter = { ...statusMerged }
+    for (const key of aliasKeys) {
+      const given = frontmatter[key]
+      delete frontmatter[key]
+      if (typeof given !== "string") throw new Error(`task_update: \`frontmatter.${key}\` must be a non-empty string; nothing was changed`)
+      if (nextStepValue !== undefined && (typeof nextStepValue !== "string" || given.trim() !== nextStepValue.trim())) {
+        throw new Error(`task_update: \`${nextStepKey}\` and \`frontmatter.${key}\` disagree; pass the next step once, as the top-level \`next_step\``)
+      }
+      if (nextStepValue === undefined) {
+        nextStepValue = given
+        nextStepKey = `frontmatter.${key}`
+      }
+    }
+  }
   refuseRecordKeys("task_update", frontmatter)
-  const nextStep = values.next_step === undefined ? undefined : requiredText(values.next_step, "next_step")
+  const nextStep = nextStepValue === undefined ? undefined : requiredText(nextStepValue, nextStepKey)
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
     tool: "task_update",
@@ -884,6 +918,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // the step the card still carries and say it was not touched. A terminal status leaves no next step to keep current.
   const terminal = TERMINAL_STATUSES.has(merged.status)
   const currentStep = nextStepOf(newBody)
+  if (nextStep !== undefined) result.next_step = currentStep
+  // Keys that look like a next step or a blocker but are neither alias nor refused: written as given, never read by Desk.
+  const ignored = Object.keys(frontmatter ?? {}).filter((key) => LOOKS_BODY_READ.test(looseKey(key)))
+  if (ignored.length > 0) result.ignored_frontmatter_keys = ignored
   if (nextStep === undefined && !terminal && (note !== undefined || merged.status !== existing.data.status)) {
     result.next_step = currentStep
     result.next_step_note = "next_step unchanged \u2014 update it if this work changed it"

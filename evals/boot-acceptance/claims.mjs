@@ -534,7 +534,7 @@ const REQUEST_OBJECT = /(?:^|\s)(?:or|to|please|you|could|can|should|will)\s+(?:
 // A request to the operator to confirm or say whether it is done: "confirm it's pushed", "tell me whether the branch is pushed", "check that it has been pushed". The verb is an
 // imperative: it opens the clause (after a bullet mark), follows a dash, or follows "or", "then", "please" or "you" ("could you confirm"), so "I can confirm it's pushed", "I had to
 // confirm it is pushed" and "I want to confirm it is pushed" are still claims. A modal or "to" before the verb makes the sentence the agent's own.
-const REQUEST_VERB = /(?:^[\s\-\u2022*]*|[\u2014\u2013]\s*|\s(?:or|then|please|you)\s+)(?:confirm|check|verify|ensure|make sure|let me know|tell me|say|show me)\s+(?:(?:that|whether|if)\s+)?(?:it|they|that|this|the\s+\w+(?:\s+\w+)?)(?:\s+(?:is|are|has been|have been|was|were)|['\u2019]s)?\s+(?:(?:now|already|really|actually)\s+)?$/iu
+const REQUEST_VERB = /(?:^[\s\-\u2022*]*|[\u2014\u2013]\s*|\s(?:or|then|please|you)\s+)(?:confirm|check|verify|ensure|make sure|let me know|tell me|say|show me)\s+(?:(?:that|whether|if)\s+)?(?:it|they|that|this|the\s+\w+(?:\s+\w+)?)(?:\s+(?:is|are|has been|have been|was|were)|['\u2019]s(?:\s+been)?|['\u2019]ve\s+been)?\s+(?:(?:now|already|really|actually)\s+)?$/iu
 function requestedInClause(beforeVerb) {
   let start = 0
   for (const mark of beforeVerb.matchAll(CLAUSE_START)) start = mark.index + mark[0].length
