@@ -362,6 +362,7 @@ test("sessions held back for want of a visibility answer are a finding only afte
   const since = (ms) => new Date(now - ms).toISOString()
   const flush = { "a/old": { visibility_unasked: 3, visibility_unasked_since: since(UNASKED_REPORT_MS + 1) }, "a/new": { visibility_unasked: 2, visibility_unasked_since: since(UNASKED_REPORT_MS - 1) }, "a/none": { result: "x" }, "a/zero": { visibility_unasked: 0, visibility_unasked_since: since(UNASKED_REPORT_MS + 1) } }
   assert.deepEqual(visibilityUnasked(flush, ["a/old", "a/new", "a/none", "a/zero", "a/absent"], now), [{ store: "a/old", sessions: 3 }])
+  assert.deepEqual(visibilityUnasked({ "a/bad": { visibility_unasked: 4, visibility_unasked_since: "garbage" }, "a/missing": { visibility_unasked: 1 } }, ["a/bad", "a/missing"], now), [{ store: "a/bad", sessions: 4, age: "unknown" }, { store: "a/missing", sessions: 1, age: "unknown" }], "an unreadable or missing start is a deferral of unknown age")
   assert.deepEqual(visibilityUnasked(undefined, ["a/old"], now), [])
   assert.match(UNASKED_ADVICE("a/old"), /`node mcp\/scripts\/factory\.js flush --store a\/old`/u)
 })

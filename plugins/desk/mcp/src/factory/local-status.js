@@ -139,13 +139,16 @@ function endedSessionRecently(dir, now = Date.now()) {
 /** How long a desk's visibility may go unasked (every flush deferring its sessions) before the doctor reports it. */
 export const UNASKED_REPORT_MS = 7 * 24 * 60 * 60 * 1000
 
-/** `[{ store, sessions }]` for each store whose last flush has held sessions back for want of a visibility answer for longer than `UNASKED_REPORT_MS`. */
+/** `[{ store, sessions, age? }]` (`age: "unknown"` when the start time does not parse) for each store whose last flush has held sessions back for want of a visibility answer for longer than `UNASKED_REPORT_MS`. */
 export function visibilityUnasked(lastFlush, stores, now = Date.now()) {
   if (!isPlainObject(lastFlush)) return []
   return stores.flatMap((store) => {
     const entry = lastFlush[store]
     if (!isPlainObject(entry) || !Number.isSafeInteger(entry.visibility_unasked) || entry.visibility_unasked <= 0) return []
-    return now - Date.parse(entry.visibility_unasked_since) > UNASKED_REPORT_MS ? [{ store, sessions: entry.visibility_unasked }] : []
+    const age = now - Date.parse(entry.visibility_unasked_since)
+    // A start time that does not parse is a deferral of unknown age, reported, never ignored.
+    if (Number.isNaN(age)) return [{ store, sessions: entry.visibility_unasked, age: "unknown" }]
+    return age > UNASKED_REPORT_MS ? [{ store, sessions: entry.visibility_unasked }] : []
   })
 }
 
@@ -222,7 +225,8 @@ function storeEntry(dir, records, store, lastFlush, place) {
   const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, retracting === UNREADABLE ? {} : retracting))))
   const pending = listed.filter((name) => !away.has(name) && (delivered === UNREADABLE || !Object.hasOwn(delivered, name))).length
   const flush = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) ? lastFlush[store].result : null
-  return { store, consent: decision(records, store), pending, route_changed: away.size, quarantined: quarantined.size, last_flush: typeof flush === "string" && RESULT_CODE.test(flush) ? flush : null }
+  const waiting = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) && Number.isSafeInteger(lastFlush[store].visibility_unasked) ? lastFlush[store].visibility_unasked : 0
+  return { store, consent: decision(records, store), pending, ...(waiting > 0 ? { waiting_for_visibility: waiting } : {}), route_changed: away.size, quarantined: quarantined.size, last_flush: typeof flush === "string" && RESULT_CODE.test(flush) ? flush : null }
 }
 
 /** See the header. Never writes and never throws for missing or unreadable state. */

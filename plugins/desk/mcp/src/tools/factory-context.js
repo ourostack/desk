@@ -61,10 +61,11 @@ export function factorySummary(status) {
     lines.push(`  this desk reports to ${status.store} (${status.source}); contribution: ${status.consent}`)
   }
   for (const entry of status.stores) {
+    const waiting = entry.waiting_for_visibility > 0 ? `, ${entry.waiting_for_visibility} waiting for a visibility answer` : ""
     const moved = entry.route_changed > 0 ? `, ${entry.route_changed} routed elsewhere` : ""
-    lines.push(`  ${entry.store}: ${entry.consent}, ${entry.pending} pending${moved}, ${entry.quarantined} quarantined, ${entry.last_flush === null ? "no flush yet" : `last flush ${entry.last_flush}`}`)
+    lines.push(`  ${entry.store}: ${entry.consent}, ${entry.pending} pending${waiting}${moved}, ${entry.quarantined} quarantined, ${entry.last_flush === null ? "no flush yet" : `last flush ${entry.last_flush}`}`)
   }
-  for (const { store, sessions } of status.visibility_unasked ?? []) lines.push(`  ${store}: ${sessions} sessions wait because their desk's visibility could not be asked for over 7 days. ${UNASKED_ADVICE(store)}`)
+  for (const { store, sessions, age } of status.visibility_unasked ?? []) lines.push(`  ${store}: ${sessions} sessions wait because their desk's visibility could not be asked for ${age === "unknown" ? "an unknown time" : "over 7 days"}. ${UNASKED_ADVICE(store)}`)
   if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
   if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
   return lines.join("\n")
