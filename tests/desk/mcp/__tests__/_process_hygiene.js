@@ -67,10 +67,12 @@ export function removeFixtureAfter(t, root) {
       // Windows holds a folder for a moment after the last process in it exits (virus scan, indexer), so retry longer there.
       rmSync(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 40 : 5, retryDelay: process.platform === "win32" ? 250 : 100 })
     } catch (error) {
-      if (process.platform !== "win32") throw error
-      let running = ""
-      try { running = execFileSync("powershell.exe", ["-NoProfile", "-Command", `Get-ChildItem -LiteralPath '${root}' -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { "\$($_.FullName) \$($_.Attributes)" }; Get-Acl -LiteralPath '${root}' | Format-List | Out-String`], { encoding: "utf8", timeout: 60000 }) } catch { /* diagnostic only */ }
-      throw new Error(`${error.message}; what is left in the folder:\n${running}`)
+      if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code)) throw error
+      // Windows keeps a folder as "delete pending" while any process still has a handle on it, even after every file in it is gone (the runner's scanner does this). A folder that is gone or empty is cleaned up for every purpose this fixture has, so only a folder that still holds files is a failure.
+      let left
+      try { left = readdirSync(root) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
+      if (left.length === 0) return
+      throw new Error(`${error.message}; still in the folder: ${left.join(", ")}`)
     }
   })
 }
