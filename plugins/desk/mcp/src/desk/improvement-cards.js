@@ -48,7 +48,7 @@ export const CLAIM_TTL_HOURS = 4
 export const MAX_CLAIMS_PER_DAY = 2
 export const MAX_LIVE_CLAIMS = 1
 const STEP_NAMES = ["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver"]
-export const LOOP_ALARMS = Object.freeze(["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "labels_quarantined", "cards_invalid", ...STEP_NAMES.map((step) => `step_stale:${step}`)])
+export const LOOP_ALARMS = Object.freeze(["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "labels_quarantined", "cards_invalid", "capture_loop_slot", ...STEP_NAMES.map((step) => `step_stale:${step}`)])
 export const EVALUATOR_NAMES = Object.freeze(["expired_requests", "gave_up"])
 export const FLUSH_HEALTH_CODES = Object.freeze(["no_account", "auth_failed", "gh_missing", "account_cannot_deliver", "route_unknown", "held_markers", "frozen"])
 // The reconcile reasons come from the one list the reconcile code keeps; the measure IDs from the one list the kaizen filer accepts.
@@ -141,6 +141,7 @@ const LOOP_TITLES = {
   headless_blocked: "The headless evaluator is blocked",
   labels_quarantined: "Evaluation labels were quarantined",
   cards_invalid: "Improvement card files were set aside as invalid",
+  capture_loop_slot: "The loop health record could not be sent to the store",
 }
 
 /**

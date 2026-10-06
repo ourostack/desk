@@ -12,7 +12,7 @@ const kinds = (command) => credentialReads([bash(command)]).map((r) => r.kind)
 
 test("ps with environment flags, in the forms an agent writes them", () => {
   for (const command of ["ps -Eww -p 123", "ps -E", "ps -eEww | grep copilot", "ps eww -p $PPID", "ps aeww", "cd /x && ps -wwE -o command= -p 9"]) assert.deepEqual(kinds(command), ["ps with env flags"], command)
-  for (const command of ["ps aux", "ps -ef", "ps -o ppid= -p 1", "ps -p 1 -o command=", "echo steps -E"]) assert.deepEqual(kinds(command), [], command)
+  for (const command of ["ps aux", "ps -ef", "ps -u arimendelow", "ps -o user -p 123", "ps -p 123 -o etime", "ps -C node", "ps -o ppid= -p 1", "ps -p 1 -o command=", "echo steps -E"]) assert.deepEqual(kinds(command), [], command)
 })
 
 test("sysctl of kern.procargs, by name or by the constant", () => {
@@ -65,6 +65,35 @@ test("gh auth token inside the documented push recipe is not a credential read: 
   assert.equal(kinds("GH_TOKEN=$(gh auth token --user me) git push; gh auth token").length, 1)
   assert.equal(kinds("gh auth status").length, 0)
   assert.equal(kinds("gh pr list --repo a/b").length, 0)
+})
+
+test("the token variable read, printed, counted, tested or sent counts, and the credential helper does not", () => {
+  for (const command of ["echo $GH_TOKEN", "echo \"Token retrieved (${#GH_TOKEN} chars)\"", "[ -n \"$GITHUB_TOKEN\" ] && echo set", "gh api -H \"Authorization: token $GH_TOKEN\" /user", "curl -H \"Authorization: Bearer ${GITHUB_TOKEN}\" https://api.github.com", "git push https://x-access-token:$GH_TOKEN@github.com/a/b.git"]) {
+    assert.deepEqual(kinds(command), ["GitHub token variable read or sent"], command)
+  }
+  // The transcript's second command: the failure branch prints the variable.
+  assert.ok(kinds("GH_TOKEN=$(gh auth token --user me --hostname github.com 2>&1) && echo \"Token retrieved (${#GH_TOKEN} chars)\" || echo \"Failed: $GH_TOKEN\"").includes("GitHub token variable read or sent"))
+  assert.deepEqual(kinds("GH_TOKEN=$(gh auth token --user me) git -c 'credential.helper=!echo username=me; echo password=$GH_TOKEN' fetch fork"), [])
+  assert.deepEqual(kinds("GH_TOKEN=$(gh auth token --user me) git push"), [])
+})
+
+test("git's and gh's credential helpers and git's credential files count", () => {
+  for (const command of ["git credential fill", "git -C /x credential fill", "git -c a=b credential approve", "echo url=https://github.com | git credential-osxkeychain get", "echo host=github.com | gh auth git-credential get", "cat ~/.git-credentials", "cat ~/.config/gh/*", "grep -r x ~/.config/gh", "cat ~/.config/git/credentials", "ls -la ~/.config/gh/hosts.yml"]) {
+    assert.equal(kinds(command).length > 0, true, command)
+  }
+  for (const command of ["git status", "git config credential.helper", "git commit -m 'credential helper docs'", "ls ~/.config/ghostty", "git log --oneline", "ls ~/.config/gh", "ls -la ~/.config/gh/", "mkdir -p ~/.config/gh"]) assert.deepEqual(kinds(command), [], command)
+})
+
+test("a mention of gh auth token is text, and only a gh that is run counts, as the guard says", () => {
+  for (const command of ["git commit -m 'explain gh auth token'", "node scripts/test.js \"gh auth token\"", "npm test -- -t \"gh auth token\"", "claude -p \"explain gh auth token\"", "vim docs/gh-auth-token.md", "make test-gh-auth-token", "echo 'gh auth token'", "grep -rn 'gh auth token' docs", "gh auth token --help"]) {
+    assert.equal(kinds(command).includes("gh auth token outside the shim's allowed parent"), false, command)
+  }
+  for (const command of ["bash -c 'gh auth token'", "sudo gh auth token", "x=1; gh auth token", "xargs gh auth token", "eval 'gh auth token'"]) assert.equal(kinds(command).includes("gh auth token outside the shim's allowed parent"), true, command)
+})
+
+test("awk and jq that read the environment count", () => {
+  for (const command of ["awk 'BEGIN{print ENVIRON[\"GH_TOKEN\"]}'", "jq -n 'env.GH_TOKEN'", "jq -n '$ENV | keys'", "gh api x --jq 'env.GH_TOKEN'"]) assert.deepEqual(kinds(command), ["environment read by awk or jq"], command)
+  for (const command of ["jq .env file.json", "gh api x --jq '.[] | select(.name==\"env\")'", "gh api x --jq '.[] | select(.name|contains(\"env\"))'", "jq '.env' file.json", "awk '{print $1}' f", "gh api x --jq .login"]) assert.deepEqual(kinds(command), [], command)
 })
 
 test("a finding carries the rule and a shortened, token-redacted command, never a token value", () => {

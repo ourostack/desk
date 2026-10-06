@@ -23,6 +23,17 @@ const ready = {
   admission: { summary: "ok", blockers: [] },
 }
 
+test("a ready desk whose detail is still loading says so in the summary and flags detail_pending, keeping state ready", () => {
+  const compact = compactStatus({ status: "ok", state: "ready", detail_pending: true, status_detail: "unavailable: the runtime status did not answer; call desk_status again shortly", admission: { summary: "ok", blockers: [] } })
+  assert.equal(compact.state, "ready")
+  assert.match(compact.summary, /^Desk is ready, but its details .* are still loading.*Call desk_status again shortly\.$/u)
+  assert.equal(compact.detail_pending, true)
+  assert.deepEqual(compact.root, { path: null, source: null })
+  assert.match(compact.status_detail, /^unavailable: /u)
+  assert.ok(!("detail_pending" in compactStatus(ready)), "a complete status has no detail_pending")
+  assert.equal(compactStatus({ ...ready, detail_pending: true, status: "admitting", state: "admitting" }).detail_pending, undefined, "only a ready desk is called ready")
+})
+
 test("a ready desk answers in one word with nothing to fix and pointers to the rest", () => {
   const compact = compactStatus(ready)
   assert.equal(compact.state, "ready")

@@ -285,7 +285,7 @@ test("andon: closed confirmed when the store's issue is closed, reopened when it
 }))
 
 test("a store build, loop alarm, evaluator and flush health card close on their own clear counts", () => scratch(async (ctx) => {
-  const cases = [["store_build", "ourostack/factory#8", 1, "store_build_closed"], ["loop_alarm", "improvement_age", 2, "condition_cleared"], ["evaluator", "expired_requests", 2, "condition_cleared"], ["flush_health", "no_account", 2, "condition_cleared"]]
+  const cases = [["store_build", "ourostack/factory#8", 1, "store_build_closed"], ["loop_alarm", "improvement_age", 2, "condition_cleared"], ["loop_alarm", "capture_loop_slot", 2, "condition_cleared"], ["evaluator", "expired_requests", 2, "condition_cleared"], ["flush_health", "no_account", 2, "condition_cleared"]]
   for (const [source, id, need, reason] of cases) {
     const key = cardKey(source, id)
     await make(ctx, source, id, "verifying")
