@@ -47,7 +47,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { readdirSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 
 import { consentDecision, consentRecords as readConsentRecords, factoryStateDir } from "./boot-check.js"
@@ -90,20 +90,34 @@ const HUNG_STRIKES = 2
 
 const finiteCount = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
 
-/** How many orphans the record holds frozen by repeated interruptions (two strikes), or 0. */
-export function orphansHung(record) {
-  if (!isPlainObject(record) || !isPlainObject(record.hung)) return 0
-  return Object.values(record.hung).filter((entry) => isPlainObject(entry) && Number.isSafeInteger(entry.strikes) && entry.strikes >= HUNG_STRIKES).length
+/** The version of Desk running this code, from the plugin.json beside it, or `null` (the same source `derive-run.js` reads). */
+export function ownVersion(read = readFileSync) {
+  try {
+    const { version } = JSON.parse(read(new URL("../../../plugin.json", import.meta.url), "utf8"))
+    return typeof version === "string" ? version : null
+  } catch {
+    return null
+  }
 }
 
-/** What is wrong with the orphan pass's record, or `null`: see the header. `now` is milliseconds. */
-export function orphanPassFinding(record, now = Date.now()) {
+/** How many orphans the record holds frozen by repeated interruptions (two strikes) under Desk `version` (a newer Desk starts the count again), or 0. */
+export function orphansHung(record, version) {
+  if (!isPlainObject(record) || !isPlainObject(record.hung) || typeof version !== "string") return 0
+  return Object.values(record.hung).filter((entry) => isPlainObject(entry) && entry.version === version && Number.isSafeInteger(entry.strikes) && entry.strikes >= HUNG_STRIKES).length
+}
+
+/**
+ * What is wrong with the orphan pass's record, or `null`: see the header. `now` is milliseconds; `version` is the running Desk's (hung strikes of
+ * another version do not count); `active` is whether this machine ended a session in the last `ORPHAN_STALE_MS` (a machine that stopped
+ * contributing is not alarmed that the pass has not run).
+ */
+export function orphanPassFinding(record, now = Date.now(), { version = null, active = false } = {}) {
   if (!isPlainObject(record)) return null
   if (record.failed !== undefined) return "pass_failed"
   // A start time that does not parse is never "running".
   if (record.ran_at === undefined) return now - Date.parse(record.started_at) <= ORPHAN_INTERRUPTED_MS ? null : "pass_interrupted"
-  if (orphansHung(record) > 0) return "orphans_hung"
-  if (now - Date.parse(record.ran_at) > ORPHAN_STALE_MS) return "pass_stale"
+  if (orphansHung(record, version) > 0) return "orphans_hung"
+  if (active && now - Date.parse(record.ran_at) > ORPHAN_STALE_MS) return "pass_stale"
   // `worked` is the orphans that took a transcript slot (a record from before it counted `examined`, which includes cheaply frozen ones).
   const worked = finiteCount(record.worked) ?? finiteCount(record.examined)
   const unexamined = finiteCount(record.unexamined)
@@ -112,18 +126,26 @@ export function orphanPassFinding(record, now = Date.now()) {
   return sweeps > Math.ceil((worked + unexamined) / Math.max(1, worked)) ? "walk_not_advancing" : null
 }
 
+/** Whether any marker on this machine records a session that ended within `ORPHAN_STALE_MS`. */
+function endedSessionRecently(dir, now = Date.now()) {
+  return outboxNames(path.join(dir, "markers")).some((name) => {
+    const marker = readState(path.join(dir, "markers", name), null)
+    return validMarker(marker) && typeof marker.ended_at === "string" && now - Date.parse(marker.ended_at) <= ORPHAN_STALE_MS
+  })
+}
+
 /** One sentence saying what to do about a finding. */
-export const ORPHAN_FINDING_ADVICE = "Run the factory status command and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem."
+export const ORPHAN_FINDING_ADVICE = "Run `node mcp/scripts/factory.js status` from the Desk plugin folder and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem."
 
 /** One line for the orphan pass's record: counts, times and fixed codes only (a failure is its class, never a message). */
-export function orphanPassLine(record, now = Date.now()) {
+export function orphanPassLine(record, now = Date.now(), { version = null } = {}) {
   if (!isPlainObject(record)) return "orphan pass: no record yet"
   const wrap = typeof record.last_wrap_at === "string" ? record.last_wrap_at : "never"
   if (record.failed !== undefined) return `orphan pass: failed (${typeof record.failed === "string" && RESULT_CODE.test(record.failed) ? record.failed : "unknown"}), last full walk ${wrap}`
-  if (record.ran_at === undefined) return `orphan pass: ${orphanPassFinding(record, now) === null ? "running" : "interrupted"}, started ${typeof record.started_at === "string" ? record.started_at : "unknown"}, last full walk ${wrap}`
+  if (record.ran_at === undefined) return `orphan pass: ${orphanPassFinding(record, now, { version }) === null ? "running" : "interrupted"}, started ${typeof record.started_at === "string" ? record.started_at : "unknown"}, last full walk ${wrap}`
   const frozen = isPlainObject(record.frozen) ? Object.values(record.frozen).reduce((sum, count) => sum + (finiteCount(count) ?? 0), 0) : 0
   const count = (value) => finiteCount(value) ?? "unknown"
-  const hung = orphansHung(record)
+  const hung = orphansHung(record, version)
   return `orphan pass: ran ${record.ran_at}, examined ${count(record.examined)}, unexamined ${count(record.unexamined)}, pending ${count(record.pending)}, frozen ${frozen}${hung > 0 ? ` (${hung} hung)` : ""}, last full walk ${wrap}, ${count(record.sweeps_in_walk)} sweeps into the walk`
 }
 
@@ -195,8 +217,9 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const place = placer(dir, status === UNREADABLE ? {} : status.derivations)
   const decided = records === UNREADABLE ? [] : Object.keys(records).filter((store) => PATTERNS.prRepo.test(store)).sort()
   const stores = [...new Set([...(routing.store === null ? [] : [routing.store]), ...decided])]
-  const orphans = status === UNREADABLE ? null : orphanPassFinding(status.orphans)
-  const hung = status === UNREADABLE ? 0 : orphansHung(status.orphans)
+  const version = ownVersion()
+  const orphans = status === UNREADABLE ? null : orphanPassFinding(status.orphans, Date.now(), { version, active: endedSessionRecently(dir) })
+  const hung = status === UNREADABLE ? 0 : orphansHung(status.orphans, version)
   return {
     store: routing.store,
     source: routing.source,

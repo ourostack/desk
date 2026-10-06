@@ -307,7 +307,7 @@ test("an invalid declaration freezes the session: it counts as pending, never ro
 }))
 
 test("the orphan pass reads as one line, and a failed, interrupted or stalled pass is a finding", async () => {
-  const { orphanPassFinding, orphanPassLine, orphansHung, ORPHAN_INTERRUPTED_MS } = await load()
+  const { orphanPassFinding, orphanPassLine, orphansHung, ownVersion, ORPHAN_INTERRUPTED_MS, ORPHAN_FINDING_ADVICE } = await load()
   const now = Date.parse("2026-10-06T12:00:00.000Z")
   const ran = { started_at: "2026-10-06T11:59:00.000Z", ran_at: "2026-10-06T11:59:10.000Z", examined: 25, unexamined: 75, pending: 2, frozen: { no_facts: 3, derive_failed: 1 }, rebuilt: 1, current: 20, cursor: "claude-code-x.json", last_wrap_at: "2026-10-05T00:00:00.000Z", sweeps_in_walk: 4 }
   assert.equal(orphanPassLine(ran, now), "orphan pass: ran 2026-10-06T11:59:10.000Z, examined 25, unexamined 75, pending 2, frozen 4, last full walk 2026-10-05T00:00:00.000Z, 4 sweeps into the walk")
@@ -319,15 +319,24 @@ test("the orphan pass reads as one line, and a failed, interrupted or stalled pa
   // Orphans frozen by cheap checks take no slot: only the ones that did work set how long a walk takes.
   assert.equal(orphanPassFinding({ ...ran, examined: 425, worked: 25, unexamined: 75, sweeps_in_walk: 4 }, now), null, "ceil(100 / 25) = 4 sweeps, however many were frozen cheaply")
   assert.equal(orphanPassFinding({ ...ran, examined: 425, worked: 25, unexamined: 75, sweeps_in_walk: 5 }, now), "walk_not_advancing")
-  assert.equal(orphanPassFinding({ ...ran, ran_at: "2026-10-04T11:59:59.000Z" }, now), "pass_stale", "not run for more than two days")
-  assert.equal(orphanPassFinding({ ...ran, ran_at: "2026-10-04T12:00:01.000Z" }, now), null)
-  assert.equal(orphanPassFinding({ ...ran, ran_at: "not a time" }, now), null, "an unreadable end time is not a stale one")
-  const hung = { ...ran, hung: { "claude-code-a.json": { strikes: 2, version: "1.0.0" }, "claude-code-b.json": { strikes: 1, version: "1.0.0" }, c: "x" } }
-  assert.equal(orphanPassFinding(hung, now), "orphans_hung")
-  assert.equal(orphansHung(hung), 1, "one strike is not hung")
-  assert.equal(orphansHung({ ...ran, hung: "x" }), 0)
-  assert.equal(orphansHung(undefined), 0)
-  assert.match(orphanPassLine(hung, now), /frozen 4 \(1 hung\), last full walk/u)
+  const active = { active: true }
+  assert.equal(orphanPassFinding({ ...ran, ran_at: "2026-10-04T11:59:59.000Z" }, now, active), "pass_stale", "not run for more than two days, on a machine that ended a session lately")
+  assert.equal(orphanPassFinding({ ...ran, ran_at: "2026-10-04T11:59:59.000Z" }, now), null, "a machine that stopped contributing is not alarmed")
+  assert.equal(orphanPassFinding({ ...ran, ran_at: "2026-10-04T12:00:01.000Z" }, now, active), null)
+  assert.equal(orphanPassFinding({ ...ran, ran_at: "not a time" }, now, active), null, "an unreadable end time is not a stale one")
+  const hung = { ...ran, hung: { "claude-code-a.json": { strikes: 2, version: "1.0.0" }, "claude-code-b.json": { strikes: 1, version: "1.0.0" }, "claude-code-d.json": { strikes: 3, version: "0.9.0" }, c: "x" } }
+  const v1 = { version: "1.0.0" }
+  assert.equal(orphanPassFinding(hung, now, v1), "orphans_hung")
+  assert.equal(orphanPassFinding(hung, now, { version: "2.0.0" }), null, "strikes of another Desk version do not count")
+  assert.equal(orphansHung(hung, "1.0.0"), 1, "one strike is not hung, and another version's strikes are not this one's")
+  assert.equal(orphansHung(hung, null), 0)
+  assert.equal(orphansHung({ ...ran, hung: "x" }, "1.0.0"), 0)
+  assert.equal(orphansHung(undefined, "1.0.0"), 0)
+  assert.match(orphanPassLine(hung, now, v1), /frozen 4 \(1 hung\), last full walk/u)
+  assert.equal(typeof ownVersion(), "string")
+  assert.equal(ownVersion(() => { throw new Error("gone") }), null)
+  assert.equal(ownVersion(() => "{}"), null)
+  assert.match(ORPHAN_FINDING_ADVICE, /`node mcp\/scripts\/factory\.js status`/u)
   const failed = { started_at: ran.started_at, ran_at: ran.ran_at, cursor: null, last_wrap_at: null, sweeps_in_walk: 0, failed: "pass_failed" }
   assert.equal(orphanPassFinding(failed, now), "pass_failed")
   assert.equal(orphanPassLine(failed, now), "orphan pass: failed (pass_failed), last full walk never")

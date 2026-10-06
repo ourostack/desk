@@ -10,7 +10,7 @@ import * as path from "node:path"
 
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
-import { setConsent, writeLocalFacts, writeStatus, readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { setConsent, writeLocalFacts, writeMarker, writeStatus, readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, json, scratch } from "../factory/_session_helpers.js"
 
 const contextUrl = new URL("../../../../../plugins/desk/mcp/src/tools/factory-context.js", import.meta.url)
@@ -160,15 +160,20 @@ test("desk_doctor reports a failed, interrupted or stalled orphan pass by its co
   await orphans({ failed: "pass_failed" })
   body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.equal(body.factory.orphans, "pass_failed")
-  assert.match(body.summary, /\n  orphan pass needs attention: pass_failed\. Run the factory status command and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem\./u)
+  assert.match(body.summary, /\n  orphan pass needs attention: pass_failed\. Run `node mcp\/scripts\/factory\.js status` from the Desk plugin folder and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem\./u)
   await orphans({ sweeps_in_walk: 9 })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, "walk_not_advancing")
-  await orphans({ hung: { "claude-code-a.json": { strikes: 2, version: "1.0.0" } } })
+  const { ownVersion } = await import("../../../../../plugins/desk/mcp/src/factory/local-status.js")
+  await orphans({ hung: { "claude-code-a.json": { strikes: 2, version: "0.0.1" } } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, undefined, "strikes under another Desk version are no finding")
+  await orphans({ hung: { "claude-code-a.json": { strikes: 2, version: ownVersion() } } })
   body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.equal(body.factory.orphans, "orphans_hung")
   assert.equal(body.factory.orphans_hung, 1, "reported by count")
   assert.match(body.summary, /orphan pass needs attention: orphans_hung \(1 orphans hung\)\./u)
   await orphans({ ran_at: "2020-01-01T00:00:00.000Z" })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, undefined, "no session ended lately: a machine that stopped contributing is not alarmed")
+  await writeMarker(host.env, { schema_version: 1, host: "claude-code", session_id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60", log_path: path.join(base, "log.jsonl"), cwd: desk, desk_root: desk, end_reason: "complete", ended_at: new Date().toISOString(), plugins: [], updated_at: new Date().toISOString() })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, "pass_stale")
   await writeStatus(host.env, { orphans: { started_at: "2026-01-01T00:00:00.000Z", cursor: null, last_wrap_at: null, sweeps_in_walk: 0 } })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, "pass_interrupted")
