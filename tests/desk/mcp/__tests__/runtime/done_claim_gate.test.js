@@ -11,6 +11,7 @@ import {
   acceptanceClaims,
   statesUnaccepted,
   clearTouchedTasks,
+  copilotStopHook,
   doneClaimStopHook,
   doneClaims,
   lastAssistantText,
@@ -328,11 +329,11 @@ test("blocks at most once: stop_hook_active ends the loop, and a child agent's s
   }
 })
 
-test("fails open: no transcript, an unreadable or oversized one, no reply, no session id, a bad payload", () => {
+test("no reply to read, no session id, a bad payload: nothing to gate, so it passes; a reply that cannot be read over an open task is a gate error (see the fail-closed tests)", () => {
   const ok = { hook_event_name: "Stop", session_id: "s1" }
   const run = (extra) => doneClaimStopHook({ ...ok, ...extra }, { stateDir: touched() })
-  assert.deepEqual(run({}), {}, "no transcript_path")
-  assert.deepEqual(run({ transcript_path: path.join(ROOT, "missing.jsonl") }), {})
+  assert.deepEqual(run({}), {}, "no transcript_path: no reply to judge")
+  assert.equal(blocks(run({ transcript_path: path.join(ROOT, "missing.jsonl") })), true)
   assert.deepEqual(run({ transcript_path: transcript(asked, toolUse) }), {}, "no assistant text")
   assert.deepEqual(run({ transcript_path: transcript(asked, say("Done.")), session_id: "" }), {})
   assert.deepEqual(doneClaimStopHook({ transcript_path: transcript(asked, say("Done.")) }, { stateDir: touched() }), {})
@@ -712,7 +713,7 @@ test("a reply that says a delivered task was accepted is blocked while its card 
   assert.match(result.reason, /no verified acceptance is recorded\. Ask the operator for it in the sign-off packet \(asked, delivered with proof, accept or send back\) and wait for their answer\.$/u)
   assert.doesNotMatch(result.reason, /task_signoff/u, "the agent is never pointed at the call that would silence the gate")
   assert.equal(existsSync(sessionFile(stateDir, "s1")), true, "a blocked stop keeps the turn's tasks")
-  for (const [state, why, verified] of [["accepted", "a verified accepted card"], [null, "a card with no sign-off record"], ["refused", null], ["accepted", null, "false"], ["accepted", null, "null"]]) {
+  for (const [state, why, verified] of [["accepted", "a verified accepted card"], [null, null], ["refused", null], ["accepted", null, "false"], ["accepted", null, "null"]]) {
     const card = signedCard(state, verified)
     const dir = freshState()
     deliveredIn(dir, card.root)
@@ -744,7 +745,7 @@ test("the reproduction: an acceptance recorded with verified false (no human tur
   assert.doesNotMatch(result.reason, /sign-off packet|Ask the operator/u, "an answer already given is never asked for again")
   const unread = freshState()
   recordTouchedTask(post(UPDATE, { track: "greenhouse-ops", slug: "watering-schedule-api", status: "done" }, JSON.stringify({ status: "updated", path: "greenhouse-ops/watering-schedule-api/task.md" })), { stateDir: unread, root: path.join(ROOT, "no-such-desk") })
-  assert.deepEqual(stop(unread, "The task is accepted."), {}, "a card that cannot be read is not judged")
+  assert.equal(blocks(stop(unread, "The task is accepted.")), true, "a card that cannot be read is unaccepted, never skipped")
 })
 
 test("task_signoff's own sentence for an unverified answer passes the gate: the gate never blocks its own tool's output", () => {
@@ -759,4 +760,111 @@ test("task_signoff's own sentence for an unverified answer passes the gate: the 
     deliveredIn(dir, card.root)
     assert.deepEqual(stop(dir, "You accepted it; Desk recorded it as unverified."), {})
   }
+})
+
+// ---- fail closed: acceptance is read with the shared parser, and the gate's own error blocks once ----
+
+const cardWith = (frontmatter) => {
+  const root = path.join(ROOT, `desk-${(counter += 1)}`)
+  mkdirSync(path.join(root, "greenhouse-ops", "watering-schedule-api"), { recursive: true })
+  const card = path.join(root, "greenhouse-ops", "watering-schedule-api", "task.md")
+  writeFileSync(card, `---\n${frontmatter}\n---\n\nbody\n`)
+  return { root, card }
+}
+const acceptedReply = "Ari accepted it, so watering-schedule-api is wrapped up."
+const gate = (frontmatter, reply = acceptedReply) => {
+  const stateDir = freshState()
+  deliveredIn(stateDir, cardWith(frontmatter).root)
+  return { stateDir, result: stop(stateDir, reply) }
+}
+
+test("a done card with no readable verified acceptance is unaccepted: no block, a malformed block, flow-form or block-form unverified all block", () => {
+  for (const [label, frontmatter] of [
+    ["no sign-off block", "status: done"],
+    ["a sign-off that is only a word", "status: done\nsignoff: accepted"],
+    ["an empty sign-off block", "status: done\nsignoff:\n"],
+    ["a block with an unknown state", "status: done\nsignoff:\n  state: maybe\n  verified: true"],
+    ["flow-form unverified acceptance", "status: done\nsignoff: { state: accepted, at: '2026-10-06T10:00:00Z', verified: false, reason: null }"],
+    ["flow-form acceptance with no verified", "status: done\nsignoff: { state: accepted }"],
+    ["block-form unverified acceptance", "status: done\nsignoff:\n  state: accepted\n  verified: false"],
+    ["flow-form delivered_unsigned", "status: done\nsignoff: { state: delivered_unsigned }"],
+    ["a quoted status", "status: \"done\"\nsignoff: { state: accepted, verified: false }"],
+  ]) assert.equal(blocks(gate(frontmatter).result), true, label)
+})
+
+test("a verified acceptance passes in either serialization, and the honest state clears a card with no record", () => {
+  for (const frontmatter of ["status: done\nsignoff:\n  state: accepted\n  verified: true", "status: done\nsignoff: { state: accepted, at: '2026-10-06T10:00:00Z', verified: true, reason: null }", "status: done\r\nsignoff:\r\n  state: accepted\r\n  verified: true"]) assert.deepEqual(gate(frontmatter).result, {}, frontmatter)
+  assert.deepEqual(gate("status: done", "Delivered, not accepted: it awaits your sign-off.").result, {}, "the honest escape")
+  assert.deepEqual(gate("status: done", "Merged and deployed.").result, {}, "no acceptance claim")
+  assert.deepEqual(gate("status: cancelled", acceptedReply).result, {}, "a cancelled card is not a delivery")
+  assert.deepEqual(gate("title: x", acceptedReply).result, {}, "a readable card with no status is not a delivery")
+})
+
+test("a block over a missing sign-off says so, and over an answer Desk could not verify says unverified", () => {
+  assert.match(gate("status: done").result.reason, /^Restate your reply as delivered, not accepted\. Task watering-schedule-api awaits/u)
+  assert.match(gate("status: done\nsignoff: { state: accepted, verified: false }").result.reason, /acceptance is recorded as unverified/u)
+})
+
+test("an unreadable card counts as unaccepted for an acceptance claim, and never skips the gate", () => {
+  const record = (root, stateDir) => recordTouchedTask(post(UPDATE, { track: "greenhouse-ops", slug: "watering-schedule-api", status: "done" }, JSON.stringify({ status: "updated", path: "greenhouse-ops/watering-schedule-api/task.md" })), { stateDir, root })
+  const missing = freshState()
+  record(path.join(ROOT, "no-such-desk"), missing)
+  const result = stop(missing, acceptedReply)
+  assert.equal(blocks(result), true, "a card that is not there")
+  assert.match(result.reason, /could not read task watering-schedule-api's card/u)
+  const folder = cardWith("status: done")
+  rmSync(folder.card)
+  mkdirSync(folder.card)
+  const second = freshState()
+  record(folder.root, second)
+  assert.equal(blocks(stop(second, acceptedReply)), true, "a folder where the card was")
+  const bare = cardWith("status: done")
+  writeFileSync(bare.card, "no frontmatter here")
+  const third = freshState()
+  record(bare.root, third)
+  assert.equal(blocks(stop(third, acceptedReply)), true, "a card with no frontmatter")
+  assert.deepEqual(stop(freshState(), acceptedReply), {}, "no touched task, nothing to gate")
+  const honest = freshState()
+  record(path.join(ROOT, "no-such-desk"), honest)
+  assert.deepEqual(stop(honest, "The card cannot be read; acceptance is unverified."), {}, "the honest state clears it")
+})
+
+test("the acceptance block stays once: the retry passes and clears the turn", () => {
+  const { stateDir } = gate("status: done")
+  assert.deepEqual(stop(stateDir, acceptedReply, { stop_hook_active: true }), {})
+  assert.equal(existsSync(sessionFile(stateDir, "s1")), false)
+})
+
+test("the gate's own error blocks once, naming the error, and the retry passes", () => {
+  const stateDir = touched()
+  const result = doneClaimStopHook({ hook_event_name: "Stop", session_id: "s1", transcript_path: path.join(ROOT, "missing.jsonl") }, { stateDir })
+  assert.equal(blocks(result), true)
+  assert.match(result.reason, /^Desk's done-claim gate hit an internal error and could not check this reply: Error: ENOENT/u)
+  assert.match(result.reason, /will not block again/u)
+  assert.equal(existsSync(sessionFile(stateDir, "s1")), true, "the turn's tasks are kept for the retry")
+  assert.deepEqual(doneClaimStopHook({ hook_event_name: "Stop", session_id: "s1", stop_hook_active: true, transcript_path: path.join(ROOT, "missing.jsonl") }, { stateDir }), {})
+  assert.equal(existsSync(sessionFile(stateDir, "s1")), false)
+})
+
+test("the gate's own error blocks only a main-agent turn that touched a task", () => {
+  const missing = path.join(ROOT, "missing.jsonl")
+  const bare = (extra = {}) => ({ hook_event_name: "Stop", session_id: "s1", transcript_path: missing, ...extra })
+  assert.deepEqual(doneClaimStopHook(bare(), { stateDir: freshState() }), {}, "no touched task, no gate to fail")
+  assert.deepEqual(doneClaimStopHook(bare({ agent_id: "child" }), { stateDir: touched() }), {}, "a subagent")
+  assert.deepEqual(doneClaimStopHook(bare({ hook_event_name: "SubagentStop" }), { stateDir: touched() }), {}, "a subagent stop")
+  const throwing = { hook_event_name: "Stop", get session_id() { throw new Error("boom") } }
+  assert.deepEqual(doneClaimStopHook(throwing, { stateDir: touched() }), {}, "an error that leaves no session to name")
+  assert.match(doneClaimStopHook(bare({ transcript_path: ROOT }), { stateDir: touched() }).reason, /internal error and could not check this reply: Error: EISDIR/u, "a folder where the transcript should be")
+})
+
+test("Copilot's stop hook blocks once on its own error too, and passes where there is nothing to gate", async () => {
+  const stateDir = touched()
+  const sleep = async () => { throw new Error("clock broke") }
+  const input = { sessionId: "s1", transcriptPath: transcript(asked), stop_hook_active: false }
+  const result = await copilotStopHook(input, { stateDir, waitMs: 500, stepMs: 10, sleep })
+  assert.equal(blocks(result), true)
+  assert.match(result.reason, /clock broke/u)
+  assert.deepEqual(await copilotStopHook({ ...input, stop_hook_active: true }, { stateDir, sleep }), {})
+  const bad = { get sessionId() { throw new Error("no id") } }
+  assert.deepEqual(await copilotStopHook(bad, { stateDir: touched() }), {}, "nothing to name")
 })
