@@ -29,6 +29,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # The standard user can read the checkout's .git/config, so it must not hold the job token.
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -63,6 +66,13 @@ jobs:
           ./.github/scripts/run-as-standard-user.ps1
           -WorkDir "$PWD"
           -Command 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json'
+
+      - name: Show the result in the job summary
+        if: always()
+        shell: pwsh
+        run: |
+          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/6" | Add-Content $env:GITHUB_STEP_SUMMARY
+          if (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }
 
       - name: Keep the per-file results
         if: always()

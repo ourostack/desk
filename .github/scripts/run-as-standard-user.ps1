@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $userName = 'deskstd'
 # Throwaway account on an ephemeral runner; the password never leaves this job.
 $plain = 'Ds!' + [guid]::NewGuid().ToString('N')
+Write-Host "::add-mask::$plain"
 $secure = ConvertTo-SecureString $plain -AsPlainText -Force
 if (-not (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue)) {
   New-LocalUser -Name $userName -Password $secure -PasswordNeverExpires -AccountNeverExpires | Out-Null
@@ -25,6 +26,8 @@ New-Item -ItemType Directory -Force -Path $tmp, $LogDir | Out-Null
 foreach ($dir in @($workspace, $tmp, $LogDir)) {
   icacls $dir /grant "${userName}:(OI)(CI)M" /T /C /Q | Out-Null
 }
+# This script assumes an ephemeral runner: handing the checkout to the new user and trusting every directory in
+# Git ('safe.directory *') are acceptable only because the runner is discarded after the job.
 # A person owns their own checkout. Without this Git refuses the repository as 'dubious ownership' for the new user.
 icacls $workspace /setowner $userName /T /C /Q | Out-Null
 git config --system --add safe.directory '*'
@@ -51,9 +54,15 @@ icacls $wrapper /grant "${userName}:(R)" /Q | Out-Null
 $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$userName", $secure)
 $out = Join-Path $LogDir 'stdout.log'
 $err = Join-Path $LogDir 'stderr.log'
+$exitCode = 1
+try {
 $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/d', '/c', "`"$wrapper`"" `
   -Credential $cred -WorkingDirectory $WorkDir -LoadUserProfile -PassThru -Wait `
   -RedirectStandardOutput $out -RedirectStandardError $err
 Get-Content $out
 Get-Content $err | ForEach-Object { Write-Host "[stderr] $_" }
-exit $p.ExitCode
+$exitCode = $p.ExitCode
+} finally {
+  Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
+}
+exit $exitCode

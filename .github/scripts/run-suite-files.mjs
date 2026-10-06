@@ -1,6 +1,6 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 300000]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 180000]
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
@@ -59,6 +59,18 @@ for (const file of mine) {
 }
 fs.writeFileSync(out, JSON.stringify({ shard: `${index}/${total}`, platform: process.platform, results }, null, 1))
 const bad = results.filter((r) => r.exitCode !== 0)
-console.log(`\nfiles=${results.length} failing-files=${bad.length} tests-pass=${results.reduce((n, r) => n + r.pass, 0)} tests-fail=${results.reduce((n, r) => n + r.fail, 0)}`)
-// The comparison is the product; a red suite is reported in the results rather than as a failed job.
+const timeouts = results.filter((r) => r.timedOut)
+const sum = (key) => results.reduce((n, r) => n + r[key], 0)
+const summary = `files=${results.length} failing-files=${bad.length} timeouts=${timeouts.length} tests-pass=${sum("pass")} tests-fail=${sum("fail")}`
+console.log(`\n${summary}`)
+// Written beside the results; the workflow appends it to the job summary, because a standard user cannot write the runner's summary file.
+const lines = [
+  "| Files | Files with a failure | Timeouts | Tests passed | Tests failed |",
+  "|---|---|---|---|---|",
+  `| ${results.length} | ${bad.length} | ${timeouts.length} | ${sum("pass")} | ${sum("fail")} |`,
+  "",
+]
+if (timeouts.length > 0) lines.push(`Timed out: ${timeouts.map((r) => `\`${r.file}\``).join(", ")}`, "")
+fs.writeFileSync(out.replace(/\.json$/u, "") + "-summary.md", lines.join("\n") + "\n")
+// The comparison is the product; a red suite is reported in the results and the summary rather than as a failed job.
 process.exit(0)
