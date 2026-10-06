@@ -93,7 +93,7 @@ export async function resolveProtectedStore({
     ownedDirectories.push({ path: cursor, kind: "directory", created })
   }
   if (platform === "win32") {
-    await protectWindowsPaths(ownedDirectories, { env })
+    await protectWindowsPaths(ownedDirectories, { env, memoize: false })
   }
 
   return { storeDir, dbPath: path.join(storeDir, filename) }
@@ -143,7 +143,7 @@ async function openProtectedDb(dbPath, { platform, env, schemaSql, naming }) {
     throw new Error(`${label}: private ${subject} DB is hard-linked and will not be used: ${dbPath}`)
   }
   if (platform === "win32") {
-    await protectWindowsPaths([{ path: dbPath, kind: "file", created }], { env })
+    await protectWindowsPaths([{ path: dbPath, kind: "file", created }], { env, memoize: false })
   } else {
     clearExtendedAcl(dbPath, platform, naming)
     await fs.chmod(dbPath, OWNER_ONLY_FILE_MODE)
