@@ -201,3 +201,21 @@ test("a delegated step Desk derived as blocked keeps its card reference when it 
   await update(root, { step: { id: "a", state: "dropped", reason: "no longer needed", expect: "blocked" } })
   assert.match(await fs.readFile(file, "utf8"), /\| a \| — \| widgets \| dropped \| no longer needed \(was: task:t\/card-stuck\) \|/u)
 })
+
+test("a step made ready by the call and one made ready by the refresh are named together", async () => {
+  const { root } = await newCard(`| b | — | widgets | in review | ${url(1)} |\n| c | b | widgets | pending | — |`)
+  const result = await update(root, { step: { id: "d", depends_on: [], repo: "widgets" } }, github({ 1: { merged: true, labels: ["released"] } }))
+  assert.equal(result.step_note, "now ready: d, c")
+})
+
+test("a table another session breaks while the call waits on GitHub is left as that session wrote it", async () => {
+  const { root, file } = await newCard(`| a | — | widgets | pending | ${url(1)} |`)
+  const fake = github({ 1: {} })
+  const broken = async (address, options) => {
+    await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("| Step | Depends on |", "| Step | Needs |"))
+    return fake.fetchFn(address, options)
+  }
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...note }, fetchFn: broken })
+  assert.equal(result.steps_refreshed, undefined)
+  assert.match(await fs.readFile(file, "utf8"), /\| a \| — \| widgets \| pending \|/u)
+})
