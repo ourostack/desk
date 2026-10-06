@@ -1,4 +1,6 @@
 import { ENUMS } from "../schema.js"
+import { addUnavailable, flagEmptyUsage } from "../derive-common.js"
+import { hostFlagsFor } from "../host-flags.js"
 
 function compareText(left, right) {
   return Number(left > right) - Number(left < right)
@@ -34,8 +36,15 @@ export function stableStringify(value) {
   return JSON.stringify(value)
 }
 
+// An old (`/1`) file has no flags for what its host never recorded. Add them so the absent value is not read as a measured zero.
+function addLegacyFlags(normalized) {
+  for (const flag of hostFlagsFor(normalized.session.host, normalized.session)) addUnavailable(normalized.unavailable, flag.field, flag.reason)
+  flagEmptyUsage(normalized.unavailable, normalized.models)
+}
+
 export function normalizePublished(value) {
   const normalized = structuredClone(value)
+  if (String(normalized.schema).endsWith("/1")) addLegacyFlags(normalized)
   normalized.plugins.sort((left, right) => compareValues(compareText(left.name, right.name), compareText(left.version, right.version)))
   normalized.models.sort((left, right) => compareText(left.id, right.id))
   normalized.agents.sort((left, right) => left.n - right.n)

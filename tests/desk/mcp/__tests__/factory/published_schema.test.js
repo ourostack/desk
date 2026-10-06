@@ -16,13 +16,14 @@ import {
   publishableToken,
   validatePublishedBytes,
   PUBLISHED_SCHEMA,
+  PUBLISHED_SCHEMAS,
   PUBLISHED_LIMITS,
   DATE_SHAPE,
   TIME_SHAPE,
   SESSION_ID_V4,
   __PUBLISHED_SPECS__,
 } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
-import { LIMITS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { ENUMS, LIMITS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "fixtures", "published-golden.json"))
@@ -69,7 +70,28 @@ test("the golden published file validates, as a value and as its exact bytes", (
   assert.deepEqual(validatePublished(golden()), { ok: true, errors: [] })
   assert.deepEqual(validatePublishedBytes(GOLDEN_BYTES), { ok: true, errors: [] })
   assert.equal(GOLDEN.schema, PUBLISHED_SCHEMA)
-  assert.equal(PUBLISHED_SCHEMA, "desk.factory.published/1")
+  assert.equal(PUBLISHED_SCHEMA, "desk.factory.published/2")
+  assert.deepEqual(PUBLISHED_SCHEMAS, ["desk.factory.published/1", PUBLISHED_SCHEMA])
+})
+
+test("published facts accept schema /1 and /2 and refuse /3", () => {
+  for (const schema of ["desk.factory.published/1", "desk.factory.published/2"]) {
+    assert.deepEqual(validatePublished({ ...golden(), schema }), { ok: true, errors: [] }, schema)
+  }
+  assertSingle(validatePublished({ ...golden(), schema: "desk.factory.published/3" }), "pattern", "schema")
+})
+
+test("every new unavailable field and reason is accepted in published facts", () => {
+  const fields = ["compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments"]
+  const reasons = ["field_absent", "host_records_partly", "withheld_public"]
+  for (const field of fields) {
+    for (const reason of reasons) {
+      const value = golden()
+      value.unavailable = [{ field, reason }]
+      assert.deepEqual(validatePublished(value), { ok: true, errors: [] }, `${field}/${reason}`)
+    }
+  }
+  assert.deepEqual(ENUMS.publishedUnavailableField.slice(-1), ["job_offsets"])
 })
 
 test("a local facts file is refused by the public gate", () => {
@@ -321,7 +343,7 @@ for (const { keys, value } of PATTERN_DATES) {
 // ---------------------------------------------------------------------------
 
 const SIMPLE_VIOLATIONS = [
-  { keys: ["schema"], value: `desk.factory.published/2 ${SENTINEL}`, code: "pattern" },
+  { keys: ["schema"], value: `desk.factory.published/3 ${SENTINEL}`, code: "pattern" },
   { keys: ["schema"], value: "desk.factory.local/1", code: "pattern" },
   { keys: ["session", "host"], value: SENTINEL, code: "enum" },
   { keys: ["session", "id"], value: SENTINEL, code: "pattern" },

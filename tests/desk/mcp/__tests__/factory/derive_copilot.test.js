@@ -15,7 +15,8 @@ import vm from "node:vm"
 import { deriveCopilotSession, __internals__ } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../../../../plugins/desk/mcp/src/factory/copilot-usage.js"
 import { spawnSync } from "node:child_process"
-import { validateLocalFacts, validateLocalFactsBytes } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { hostFlagsFor } from "../../../../../plugins/desk/mcp/src/factory/host-flags.js"
+import { ENUMS, LIMITS, validateLocalFacts, validateLocalFactsBytes } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
   SENTINEL,
   SESSIONS,
@@ -123,7 +124,7 @@ test("the full session derives one valid session across three resumes and four s
       end_reason: "complete",
       derived_through: at(99),
     })
-    assert.equal(facts.schema, "desk.factory.local/1")
+    assert.equal(facts.schema, "desk.factory.local/2")
     assert.equal(Object.hasOwn(facts, "contributor"), false, "local facts carry no contributor")
     assert.deepEqual(facts.jobs, [])
     assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(45, 46), span(47, 48), span(61, 74), span(75.4, 75.6), span(91, 92), span(96, 97)])
@@ -186,8 +187,12 @@ test("with neither a shutdown nor database rows, tokens are unavailable, not zer
     assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "unknown", requested_model: "claude-opus-5-5" }])
     assert.deepEqual(facts.unavailable, [
       { field: "tokens", reason: "session_open" },
+      { field: "models", reason: "field_absent" },
+      { field: "requests", reason: "field_absent" },
       { field: "commits", reason: "log_missing" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
+      { field: "prs", reason: "host_records_partly" },
+      { field: "entrypoint", reason: "host_does_not_record" },
     ])
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -397,6 +402,7 @@ test("an open session: open turn, orphan tool, failed subagent, truncated last l
       { field: "tool_durations", reason: "session_open" },
       { field: "turns", reason: "session_open" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
+      { field: "prs", reason: "host_records_partly" },
     ])
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -641,8 +647,12 @@ test("odd turn, tool, permission, subagent and compaction shapes are skipped or 
     { field: "plugins", reason: "source_unreadable" },
     { field: "turns", reason: "source_unreadable" },
     { field: "tokens", reason: "session_open" },
+    { field: "models", reason: "field_absent" },
+    { field: "requests", reason: "field_absent" },
     { field: "commits", reason: "log_missing" },
     { field: "ci_runs", reason: "not_collected_in_slice_1" },
+    { field: "prs", reason: "host_records_partly" },
+    { field: "entrypoint", reason: "host_does_not_record" },
   ])
 })
 
@@ -1306,4 +1316,101 @@ test("sentinel: the focus, spawn, path and write events never carry prompt, comm
   assert.equal(JSON.stringify(events.spawns).includes(SENTINEL), false)
   assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
   assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+})
+
+// ---------------------------------------------------------------------------
+// Flags for what the host does not record, or records only in part.
+// ---------------------------------------------------------------------------
+
+const hasFlag = (facts, field, reason) => facts.unavailable.some((entry) => entry.field === field && entry.reason === reason)
+
+test("a Copilot cli session flags entrypoint as not recorded and a launcher session does not", async () => {
+  const ev = eventWriter()
+  const events = [start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { requests: { count: 1 }, usage: { inputTokens: 1 } } } })]
+  const cli = await deriveText(events)
+  assert.equal(cli.facts.session.entrypoint, "cli")
+  assert.ok(hasFlag(cli.facts, "entrypoint", "host_does_not_record"))
+  const launcher = await deriveText(events, { entrypoint: "launcher" })
+  assert.equal(launcher.facts.session.entrypoint, "launcher")
+  assert.equal(launcher.facts.unavailable.some((entry) => entry.field === "entrypoint"), false)
+})
+
+test("a Copilot session carries prs as recorded only partly", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev)], { entrypoint: "launcher" })
+  assert.ok(hasFlag(facts, "prs", "host_records_partly"))
+})
+
+test("facts carry every flag the host table returns for their entrypoint", async () => {
+  const ev = eventWriter()
+  for (const entrypoint of ["cli", "launcher"]) {
+    const { facts } = await deriveText([start(ev)], { entrypoint })
+    for (const flag of hostFlagsFor("copilot-cli", { entrypoint })) assert.ok(hasFlag(facts, flag.field, flag.reason), `${entrypoint}: ${flag.field}`)
+  }
+})
+
+test("a null request count flags requests field_absent", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { usage: { inputTokens: 5 } } } })])
+  assert.equal(facts.models[0].requests, null)
+  assert.ok(hasFlag(facts, "requests", "field_absent"))
+  const measured = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { requests: { count: 0 }, usage: { inputTokens: 5 } } } })])
+  assert.equal(measured.facts.models[0].requests, 0)
+  assert.equal(measured.facts.unavailable.some((entry) => entry.field === "requests"), false, "a measured zero is not flagged")
+})
+
+test("a malformed request count is flagged unreadable, not absent", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { requests: { count: -1 }, usage: {} } } })])
+  assert.equal(facts.models[0].requests, null)
+  assert.ok(hasFlag(facts, "requests", "source_unreadable"))
+  assert.equal(hasFlag(facts, "requests", "field_absent"), false)
+})
+
+test("empty models with no token flag now flags models, tokens and requests field_absent", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: {} })])
+  assert.deepEqual(facts.models, [])
+  for (const field of ["models", "tokens", "requests"]) assert.ok(hasFlag(facts, field, "field_absent"), field)
+})
+
+test("empty models that already carry a token flag keep it and add no second tokens flag", async () => {
+  const { facts } = await deriveText([start(eventWriter())])
+  assert.ok(hasFlag(facts, "tokens", "session_open"))
+  assert.equal(hasFlag(facts, "tokens", "field_absent"), false)
+  assert.ok(hasFlag(facts, "models", "field_absent"))
+})
+
+test("the unavailable list is not trimmed when it holds every field and reason", async () => {
+  const flags = new Map()
+  for (const field of ENUMS.unavailableField) for (const reason of ENUMS.unavailableReason) flags.set(`${field}|${reason}`, { field, reason })
+  const list = __internals__.unavailableList(flags)
+  assert.equal(list.length, ENUMS.unavailableField.length * ENUMS.unavailableReason.length)
+  assert.ok(list.length <= LIMITS.unavailable)
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev)])
+  assertValid({ ...facts, unavailable: list })
+})
+
+test("a sentinel in event text reaches neither facts nor flags", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([
+    start(ev),
+    ev("session.shutdown", 1, { modelMetrics: { [`bad ${SENTINEL}`]: { requests: { count: SENTINEL }, usage: { inputTokens: SENTINEL } }, "model-a": { requests: SENTINEL, usage: { outputTokens: SENTINEL } } }, note: SENTINEL }),
+  ])
+  assert.equal(JSON.stringify(facts.unavailable).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+})
+
+test("facts written by the Copilot deriver validate as /2", async () => {
+  const home = makeHome()
+  try {
+    for (const [sessionId, endReason] of [[SESSIONS.full, "complete"], [SESSIONS.noShutdown, null], [SESSIONS.noUsage, "user_exit"]]) {
+      const { facts } = await derive(home, sessionId, { endReason })
+      assert.equal(facts.schema, "desk.factory.local/2")
+      assertValid(facts)
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })

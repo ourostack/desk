@@ -332,3 +332,14 @@ test("syncKaizenCards reports a card whose calls fail with a stable code and sti
   })
   assert.equal(github.botComments(2).length, 1)
 })
+
+test("a partial measure value is checked and the result carries its state, a measured check says measured", () => {
+  const partial = (record) => ({ ...record, measures: { ...record.measures, tool_retries: { ...record.measures.tool_retries, state: "partial", reasons: ["host_records_partly"] } } })
+  const measured = checkCard(parseCard(body(CARD)).card, FEWER, { seed: 1 })
+  assert.deepEqual([measured.state, measured.reasons], ["measured", []])
+  const result = checkCard(parseCard(body(CARD)).card, FEWER.map((record, index) => index === 0 ? partial(record) : record), { seed: 1 })
+  assert.deepEqual([result.state, result.reasons], ["partial", ["host_records_partly"]])
+  assert.equal(result.comparison.before.jobs, 6, "the partial value is used, as a lower bound")
+  assert.match(kaizenComment({ card: parseCard(body(CARD)).card, result }), /lower bound: the host records .* only partly/u)
+  assert.doesNotMatch(kaizenComment({ card: parseCard(body(CARD)).card, result: measured }), /lower bound/u)
+})

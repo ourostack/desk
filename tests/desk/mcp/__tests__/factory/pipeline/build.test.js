@@ -54,7 +54,7 @@ test("build turns the golden rollup store's facts and labels into every golden o
   assert.deepEqual(Object.keys(actual), Object.keys(expected))
   for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
   assert.deepEqual(Object.keys(actual).filter((relative) => relative.startsWith("rollups/")), [
-    "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json",
+    "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json", "rollups/totals.json",
   ])
 }))
 
@@ -116,6 +116,40 @@ test("two builds over identical input are byte-identical", () => scratch((root) 
   for (const relative of Object.keys(left)) assert.equal(Buffer.compare(left[relative], replaced[relative]), 0, relative)
 }))
 
+test("build writes totals.json and the stable output is byte-identical across two builds", () => scratch((root) => {
+  const first = path.join(root, "first")
+  const second = path.join(root, "second")
+  build({ storeDir: ROLLUP_STORE, outDir: first })
+  build({ storeDir: ROLLUP_STORE, outDir: second })
+  const left = readFileSync(path.join(first, "rollups", "totals.json"))
+  assert.equal(Buffer.compare(left, readFileSync(path.join(second, "rollups", "totals.json"))), 0)
+  const totals = JSON.parse(left.toString("utf8"))
+  assert.equal(totals.schema, "desk.factory.rollups/1")
+  assert.deepEqual(Object.keys(totals.hosts), ["claude-code", "copilot-cli"])
+  assert.equal(totals.all.sessions.value, 10)
+  assert.match(readFileSync(path.join(first, "README.md"), "utf8"), /rollups\/totals\.json/u)
+  assert.equal(left.toString("utf8").endsWith("\n"), true)
+}))
+
+test("totals.json carries no date, time, path or contributor", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(STORE, store, { recursive: true })
+  const factPath = path.join(store, "facts", "claude-code-11111111-1111-4111-8111-111111111111.json")
+  const fact = JSON.parse(readFileSync(factPath, "utf8"))
+  fact.models[0].id = SENTINEL
+  fact.agents[0].model = SENTINEL
+  writeFileSync(factPath, JSON.stringify(fact))
+  const out = path.join(root, "out")
+  build({ storeDir: store, outDir: out })
+  const text = readFileSync(path.join(out, "rollups", "totals.json"), "utf8")
+  assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}/u)
+  assert.doesNotMatch(text, /\d{2}:\d{2}/u)
+  assert.doesNotMatch(text, /\/(?:Users|home|tmp|var)\/|[A-Za-z]:\\/u)
+  assert.equal(text.includes(SENTINEL), false)
+  assert.doesNotMatch(text, /contributor|author|email/iu)
+  assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ["all", "hosts", "schema"])
+}))
+
 test("generated output contains no date, time of day, absolute path, or planted free-text sentinel", () => scratch((root) => {
   // The sentinel is planted where the build actually reads: a schema-valid
   // model ID inside a facts file, an ignored dotfile under facts/, and the
@@ -142,6 +176,9 @@ test("generated output contains no date, time of day, absolute path, or planted 
   const rollupOut = path.join(root, "rollup-out")
   assert.deepEqual(build({ storeDir: rollupStore, outDir: rollupOut }), { jobs: 6, sessions: 10 })
   const outputs = [...Object.entries(bytesByPath(out)), ...Object.entries(bytesByPath(rollupOut)).map(([relative, contents]) => [`rollup/${relative}`, contents])]
+  // The new pages and the totals are among the files checked, not only the old ones.
+  for (const required of ["README.md", "index.md", "rollups/index.md", "rollups/totals.json", "rollup/rollups/totals.json", "rollup/rollups/index.md"]) assert.ok(outputs.some(([relative]) => relative === required), required)
+  assert.ok(outputs.some(([relative, contents]) => relative.endsWith(".md") && contents.toString("utf8").includes("- Tokens: ")))
   for (const [relative, contents] of outputs) {
     const text = contents.toString("utf8")
     assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}/u, relative)
@@ -157,7 +194,7 @@ test("a store with no facts directory, or only dotfiles in it, publishes an empt
   const out = path.join(root, "out")
   assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 0, sessions: 0 })
   const empty = bytesByPath(out)
-  assert.deepEqual(Object.keys(empty), ["README.md", "index.md", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json"])
+  assert.deepEqual(Object.keys(empty), ["README.md", "index.md", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json", "rollups/totals.json"])
   assert.match(empty["index.md"].toString("utf8"), /No job has published facts yet\./u)
   assert.match(empty["rollups/index.md"].toString("utf8"), /No job has published facts yet\./u)
   assert.equal(JSON.parse(empty["rollups/coverage.json"]).jobs, 0)
@@ -286,4 +323,21 @@ test("a store mixing legacy and per-worker files builds and legacy numbers are u
   // legitimately credited to each job.
   assert.equal(first.formulas.active_time_ms.value, 6000)
   assert.equal(second.formulas.active_time_ms.value, 6000)
+}))
+
+test("built pages and the README say what each host cannot record, with no raw reason identifier", () => scratch((root) => {
+  const out = path.join(root, "out")
+  build({ storeDir: ROLLUP_STORE, outDir: out })
+  const pages = bytesByPath(out)
+  const readme = pages["README.md"].toString("utf8")
+  assert.match(readme, /rollups\/totals\.json/u)
+  assert.match(readme, /Cost in money is not measured/u)
+  for (const relative of Object.keys(pages).filter((name) => name.endsWith(".md"))) {
+    const text = pages[relative].toString("utf8")
+    assert.doesNotMatch(text, /\b(host_does_not_record|host_records_partly|field_absent|worker_split|open_job|job_offsets_unavailable|not_collected_in_slice_1)\b/u, relative)
+    assert.equal(text.includes("a reason this report has no words for yet"), false, relative)
+    for (const line of text.split("\n").filter((entry) => entry.startsWith("- Public pull requests"))) {
+      assert.match(line, /public commits: (?:\d+ \((?:measured|partial: [^)]*)\)|not recorded \([^)]*\))/u, relative)
+    }
+  }
 }))

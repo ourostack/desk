@@ -275,7 +275,7 @@ test("local facts refuse a PR time that is negative or past the session's end, a
 
 function publishedSession(jobs, prs = []) {
   return {
-    schema: "desk.factory.published/1",
+    schema: "desk.factory.published/2",
     session: { host: "claude-code", id: "55555555-5555-4555-8555-555555555555", host_version: "2.1.0", entrypoint: "cli", duration_ms: 100000, ended: true, end_reason: "complete" },
     plugins: [],
     models: [],
@@ -371,11 +371,11 @@ test("three jobs in sequence: the controller's time is split, and the jobs' acti
   const [a, b, c] = ["a", "b", "c"].map((hex) => formulasOf(hex, [session]))
   // Worker 0 is active [0,20000) + [25000,70000) + [80000,100000) = 85000 ms.
   // a: [0,20000) + [25000,30000); b: [30000,60000); c: [60000,70000) + [80000,100000).
-  assert.deepEqual([a, b, c].map((formulas) => formulas.active_time_ms), [25000, 30000, 30000].map((value) => ({ class: "measured", value })))
+  assert.deepEqual([a, b, c].map((formulas) => formulas.active_time_ms), [25000, 30000, 30000].map((value) => ({ class: "measured", value, state: "measured", reasons: [] })))
   assert.equal(a.active_time_ms.value + b.active_time_ms.value + c.active_time_ms.value, 85000)
   // The same session with no segments copies the controller's whole time into each job, marked worker_shared.
   const copied = formulasOf("a", [publishedSession(THREE.map(([hex, agents]) => [hex, agents]))])
-  assert.deepEqual(copied.active_time_ms, { class: "measured", value: 85000, partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"] })
+  assert.deepEqual(copied.active_time_ms, { class: "measured", value: 85000, partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"], state: "partial", reasons: ["worker_shared"] })
 })
 
 test("other workers' time is not clipped by the controller's segments", () => {
@@ -393,11 +393,11 @@ test("an overlap span is shared: only the jobs holding it are worker_shared, and
     ["c", [0], [span(70000, 100000)]],
   ]
   const session = publishedSession(overlap)
-  const shared = { partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"] }
+  const shared = { partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"], state: "partial", reasons: ["worker_shared"] }
   // a: [0,20000) + [25000,50000); b: [40000,70000); c: [80000,100000).
   assert.deepEqual(formulasOf("a", [session]).active_time_ms, { class: "measured", value: 45000, ...shared })
   assert.deepEqual(formulasOf("b", [session]).active_time_ms, { class: "measured", value: 30000, ...shared })
-  assert.deepEqual(formulasOf("c", [session]).active_time_ms, { class: "measured", value: 20000 })
+  assert.deepEqual(formulasOf("c", [session]).active_time_ms, { class: "measured", value: 20000, state: "measured", reasons: [] })
   // The jobs' times sum to the controller's 85000 plus the shared span counted twice (10000), which is flagged.
   assert.equal(45000 + 30000 + 20000, 85000 + 10000)
   // Without the shared span, nothing is worker_shared.
@@ -438,8 +438,8 @@ test("tool and API retries carry the same partial reasons: split, and shared whe
   whole.counts = { tool_calls: {}, tool_failures: {}, tool_retries: 2, api_retries: 1, compactions: 0 }
   const signals = formulasOf("a", [segmented, whole]).rework_signals
   const reasons = ["worker_split", "worker_shared"]
-  assert.deepEqual(signals.tool_retries, { class: "inferred", value: 2, partial: true, uncovered_sessions: 1, partial_reasons: reasons })
-  assert.deepEqual(signals.api_retries, { class: "inferred", value: 1, partial: true, uncovered_sessions: 1, partial_reasons: reasons })
+  assert.deepEqual(signals.tool_retries, { class: "inferred", value: 2, partial: true, uncovered_sessions: 1, partial_reasons: reasons, state: "partial", reasons: [...reasons].sort() })
+  assert.deepEqual(signals.api_retries, { class: "inferred", value: 1, partial: true, uncovered_sessions: 1, partial_reasons: reasons, state: "partial", reasons: [...reasons].sort() })
   // Every session split: nothing to report, for either.
   const alone = formulasOf("a", [segmented]).rework_signals
   assert.deepEqual([alone.tool_retries.class, alone.api_retries.class, alone.api_retries.reason], ["unavailable", "unavailable", "worker_split"])
@@ -557,7 +557,7 @@ test("a Claude controller working three jobs: derive, bind, publish and build sp
     const built = (hex) => JSON.parse(readFileSync(path.join(out, "jobs", `${hex}.json`), "utf8")).formulas
 
     // Worker 0 is active the whole 25 minutes; the child (in b only) adds nothing outside b's span.
-    assert.deepEqual([A, B, C].map((hex) => built(hex).active_time_ms), [5, 16, 4].map((minutes) => ({ class: "measured", value: minutes * 60000 })))
+    assert.deepEqual([A, B, C].map((hex) => built(hex).active_time_ms), [5, 16, 4].map((minutes) => ({ class: "measured", value: minutes * 60000, state: "measured", reasons: [] })))
     // Each PR is in exactly one job: the controller's by time, the child's by its worker.
     assert.deepEqual([A, B, C].map((hex) => built(hex).references.value.public_pull_requests.map((pr) => pr.number)), [[20], [22], [21]])
   } finally {

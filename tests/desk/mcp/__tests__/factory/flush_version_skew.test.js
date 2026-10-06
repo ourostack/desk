@@ -146,7 +146,7 @@ test("facts or labels with keys a newer Desk wrote are skipped and counted as ne
   const mixed = localFacts(4)
   mixed.session.at_ms = 5
   mixed.session.end_reason = 7
-  const future = { schema: "desk.factory.local/2", anything: true }
+  const future = { schema: "desk.factory.local/3", anything: true }
   await writeFacts(1, extra)
   await writeFacts(2, nested)
   await writeFacts(3, wrongType)

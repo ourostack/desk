@@ -96,7 +96,7 @@ async function scratch(run) {
 
 function validLocalFacts(overrides = {}) {
   return {
-    schema: "desk.factory.local/1",
+    schema: "desk.factory.local/2",
     session: {
       host: "claude-code",
       id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60",

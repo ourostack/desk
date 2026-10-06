@@ -19,6 +19,7 @@ import { publishedAgentType } from "../../../../../plugins/desk/mcp/src/factory/
 import { reconcileMarker } from "../../../../../plugins/desk/mcp/src/factory/session-lifetime.js"
 import { factoryStateRoot, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { hostFlagsFor } from "../../../../../plugins/desk/mcp/src/factory/host-flags.js"
 import { END, SENTINEL as RUN_SENTINEL, START, STORE, scratch } from "./_session_helpers.js"
 import {
   CHILD_MODEL,
@@ -559,12 +560,13 @@ test("token totals are cumulative: each increase is a request, a lower total is 
 }))
 
 test("an unreadable total field keeps its baseline and is flagged; the next good total recovers the increase", () => withHome(async (home) => {
+  const rest = { cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 }
   for (const bad of [1.5, 2 ** 53 + 2, -5, "x"]) {
     const { facts } = await deriveRoot(home, [
       meta(), turnContext(1, ROOT_MODEL),
-      tokens(2, { input_tokens: 10, output_tokens: 5 }),
-      tokens(3, { input_tokens: bad, output_tokens: 8 }),
-      tokens(4, { input_tokens: 30, output_tokens: 9 }),
+      tokens(2, { ...rest, input_tokens: 10, output_tokens: 5 }),
+      tokens(3, { ...rest, input_tokens: bad, output_tokens: 8 }),
+      tokens(4, { ...rest, input_tokens: 30, output_tokens: 9 }),
     ])
     assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 3, tokens: { input: 30, output: 9, cache_read: 0, cache_write: 0, reasoning: 0 } }], String(bad))
     assert.ok(unavailable(facts, "tokens", "source_unreadable"))
@@ -578,8 +580,9 @@ test("a bad cached or reasoning field never nulls a good input or output, and a 
     tokens(2, { input_tokens: 100, cached_input_tokens: 1.5, output_tokens: 50, reasoning_output_tokens: -1 }),
     tokens(3, { input_tokens: "x", cached_input_tokens: 1.5, output_tokens: 2 ** 53 + 2 }),
   ])
-  assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: 100, output: 50, cache_read: 0, cache_write: 0, reasoning: 0 } }])
+  assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: 100, output: 50, cache_read: 0, cache_write: null, reasoning: 0 } }])
   assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+  assert.ok(unavailable(facts, "tokens", "field_absent"), "the counter the log left out is absent, not unreadable")
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 }))
 
@@ -588,8 +591,8 @@ test("token sums past the safe range are unknown and flagged, never an invalid f
   const lines = [meta(), turnContext(1, ROOT_MODEL)]
   // Each cycle climbs to a huge total, then resets low, so the deltas add up past 2**53.
   for (let cycle = 0; cycle < 3; cycle += 1) {
-    lines.push(tokens(2 + cycle * 2, { input_tokens: big, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 }))
-    lines.push(tokens(3 + cycle * 2, { input_tokens: 0, output_tokens: 0 }))
+    lines.push(tokens(2 + cycle * 2, { input_tokens: big, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 }))
+    lines.push(tokens(3 + cycle * 2, { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 }))
   }
   const { facts } = await deriveRoot(home, lines)
   assert.equal(facts.models[0].tokens.input, null)
@@ -605,8 +608,10 @@ test("tokens with no known model, a bad model, or no usage at all are flagged, n
   assert.equal(agentOf(badModel.facts, 0).model, "unknown")
   assert.ok(unavailable(badModel.facts, "models", "source_unreadable"))
   const noUsage = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL)])
-  assert.ok(unavailable(noUsage.facts, "tokens", "source_unreadable"))
-  assert.ok(unavailable(noUsage.facts, "models", "source_unreadable"))
+  assert.ok(unavailable(noUsage.facts, "tokens", "field_absent"))
+  assert.ok(unavailable(noUsage.facts, "models", "field_absent"))
+  const unusable = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), event(2, { type: "token_count", info: { total_token_usage: { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 } } })])
+  assert.ok(unavailable(unusable.facts, "tokens", "source_unreadable"), "samples that count for no model are unreadable")
 }))
 
 test("the most-used model wins, and ties keep the first seen", () => withHome(async (home) => {
@@ -963,4 +968,131 @@ test("sentinel: the focus, spawn, path, write and PR events never carry prompt, 
   const { events, facts } = await deriveRoot(home, lines)
   for (const key of ["focusCalls", "spawns", "shellGitCommits", "fileWrites", "prRefs"]) assert.equal(JSON.stringify(events[key]).includes(SENTINEL), false, key)
   assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+}))
+
+// --- Number states: what the host does not record and what the log left out ---
+
+const flagsOf = (facts, field) => facts.unavailable.filter((entry) => entry.field === field).map((entry) => entry.reason).sort()
+
+test("a Codex session carries compaction_waits as not recorded and prs, requests, tokens and tool_outcomes as recorded partly", async () => {
+  const { facts } = await deriveFixtureRoot()
+  assert.deepEqual(hostFlagsFor("codex-cli", { entrypoint: facts.session.entrypoint }).map((flag) => flag.reason).sort(), ["host_does_not_record", "host_does_not_record", "host_does_not_record", "host_does_not_record", "host_records_partly", "host_records_partly", "host_records_partly", "host_records_partly"])
+  for (const flag of hostFlagsFor("codex-cli", { entrypoint: facts.session.entrypoint })) assert.ok(unavailable(facts, flag.field, flag.reason), `${flag.field}/${flag.reason}`)
+  assert.ok(unavailable(facts, "compaction_waits", "host_does_not_record"))
+  for (const field of ["prs", "tool_outcomes", "requests", "tokens"]) assert.ok(unavailable(facts, field, "host_records_partly"), field)
+  for (const [field, reason] of [["commits", "host_does_not_record"], ["permission_waits", "host_does_not_record"], ["api_retries", "host_does_not_record"], ["ci_runs", "not_collected_in_slice_1"]]) assert.ok(unavailable(facts, field, reason), field)
+})
+
+test("an absent usage counter gives null and tokens field_absent", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [
+    meta(), turnContext(1, ROOT_MODEL),
+    tokens(2, { input_tokens: 10, cached_input_tokens: 2, output_tokens: 5, reasoning_output_tokens: 1 }),
+    tokens(3, { input_tokens: 20, cached_input_tokens: 4, output_tokens: 9, reasoning_output_tokens: 2 }),
+  ])
+  assert.equal(facts.models[0].tokens.cache_write, null)
+  assert.equal(facts.models[0].tokens.input, 16)
+  assert.ok(unavailable(facts, "tokens", "field_absent"))
+  assert.equal(unavailable(facts, "tokens", "source_unreadable"), false, "absent is not unreadable")
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  const whole = await deriveRoot(home, [
+    meta(), turnContext(1, ROOT_MODEL),
+    tokens(2, { input_tokens: 10, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 }),
+  ])
+  assert.deepEqual(whole.facts.models[0].tokens, { input: 10, output: 5, cache_read: 0, cache_write: 0, reasoning: 0 }, "a measured 0 stays 0")
+  assert.deepEqual(flagsOf(whole.facts, "tokens"), ["host_records_partly"], "a measured 0 carries no absent flag")
+}))
+
+test("an absent input counter with a rising output still counts a request and leaves input unknown", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 })])
+  assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: null, output: 5, cache_read: 0, cache_write: 0, reasoning: 0 } }])
+  assert.ok(unavailable(facts, "tokens", "field_absent"))
+  const outputGone = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { input_tokens: 7, cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 })])
+  assert.deepEqual(outputGone.facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: 7, output: null, cache_read: 0, cache_write: 0, reasoning: 0 } }])
+  const neither = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 })])
+  assert.deepEqual(neither.facts.models, [], "no input and no output is no known request")
+  assert.ok(unavailable(neither.facts, "tokens", "field_absent"))
+}))
+
+test("empty models without a parse failure flags field_absent, and with one flags source_unreadable", () => withHome(async (home) => {
+  const none = await deriveRoot(home, [meta()])
+  assert.deepEqual(none.facts.models, [])
+  assert.ok(unavailable(none.facts, "models", "field_absent"))
+  assert.equal(unavailable(none.facts, "models", "source_unreadable"), false)
+  assert.ok(unavailable(none.facts, "requests", "field_absent"))
+  assert.ok(unavailable(none.facts, "tokens", "field_absent"))
+  const bad = await deriveRoot(home, [meta(), tokens(2, { input_tokens: 10, output_tokens: 5 })])
+  assert.deepEqual(bad.facts.models, [])
+  assert.ok(unavailable(bad.facts, "models", "source_unreadable"))
+  assert.equal(unavailable(bad.facts, "models", "field_absent"), false)
+  assert.ok(unavailable(bad.facts, "requests", "field_absent"), "no request was counted")
+  for (const { facts } of [none, bad]) assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
+test("the joined-thread cap flags agents capped", () => withHome(async (home) => {
+  for (const n of [2, 3, 4]) put(home, uuid(n), at(n), [meta({ id: uuid(n), parent: ROOT, startIso: at(n) })])
+  const capped = await deriveRoot(home, [meta()], { maxThreads: 2 })
+  assert.ok(unavailable(capped.facts, "agents", "capped"))
+  assert.ok(unavailable(capped.facts, "turns", "capped"))
+  const roomy = await deriveRoot(home, [meta()], { maxThreads: 10 })
+  assert.equal(unavailable(roomy.facts, "agents", "capped"), false)
+}))
+
+test("a sentinel in prompt and command text reaches neither facts nor flags", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [
+    meta(), turnContext(1, ROOT_MODEL),
+    user(2, [{ type: "input_text", text: `${SENTINEL} prompt` }]),
+    call(3, "c1", "shell", { command: ["bash", "-lc", `echo ${SENTINEL}`] }),
+    output(4, "c1", `${SENTINEL} out`),
+    tokens(5, { input_tokens: 10, output_tokens: 5 }),
+  ])
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts.unavailable).includes(SENTINEL), false)
+}))
+
+test("facts written by the Codex deriver validate as /2", async () => {
+  const { facts } = await deriveFixtureRoot()
+  assert.equal(facts.schema, "desk.factory.local/2")
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+// --- Fix round 1: a damaged log is unreadable, not absent ---
+
+test("a damaged log with no models reads as unreadable, and a clean empty log stays absent", () => withHome(async (home) => {
+  const full = { input_tokens: 10, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 }
+  const damaged = {
+    "an unparseable mid-file line": [meta(), "{not json", event(3, { type: "task_started" })],
+    "a record with an unreadable timestamp": [meta(), { timestamp: "nope", type: "turn_context", payload: { turn_id: "t", model: ROOT_MODEL } }, { timestamp: "nope", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: full } } }],
+    "a line that is JSON but not an object": [meta(), "[1,2]", "7"],
+  }
+  for (const [name, lines] of Object.entries(damaged)) {
+    const { facts } = await deriveRoot(home, lines)
+    assert.deepEqual(facts.models, [], name)
+    for (const field of ["models", "tokens", "requests"]) {
+      assert.ok(unavailable(facts, field, "source_unreadable"), `${name}: ${field}`)
+      assert.equal(unavailable(facts, field, "field_absent"), false, `${name}: ${field} is not absent`)
+    }
+  }
+  const clean = await deriveRoot(home, [meta()])
+  for (const field of ["models", "tokens", "requests"]) assert.ok(unavailable(clean.facts, field, "field_absent"), field)
+  assert.equal(unavailable(clean.facts, "models", "source_unreadable"), false)
+}))
+
+test("an overflow on one model is still unreadable when another model has an absent counter", () => withHome(async (home) => {
+  const big = Number.MAX_SAFE_INTEGER - 1
+  const full = (input, output) => ({ input_tokens: input, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: output, reasoning_output_tokens: 0 })
+  const lines = [meta(), turnContext(1, "model-a")]
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    lines.push(tokens(2 + cycle * 2, full(big, 1)))
+    lines.push(tokens(3 + cycle * 2, full(0, 0)))
+  }
+  lines.push(turnContext(20, "model-b"), tokens(21, { cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 }))
+  const { facts } = await deriveRoot(home, lines)
+  assert.equal(facts.models.find((model) => model.id === "model-a").tokens.input, null)
+  assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+  assert.ok(unavailable(facts, "tokens", "field_absent"))
+}))
+
+test("samples with no known model leave tokens unreadable as well as models", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [meta(), tokens(2, { input_tokens: 10, output_tokens: 5 })])
+  assert.ok(unavailable(facts, "tokens", "source_unreadable"))
 }))

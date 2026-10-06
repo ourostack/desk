@@ -133,7 +133,8 @@ test("a multi-worker Claude session goes from transcript to built store with eve
     // session binds other jobs and holds another worker's PR that is not this job's.
     for (const job of [A, B, C]) {
       assert.equal(built(job).references.partial, true, job)
-      assert.deepEqual(built(job).references.partial_reasons, ["worker_shared"], job)
+      // The derived Claude facts flag commits (not recorded) and PRs (recorded partly), next to the shared worker.
+      assert.deepEqual(built(job).references.partial_reasons, ["host_does_not_record", "host_records_partly", "worker_shared"], job)
     }
 
     // Every job holds a strict subset of the session's workers or of the root's time, so its tool measures are worker_split.

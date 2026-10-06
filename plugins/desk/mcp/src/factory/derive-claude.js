@@ -95,8 +95,9 @@ import * as os from "node:os"
 import { createInterface } from "node:readline"
 import * as path from "node:path"
 
+import { hostFlagsFor } from "./host-flags.js"
 import { toolKind } from "./tool-kinds.js"
-import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, sanitizePlugins, shellBinding, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, sanitizePlugins, shellBinding, usageAbsent, usageOrNull, withRequestedModel } from "./derive-common.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { normalizeTimestamp } from "./time.js"
@@ -113,9 +114,9 @@ const SYNTHETIC_MODEL = "<synthetic>"
 // Small, defensive helpers. None of these ever throw on an unexpected shape.
 // ---------------------------------------------------------------------------
 
-// A usage field the log leaves out counts as 0; one it carries that is no safe non-negative integer is unknown (`null`).
-function usageCount(value) {
-  return value === undefined || value === null ? 0 : countOrNull(value)
+// A usage field the log leaves out or carries as no safe non-negative integer is unknown (`null`), never 0. `usageGap` tells the two apart.
+function usageGap(value) {
+  return usageAbsent(value) ? "absent" : "malformed"
 }
 
 // The larger of two counts; an unknown one yields to a readable one, so a malformed repeat of a message never erases a good value.
@@ -238,21 +239,23 @@ async function streamJsonlFile(filePath, onLine) {
   return { parseFailures, truncated: lastLineFailed }
 }
 
+// A session with no `subagents` folder has no workers, which is no gap; a folder that cannot be read is one.
 async function listSubagentFiles(transcriptPath) {
   const sessionDir = path.join(path.dirname(transcriptPath), path.basename(transcriptPath, ".jsonl"), "subagents")
   let entries
   try {
     entries = await readdir(sessionDir)
-  } catch {
-    return []
+  } catch (error) {
+    return { files: [], unreadable: error?.code !== "ENOENT" }
   }
-  return entries
+  const files = entries
     .filter((name) => /^agent-.+\.jsonl$/u.test(name))
     .sort()
     .map((name) => ({
       jsonlPath: path.join(sessionDir, name),
       metaPath: path.join(sessionDir, name.replace(/\.jsonl$/u, ".meta.json")),
     }))
+  return { files, unreadable: false }
 }
 
 async function readSubagentMeta(metaPath) {
@@ -398,16 +401,19 @@ function createAgentProcessor({ agentIndex }) {
     const model = message.model
     if (id !== undefined && !line.isApiErrorMessage && model !== SYNTHETIC_MODEL) {
       const usage = message.usage ?? {}
-      const fields = {
-        input: usageCount(usage.input_tokens),
-        output: usageCount(usage.output_tokens),
-        cache_read: usageCount(usage.cache_read_input_tokens),
-        cache_write: usageCount(usage.cache_creation_input_tokens),
+      const raw = { input: usage.input_tokens, output: usage.output_tokens, cache_read: usage.cache_read_input_tokens, cache_write: usage.cache_creation_input_tokens }
+      const fields = {}
+      const gaps = {}
+      for (const [key, value] of Object.entries(raw)) {
+        fields[key] = usageOrNull(value)
+        if (fields[key] === null) {
+          gaps[key] = usageGap(value)
+          if (gaps[key] === "malformed") tokensUnreadable = true
+        }
       }
-      if (Object.values(fields).includes(null)) tokensUnreadable = true
       if (!usageById.has(id)) {
         if (isValidModelId(model)) {
-          usageById.set(id, { model, ...fields })
+          usageById.set(id, { model, ...fields, gaps })
           if (!modelCounts.has(model)) modelOrder.push(model)
           modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1)
         } else {
@@ -415,10 +421,11 @@ function createAgentProcessor({ agentIndex }) {
         }
       } else {
         const existing = usageById.get(id)
-        existing.input = maxReadable(existing.input, fields.input)
-        existing.output = maxReadable(existing.output, fields.output)
-        existing.cache_read = maxReadable(existing.cache_read, fields.cache_read)
-        existing.cache_write = maxReadable(existing.cache_write, fields.cache_write)
+        for (const key of Object.keys(raw)) {
+          existing[key] = maxReadable(existing[key], fields[key])
+          if (existing[key] !== null) delete existing.gaps[key]
+          else existing.gaps[key] = gaps[key] === "malformed" || existing.gaps[key] === "malformed" ? "malformed" : "absent"
+        }
       }
     }
 
@@ -564,6 +571,7 @@ function createAgentProcessor({ agentIndex }) {
         hadUnresolvedCall,
         invalidModelSeen,
         tokensUnreadable,
+        tokensAbsent: [...usageById.values()].some((entry) => Object.values(entry.gaps).includes("absent")),
         earliestTimestamp,
         latestTimestamp,
         hadUsableEnvelope,
@@ -640,11 +648,13 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   let hadUnresolvedAny = rootResult.hadUnresolvedCall
   let invalidModelSeen = rootResult.invalidModelSeen
 
-  const subagentFiles = await listSubagentFiles(transcriptPath)
+  const { files: subagentFiles, unreadable: subagentsUnreadable } = await listSubagentFiles(transcriptPath)
+  let agentsUnreadable = subagentsUnreadable
   for (let index = 0; index < subagentFiles.length; index += 1) {
     const agentIndex = index + 1
     const { jsonlPath, metaPath } = subagentFiles[index]
     const meta = await readSubagentMeta(metaPath)
+    if (meta === null) agentsUnreadable = true
     const processor = createAgentProcessor({ agentIndex })
     const read = await streamJsonlFile(jsonlPath, (line) => processor.pushLine(line))
     const result = processor.finish()
@@ -721,9 +731,14 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   if ((models.length === 0 && totalParseFailures > 0) || invalidModelSeen) {
     addUnavailable(unavailable, "models", "source_unreadable")
   }
-  if (agentResults.some((result) => result.tokensUnreadable) || models.some(({ tokens }) => [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write].includes(null))) {
-    addUnavailable(unavailable, "tokens", "source_unreadable")
-  }
+  const tokensAbsent = agentResults.some((result) => result.tokensAbsent)
+  const tokensNull = models.some(({ tokens }) => [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write].includes(null))
+  // A null the log's own gaps do not explain (a sum past the safe range) is unreadable too.
+  if (agentResults.some((result) => result.tokensUnreadable) || (tokensNull && !tokensAbsent)) addUnavailable(unavailable, "tokens", "source_unreadable")
+  if (tokensAbsent) addUnavailable(unavailable, "tokens", "field_absent")
+  if (agentsUnreadable) addUnavailable(unavailable, "agents", "source_unreadable")
+  flagEmptyUsage(unavailable, models)
+  for (const { field, reason } of hostFlagsFor(HOST)) addUnavailable(unavailable, field, reason)
   addUnavailable(unavailable, "permission_waits", "host_does_not_record")
   addUnavailable(unavailable, "ci_runs", "not_collected_in_slice_1")
   addUnavailable(unavailable, "commits", "host_does_not_record")

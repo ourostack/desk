@@ -114,6 +114,14 @@ function series(records, { plugin, measure, jobClass }) {
   return { byVersion, groups, comparable }
 }
 
+// A measure's state over the jobs an alarm compares: partial when any of them
+// carries a partial value (a lower bound the host records only partly), with
+// every reason those values give.
+function stateOver(jobs, measure) {
+  const reasons = [...new Set(jobs.flatMap((record) => record.measures[measure].state === "partial" ? record.measures[measure].reasons : []))].sort()
+  return { state: reasons.length === 0 ? "measured" : "partial", reasons }
+}
+
 function compare({ plugin, measure, jobClass }, data, baseline, version) {
   return compareMedians(data.groups.get(baseline), data.groups.get(version), { seed: seedFromText(`${plugin} ${baseline} ${version} ${measure} ${jobClass}`) })
 }
@@ -140,7 +148,7 @@ function coChanged(plugin, before, after, publicPlugins) {
   })
 }
 
-function renderBody({ plugin, version, baseline, measure, jobClass, comparison, before, after }, publicPlugins) {
+function renderBody({ plugin, version, baseline, measure, jobClass, comparison, before, after, state }, publicPlugins) {
   const format = (value) => formatMeasure(measure, value)
   const others = coChanged(plugin, before, after, publicPlugins)
   return [
@@ -159,6 +167,7 @@ function renderBody({ plugin, version, baseline, measure, jobClass, comparison, 
     `- Evidence jobs on ${baseline}: ${before.map((record) => `\`${record.job}\``).sort().join(", ")}.`,
     `- Evidence jobs on ${version}: ${after.map((record) => `\`${record.job}\``).sort().join(", ")}.`,
     "",
+    ...(state === "partial" ? [`The \`${measure}\` numbers here are a lower bound: the host records them only partly.`, ""] : []),
     ...(others.length === 0
       ? [`No other publicly sourced plugin that every compared job reports changed version between these two sets of jobs.`]
       : [
@@ -177,13 +186,14 @@ function alarmFor(key, data, baseline, version, publicPlugins) {
   if (comparison.direction !== WORSE) return { comparison }
   const before = data.byVersion.get(baseline)
   const after = data.byVersion.get(version)
-  return { comparison, body: renderBody({ ...key, version, baseline, comparison, before, after }, publicPlugins) }
+  const { state, reasons } = stateOver([...before, ...after], key.measure)
+  return { comparison, state, reasons, body: renderBody({ ...key, version, baseline, comparison, before, after, state }, publicPlugins) }
 }
 
 /**
  * `planAndon(records, { plugins, publicPlugins }) -> alarms`: every alarm the
  * tracked `plugins` raise, as `{ plugin, version, baseline, measure,
- * job_class, title, comparison, body }`, ordered by plugin, then
+ * job_class, title, comparison, state, reasons, body }` (`state` is `partial`, with the `reasons`, when any compared value is a lower bound the host records only partly), ordered by plugin, then
  * `QUALITY_MEASURES`, then `JOB_CLASSES`. `records` are the rollups' job
  * records; `publicPlugins` (`storePublicPlugins`, default none) are the only
  * other plugins a body may name.
@@ -196,9 +206,9 @@ export function planAndon(records, { plugins, publicPlugins = [] }) {
     if (data.comparable.length < 2) return []
     const version = data.comparable.at(-1)
     const baseline = data.comparable.at(-2)
-    const { comparison, body } = alarmFor(key, data, baseline, version, named)
+    const { comparison, body, state, reasons } = alarmFor(key, data, baseline, version, named)
     if (body === undefined) return []
-    return [{ plugin, version, baseline, measure, job_class: jobClass, title: andonTitle(plugin, version, measure, jobClass), comparison, body }]
+    return [{ plugin, version, baseline, measure, job_class: jobClass, title: andonTitle(plugin, version, measure, jobClass), comparison, state, reasons, body }]
   })))
 }
 

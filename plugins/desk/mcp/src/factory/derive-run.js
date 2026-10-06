@@ -7,6 +7,7 @@ import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { bindSession } from "./binding.js"
 import { deriveClaudeSession } from "./derive-claude.js"
+import { addUnavailable } from "./derive-common.js"
 import { deriveCodexSession } from "./derive-codex.js"
 import { deriveCopilotSession } from "./derive-copilot.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
@@ -179,6 +180,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
+    if (segmentsCappedMs > 0) addUnavailable(derived.facts.unavailable, "job_segments", "capped")
     // The decision that guards the write is made again right before it: the derivation above is long.
     const late = admit === null ? null : await admit()
     if (late !== null) return { result: "refused", store, reason: late }
