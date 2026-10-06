@@ -6,7 +6,7 @@
 //   - shell forms, judged on the words around the path inside the same pipeline segment (the text between `;`, `&`, `|` and line breaks):
 //     a redirect onto it (`> path`, `>> path`, `>| path`, `2> path`), `tee` / `sponge` / `truncate` / `dd of=` naming it, an in-place editor (`sed -i`,
 //     `perl -i`, `ruby -i`, `yq -i`, `--in-place`) naming it, `mv` / `cp` / `install` / `rsync` / `ln` whose LAST operand it is, and `git checkout` or `git restore`
-//     naming it;
+//     naming it, and `git add` naming it (unless the command sets `DESK_TOOL_COMMIT=1`);
 //   - script forms, judged on the call: a script that writes a file by API (`writeFile`, `writeFileSync`, `appendFile`, `createWriteStream`,
 //     `copyFile`, `renameSync`, Python `open(..., 'w'|'a'|'x'|'r+')`, `write_text`, `write_bytes`, `shutil.move|copy*`, `os.replace|rename`, Ruby
 //     `File.write` / `IO.write`, PowerShell `Set-Content` / `Add-Content` / `Out-File`), because the path is often held in a variable the script
@@ -36,6 +36,11 @@ const TEE_BEFORE = /\b(?:tee|sponge|truncate)\b[^]*$/u
 const DD_BEFORE = /\bof=["']?$/u
 const IN_PLACE_BEFORE = /\b(?:sed|gsed|perl|ruby|yq|awk)\b[^]*\s(?:-[A-Za-z]*i\S*|--in-place\S*)/u
 const COPY_BEFORE = /\b(?:mv|cp|install|rsync|ln)\b[^]*$/u
+// `git add <card>` is not a write, but a card is committed only by Desk (the desk's pre-commit hook refuses the rest), so staging one by hand is denied too
+// (round AG: after `task_update` had committed the card, an agent ran `git add <card>` and `git commit` anyway). `DESK_TOOL_COMMIT=1` in the command is the
+// tidy's own way through, and a conflicted card may be staged to finish a merge.
+const GIT_ADD_BEFORE = /\bgit(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+add\b/u
+const TOOL_COMMIT_SET = /\bDESK_TOOL_COMMIT=1\b/u
 const GIT_RESTORE_BEFORE = /\bgit\b[^]*\b(?:checkout|restore)\b/u
 // `git restore --staged <path>` only unstages it (the hook's own message tells an agent to do that); with `--worktree` it rewrites the file too.
 const UNSTAGE_ONLY = /\s(?:--staged|-S)(?=\s)/u
@@ -99,6 +104,7 @@ function shellForm(command, index, length) {
   if (TEE_BEFORE.test(before)) return "tee"
   if (IN_PLACE_BEFORE.test(before)) return "an in-place edit"
   if (GIT_RESTORE_BEFORE.test(before) && (!UNSTAGE_ONLY.test(before) || ALSO_WORKTREE.test(before))) return "git checkout or restore"
+  if (GIT_ADD_BEFORE.test(before) && !TOOL_COMMIT_SET.test(command)) return "git add of it"
   if (COPY_BEFORE.test(before) && /^["']?\s*$/u.test(after)) return "a move or copy onto it"
   if (powershellTarget(before)) return "a PowerShell write cmdlet"
   return null
@@ -211,7 +217,7 @@ export function shellCardWrites(command, { resolve, slugCards, vars = {}, confli
     const card = resolve(match[0], dirs)
     if (card === null) continue
     const via = shellForm(text, match.index, match[0].length)
-    if (via === "git checkout or restore" && conflicted(card)) continue
+    if ((via === "git checkout or restore" || via === "git add of it") && conflicted(card)) continue
     if (via !== null) note(card, via)
   }
   let bare = false

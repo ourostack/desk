@@ -210,6 +210,14 @@ function substitutions(text, { quotes = true } = {}) {
   return found
 }
 
+const ASSIGNMENT = /^[A-Za-z_]\w*=/u
+
+/** `word` with every `$NAME` and `${NAME}` that a plain assignment earlier in the same command text set replaced by its value; any other variable stays as written. */
+function expandVars(word, vars) {
+  if (vars.size === 0 || !word.includes("$")) return word
+  return word.replace(/\$\{(\w+)\}|\$(\w+)/gu, (whole, braced, bare) => vars.get(braced ?? bare) ?? whole)
+}
+
 // Looks through wrappers to the command they run: `VAR=x`, `env`, `time`, `sudo`, `nohup`, `then`, `timeout 5`, `xargs -n1`, `ssh host`.
 function unwrap(words) {
   let rest = [...words]
@@ -243,7 +251,15 @@ function unwrap(words) {
 export function simpleCommands(command, depth = 0) {
   const text = String(command ?? "")
   const out = []
+  const vars = new Map()
   for (const raw of rawCommands(text)) {
+    raw.words = raw.words.map((word) => expandVars(word, vars))
+    for (const redirect of raw.redirects) redirect.target = expandVars(redirect.target, vars)
+    // `REPO_URL="https://..."` on a line of its own: later commands name the repository through `"$REPO_URL"` (round AG, elsewhere-clone run 2).
+    if (raw.words.length > 0 && raw.redirects.length === 0 && raw.words.every((word) => ASSIGNMENT.test(word))) {
+      for (const word of raw.words) vars.set(word.slice(0, word.indexOf("=")), word.slice(word.indexOf("=") + 1))
+      continue
+    }
     const words = unwrap(raw.words)
     if (words.length === 0 && raw.redirects.length === 0) continue
     if (words.length > 0 && basename(words[0]) === "git") words[0] = "git"

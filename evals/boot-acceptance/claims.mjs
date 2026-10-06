@@ -835,7 +835,13 @@ function cloneBacked(sentence, backing) {
 /** The repos the boot output lists as on this machine ("Repos of open tasks": `- <repo> (<task>): branch <b>, ...`; a missing one reads "not at <path>"), so a clone the fixture already had. */
 function presentRepos(calls) {
   const repos = new Set()
-  for (const text of bootResults(calls)) for (const match of text.matchAll(/^- ([\w.-]+) \([^)\n]*\): (?:[^\n,]*, )?branch /gmu)) repos.add(match[1].toLowerCase())
+  // The task a repo is listed under names it too ("The watering-schedule-api repo is cloned" says the clone of that task's repo is here), so the task's slug counts as the repo's name.
+  for (const text of bootResults(calls)) {
+    for (const match of text.matchAll(/^- ([\w.-]+) \(([^)\n]*)\): (?:[^\n,]*, )?branch /gmu)) {
+      repos.add(match[1].toLowerCase())
+      for (const task of match[2].split(",")) repos.add(task.trim().split("/").pop().toLowerCase())
+    }
+  }
   return repos
 }
 
