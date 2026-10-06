@@ -15,13 +15,13 @@ import { crewWorkspace } from "../desk/crew-roster.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { outcomeSnapshot } from "./outcome.js"
-import { COPY_RETENTION_MS, factoryStateRoot, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
 import { githubRepoOfRemote } from "./desk-visibility.js"
 import { LIMITS, isPlainObject } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
-import { declared, deskRootOf, markerRoute, proofIndex, provenBy } from "./session-route.js"
+import { declared, deskRootOf, markerRoute, proofIndex, provenBy, sessionRoute } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
 async function sourceStamp(file) {
@@ -598,6 +598,20 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
     const { result, reason } = await deriveMarker(env, marker, { quietMs, requireStored: true, siblings })
     summary[result] += 1
     if (reason === "route_unverified") summary.route_unverified += 1
+  }
+  // "Away" is made durable as soon as a marker shows it: a session that positively routes to one store has its copies in every other store's
+  // outbox moved to that store's `retracted-copies/`, so the store it left never publishes it again once the marker and `status.json` are gone,
+  // even when that store's own flush (which does the same for the stores it flushes) never runs because its consent is off.
+  try {
+    const routes = new Map()
+    for (const marker of markers) {
+      const route = sessionRoute(marker, { siblings: () => markers })
+      if (route.kind === "store") routes.set(marker.session_id, route.store)
+    }
+    summary.kept_elsewhere = (await keepCopiesElsewhere(env, routes)).length
+  } catch {
+    // The flush of each consented store still moves the copies of its sessions that are not here; this step is the second line for the rest.
+    summary.kept_elsewhere = null
   }
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.
   Object.assign(summary, await rebuildOrphans(env, { quietMs, markers }))

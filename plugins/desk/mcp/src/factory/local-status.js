@@ -20,10 +20,11 @@
 // resolved store first, then every other store with a recorded decision,
 // sorted. `pending` counts the store's outbox files never delivered and not
 // quarantined whose session the flush would publish there (`here`, or
-// `unknown`, waiting for its route); `route_changed` counts its outbox files,
-// not quarantined, whose session routes elsewhere as the flush reads it
-// (`session-route.js`: `away`, including a finished retraction's tombstone,
-// `stale` or `stalled`): the flush never publishes them there; `quarantined`
+// `unknown`, waiting for its route); `route_changed` counts its outbox files
+// and kept copies (`retracted-copies/`), not quarantined, whose session routes
+// elsewhere as the flush reads it (`session-route.js`: `away`, including a
+// finished retraction's tombstone, `stale` or `stalled`; a kept copy without a
+// positive route here is `stale`): the flush never publishes them there; `quarantined`
 // counts its quarantined files; `last_flush` is the last flush's result
 // code, or `null`.
 //
@@ -35,6 +36,10 @@
 // `ORPHAN_STALE_MS` ago) or `"walk_not_advancing"` (`sweeps_in_walk` is past `ceil((worked + unexamined) / max(1, worked))`, `worked` counting only
 // the orphans that took a transcript slot, so the walk should have wrapped). `orphanPassLine(record, now)` is the one-line
 // reading `factory.js status` prints; both read counts, times and fixed codes only.
+// `retention` is present only when a pruning part stopped (`retention.js` `retentionFinding`): `"prune_failed"` (the last sweep's tombstone
+// pruning failed) or `"copies_prune_failed"` (the last orphan pass counted a delivered-copy prune that threw). `capture_check_unavailable` is
+// present only when a store's own capture check could not read the record `CHECK_UNAVAILABLE_ALARM` (3) or more times in a row:
+// `[{ store, times }]`. Like `orphans`, both are pushed to the doctor and the boot status, not only shown by `factory.js status`.
 //
 // The result carries store names, codes and counts only: never the machine
 // secret, an account, an intake ID, a token, a time, a local path or any
@@ -67,6 +72,7 @@ import { deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, 
 import { readSmallText, validMarker } from "./marker.js"
 import { jobReportUrl } from "./pipeline/build.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
+import { captureCheckFindings, retentionFinding } from "./retention.js"
 import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 
@@ -169,6 +175,12 @@ export const UNASKED_ADVICE = (store) => `Run \`node mcp/scripts/factory.js flus
 /** One sentence saying what to do about a finding. */
 export const ORPHAN_FINDING_ADVICE = "Run `node mcp/scripts/factory.js status` from the Desk plugin folder and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem."
 
+/** One sentence saying what to do about a retention finding. */
+export const RETENTION_FINDING_ADVICE = "Run `node mcp/scripts/factory.js status` from the Desk plugin folder and read its retention line; if pruning keeps failing, file a Desk problem."
+
+/** One sentence saying what to do about a store whose own capture check keeps failing. */
+export const CAPTURE_CHECK_ADVICE = (store) => `The store's own check, not this machine, is failing: file a problem against ${store}'s capture check, and run \`node mcp/scripts/factory.js status\` from the Desk plugin folder to see its capture line.`
+
 /** One line for the orphan pass's record: counts, times and fixed codes only (a failure is its class, never a message). */
 export function orphanPassLine(record, now = Date.now(), { version = null } = {}) {
   if (!isPlainObject(record)) return "orphan pass: no record yet"
@@ -215,14 +227,17 @@ function placer(dir, receipts) {
   }
   let siblings = null
   const listSiblings = () => (siblings ??= outboxNames(path.join(dir, "markers")).map(markerOf).filter((marker) => marker !== null))
-  // `retracting` is the store's retracting records and tombstones, by name.
-  return (store, name, retracting) => {
+  // `retracting` is the store's retracting records and tombstones, by name. `kept`: a copy in `retracted-copies/` is here only on a positive
+  // route, as the flush reads it.
+  return (store, name, retracting, kept) => {
     // An outbox name, like a labels key, ends in the 36-character session id and `.json`.
     const session = name.slice(-41, -5)
     const names = ENUMS.host.map((host) => `${host}-${session}.json`)
     const marker = names.map(markerOf).find((found) => found !== null) ?? null
     const records = Object.entries(retracting).filter(([key, record]) => key.slice(-41, -5) === session && isPlainObject(record)).map(([, record]) => record)
-    return sessionPlace(store, sessionRoute(marker, { siblings: listSiblings, deskRoot: deskRootOf(receipts, names) }), derivedStoreOf(receipts, names), records)
+    const route = sessionRoute(marker, { siblings: listSiblings, deskRoot: deskRootOf(receipts, names) })
+    const place = sessionPlace(store, route, derivedStoreOf(receipts, names), records)
+    return place === "here" && kept && route.kind !== "store" ? "stale" : place
   }
 }
 
@@ -231,9 +246,10 @@ function storeEntry(dir, records, store, lastFlush, place) {
   const delivered = readState(path.join(dir, "delivered", `${slug}.json`), {})
   const quarantined = new Set(outboxNames(path.join(dir, "quarantine", slug)))
   const retracting = readState(path.join(dir, "retracting", `${slug}.json`), {})
-  // The kept copies of retracted sessions (`session-route.js`) count with the outbox files: they are what `route_changed` reports.
-  const listed = [...new Set([...outboxNames(path.join(dir, "outbox", slug)), ...outboxNames(path.join(dir, RETRACTED_COPIES, slug))])].filter((name) => !quarantined.has(name))
-  const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, retracting === UNREADABLE ? {} : retracting))))
+  // The kept copies of sessions that left the store (`session-route.js`) count with the outbox files: they are what `route_changed` reports.
+  const live = new Set(outboxNames(path.join(dir, "outbox", slug)))
+  const listed = [...new Set([...live, ...outboxNames(path.join(dir, RETRACTED_COPIES, slug))])].filter((name) => !quarantined.has(name))
+  const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, retracting === UNREADABLE ? {} : retracting, !live.has(name)))))
   const pending = listed.filter((name) => !away.has(name) && (delivered === UNREADABLE || !Object.hasOwn(delivered, name))).length
   const flush = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) ? lastFlush[store].result : null
   const waiting = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) && Number.isSafeInteger(lastFlush[store].visibility_unasked) ? lastFlush[store].visibility_unasked : 0
@@ -256,6 +272,8 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const orphans = status === UNREADABLE ? null : orphanPassFinding(status.orphans, Date.now(), { version, active: contributing && endedSessionRecently(dir) })
   const unasked = visibilityUnasked(lastFlush, stores)
   const hung = status === UNREADABLE ? 0 : orphansHung(status.orphans, version)
+  const retention = status === UNREADABLE ? null : retentionFinding(status)
+  const captureCheck = status === UNREADABLE ? [] : captureCheckFindings(status).filter(({ store }) => PATTERNS.prRepo.test(store))
   return {
     store: routing.store,
     source: routing.source,
@@ -265,6 +283,8 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
     ...(orphans === null ? {} : { orphans }),
     ...(unasked.length > 0 ? { visibility_unasked: unasked } : {}),
     ...(hung > 0 ? { orphans_hung: hung } : {}),
+    ...(retention === null ? {} : { retention }),
+    ...(captureCheck.length > 0 ? { capture_check_unavailable: captureCheck } : {}),
   }
 }
 

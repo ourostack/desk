@@ -15,7 +15,7 @@ import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { checkLabelsAgainstFacts, validateLabelsBytes } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import {
-  factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeVisibilityCache,
+  factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus, writeVisibilityCache,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
@@ -44,8 +44,11 @@ async function setup(env) {
   await setConsent(env, { store: STORE, contribute: true, account: ACCOUNT })
 }
 
+// With the derivation receipt a sweep writes, so a held session is known to have been derived for this store.
 async function putFacts(env, n) {
-  assert.equal((await writeLocalFacts(env, STORE, localFacts(n))).written, true)
+  const { name } = await writeLocalFacts(env, STORE, localFacts(n))
+  assert.equal(typeof name, "string")
+  await writeStatus(env, { derivations: { [name]: { store: STORE } } })
 }
 
 async function putLabels(env, n, value = localLabels(n)) {

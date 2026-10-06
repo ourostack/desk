@@ -22,7 +22,7 @@ import { loadEndHook, pluginRootFor } from "../factory/end-hook.js"
 import { readSmallText } from "../factory/marker.js"
 import { factoryStateDir } from "../factory/boot-check.js"
 import { PATTERNS, isPlainObject } from "../factory/schema.js"
-import { ORPHAN_FINDING_ADVICE, UNASKED_ADVICE, factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
+import { CAPTURE_CHECK_ADVICE, ORPHAN_FINDING_ADVICE, RETENTION_FINDING_ADVICE, UNASKED_ADVICE, factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
 import { signoffStatus, unsignedDeliveries } from "../desk/unsigned-deliveries.js"
 
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
@@ -132,6 +132,8 @@ export function factorySummary(status, { now = Date.now() } = {}) {
   }
   for (const { store, sessions, age } of status.visibility_unasked ?? []) lines.push(`  ${store}: ${sessions} sessions wait because their desk's visibility could not be asked for ${age === "unknown" ? "an unknown time" : "over 7 days"}. ${UNASKED_ADVICE(store)}`)
   if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
+  if (status.retention !== undefined) lines.push(`  local retention needs attention: ${status.retention}. ${RETENTION_FINDING_ADVICE}`)
+  for (const { store, times } of status.capture_check_unavailable ?? []) lines.push(`  ${store}: capture record not landing, the store's own check could not read it ${times} times in a row. ${CAPTURE_CHECK_ADVICE(store)}`)
   if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
   if (status.signoff) lines.push(signoffLine(status.signoff))
   lines.push(...loopLines(status.loop, now))

@@ -131,6 +131,22 @@ test("tombstoned, stale and stalled copies count as route_changed, never pending
   assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 3, route_changed: 2, quarantined: 0, last_flush: null })
 }))
 
+test("a kept copy counts as pending only on a positive route here, as the flush reads it; without one it is route_changed", () => scratch(async ({ base, desk, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const root = await factoryStateRoot(env)
+  const kept = path.join(root, "retracted-copies", STORE.replace("/", "__"))
+  // 1: a kept copy whose marker routes here. 2: a kept copy with no marker, whose receipt names this store. 3: a live copy, the same receipt.
+  const names = []
+  for (const n of [1, 2, 3]) names.push(await outboxFile(env, STORE, n))
+  await fs.mkdir(kept, { recursive: true })
+  for (const name of names.slice(0, 2)) await fs.rename(path.join(root, "outbox", STORE.replace("/", "__"), name), path.join(kept, name))
+  await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: STORE })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeStatus(env, { derivations: { [names[1]]: { store: STORE }, [names[2]]: { store: STORE } } })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 1, quarantined: 0, last_flush: null })
+}))
+
 test("the desk's declaration picks the store, and every other decided store is listed after it", () => scratch(async ({ desk, env }) => {
   const { factoryLocalStatus } = await load()
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: OTHER })
