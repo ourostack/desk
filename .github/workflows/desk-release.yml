@@ -97,7 +97,7 @@ jobs:
           for check in validate-skills test-desk-docs test-desk-host-manifests test-desk-generated-artifacts test-desk-contracts; do
             node "scripts/$check.cjs"
           done
-          (cd plugins/desk/mcp && node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test "__tests__/release/**/*.test.js" "__tests__/activation/**/*.test.js" "__tests__/artifacts/**/*.test.js" "__tests__/docs/**/*.test.js" "__tests__/scripts/**/*.test.js")
+          (cd plugins/desk/mcp && node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test "../../../tests/desk/mcp/__tests__/release/**/*.test.js" "../../../tests/desk/mcp/__tests__/activation/**/*.test.js" "../../../tests/desk/mcp/__tests__/artifacts/**/*.test.js" "../../../tests/desk/mcp/__tests__/docs/**/*.test.js" "../../../tests/desk/mcp/__tests__/scripts/**/*.test.js")
           mkdir -p "$RUNNER_TEMP/desk-release"
           git bundle create "$RUNNER_TEMP/desk-release/release.bundle" refs/heads/main "^$base"
           { echo "released=true"; echo "summary=$summary"; echo "sha=$sha"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
