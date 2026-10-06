@@ -189,7 +189,7 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
   }
   assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit: card.spawnGit, homeDir: card.homeDir, existingRepos: card.existingRepos, created: card.created })
   // A pull request whose repo ships through a release is delivered only once the release has carried it (`delivery-gate.js`).
-  return checkDelivery({ toolName, evidence, env: card.env, fetchFn: card.fetchFn })
+  return card.delivery ?? checkDelivery({ toolName, evidence, env: card.env, fetchFn: card.fetchFn })
 }
 
 /**
@@ -930,6 +930,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const seen = await readMarkdown(filePath)
   const seenRepos = recordedRepos({ ...seen.data, ...(frontmatter ?? {}) }.repos).map((repo) => repo.name)
   const refresh = await refreshSteps(step === undefined ? seen.content : applyStep(seen.content, step, "task_update", seenRepos).body, { deskRoot, person, env, fetchFn, mode: frontmatter?.status === "done" ? "close" : "ordinary" })
+  // The delivery of a pull request given as done evidence is checked in this same phase, so nothing slow happens after the card is read again.
+  const delivery = frontmatter?.status === "done" && seen.data.status !== "done" && evidence?.kind === "pr" && typeof evidence.ref === "string" && !readSteps(seen.content).found ? await checkDelivery({ toolName: "task_update", evidence, env, fetchFn }) : null
   const existing = await readMarkdown(filePath)
   assertLocalOnlyUnchanged(frontmatter?.repos, existing.data.repos)
   const merged = { ...existing.data, ...(frontmatter ?? {}) }
@@ -988,6 +990,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (merged.status === "done" && existing.data.status !== "done") {
     deliveryCheck = await assertDoneEvidence(evidence, deskRoot, "task_update", {
       steps: stepsNow,
+      delivery,
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
       repos: [...asList(existing.data.repos), ...asList(frontmatter.repos)],
       // Only these can earn the local-only exemption: repos added in this call never do (`done-evidence.js`).

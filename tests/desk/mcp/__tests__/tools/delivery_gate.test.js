@@ -4,6 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { readFileSync } from "node:fs"
+import { promises as fs } from "node:fs"
 import { checkDelivery, findPullRequests, prDelivery, makeRunGh, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
@@ -425,4 +426,23 @@ test("findPullRequests finds every distinct GitHub pull request URL inside some 
   ])
   assert.deepEqual(findPullRequests("https://dev.azure.com/o/p/_git/r/pullrequest/3"), [])
   assert.deepEqual(findPullRequests("waits on infra"), [])
+})
+
+test("a card another session changes during the delivery check keeps both changes when the PR closes it", async () => {
+  const root = await deskWithTask("raced")
+  const file = path.join(root, "t", "raced", "task.md")
+  const released = fakeGitHub({ pr: { status: 200, body: { labels: [{ name: "released" }], merged_at: "x" } } })
+  let touched = false
+  const meanwhile = async (address, options) => {
+    if (!touched) {
+      touched = true
+      await fs.writeFile(file, `${(await fs.readFile(file, "utf8")).replace(/\n$/u, "")}\n\nAnother session was here.\n`.replace("status: drafting", "status: drafting\nowner: ari"))
+    }
+    return released.fetchFn(address, options)
+  }
+  await task_update({ deskRoot: root, input: { track: "t", slug: "raced", frontmatter: { status: "done" }, evidence: PR }, fetchFn: meanwhile })
+  const card = await readFront(file)
+  assert.equal(card.data.status, "done")
+  assert.equal(card.data.owner, "ari")
+  assert.match(card.content, /Another session was here\./u)
 })

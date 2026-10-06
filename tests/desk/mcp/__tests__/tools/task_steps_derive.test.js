@@ -331,3 +331,15 @@ test("task_archive writes the derived cells into the archived card and leaves it
   assert.match(archived, /\| a \| — \| widgets \| delivered \| https:/u)
   assert.match(archived, /^---\n[\s\S]*status: done[\s\S]*\n---\n/u)
 })
+
+test("a step with only non-GitHub evidence keeps its declared state through a refresh, and the answer that declared it says so", async () => {
+  const { root, file } = await newCard(`| a | — | widgets | pending | — |`)
+  const fake = github({})
+  const ado = "https://dev.azure.com/o/p/_git/r/pullrequest/3"
+  const declared = await update(root, { step: { id: "a", state: "merged", evidence: ado } }, fake)
+  assert.match(declared.step_declared, /the state merged is agent-declared/u)
+  const later = await update(root, note, fake)
+  assert.deepEqual(await rows(file), { a: "merged" })
+  assert.equal(later.steps_refreshed, undefined)
+  assert.equal(fake.calls.length, 0)
+})
