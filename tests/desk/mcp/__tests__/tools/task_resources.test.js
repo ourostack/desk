@@ -17,6 +17,13 @@ import { mkTempDeskRoot } from "./_helpers.js"
 
 const REPOS = [{ name: "widgets" }]
 const PR = "https://github.com/o/widgets/pull/7"
+// A GitHub where pull request 7 is merged and released: Desk derives a step with that PR in Evidence as delivered.
+const RELEASED = async (address) => {
+  const answer = (status, body) => ({ status, text: async () => JSON.stringify(body) })
+  if (address.includes("/contents/")) return answer(404, "")
+  if (address.endsWith("/repos/o/widgets")) return answer(200, {})
+  return answer(200, { state: "closed", merged_at: "2026-10-06T00:00:00Z", labels: [] })
+}
 const HEADER = "| Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |"
 const SEP = "|---|---|---|---|---|---|"
 const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "desk-resources-")))
@@ -33,7 +40,7 @@ async function newCard(body = "## Outcome\n\nShip it.\n\n## Progress log\n\n- 20
   await task_update({ deskRoot: root, input: { track: "t", slug: "chain", step: { id: "api", depends_on: [], repo: repos.length > 0 ? "widgets" : "—" } } })
   return { root, file }
 }
-const update = (root, input) => task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...input } })
+const update = (root, input) => task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...input }, fetchFn: RELEASED })
 const text = (file) => fs.readFile(file, "utf8")
 
 test("the first resource creates the section right after Steps, and the same identity updates its row", async () => {
@@ -106,7 +113,7 @@ test("a row is due when its step is delivered or dropped, the answer lists it wi
   await update(root, { resource: { identity: `worktree:${where}`, step: "api" } })
   await update(root, { resource: { identity: "branch:o/widgets#feat/api", step: "api" } })
   await update(root, { resource: { identity: "branch:o/widgets#feat/ui", step: "ui" } })
-  const answer = await update(root, { step: { id: "api", state: "delivered", evidence: PR } })
+  const answer = await update(root, { step: { id: "api", evidence: PR } })
   assert.deepEqual(answer.cleanup_due.map((item) => [item.identity, item.why]), [[`worktree:${where}`, "step api is delivered"], ["branch:o/widgets#feat/api", "step api is delivered"]])
   assert.match(answer.cleanup_due[0].action, new RegExp(`git worktree remove '${where.replaceAll("/", "\\/")}'`, "u"))
   assert.match(answer.cleanup_due[1].action, /git branch -d 'feat\/api'/u)
@@ -131,8 +138,8 @@ test("a card moving to done or cancelled lists its due rows, and a deleted workt
     await update(root, { resource: { identity: "branch:o/widgets#feat/end" } })
     assert.equal("cleanup_due" in (await update(root, { note: "working" })), false)
     rmSync(where, { recursive: true })
-    const answer = await update(root, status === "done" ? { status, evidence: { kind: "non_code", ref: "https://example.com/proof" } } : { status })
-    assert.deepEqual(answer.cleanup_due.map((item) => [item.identity, item.why, item.stale]), [[`worktree:${where}`, `the task is ${status}`, true], ["branch:o/widgets#feat/end", `the task is ${status}`, undefined]])
+    const answer = await update(root, status === "done" ? { status, evidence: { kind: "steps" }, step: { id: "api", evidence: PR } } : { status })
+    assert.deepEqual(answer.cleanup_due.map((item) => [item.identity, item.why, item.stale]), [[`worktree:${where}`, status === "done" ? "step api is delivered and the task is done" : `the task is ${status}`, true], ["branch:o/widgets#feat/end", `the task is ${status}`, undefined]])
     assert.match(answer.cleanup_due[0].action, /^stale row: .* is not on this machine/u)
     assert.match(answer.cleanup_due[0].action, /removed-and-absent/u)
   }
@@ -146,7 +153,7 @@ test("boot counts due rows from the cards it reads, prints one line, and prints 
   const quiet = formatBootText({ status: "ready", active_tasks: activeTasks(root) })
   assert.doesNotMatch(quiet, /Cleanup due|cleanup due/u)
   assert.equal("cleanup_due_count" in activeTasks(root).tracks[0].tasks[0], false)
-  await update(root, { step: { id: "api", state: "delivered", evidence: PR } })
+  await update(root, { step: { id: "api", evidence: PR } })
   const [task] = activeTasks(root).tracks[0].tasks
   assert.equal(task.cleanup_due_count, 2)
   const out = formatBootText({ status: "ready", active_tasks: activeTasks(root) })
@@ -210,7 +217,7 @@ const unfinished = async (finish) => {
   await finish(root)
   return { root, where }
 }
-const DONE = { status: "done", evidence: { kind: "non_code", ref: "https://example.com/proof" } }
+const DONE = { status: "done", evidence: { kind: "steps" }, step: { id: "api", state: "dropped", reason: "not needed" } }
 
 test("a finished card still reminds, whether it stays in its folder or is archived, until its rows are dealt with", async () => {
   const { root, where } = await unfinished((root) => update(root, DONE))
@@ -413,4 +420,30 @@ test("an archived card without frontmatter or without the row is handled, a stat
   git("add", "-A")
   git("commit", "-qm", "seed2")
   assert.equal((await call("tracked2", { spawnGit: failing })).commit.status, "failed")
+})
+
+test("a step Desk derives as delivered from its PR on a later call makes its rows due, announced once, like one a caller settled", async () => {
+  const { root } = await newCard()
+  const where = worktree("derived")
+  let merged = false
+  const github = async (address) => (merged || address.includes("/contents/") || address.endsWith("/repos/o/widgets") ? RELEASED(address) : { status: 200, text: async () => JSON.stringify({ state: "open", merged_at: null, labels: [] }) })
+  const later = (input) => task_update({ deskRoot: root, input: { track: "t", slug: "chain", ...input }, fetchFn: github })
+  await later({ resource: { identity: `worktree:${where}`, step: "api" } })
+  assert.equal("cleanup_due" in (await later({ step: { id: "api", evidence: PR } })), false, "in review: nothing due yet")
+  merged = true
+  const answer = await later({ note: "checked" })
+  assert.deepEqual(answer.steps_refreshed, ["api: in review -> delivered"])
+  assert.deepEqual(answer.cleanup_due.map((item) => [item.identity, item.why]), [[`worktree:${where}`, "step api is delivered"]])
+  assert.equal("cleanup_due" in (await later({ note: "again" })), false)
+})
+
+test("an archived card's disposition is written through a temporary file: its mode stays and no temporary file is left", async () => {
+  const { root, where } = await unfinished((root) => update(root, DONE))
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "chain" } })
+  const file = path.join(root, "t", "_archive", "chain", "task.md")
+  await fs.chmod(file, 0o640)
+  await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
+  assert.equal((await fs.stat(file)).mode & 0o777, 0o640)
+  assert.deepEqual((await fs.readdir(path.dirname(file))).filter((name) => name.endsWith(".tmp")), [])
+  assert.match(await fs.readFile(file, "utf8"), /removed-and-absent: gone/u)
 })

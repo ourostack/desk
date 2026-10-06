@@ -40,6 +40,14 @@ const REQUEST_BUDGET_MS = 5000
 const FILE_PAGES = 3
 const GITHUB_PR = /^https:\/\/(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+)\/pull\/(\d+)(?:[/?#].*)?$/iu
 const MERGE = Object.freeze({ kind: "merge" })
+const PR_IN_TEXT = /https:\/\/(?:www\.)?github\.com\/([^/\s?#()]+)\/([^/\s?#()]+)\/pull\/(\d+)/giu
+
+/** Every distinct GitHub pull request URL inside some text, as `{ repo, number, url }`, in order. */
+export function findPullRequests(text) {
+  const found = new Map()
+  for (const match of text.matchAll(PR_IN_TEXT)) found.set(match[0].toLowerCase(), { repo: `${match[1]}/${match[2]}`, number: Number(match[3]), url: match[0] })
+  return [...found.values()]
+}
 
 const GH_TOKEN_BUDGET_MS = 3000
 const ghTokens = new WeakMap()
@@ -145,7 +153,7 @@ function usableRule(rule) {
 
 /**
  * Is pull request `repo`#`number` delivered? Never throws. `{ status: "delivered", basis }` (`basis` says why: "no delivery rule declared",
- * "merge", the label), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged }` with a ready sentence in `need`,
+ * "merge", the label), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged, state? }` with a ready sentence in `need` (`state` is "open" or "closed" for a pull request that is not merged),
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
  * `fetchFn`, `budgetMs` (per request), `ghRunner` (asks `gh` for a token) and `now` (the clock) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
  */
@@ -167,7 +175,7 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
   if (pr === null || !Array.isArray(pr.labels)) return notVerified(`pull request ${repo}#${number} could not be read from GitHub (${why(prAnswer.status)})`)
 
   // Not merged is never delivered, whatever the rules say.
-  if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false }
+  if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false, state: pr.state === "closed" ? "closed" : "open" }
 
   // The rules describe how the branch the pull request merged into reaches its consumers, so they are read from that branch. A base branch
   // with no rules file (a release branch, a stacked branch, a deleted base) falls back to the default branch's rules.
