@@ -324,7 +324,7 @@ function taskSection(result, lines) {
 
 /**
  * The boot result as readable text, leading with the work: one status line (status, desk, host, sync in plain words),
- * the stale-Desk line when there is one, the active tasks grouped by state with each task's push route, the open pull
+ * the stale-Desk line and the release-alert line when there are any, the active tasks grouped by state with each task's push route, the open pull
  * requests and repos, then only the instructions that apply to this boot, and the desk's AGENTS.md. Every section is
  * omitted when it has nothing to say, so a healthy boot stays short. `result.text_instructions`, when the boot made
  * them, are the plain-text wording of the instructions (shorter, with the push routes and the factory script moved out);
@@ -356,6 +356,7 @@ export function formatBootText(result) {
   const lines = [status.join(" | ")]
   if (waiting) lines.push(`Needs you first: ${result.needs_operator.question}`)
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
+  if (typeof result.release_alert?.line === "string") lines.push(result.release_alert.line)
   // The headline already says why the sync failed and what else failed (up to three short entries), so those entries would only repeat it.
   for (const line of result.degraded ?? []) if (!inHeadline.has(line) && (sync === null || !line.startsWith("sync: "))) lines.push(`- degraded: ${line}`)
   for (const line of result.pending ?? []) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
