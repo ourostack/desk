@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.193 — 2026-10-06
+
+The clone guard's denial now carries the already-pushed exception in its first line: "Ask the operator to push <branch> unless they already said it is pushed; if so, use task_update." Hosts show only that first line, and a Copilot agent that saw only "Ask the operator to push ..." asked the operator to confirm a push the operator's own message had already announced. The rest of the reason says that the operator's own message in the conversation counts, that the agent then rewrites the next step with task_update, retries and does not ask again, and that it never records a push the operator has not stated. The boot note under a task whose work is on another machine says the same in one clause.
+
+The boot-acceptance harness now judges a missing clone by one rule instead of a phrase list, and counts a clone that finished before a later step of the same chained command failed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.192 — 2026-10-06
 
 **`reconcile` no longer reports `status_unobserved` because of an open session's old observation.** The reason compares a card's status with the latest status the store observed for its job, and it ordered the store's observations by this machine's newest local facts. A session that was still open had been derived locally long after its published file was written, so its old observation (for example `drafting`) counted as the latest, and a `done` card whose `done` the store had already seen was reported as `card_status_not_in_store`. Observations are now ordered by when each is known to hold: the end of the published file that made it, or a terminal status's card `updated` when later. See [`reconcile.js`](mcp/src/factory/reconcile.js) and the [factory doc](docs/factory-local-capture.md).
