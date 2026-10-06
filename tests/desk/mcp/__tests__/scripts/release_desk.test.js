@@ -181,7 +181,7 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
   assert.match(build, /node scripts\/release-desk\.cjs --date/u)
   assert.match(build, /node scripts\/check-release-integrity\.cjs/u)
-  assert.match(build, /"__tests__\/release\/\*\*\/\*\.test\.js"/u)
+  assert.match(build, /"\.\.\/\.\.\/\.\.\/tests\/desk\/mcp\/__tests__\/release\/\*\*\/\*\.test\.js"/u)
   const report = workflow.jobs.report
   assert.deepEqual(report.needs, ["build", "push"])
   assert.deepEqual(report.permissions, { issues: "write" })
