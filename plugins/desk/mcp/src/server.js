@@ -38,6 +38,7 @@ import { taskSignoff } from "./tools/task-signoff.js"
 import { track_create, track_update } from "./tools/track.js"
 import { task_move, track_rename } from "./tools/move.js"
 import { friction_add } from "./tools/friction.js"
+import { improvement_open, improvement_next, improvement_update } from "./tools/improvement.js"
 import { lesson_add } from "./tools/lesson.js"
 import { desk_save } from "./tools/desk-save.js"
 import {
@@ -67,6 +68,7 @@ import { admitControlPlane } from "./activation/admit.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { createWorkspaceWatcher } from "./readiness/workspace-watcher.js"
 import { readinessContracts } from "./readiness/contracts.js"
+import { headlessRefusal } from "./factory/headless-flag.js"
 import { probeEmbeddingService, resolveEmbeddingEndpoints, resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
@@ -229,6 +231,9 @@ export const TOOL_IMPLS = {
   desk_reindex,
   desk_status,
   desk_doctor: doctorRuntime,
+  improvement_open,
+  improvement_next,
+  improvement_update,
 }
 
 const queryRouters = new WeakMap()
@@ -247,13 +252,15 @@ function routerFor(controller) {
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
  */
-export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal }) {
+export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal, env = process.env }) {
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: `unknown tool: ${name}` }],
       isError: true,
     }
   }
+  const refused = headlessRefusal(name, env)
+  if (refused) return { content: [{ type: "text", text: JSON.stringify(refused) }], isError: true }
   const impl = TOOL_IMPLS[name]
   if (!impl) {
     // Every tool wired; this branch only fires if a name exists in

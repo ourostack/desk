@@ -40,6 +40,7 @@ import {
   requestFinalize,
   setConsent,
   setJobsForFile,
+  updateStatus,
   rebuildJobsIndex,
   writeLocalFacts,
   writeMarker,
@@ -891,6 +892,31 @@ test("writeStatus merges top-level fields that aren't last_flush too", () => scr
 test("writeStatus rejects a non-object patch", () => scratch(async (env) => {
   await assert.rejects(() => writeStatus(env, null), TypeError)
   await assert.rejects(() => writeStatus(env, []), TypeError)
+}))
+
+test("updateStatus keeps unrelated top-level keys and serializes concurrent mutations", () => scratch(async (env) => {
+  await writeStatus(env, { note: "kept", derivations: { a: { route: STORE } } })
+  await Promise.all([1, 2, 3, 4].map((n) => updateStatus(env, (current) => ({ ...current, count: (current.count ?? 0) + n }))))
+  const status = await readStatus(env)
+  assert.equal(status.count, 10)
+  assert.equal(status.note, "kept")
+  assert.deepEqual(status.derivations, { a: { route: STORE } })
+  assert.deepEqual(status.last_flush, {})
+}))
+
+test("updateStatus returns the written value", () => scratch(async (env) => {
+  const next = await updateStatus(env, (current) => ({ ...current, x: 1 }))
+  assert.deepEqual(next, { last_flush: {}, x: 1 })
+  assert.deepEqual(await readStatus(env), next)
+}))
+
+test("updateStatus refuses a mutation without a last_flush object and writes nothing", () => scratch(async (env) => {
+  await writeStatus(env, { note: "kept" })
+  await assert.rejects(() => updateStatus(env, () => ({ note: "lost" })), /last_flush/)
+  await assert.rejects(() => updateStatus(env, () => null), TypeError)
+  await assert.rejects(() => updateStatus(env, () => ({ last_flush: [] })), TypeError)
+  assert.equal((await readStatus(env)).note, "kept")
+  await assert.rejects(() => updateStatus(env, "not a function"), TypeError)
 }))
 
 // ---------------------------------------------------------------------------

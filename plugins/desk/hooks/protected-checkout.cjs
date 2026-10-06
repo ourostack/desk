@@ -100,6 +100,8 @@ function commandTextFromRawInput(raw) {
   }
 }
 
+const headless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
+
 function defaultSpawnFiler({ mechanism, reason, host, env = process.env }) {
   const { compatibleCommand, launchCommand } = require("./boot-checks.cjs");
   const script = path.join(__dirname, "..", "mcp", "scripts", "file-desk-problem.js");
@@ -128,7 +130,7 @@ async function deadlineDecision({ rawInput, host, deadlineMs, env = process.env,
     const result = repeatedTimeoutDeskProblem({ command, env, deadlineMs });
     if (result.block) {
       block = result.block;
-      if (result.shouldFile) {
+      if (result.shouldFile && !headless(env)) {
         try {
           spawnFiler({ mechanism: "protected-checkout", reason: `repeated timeout (${result.count}x)`, host, env });
         } catch {

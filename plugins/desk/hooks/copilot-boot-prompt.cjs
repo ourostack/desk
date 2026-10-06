@@ -13,6 +13,13 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", async () => {
   try {
+    // A headless evaluator session gets no boot direction and claims nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
+    let headless;
+    try { headless = require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(process.env); } catch { const v = String(process.env.DESK_FACTORY_HEADLESS ?? ""); headless = v !== "" && v !== "0"; }
+    if (headless) {
+      process.stdout.write("{}\n");
+      return;
+    }
     const { sessionId, cwd } = JSON.parse(input);
     const root = path.join(__dirname, "../mcp/src");
     // The text first, then the root check, then the claim last: a failure before the claim must not use it up.

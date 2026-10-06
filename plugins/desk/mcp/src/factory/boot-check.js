@@ -22,8 +22,9 @@
 // `labelsBootCheck({ env, now })` reads, when a store has `contribute: true`,
 // the names in `evaluate-requests/` and in each contributing store's
 // `quarantine/<store-slug>/labels/<job>/`, the times of those job folders,
-// and, only when both hold something, `jobs-index.json`. It returns
-// `{ count, quarantined }`:
+// and, only when both hold something, `jobs-index.json`; it also reads the
+// first requests' own times and `status.json`'s `evaluator` record. It returns
+// `{ count, quarantined, oldest_days, evaluator }`:
 //
 //   - `count`: retained waste evaluation requests (a finished job whose
 //     labels are not complete yet), except a job whose every indexed
@@ -32,15 +33,34 @@
 //     be delivered: a job folder in labels quarantine updated within 30
 //     days, or a request left out of `count` for that reason. Labels are
 //     quarantined when the store's gate refuses them or when their facts are
-//     quarantined (`outbox.js`'s `holdLabels`).
+//     quarantined (`outbox.js`'s `holdLabels`);
+//   - `oldest_days`: whole days since the oldest counted request was made
+//     (the first 200 are read), or null when there is none to read;
+//   - `evaluator`: `{ state, expired_total, gave_up }` from `status.json`'s
+//     `evaluator` record, each null when it is not recorded (never 0), or null
+//     when there is no record.
 //
-// `labelsLine(count)` and `labelsQuarantinedLine(quarantined)` are the
-// agent lines for a number above zero.
+// The lines come from stored numbers only and never tell the agent to start
+// the evaluator: the plugin runs it. `labelsLine(summary, { cardOpen })` is the
+// evaluator line, `labelsQuarantinedLine(count, { cardOpen })` the quarantined
+// labels line, and `andonLine(store, issues, { openKeys })` the andon line for
+// one store. A line says a card is open only when the cards it was given say so:
+// `cardOpen` and `openKeys` come from `improvementBootCheck`, and when the
+// cards could not be read (null) the line says that instead.
 //
 // `andonBootCheck({ env })` reads, when a store has `contribute: true`,
 // `status.json`'s `andon` record, which the start-time delivery refreshes
-// (`andon-watch.js`), and returns the open andon issues for each such store;
-// `andonLine(store, issues)` is the agent line for one store.
+// (`andon-watch.js`), and returns the open andon issues for each such store.
+//
+// `improvementBootCheck({ deskRoot, personPrefix, env, now, deadline, clock })`
+// reads the improvement cards of the desk (`readCards`, bounded to 200 files)
+// and returns `{ status, open, oldest_days, open_keys, truncated, set_aside,
+// unreadable_files }`: `status` is `ok` or `unreadable`; `open` counts the
+// cards a session may take (open, or claimed with a claim that ran out);
+// `open_keys` lists every card that is not closed. It stops with a thrown
+// `boot_check_budget` error at `deadline` (a `clock()` value). `improvementLine`
+// is the agent line for it, `improvementCountText` the count with its age and
+// `improvementNotes` the files only a session can repair.
 //
 // Task cards are found only in the desk layout: `<track>/<task>/task.md`,
 // `<track>/_archive/<task>/task.md` and the same under `_archive/<track>/`,
@@ -71,6 +91,8 @@ import { checkPersonPrefix, jobId } from "./binding.js"
 import { readDeskRemote, resolveJobIdentity } from "./desk-repo.js"
 import { readSmallText } from "./marker.js"
 import { expandHome } from "./os-protect.js"
+import { createRequire } from "node:module"
+import { readWorker } from "./loop-worker-state.js"
 import { isPlainObject } from "./schema.js"
 import { resolveStore } from "./store-route.js"
 import { normalizeTimestamp } from "./time.js"
@@ -205,20 +227,50 @@ export function hasContributingStore(env = process.env) {
   return contributingStores(env).length > 0
 }
 
-/** The agent line for `count` finished tasks whose waste labels are not complete. */
-export function labelsLine(count) {
-  return `Factory: ${count} finished tasks have no waste labels yet; run the evaluator for them in the background`
+const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_REQUEST_READS = 200
+const EVALUATOR_STATES = new Set(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host"])
+// The states in which a card opens after two blocked days (the evaluator step's blocked states that a person can change).
+const CARD_STATES = new Set(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
+
+const days = (n) => `${n} ${n === 1 ? "day" : "days"}`
+const wholeDays = (from, now) => Math.floor(Math.max(0, now - from) / DAY_MS)
+
+/** The agent line for the evaluator: `{ count, oldest_days, evaluator }` from `labelsBootCheck`, `cardOpen` true only when a `loop_alarm:headless_blocked` card is open. */
+export function labelsLine({ count, oldest_days: oldest = null, evaluator = null }, { cardOpen = false } = {}) {
+  const state = evaluator?.state ?? null
+  const age = oldest === null ? "" : ` (oldest ${days(oldest)})`
+  const waits = `${count} finished ${count === 1 ? "job waits" : "jobs wait"}`
+  const gaveUp = evaluator?.gave_up > 0 ? [`${evaluator.gave_up} ${evaluator.gave_up === 1 ? "has" : "have"} been tried three times without an accepted result`] : []
+  const expired = evaluator?.expired_total > 0 ? [`${evaluator.expired_total} evaluation ${evaluator.expired_total === 1 ? "request expired and is" : "requests expired and are"} counted`] : []
+  if (state === "disabled_would_bill") return ["Factory evaluator: does not run because this sign-in would be billed per token, and nothing is spent", `${waits}${age}`, ...gaveUp, ...expired].join("; ")
+  if (CARD_STATES.has(state)) {
+    return [`Factory evaluator: cannot run (${state})`, `${waits}${age}`, ...gaveUp, cardOpen === true ? "a card is open for it" : "the state is shown on the health record", ...expired].join("; ")
+  }
+  const waiting = `${count} finished ${count === 1 ? "job waits" : "jobs wait"} for labels${age}`
+  if (state === "disabled") return ["Factory evaluator: switched off on this machine", waiting, ...gaveUp, ...expired].join("; ")
+  const last = state === null ? "no result recorded yet" : state === "unrecognized" ? "last result not recognised by this version" : `last result ${state}`
+  return [`Factory evaluator: ${waiting}`, `the plugin labels them in the background, ${last}`, ...gaveUp, ...expired].join("; ")
 }
 
-/** The agent line for `count` finished tasks whose waste labels are quarantined. */
-export function labelsQuarantinedLine(count) {
-  return `Factory: ${count} finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`
+/** The agent line for `count` finished jobs whose waste labels are quarantined; `cardOpen` is true, false, or null when the cards could not be read. */
+export function labelsQuarantinedLine(count, { cardOpen = false } = {}) {
+  const card = cardOpen === null ? "the improvement cards could not be fully read" : cardOpen === true ? "a card is open for it" : "no card is open for it yet"
+  return `Factory: ${count} finished ${count === 1 ? "job has" : "jobs have"} quarantined waste labels; ${card}`
 }
 
-/** The agent line for the open andon issues `issues` (`[{ number }]`, at least one) recorded for `store`. */
-export function andonLine(store, issues) {
+/** The agent line for the open andon issues `issues` (`[{ number }]`, at least one) recorded for `store`; `openKeys` lists the cards that are not closed, or is null when the cards could not be read, and `complete` is false when the read was cut off. */
+export function andonLine(store, issues, { openKeys = null, complete = true } = {}) {
   const count = issues.length
-  return `Factory: ${count} open andon ${count === 1 ? "issue" : "issues"} in ${store} (${issues.map(({ number }) => `#${number}`).join(", ")}); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)`
+  const head = `Factory: ${count} open andon ${count === 1 ? "issue" : "issues"} in ${store} (${issues.map(({ number }) => `#${number}`).join(", ")})`
+  if (openKeys === null) return `${head}; the improvement cards could not be fully read`
+  const open = new Set(openKeys)
+  const have = issues.filter(({ number }) => open.has(`andon:${store}#${number}`)).length
+  if (have === count) return `${head}; ${count === 1 ? "it has" : "each has"} an improvement card`
+  // A card not found in a cut-off read may sit beyond the bound: unknown, not absent.
+  if (!complete) return `${head}; the improvement cards could not be fully read`
+  if (have === 0) return `${head}; ${count === 1 ? "it has no improvement card yet, and gets one" : "none has an improvement card yet, and each gets one"} at the next background step`
+  return `${head}; ${have} of them ${have === 1 ? "has" : "have"} an improvement card, and the rest get one at the next background step`
 }
 
 /**
@@ -243,9 +295,28 @@ export function andonBootCheck({ env }) {
 }
 
 /** See the header. Never writes and never opens a request or a quarantine record; every listing is capped. */
+const HOUR_MS = 60 * 60 * 1000
+const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
+
+/**
+ * `loopWorkerLine({ env, now })`: one status line when the loop worker's last recorded result is not a normal run, else `""`. It reads
+ * `status.json`'s `loop.worker` and the small file beside the lock; both hold a code and two times. No card is involved.
+ */
+export function loopWorkerLine({ env = process.env, now = Date.now() } = {}) {
+  // The switch is read here, not from the record: a loop that is off launches nothing, so no worker is left to record it.
+  if (!isLoopEnabled(env)) return "Factory loop: switched off on this machine (DESK_FACTORY_LOOP)"
+  const dir = factoryStateDir(env)
+  const worker = readWorker(readState(path.join(dir, "status.json"), {}), dir)
+  if (worker === null) return ""
+  if (worker.result === "busy") return `Factory loop: has not run for ${Math.max(0, Math.floor((now - Date.parse(worker.since)) / HOUR_MS))} hours because another worker holds the lock`
+  if (worker.result === "status_reset" || worker.result === "status_unavailable") return "Factory loop: stopped because its status file was damaged and was set aside; the evaluator rests for the rest of that UTC day"
+  if (worker.result === "budget_spent") return "Factory loop: the last run used its whole time budget before every step started"
+  return ""
+}
+
 export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
   const stores = contributingStores(env)
-  if (stores.length === 0) return { count: 0, quarantined: 0 }
+  if (stores.length === 0) return { count: 0, quarantined: 0, oldest_days: null, evaluator: null }
   const dir = factoryStateDir(env)
   const requests = listNames(path.join(dir, "evaluate-requests")).filter((name) => FINALIZE_NAME.test(name)).map((name) => name.slice(0, -5))
   // job -> the sessions whose labels are quarantined, in any contributing store; and the jobs quarantined recently.
@@ -262,14 +333,100 @@ export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
     }
   }
   const index = held.size > 0 && requests.length > 0 ? readState(path.join(dir, "jobs-index.json"), {}) ?? {} : {}
-  let count = 0
+  const waiting = []
   for (const job of requests) {
     const names = Array.isArray(index[job]) ? index[job] : []
     const sessions = names.map((name) => SESSION_OF.exec(String(name))?.[1])
     if (sessions.length > 0 && sessions.every((session) => held.get(job)?.has(session))) quarantined.add(job)
-    else count += 1
+    else waiting.push(job)
   }
-  return { count, quarantined: quarantined.size }
+  // The oldest request's own time, from the first requests only; a file that does not parse gives no age.
+  let oldest = null
+  for (const job of waiting.slice(0, MAX_REQUEST_READS)) {
+    const at = Date.parse(readState(path.join(dir, "evaluate-requests", `${job}.json`), {})?.requested_at)
+    if (!Number.isNaN(at) && (oldest === null || at < oldest)) oldest = at
+  }
+  return { count: waiting.length, quarantined: quarantined.size, oldest_days: oldest === null ? null : wholeDays(oldest, now), evaluator: evaluatorRecord(dir) }
+}
+
+/** `status.json`'s `evaluator` record as `{ state, expired_total, gave_up }`, each null when it is not recorded as a plausible value; null with no record. */
+function evaluatorRecord(dir) {
+  const record = readState(path.join(dir, "status.json"), {})?.evaluator
+  if (!isPlainObject(record)) return null
+  const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
+  // A state this version does not know is said as not recognised, never as no result.
+  const recorded = isPlainObject(record.headless) ? record.headless.state : undefined
+  const state = EVALUATOR_STATES.has(recorded) ? recorded : typeof recorded === "string" ? "unrecognized" : null
+  return { state, expired_total: count(record.expired_total), gave_up: count(record.gave_up) }
+}
+
+const NO_CARDS = Object.freeze({ status: "unreadable", open: 0, oldest_days: null, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 })
+
+/** See the header. Reads, and never writes, the improvement cards; `readCards` is a test seam. */
+export async function improvementBootCheck({ deskRoot, personPrefix = "", now = Date.now(), readCards, deadline = Infinity, clock = () => performance.now() }) {
+  const within = () => {
+    if (clock() >= deadline) throw new BudgetExceeded()
+  }
+  within()
+  let found = null
+  try {
+    found = await (readCards ?? (await import("../desk/improvement-cards.js")).readCards)({ deskRoot, personPrefix })
+  } catch {
+    found = null
+  }
+  within()
+  if (found === null || found.unreadable) return { ...NO_CARDS, open_keys: [] }
+  const live = (card) => card.claim !== null && typeof card.claim?.expires_at === "string" && Date.parse(card.claim.expires_at) > now
+  const available = found.cards.filter((card) => card.state === "open" || (card.state === "claimed" && !live(card)))
+  const times = available.map((card) => Date.parse(card.last_opened_at)).filter((at) => !Number.isNaN(at))
+  return {
+    status: "ok",
+    open: available.length,
+    oldest_days: times.length === 0 ? null : wholeDays(Math.min(...times), now),
+    open_keys: found.cards.filter((card) => !String(card.state).startsWith("closed_")).map((card) => card.key),
+    truncated: found.truncated === true,
+    set_aside: found.set_aside_total,
+    unreadable_files: found.unreadable_files,
+  }
+}
+
+/** True when the card `key` is not closed, false when it is not, null when the cards were not read (or the read was cut off before it was found). */
+export function cardOpenState(summary, key) {
+  if (summary === null || summary === undefined || summary.status !== "ok") return null
+  if (summary.open_keys.includes(key)) return true
+  return summary.truncated ? null : false
+}
+
+const UNCHECKED = {
+  login_not_cached: "this crew desk has several people and this session's person is not known without a network call (set DESK_PERSON to read your cards)",
+  no_matching_member: "this session's identity matches no member of this crew desk's roster (set DESK_PERSON to read your cards)",
+  invalid_member: "the crew roster names an alias that is not a valid folder name",
+}
+
+/** The count of open cards with the age of the oldest, as the improvement line and the boot instruction both say it. */
+export function improvementCountText({ open, oldest_days: oldest, truncated }) {
+  const age = oldest === null ? "" : ` (oldest ${days(oldest)}${truncated ? " among those read" : ""})`
+  return `${truncated ? "at least " : ""}${open} open${age}`
+}
+
+/** The card files only a session can repair, one phrase each, for the counts above zero. */
+export function improvementNotes({ set_aside: setAside, unreadable_files: unreadable }) {
+  return [
+    ...(setAside > 0 ? [`${setAside} ${setAside === 1 ? "file was" : "files were"} set aside as invalid in the improvement folder under _meta (restore or delete ${setAside === 1 ? "it" : "them"} and commit)`] : []),
+    ...(unreadable > 0 ? [`${unreadable} card ${unreadable === 1 ? "file could not be read and was" : "files could not be read and were"} left in place (fix ${unreadable === 1 ? "its" : "their"} permissions or delete ${unreadable === 1 ? "it" : "them"} and commit)`] : []),
+  ]
+}
+
+/** The agent line for `summary` from `improvementBootCheck`: the open cards, an unreadable folder (never silence), or the files only a session can repair; empty when there is nothing to say. */
+export function improvementLine(summary) {
+  if (summary === null || summary === undefined) return ""
+  if (summary.status === "unchecked") return `Improvement cards: not checked, because ${UNCHECKED[summary.reason] ?? "this session's person is not known"}`
+  if (summary.status !== "ok") return "Improvement cards: unreadable (check the improvement folder under _meta on the desk)"
+  const parts = [
+    ...(summary.open > 0 ? [`${improvementCountText(summary)}. Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next`] : []),
+    ...improvementNotes(summary),
+  ]
+  return parts.length === 0 ? "" : `Improvement cards: ${parts.join("; ")}`
 }
 
 // Every task folder the desk layout allows, live and archived, in a stable order:

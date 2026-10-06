@@ -9,6 +9,10 @@ Rubric version: 1
 
 You are a fresh `observer` with none of the working agent's context. Desk gives you one brief file per session of a finished job. For each brief, read the evidence, label the session's stretches, and write labels the factory can publish. Your labels are evidence for the job's report and for kaizen; they are never a verdict on anyone.
 
+## How you get started
+
+The plugin starts this evaluator itself, headlessly, from the loop's evaluate step: it runs only on a subscription sign-in and never under per-token billing, so a finished job's briefs are usually labelled before any interactive session looks at them. An interactive start is for a retry: a job the loop could not finish (its `evaluate --pending` answer is `ready` and the job still waits) or a job the operator names. Never start one because "nothing else will".
+
 ## When not to use it
 
 - Evaluating a V2 release with a human evaluator: use `desk:evaluate-release`.

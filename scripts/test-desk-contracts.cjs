@@ -856,28 +856,23 @@ requires(
 requires(
   "plugins/desk/skills/friction-management/SKILL.md",
   "friction-management records system friction as a kaizen candidate the curator files, with no free text in a public store",
-  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen candidate and sends nothing[\s\S]+setup[\s\S]+stays on the desk[\s\S]+only the kaizen worker \(`curator`\) files a candidate as a card, after its signoff step[\s\S]+same route as the desk's facts[\s\S]+route_unknown[\s\S]+work desk files only to its work store[\s\S]+free text never goes to a public store[\s\S]+structured fields[\s\S]+plugin_not_public[\s\S]+evidence_jobs_local[\s\S]+generically/iu,
+  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen candidate and sends nothing[\s\S]+setup[\s\S]+stays on the desk[\s\S]+opens an improvement card by itself[\s\S]+no signoff[\s\S]+same route as the desk's facts[\s\S]+route_unknown[\s\S]+work desk files only to its work store[\s\S]+free text never goes to a public store[\s\S]+structured fields[\s\S]+plugin_not_public[\s\S]+evidence_jobs_local[\s\S]+generically/iu,
 );
 requires(
   "plugins/desk/skills/lesson-capture/SKILL.md",
   "lesson-capture proposes kaizen cards from the evaluator's waste and never files them",
-  /## Waste the evaluator found[\s\S]+not a private note[\s\S]+kaizen candidate[\s\S]+signal[\s\S]+evidence_jobs[\s\S]+never files a card itself[\s\S]+after its signoff step/iu,
+  /## Waste the evaluator found[\s\S]+not a private note[\s\S]+kaizen candidate[\s\S]+signal[\s\S]+evidence_jobs[\s\S]+never files a card itself[\s\S]+with no signoff/iu,
 );
 requires(
   "plugins/desk/skills/curator/SKILL.md",
   "curator works kaizen cards from filing to verdict",
-  /## The kaizen worker[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+file the system friction, after signoff[\s\S]+file_card: true[\s\S]+at most five per pass[\s\S]+never files to a public store[\s\S]+PR flow[\s\S]+fill `version` when the release lands[\s\S]+confirmed[\s\S]+close[\s\S]+not-confirmed[\s\S]+moved clearly the wrong way[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+## Process[\s\S]+file them only after the signoff/iu,
+  /## The improvement-card routine[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+pull request flow[\s\S]+improvement_update[\s\S]+not-confirmed[\s\S]+moved clearly the wrong way[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+`file_card: true`[\s\S]+never files to a public store[\s\S]+## The friction backlog pass[\s\S]+## Process/iu,
 );
 
 requires(
-  "plugins/desk/skills/session-start/details.md",
-  "session-start surfaces open andon issues and offers the curator",
-  /## Factory boot lines[\s\S]+waste labels and andon[\s\S]+open andon issues in <store>[\s\S]+status block[\s\S]+`curator` pass, which handles them first/u,
-);
-requires(
   "plugins/desk/docs/agentic-engineering-v2-rfc.md",
   "the RFC states the kaizen and andon rules the store's build applies",
-  /\*\*The loop closes\.\*\*[\s\S]+structured fields only[\s\S]+after the operator signs off[\s\S]+at least 6 groups[\s\S]+computed from the confidence level[\s\S]+not-confirmed ones[\s\S]+\*\*Andon stops the line\.\*\*[\s\S]+`factory\.json`[\s\S]+latest version with enough independent jobs[\s\S]+`andon-dismissed`[\s\S]+session start lists[\s\S]+\*\*Still open\.\*\*[\s\S]+Draining recorded friction into kaizen cards/u,
+  /\*\*The loop closes\.\*\*[\s\S]+structured fields only[\s\S]+with no signoff[\s\S]+at least 6 groups[\s\S]+computed from the confidence level[\s\S]+not-confirmed ones[\s\S]+\*\*Andon stops the line\.\*\*[\s\S]+`factory\.json`[\s\S]+latest version with enough independent jobs[\s\S]+`andon-dismissed`[\s\S]+session start lists[\s\S]+\*\*Still open\.\*\*[\s\S]+Draining recorded friction into kaizen cards/u,
 );
 
 // The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
@@ -1015,10 +1010,10 @@ contract("factory-evaluator stays public-safe", () => {
   assert.ok(Buffer.byteLength(skill) <= 8192, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
 });
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle records the evaluation request itself on done or cancelled and hands its answer to session-start",
-  /transitioning to `done` or `cancelled` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+Both statuses request one: a cancelled job is still a finished job[\s\S]+evaluate --pending[\s\S]+as `desk:session-start`'s factory boot lines say[\s\S]+Neither status waits for the evaluator/u);
+  /transitioning to `done` or `cancelled` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+Both statuses request one: a cancelled job is still a finished job[\s\S]+evaluate --pending[\s\S]+as `desk:session-start`'s factory lines say[\s\S]+Neither status waits for the evaluator/u);
 // One owner for the evaluator answer and the Factory label lines: session-start, which every session loads first.
-requires("plugins/desk/skills/session-start/details.md", "session-start owns the Factory label lines and the evaluator answer",
-  /## Factory boot lines[\s\S]+finished tasks have no waste labels yet[\s\S]+factory\.js evaluate --pending[\s\S]+quarantined waste labels that will not be delivered[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
+requires("plugins/desk/skills/session-start/details.md", "session-start owns the Factory lines and the evaluator answer",
+  /## Factory lines[\s\S]+Factory evaluator:[\s\S]+quarantined waste labels[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
 // The factory's one-time consent question (M3-11): asked once per store, in plain words, recorded yes or no
 // through `factory.js consent`, never asked again, and never asked in a noninteractive session.
 const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
@@ -1365,6 +1360,130 @@ contract("every write to an existing task card goes through task_update, and the
   const guard = text("plugins/desk/mcp/src/runtime/task-status-guard.js");
   assert.match(guard, /Desk denies a direct edit of an existing task card/u);
   assert.match(text("plugins/desk/skills/task-card-format/SKILL.md"), /url: https:\/\/github\.com\/<org>\/OrderService\.git/u);
+});
+
+// The improvement loop (package G): the plugin starts the evaluator and works the steps by itself, system friction opens its own card,
+// and an agent works a card it took with `improvement_next` as standing, pre-authorized work.
+const loopSkillFiles = fs.readdirSync(path.join(root, "plugins/desk/skills")).map((name) => `plugins/desk/skills/${name}`)
+  .flatMap((dir) => fs.readdirSync(path.join(root, dir)).filter((file) => file.endsWith(".md")).map((file) => `${dir}/${file}`));
+const loopDocFiles = ["plugins/desk/docs/factory-local-capture.md", "plugins/desk/docs/agentic-engineering-v2-rfc.md", "plugins/desk/mcp/README.md", "plugins/desk/README.md"];
+contract("no skill or doc still says nothing runs on its own or that only an agent can start evaluators", () => {
+  const retired = [
+    /only you can start evaluators/iu,
+    /nothing runs on its own/iu,
+    /run the evaluator for them in the background/iu,
+    /ONLY when the operator explicitly asks to process the open friction backlog or work the kaizen cards/u,
+    /file the system friction, after signoff/iu,
+    /after its signoff step/iu,
+    /only after the operator signs off/iu,
+  ];
+  for (const file of [...loopSkillFiles, ...loopDocFiles]) {
+    const body = text(file);
+    for (const pattern of retired) assert.doesNotMatch(body, pattern, `${file} still says ${pattern}`);
+  }
+});
+contract("no skill or doc tells an agent to remove or change a billing or sign-in setting", () => {
+  const forbidden = [/yours to remove/iu, /(?:remove|unset|delete|change|switch)[^.\n]{0,40}per-token (?:environment )?(?:variable|credential|key)/iu, /remove it where the plugin starts/iu, /per-token (?:environment )?(?:variable|credential)[^.\n]{0,60}(?:remove|unset)/iu];
+  for (const file of [...loopSkillFiles, ...loopDocFiles]) {
+    const body = text(file);
+    for (const pattern of forbidden) assert.doesNotMatch(body, pattern, `${file} tells an agent to change billing: ${pattern}`);
+  }
+  const section = text("plugins/desk/docs/factory-local-capture.md").split(/^## The improvement loop$/mu)[1].split(/^## /mu)[0];
+  assert.match(section, /[Oo]nly `no_agent_cli`, `no_credentials`, `unsupported_host` and `sign_in_unknown` open the `loop_alarm:headless_blocked` card/u);
+  assert.match(section, /`disabled_would_bill`, `disabled` and `budget_exhausted` are shown on the health record and at session start and never carded/u);
+  assert.match(section, /the agent changes nothing/u);
+  assert.match(section, /Desk problem closes after 7 days quiet[^\n]*`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
+  assert.match(section, /`unavailable` with the reason `not_recorded`[\s\S]+written locally/u);
+  assert.match(text("plugins/desk/skills/desk-problem/SKILL.md"), /`closed_confirmed`[^.\n]*measured[^.\n]*`closed_unverified` otherwise/u);
+  const start = text("plugins/desk/skills/session-start/details.md");
+  const would = start.split("\n").find((line) => line.includes("(`disabled_would_bill`)"));
+  assert.ok(would && !/sign_in_unknown/u.test(would), "the disabled_would_bill bullet must not carry sign_in_unknown");
+});
+contract("every improvement tool named in a skill or doc is registered, and the only other improvement_ names are known record names", () => {
+  const registry = text("plugins/desk/mcp/src/tool-names.js");
+  const names = [...registry.match(/export const TOOL_NAMES = \[([\s\S]*?)\]/u)[1].matchAll(/"(improvement_[a-z_]+)"/gu)].map((match) => match[1]);
+  assert.deepEqual([...names].sort(), ["improvement_next", "improvement_open", "improvement_update"]);
+  const known = new Set([...names, "improvement_age", "improvement_stuck", "improvement_commit"]);
+  const named = new Set();
+  for (const file of [...loopSkillFiles, ...loopDocFiles]) {
+    for (const match of text(file).matchAll(/\bimprovement_[a-z_]+\b/gu)) {
+      assert.ok(known.has(match[0]), `${file} names ${match[0]}, which is not a registered tool`);
+      named.add(match[0]);
+    }
+  }
+  for (const name of names) assert.ok(named.has(name), `no skill or doc names ${name}`);
+});
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator works improvement cards as standing, pre-authorized work and keeps the friction pass operator-asked",
+  /^description: [^\n]*improvement_next[^\n]*\n[\s\S]+## The improvement-card routine[\s\S]+standing, pre-authorized[\s\S]+improvement_next[\s\S]+money on a human's payment method[\s\S]+credential or an account only a human can act in[\s\S]+irreversible destructive action[\s\S]+every ruling[\s\S]+countermeasure pull request[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+improvement_update[\s\S]+claim_id[\s\S]+`wont_fix`[\s\S]+`duplicate`[\s\S]+`not_reproducible`[\s\S]+## The friction backlog pass[\s\S]+only when the operator asks[\s\S]+## Process/mu,
+);
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator says system friction no longer waits for signoff",
+  /system friction no longer waits for signoff[\s\S]+opens its own card/iu,
+);
+requires(
+  "plugins/desk/skills/session-start/details.md",
+  "session-start says what each factory line asks of the agent now that the plugin runs the evaluator",
+  /## Factory lines[\s\S]+Factory evaluator:[\s\S]+the plugin labels them in the background[\s\S]+sign_in_unknown[\s\S]+disabled_would_bill[\s\S]+Improvement cards:[\s\S]+background subagent[\s\S]+improvement_next[\s\S]+_meta\/improvement\/invalid\/[\s\S]+quarantined waste labels[\s\S]+open andon issues[\s\S]+each has an improvement card[\s\S]+only when you retry[\s\S]+`ready` → start a fresh `desk:observer` subagent/u,
+);
+requires(
+  "plugins/desk/skills/friction-management/SKILL.md",
+  "friction-management says system friction opens its card by itself and the entry names the key",
+  /\*\*`system`\*\*[\s\S]+opens an improvement card by itself[\s\S]+no signoff[\s\S]+Improvement card key: `friction_candidate:<fingerprint>`/u,
+);
+requires(
+  "plugins/desk/skills/desk-problem/SKILL.md",
+  "desk-problem says a filed or known problem has an improvement card",
+  /improvement card[\s\S]+`desk_problem:/u,
+);
+requires(
+  "plugins/desk/skills/factory-evaluator/SKILL.md",
+  "factory-evaluator says the plugin starts this evaluator itself",
+  /the plugin starts this evaluator itself[\s\S]+subscription sign-in[\s\S]+retry/iu,
+);
+requires(
+  "plugins/desk/docs/factory-local-capture.md",
+  "the factory doc has one improvement-loop section with the cards, the tools, the steps, the money rule, the bounds and the health record",
+  /^## The improvement loop$[\s\S]+improvement card[\s\S]+_meta\/improvement[\s\S]+improvement_open[\s\S]+improvement_next[\s\S]+improvement_update[\s\S]+evaluate, route, mirror, reconcile, verify, measure[\s\S]+DESK_FACTORY_LOOP[\s\S]+DESK_FACTORY_HEADLESS_EVALUATOR[\s\S]+disabled_would_bill[\s\S]+sign_in_unknown[\s\S]+headless_blocked[\s\S]+closed_confirmed[\s\S]+closed_unverified[\s\S]+cards_invalid[\s\S]+status\.json[\s\S]+not recorded[\s\S]+^## /mu,
+);
+contract("the improvement-loop bounds in the doc are the constants in the code", () => {
+  const source = (file) => text(`plugins/desk/mcp/src/${file}`);
+  const constant = (file, name) => Number(source(file).match(new RegExp(`export const ${name} = (\\d+)`, "u"))[1]);
+  const section = text("plugins/desk/docs/factory-local-capture.md").split(/^## The improvement loop$/mu)[1].split(/^## /mu)[0];
+  const facts = [
+    [constant("factory/headless.js", "MAX_HEADLESS_JOBS_PER_DAY"), /(\d+) evaluator runs a day/u],
+    [constant("desk/improvement-cards.js", "MAX_LIVE_CLAIMS"), /(\d+) live claim per machine/u],
+    [constant("desk/improvement-cards.js", "MAX_CLAIMS_PER_DAY"), /(\d+) new claims per machine per day/u],
+    [constant("desk/improvement-cards.js", "CLAIM_TTL_HOURS"), /claim lasts (\d+) hours/u],
+    [constant("factory/improvement-verify.js", "THIN_CHECKS_BEFORE_ESCALATION"), /after (\d+) checks/u],
+    [constant("factory/improvement-verify.js", "DESK_PROBLEM_QUIET_DAYS"), /(\d+) days quiet/u],
+    [constant("factory/improvement-verify.js", "MAX_READING_AGE_HOURS"), /(\d+)-hour freshness/u],
+  ];
+  for (const [value, pattern] of facts) {
+    const match = section.match(pattern);
+    assert.ok(match, `the improvement loop section must state ${pattern}`);
+    assert.equal(Number(match[1]), value, `${pattern} must match the code`);
+  }
+  assert.match(section, /oldest open card is older than 7 days/u);
+  assert.match(section, /in verification for more than 21 days/u);
+  const gaps = source("factory/loop-status.js").match(/MIN_GAP_HOURS = Object\.freeze\(\{([^}]*)\}\)/u)[1];
+  assert.match(gaps, /evaluate: 1, route: 6, mirror: 6, reconcile: 24, verify: 24/u);
+  assert.match(section, /evaluate at most every hour, route and mirror every 6 hours, reconcile and verify every 24 hours/u);
+});
+requires(
+  "plugins/desk/mcp/README.md",
+  "the MCP readme lists the three improvement tools",
+  /## Tools exposed \(22\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 22 tools are wired/u,
+);
+contract("the changelog fragment for the loop exists, has no heading and says what changed for the reader", () => {
+  const fragment = text("plugins/desk/changelog.d/factory-closed-loop.md");
+  assert.doesNotMatch(fragment, /^#{1,2} /mu);
+  assert.match(fragment, /improvement card/iu);
+  assert.match(fragment, /improvement_next/u);
+  assert.match(fragment, /subscription/iu);
+  assert.doesNotMatch(fragment, /Ships desk-mcp@/u);
 });
 
 assert.equal(

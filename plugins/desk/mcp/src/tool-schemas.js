@@ -172,7 +172,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     about: {
       type: "string",
       enum: ["setup", "system"],
-      description: "What the friction is about. \"setup\" (default): friction with this desk's own setup; it stays on the desk. \"system\": friction with Desk itself (its skills, tools or the factory); it becomes a kaizen candidate for the curator.",
+      description: "What the friction is about. \"setup\" (default): friction with this desk's own setup; it stays on the desk. \"system\": friction with Desk itself (its skills, tools or the factory); an improvement card opens by itself, with no signoff; read `improvement` in the result.",
     },
     title: text("Required when about is \"system\": the kaizen card's title, on one line."),
     plugin: text("When about is \"system\": the plugin the friction is in; defaults to \"desk\"."),
@@ -184,7 +184,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     },
     signal: text("When about is \"system\": the rollups measure the friction moves, when known."),
     evidence_jobs: list("When about is \"system\": factory job ids that show the friction, when known."),
-    file_card: flag("Curator-only, after its signoff step: file the \"system\" kaizen candidate as a card now instead of leaving it a candidate. Only valid when about is \"system\"."),
+    file_card: flag("Also file the store's kaizen issue for the \"system\" friction now, instead of leaving it to the loop's mirror step. Only valid when about is \"system\"."),
   }, ["body"]),
   lesson_add: schema({
     topic: text("The lesson topic; slugified for the filename."),
@@ -233,4 +233,20 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
     repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },
   }),
+  improvement_open: schema({
+    source: { type: "string", enum: ["andon", "friction_candidate", "reconcile_class", "desk_problem", "store_build", "evaluator", "loop_alarm", "flush_health"], description: "Where the card comes from; the card key is <source>:<id>." },
+    id: text("The case's id for the source: an owner/repo#number for andon and store_build, ourostack/desk#number for desk_problem, 32 hex for friction_candidate, or a code from the source's closed list."),
+    title: text("Never accepted: Desk builds every card title, so a title is refused as title_not_allowed."),
+    evidence: list("Up to 10 pointers: job:<32 hex>, issue:<owner/repo>#<n>, pr:<owner/repo>#<n>, reconcile:<reason>@<count>, fingerprint:<hex>."),
+    plugin: text("The plugin the improvement is in; defaults to \"desk\"."),
+    signal: text("The rollups measure the improvement moves, when known."),
+  }, ["source", "id"]),
+  improvement_next: schema({ session: text("The session's UUID, when known.") }),
+  improvement_update: schema({
+    key: text("The card's key, as improvement_next returned it."),
+    claim_id: text("The claim_id improvement_next returned."),
+    state: { type: "string", enum: ["shipped", "open", "closed_unverified"], description: "shipped (with countermeasure; may be omitted then), open (release the claim) or closed_unverified (with close_reason)." },
+    countermeasure: text("The pull request URL that ships the fix: https://github.com/<owner>/<repo>/pull/<n>."),
+    close_reason: { type: "string", enum: ["wont_fix", "duplicate", "not_reproducible"], description: "Why you close the card; required with state closed_unverified." },
+  }, ["key", "claim_id"]),
 })

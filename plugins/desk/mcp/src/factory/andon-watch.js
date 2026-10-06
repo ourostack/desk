@@ -29,7 +29,14 @@ import { ANDON_LABEL, DISMISSED_LABEL, parseAndonTitle, parseStoreConfig } from 
 import { issuesClient } from "./store-issues.js"
 
 export const MAX_RECORDED = 20
-const BUILD_AUTHOR = "github-actions[bot]"
+export const BUILD_AUTHOR = "github-actions[bot]"
+
+/** The open andon issues the store's build opened for a tracked plugin and no one dismissed, lowest number first. Shared with the loop's route step. */
+export function trackedAndonIssues(issues, tracked) {
+  return issues
+    .filter((issue) => !issue.pull_request && issue.author === BUILD_AUTHOR && !issue.labels.includes(DISMISSED_LABEL) && tracked.has(parseAndonTitle(issue.title)?.plugin))
+    .sort((left, right) => left.number - right.number)
+}
 
 /** See the header. Never throws for GitHub or consent problems; each is a result code. */
 export async function refreshAndon(env, { store, runner, now = Date.now }) {
@@ -46,9 +53,7 @@ export async function refreshAndon(env, { store, runner, now = Date.now }) {
     const config = parseStoreConfig(await client.readFile("factory.json"))
     if (!config.ok) return { result: "invalid_config" }
     const tracked = new Set(config.plugins)
-    issues = (await client.listIssues({ label: ANDON_LABEL, state: "open" }))
-      .filter((issue) => !issue.pull_request && issue.author === BUILD_AUTHOR && !issue.labels.includes(DISMISSED_LABEL) && tracked.has(parseAndonTitle(issue.title)?.plugin))
-      .sort((left, right) => left.number - right.number)
+    issues = trackedAndonIssues(await client.listIssues({ label: ANDON_LABEL, state: "open" }), tracked)
       .slice(0, MAX_RECORDED)
       .map(({ number, title }) => ({ number, title }))
   } catch (error) {
