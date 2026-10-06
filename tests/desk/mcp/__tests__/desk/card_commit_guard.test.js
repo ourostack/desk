@@ -373,7 +373,7 @@ test("a card whose staged frontmatter does not parse can be repaired by hand; th
     const refused = commitAll(root, "crlf card")
     assert.notEqual(refused.status, 0, "a CRLF card that parses is still refused")
     assert.doesNotMatch(refused.stderr, /DESK_TOOL_COMMIT/, "the refusal never tells an agent about the override")
-    assert.match(refused.stderr, /call task_update for the card/)
+    assert.match(refused.stderr, /call task_update for (?:it|the card)/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
