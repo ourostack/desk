@@ -170,6 +170,10 @@ const stepNamed = (job, name) => {
   return found
 }
 
+function sharedScript() {
+  return readFileSync(path.join(repoRoot, "scripts", "build-and-check-release.sh"), "utf8")
+}
+
 test("the release workflow runs on main one at a time and daily, checks the release, pushes it and reports a failure", () => {
   const { text, workflow } = releaseWorkflow()
   assert.deepEqual(workflow.on.push, { branches: ["main"], paths: ["plugins/desk/changelog.d/**"] })
@@ -179,9 +183,9 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false })
   assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "report"])
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
-  assert.match(build, /node scripts\/release-desk\.cjs --date/u)
-  assert.match(build, /node scripts\/check-release-integrity\.cjs/u)
-  assert.match(build, /"\.\.\/\.\.\/\.\.\/tests\/desk\/mcp\/__tests__\/release\/\*\*\/\*\.test\.js"/u)
+  assert.match(build, /scripts\/build-and-check-release\.sh$/mu)
+  assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)
+  assert.match(sharedScript(), /node scripts\/check-release-integrity\.cjs/u)
   const report = workflow.jobs.report
   assert.deepEqual(report.needs, ["build", "push"])
   assert.deepEqual(report.permissions, { issues: "write" })
@@ -201,15 +205,17 @@ test("the release workflow checks every release surface in a read-only job and p
   assert.deepEqual(push.permissions, { contents: "write", actions: "write" })
   assert.doesNotMatch(JSON.stringify(build), /github\.token|secrets\./u, "the build job never receives a write credential")
   for (const job of [build, push]) assert.equal(stepNamed(job, "Check out main").with["persist-credentials"], false)
-  const checks = stepNamed(build, "Build and check the release").run
+  // The release and the pull request dry run run the same script, so the checks below are the checks of both.
+  assert.match(stepNamed(build, "Build and check the release").run, /scripts\/build-and-check-release\.sh$/mu)
+  const checks = sharedScript()
   for (const check of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) {
     assert.match(checks, new RegExp(check, "u"), check)
   }
   for (const folder of ["release", "activation", "artifacts", "docs", "scripts"]) {
-    assert.ok(checks.includes(`"../../../tests/desk/mcp/__tests__/${folder}/**/*.test.js"`), folder)
+    assert.match(checks, new RegExp(`^patterns=\\(.*\\b${folder}\\b.*\\)$`, "mu"), folder)
   }
-  assert.match(checks, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
-  assert.match(checks, /echo "sha=\$sha"; echo "base=\$base"/u)
+  assert.match(stepNamed(build, "Build and check the release").run, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
+  assert.match(checks, /output "released=true" "summary=\$summary" "sha=\$sha" "base=\$base"/u)
   // The push job uses only actions and git: no npm, no node and no script from the repository.
   assert.equal(push.needs, "build")
   assert.equal(push.if, "needs.build.outputs.released == 'true'")
@@ -233,4 +239,70 @@ test("the release workflow checks every release surface in a read-only job and p
   const listed = spawnSync("sed", ["-n", allowed[0][1], path.join(repoRoot, "scripts", "release-desk.cjs")], { encoding: "utf8" }).stdout.trim().split("\n")
   assert.deepEqual(listed.sort(), [...release.DESK_VERSION_FILES, release.CHANGELOG].sort())
   assert.equal(report.permissions.issues, "write")
+})
+
+test("pull request CI dry-runs the release through the same script, and the CI gate waits for it", () => {
+  const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
+  const job = tests.jobs["release-dry-run"]
+  assert.equal(job.name, "Release dry run")
+  assert.equal(job["continue-on-error"], undefined)
+  assert.equal(job.if, undefined)
+  assert.match(stepNamed(job, "Build and check the release without keeping it").run, /^scripts\/build-and-check-release\.sh --dry-run$/u)
+  assert.ok(tests.jobs["ci-gate"].needs.includes("release-dry-run"))
+  const release = stepNamed(releaseWorkflow().workflow.jobs.build, "Build and check the release").run
+  assert.match(release, /scripts\/build-and-check-release\.sh$/mu)
+  assert.doesNotMatch(release, /--dry-run/u)
+})
+
+test("the shared release script fails a test step that matches no file or runs no test", () => {
+  const text = sharedScript()
+  assert.match(text, /matches no test file/u)
+  assert.match(text, /\[ "\$\{ran:-0\}" -gt 0 \]/u)
+})
+
+// Runs the real script in a temporary repository whose release scripts are stubs, so the dry run's own behaviour is exercised.
+function dryRunRepo({ tests }) {
+  const root = mkdtempSync(path.join(tmpdir(), "dry-run-"))
+  const put = (file, text) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
+    writeFileSync(path.join(root, file), text)
+  }
+  put("scripts/build-and-check-release.sh", readRepo("scripts/build-and-check-release.sh"))
+  put("scripts/release-desk.cjs", `const fs = require("node:fs"); const dir = "plugins/desk/changelog.d";
+const found = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.endsWith(".md") && n !== "README.md") : [];
+if (found.length) { for (const n of found) fs.rmSync(dir + "/" + n); fs.writeFileSync("plugins/desk/released.txt", "x"); }
+console.log(JSON.stringify({ released: found.length > 0, to: "9.9.9-alpha.1", fragments: found.map((n) => dir + "/" + n) }));\n`)
+  for (const name of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) put(`scripts/${name}.cjs`, "")
+  put(".claude-plugin/marketplace.json", "{}\n")
+  put("plugins/desk/changelog.d/README.md", "readme\n")
+  put("plugins/desk/mcp/package.json", "{}\n")
+  put("tests/desk/mcp/__tests__/_isolated_env.mjs", "")
+  for (const name of ["release", "activation", "artifacts", "docs", "scripts"]) put(`tests/desk/mcp/__tests__/${name}/a.test.js`, tests)
+  const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, encoding: "utf8" })
+  git("init", "-q", "-b", "main")
+  git("add", "--all")
+  git("commit", "-q", "-m", "start")
+  return { root, git, head: () => git("rev-parse", "HEAD").stdout.trim() }
+}
+const runDryRun = (repo) => spawnSync("bash", ["scripts/build-and-check-release.sh", "--dry-run"], { cwd: repo.root, encoding: "utf8", env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT")) })
+
+test("a dry run with no fragment pending still folds and checks a throwaway fragment, then restores the tree", () => {
+  const repo = dryRunRepo({ tests: 'require("node:test")("t", () => {})\n' })
+  const before = repo.head()
+  const result = runDryRun(repo)
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /builds and passes every check/u)
+  assert.equal(repo.head(), before)
+  assert.equal(repo.git("status", "--porcelain").stdout, "")
+  assert.equal(repo.git("branch", "--show-current").stdout.trim(), "main")
+  rmSync(repo.root, { recursive: true, force: true })
+})
+
+test("a dry run whose release tests are all skipped fails, because only passing tests count", () => {
+  const repo = dryRunRepo({ tests: 'require("node:test")("t", { skip: true }, () => {})\n' })
+  const result = runDryRun(repo)
+  assert.equal(result.status, 1, result.stdout + result.stderr)
+  assert.match(result.stdout + result.stderr, /passed 0 tests/u)
+  assert.equal(repo.git("status", "--porcelain").stdout, "")
+  rmSync(repo.root, { recursive: true, force: true })
 })

@@ -2,7 +2,7 @@
 "use strict";
 
 // The Desk release bumps the version in every file scripts/release-desk.cjs lists, some of them test fixtures under
-// tests/desk, and the release workflow then commits only the paths its `git add` names. A bumped file outside those
+// tests/desk, and the release then commits only the paths its `git add` names. A bumped file outside those
 // paths stays uncommitted: the release's own checks pass on its working tree, and main goes red afterwards.
 
 const assert = require("node:assert/strict");
@@ -11,7 +11,8 @@ const path = require("node:path");
 const { DESK_VERSION_FILES } = require("./release-desk.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
-const WORKFLOW = ".github/workflows/desk-release.yml";
+// The staging lives in the script the release workflow and the pull request dry run share.
+const WORKFLOW = "scripts/build-and-check-release.sh";
 
 // Every pathspec after `git add ... --` on a staging line of the workflow.
 function stagedPathspecs(text) {
