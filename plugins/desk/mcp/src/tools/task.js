@@ -42,19 +42,20 @@ import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
-import { applyStep } from "../desk/steps.js"
+import { applyStep, readSteps, readyOf, setDerived } from "../desk/steps.js"
+import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
 const DESK_COMMIT_NOTE = "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
-const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
+const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code", "steps"])
 const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/repo/pull/123"}'
 const DONE_EVIDENCE_USAGE =
-  "`evidence.kind` is one of pr, commit, ci_run, non_code; `evidence.ref` is a reference in that " +
+  "`evidence.kind` is one of pr, commit, ci_run, non_code, steps; `evidence.ref` is a reference in that " +
   "kind's own checkable shape -- a PR URL for pr, a commit sha or commit URL for commit, an " +
-  "https URL for ci_run, or an https URL or desk-relative path for non_code."
+  "https URL for ci_run, or an https URL or desk-relative path for non_code. A card with a `## Steps` table closes only with `{ kind: \"steps\" }` (no `ref`) once every step is delivered or dropped."
 
 // Per-kind ref shape, checkable without a network call (2026-09-29 review of
 // #106): a reviewer pointed out that an unconstrained `ref` string let
@@ -133,6 +134,20 @@ const DONE_EVIDENCE_REF_CHECKS = {
 // `card` carries what the check needs of the task itself: its recorded `repos`, the card file(s) the task lives in
 // (a `non_code` ref may not be the card, which any agent can write to say anything) and the git seams.
 async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
+  // A card with a readable `## Steps` table closes on its steps, refreshed just before this check, and on nothing else.
+  if (card.steps != null) {
+    if (evidence?.kind !== "steps") {
+      throw new Error(`${toolName}: this card has a \`## Steps\` table, so it closes only with \`evidence: { kind: "steps" }\` once every step is delivered or dropped (Desk checks each step against its pull request). Got ${evidence === undefined ? "no evidence" : JSON.stringify(evidence)}.`)
+    }
+    const unsettled = unsettledSteps(card.steps.rows, card.steps.derived)
+    if (unsettled.length > 0) {
+      throw new Error(`${toolName}: not done: ${unsettled.length} step${unsettled.length === 1 ? " is" : "s are"} not delivered or dropped: ${unsettled.join("; ")}. Finish or drop ${unsettled.length === 1 ? "it" : "each"}, then repeat this call with \`evidence: { kind: "steps" }\`.`)
+    }
+    return null
+  }
+  if (evidence?.kind === "steps") {
+    throw new Error(`${toolName}: \`evidence: { kind: "steps" }\` needs a card with a readable \`## Steps\` table, and this card has none. Use pr, commit, ci_run or non_code evidence.`)
+  }
   if (evidence === undefined) {
     throw new Error(
       `${toolName}: moving a task to \`done\` needs evidence -- pass \`evidence: { kind, ref }\`. ` +
@@ -343,6 +358,45 @@ function deliveryAnswer({ data, slug, ref }) {
     signoff: "delivered_unsigned",
     signoff_packet: [`Asked: ${packetTitle(data, slug)}`, `Delivered: ${ref}`, "Accept or send back?"],
     signoff_note: SIGNOFF_NOTE,
+  }
+}
+
+// The status of the card a delegated step points at (`task:<track>/<slug>`), live or archived; null when there is no readable card.
+const cardStatusIn = (deskRoot, person) => async (track, slug) => {
+  for (const segments of [[track, slug, "task.md"], [track, "_archive", slug, "task.md"]]) {
+    const file = await resolveWriteTarget({ deskRoot, person, segments })
+    if (!(await pathExists(file))) continue
+    try {
+      return String((await readMarkdown(file)).data.status ?? "unknown")
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+// The evidence ref recorded when a card closes on its steps.
+function stepsRef({ rows, derived }) {
+  const states = rows.map((row) => derived.changes.get(row.id)?.state ?? row.state)
+  const count = (state) => states.filter((item) => item === state).length
+  return `all ${rows.length} steps settled: ${count("delivered")} delivered, ${count("dropped")} dropped`
+}
+
+// A card's steps with their states derived from their pull requests and delegated cards: `{ rows, derived }`, or null when the body has no readable table.
+async function refreshSteps(body, { deskRoot, person, env, fetchFn }) {
+  const read = readSteps(body)
+  if (read.rows === undefined) return null
+  return { rows: read.rows, derived: await deriveSteps(read.rows, { env, fetchFn, cardStatus: cardStatusIn(deskRoot, person) }) }
+}
+
+// What the answer says about the refresh: the cells Desk changed, what it could not verify, and the steps the change made ready.
+function refreshAnswer(refresh, written, before, after) {
+  const ready = readyOf(after).filter((id) => !before.includes(id))
+  const moved = written.map((id) => `${id}: ${refresh.rows.find((row) => row.id === id).state} -> ${refresh.derived.changes.get(id).state}`)
+  return {
+    ...(moved.length === 0 ? {} : { steps_refreshed: moved }),
+    ...(refresh.derived.notes.length === 0 ? {} : { steps_notes: refresh.derived.notes }),
+    ready,
   }
 }
 
@@ -865,15 +919,20 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   let delivered = null
   let report = null
   let deliveryCheck = null
+  // A card with steps has them refreshed from their pull requests once per call (as the card will read after this call's own step, when it has one);
+  // the refresh is written with the rest of the call, and a move to done is checked against it.
+  const repoNames = recordedRepos(merged.repos).map((repo) => repo.name)
+  const refresh = await refreshSteps(step === undefined ? existing.content : applyStep(existing.content, step, "task_update", repoNames).body, { deskRoot, person, env, fetchFn })
   if (merged.status === "done" && existing.data.status !== "done") {
     deliveryCheck = await assertDoneEvidence(evidence, deskRoot, "task_update", {
+      steps: refresh,
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
       repos: [...asList(existing.data.repos), ...asList(frontmatter.repos)],
       // Only these can earn the local-only exemption: repos added in this call never do (`done-evidence.js`).
       existingRepos: existing.data.repos, created: existing.data.created,
       files: [filePath], spawnGit, homeDir: env.HOME, env, fetchFn,
     })
-    merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
+    merged.evidence = { kind: evidence.kind, ref: refresh === null ? evidence.ref : stepsRef(refresh), recorded_at: merged.updated }
     delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
     report = await factoryReportFor({ deskRoot, person, track, slug, env })
   } else if (Object.hasOwn(existing.data, "factory_report_unavailable")) {
@@ -900,10 +959,20 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // A step is applied to the card as it is on disk right now, just before the write, so an `expect` holds against a change
   // another session made while this call ran. Only the body is re-read: the frontmatter is written as this call built it, as for every task_update.
   let stepResult = null
+  let refreshed = null
   let newBody = existing.content
-  if (step !== undefined) {
-    stepResult = applyStep((await readMarkdown(filePath)).content, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
-    newBody = stepResult.body
+  if (step !== undefined || refresh !== null) {
+    newBody = (await readMarkdown(filePath)).content
+    if (step !== undefined) {
+      stepResult = applyStep(newBody, step, "task_update", repoNames)
+      newBody = stepResult.body
+    }
+    if (refresh !== null) {
+      const before = readSteps(newBody).rows
+      const { body: derivedBody, written } = setDerived(newBody, refresh.derived.changes)
+      newBody = derivedBody
+      refreshed = refreshAnswer(refresh, written, readyOf(before ?? []), readSteps(newBody).rows ?? [])
+    }
   }
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
@@ -914,7 +983,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
 
   const stage = stagingAllowed(filePath, spawnGit)
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
-  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined })
+  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || refresh !== null })
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
@@ -929,6 +998,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
   if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
+  if (refreshed !== null) Object.assign(result, refreshedAnswer(refreshed, result.step_note))
   if (returnReason !== undefined) {
     const line = parseReturn(merged.returns.at(-1))
     result.return_recorded = `${line.from} to ${line.to}, ${line.reason}, caught ${line.caught}`
@@ -968,6 +1038,12 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (focus !== undefined) result.focus_note = focus
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
+}
+
+// The refresh's part of the answer, with the steps it made ready joined to any the call's own step made ready.
+function refreshedAnswer({ ready, ...rest }, stepNote) {
+  const note = ready.length === 0 ? stepNote : stepNote === undefined ? `now ready: ${ready.join(", ")}` : `${stepNote}, ${ready.join(", ")}`
+  return { ...rest, ...(note === undefined ? {} : { step_note: note }) }
 }
 
 // What the answer says about a step write: the row as it now stands, the dependents a drop blocked, and the steps it made ready.
@@ -1153,8 +1229,9 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
       } else {
-        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn })
-        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
+        const steps = await refreshSteps(sourceCard.content, { deskRoot, person, env, fetchFn })
+        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
+        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps) } }
       }
       // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
       // with the folder untouched, never after a move it would leave unpatched and uncommitted.

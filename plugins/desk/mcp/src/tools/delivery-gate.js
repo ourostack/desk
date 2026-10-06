@@ -35,6 +35,13 @@ const REQUEST_BUDGET_MS = 5000
 const FILE_PAGES = 3
 const GITHUB_PR = /^https:\/\/(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+)\/pull\/(\d+)(?:[/?#].*)?$/iu
 const MERGE = Object.freeze({ kind: "merge" })
+const PR_IN_TEXT = /https:\/\/(?:www\.)?github\.com\/([^/\s?#()]+)\/([^/\s?#()]+)\/pull\/(\d+)/iu
+
+/** The first GitHub pull request URL inside some text, as `{ repo, number, url }`, or null. */
+export function findPullRequest(text) {
+  const match = PR_IN_TEXT.exec(text)
+  return match === null ? null : { repo: `${match[1]}/${match[2]}`, number: Number(match[3]), url: match[0] }
+}
 
 async function github({ fetchFn, env, budgetMs }, route, accept = "application/vnd.github+json") {
   const headers = { "User-Agent": "desk-delivery-gate", Accept: accept }
@@ -87,7 +94,7 @@ function usableRule(rule) {
 
 /**
  * Is pull request `repo`#`number` delivered? Never throws. `{ status: "delivered", basis }` (`basis` says why: "no delivery rule declared",
- * "merge", the label), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged }` with a ready sentence in `need`,
+ * "merge", the label), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged, state? }` with a ready sentence in `need` (`state` is "open" or "closed" for a pull request that is not merged),
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
  * `fetchFn` and `budgetMs` (per request) are test seams.
  */
@@ -112,7 +119,7 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
   if (prAnswer.status === 404) return { status: "not_found" }
   const pr = prAnswer.status === 200 ? parse(prAnswer.body) : null
   if (pr === null || !Array.isArray(pr.labels)) return notVerified(`pull request ${repo}#${number} could not be read from GitHub (${why(prAnswer.status)})`)
-  if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false }
+  if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false, state: pr.state === "closed" ? "closed" : "open" }
   if (rules === null) return { status: "delivered", basis: `no delivery rule declared in ${repo} (${POLICY_PATH}); merge counts as delivery` }
   if (rules.every((rule) => rule.delivered_at.kind === "merge")) return { status: "delivered", basis: "every rule delivers at merge" }
   const labels = new Set(pr.labels.map((label) => label?.name))
