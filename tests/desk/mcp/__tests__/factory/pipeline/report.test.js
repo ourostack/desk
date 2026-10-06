@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url"
 import { calculateFormulas } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js"
 import { normalizePublished } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
 import { withState } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/number-states.js"
-import { FIELD_TEXT, LABEL_REASONS, REASON_TEXT, REPORT_ONLY_REASONS, buildCoverage, reasonText, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { ATTENTION_REASON_TEXT, ATTENTION_ROLLUP_REASONS, FIELD_TEXT, LABEL_REASONS, REASON_TEXT, REPORT_ONLY_REASONS, buildCoverage, reasonText, outcomeSections, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { ENUMS } from "../../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { LABEL_UNAVAILABLE } from "../../../../../../plugins/desk/mcp/src/factory/label-schema.js"
+import { ATTENTION_REASONS } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/attention.js"
 import { build } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { buildJobTimeline, buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 
@@ -105,7 +106,8 @@ test("the report labels a shared session and groups every unavailable field plus
   assert.match(report, /1 session shared with 1 other job/u)
   assert.match(report, /- Human waits: the host does not record it \(1 session\)/u)
   assert.match(report, /- Permission waits: the host does not record it \(1 session\)/u)
-  assert.match(report, /First-pass yield: not recorded \(it is not collected yet\)/u)
+  assert.match(report, /First-pass yield: not recorded \(no outcome record is available\)/u)
+  assert.match(report, /Rework: not recorded \(no outcome record is available\)/u)
 })
 
 test("index coverage includes every required count, unavailable rate, and plugin version", () => {
@@ -462,6 +464,28 @@ test("the README states the rules, totals.json and that cost is not measured", (
   assert.equal(readme.split("\n").filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("- ") && line.length < 60).length, 0)
 })
 
+test("the report README explains the attention estimate, its method version and that it is an estimate", () => {
+  const readme = renderReadme()
+  assert.match(readme, /^## Human attention$/mu)
+  assert.match(readme, /Human attention per accepted outcome is an estimate, not a measurement/u)
+  assert.match(readme, /method version 1/u)
+  assert.match(readme, /Desk changes the method version whenever it changes a constant/u)
+  assert.match(readme, /reading the reply and writing the prompt/u)
+  assert.match(readme, /never more than the gap the host shows, when there is one/u)
+  assert.match(readme, /printed beside the attention figures/u)
+  assert.match(readme, /counts every human turn of every session in the period[^\n]+including turns on jobs that were refused, are unsigned or were never delivered/u)
+  assert.match(readme, /divided by the jobs accepted and verified/u)
+  assert.match(readme, /It is partial, a lower bound, when some session in the period flags the field[^\n]+Codex records no human turns[^\n]+Copilot records them only in part/u)
+  assert.match(readme, /It is unavailable, with no value and no total, when no session in the period kept a list[^\n]+no human-turn records[^\n]+turns not recorded/u)
+  assert.match(readme, /A turn the estimator cannot read is counted, adds no time and gives the reason that a turn could not be estimated/u)
+  assert.match(readme, /also unavailable, with no total, when every turn is unreadable/u)
+  assert.match(readme, /With no verified accepted outcome the headline is unavailable[^\n]+the total so far is still shown/u)
+  assert.match(readme, /Sessions in the old format \(`\/1`\) are outside the period/u)
+  assert.match(readme, /no accepted outcomes yet/u)
+  assert.match(readme, /Permission decisions are shown beside the headline, not in it/u)
+  assert.equal(readme.split("\n").filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("- ") && line.length < 60).length, 0)
+})
+
 test("each job page carries the footnote that defines retries, human wait, tool outcomes and cost", () => {
   for (const page of pagesOf(readFacts(FACTS)).jobs) {
     assert.match(page, /\nHow to read these numbers: measured means/u)
@@ -508,4 +532,262 @@ test("token types that share one not-recorded state and reason are said once", (
   formulas.tokens_total = { total: none("field_absent"), input: none("field_absent"), output: none("field_absent"), cache_read: none("field_absent"), cache_write: none("field_absent"), reasoning: none("host_does_not_record") }
   const line = renderJobMarkdown({ timeline, formulas }).split("\n").find((entry) => entry.startsWith("- Tokens"))
   assert.equal(line, "- Tokens: total, input, output, cache read, cache write not recorded (the host's record did not include it), reasoning not recorded (the host does not record it).")
+})
+
+function signoffLine(outcome) {
+  const recorded = structuredClone(sessions)
+  if (outcome !== null) recorded[0].outcomes = [{ job: CLOSED, rev: 1, deliveries: 1, verified: null, reason: null, wait: null, ...outcome }]
+  const timeline = buildJobTimeline(CLOSED, recorded)
+  const report = renderJobMarkdown({ timeline, formulas: calculateFormulas(timeline) })
+  return report.split("\n").filter((line) => line.startsWith("- Sign-off:"))
+}
+
+test("the job page says which sign-off the job has, in the plan's words", () => {
+  const class1 = (waitClass, censored) => ({ class: waitClass, censored })
+  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: class1("lt_1d", false) }), ["- Sign-off: accepted (verified), waited under 1 day."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: false, wait: class1("lt_1h", false) }), ["- Sign-off: accepted (unverified), waited under 1 hour."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: null, wait: class1("lt_7d", false) }), ["- Sign-off: accepted (unverified), waited under 7 days."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: class1("ge_7d", false) }), ["- Sign-off: accepted (verified), waited 7 days or more."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: null }), ["- Sign-off: accepted (verified)."])
+  assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("lt_7d", true) }), ["- Sign-off: delivered, waiting at least 1 day."])
+  assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("lt_1h", true) }), ["- Sign-off: delivered, waiting, under 1 hour so far."])
+  assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("lt_1d", true) }), ["- Sign-off: delivered, waiting at least 1 hour."])
+  assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("ge_7d", true) }), ["- Sign-off: delivered, waiting at least 7 days."])
+  assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: null }), ["- Sign-off: delivered, waiting for sign-off."])
+  assert.deepEqual(signoffLine({ state: "refused", verified: true, reason: "defect", wait: class1("lt_1d", false) }), ["- Sign-off: refused (verified), reason defect, waited under 1 day."])
+  assert.deepEqual(signoffLine({ state: "refused", verified: false, reason: "changed_ask", wait: null }), ["- Sign-off: refused (unverified), reason changed_ask."])
+  assert.deepEqual(signoffLine({ state: "reopened" }), ["- Sign-off: reopened after delivery."])
+  assert.deepEqual(signoffLine({ state: "not_delivered", deliveries: 0 }), ["- Sign-off: not delivered yet."])
+})
+
+test("a job with no entry and a legacy done job read not recorded and delivered, sign-off not recorded", () => {
+  assert.deepEqual(signoffLine(null), ["- Sign-off: not recorded."])
+  assert.deepEqual(signoffLine({ state: "not_recorded", deliveries: 0 }), ["- Sign-off: delivered, sign-off not recorded."])
+})
+
+function qualityLines(outcome) {
+  const recorded = structuredClone(sessions)
+  recorded[0].outcomes = [{ job: CLOSED, rev: 1, deliveries: 1, verified: null, reason: null, wait: null, since: "created", returns: [], ...outcome }]
+  const timeline = buildJobTimeline(CLOSED, recorded)
+  const report = renderJobMarkdown({ timeline, formulas: calculateFormulas(timeline) })
+  return report.split("\n").filter((line) => line.startsWith("- First-pass yield:") || line.startsWith("- Rework:"))
+}
+
+const RETURN = { reason: "agent_error", caught: "at_review", counts: true, refusal: null, refusal_verified: null }
+
+test("the job page says whether the job passed first time and what was sent back", () => {
+  assert.deepEqual(qualityLines({ state: "accepted", verified: true }), [
+    "- First-pass yield: 1, passed first time.",
+    "- Rework: returned in the task 0, at review 0, after delivery 0; reason check on refusals: compared 0, disagree 0.",
+  ])
+  assert.deepEqual(qualityLines({ state: "accepted", verified: true, returns: [RETURN, { ...RETURN, caught: "after_delivery", refusal: "defect", refusal_verified: true }] }), [
+    "- First-pass yield: 0, sent back after review (2 returns counted).",
+    "- Rework: returned in the task 0, at review 1, after delivery 1; reason check on refusals: compared 1, disagree 0 (a lower bound).",
+  ])
+  assert.equal(qualityLines({ state: "delivered_unsigned" })[0], "- First-pass yield: 1, upper bound (passed so far, waiting for sign-off).")
+  assert.equal(qualityLines({ state: "accepted", verified: false })[0], "- First-pass yield: 1, upper bound (passed so far, accepted but unverified).")
+  assert.equal(qualityLines({ state: "accepted", verified: true, returns: [{ ...RETURN, reason: "changed_ask", counts: false }] })[0], "- First-pass yield: 1, passed first time; only changed asks came back.")
+  assert.equal(qualityLines({ state: "accepted", verified: true, returns: [RETURN], returns_unreadable: 1 })[1].endsWith("(partial: some of what was sent back was not recorded)."), true)
+})
+
+test("an unavailable first-pass yield or rework figure is listed under what we could not see as not recorded", () => {
+  const recorded = structuredClone(sessions)
+  recorded[0].outcomes = [{ job: CLOSED, rev: 1, state: "not_delivered", verified: null, reason: null, deliveries: 0, wait: null, since: "created", returns: [] }]
+  const timeline = buildJobTimeline(CLOSED, recorded)
+  const report = renderJobMarkdown({ timeline, formulas: calculateFormulas(timeline) })
+  const seen = report.split("## What we could not see\n\n")[1]
+  assert.match(seen, /- First-pass yield: not recorded \(the job has no standing delivery yet\)\./u)
+  assert.doesNotMatch(seen, /- Rework:/u)
+  assert.match(report.split("## What mattered")[0], /- Rework: returned in the task 0/u)
+  assert.doesNotMatch(report.split("## What mattered")[0], /First-pass yield/u)
+})
+
+const NO_YIELD = { state: "unavailable", reasons: ["no_delivered_jobs"], n: 0, N: 0, passed: 0, returned: 0, awaiting_signoff: 0, signoff_unverified: 0, changed_ask_only: 0, excluded: [] }
+const NO_REWORK = { state: "unavailable", reasons: ["not_recorded"], n: 0, N: 0, reason_check: { state: "unavailable", reasons: ["not_recorded"] } }
+const rollupsOf = (signoff, rest = {}) => ({ schema: "desk.factory.rollups/1", signoff, first_pass_yield: NO_YIELD, rework: NO_REWORK, ...rest })
+
+test("the rollups page section names the sign-off counts, or says they are not recorded", () => {
+  assert.deepEqual(outcomeSections(undefined), [])
+  assert.deepEqual(outcomeSections(rollupsOf({ recorded: false })).slice(0, 4), [
+    "## Sign-off", "", "Sign-off: not recorded in any session of this store.", "",
+  ])
+  const signoff = {
+    recorded: true, jobs: 9, accepted: 3, accepted_unverified: 1, delivered_unsigned: 2, refused: 1, refused_unverified: 1, reopened: 0, not_recorded: 1, not_delivered: 1,
+    no_record: 2, jobs_without_work_record: 1,
+    refusal_reasons: { not_what_was_asked: 0, defect: 1, changed_ask: 0, incomplete: 0, other: 0 },
+    waits: { signed: { lt_1h: 1, lt_1d: 2, lt_7d: 0, ge_7d: 0 }, unsigned: { lt_1h: 0, lt_1d: 0, lt_7d: 2, ge_7d: 0 } },
+  }
+  assert.deepEqual(outcomeSections(rollupsOf(signoff)).slice(0, 11), [
+    "## Sign-off", "",
+    "- Jobs with a sign-off record: 9; with no work record: 1. Jobs with a work record and no sign-off record: 2.",
+    "- Accepted (verified): 3. Accepted but unverified, not counted as accepted: 1.",
+    "- Delivered, waiting for sign-off: 2. Refused: 1 (unverified: 1). Reopened: 0.",
+    "- Delivered before sign-off was recorded: 1. Not delivered yet: 1.",
+    "- Refusal reasons: defect 1.",
+    "- Waits that ended in an answer: under 1 hour 1, under 1 day 2.",
+    "- Waits still open (at least this long): at least 1 day 2.",
+    "",
+    "## First-pass yield",
+  ])
+})
+
+test("the rollups page says first-pass yield as n of N, an upper bound while sign-offs are pending, and not recorded when there is none", () => {
+  const section = (value) => outcomeSections(rollupsOf({ recorded: false }, value)).join("\n").split("## First-pass yield\n\n")[1].split("\n## Rework")[0]
+  const base = { n: 2, N: 3, passed: 2, returned: 1, awaiting_signoff: 0, signoff_unverified: 0, changed_ask_only: 1, excluded: [{ reason: "history_not_recorded", jobs: 4 }, { reason: "not_delivered", jobs: 1 }] }
+  assert.equal(section({ first_pass_yield: { state: "measured", value: 2 / 3, reasons: [], ...base } }), [
+    "- First-pass yield: 2 of 3 delivered jobs passed first time (66.67%).",
+    "- Sent back: 1. Only changed asks came back: 1.",
+    "- Left out of the count: 4 jobs (the task card does not record what was sent back), 1 job (the job has no standing delivery yet).",
+    "",
+  ].join("\n"))
+  const partial = section({ first_pass_yield: { state: "partial", value: 1, reasons: ["awaiting_signoff", "signoff_unverified"], ...base, N: 2, returned: 0, awaiting_signoff: 1, signoff_unverified: 1, excluded: [] } })
+  assert.equal(partial, [
+    "- First-pass yield: at most 2 of 2 delivered jobs passed first time (upper bound 100.00%; 1 waiting for sign-off, 1 accepted but unverified).",
+    "- Sent back: 0. Only changed asks came back: 1.",
+    "- Left out of the count: none.",
+    "",
+  ].join("\n"))
+  assert.match(section({ first_pass_yield: { state: "partial", value: 1, reasons: ["awaiting_signoff"], ...base, awaiting_signoff: 2 } }), /\(upper bound 100\.00%; 2 waiting for sign-off\)/u)
+  assert.match(section({ first_pass_yield: { state: "partial", value: 1, reasons: ["signoff_unverified"], ...base, signoff_unverified: 1 } }), /\(upper bound 100\.00%; 1 accepted but unverified\)/u)
+  assert.match(section({}), /^- First-pass yield: not recorded \(no delivered job has a first-pass result yet\)\.\n/u)
+})
+
+test("the rollups page says what was sent back, where it was caught and how often the reasons differ, or that none is recorded", () => {
+  const section = (rework) => outcomeSections(rollupsOf({ recorded: false }, { rework })).join("\n").split("## Rework\n\n")[1]
+  const returns = {
+    in_task: { agent_error: 0, changed_ask: 0, new_information: 1, external: 0 },
+    at_review: { agent_error: 0, changed_ask: 0, new_information: 0, external: 0 },
+    after_delivery: { agent_error: 2, changed_ask: 1, new_information: 0, external: 0 },
+  }
+  assert.equal(section({ state: "measured", reasons: [], n: 3, N: 3, returns, changed_ask: 1, reason_check: { state: "measured", reasons: [], compared: 4, disagree: 1, compared_verified: 3 } }), [
+    "- Jobs with returns recorded: 3 of 3.",
+    "- Returns caught in the task: new_information 1. At review: none. After delivery: agent_error 2, changed_ask 1.",
+    "- Returns that were changed asks: 1.",
+    "- Reason check on refusals: compared 4, disagree 1, of which 3 of the compared refusals were verified. This is a lower bound on disagreement.",
+    "",
+  ].join("\n"))
+  const partial = section({ state: "partial", reasons: ["history_not_recorded"], n: 1, N: 3, returns, changed_ask: 0, reason_check: { state: "unavailable", reasons: ["no_refusals"] } })
+  assert.match(partial, /^- Jobs with returns recorded: 1 of 3 \(partial: the task card does not record what was sent back\)\./u)
+  assert.match(partial, /- Reason check on refusals: not recorded \(no refusal could be compared with the agent's reason\)\./u)
+  assert.equal(section({ state: "unavailable", reasons: ["history_not_recorded"], n: 0, N: 2, reason_check: { state: "unavailable", reasons: ["not_recorded"] } }), "- Rework: not recorded (the task card does not record what was sent back).\n")
+})
+
+test("a store with finished jobs and no outcome records does not say that nothing was delivered", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "desk-factory-no-outcomes-"))
+  try {
+    build({ storeDir: STORE, outDir: root + "/out" })
+    const page = readFileSync(path.join(root, "out", "rollups", "index.md"), "utf8")
+    assert.match(page, /- First-pass yield: not recorded \(no delivered job has a first-pass result yet\)\./u)
+    assert.match(page, /Left out of the count: 2 jobs \(no outcome record is available\)/u)
+    assert.doesNotMatch(page, /no job has been delivered/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// --- the attention headline on the rollups page and the job page (task E8) -----
+
+const METHOD = { version: 1, read_ms: { none: 0, xs: 1000, s: 5000, m: 30_000, l: 150_000, xl: 400_000 }, type_ms: { none: 2000, xs: 3000, s: 25_000, m: 150_000, l: 180_000, xl: 180_000 }, floor_ms: 1000, permission_ms: 5000 }
+const attentionOf = (headline, rest = {}) => ({
+  method: METHOD,
+  headline: { reasons: [], n: 3, N: 3, numerator_ms: 3_600_000, accepted_outcomes: 3, ...headline },
+  turns_per_accepted: { state: "measured", value: 2.5, reasons: [], n: 3, N: 3 },
+  human_turns: 40,
+  est_ms: { attributed: 3_000_000, unattributed: 450_000, unplaced: 150_000 },
+  sessions: { in_period: 5, complete: 5 },
+  permission: { state: "measured", decisions: 2, est_ms: 8000, reasons: [] },
+  ...rest,
+})
+const attentionPage = (attention) => outcomeSections(rollupsOf({ recorded: false }, { attention })).join("\n").split("## Human attention\n\n")[1].split("\n## ")[0]
+
+test("the rollups page leads with the headline number, says it is an estimate with its method version, then its state", () => {
+  const page = attentionPage(attentionOf({ state: "measured", value: 1_200_000, reasons: [] }))
+  const lines = page.split("\n")
+  assert.equal(lines[0], "- Human attention per accepted outcome: about 20 minutes (an estimate, method version 1; measured). That is 1 hour of estimated attention over 3 accepted outcomes.")
+  assert.match(page, /- Human turns per accepted outcome: 2\.5 \(40 human turns over 3 accepted outcomes\)\./u)
+  assert.match(page, /- Where the estimate went: 50 minutes on jobs, 7\.5 minutes on sessions that were not on any job, 2\.5 minutes on sessions that could not be placed on a job\./u)
+  assert.match(page, /- Sessions in the period: 5, of which 5 record the human's turns completely\./u)
+  assert.doesNotMatch(page, /Codex|Copilot/u, "no host sentence when no session in the period has a host reason")
+  assert.match(page, /- Permission decisions, reported beside the headline and not in it: 2, estimated at 8 seconds\./u)
+  assert.match(page, /- Method: version 1\. An estimate of the time the human spent reading the reply and writing the prompt/u)
+  assert.doesNotMatch(page, /_ms|undefined|NaN/u)
+})
+
+test("a partial headline says it is a lower bound and why, and names Codex and Copilot", () => {
+  const reasons = ["host_does_not_record", "host_records_partly", "turns_capped", "turns_not_recorded"]
+  const page = attentionPage(attentionOf({ state: "partial", value: 1_200_000, reasons }, { turns_per_accepted: { state: "partial", value: 2.5, reasons, n: 3, N: 3 } }))
+  assert.match(page.split("\n")[0], /^- Human attention per accepted outcome: about 20 minutes \(an estimate, method version 1; partial, so a lower bound: /u)
+  assert.match(page.split("\n")[0], /a host does not record the human's turns/u)
+  assert.match(page.split("\n")[0], /a host records the human's turns only in part/u)
+  assert.doesNotMatch(page.split("\n")[0], /Codex|Copilot|Claude/u, "a reason names the reason, not a host")
+  assert.match(page, /such as Codex.*such as Copilot/u, "the sentence about hosts is printed when a host reason is present")
+  assert.match(page, /- Human turns per accepted outcome: at least 2\.5/u)
+  assert.doesNotMatch(page, /host_|turns_capped|turns_not_recorded/u)
+})
+
+test("with no accepted outcome the page says no accepted outcomes yet and still gives the estimated attention", () => {
+  const page = attentionPage(attentionOf(
+    { state: "unavailable", reasons: ["no_accepted_outcomes"], n: 0, N: 0, accepted_outcomes: 0 },
+    { turns_per_accepted: { state: "unavailable", reasons: ["no_accepted_outcomes"], n: 0, N: 0 } },
+  ))
+  assert.equal(page.split("\n")[0], "- Human attention per accepted outcome: no accepted outcomes yet. The estimated attention so far, with nothing to divide it by, is 1 hour over 40 human turns.")
+  const bound = attentionPage(attentionOf({ state: "unavailable", reasons: ["no_accepted_outcomes", "turns_capped"], n: 0, N: 0, accepted_outcomes: 0 }, { turns_per_accepted: { state: "unavailable", reasons: ["no_accepted_outcomes"], n: 0, N: 0 } }))
+  assert.equal(bound.split("\n")[0], "- Human attention per accepted outcome: no accepted outcomes yet. The estimated attention so far, with nothing to divide it by, is at least 1 hour over at least 40 human turns (a session's list of human turns was cut to a size limit, so this is a lower bound).")
+  const unknown = attentionPage(attentionOf({ state: "unavailable", reasons: ["host_does_not_record", "no_accepted_outcomes", "turns_not_recorded"], n: 0, N: 0, accepted_outcomes: 0, numerator_ms: undefined }, { turns_per_accepted: { state: "unavailable", reasons: ["no_accepted_outcomes"], n: 0, N: 0 }, human_turns: undefined, est_ms: undefined, sessions: { in_period: 1, complete: 0 } }))
+  assert.equal(unknown.split("\n")[0], "- Human attention per accepted outcome: no accepted outcomes yet, and no human attention is recorded in the period (a host does not record the human's turns, so this is a lower bound and some sessions did not record all of the human's turns, so this is a lower bound).")
+  assert.doesNotMatch(unknown, /over 0 ms|0 human turns|Where the estimate went/u)
+  assert.match(page, /- Human turns per accepted outcome: no accepted outcomes yet\./u)
+  assert.doesNotMatch(page, /about|NaN/u)
+})
+
+test("an unavailable headline for another reason says so in words and gives no number", () => {
+  const page = attentionPage(attentionOf({ state: "unavailable", reasons: ["no_turn_records"], numerator_ms: undefined }, { human_turns: undefined, sessions: { in_period: 0, complete: 0 }, est_ms: undefined }))
+  assert.match(page.split("\n")[0], /^- Human attention per accepted outcome: not available \(no session in the store records the human's turns\)\./u)
+  const permission = attentionPage(attentionOf({ state: "measured", value: 1 }, { permission: { state: "unavailable", reasons: ["host_does_not_record", "no_sessions"] } }))
+  assert.match(permission, /- Permission decisions, reported beside the headline and not in it: not recorded \(the host does not record it and no session has reported yet\)\./u)
+  assert.equal(outcomeSections(rollupsOf({ recorded: false })).join("\n").includes("Human attention"), false, "a caller with no attention figure adds nothing")
+})
+
+test("attention reasons print through the attention words on every page, never through the outcome words for not_recorded", () => {
+  const timeline = buildJobTimeline(CLOSED, sessions)
+  const base = calculateFormulas(timeline)
+  const outcomeWords = REASON_TEXT.not_recorded
+  assert.notEqual(outcomeWords, ATTENTION_REASON_TEXT.not_recorded)
+  const line = (attention) => renderJobMarkdown({ timeline, formulas: { ...base, attention } }).split("\n").find((entry) => entry.startsWith("- Human attention"))
+  // The built fixture has no recorded turns: the job page says so in the attention words.
+  assert.equal(line(base.attention), `- Human attention: not recorded (${ATTENTION_REASON_TEXT.not_recorded}).`)
+  for (const code of ATTENTION_REASONS) {
+    const unavailable = { class: "unavailable", state: "unavailable", value: null, reasons: [code], reason: code }
+    const text = line(withState(unavailable))
+    assert.ok(text.includes(ATTENTION_REASON_TEXT[code]), code)
+    assert.ok(!text.includes(outcomeWords), `${code} does not print the outcome words`)
+  }
+  const partial = withState({ class: "inferred", value: 90_000, turns: 3, method: 1, reasons: ["turns_not_recorded", "turns_capped"], state: "partial", partial: true, partial_reasons: ["turns_not_recorded", "turns_capped"] })
+  assert.equal(line(partial), `- Human attention: about 1.5 minutes over 3 human turns (an estimate, method version 1; partial: ${ATTENTION_REASON_TEXT.turns_capped} and ${ATTENTION_REASON_TEXT.turns_not_recorded}).`)
+  const measured = withState({ class: "inferred", value: 9000, turns: 3, method: 1, reasons: [], state: "measured" })
+  assert.equal(line(measured), "- Human attention: about 9 seconds over 3 human turns (an estimate, method version 1; measured).")
+  const mixed = withState({ class: "unavailable", state: "unavailable", value: null, reasons: ["desk_public", "no_segments"], reason: "mixed" })
+  assert.equal(line(mixed), `- Human attention: not recorded (${REASON_TEXT.desk_public} and ${ATTENTION_REASON_TEXT.no_segments}).`)
+  // The rollup words for the headline never use the outcome words either.
+  for (const code of ATTENTION_ROLLUP_REASONS) assert.ok(Object.hasOwn(REASON_TEXT, code) && REASON_TEXT[code].length > 10 && !/[_;()]/u.test(REASON_TEXT[code]), code)
+})
+
+test("durations read in seconds, minutes and hours with singular and plural words, and a host's own flag keeps its shared words on the job page", () => {
+  const timeline = buildJobTimeline(CLOSED, sessions)
+  const base = calculateFormulas(timeline)
+  const line = (value, turns, reasons = []) => renderJobMarkdown({
+    timeline,
+    formulas: { ...base, attention: withState({ class: "inferred", value, turns, method: 1, reasons, state: reasons.length === 0 ? "measured" : "partial", ...(reasons.length === 0 ? {} : { partial: true, partial_reasons: reasons }) }) },
+  }).split("\n").find((entry) => entry.startsWith("- Human attention"))
+  assert.equal(line(500, 1), "- Human attention: about 500 ms over 1 human turn (an estimate, method version 1; measured).")
+  assert.equal(line(1000, 1), "- Human attention: about 1 second over 1 human turn (an estimate, method version 1; measured).")
+  assert.equal(line(60_000, 2), "- Human attention: about 1 minute over 2 human turns (an estimate, method version 1; measured).")
+  assert.equal(line(3_600_000, 2), "- Human attention: about 1 hour over 2 human turns (an estimate, method version 1; measured).")
+  assert.equal(line(7_200_000, 2), "- Human attention: about 2 hours over 2 human turns (an estimate, method version 1; measured).")
+  assert.match(line(9000, 2, ["host_records_partly"]), /partial: the host records only some of it, so this is a lower bound\)\.$/u)
+})
+
+test("the rollups page says a partial permission figure in words, from the attention words or the shared ones", () => {
+  const line = (reasons) => attentionPage(attentionOf({ state: "measured", value: 1 }, { permission: { state: "partial", decisions: 2, est_ms: 8000, reasons } })).split("\n").find((entry) => entry.startsWith("- Permission"))
+  assert.match(line(["capped", "decision_not_estimable"]), /estimated at 8 seconds \(partial: it was cut to a size limit and some permission decisions could not be estimated, so this is a lower bound\)\.$/u)
 })

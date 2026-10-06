@@ -81,6 +81,7 @@ import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTI
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
+import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -1061,6 +1062,8 @@ function buildInstructionItems(ctx) {
   } else {
     add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
   }
+  // The sign-off line comes before the consent block: consent stays the last instruction of the text boot.
+  signoffInstructions(ctx.unsigned, { noninteractive }).forEach((text) => add(text))
   // An ask-and-stop blocker means the operator has one question to answer first: no consent line on this boot.
   const consent = needsOperator(ctx) === null ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
   consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
@@ -1140,6 +1143,7 @@ export async function bootOnce({
   agentsFn = readAgentsMd,
   staleDeskFn = checkStaleDesk,
   nestedCards = NESTED_CARD_FIELDS,
+  unsignedFn = recordUnsigned,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
   const ghAuth = ghAuthArg ?? (ghArg ?? commandRunner("gh", { env }))
@@ -1319,6 +1323,14 @@ export async function bootOnce({
     degraded.push(`factory: ${error.message}`)
   }
 
+  // The delivered tasks that await the operator's sign-off; the counts go to status.json.
+  let unsigned = null
+  try {
+    unsigned = await unsignedFn(env, root.path, now())
+  } catch {
+    unsigned = null
+  }
+
   let task = null
   if (taskQuery !== null) {
     const resolved = resolveTaskQuery(taskQuery, cards, root.path)
@@ -1333,7 +1345,7 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
@@ -1361,6 +1373,7 @@ export async function bootOnce({
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
+    unsigned_deliveries: unsigned,
   }
 }
 

@@ -1097,6 +1097,128 @@ contract("task-card-format documents the optional factory_report field", () => {
   assert.match(skill, /^factory_report: https:\/\/github\.com\/<store>\/blob\/reports\/jobs\/<job>\.md +# /mu);
   assert.match(skill, /\*\*`factory_report`\*\*[^\n]+written by `task_update` or `task_archive`[^\n]+transition to `done`[^\n]+consent[^\n]+may not resolve until[^\n]+never write or edit it by hand/u);
 });
+contract("the card format skill documents signoff, flow and returns as tool-written", () => {
+  const skill = text("plugins/desk/skills/task-card-format/SKILL.md");
+  for (const key of ["signoff", "flow", "returns"]) {
+    assert.ok(new RegExp("\\*\\*`" + key + "`\\*\\*[^\\n]+written by the task tools", "u").test(skill), `${key} is documented as tool-written`);
+  }
+  assert.match(skill, /`task_update` and `task_create` refuse[^\n]+`signoff`[^\n]+`flow`[^\n]+`returns`[^\n]+in `frontmatter`/u);
+  assert.match(skill, /\*\*`signoff`\*\*[^\n]+`delivered_unsigned`[^\n]+`accepted`[^\n]+`refused`[^\n]+`verified`[^\n]+`task_signoff`/u);
+  assert.match(skill, /\*\*`flow`\*\*[^\n]+`since`[^\n]+`rev`[^\n]+`reached`[^\n]+`first_validating_at`[^\n]+`first_delivered_at`[^\n]+`delivered_at`[^\n]+`deliveries`/u);
+  assert.match(skill, /\*\*`returns`\*\*[^\n]+one line per return[^\n]+refused=/u);
+});
+contract("the lifecycle skill says done is a delivery that waits for a sign-off", () => {
+  const skill = text("plugins/desk/skills/task-lifecycle/SKILL.md");
+  const body = (skill.split("## Done is a delivery\n", 2)[1] ?? "").split(/\n## /u, 1)[0];
+  assert.match(body, /delivery, not an acceptance/u);
+  assert.match(body, /`task_signoff`[^\n]+later turn/u);
+  assert.match(body, /`task_update` and `task_archive` answer[^\n]+`signoff_packet`[^\n]+`signoff_note`/u);
+  assert.match(body, /A child agent never calls `task_signoff`/u);
+});
+contract("the lifecycle skill names return_reason and its four values", () => {
+  const skill = text("plugins/desk/skills/task-lifecycle/SKILL.md");
+  const section = skill.split("## Returns\n", 2)[1];
+  assert.ok(section, "task-lifecycle has a Returns section");
+  const body = section.split(/\n## /u, 1)[0];
+  for (const reason of ["agent_error", "changed_ask", "new_information", "external"]) assert.ok(new RegExp("\\*\\*`" + reason + "`\\*\\*", "u").test(body), reason);
+  assert.match(body, /`return_reason`/u);
+  assert.match(body, /any move out of `done`/u);
+  assert.match(body, /ranks below the furthest/u);
+  assert.match(body, /compared with the operator's/u);
+  assert.match(body, /counted, not punished/u);
+  assert.match(body, /`changed_ask`[^\n]*does not lower first-pass yield/u);
+  assert.match(skill, /^\| `done` → `processing` \| NOTIFY \|[^\n]*`return_reason`/mu);
+});
+contract("the card format skill points at the return rules", () => {
+  const skill = text("plugins/desk/skills/task-card-format/SKILL.md");
+  assert.match(skill, /`task-lifecycle`, "Returns"[^\n]+`return_reason`/u);
+});
+contract("the lifecycle skill says what an unverified answer can and cannot become", () => {
+  const skill = text("plugins/desk/skills/task-lifecycle/SKILL.md");
+  assert.match(skill, /Only an unverified acceptance on Claude Code can be upgraded: do not ask the operator again; when their next message arrives, repeat the call with the same answer\.[^\n]+An unverified refusal has already sent the task back to work, so there is nothing to sign until the next delivery[^\n]+On Copilot CLI and Codex every answer is unverified/u);
+  assert.doesNotMatch(skill, /usually to repeat the call/u);
+  assert.doesNotMatch(skill, /ask again in a later turn/u);
+  assert.match(skill, /^\| `done` → `processing` \| NOTIFY \|[^\n]*\(`start-task`\)\. Moving out of `done`/mu);
+});
+contract("each new sign-off paragraph in the other skills is pinned", () => {
+  const read = (name) => text(`plugins/desk/skills/${name}`);
+  assert.match(read("archive-workflow/SKILL.md"), /^## Archiving a delivered task$/mu);
+  assert.match(read("archive-workflow/SKILL.md"), /does not accept it[^\n]+`task_signoff` still finds it[^\n]+`unarchive: true`/u);
+  assert.match(read("interaction-style/SKILL.md"), /^### The sign-off ask is the one closing question$/mu);
+  assert.match(read("interaction-style/SKILL.md"), /three lines[^\n]+ask it once, carry on without waiting[^\n]+`task_signoff` in a later turn/u);
+  assert.match(read("session-resumption/SKILL.md"), /A task found at `done` is delivered[^\n]+Do not treat it as accepted[^\n]+`task_signoff` in a later turn/u);
+  assert.match(read("session-start/SKILL.md"), /\*\*Delivered, awaiting sign-off\.\*\*[^\n]+`details\.md`/u);
+  assert.match(read("session-start/details.md"), /^## Delivered tasks awaiting sign-off$/mu);
+  assert.match(read("session-start/details.md"), /`Delivered, awaiting sign-off:`[^\n]+In a noninteractive session, raise nothing/u);
+  assert.match(read("using-superpowers-with-desk/SKILL.md"), /`Never call task_signoff\.`[^\n]+always there[^\n]+a child never calls `task_signoff`/u);
+  assert.match(read("using-desk/SKILL.md"), /re-dispatch it or finish in the root/u);
+  assert.match(read("using-desk/SKILL.md"), /A child's report omits the sign-off ask\./u);
+});
+contract("the store playbook states the outcome report keys as fact", () => {
+  const playbook = text("plugins/desk/docs/factory-store-playbook.md");
+  assert.doesNotMatch(playbook, /Marked for the lead/u);
+  assert.match(playbook, /Read the `state` of a figure[^\n]+before any count/u);
+  assert.match(playbook, /a yield of 1 can be `partial`[^\n]+upper bound[^\n]+`reason_check\.disagree`[^\n]+a lower bound[^\n]+`compared_verified`/u);
+  assert.match(playbook, /`refused_unverified`[^\n]+`signoff: \{ recorded: false \}`/u);
+  assert.match(playbook, /`signoff_unverified`, `changed_ask_only`/u);
+  assert.match(playbook, /An unverified sign-off is never an acceptance[^\n]+Show `no_record` beside the sign-off counts/u);
+});
+contract("local capture explains the remaining outcome fields", () => {
+  const doc = text("plugins/desk/docs/factory-local-capture.md");
+  assert.match(doc, /`first_validating_at` and `first_delivered_at`/u);
+  assert.match(doc, /`reopened` means the task was delivered and is back in work without a refusal/u);
+  assert.match(doc, /`returns_truncated` and `returns_unreadable`[^\n]+are published when present/u);
+});
+contract("local capture says what a human turn is on each host, what cannot be known and how attention is estimated", () => {
+  const doc = text("plugins/desk/docs/factory-local-capture.md");
+  assert.match(doc, /^## Human attention$/mu);
+  assert.match(doc, /A human turn on Claude Code is a root prompt line whose `origin\.kind` is `human`[^\n]+A session where none carries an origin flags `human_turns` `field_absent`[^\n]+a mix flags `host_records_partly`/u);
+  assert.match(doc, /A queued prompt counts as `mid_turn`[^\n]+a `mid_turn` window is not human wait time/u);
+  assert.match(doc, /A prompt dated before the last kept turn is dropped and flags `source_unreadable`/u);
+  assert.match(doc, /every Copilot list is flagged `host_records_partly`/u);
+  assert.match(doc, /Codex is flagged `host_does_not_record` and writes no list/u);
+  assert.match(doc, /No host records how long a person read a reply[^\n]+never a measurement/u);
+  assert.match(doc, /`estimateTurn\(turn\) = max\(FLOOR_MS, min\(turn\.window_ms \?\? Infinity, READ_MS\[turn\.output_class\] \+ TYPE_MS\[turn\.prompt_class\]\)\)`/u);
+  assert.match(doc, /^\| `READ_MS` \(reading the reply\) \| 0 \| 1,000 \| 5,000 \| 30,000 \| 150,000 \| 400,000 \|$/mu);
+  assert.match(doc, /^\| `TYPE_MS` \(writing the prompt\) \| 2,000 \| 3,000 \| 25,000 \| 150,000 \| 180,000 \| 180,000 \|$/mu);
+  assert.match(doc, /`ATTENTION_METHOD = 1`[^\n]+changing any constant raises the method version/u);
+  assert.match(doc, /The headline is partial, printed as a lower bound, when some session in the period flags the field \(Codex sessions and every Copilot session do\)/u);
+  assert.match(doc, /unavailable when no session in the period kept a list[^\n]+`no_turn_records`[^\n]+no total is published/u);
+  assert.match(doc, /unavailable, with the total still published when a list exists and a turn could be estimated, when no verified acceptance exists/u);
+  assert.match(doc, /also unavailable, with no total, when every turn is unreadable/u);
+  assert.match(doc, /A turn the estimator cannot read is counted, adds no time and gives `turn_not_estimable`/u);
+  assert.match(doc, /Sessions in the old `\/1` format carry neither list nor flag[^\n]+coverage pages no longer count them[^\n]+`not_recorded`/u);
+  assert.doesNotMatch(doc, /partial whenever a Codex or Copilot session is in the period/u);
+});
+contract("the store playbook states the human turns shape, the attention rollup and how to read them", () => {
+  const playbook = text("plugins/desk/docs/factory-store-playbook.md");
+  assert.match(playbook, /^## Reading attention in the reports$/mu);
+  assert.match(playbook, /`human_turns`[^\n]+at most 1,000[^\n]+`\{ at_ms, basis, window_ms, prompt_class, output_class \}`[^\n]+`first`, `after_stop` or `mid_turn`/u);
+  assert.match(playbook, /`rollups\/outcomes\.json` has an `attention` block: `method`, `headline`, `turns_per_accepted`, `human_turns`, `est_ms` \(attributed, unattributed and unplaced\), `sessions` \(in the period and complete\) and `permission`/u);
+  assert.match(playbook, /Read `state` first[^\n]+The figure is an estimate[^\n]+A partial figure is a lower bound/u);
+  assert.match(playbook, /unavailable with no value and no total when no session in the period kept a list \(`no_turn_records`[^\n]+`turns_not_recorded`/u);
+  assert.match(playbook, /unavailable, with its total still published when a list exists and a turn could be estimated, when no verified acceptance exists/u);
+  assert.match(playbook, /also unavailable, with no total, when every turn is unreadable/u);
+  assert.match(playbook, /`human_turns` is left out only when no session kept a list, and `est_ms` and `numerator_ms` are also left out when no turn could be estimated/u);
+  assert.match(playbook, /`turn_not_estimable`[^\n]+sessions in the old `\/1` format are outside the period/u);
+  assert.match(playbook, /`not_recorded`, `desk_public`, `no_segments`, `turn_not_estimable` or `mixed`/u);
+  assert.doesNotMatch(playbook, /partial whenever a Codex or Copilot session is in the period/u);
+  assert.doesNotMatch(playbook, /so the site reads `thin sample`/u);
+  assert.match(playbook, /`no_accepted_outcomes`[^\n]+never zero/u);
+  assert.match(playbook, /store's limit for `unavailable` entries is now 231/u);
+});
+contract("the README says the ticket hook records whether, not checks that", () => {
+  const readme = text("plugins/desk/README.md");
+  assert.match(readme, /records whether the last turn-starting line of the transcript was typed by a human/u);
+});
+contract("the plugin README lists the sign-off witness hook with its three modes", () => {
+  const readme = text("plugins/desk/README.md");
+  const row = readme.split("\n").find((line) => line.startsWith("| sign-off witness |"));
+  assert.ok(row, "the host parity table has a sign-off witness row");
+  assert.match(row, /`UserPromptSubmit`[^|]*`prompt`[^|]*`Stop`[^|]*`stop`[^|]*`PreToolUse`[^|]*`ticket`/u);
+  assert.match(row, /`userPromptSubmitted`[^|]*`prompt`[^|]*`agentStop`[^|]*`stop`/u);
+  assert.match(row, /\| not wired \|$/u);
+});
 contract("public Desk skills name only the public factory store", () => {
   for (const file of [sessionStart, "plugins/desk/skills/first-run-bootstrap/SKILL.md", "plugins/desk/skills/task-lifecycle/SKILL.md", "plugins/desk/skills/task-card-format/SKILL.md"]) {
     const stores = [...text(file).matchAll(/\b[A-Za-z0-9-]+\/[A-Za-z0-9._-]*factory\b(?!\.js|\/)/gu)].map((match) => match[0])

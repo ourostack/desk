@@ -236,3 +236,28 @@ test("the pipeline's timeline and jobActiveMs agree on one session and job", () 
   }
   assert.equal(jobActiveMs({ duration_ms: session.session.duration_ms, intervals: session.intervals }, binding), union.reduce((total, [a, b]) => total + b - a, 0))
 })
+
+test("a job's timeline carries its current outcome entry, or null when no session has one", () => {
+  assert.equal(buildJobTimeline(CLOSED, sessions).outcome, null)
+  const current = { job: CLOSED, rev: 3, state: "accepted", verified: true, reason: null, deliveries: 1, wait: { class: "lt_1d", censored: false } }
+  const stale = { ...current, rev: 1, state: "delivered_unsigned", verified: null, wait: null }
+  const recorded = structuredClone(sessions)
+  recorded[0].outcomes = [stale]
+  recorded[1].outcomes = [current, { ...current, job: OPEN }]
+  assert.deepEqual(buildJobTimeline(CLOSED, recorded).outcome, current)
+  assert.equal(buildJobTimeline(OPEN, recorded).outcome.job, OPEN)
+  // A job with an outcome and no binding still has no timeline, so its entry is not lost to the rollups.
+  assert.deepEqual(buildTimelines(recorded).map((timeline) => timeline.job), [CLOSED, OPEN])
+})
+
+// Human attention on the job (task E7): the turns of the job's sessions that fall in the job's segments.
+const withTurns = (facts, turns, jobs) => ({ ...structuredClone(facts), human_turns: turns, jobs: jobs ?? structuredClone(facts.jobs) })
+const turnAt = (at_ms) => ({ at_ms, basis: "after_stop", window_ms: 3000, prompt_class: "xs", output_class: "none" })
+
+test("the timeline carries no attention key: the per-job figure is the attention formula and the headline sums are across sessions", () => {
+  const facts = withTurns(sessions[0], [turnAt(1000)])
+  for (const list of [sessions, [facts, ...sessions.slice(1)]]) {
+    const timeline = buildJobTimeline(CLOSED, list)
+    assert.equal(Object.hasOwn(timeline, "attention"), false)
+  }
+})

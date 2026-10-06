@@ -142,6 +142,7 @@ import { closeSync, existsSync, openSync, readSync, realpathSync, statSync } fro
 import * as path from "node:path"
 
 import { checkPersonPrefix, isTaskSegment, normalizeRemote, relativeSegments, taskOfSegments } from "./binding.js"
+import { recordFromLines } from "./outcome.js"
 import { ENUMS, PATTERNS } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -863,6 +864,16 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return found === null ? null : cardFields(found.text)
   }
 
+  // The outcome record the card carries, its status and the time it was last updated, or null when no card exists (archived cards are found too).
+  function readOutcome(track, slug) {
+    if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
+    const found = findCard(base, track, slug, renamedKey)
+    if (found === null) return null
+    const lines = frontmatterLines(found.text)
+    const fields = frontmatterOf(lines)
+    return { record: recordFromLines(lines), status: ENUMS.jobStatus.includes(fields.status) ? fields.status : null, evidenceAt: normalizeTimestamp(fields.updated) }
+  }
+
   // Keyed by sha alone: this cache lives for exactly one `createDeskReaders`
   // call, so it can never mix results across a different `deskRoot`, `git`
   // binary, or `timeoutMs` the way a module-level cache keyed only on
@@ -1019,7 +1030,7 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   const repoOfPath = (absolutePath) => repoLookup(absolutePath).repo ?? null
 
   return {
-    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, repoLookup,
+    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, repoLookup, readOutcome,
     resolveJobIdentity: (track, slug) => resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs }),
   }
 }

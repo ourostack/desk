@@ -359,3 +359,90 @@ test("task_create accepts each lifecycle state and defaults to drafting", async 
   await task_create({ deskRoot: root, input: { track: "t", slug: "paused-status", title: "T", status: "paused" } })
   assert.equal((await readFront(path.join(root, "t", "paused-status", "task.md"))).data.status, "paused")
 })
+
+// ── the outcome record ──────────────────────────────────────────────────────
+
+test("task_create refuses signoff, flow and returns in frontmatter-like input and writes nothing", async () => {
+  const root = await mkTempDeskRoot()
+  for (const [key, value] of [["signoff", { state: "accepted" }], ["flow", { rev: 9 }], ["returns", ["x"]]]) {
+    await assert.rejects(
+      task_create({ deskRoot: root, input: { track: "t", slug: `refuse-${key}`, title: "T", [key]: value } }),
+      /these records are written by the task tools; to record an answer call task_signoff/,
+    )
+    assert.equal(await exists(path.join(root, "t", `refuse-${key}`, "task.md")), false)
+  }
+})
+
+test("task_create refuses signoff in frontmatter", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    task_create({ deskRoot: root, input: { track: "t", slug: "forged-signoff", title: "T", frontmatter: { signoff: { state: "accepted", verified: true } } } }),
+    /these records are written by the task tools; to record an answer call task_signoff/,
+  )
+  assert.equal(await exists(path.join(root, "t", "forged-signoff", "task.md")), false)
+})
+
+test("task_create starts the flow record as created", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "fresh-flow", title: "T" } })
+  const { data } = await readFront(path.join(root, "t", "fresh-flow", "task.md"))
+  assert.deepEqual(data.flow, {
+    since: "created",
+    rev: 0,
+    reached: "drafting",
+    first_validating_at: null,
+    first_delivered_at: null,
+    delivered_at: null,
+    deliveries: 0,
+  })
+  assert.equal(data.signoff, undefined)
+  assert.equal(data.returns, undefined)
+})
+
+test("task_create records the furthest state a new card starts at, and drafting for a state outside the four", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "starts-processing", title: "T", status: "processing" } })
+  assert.equal((await readFront(path.join(root, "t", "starts-processing", "task.md"))).data.flow.reached, "processing")
+  await task_create({ deskRoot: root, input: { track: "t", slug: "starts-paused", title: "T", status: "paused" } })
+  assert.equal((await readFront(path.join(root, "t", "starts-paused", "task.md"))).data.flow.reached, "drafting")
+})
+
+test("a card created already done is delivered_unsigned and says there is no proof to show", async () => {
+  const root = await mkTempDeskRoot()
+  const result = await task_create({ deskRoot: root, input: { track: "t", slug: "born-done", title: "T", status: "done" } })
+  const { data } = await readFront(path.join(root, "t", "born-done", "task.md"))
+  assert.equal(data.signoff.state, "delivered_unsigned")
+  assert.equal(data.flow.since, "created")
+  assert.equal(data.flow.deliveries, 1)
+  assert.equal(data.flow.delivered_at, data.created)
+  assert.equal(result.signoff, "delivered_unsigned")
+  assert.equal(result.signoff_packet, undefined)
+  assert.match(result.signoff_note, /created already done, with no evidence/)
+})
+
+test("a card created at validating or done has its first review point set, and drafting has none", async () => {
+  const root = await mkTempDeskRoot()
+  for (const status of ["validating", "done"]) {
+    await task_create({ deskRoot: root, input: { track: "t", slug: `born-${status}`, title: "T", status } })
+    const { data } = await readFront(path.join(root, "t", `born-${status}`, "task.md"))
+    assert.equal(data.flow.since, "created")
+    assert.equal(data.flow.first_validating_at, data.created, status)
+    assert.equal(data.flow.reached, status)
+  }
+  await task_create({ deskRoot: root, input: { track: "t", slug: "born-drafting", title: "T" } })
+  assert.equal((await readFront(path.join(root, "t", "born-drafting", "task.md"))).data.flow.first_validating_at, null)
+})
+
+test("task_create refuses a slug that sits in the archive, names the fix and writes nothing; a slug that exists nowhere still creates", async () => {
+  const root = await mkTempDeskRoot()
+  const archived = path.join(root, "t", "_archive", "old-job")
+  await fs.mkdir(archived, { recursive: true })
+  await fs.writeFile(path.join(archived, "task.md"), "---\ntitle: Old\nstatus: done\n---\n", "utf8")
+  await assert.rejects(
+    task_create({ deskRoot: root, input: { track: "t", slug: "old-job", title: "Again" } }),
+    (error) => error.message === "task_create: t/old-job already exists in the archive. To work on it again, bring it back with task_move (unarchive: true), then task_update with return_reason. To start different work, choose another slug.",
+  )
+  assert.equal(await exists(path.join(root, "t", "old-job")), false)
+  const made = await task_create({ deskRoot: root, input: { track: "t", slug: "brand-new", title: "New" } })
+  assert.equal(made.status, "created")
+})

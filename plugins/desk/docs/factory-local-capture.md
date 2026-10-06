@@ -99,6 +99,51 @@ A marker is pruned after 30 days, which leaves a session with an outbox copy and
 
 Any other session stays frozen, and nothing about it is guessed. The sweep reports how many sessions it rebuilt, how many it left frozen (by reason) and how many are still pending, so a session left behind is visible.
 
+## Outcomes: delivery and sign-off
+
+A job is delivered when its task reaches `done`, and it is accepted only when the operator says so. The task tools record this on the task card (`signoff`, `flow`, `returns`; see `task-card-format`), and each session's facts carry what the card says about the job, as an `outcomes` list with one entry per job (at most 256).
+
+Local facts. An entry holds the job, the card's revision count (`rev`), the outcome `state` (`not_delivered`, `not_recorded`, `delivered_unsigned`, `accepted`, `refused` or `reopened`), `verified` (true, false, or null when there is no answer), the operator's refusal `reason` (or null), the number of `deliveries`, and the times of the delivery, of the sign-off and of the observation, plus `first_validating_at` and `first_delivered_at` when the card has them. The times stay on the machine. `reopened` means the task was delivered and is back in work without a refusal. `not_recorded` means the card was finished before the record existed; it is never read as accepted.
+
+Verified. An answer is verified only when Desk's witness saw a human-typed prompt after the delivery, in a later turn, and saw the main agent make the call. That is possible on Claude Code only; on Copilot CLI and Codex every answer is unverified in this version. An unverified answer is kept, counted apart and never counts as accepted.
+
+Published facts. The same entry is published without any time or name: the job (keyed the same way the published `jobs` are keyed for that desk), `rev`, `state`, `verified`, `reason`, `deliveries` and `wait`. `rev` and `deliveries` are cut to 9999, which reads "9999 or more". `wait` is how long the delivery waited for its answer, as one of four classes (`lt_1h`, `lt_1d`, `lt_7d`, `ge_7d`) with a `censored` flag: a delivery with no answer yet has waited at least that long, so its flag is true. A state with no wait has `wait: null`, never a zero. `returns_truncated` and `returns_unreadable` (a count from 1 to 9999) are published when present. A time is never published, and neither is a track, a slug, a title or a person.
+
+### Returns and rework
+
+A return is any move that sends work back: a refusal, a move out of `done`, or a move below the furthest status the task had reached (`task-lifecycle`, "Returns"). Every return carries a reason the agent gave: `agent_error`, `changed_ask`, `new_information` or `external`. A return the operator caused by refusing also carries the operator's reason, and whether that refusal was verified. Each entry of the `outcomes` list gains `since` (`created` or `adopted`: a card adopted from before the record has no known start, so it is left out of first-pass yield) and a `returns` list of at most 32 entries, each `{ reason, caught, counts, refusal, refusal_verified }`. `caught` says where the return was found: `in_task` (before the first review), `at_review` or `after_delivery`. `counts` says whether the return counts against first-pass yield: it does not when the deciding reason is `changed_ask`, because a changed ask is not a defect. The deciding reason is the operator's when the refusal was verified and the agent's otherwise, so an unverified refusal can never take a defect out of the yield. When the list is cut, `returns_truncated` is true (published only when true); `returns_unreadable` counts damaged lines, so a damaged card never reads as having no returns. The times of the returns stay on the card and are not in the facts.
+
+Published facts carry `since` and `returns` as the local entry has them, with the same four agent reasons, three catch points, `counts`, and the refusal reason and its verified flag, and no time, name or track.
+
+## Human attention
+
+Facts carry `human_turns`, a list of at most 1,000 entries in time order, so the factory can say how much human attention each accepted outcome cost. An entry is `{ at, basis, window_ms, prompt_class, output_class }` locally and `{ at_ms, basis, window_ms, prompt_class, output_class }` when published, where `at_ms` is the offset on the session clock, the same clock the intervals use. `basis` is `first` (the first human prompt of the session), `after_stop` (the agent had stopped) or `mid_turn` (the agent had not stopped since the previous human prompt). `window_ms` is the gap from the agent's stop to the prompt for `after_stop`, the time since the previous human prompt for `mid_turn`, and `null` for `first`. `prompt_class` and `output_class` are size classes of a character count: `none` is 0, `xs` 1 to 20, `s` 21 to 200, `m` 201 to 1,000, `l` 1,001 to 5,000 and `xl` above 5,000. No prompt text, command, path or reply text is held, only the class. A session over the limit keeps the first 1,000 entries and flags `human_turns` `capped`.
+
+What a human turn is, per host:
+
+- **Claude Code.** A human turn on Claude Code is a root prompt line whose `origin.kind` is `human`. The interrupt marker, a headless prompt, a scheduled task, a subagent's report and any line a hook or a tool result wrote are not human turns. A session where none carries an origin flags `human_turns` `field_absent` and writes no list, so a transcript from a host version that wrote no origin never reads as having no human turns; a mix flags `host_records_partly`. A queued prompt counts as `mid_turn`: the human typed it while the agent worked, so a `mid_turn` window is not human wait time, only the time since the previous prompt. The size of a reply is the text of the root assistant lines since the previous human turn, with no thinking, tool use or subagent lines.
+- **Copilot CLI.** A human turn is a root `user.message` with no `source`, not an autopilot continuation. The agent's stop is the last root turn end with no root turn start after it. Nothing proves that a `user.message` with no `source` was always typed by a human, so every Copilot list is flagged `host_records_partly`: the list is kept, and the figure is not proven complete or exact.
+- **Codex.** The log does not mark which prompt a human typed. Codex is flagged `host_does_not_record` and writes no list.
+
+A prompt dated before the last kept turn is dropped and flags `source_unreadable`: moving a time would make up a fact, and one skewed line must not void the whole session. A human prompt with no readable time, an unreadable line, and a log that ends mid-record flag `source_unreadable` or `log_truncated` too, and the list is then a lower bound.
+
+What cannot be known. No host records how long a person read a reply or how long they typed, and none records whether the person read while the agent was still writing. The estimate is built from the size classes and the gap the host shows, so it is an estimate and never a measurement. A permission decision is not a human turn: only Copilot records its wait, and Claude Code and Codex record none.
+
+The estimator (method version 1) is a pure function of one entry, and it refuses an entry it cannot read:
+
+`estimateTurn(turn) = max(FLOOR_MS, min(turn.window_ms ?? Infinity, READ_MS[turn.output_class] + TYPE_MS[turn.prompt_class]))`
+
+| Constant (ms) | `none` | `xs` | `s` | `m` | `l` | `xl` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `READ_MS` (reading the reply) | 0 | 1,000 | 5,000 | 30,000 | 150,000 | 400,000 |
+| `TYPE_MS` (writing the prompt) | 2,000 | 3,000 | 25,000 | 150,000 | 180,000 | 180,000 |
+
+`FLOOR_MS = 1,000`, `PERMISSION_MS = 5,000` and `ATTENTION_METHOD = 1`. Reading is taken at about 50 ms per character of a representative reply for the class (1,250 characters a minute). Typing is taken at about 300 ms per character (40 words a minute) up to class `m`; classes `l` and `xl` are treated as mostly pasted and held at 180 seconds. A permission decision is `max(FLOOR_MS, min(wait, PERMISSION_MS))` and is reported beside the headline, not in it. The store recomputes every figure from the entries, and changing any constant raises the method version, so a figure is only compared with figures of its own method version.
+
+Each turn belongs to the job whose segment holds its `at_ms` (the segment that started last when several do). A turn in no segment is unattributed, and a turn in a session whose jobs publish no segments is unplaced when the session has jobs and unattributed when it has none. Nothing is dropped, and every turn stays in the headline.
+
+The headline, human attention per accepted outcome, is the sum of the estimates over every human turn of every session in the period, divided by the jobs accepted and verified, including turns on jobs that were refused, are unsigned or were never delivered. The headline has three states, and the figure always carries its `state` and `reasons`. It is measured when every session in the period kept a complete list. The headline is partial, printed as a lower bound, when some session in the period flags the field (Codex sessions and every Copilot session do), or a session was cut by the limit; a partial figure is a lower bound on the total. It is unavailable when no session in the period kept a list (`no_turn_records` when no session is in the period, `turns_not_recorded` with the host's own reason otherwise), and no total is published then. It is also unavailable, with no total, when every turn is unreadable (`turn_not_estimable`). It is unavailable, with the total still published when a list exists and a turn could be estimated, when no verified acceptance exists (`no_accepted_outcomes`); the total is shown as "at least" when partial, and the headline shows no value and is never zero. A turn the estimator cannot read is counted, adds no time and gives `turn_not_estimable`; when every turn is unreadable the time is left out. Sessions in the old `/1` format carry neither list nor flag, so they are outside the period: coverage pages no longer count them under human turns, and their per-job result still reads `not_recorded`.
+
 ## Waste labels
 
 When a task reaches `done` or `cancelled`, `task_update` (or `task_archive`) itself records an evaluation request at `evaluate-requests/<job>.json`, the same way and on the same opt-in gate it already records a finalize request — because the session that finished the job is usually not derived until it ends, this is a record only, not a prepared brief. Both terminal statuses request one: a cancelled job is still a finished job (see "Only finished jobs count" below), and the waste in it is exactly what the evaluator needs to see. `evaluate --pending`, which the session-start hook runs, prepares every retained request's briefs, and the agent handles the answer as `desk:session-start` (its `details.md`, "Factory boot lines") says: when the answer is `ready`, it starts a fresh `desk:observer` subagent in the background with only the brief paths. `evaluate --task <track>/<slug>` remains available to record and prepare one task's request directly, for example a task finished before this wiring existed. A request is cleared once every session of the job has ended and has accepted labels or has its labels held back because its facts are quarantined, and moved to `evaluate-requests/quarantine/` as `expired` after 30 days or `not_opted_in` when its stores lose consent. Without factory state or consent, `evaluate` answers `not_opted_in` and creates nothing. The observer labels each session's waste with the [factory-evaluator rubric](../skills/factory-evaluator/SKILL.md) and never sees the working agent's conversation. Neither status waits for it.
@@ -110,7 +155,7 @@ When a task reaches `done` or `cancelled`, `task_update` (or `task_archive`) its
 
 ## Store-side validation and reports
 
-`validate-pr` judges exactly what merging the head into the base would land. It builds the merge result with `git merge-tree --write-tree` (Git 2.38 or later; an older or unreadable Git fails with `git_too_old`, and a merge-tree failure other than a conflict with `merge_tree_unavailable`, both without a result), lists changes as the base against that tree, and reads bytes through `git show` and `git ls-tree`. It refuses a head whose merge conflicts (`merge_conflict`) and a head that carries merge commits not already on the base (`unexpected_merge`). A `base...head` diff would read only one merge base, while the merge uses all of them, so a crafted head could otherwise pass while its merge changed something else. It never checks out, imports or executes candidate-controlled files. Contributor changes are limited to at most 500 added or modified data files of two kinds: published facts at `facts/<host>-<session-id>.json` and published labels at `labels/<job>/<session-id>.json`. Each facts file must pass the canonical published-bytes gate, match its filename identity, preserve host/session identity when modified and never reduce `session.duration_ms`. Validation output contains only stable reason codes and safe paths. Any change that is not a published facts or labels file, including any other file under `facts/` or `labels/`, is accepted only for GitHub author associations `OWNER`, `MEMBER` or `COLLABORATOR`, and is marked as maintenance for the store workflow to leave unmerged. Only an author association of `OWNER`, `MEMBER` or `COLLABORATOR` may delete a facts or labels file (a retraction, see below): such a delete at those two path shapes validates with no content to check and is not maintenance, a delete at any other path is maintenance, every other author's delete of a facts or labels file is rejected as `removal` (a delete at any other path is rejected as `path`, or `removal_path` from `validatePr` itself), and a rename is still rejected. A modified facts file's previous bytes are read at the base, and its new bytes in the merge result.
+`validate-pr` judges exactly what merging the head into the base would land. It builds the merge result with `git merge-tree --write-tree` (Git 2.38 or later; an older or unreadable Git fails with `git_too_old`, and a merge-tree failure other than a conflict with `merge_tree_unavailable`, both without a result), lists changes as the base against that tree, and reads bytes through `git show` and `git ls-tree`. It refuses a head whose merge conflicts (`merge_conflict`) and a head that carries merge commits not already on the base (`unexpected_merge`). A `base...head` diff would read only one merge base, while the merge uses all of them, so a crafted head could otherwise pass while its merge changed something else. It never checks out, imports or executes candidate-controlled files. Contributor changes are limited to at most 500 added or modified data files of three kinds: published facts at `facts/<host>-<session-id>.json`, published labels at `labels/<job>/<session-id>.json` and the machine's capture record at `capture/<intake id>.json` (see "Capture coverage"). Each facts file must pass the canonical published-bytes gate, match its filename identity, preserve host/session identity when modified and never reduce `session.duration_ms`. Validation output contains only stable reason codes and safe paths. Any change that is not a published facts or labels file, including any other file under `facts/` or `labels/`, is accepted only for GitHub author associations `OWNER`, `MEMBER` or `COLLABORATOR`, and is marked as maintenance for the store workflow to leave unmerged. Only an author association of `OWNER`, `MEMBER` or `COLLABORATOR` may delete a facts or labels file (a retraction, see below): such a delete at those two path shapes validates with no content to check and is not maintenance, a delete at any other path is maintenance, every other author's delete of a facts or labels file is rejected as `removal` (a delete at any other path is rejected as `path`, or `removal_path` from `validatePr` itself), and a rename is still rejected. A modified facts file's previous bytes are read at the base, and its new bytes in the merge result.
 
 A labels file holds an independent evaluator's waste labels for one job's session, in the exact [labels v1 schema](../mcp/src/factory/label-schema.js) (`desk.factory.labels/1`). It carries the job and version-4 session IDs, the evaluator, a list of stretches, and a list of what the evaluator could not read. Nothing in the file is free text:
 
@@ -212,3 +257,76 @@ On the transition to `done`, `task_update` and `task_archive` write `factory_rep
 The [task tools](../mcp/src/tools/task.js) write `finalize/<job>.json` on `done`, `cancelled` and archive, including repeat archive calls, only when factory state already exists. They use the same job identity as binding; a factory failure emits a fixed diagnostic code without failing the completed task operation. This does not wait for a store, create consent or mark a report delivered.
 
 The [CLI](../mcp/scripts/factory.js) advertises `finalize`, so the end-of-turn hook now starts it for pending requests, and the `factory` boot check is the backstop. Delivery to the live public store, and installed Claude, Copilot and Desktop behavior for delivery, remain unverified until the channel update is installed and the controller runs the live proof.
+
+## Capture coverage
+
+The sweep counts each host's root sessions on disk and says what became of them. It lists folders only and never opens a transcript, except that for Codex it reads at most the first 16 KiB of each rollout file's first line to tell a child session from a root session. A symlink, a hard link and a symlinked folder are never counted. The counts go to the local `status.json`, and once a store says it accepts them, one content-free record per machine goes to that store. Nothing from a transcript is stored, logged or published.
+
+### The buckets
+
+Every session a host kept on disk is in exactly one bucket, and the buckets of a host add up to its `on_disk` count (the sweep checks the sum for every host before it writes anything).
+
+- `derived`: the session has facts and they are placed with their store (delivered, or waiting in the outbox for that store).
+- `held`: facts are not being made or sent for it, because its facts copy is quarantined, its marker names no store, the store has no `contribute: true` consent, or it is an unproven Codex default route.
+- `frozen`: facts exist or could exist, but the session cannot be published now. Its route is unknown, stale or stalled, or it is an orphan that is not current (see below). `frozen_by_reason` counts the reasons as fixed codes, and tolerates reasons it does not know.
+- `pending`: the session has a marker and its store has consent, and its facts are not derived yet.
+- `not_seen`: the capture hook never marked the session (or, on Copilot CLI and Codex, the marker says no desk), so there are no facts for it.
+- `not_in_a_desk`: Claude Code only. An unmarked session in a folder that belongs to none of this machine's known desks. On Copilot CLI and Codex this is `null`, because an unmarked non-desk session cannot be told from a miss there.
+
+A bucket that cannot be told is omitted or `null`, never `0`. A host that is `absent` (no folder), `unreadable` or `capped` (more than the entry budget or the three-second time budget) carries only its `state` and `unverified`, no counts.
+
+Every not-current orphan reads as `frozen`. The orphan pass counts its pending orphans machine-wide, so that count cannot be split by owner and is never used: one owner's record must not move with another owner's sessions. The reason is `orphan_unsplit`, or `orphan_pass_unavailable` when the pass left no usable result. The pass's own frozen reasons for sessions on disk are added to `frozen_by_reason` as they are.
+
+### The local `status.json` keys
+
+- `coverage`: `{ method: 1, ran_at, hosts }`, one entry per host as above, plus `by_owner` (each owner's own buckets, which sum to the host's) and, on Codex, `undetermined` (rollouts whose first line could not be read) and `fallback` when set.
+- `coverage_failed`: set to `state_unreadable`, `count_failed` or `classify_failed` (the stage that failed, no message) when a pass fails. A failed pass keeps the earlier `coverage` in place and writes only this code. A successful pass clears it.
+- `coverage_cache`: local only. Its keys are Codex rollout file names, kept so the next sweep need not reread unchanged files. It is never copied into `coverage`, a record, `last_flush` or any other file.
+
+### Owners and withheld sessions
+
+Each session has an owner, and a store's record counts only its own sessions plus the owner `-`.
+
+- A store name is the owner when a marker, a receipt or a facts copy tells it. Names are compared in lower case.
+- `-` means the session belongs to no store: no desk evidence names it, and at most one store has `contribute: true`.
+- `?` means the owner cannot be told, and a `?` session is in no record at all. This happens when a marker or receipt names a desk root but its store cannot be told (a desk with no tellable store, or a route that is unknown or whose desk folder is gone); when two sessions of one desk folder point to two stores, or one of them to none; when two desks share one Claude Code folder name (a folder-name collision) and their sessions point to different stores; and when an unowned session exists while two or more stores have `contribute: true`, because it could belong to either.
+- Failing closed costs a slightly high-looking share. Failing open could put a private desk's activity in a public record, so every doubt is withheld.
+
+### The published record
+
+When a store accepts capture records, the sweep's coverage is scoped to that store and sent as `capture/<intake id>.json` in the same intake pull request as facts, through the same outbox and flush. The file name's intake id is the machine's existing intake branch name, so it is already public. The record holds counts and fixed words only: no date, path, session id, desk name, store name or host name beyond the three hosts.
+
+The key set is closed. Any other key fails the store's gate with `unknown_key`. The machine-readable list is this block, and a test fails if it differs from the schema ([capture-schema.js](../mcp/src/factory/capture-schema.js)):
+
+```text capture-record-keys
+top: schema basis hosts loop
+host: on_disk derived held frozen pending not_seen not_in_a_desk unverified
+```
+
+- `schema` is `desk.factory.capture/1`, and `basis` is always `still_on_disk`. `basis` is required so the share cannot be shown without its caveat.
+- `hosts` holds zero to three of `claude-code`, `copilot-cli` and `codex-cli`. A host that is not `counted`, or whose in-scope total is 0, is left out. Each count is an integer from 0 to 1,000,000, `not_in_a_desk` may be `null`, and `unverified` is a boolean. The buckets add up to `on_disk`, which is the in-scope total, not the machine's.
+- `loop` is one optional slot, reserved for the closed loop's health record. It is named, validated by `validateLoopSlot` (a flat object of at most 512 bytes whose keys and strings match `^[a-z_]{1,32}$`, numbers are integers up to 1,000,000, and booleans and `null` are allowed) and owned by the closed-loop work, which may replace the rule. This change never writes it. The empty record never carries it.
+- The record is at most 2 KiB, in canonical bytes.
+
+The share is "of sessions still on disk" and an upper bound: a host that deleted its old transcripts is invisible here. A store's record is also self-reported: the store cannot check it, and anyone who can open an intake pull request can overwrite a capture file, so the numbers are a signal, not proof.
+
+### Reading the record with number states
+
+The record is raw input, and a store's reports must read it by the same rule as every other number: a count never stands alone, and a number that was not measured is never shown as 0. A host entry that is present has measured counts, and when its `unverified` is `true` the counts are a lower bound, shown as unverified in words. A `null` `not_in_a_desk` was not measured. A host left out of the record means no session in this store's scope, which is not the same as zero sessions seen on the machine. A store with no record has no data. A rollup over machines says how many machines it rests on (n of N). The record carries no state or reason keys and its closed key set is unchanged, so the store's own reading and wording apply, in the terms of its README.
+
+### Codex is unverified until proven
+
+A record's Codex entry says `unverified: false` only when the in-scope `derived` count is above 0 (a Codex session this store's own facts were derived from), the listing had no `undetermined` rollouts, and no fallback listing was used. Otherwise it says `unverified: true`. An `undetermined` residual is a rollout whose first line was unreadable, too long or invalid, so it could be a root or a child. It is never counted as a session, and any above 0 makes the host unverified. The host's own receipt-based flag is not read for the record, so another store's derived session cannot change a public record.
+
+### A host that is capped or unreadable
+
+While any host is `capped` or `unreadable`, no record is sent to any store and the record already on the store is kept: the record replaces the whole file, so one without that host would overwrite the store's true counts for it and read as "no sessions". The local `status.json` says why (the host's `state`), and the store's rule for stale files (below) makes a machine that stays stuck visible. Nothing says "zero" for a host that could not be counted.
+
+### When a record is sent
+
+- Handshake: the record is sent only when the default branch holds a file `capture.json` at its root whose content is exactly the JSON object `{"capture":1}` (read through the account's own client, from the store, not a fork). Anything else, no file, an error, bad JSON, an extra key or another value, is `store_not_ready`: no record is sent, `status.capture[<store>].skipped` says so, and the store is asked again after a day. `factory.json` is deliberately untouched (a `capture` key there enables nothing), so an older client's andon parser keeps working. A store that is not ready never delays facts.
+- Coverage older than three days (by `ran_at`), unparsable or in the future sends nothing and retracts nothing. A failed pass leaves the earlier coverage in place, so it is used only while it is still fresh.
+- Replacement is throttled to once in 20 hours, and only when the bytes differ from what the default branch holds. The bookkeeping lives in `status.capture[<store>]` and never in a delivered record.
+- Retraction is the empty record, `hosts: {}`. It is sent when a record was sent before and nothing is left in scope (every host `counted` or `absent`). Any contributor may send it. A host that is capped or unreadable blocks a retraction.
+- A refusal that names the record (a `capture_*` code, or `path` for the pull request that carried it) is counted as a stale pull request: facts are sent again and never quarantined because of it. The record backs off a week. A data code beside it still quarantines facts as before.
+- The record's own gate fails (a bug, not a store refusal) only as `capture_invalid`: nothing is sent and it is asked again after a day.

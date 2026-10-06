@@ -205,6 +205,8 @@ const CARD_FILE = "task.md"
 const MASS_COMMIT_TASKS = 3
 
 const CREATE_CALL = /task_create$/u
+// A sign-off is the human's answer to a delivery, given in a session that may have done no work on the task: it binds nothing.
+const SIGNOFF_CALL = /task_signoff$/u
 // A task tool call commits the card within moments; a minute each way covers Git's whole seconds and a slow push.
 const TOOL_CALL_REACH_MS = 60000
 const OWN_ACTIVITY_SPANS = 500
@@ -413,6 +415,7 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     const at = msOf(call.at)
     if (at !== null) spans.push([at - TOOL_CALL_REACH_MS, at + TOOL_CALL_REACH_MS])
     if (!isTaskSegment(call.track) || !isTaskSegment(call.slug) || !listed.has(agentOf(call))) continue
+    if (typeof call.name === "string" && SIGNOFF_CALL.test(call.name)) continue
     const task = taskOf(call)
     if (task === null) continue
     if (ENUMS.jobStatus.includes(call.status) && at !== null) task.transitions.push({ to: call.status, at: call.at })
@@ -583,5 +586,5 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     if (last !== undefined && start - startedMs <= last[1]) last[1] = Math.max(last[1], end - startedMs)
     else ownActivity.push([start - startedMs, end - startedMs])
   }
-  return { jobs: jobs.slice(0, LIMITS.jobs), boundBy, disagrees, ownActivity: ownActivity.slice(0, OWN_ACTIVITY_SPANS), repoUnresolved: unresolved.size, segmentsCappedMs }
+  return { jobs: jobs.slice(0, LIMITS.jobs), boundBy, disagrees, ownActivity: ownActivity.slice(0, OWN_ACTIVITY_SPANS), repoUnresolved: unresolved.size, segmentsCappedMs, tasks: [...ids].map(([key, id]) => ({ job: id, track: tasks.get(key).birth.track, slug: tasks.get(key).birth.slug })), remote }
 }

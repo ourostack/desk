@@ -1,4 +1,5 @@
 import { withState } from "./number-states.js"
+import { ATTENTION_METHOD } from "./attention.js"
 
 const LABELS = Object.freeze({
   active_in_lead_ms: "Active time inside the lead-time window",
@@ -64,13 +65,62 @@ const LABEL_REASON_TEXT = {
   evidence_unmatched: "the labeled evidence no longer matches the facts",
 }
 
+// Reasons the outcome figures (sign-off, first-pass yield, rework) carry, in words for the operator who reads the page.
+const OUTCOME_REASON_TEXT = {
+  not_recorded: "no outcome record is available",
+  signoff_not_recorded: "the job was delivered before sign-offs were recorded",
+  history_not_recorded: "the task card does not record what was sent back",
+  not_delivered: "the job has no standing delivery yet",
+  returns_not_fully_recorded: "some of what was sent back was not recorded",
+  awaiting_signoff: "the human has not yet accepted the delivery",
+  signoff_unverified: "the human's acceptance could not be confirmed",
+  no_delivered_jobs: "no delivered job has a first-pass result yet",
+  no_refusals: "no refusal could be compared with the agent's reason",
+  no_labels: "the independent evaluator has not labeled any job",
+  no_finished_jobs: "no job has finished yet",
+  not_all_labeled: "some finished jobs are not labeled yet",
+  active_time_unavailable: "the active time of some jobs was not recorded",
+  catch_point_not_recorded: "some defect time has no recorded place where it was caught",
+}
+
+// Reasons the attention figure (human attention on a job) carries, in words for the operator. `not_recorded` already means "no outcome record" for the outcome figures, and the shared table holds one text per code, so its attention words are kept here and not in the shared table; `desk_public` has its words in the facts table.
+export const ATTENTION_REASON_TEXT = Object.freeze({
+  not_recorded: "no session of the job recorded the human's turns",
+  desk_public: "the desk is public, so job timing is withheld",
+  no_segments: "the job's time inside its sessions was not recorded, so the turns cannot be placed on it",
+  turns_not_recorded: "some sessions did not record all of the human's turns, so this is a lower bound",
+  turns_capped: "a session's list of human turns was cut to a size limit, so this is a lower bound",
+  turn_not_estimable: "some turns could not be estimated, so this is a lower bound",
+})
+// Reasons only the store-wide attention figures carry (`attention-rollup.js`). Their words are in the shared table too, so the reasons in the built files all have text.
+const ATTENTION_ROLLUP_REASON_TEXT = {
+  no_accepted_outcomes: "no job has an accepted, verified outcome yet",
+  no_turn_records: "no session in the store records the human's turns",
+  decision_not_estimable: "some permission decisions could not be estimated, so this is a lower bound",
+}
+
+// On an attention line a host's own flag says which host it is, so the operator can see why the figure is a lower bound. `desk_public` and the rest keep the words of the tables above.
+const ATTENTION_PAGE_REASON_TEXT = Object.freeze({
+  ...ATTENTION_REASON_TEXT,
+  ...ATTENTION_ROLLUP_REASON_TEXT,
+  host_does_not_record: "a host does not record the human's turns, so this is a lower bound",
+  host_records_partly: "a host records the human's turns only in part, so this is a lower bound",
+})
+const ATTENTION_SHARED_TEXT = Object.fromEntries(Object.entries(ATTENTION_REASON_TEXT).filter(([code]) => code !== "not_recorded" && code !== "desk_public"))
+
+/** The reasons only the store-wide attention figures carry. */
+export const ATTENTION_ROLLUP_REASONS = Object.freeze(Object.keys(ATTENTION_ROLLUP_REASON_TEXT))
+
 /** The reasons the report and rollups name that are not in the facts enums. */
 export const REPORT_ONLY_REASONS = Object.freeze(Object.keys(REPORT_REASON_TEXT))
+
+/** The reasons the outcome figures carry. */
+export const OUTCOME_REASONS = Object.freeze(Object.keys(OUTCOME_REASON_TEXT))
 
 /** The reason codes of the labels files: what a label can declare unreadable and why one is left unused. */
 export const LABEL_REASONS = Object.freeze(Object.keys(LABEL_REASON_TEXT))
 
-export const REASON_TEXT = Object.freeze({ ...FACT_REASON_TEXT, ...REPORT_REASON_TEXT, ...LABEL_REASON_TEXT })
+export const REASON_TEXT = Object.freeze({ ...FACT_REASON_TEXT, ...REPORT_REASON_TEXT, ...OUTCOME_REASON_TEXT, ...LABEL_REASON_TEXT, ...ATTENTION_SHARED_TEXT, ...ATTENTION_ROLLUP_REASON_TEXT })
 
 /** `reasonText(id) -> string`: the plain words for a reason. An id with no words is a defect and stops the build. */
 export function reasonText(id) {
@@ -99,6 +149,7 @@ export const FIELD_TEXT = Object.freeze({
   tool_outcomes: "Tool outcomes",
   job_segments: "Job time segments",
   job_offsets: "Job clock offsets",
+  human_turns: "Human turns",
 })
 
 function fieldText(field) {
@@ -154,6 +205,186 @@ function signalText(value, singular, pluralForm) {
   return value.state === "unavailable" ? `${pluralForm} ${stateText(value)}` : `${plural(value.value, singular, pluralForm)} (${stateText(value, false)})`
 }
 
+const SETTLED_WAIT = Object.freeze({ lt_1h: "under 1 hour", lt_1d: "under 1 day", lt_7d: "under 7 days", ge_7d: "7 days or more" })
+// An unfinished wait reads as its lower edge: it has lasted at least this long.
+const OPEN_WAIT = Object.freeze({ lt_1h: "under 1 hour so far", lt_1d: "at least 1 hour", lt_7d: "at least 1 day", ge_7d: "at least 7 days" })
+
+function waitedText(wait) {
+  return wait === null ? "" : `, waited ${SETTLED_WAIT[wait.class]}`
+}
+
+function verifiedText(formula) {
+  return formula.verified === true ? "verified" : "unverified"
+}
+
+// The job page's sign-off line: what the human said about the delivery, how sure the record is, and how long it waited.
+function signoffText(formula) {
+  if (formula.class === "unavailable") return formula.reason === "signoff_not_recorded" ? "delivered, sign-off not recorded" : "not recorded"
+  if (formula.value === "accepted") return `accepted (${verifiedText(formula)})${waitedText(formula.wait)}`
+  if (formula.value === "refused") return `refused (${verifiedText(formula)}), reason ${formula.reason}${waitedText(formula.wait)}`
+  if (formula.value === "delivered_unsigned") {
+    if (formula.wait === null) return "delivered, waiting for sign-off"
+    return formula.wait.class === "lt_1h" ? "delivered, waiting, under 1 hour so far" : `delivered, waiting ${OPEN_WAIT[formula.wait.class]}`
+  }
+  return formula.value === "reopened" ? "reopened after delivery" : "not delivered yet"
+}
+
+// Attention reasons are printed through the attention words, never through the shared table's `not_recorded` ("no outcome record is available"). A code the attention words do not hold (a host's own flag, `desk_public`) falls back to the shared words.
+function attentionReasonsPhrase(reasons, table = ATTENTION_REASON_TEXT) {
+  return reasons.map((reason) => (Object.hasOwn(table, reason) ? table[reason] : reasonText(reason))).join(" and ")
+}
+
+// A duration the operator can read: seconds under a minute, minutes under an hour, hours above.
+function durationText(ms) {
+  if (ms < 1000) return `${ms} ms`
+  const trim = (value) => String(Number(value.toFixed(1)))
+  if (ms < 60_000) return `${trim(ms / 1000)} ${ms === 1000 ? "second" : "seconds"}`
+  if (ms < 3_600_000) return `${trim(ms / 60_000)} ${ms === 60_000 ? "minute" : "minutes"}`
+  return `${trim(ms / 3_600_000)} ${ms === 3_600_000 ? "hour" : "hours"}`
+}
+
+// The job page's attention line: the estimate first, what it is, then its state.
+function attentionText(formula) {
+  if (formula.state === "unavailable") return `not recorded (${attentionReasonsPhrase(formula.reasons)})`
+  const state = formula.state === "measured" ? "measured" : `partial: ${attentionReasonsPhrase(formula.reasons)}`
+  return `about ${durationText(formula.value)} over ${plural(formula.turns, "human turn")} (an estimate, method version ${formula.method}; ${state})`
+}
+
+const PARTIAL_YIELD = Object.freeze({ awaiting_signoff: "waiting for sign-off", signoff_unverified: "accepted but unverified" })
+
+// The job page's first-pass line: 1 when the delivery has no return that counts, 0 when it has. A 1 with the human's answer still missing or unwitnessed is an upper bound.
+function firstPassText(formula) {
+  const only = formula.changed_ask_only ? "; only changed asks came back" : ""
+  if (formula.value === 0) return `0, sent back after review (${plural(formula.returns.counting, "return")} counted)${only}`
+  if (formula.state === "partial") return `1, upper bound (passed so far, ${formula.reasons.map((reason) => PARTIAL_YIELD[reason]).join(", ")})${only}`
+  return `1, passed first time${only}`
+}
+
+function reworkText(formula) {
+  const { in_task: inTask, at_review: atReview, after_delivery: afterDelivery } = formula.value
+  const check = formula.reason_check
+  const bound = check.compared > 0 ? " (a lower bound)" : ""
+  const partial = formula.state === "partial" ? ` (partial: ${reasonsPhrase(formula)})` : ""
+  return `returned in the task ${inTask}, at review ${atReview}, after delivery ${afterDelivery}; reason check on refusals: compared ${check.compared}, disagree ${check.disagree}${bound}${partial}`
+}
+
+function countsText(counts, labels) {
+  const entries = Object.keys(labels).filter((key) => counts[key] > 0).map((key) => `${labels[key]} ${counts[key]}`)
+  return entries.length === 0 ? "none" : entries.join(", ")
+}
+
+function signoffSection(signoff) {
+  if (!signoff.recorded) return ["## Sign-off", "", "Sign-off: not recorded in any session of this store.", ""]
+  const reasons = Object.fromEntries(Object.keys(signoff.refusal_reasons).map((key) => [key, key]))
+  return [
+    "## Sign-off",
+    "",
+    `- Jobs with a sign-off record: ${signoff.jobs}; with no work record: ${signoff.jobs_without_work_record}. Jobs with a work record and no sign-off record: ${signoff.no_record}.`,
+    `- Accepted (verified): ${signoff.accepted}. Accepted but unverified, not counted as accepted: ${signoff.accepted_unverified}.`,
+    `- Delivered, waiting for sign-off: ${signoff.delivered_unsigned}. Refused: ${signoff.refused} (unverified: ${signoff.refused_unverified}). Reopened: ${signoff.reopened}.`,
+    `- Delivered before sign-off was recorded: ${signoff.not_recorded}. Not delivered yet: ${signoff.not_delivered}.`,
+    `- Refusal reasons: ${countsText(signoff.refusal_reasons, reasons)}.`,
+    `- Waits that ended in an answer: ${countsText(signoff.waits.signed, SETTLED_WAIT)}.`,
+    `- Waits still open (at least this long): ${countsText(signoff.waits.unsigned, OPEN_WAIT)}.`,
+    "",
+  ]
+}
+
+function yieldSection(result) {
+  const left = result.excluded.length === 0 ? "none" : result.excluded.map((entry) => `${plural(entry.jobs, "job")} (${reasonText(entry.reason)})`).join(", ")
+  const counted = result.state === "unavailable"
+    ? [`- First-pass yield: not recorded (${reasonsPhrase(result)}).`]
+    : [yieldText(result), `- Sent back: ${result.returned}. Only changed asks came back: ${result.changed_ask_only}.`]
+  return ["## First-pass yield", "", ...counted, `- Left out of the count: ${left}.`, ""]
+}
+
+// `n of N`, and an upper bound while the human's answer is still missing or unwitnessed for any counted job.
+function yieldText(result) {
+  if (result.state === "measured") return `- First-pass yield: ${result.n} of ${result.N} delivered jobs passed first time (${percentage(result.value)}).`
+  const pending = [
+    ...(result.awaiting_signoff > 0 ? [`${result.awaiting_signoff} waiting for sign-off`] : []),
+    ...(result.signoff_unverified > 0 ? [`${result.signoff_unverified} accepted but unverified`] : []),
+  ]
+  return `- First-pass yield: at most ${result.n} of ${result.N} delivered jobs passed first time (upper bound ${percentage(result.value)}; ${pending.join(", ")}).`
+}
+
+function reworkSection(rework) {
+  if (rework.state === "unavailable") return ["## Rework", "", `- Rework: not recorded (${reasonsPhrase(rework)}).`, ""]
+  const caught = (point) => countsText(rework.returns[point], Object.fromEntries(Object.keys(rework.returns[point]).map((key) => [key, key])))
+  const check = rework.reason_check
+  const bound = check.state === "unavailable"
+    ? `not recorded (${reasonsPhrase(check)})`
+    : `compared ${check.compared}, disagree ${check.disagree}, of which ${check.compared_verified} of the compared refusals were verified. This is a lower bound on disagreement`
+  return [
+    "## Rework",
+    "",
+    `- Jobs with returns recorded: ${rework.n} of ${rework.N}${rework.state === "partial" ? ` (partial: ${reasonsPhrase(rework)})` : ""}.`,
+    `- Returns caught in the task: ${caught("in_task")}. At review: ${caught("at_review")}. After delivery: ${caught("after_delivery")}.`,
+    `- Returns that were changed asks: ${rework.changed_ask}.`,
+    `- Reason check on refusals: ${bound}.`,
+    "",
+  ]
+}
+
+// The headline first: the number and what it is (an estimate, with its method version), then its state. With no accepted outcome there is no number, and the page says so in those words and gives the attention so far, as "at least" when it is a lower bound. When nothing was recorded, no time is given at all.
+function attentionHeadline(attention) {
+  const { headline, est_ms: placed, human_turns: turns } = attention
+  const method = attention.method.version
+  const why = headline.reasons.filter((reason) => reason !== "no_accepted_outcomes")
+  const phrase = attentionReasonsPhrase(why, ATTENTION_PAGE_REASON_TEXT)
+  if (headline.state === "unavailable" && headline.reasons.includes("no_accepted_outcomes")) {
+    if (headline.numerator_ms === undefined) return `- Human attention per accepted outcome: no accepted outcomes yet, and no human attention is recorded in the period (${phrase}).`
+    const bound = why.length > 0 ? "at least " : ""
+    const total = placed.attributed + placed.unattributed + placed.unplaced
+    return `- Human attention per accepted outcome: no accepted outcomes yet. The estimated attention so far, with nothing to divide it by, is ${bound}${durationText(total)} over ${bound}${plural(turns, "human turn")}${why.length > 0 ? ` (${phrase})` : ""}.`
+  }
+  if (headline.state === "unavailable") return `- Human attention per accepted outcome: not available (${phrase}).`
+  const state = headline.state === "measured" ? "measured" : `partial, so a lower bound: ${phrase}`
+  return `- Human attention per accepted outcome: about ${durationText(headline.value)} (an estimate, method version ${method}; ${state}). That is ${durationText(headline.numerator_ms)} of estimated attention over ${plural(headline.accepted_outcomes, "accepted outcome")}.`
+}
+
+function attentionTurnsLine(attention) {
+  const { turns_per_accepted: figure, human_turns: turns } = attention
+  if (figure.state === "unavailable") {
+    return figure.reasons.includes("no_accepted_outcomes") ? "- Human turns per accepted outcome: no accepted outcomes yet." : `- Human turns per accepted outcome: not available (${attentionReasonsPhrase(figure.reasons, ATTENTION_PAGE_REASON_TEXT)}).`
+  }
+  const bound = figure.state === "partial" ? "at least " : ""
+  return `- Human turns per accepted outcome: ${bound}${Number(figure.value.toFixed(2))} (${plural(turns, "human turn")} over ${plural(figure.N, "accepted outcome")}).`
+}
+
+function attentionPermissionLine(permission) {
+  const lead = "- Permission decisions, reported beside the headline and not in it: "
+  if (permission.state === "unavailable") return `${lead}not recorded (${permission.reasons.map(reasonText).join(" and ")}).`
+  const bound = permission.state === "partial" ? ` (partial: ${permission.reasons.map((reason) => (Object.hasOwn(ATTENTION_ROLLUP_REASON_TEXT, reason) ? ATTENTION_ROLLUP_REASON_TEXT[reason] : reasonText(reason))).join(" and ")})` : ""
+  return `${lead}${permission.decisions}, estimated at ${durationText(permission.est_ms)}${bound}.`
+}
+
+function attentionSection(attention) {
+  const { est_ms: placed, sessions, method } = attention
+  const hostReasons = attention.headline.reasons.some((reason) => reason === "host_does_not_record" || reason === "host_records_partly")
+  const hostNote = hostReasons ? " A host that does not record the human's turns (such as Codex) or records them only in part (such as Copilot, or Claude Code when only some prompts carry an origin) makes the figure a lower bound." : ""
+  const constants = (table) => Object.entries(table).map(([size, ms]) => `${size} ${durationText(ms)}`).join(", ")
+  return [
+    "## Human attention",
+    "",
+    attentionHeadline(attention),
+    attentionTurnsLine(attention),
+    ...(placed === undefined ? [] : [`- Where the estimate went: ${durationText(placed.attributed)} on jobs, ${durationText(placed.unattributed)} on sessions that were not on any job, ${durationText(placed.unplaced)} on sessions that could not be placed on a job. All of it is in the headline, including time on refused, unsigned and undelivered work.`]),
+    `- Sessions in the period: ${sessions.in_period}, of which ${sessions.complete} record the human's turns completely. Sessions from before turns were recorded are not in the period.${hostNote}`,
+    attentionPermissionLine(attention.permission),
+    `- Method: version ${method.version}. An estimate of the time the human spent reading the reply and writing the prompt, never longer than the gap before the prompt, and at least ${durationText(method.floor_ms)} per turn. Reading a reply by size: ${constants(method.read_ms)}. Writing a prompt by size: ${constants(method.type_ms)}. A permission decision counts at most ${durationText(method.permission_ms)}.`,
+    "",
+  ]
+}
+
+/**
+ * `outcomeSections(outcomes) -> lines`: the sign-off, first-pass yield and rework sections of the rollups page, then the human attention section when the rollups carry one. `undefined` (a caller with no outcome rollups) adds nothing.
+ */
+export function outcomeSections(outcomes) {
+  if (outcomes === undefined) return []
+  return [...signoffSection(outcomes.signoff), ...yieldSection(outcomes.first_pass_yield), ...reworkSection(outcomes.rework), ...(outcomes.attention === undefined ? [] : attentionSection(outcomes.attention))]
+}
+
 function listedCounts(value, order = Object.keys(value).sort()) {
   const entries = order.filter((key) => value[key] !== undefined).map((key) => `${key} ${value[key]}`)
   return entries.length === 0 ? "none" : entries.join(", ")
@@ -162,7 +393,9 @@ function listedCounts(value, order = Object.keys(value).sort()) {
 function unavailableLines(formulas) {
   const lines = formulas.unavailable.value.map((entry) =>
     `- ${fieldText(entry.field)}: ${reasonText(entry.reason)} (${plural(entry.count, "session")}).`)
-  lines.push(`- First-pass yield: ${stateText(formulas.first_pass_yield)}.`)
+  for (const [label, formula] of [["First-pass yield", formulas.first_pass_yield], ["Rework", formulas.rework]]) {
+    if (formula.state === "unavailable") lines.push(`- ${label}: ${stateText(formula)}.`)
+  }
   return lines
 }
 
@@ -288,6 +521,10 @@ export function renderJobMarkdown({ timeline, formulas, labels = new Map() }) {
     `- ${referencesText(formulas.references)}.`,
     `- Tokens: ${tokensText(formulas.tokens_total)}.`,
     `- Status transitions: ${transitions} (${transitionState}).`,
+    `- Sign-off: ${signoffText(formulas.signoff)}.`,
+    ...(formulas.first_pass_yield.state === "unavailable" ? [] : [`- First-pass yield: ${firstPassText(formulas.first_pass_yield)}.`]),
+    ...(formulas.rework.state === "unavailable" ? [] : [`- Rework: ${reworkText(formulas.rework)}.`]),
+    `- Human attention: ${attentionText(formulas.attention)}.`,
     "",
     "## What mattered",
     "",
@@ -407,6 +644,18 @@ export function renderReadme() {
     "The reason `the host records only some of it` marks a lower bound: the host surfaced some of the records, so the real number is at least what is printed. Claude API retry counts are such a lower bound.",
     "",
     DEFINITIONS,
+    "",
+    "## Human attention",
+    "",
+    `Human attention per accepted outcome is an estimate, not a measurement. It is made with method version ${ATTENTION_METHOD}, and the method version is printed beside the attention figures. Desk changes the method version whenever it changes a constant, and the reports are rebuilt from the same facts, so a figure is only compared with figures of its own method version.`,
+    "",
+    "No host records how long a person spent reading a reply or writing a prompt. The estimate adds two parts for each human turn, reading the reply and writing the prompt, each taken from the size class of its character count. It is never more than the gap the host shows, when there is one, and never less than one second. The person may have read while the agent was still writing, and no host records that, so a figure is closer to a floor than to a ceiling.",
+    "",
+    "The headline counts every human turn of every session in the period, including turns on jobs that were refused, are unsigned or were never delivered, and the total is divided by the jobs accepted and verified. A turn that falls in no job's time is shown apart as unattributed, and a turn in a session whose jobs publish no time is shown as unplaced; both stay in the headline. The same page also gives human turns per accepted outcome, a plain count over the same jobs.",
+    "",
+    "The headline has three states. It is measured when every session in the period has a complete list of human turns. It is partial, a lower bound, when some session in the period flags the field: Codex records no human turns, Copilot records them only in part because a prompt there cannot be told from a hook's follow-up with certainty, and a Claude Code session whose host wrote no origin on its prompts, a session cut at 1,000 turns and a log cut short flag it too. The reasons are printed. It is unavailable, with no value and no total, when no session in the period kept a list (the reason reads no human-turn records when no session is in the period, and turns not recorded, with the host's own reason, when sessions are, for example when all are Codex). It is also unavailable, with no total, when every turn is unreadable. A turn the estimator cannot read is counted, adds no time and gives the reason that a turn could not be estimated. With no verified accepted outcome the headline is unavailable and reads no accepted outcomes yet; the total so far is still shown, as \"at least\" when it is partial, only when a list exists and a turn could be estimated, and the headline is never zero. Sessions in the old format (`/1`) are outside the period.",
+    "",
+    "Permission decisions are shown beside the headline, not in it. Only Copilot records them, and each is taken as at most five seconds.",
     "",
   ].join("\n")
 }

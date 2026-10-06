@@ -132,6 +132,8 @@ Only after writer release, source and effect reconciliation, current authority a
 
 full transition rules and state machine live in the `task-lifecycle` skill.
 
+A task found at `done` is delivered, and it may still be waiting for the operator's answer. Do not treat it as accepted. If its `signoff` is `delivered_unsigned`, raise it once as three lines (what was asked, what was delivered with its proof, accept or send back?) and record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery"). To work on it again, move it back with `task_update` and `return_reason`.
+
 ## Commit any state changes
 
 if resuming caused a status transition (e.g., `drafting` → `processing` because `planning_complete: true`), follow the state-change protocol in `task-lifecycle`: update the `updated` timestamp, commit, push, and trigger any downstream actions (status tweet, archive) as applicable.

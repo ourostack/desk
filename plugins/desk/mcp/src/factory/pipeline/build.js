@@ -6,6 +6,7 @@ import { validateLabelsBytes } from "../label-schema.js"
 import { PATTERNS } from "../schema.js"
 import { calculateFormulas } from "./formulas.js"
 import { normalizePublished, stableStringify } from "./normalize.js"
+import { computeOutcomeRollups } from "./outcomes.js"
 import { buildCoverage, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "./report.js"
 import { computeRollups, jobRecord, renderRollupsMarkdown, resolveLabels } from "./rollups.js"
 import { buildTimelines } from "./timeline.js"
@@ -40,6 +41,7 @@ function outputTimeline(timeline) {
     intervals: timeline.intervals,
     transitions: timeline.transitions,
     observations: timeline.observations,
+    outcome: timeline.outcome,
   }
 }
 
@@ -116,6 +118,7 @@ function writeRollups(directory, rollups) {
   writeFileSync(path.join(directory, "muda.json"), `${stableStringify(rollups.muda)}\n`)
   writeFileSync(path.join(directory, "tool-kinds.json"), `${stableStringify(rollups.tool_kinds)}\n`)
   writeFileSync(path.join(directory, "coverage.json"), `${stableStringify(rollups.coverage)}\n`)
+  writeFileSync(path.join(directory, "outcomes.json"), `${stableStringify(rollups.outcomes)}\n`)
   writeFileSync(path.join(directory, "totals.json"), `${stableStringify(rollups.totals)}\n`)
 }
 
@@ -169,7 +172,7 @@ export function build({ storeDir, outDir }) {
   requireDirectory(store, "store")
 
   const { sessions, labels, reports, records } = readStore(store)
-  const rollups = computeRollups({ records, sessions, labels })
+  const rollups = { ...computeRollups({ records, sessions, labels }), outcomes: computeOutcomeRollups({ sessions, reports, records, labels }) }
   const temporary = `${out}.factory-tmp-${process.pid}`
   rmSync(temporary, { recursive: true, force: true })
   mkdirSync(path.join(temporary, "jobs"), { recursive: true })

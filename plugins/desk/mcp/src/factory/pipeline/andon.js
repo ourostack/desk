@@ -80,7 +80,11 @@ export function parseStoreConfig(text) {
   }
   const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
   const plugins = config?.andon?.plugins
-  const shaped = isObject(config) && Object.keys(config).join() === "andon" && isObject(config.andon) && Object.keys(config.andon).join() === "plugins" && Array.isArray(plugins)
+  // The store's capture flag lives in its own file, `capture.json`, not here. A `capture` key beside `andon` (a positive integer) is only tolerated, so a
+  // store that carries one is not broken; the flush never reads it and requires exactly `{"capture":1}` in `capture.json`.
+  const keys = isObject(config) ? Object.keys(config).sort().join() : ""
+  const flagged = keys === "andon" || (keys === "andon,capture" && Number.isSafeInteger(config.capture) && config.capture >= 1)
+  const shaped = flagged && isObject(config.andon) && Object.keys(config.andon).join() === "plugins" && Array.isArray(plugins)
   if (!shaped || plugins.length > MAX_TRACKED_PLUGINS || !plugins.every((name) => typeof name === "string" && PATTERNS.pluginName.test(name)) || new Set(plugins).size !== plugins.length) {
     return { ok: false, code: "invalid_config" }
   }

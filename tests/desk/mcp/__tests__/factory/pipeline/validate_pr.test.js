@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { factsPathsForSession, isFactsPath, isLabelsPath, validatePr } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
+import { factsPathsForSession, isCapturePath, isFactsPath, isLabelsPath, validatePr } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "..", "fixtures", "published-golden.json"))
@@ -452,4 +452,70 @@ test("validatePr accepts the mapped facts and labels paths of a Codex (v7) sessi
   const mapped = toPublishedLabels(labels, { deskVisibility: "private", machineSecret })
   assert.equal(isLabelsPath(mapped.path), true)
   assert.equal(mapped.published.session, published.session.id)
+})
+
+test("validatePr accepts a facts file with outcomes and rejects an unknown wait class, state or reason with a path and no value", () => {
+  const add = (outcome) => Buffer.from(`${JSON.stringify({ ...structuredClone(GOLDEN), outcomes: [{ ...GOLDEN.outcomes[0], ...outcome }] })}\n`)
+  const run = (outcome) => validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: add(outcome) }] })
+  assert.deepEqual(run({}), { ok: true, errors: [] })
+  assert.deepEqual(run({ wait: { class: "ge_7d", censored: true } }), { ok: true, errors: [] })
+  assert.deepEqual(run({ wait: null }), { ok: true, errors: [] })
+  for (const [outcome, code] of [
+    [{ wait: { class: `${SENTINEL}-class`, censored: false } }, "enum"],
+    [{ state: `${SENTINEL}-state` }, "enum"],
+    [{ reason: SENTINEL }, "enum"],
+    [{ delivered_at: "2026-09-25T09:00:00.000Z" }, "unknown_key"],
+  ]) {
+    assert.deepEqual(run(outcome), { ok: false, errors: [{ code, path: VALID_PATH }] })
+  }
+})
+
+test("validatePr accepts a facts file with human_turns and rejects a key beyond the five, a date or a wrong order with a path and no value", () => {
+  const turn = { at_ms: 5000, basis: "first", window_ms: null, prompt_class: "s", output_class: "none" }
+  const run = (turns) => validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: Buffer.from(`${JSON.stringify({ ...structuredClone(GOLDEN), human_turns: turns })}\n`) }] })
+  assert.deepEqual(run([turn]), { ok: true, errors: [] })
+  assert.deepEqual(run([]), { ok: true, errors: [] })
+  assert.deepEqual(run([{ ...turn, at: "2026-09-25T08:00:05.000Z" }]), { ok: false, errors: [{ code: "unknown_key", path: VALID_PATH }] })
+  assert.deepEqual(run([{ ...turn, text: SENTINEL }]), { ok: false, errors: [{ code: "unknown_key", path: VALID_PATH }] })
+  assert.deepEqual(run([turn, { ...turn, at_ms: 1, basis: "mid_turn", window_ms: 1 }]), { ok: false, errors: [{ code: "order", path: VALID_PATH }] })
+})
+
+// The capture record (`capture/<16 hex>.json`): a data path like facts and labels.
+const CAPTURE_PATH_OK = "capture/0123456789abcdef.json"
+const CAPTURE_RECORD = Buffer.from(`${JSON.stringify({
+  schema: "desk.factory.capture/1",
+  basis: "still_on_disk",
+  hosts: { "copilot-cli": { on_disk: 3, derived: 1, held: 0, frozen: 0, pending: 0, not_seen: 2, not_in_a_desk: null, unverified: false } },
+})}\n`)
+
+test("validatePr accepts an added or modified capture file and refuses a capture path with a wrong id length or a nested path", () => {
+  for (const status of ["added", "modified"]) {
+    assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status, bytes: CAPTURE_RECORD }] }), { ok: true, errors: [] }, status)
+  }
+  assert.equal(isCapturePath(CAPTURE_PATH_OK), true)
+  assert.equal(isCapturePath(null), false)
+  for (const bad of ["capture/0123456789abcde.json", "capture/0123456789abcdef0.json", "capture/nested/0123456789abcdef.json", `capture/${SENTINEL}.json`]) {
+    assert.deepEqual(validatePr({ changes: [{ path: bad, status: "added", bytes: CAPTURE_RECORD }] }), { ok: false, errors: [{ code: "path", path: "changes.0" }] }, bad)
+  }
+})
+
+test("validatePr refuses an invalid capture record with its code and the safe path, never the content", () => {
+  const bad = Buffer.from(`${JSON.stringify({ schema: "desk.factory.capture/1", basis: "still_on_disk", hosts: {}, extra: SENTINEL })}\n`)
+  const result = validatePr({ changes: [{ path: CAPTURE_PATH_OK, status: "added", bytes: bad }] })
+  assert.deepEqual(result, { ok: false, errors: [{ code: "unknown_key", path: CAPTURE_PATH_OK }] })
+  assert.equal(JSON.stringify(result).includes(SENTINEL), false)
+  assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status: "added", bytes: "{" }] }).errors, [{ code: "json", path: CAPTURE_PATH_OK }])
+})
+
+test("an ordinary contributor's deletion of a capture file is refused as removal, a maintainer's is accepted", () => {
+  assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status: "removed" }] }), { ok: false, errors: [{ code: "removal", path: CAPTURE_PATH_OK }] })
+  assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status: "removed" }], trustedMaintainer: true }), { ok: true, errors: [] })
+  assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status: "renamed", bytes: CAPTURE_RECORD }] }), { ok: false, errors: [{ code: "status", path: CAPTURE_PATH_OK }] })
+})
+
+test("validatePr refuses a capture change that carries no bytes, and does not throw", () => {
+  for (const status of ["added", "modified"]) {
+    assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status }] }), { ok: false, errors: [{ code: "type", path: CAPTURE_PATH_OK }] }, status)
+  }
+  assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status: "added", bytes: null }] }).errors, [{ code: "type", path: CAPTURE_PATH_OK }])
 })

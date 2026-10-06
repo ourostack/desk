@@ -60,6 +60,7 @@
 
 import { LABEL_WASTES, checkLabelsAgainstFacts } from "../label-schema.js"
 import { covered, retryCoverage, splitSessions } from "./formulas.js"
+import { outcomeSections } from "./report.js"
 import { bindingsOverlap } from "./timeline.js"
 import { NUMBER_STATES, fieldsFeeding, withState } from "./number-states.js"
 import { reasonText } from "./report.js"
@@ -647,6 +648,7 @@ export function renderRollupsMarkdown(rollups) {
           ...tools.map((row) => `| ${row.tool} | ${stateWord(row.state)} | ${row.calls ?? "not recorded"} | ${row.failures ?? "not recorded"} | ${row.n} of ${row.N} | ${row.reasons.length === 0 ? "none" : row.reasons.map(reasonText).join(" and ")} |`),
         ]),
     "",
+    ...outcomeSections(rollups.outcomes),
     "## Coverage",
     "",
     `- Jobs: ${cover.jobs}; open: ${cover.jobs_open}.`,

@@ -106,4 +106,8 @@ test("a /1 Codex session reads commits, permission waits and API retries as not 
   session.session.host = "codex-cli"
   const out = normalizePublished(session)
   for (const field of ["commits", "permission_waits", "api_retries"]) assert.ok(flags(out).includes(`${field}/host_does_not_record`), field)
+  // Human turns did not exist at /1: reading an old file adds no flag for them, so the session stays outside the period.
+  assert.equal(flags(out).some((flag) => flag.startsWith("human_turns/")), false)
+  session.session.host = "copilot-cli"
+  assert.equal(flags(normalizePublished(session)).some((flag) => flag.startsWith("human_turns/")), false)
 })

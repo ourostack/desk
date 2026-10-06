@@ -19,9 +19,12 @@ export const HOST_FLAGS = Object.freeze({
     { field: "tool_outcomes", reason: "host_records_partly" },
     { field: "requests", reason: "host_records_partly" },
     { field: "tokens", reason: "host_records_partly" },
+    { field: "human_turns", reason: "host_does_not_record" },
   ]),
   "copilot-cli": freeze([
     { field: "prs", reason: "host_records_partly" },
+    // A `user.message` with no `source` is not proven to be typed by a human: a hook follow-up or a batched message may be logged the same way.
+    { field: "human_turns", reason: "host_records_partly" },
   ]),
 })
 

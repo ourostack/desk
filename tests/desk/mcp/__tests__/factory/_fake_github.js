@@ -62,6 +62,12 @@ export function fakeGitHub({
   forkReadyOnCreate = false,
   mainFacts = {},
   extraMainEntries = [],
+  // The store's `factory.json` on the default branch (a string), or `null` for none.
+  factoryJson = null,
+  // The store's `capture.json` on the default branch (a string), or `null` for none.
+  captureJson = null,
+  // Capture records already on the default branch: `{ "<intake id>.json": bytes }`.
+  mainCapture = {},
   intercept = null,
 } = {}) {
   const calls = []
@@ -125,7 +131,7 @@ export function fakeGitHub({
     }
     return putTree([...entries])
   }
-  const DATA = /^(?:facts|labels)\//u
+  const DATA = /^(?:facts|labels|capture)\//u
 
   const factsEntries = Object.entries(mainFacts).map(([name, bytes]) => {
     const sha = gitBlobSha(bytes)
@@ -133,7 +139,26 @@ export function fakeGitHub({
     return [name, { type: "blob", sha }]
   })
   const factsTree = putTree([...factsEntries, ...extraMainEntries])
-  const rootTree = putTree([["README.md", { type: "blob", sha: "a".repeat(40) }], ["facts", { type: "tree", sha: factsTree }]])
+  const rootEntries = [["README.md", { type: "blob", sha: "a".repeat(40) }], ["facts", { type: "tree", sha: factsTree }]]
+  if (Object.keys(mainCapture).length > 0) {
+    const captureTree = putTree(Object.entries(mainCapture).map(([name, bytes]) => {
+      const sha = gitBlobSha(bytes)
+      blobs.set(sha, Buffer.from(bytes).toString("utf8"))
+      return [name, { type: "blob", sha }]
+    }))
+    rootEntries.push(["capture", { type: "tree", sha: captureTree }])
+  }
+  if (factoryJson !== null) {
+    const sha = gitBlobSha(factoryJson)
+    blobs.set(sha, factoryJson)
+    rootEntries.push(["factory.json", { type: "blob", sha }])
+  }
+  if (captureJson !== null) {
+    const sha = gitBlobSha(captureJson)
+    blobs.set(sha, captureJson)
+    rootEntries.push(["capture.json", { type: "blob", sha }])
+  }
+  const rootTree = putTree(rootEntries)
   const mainCommit = putCommit(rootTree, [])
   const [storeOwner, storeName] = store.split("/")
   repos.set(store.toLowerCase(), { meta: { full_name: store, private: false, fork: false, default_branch: "main", permissions: { push } }, refs: new Map([["heads/main", mainCommit]]) })
@@ -176,6 +201,14 @@ export function fakeGitHub({
       if (found) return ok(found.meta)
       if (forThisCall === "public" || forThisCall === "private") return ok({ full_name: wanted, private: forThisCall === "private" })
       return httpError(404, "Not Found")
+    }
+    if (method === "GET" && pathPart === `repos/${store}/contents/factory.json`) {
+      if (factoryJson === null) return httpError(404, "Not Found")
+      return ok({ type: "file", encoding: "base64", content: Buffer.from(factoryJson, "utf8").toString("base64") })
+    }
+    if (method === "GET" && pathPart === `repos/${store}/contents/capture.json`) {
+      if (captureJson === null) return httpError(404, "Not Found")
+      return ok({ type: "file", encoding: "base64", content: Buffer.from(captureJson, "utf8").toString("base64") })
     }
     if (method === "POST" && pathPart === `repos/${store}/forks`) {
       if (!repo(forkName)) addFork(forkReadyOnCreate)

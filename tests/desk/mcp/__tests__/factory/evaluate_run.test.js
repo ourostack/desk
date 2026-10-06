@@ -51,6 +51,9 @@ const OUTPUT = "/tmp/m5-2-output.labels.json"
 
 const local = () => structuredClone(LOCAL)
 const labels = () => structuredClone(LABELS)
+// What Desk accepts when it cannot place a stretch: the evaluator's own `caught` is never kept.
+const UNSTAMPED = structuredClone(LABELS)
+for (const stretch of UNSTAMPED.stretches) delete stretch.caught
 const bytes = (value) => Buffer.from(JSON.stringify(value))
 
 function brief(overrides = {}) {
@@ -155,9 +158,9 @@ test("the rubric the skill states is the rubric version labels carry", () => {
 
 test("labels that match the brief are accepted and returned as a canonical copy", () => {
   const result = acceptEvaluation(brief(), bytes(labels()))
-  assert.deepEqual(result, { ok: true, errors: [], labels: LABELS })
+  assert.deepEqual(result, { ok: true, errors: [], labels: UNSTAMPED })
   const pretty = acceptEvaluation(brief(), Buffer.from(`${JSON.stringify(labels(), null, 2)}\n`))
-  assert.deepEqual(pretty, { ok: true, errors: [], labels: LABELS })
+  assert.deepEqual(pretty, { ok: true, errors: [], labels: UNSTAMPED })
   assert.deepEqual(acceptEvaluation(brief(), JSON.stringify(labels())).ok, true)
 })
 
@@ -325,7 +328,7 @@ test("acceptEvaluations turns a valid answer into local labels and clears the br
   await fs.writeFile(output, JSON.stringify(labels(), null, 2))
   assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "accepted" }], request: "cleared" })
   const stored = path.join(root, "labels", "ourostack__factory", JOB, `${SESSION}.json`)
-  assert.equal(await fs.readFile(stored, "utf8"), `${JSON.stringify(LABELS)}\n`)
+  assert.equal(await fs.readFile(stored, "utf8"), `${JSON.stringify(UNSTAMPED)}\n`)
   assert.deepEqual(await fs.readdir(dir), [])
   assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [], request: "cleared" })
   assert.deepEqual(await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION }), { result: "complete", job: JOB, briefs: [] })
@@ -540,4 +543,59 @@ test("facts quarantined after a brief was written settle the request when answer
   await quarantine(env, STORE, NAME, "evidence_unmatched")
   assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "missing" }], request: "cleared" })
   assert.deepEqual(await listEvaluationRequests(env), [])
+}))
+
+// ---------------------------------------------------------------------------
+// The catch point Desk places on each defects stretch.
+// ---------------------------------------------------------------------------
+
+const BOUND = LOCAL.jobs[0].job
+const STARTED = LOCAL.session.started_at
+// The golden labels' first stretch is a defects stretch at 5 s; the others are not defects.
+const stamping = (extra = {}) => ({ outcome: { job: BOUND, rev: 2, since: "created", deliveries: 1, first_validating_at: "2026-09-25T08:00:03.000Z", first_delivered_at: "2026-09-25T08:00:30.000Z", ...extra }, startedAt: STARTED })
+
+test("acceptEvaluation stamps the defects stretches from the record it is given, after every check has passed", () => {
+  const written = labels()
+  written.stretches[0].caught = "after_delivery"
+  const accepted = acceptEvaluation(brief(), bytes(written), stamping())
+  assert.equal(accepted.ok, true)
+  assert.deepEqual(accepted.labels.stretches.map((stretch) => stretch.caught), ["at_review", undefined, undefined, undefined])
+  const late = acceptEvaluation(brief(), bytes(labels()), stamping({ first_delivered_at: "2026-09-25T08:00:04.000Z" }))
+  assert.equal(late.labels.stretches[0].caught, "after_delivery")
+  assert.equal(acceptEvaluation(brief(), bytes(labels()), stamping({ since: "adopted" })).labels.stretches[0].caught, undefined)
+  const rejected = labels()
+  rejected.stretches[0].note = SENTINEL
+  assert.deepEqual(acceptEvaluation(brief(), bytes(rejected), stamping()), { ok: false, errors: [{ code: "unknown_key", path: "stretches.0" }] })
+})
+
+// A session bound to one job only, with that job's record.
+async function seedSingle(env, entryExtra = {}) {
+  await seed(env)
+  const facts = local()
+  facts.jobs = facts.jobs.filter((bound) => bound.job === JOB)
+  facts.outcomes = [{ job: JOB, rev: 2, state: "delivered_unsigned", verified: null, reason: null, deliveries: 1, delivered_at: "2026-09-25T08:00:30.000Z", signed_at: null, observed_at: "2026-09-25T09:30:00.000Z", since: "created", first_validating_at: "2026-09-25T08:00:03.000Z", first_delivered_at: "2026-09-25T08:00:30.000Z", returns: [], ...entryExtra }]
+  await writeLocalFacts(env, STORE, facts)
+}
+
+async function acceptStored(env) {
+  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  const root = await factoryStateRoot(env)
+  await fs.writeFile(path.join(root, "evaluations", JOB, "ourostack__factory", `claude-code-${SESSION}.labels.json`), JSON.stringify(labels()))
+  assert.equal((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).sessions[0].result, "accepted")
+  return JSON.parse(await fs.readFile(path.join(root, "labels", "ourostack__factory", JOB, `${SESSION}.json`), "utf8"))
+}
+
+test("accepted labels of a session bound to one job carry the catch point from that job's record", () => scratch(async (env) => {
+  await seedSingle(env)
+  assert.deepEqual((await acceptStored(env)).stretches.map((stretch) => stretch.caught), ["at_review", undefined, undefined, undefined])
+}))
+
+test("accepted labels carry no catch point when the session is bound to more than one job, or the record is adopted", () => scratch(async (env) => {
+  await seed(env)
+  assert.deepEqual((await acceptStored(env)).stretches.map((stretch) => stretch.caught), [undefined, undefined, undefined, undefined])
+}))
+
+test("accepted labels carry no catch point when the record is adopted", () => scratch(async (env) => {
+  await seedSingle(env, { since: "adopted" })
+  assert.equal((await acceptStored(env)).stretches[0].caught, undefined)
 }))

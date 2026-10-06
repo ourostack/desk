@@ -38,6 +38,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/signoff-witness.cjs\" stop",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -90,6 +99,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*__task_signoff",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/signoff-witness.cjs\" ticket",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -107,6 +126,15 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" claude prompt",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/signoff-witness.cjs\" prompt",
             "timeout": 5
           }
         ]

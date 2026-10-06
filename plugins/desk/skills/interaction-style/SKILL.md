@@ -221,6 +221,10 @@ Don't end responses with offers of follow-up work:
 
 The operator will ask if they want more. Exception: a genuine fork per Section 6 ("Ask only when blocked") where the next action genuinely depends on operator judgment.
 
+### The sign-off ask is the one closing question
+
+A reply that delivers a task ends with the three lines (what was asked, what you delivered with its proof, accept or send back?). That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
+
 ### Ban these specific phrases (known Claude tics)
 
 These read as sycophantic padding without adding signal. They have been documented as widespread Claude defaults (issue [anthropics/claude-code#3382](https://github.com/anthropics/claude-code/issues/3382)).

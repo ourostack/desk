@@ -697,3 +697,20 @@ test("patchMarkdownFrontmatter throws rather than guess when a field it means to
   await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: "done" }))
   assert.equal(await fs.readFile(filePath, "utf8"), original)
 })
+
+test("patchFrontmatterFields writes numbers, booleans and null bare and a list of strings as a block list", () => {
+  const raw = ["---", "title: T", "---", "body"].join("\n")
+  const out = patchFrontmatterFields(raw, { flow: { rev: 0, ok: true, off: false, at: null, when: "2026-10-05T10:00:00Z" }, returns: ["a, b", "c"], none: [] })
+  assert.equal(
+    out,
+    ["---", "title: T", "flow:", "  rev: 0", "  ok: true", "  off: false", "  at: null", '  when: "2026-10-05T10:00:00Z"', "returns:", '  - "a, b"', "  - c", "none: []", "---", "body"].join("\n"),
+  )
+  const again = patchFrontmatterFields(out, { returns: ["only"], flow: { rev: 1 } })
+  assert.equal(again, ["---", "title: T", "flow:", "  rev: 1", "returns:", "  - only", "none: []", "---", "body"].join("\n"))
+})
+
+test("patchFrontmatterFields writes a non-scalar list item as its text form (a known limit: no caller passes one)", () => {
+  const raw = ["---", "title: T", "---", "body"].join("\n")
+  const out = patchFrontmatterFields(raw, { returns: [{ a: 1 }] })
+  assert.equal(out, ["---", "title: T", "returns:", '  - "[object Object]"', "---", "body"].join("\n"))
+})

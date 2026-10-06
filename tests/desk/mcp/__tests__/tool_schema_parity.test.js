@@ -38,6 +38,7 @@ import { NO_INPUT_TOOLS, TOOL_INPUT_SCHEMAS } from "../../../../plugins/desk/mcp
 
 import { TASK_CREATE_FIELDS, TASK_UPDATE_FIELDS, TASK_ARCHIVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task.js"
 import { TASK_FOCUS_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task-focus.js"
+import { TASK_SIGNOFF_FIELDS } from "../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import { TASK_MOVE_FIELDS, TRACK_RENAME_FIELDS } from "../../../../plugins/desk/mcp/src/tools/move.js"
 import { TRACK_CREATE_FIELDS, TRACK_UPDATE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/track.js"
 import { FRICTION_ADD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/friction.js"
@@ -62,6 +63,7 @@ const HANDLER_FIELDS = {
   task_archive: TASK_ARCHIVE_FIELDS,
   task_move: TASK_MOVE_FIELDS,
   task_focus: TASK_FOCUS_FIELDS,
+  task_signoff: TASK_SIGNOFF_FIELDS,
   track_create: TRACK_CREATE_FIELDS,
   track_update: TRACK_UPDATE_FIELDS,
   track_rename: TRACK_RENAME_FIELDS,
@@ -104,4 +106,11 @@ test("a tool with no input (NO_INPUT_TOOLS) has an empty handler field list", ()
   for (const name of NO_INPUT_TOOLS) {
     assert.deepEqual(HANDLER_FIELDS[name], [])
   }
+})
+
+test("the task_update schema lists return_reason with its four values", () => {
+  const property = TOOL_INPUT_SCHEMAS.task_update.properties.return_reason
+  assert.equal(property.type, "string")
+  assert.deepEqual(property.enum, ["agent_error", "changed_ask", "new_information", "external"])
+  assert.ok(!TOOL_INPUT_SCHEMAS.task_update.required.includes("return_reason"))
 })

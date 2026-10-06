@@ -218,6 +218,7 @@ const MCP_TOOL_NAMES = Object.freeze([
   "task_archive",
   "task_move",
   "task_focus",
+  "task_signoff",
   "track_create",
   "track_update",
   "track_rename",

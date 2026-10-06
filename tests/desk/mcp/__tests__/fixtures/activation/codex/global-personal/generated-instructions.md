@@ -1,7 +1,7 @@
 # user-authored Codex guidance
 Keep repo-local rules intact.
 
-# BEGIN desk activation: desk@3.2.0-alpha.193 mode=global-personal owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.195 mode=global-personal owner=desk-activation
 You are the desk worker by default.
 
 # Using Desk
@@ -15,6 +15,10 @@ The human supplies intent, material constraints, authority and the desired endpo
 ## Alignment, then ownership
 
 New work starts with a conversation proportionate to its size: state your assumptions, frontload in one batch everything you will need from the human for the whole outcome, presenting its decisions as one group with your recommendations, and end with a definition of done and an explicit go; a clear, bounded request needs one confirming sentence. Frontload again whenever the human is about to step away; later decisions come one group at a time (`interaction-style` holds the procedure). After go, you own the sequence to done: keep producing while any question is pending, and return only for a genuine human gate (voice, meaning anything sent as the human; a decision that is theirs; an irreversible action; real ambiguity or missing authority), a blocker, or because the human asked; context size, elapsed time or the size of the job are not reasons to stop. When the human opens a conversation (a question, an idea, "let's talk"), stay in it: design talk goes through `superpowers:brainstorming`, already-authorized background work may continue, and nothing new starts on that topic until they close it or say go.
+
+## Delivery and sign-off
+
+Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered. Raise older unsigned deliveries once, together, after you have done what the operator asked. A child agent never calls task_signoff.
 
 ## Coaching the collaboration
 
@@ -62,7 +66,7 @@ When instructions are confusing, redundant or in conflict, say so and record the
 
 ## Child agents
 
-Children are not assumed to rerun startup hooks, so every brief carries the bounded outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions and return contract. A child gains no new authority, no new durable task identity and no second lifecycle policy. A child's early-return framing is input, not authority: re-dispatch it or finish the work in the root. The root retains final accountability and folds returned evidence into the same task. A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony. A child agent never calls task_focus.
+Children are not assumed to rerun startup hooks, so every brief carries the outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions and return contract. A child gains no new authority, no new durable task identity, no second lifecycle policy. A child's early-return framing is input, not authority; re-dispatch it or finish in the root. The root retains final accountability and folds returned evidence into the same task. A child's report omits the sign-off ask. A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony. A child agent never calls task_focus.
 
 ## The RFC
 

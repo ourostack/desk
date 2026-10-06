@@ -66,7 +66,7 @@
 //     `reasoning_output_tokens` is part of `output_tokens`, so `input` and
 //     `output` exclude them.
 //   - Binding events, as the Claude deriver's: `deskToolCalls` (an MCP call
-//     named `mcp__*desk*__task_create|task_update|task_archive`, whether the
+//     named `mcp__*desk*__task_create|task_update|task_archive|task_signoff`, whether the
 //     rollout stores the name joined or as namespace plus name),
 //     `fileWrites` (`*** Add File`, `*** Update File` and `*** Move to` paths
 //     of a successful `apply_patch`), `shellGitCommits` (successful
@@ -107,7 +107,7 @@ import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
 
 const HOST = "codex-cli"
-const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save)$/u
+const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save|task_signoff)$/u
 const PR_URL_PATTERN = /github\.com\/([^/\s]+\/[^/\s]+?)(?:\.git)?\/pull\/(\d+)/u
 const PR_CREATE_PATTERN = /\bgh\s+pr\s+create\b/u
 const PATCH_PATH_PATTERN = /^\*\*\* (?:Add File|Update File|Move to): (.+)$/gmu

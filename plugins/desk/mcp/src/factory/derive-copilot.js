@@ -15,6 +15,7 @@
 // `session.shutdown.modelMetrics` (never `codeChanges`);
 // `assistant.turn_start.{turnId, interactionId}` and `turn_end.turnId`;
 // `user.message.{source, isAutopilotContinuation}` (classification only);
+// the character count of `user.message.content` and root `assistant.message.content` (the length only, the text is dropped; see the human-turn rule below);
 // `tool.execution_start.{toolCallId, toolName, parentToolCallId}` and, for
 // binding only, the Desk task fields (`track`, `slug`, `person`, `status`)
 // and file-write paths of its `arguments`; `tool.execution_complete.
@@ -73,6 +74,18 @@
 //     `autopilot`, scheduled (`schedule-*`) and any other sourced message is
 //     not human. `human_wait` (agent 0 only) runs from the end of the last
 //     interaction to the next human prompt, when no turn is open in between.
+//   - Human turns (`human_turns`): each human prompt (as above) is one entry,
+//     fed to `createHumanTurns` as a character count. A root `assistant.message`
+//     adds its length to the reply size of the next prompt. The agent's stop is
+//     the last root `assistant.turn_end` with no root `assistant.turn_start`
+//     after it (Copilot starts a turn per model iteration, so an earlier turn
+//     end is not a stop). A permission decision is no `user.message`, so it is
+//     never a turn. Anything not provable fails closed: a prompt with no
+//     readable time or text is not recorded, a reply with no readable text adds
+//     nothing, and either, or a log with lost lines, flags `human_turns`
+//     (`source_unreadable` or `log_truncated`) so the list reads as a lower
+//     bound. No `agentId` event, `source`d message or autopilot continuation is
+//     ever counted.
 //   - `permission_wait` runs from `permission.requested` to its
 //     `permission.completed` only when `decisionSource` is `human_response`,
 //     on the agent whose tool call (`toolCallId`) asked.
@@ -142,7 +155,7 @@
 //     `{commits, source_unreadable}`, and the same for tokens when they were
 //     needed.
 //   - Binding events: tool names ending `task_create|task_update|
-//     task_archive` whose arguments carry string `track` and `slug`; file
+//     task_archive|task_signoff` whose arguments carry string `track` and `slug`; file
 //     writes are `create`/`edit` `arguments.path` and the `*** Add/Update/
 //     Delete File:` headers of an `apply_patch` argument (parsed in memory),
 //     kept only when the paired completion has `success: true`; `at` is the
@@ -189,14 +202,14 @@ import { createInterface } from "node:readline"
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
-import { addNullable, compareByStart, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, shellBinding, usageAbsent, withRequestedModel } from "./derive-common.js"
+import { addNullable, compareByStart, createHumanTurns, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, shellBinding, usageAbsent, withRequestedModel } from "./derive-common.js"
 import { hostFlagsFor } from "./host-flags.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
 
 const HOST = "copilot-cli"
-const DESK_TOOL = /(?:task_create|task_update|task_archive)$/u
+const DESK_TOOL = /(?:task_create|task_update|task_archive|task_signoff)$/u
 const FOCUS_TOOL = /(task_focus|task_create)$/u
 const SAVE_TOOL = /desk_save$/u
 const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$/gmu
@@ -231,6 +244,11 @@ function isRetryableFailure(data) {
 
 function isHumanPrompt(data, root) {
   return root && data.isAutopilotContinuation !== true && (data.source === undefined || data.source === null)
+}
+
+// The character count of a message's text, or null when it holds no text. The text itself is never kept.
+function textLength(content) {
+  return typeof content === "string" ? Array.from(content).length : null
 }
 
 function deskCallOf(name, args, at) {
@@ -372,6 +390,32 @@ function createSessionFold() {
 
   const agentOf = (parentCall) => (parentCall === null ? 0 : subagentByCall.get(parentCall) ?? 0)
 
+  // The human turns, from character counts only. `stopAt` is the last root turn end with no root turn started since: the agent's stop.
+  const humans = createHumanTurns()
+  let stopAt = null
+  let stopInteraction = null
+  // A prompt that follows a stop waits here for the next root turn start: if that turn continues the interaction the stop closed, the prompt came between two iterations and the agent had not stopped. Anything else (a turn of a new interaction, or no turn start before another event) is read as a stop.
+  let held = null
+
+  function settlePrompt(stopped) {
+    if (held === null) return
+    if (stopped) humans.agentStopped(held.stopAt)
+    humans.prompt(held.at, held.chars)
+    held = null
+  }
+
+  function recordHumanTurn(data, at) {
+    settlePrompt(true)
+    const chars = textLength(data.content)
+    if (at === null || chars === null) {
+      flag("human_turns", "source_unreadable")
+      return
+    }
+    if (stopAt === null) humans.prompt(at, chars)
+    else held = { at, chars, stopAt, stopId: stopInteraction }
+    stopAt = null
+  }
+
   function closeInteraction() {
     if (interaction.open.size > 0) lostTurns = true
     if (interaction.lastEnd !== null) {
@@ -430,6 +474,10 @@ function createSessionFold() {
       if (shutdown !== null) shutdown.stale = true
       const turnId = stringOrNull(data.turnId)
       if (!root || turnId === null) return
+      // A prompt logged right after a turn end is settled by this turn: one that continues the interaction the turn end closed means the agent had not stopped.
+      settlePrompt(!(held !== null && held.stopId !== null && held.stopId === (stringOrNull(data.interactionId) ?? `turn:${turnId}`)))
+      // The agent is working again, so an earlier turn end was not its stop.
+      stopAt = null
       const id = stringOrNull(data.interactionId) ?? `turn:${turnId}`
       if (interaction !== null && interaction.id !== id) closeInteraction()
       if (interaction === null) {
@@ -439,14 +487,29 @@ function createSessionFold() {
       interaction.open.add(turnId)
     },
     "assistant.turn_end"(data, at, root) {
+      if (root) settlePrompt(true)
+      if (root && at !== null) {
+        stopAt = at
+        stopInteraction = interaction === null ? null : interaction.id
+      }
       const turnId = stringOrNull(data.turnId)
       if (!root || interaction === null || !interaction.open.has(turnId)) return
       interaction.open.delete(turnId)
       interaction.lastEnd = at
       retryStart = null
     },
+    "assistant.message"(data, at, root) {
+      if (!root) return
+      settlePrompt(true)
+      // A message that only asks for tools may carry no `content` key: it has no text, which is not a lost value.
+      const toolOnly = data.content === undefined && Array.isArray(data.toolRequests) && data.toolRequests.length > 0
+      const chars = toolOnly ? 0 : textLength(data.content)
+      if (chars === null) flag("human_turns", "source_unreadable")
+      else humans.addReply(chars)
+    },
     "user.message"(data, at, root) {
       if (!isHumanPrompt(data, root)) return
+      recordHumanTurn(data, at)
       if (interaction !== null && interaction.open.size === 0) closeInteraction()
       if (interaction === null && lastTurnEnd !== null) addTimed({ kind: "human_wait", agent: 0 }, lastTurnEnd, at, "human_waits")
       lastTurnEnd = null
@@ -585,7 +648,12 @@ function createSessionFold() {
     },
     finish() {
       if (interaction !== null) closeInteraction()
+      settlePrompt(true)
+      const humanFlags = []
+      const humanTurns = humans.finish(humanFlags)
+      for (const { field, reason } of humanFlags) flag(field, reason)
       return {
+        humanTurns,
         flags,
         gitRoot,
         selectedModel,
@@ -821,6 +889,9 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   if (safeEndReason === null) flag("ended_at", "session_open")
   if (read.truncated) flag("turns", "log_truncated")
   if (read.earlierFailure) flag("turns", "source_unreadable")
+  // A line that could not be read may have been a prompt, so the list is a lower bound.
+  if (read.truncated) flag("human_turns", "log_truncated")
+  if (read.earlierFailure) flag("human_turns", "source_unreadable")
   if (state.unfinishedCalls) flag("tool_durations", openOrTruncated)
   if (state.openTurns) flag("turns", openOrTruncated)
 
@@ -854,6 +925,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
       compactions: state.compactions,
     },
     refs: { prs: refs.prs, commits: refs.commits, unresolved: refs.unresolved },
+    human_turns: state.humanTurns,
     jobs: [],
     unavailable: unavailableList(state.flags),
   }

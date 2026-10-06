@@ -15,7 +15,8 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { task_move, track_rename } from "../../../../../plugins/desk/mcp/src/tools/move.js"
-import { task_create, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
+import { task_create, task_archive, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 import { folderHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
@@ -1158,7 +1159,8 @@ test("task_move unarchive refuses a task that isn't archived", async () => {
 test("task_move unarchive refuses when the live folder already exists", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root)
-  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-task", title: "T" } })
+  // task_create refuses a slug that exists in the archive, so the colliding live folder is written directly.
+  await writeMarkdown(path.join(root, "main-track", "old-task", "task.md"), { title: "T", status: "drafting" }, "")
 
   await assert.rejects(
     task_move({ deskRoot: root, input: { track: "main-track", slug: "old-task", unarchive: true } }),
@@ -1895,4 +1897,33 @@ test("task_move into_task whose git mv fails leaves no empty _iterations folder 
   const failMv = (command, args, options) => (args.includes("mv") ? { status: 1, stdout: "", stderr: "mv refused" } : spawnSync(command, args, options))
   await assert.rejects(task_move({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "keep-task" }, spawnGit: failMv, schedulePush: () => {} }), /git mv failed/u)
   await assert.rejects(fs.stat(path.join(root, "main-track", "keep-task", "_iterations")), { code: "ENOENT" })
+})
+
+// ── the outcome record survives every card rewrite ──────────────────────────
+
+test("task_move and track_rename keep signoff, flow and returns exactly as written", async () => {
+  const root = await mkTempDeskRoot()
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "Unique title for the record test" } })
+  await task_update({ deskRoot: root, input: { track: "main-track", slug: "old-name", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
+  const file = path.join(root, "main-track", "old-name", "task.md")
+  const card = await readFront(file)
+  card.data.returns = ["processing, 2026-10-05T10:00:00Z, agent_error"]
+  await writeMarkdown(file, card.data, card.content)
+  const keep = (data) => ({ signoff: data.signoff, flow: data.flow, returns: data.returns })
+  const before = keep((await readFront(file)).data)
+  assert.equal(before.signoff.state, "delivered_unsigned")
+
+  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" }, schedulePush: () => {} })
+  assert.deepEqual(keep((await readFront(path.join(root, "main-track", "new-name", "task.md"))).data), before)
+
+  await track_rename({ deskRoot: root, input: { track: "main-track", to: "renamed-track" }, schedulePush: () => {} })
+  assert.deepEqual(keep((await readFront(path.join(root, "renamed-track", "new-name", "task.md"))).data), before)
+
+  await task_archive({ deskRoot: root, input: { track: "renamed-track", slug: "new-name" } })
+  const archived = path.join(root, "renamed-track", "_archive", "new-name", "task.md")
+  assert.deepEqual(keep((await readFront(archived)).data), before)
+
+  await task_move({ deskRoot: root, input: { track: "renamed-track", slug: "new-name", to_slug: "again" }, schedulePush: () => {} })
+  assert.deepEqual(keep((await readFront(path.join(root, "renamed-track", "_archive", "again", "task.md"))).data), before)
 })

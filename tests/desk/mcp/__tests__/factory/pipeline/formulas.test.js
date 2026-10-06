@@ -92,7 +92,8 @@ test("closed-job formulas match hand-computed overlapping session and parallel-a
     api_retries: { class: "inferred", value: 1, partial: true, uncovered_sessions: 1, partial_reasons: ["host_records_partly"], state: "partial", reasons: ["host_records_partly"] },
     session_retouches: S({ class: "inferred", value: 1, basis: "captured_sessions" }, "measured"),
   })
-  assert.deepEqual(formulas.first_pass_yield, S({ class: "unavailable", value: null, reason: "not_collected_in_slice_1" }, "unavailable", ["not_collected_in_slice_1"]))
+  assert.deepEqual(formulas.first_pass_yield, { class: "unavailable", state: "unavailable", value: null, reasons: ["not_recorded"], reason: "not_recorded" })
+  assert.deepEqual(formulas.rework, { class: "unavailable", state: "unavailable", value: null, reasons: ["not_recorded"], reason: "not_recorded" })
 })
 
 test("open-job lead and flow are censored at the latest positioned session end, and the lost-clock session makes the clock numbers partial", () => {
@@ -765,6 +766,30 @@ test("idle inside a segment is not active time", () => {
   for (const wait of Object.values(formulas.waits)) assert.equal(wait.value, 0)
 })
 
+test("the sign-off formula reads the job's current outcome and says not recorded when there is none", () => {
+  const none = calculateFormulas(buildJobTimeline(CLOSED, sessions))
+  assert.deepEqual(none.signoff, { class: "unavailable", state: "unavailable", value: null, reasons: ["not_recorded"], reason: "not_recorded" })
+  const recorded = structuredClone(sessions)
+  const wait = { class: "lt_1d", censored: false }
+  recorded[0].outcomes = [{ job: CLOSED, rev: 2, state: "accepted", verified: true, reason: null, deliveries: 1, wait }]
+  assert.deepEqual(calculateFormulas(buildJobTimeline(CLOSED, recorded)).signoff, {
+    class: "declared", value: "accepted", verified: true, reason: null, wait, state: "measured", reasons: [],
+  })
+  recorded[0].outcomes[0].state = "not_recorded"
+  assert.deepEqual(calculateFormulas(buildJobTimeline(CLOSED, recorded)).signoff.reasons, ["signoff_not_recorded"])
+})
+
+test("the first-pass and rework formulas read the job's returns and give a verdict only from a created record", () => {
+  const recorded = structuredClone(sessions)
+  const returns = [{ reason: "agent_error", caught: "at_review", counts: true, refusal: null, refusal_verified: null }]
+  recorded[0].outcomes = [{ job: CLOSED, rev: 2, state: "accepted", verified: true, reason: null, deliveries: 1, wait: null, since: "created", returns }]
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, recorded))
+  assert.deepEqual(formulas.first_pass_yield, { class: "declared", state: "measured", value: 0, reasons: [], returns: { counting: 1, changed_ask: 0 }, changed_ask_only: false })
+  assert.deepEqual(formulas.rework, { class: "declared", state: "measured", value: { in_task: 0, at_review: 1, after_delivery: 0 }, reasons: [], reason_check: { compared: 0, disagree: 0, compared_verified: 0 } })
+  recorded[0].outcomes[0].since = "adopted"
+  assert.equal(calculateFormulas(buildJobTimeline(CLOSED, recorded)).first_pass_yield.reason, "history_not_recorded")
+})
+
 const hasState = (result) => result.state === stateOf(without(result)) && JSON.stringify(result.reasons) === JSON.stringify(reasonsOf(without(result)))
 // A mixed unavailable result carries its reasons as input; any other result's reasons are derived and must not be read back.
 const without = ({ state, ...rest }) => rest.reason === "mixed" ? rest : (({ reasons, ...others }) => others)(rest)
@@ -788,7 +813,7 @@ test("every result calculateFormulas returns carries state and reasons", () => {
   const closed = calculateFormulas(buildJobTimeline(CLOSED, sessions))
   assert.equal(closed.status.state, "measured")
   assert.equal(closed.first_pass_yield.state, "unavailable")
-  assert.deepEqual(closed.first_pass_yield.reasons, ["not_collected_in_slice_1"])
+  assert.deepEqual(closed.first_pass_yield.reasons, ["not_recorded"])
 })
 
 test("every top-level result is a known formula id or a not-fed name", () => {
@@ -1275,4 +1300,28 @@ test("lead contributors with no entry left are unavailable, never an empty parti
   assert.equal(formulas.lead_contributors.state, "unavailable")
   assert.equal(formulas.lead_contributors.value, null)
   assert.deepEqual(formulas.lead_contributors.reasons, ["source_unreadable"])
+})
+
+// Human attention (task E7): the per-job result is built from the job's sessions and stated through `withState`.
+test("attention is unavailable as not recorded for sessions that predate the record, and the key is a known formula", () => {
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, sessions))
+  assert.deepEqual(formulas.attention, { class: "unavailable", state: "unavailable", value: null, reason: "not_recorded", reasons: ["not_recorded"] })
+  assert.ok(FORMULA_IDS.includes("attention"))
+})
+
+test("attention is a measured inferred figure when the job's sessions record turns and publish segments", () => {
+  const turn = (at_ms) => ({ at_ms, basis: "after_stop", window_ms: 3000, prompt_class: "xs", output_class: "none" })
+  const own = sessions.map((facts) => ({
+    ...structuredClone(facts),
+    schema: "desk.factory.published/2",
+    unavailable: facts.unavailable.filter((entry) => entry.field !== "human_turns"),
+    human_turns: [turn(1000), turn(2000)],
+    jobs: facts.jobs.map((binding) => ({ ...binding, agents: [0, 1], segments: [{ start_ms: 0, end_ms: 10_000 }] })),
+  }))
+  const formulas = calculateFormulas(buildJobTimeline(OPEN, own))
+  assert.equal(formulas.attention.class, "inferred")
+  assert.equal(formulas.attention.method, 1)
+  assert.ok(formulas.attention.turns > 0)
+  assert.equal(formulas.attention.value, formulas.attention.turns * 3000)
+  assert.deepEqual(withState(formulas.attention), formulas.attention)
 })

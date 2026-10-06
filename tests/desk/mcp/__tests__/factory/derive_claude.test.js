@@ -23,6 +23,7 @@ import {
   NON_UUID_FILE_STEM,
   FULL_TURN_1_END,
   TRUNCATED_SKEWED_RESULT_AT,
+  padded,
 } from "./fixtures/claude/make.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -1134,6 +1135,26 @@ test("task_create with focus: true is a focusCall as well as a deskToolCall; foc
   assert.equal(validateLocalFacts(facts).ok, true)
 })
 
+test("each deriver records a successful task_signoff call and ignores a failed one (Claude Code)", async () => {
+  const { line, call, result } = focusSession()
+  const SIGNOFF_TOOL = "mcp__plugin_desk_desk__task_signoff"
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("s1", SIGNOFF_TOOL, { track: "desk-plugin", slug: "signed", outcome: "accepted", reason: SENTINEL }), // 01
+    result("s1"),
+    call("s2", SIGNOFF_TOOL, { track: "desk-plugin", slug: "failed", outcome: "refused", reason: SENTINEL }),
+    result("s2", true),
+  ])
+  assert.deepEqual(events.deskToolCalls.map(({ name, slug, ok, status }) => ({ name, slug, ok, status })), [
+    { name: SIGNOFF_TOOL, slug: "signed", ok: true, status: null },
+    { name: SIGNOFF_TOOL, slug: "failed", ok: false, status: null },
+  ])
+  assert.deepEqual(events.focusCalls, [], "a sign-off declares no focus")
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("signed"), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
 test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
   const { line, call, result } = focusSession()
   const inputs = [
@@ -1396,4 +1417,210 @@ test("facts written by the Claude deriver validate as /2", async () => {
     assert.equal(facts.schema, "desk.factory.local/2")
     assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
   }
+})
+
+
+// --- Human turns: one content-free entry per human prompt -------------------
+
+const HUMAN = { promptSource: "typed", origin: { kind: "human" }, turnOrigin: "human" }
+const turnLine = (second, extra, content = "go") => ({ type: "user", sessionId: GIT_SESSION_ID, version: "2.1.282", timestamp: `2026-09-25T11:00:${String(second).padStart(2, "0")}.000Z`, message: { role: "user", content }, ...extra })
+const replyLine = (second, text, extra = {}) => ({ type: "assistant", sessionId: GIT_SESSION_ID, version: "2.1.282", timestamp: `2026-09-25T11:00:${String(second).padStart(2, "0")}.000Z`, message: { id: `m-${second}`, model: "claude-opus-5-5", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "text", text }] }, ...extra })
+const turnsOf = async (lines) => (await deriveLines(lines)).facts.human_turns
+const humanTurnsFlags = (facts) => facts.unavailable.filter((entry) => entry.field === "human_turns")
+
+test("a typed prompt is one human turn with its size class", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  assert.deepEqual(facts.human_turns[0], { at: "2026-09-25T10:00:00.000Z", basis: "first", window_ms: null, prompt_class: "xs", output_class: "none" })
+  assert.deepEqual(facts.human_turns[1], { at: "2026-09-25T10:01:00.000Z", basis: "after_stop", window_ms: 20000, prompt_class: "s", output_class: "m" })
+  assert.deepEqual(humanTurnsFlags(facts), [])
+})
+
+test("a tool result line is not a human turn, even when it carries the human marks", async () => {
+  const turns = await turnsOf([
+    turnLine(0, HUMAN),
+    replyLine(1, "ok"),
+    turnLine(2, HUMAN, [{ type: "tool_result", tool_use_id: "x", content: padded(40) }]),
+  ])
+  assert.equal(turns.length, 1)
+})
+
+test("a hook or slash-command meta line is not a human turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(1, { isMeta: true, ...HUMAN }), turnLine(2, { isMeta: true }, [{ type: "text", text: "x" }])])
+  assert.equal(turns.length, 1)
+})
+
+test("a compaction summary is not a human turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(1, { isCompactSummary: true, ...HUMAN })])
+  assert.equal(turns.length, 1)
+})
+
+test("a system notification and a scheduled wake-up are not human turns", async () => {
+  const turns = await turnsOf([
+    turnLine(0, HUMAN),
+    turnLine(1, { promptSource: "system", origin: { kind: "task-notification" }, turnOrigin: "task_notification" }),
+    turnLine(2, { promptSource: "system", origin: { kind: "human" } }),
+    turnLine(3, { isMeta: true, promptSource: "system", turnOrigin: "scheduled", scheduledTaskId: "s-1" }),
+    turnLine(4, { ...HUMAN, scheduledFireId: "f-1" }),
+    turnLine(5, { ...HUMAN, turnOrigin: "scheduled" }),
+    turnLine(6, { origin: { kind: "peer" }, isMeta: true }),
+  ])
+  assert.equal(turns.length, 1)
+})
+
+test("a human line with no turnOrigin is a human turn, and one with another turnOrigin is not", async () => {
+  const turns = await turnsOf([turnLine(0, { origin: { kind: "human" } }), turnLine(5, { origin: { kind: "human" }, turnOrigin: "sdk" })])
+  assert.equal(turns.length, 1)
+})
+
+test("a prompt to a subagent, in the subagent's file, is not a human turn, and a sidechain line in the root file is not one either", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.equal(facts.human_turns.length, 4)
+  assert.equal(facts.agents.length, 2)
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(1, { ...HUMAN, isSidechain: true })])
+  assert.equal(turns.length, 1)
+})
+
+test("an image-only prompt is a human turn of size none", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.deepEqual(facts.human_turns[2], { at: "2026-09-25T10:02:00.000Z", basis: "after_stop", window_ms: 30000, prompt_class: "none", output_class: "s" })
+})
+
+test("the reply size is the root agent's visible text since the previous human turn, and a subagent's text adds nothing", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  // 250 + 100 + 25 visible characters (class m); thinking, tool use and the 6,000-character subagent reply count for nothing.
+  assert.equal(facts.human_turns[1].output_class, "m")
+  const edge = await turnsOf([turnLine(0, HUMAN), replyLine(1, "x".repeat(20)), replyLine(2, "y".repeat(1)), turnLine(3, HUMAN)])
+  assert.equal(edge[1].output_class, "s")
+  const text = await turnsOf([turnLine(0, HUMAN), replyLine(1, "x".repeat(25), { isApiErrorMessage: true }), { ...replyLine(2, "x"), message: { id: "m-2", content: "plain string" } }, { ...replyLine(3, "x"), message: undefined }, { ...replyLine(3, "x"), message: { id: "m-9" } }, turnLine(4, HUMAN)])
+  // The error line adds nothing; the 12-character string reply is xs.
+  assert.equal(text[1].output_class, "xs")
+})
+
+test("text before the first human prompt is not counted in its reply size", async () => {
+  const turns = await turnsOf([replyLine(0, "x".repeat(300)), turnLine(1, HUMAN)])
+  assert.equal(turns[0].output_class, "none")
+})
+
+test("the interrupt marker line and a headless prompt are not human turns", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.equal(facts.human_turns.length, 4)
+  const turns = await turnsOf([
+    turnLine(0, HUMAN),
+    turnLine(1, {}, [{ type: "text", text: "[Request interrupted by user]" }]),
+    turnLine(2, { promptSource: "sdk", turnOrigin: "sdk" }),
+  ])
+  assert.equal(turns.length, 1)
+})
+
+test("two prompts with no stop between give a mid_turn second turn", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.deepEqual(facts.human_turns[3], { at: "2026-09-25T10:02:04.000Z", basis: "mid_turn", window_ms: 4000, prompt_class: "s", output_class: "none" })
+})
+
+test("a prompt typed while the agent was working, written by the queue, is a mid_turn turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), replyLine(5, "partial"), turnLine(9, { ...HUMAN, promptSource: "queued" }), replyLine(12, "done"), turnLine(40, HUMAN)])
+  assert.deepEqual(turns.map((turn) => [turn.basis, turn.window_ms]), [["first", null], ["mid_turn", 9000], ["after_stop", 28000]])
+})
+
+test("a session whose prompt lines carry no origin key writes no list and flags human_turns field_absent", async () => {
+  const { facts } = await deriveLines([turnLine(0, {}), replyLine(1, "ok"), turnLine(5, { promptSource: "typed" })])
+  assert.equal(Object.hasOwn(facts, "human_turns"), false)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "field_absent" }])
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+test("a session with no prompt-like line at all has an empty list, not a flag", async () => {
+  const { facts } = await deriveLines([turnLine(0, { promptSource: "system", origin: { kind: "task-notification" } }), replyLine(1, "ok")])
+  assert.deepEqual(facts.human_turns, [])
+  assert.deepEqual(humanTurnsFlags(facts), [])
+})
+
+test("a session where some prompt lines carry an origin and others that should do not keeps its list and flags host_records_partly", async () => {
+  const { facts } = await deriveLines([turnLine(0, {}), turnLine(3, HUMAN)])
+  assert.equal(facts.human_turns.length, 1)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "host_records_partly" }])
+})
+
+test("the interrupt marker and a headless prompt without an origin do not make a session partial", async () => {
+  const { facts } = await deriveLines([
+    turnLine(0, HUMAN),
+    turnLine(1, {}, [{ type: "text", text: "[Request interrupted by user]" }]),
+    turnLine(2, {}, "[Request interrupted by user for tool use]"),
+    turnLine(3, { promptSource: "sdk", turnOrigin: "sdk" }),
+  ])
+  assert.deepEqual(humanTurnsFlags(facts), [])
+})
+
+test("a suggestion accepted by the human is a human turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(9, { ...HUMAN, promptSource: "suggestion_accepted" })])
+  assert.equal(turns.length, 2)
+})
+
+test("a synthetic model line adds nothing to the reply size", async () => {
+  const synthetic = { ...replyLine(1, "x".repeat(300)), message: { id: "m-1", model: "<synthetic>", content: [{ type: "text", text: "x".repeat(300) }] } }
+  const turns = await turnsOf([turnLine(0, HUMAN), synthetic, turnLine(5, HUMAN)])
+  assert.equal(turns[1].output_class, "none")
+})
+
+test("a damaged subagent file does not flag the root's human turns", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-human-turns-"))
+  try {
+    const root = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
+    writeFileSync(root, `${JSON.stringify(turnLine(0, HUMAN))}\n`)
+    mkdirSync(path.join(dir, GIT_SESSION_ID, "subagents"), { recursive: true })
+    writeFileSync(path.join(dir, GIT_SESSION_ID, "subagents", "agent-1.jsonl"), "not json\n")
+    const { facts } = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: null })
+    assert.deepEqual(humanTurnsFlags(facts), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a human prompt with no readable time flags human_turns source_unreadable", async () => {
+  const { facts } = await deriveLines([turnLine(0, HUMAN), { ...turnLine(5, HUMAN), timestamp: "not-a-time" }])
+  assert.equal(facts.human_turns.length, 1)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a prompt dated before the previous one is dropped and flags human_turns source_unreadable", async () => {
+  const { facts } = await deriveLines([turnLine(10, HUMAN), turnLine(5, HUMAN), turnLine(20, HUMAN)])
+  assert.equal(facts.human_turns.length, 2)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a log that ends mid-record, or has an unreadable line, flags human_turns", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-human-turns-"))
+  try {
+    const transcript = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
+    const good = JSON.stringify(turnLine(0, HUMAN))
+    writeFileSync(transcript, `${good}\n{"type":"user","timest`)
+    const cut = await deriveClaudeSession({ transcriptPath: transcript, plugins: PLUGINS, endReason: null })
+    assert.deepEqual(humanTurnsFlags(cut.facts), [{ field: "human_turns", reason: "log_truncated" }])
+    writeFileSync(transcript, `${good}\nnot json\n${JSON.stringify(turnLine(9, HUMAN))}\n`)
+    const damaged = await deriveClaudeSession({ transcriptPath: transcript, plugins: PLUGINS, endReason: null })
+    assert.equal(damaged.facts.human_turns.length, 2)
+    assert.deepEqual(humanTurnsFlags(damaged.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("more than the cap of human turns keeps the first and flags human_turns capped", async () => {
+  const lines = []
+  for (let index = 0; index <= 1000; index += 1) {
+    lines.push({ ...turnLine(0, HUMAN), timestamp: new Date(Date.parse("2026-09-25T11:00:00.000Z") + index * 1000).toISOString() })
+  }
+  const { facts } = await deriveLines(lines)
+  assert.equal(facts.human_turns.length, 1000)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "capped" }])
+})
+
+test("SENTINEL in a prompt and in a reply reaches no fact", async () => {
+  const { facts, events } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("-pppp"), false)
+  assert.equal(JSON.stringify(events).includes("-pppp"), false)
+  const raw = await deriveLines([turnLine(0, HUMAN, padded(50)), replyLine(1, padded(50))])
+  assert.equal(JSON.stringify(raw).includes(SENTINEL), false)
 })

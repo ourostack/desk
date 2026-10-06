@@ -66,5 +66,59 @@
       "observed": null
     }
   ],
-  "unavailable": [{ "field": "permission_waits", "reason": "host_does_not_record" }, { "field": "tool_durations", "reason": "capped" }]
+  "unavailable": [{ "field": "permission_waits", "reason": "host_does_not_record" }, { "field": "tool_durations", "reason": "capped" }],
+  "outcomes": [
+    {
+      "job": "1a2b3c4d5e6f708192a3b4c5d6e7f809",
+      "rev": 4,
+      "state": "accepted",
+      "verified": true,
+      "reason": null,
+      "deliveries": 1,
+      "delivered_at": "2026-09-25T09:00:00.000Z",
+      "signed_at": "2026-09-25T09:20:00.000Z",
+      "observed_at": "2026-09-25T09:30:00.000Z",
+      "since": "created",
+      "first_validating_at": "2026-09-25T08:40:00.000Z",
+      "first_delivered_at": "2026-09-25T09:00:00.000Z",
+      "returns": [
+        {
+          "reason": "agent_error",
+          "caught": "at_review",
+          "counts": true,
+          "refusal": null,
+          "refusal_verified": null
+        }
+      ]
+    },
+    {
+      "job": "5e6f708192a3b4c5d6e7f8091a2b3c4d",
+      "rev": 1,
+      "state": "not_delivered",
+      "verified": null,
+      "reason": null,
+      "deliveries": 0,
+      "delivered_at": null,
+      "signed_at": null,
+      "observed_at": "2026-09-25T09:30:00.000Z",
+      "since": "adopted",
+      "returns": []
+    },
+    {
+      "job": "9f2c4b1a7d3e5f60718293a4b5c6d7e8",
+      "rev": 0,
+      "state": "not_recorded",
+      "verified": null,
+      "reason": null,
+      "deliveries": 1,
+      "delivered_at": "2026-09-25T09:25:00.000Z",
+      "signed_at": null,
+      "observed_at": "2026-09-25T09:30:00.000Z"
+    }
+  ],
+  "human_turns": [
+    { "at": "2026-09-25T08:00:05.000Z", "basis": "first", "window_ms": null, "prompt_class": "s", "output_class": "none" },
+    { "at": "2026-09-25T08:20:00.000Z", "basis": "after_stop", "window_ms": 45000, "prompt_class": "xs", "output_class": "l" },
+    { "at": "2026-09-25T08:20:30.000Z", "basis": "mid_turn", "window_ms": 30000, "prompt_class": "m", "output_class": "none" }
+  ]
 }

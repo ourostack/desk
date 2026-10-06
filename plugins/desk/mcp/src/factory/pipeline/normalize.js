@@ -38,7 +38,8 @@ export function stableStringify(value) {
 
 // An old (`/1`) file has no flags for what its host never recorded. Add them so the absent value is not read as a measured zero.
 function addLegacyFlags(normalized) {
-  for (const flag of hostFlagsFor(normalized.session.host, normalized.session)) addUnavailable(normalized.unavailable, flag.field, flag.reason)
+  // Human turns did not exist at `/1`: an old file is from before the record, and a flag for them would put it in the period.
+  for (const flag of hostFlagsFor(normalized.session.host, normalized.session).filter((entry) => entry.field !== "human_turns")) addUnavailable(normalized.unavailable, flag.field, flag.reason)
   flagEmptyUsage(normalized.unavailable, normalized.models)
 }
 
@@ -66,6 +67,7 @@ export function normalizePublished(value) {
     job.transitions.sort((left, right) => compareValues(compareNullableNumber(left.offset_ms, right.offset_ms), enumIndex(ENUMS.jobStatus, left.to) - enumIndex(ENUMS.jobStatus, right.to)))
   })
   normalized.jobs.sort((left, right) => compareText(left.job, right.job))
+  if (Object.hasOwn(normalized, "outcomes")) normalized.outcomes.sort((left, right) => compareText(left.job, right.job))
   normalized.unavailable.sort((left, right) => compareValues(compareText(left.field, right.field), compareText(left.reason, right.reason)))
   return normalized
 }
