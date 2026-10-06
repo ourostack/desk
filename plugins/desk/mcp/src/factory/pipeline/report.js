@@ -64,6 +64,7 @@ const LABEL_REASON_TEXT = {
   range: "a labeled stretch runs past the session",
   evidence_unmatched: "the labeled evidence no longer matches the facts",
   share_unknown: "the facts do not record which part of the session was the job's",
+  outside_share: "the labels cover none of the job's own part of the session",
 }
 
 // Reasons the outcome figures (sign-off, first-pass yield, rework) carry, in words for the operator who reads the page.

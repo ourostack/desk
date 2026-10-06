@@ -20,9 +20,13 @@
 //     the store will hold, so evidence copied from them matches the store's
 //     gate. `null` when the session could never be published;
 //   - `own_share`: the job's own spans of the session (`[{ start_ms,
-//     end_ms }]` on the same clock, its binding's segments), or `null` when
-//     the binding records none. The store counts labels only inside the job's
-//     share, so a session several jobs share is labeled there, not whole;
+//     end_ms }]` on the same clock): its binding's segments, or the whole
+//     session for a binding from before workers were recorded that is the
+//     session's only job, as the store reads it. `null` when the store cannot
+//     tell which part was the job's (a subagent-only binding, or one of
+//     several without segments): no label of it can be credited to the job,
+//     so the evaluator writes no stretches. The store counts labels only
+//     inside the job's share, so a shared session is labeled there, not whole;
 //   - `unavailable`: `session_log_missing` and `facts_missing` as they apply;
 //   - `output`: where the evaluator writes its labels.
 //
@@ -141,10 +145,16 @@ export function buildEvaluatorBrief({ job, localFacts, logPath, outputPath, plug
     session_log: logPath,
     clock_origin: clock === null ? null : localFacts.session.started_at,
     facts: clock === null ? null : { ...clock, counts: structuredClone(localFacts.counts) },
-    own_share: clock === null || !Object.hasOwn(binding, "segments") ? null : binding.segments.map((segment) => ({ start_ms: segment.start_ms, end_ms: segment.end_ms })),
+    own_share: clock === null ? null : ownShareOf(binding, localFacts.jobs.length, clock.duration_ms),
     unavailable,
     output: outputPath,
   }
+}
+
+// The job's own spans of the session, as the store's build reads the published binding (`resolveLabels`), or `null` when unknown.
+function ownShareOf(binding, jobs, durationMs) {
+  if (Object.hasOwn(binding, "segments")) return binding.segments.map((segment) => ({ start_ms: segment.start_ms, end_ms: segment.end_ms }))
+  return !Object.hasOwn(binding, "agents") && jobs === 1 ? [{ start_ms: 0, end_ms: durationMs }] : null
 }
 
 const rejected = (errors) => ({ ok: false, errors })

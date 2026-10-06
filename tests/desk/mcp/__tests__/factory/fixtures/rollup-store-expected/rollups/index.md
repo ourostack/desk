@@ -6,11 +6,11 @@ Only finished jobs count: every measure of a job that is not done or cancelled, 
 
 ## Waste by type
 
-Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each job counts only its own part of a session, so a session several jobs share counts once in a total. The unknown row, once any label could say it, is time the evaluator looked at and could not tell: it is not counted in muda time, but each row's share is of all labeled waste time, unknown included. Confidence is the time in the row by how sure the evaluator was; it reads not recorded when a label that speaks to the row is from an evaluator that recorded none. Evaluator versions are the versions of those labels.
+Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each job counts only its own part of a session, and where several jobs hold the same time, a total counts it once. The unknown row, once any label could say it, is time the evaluator looked at and could not tell: it is not counted in muda time, but each row's share is of all labeled waste time, unknown included. Confidence is the time in the row by how sure the evaluator was; it reads not recorded when a label that speaks to the row is from an evaluator that recorded none. Evaluator versions are the versions of those labels.
 
 ### All jobs
 
-Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 6, each job's own part once; shared by several jobs: 0.
+Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 6, each session's time once; shared by several jobs: 0.
 
 | Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
@@ -25,7 +25,7 @@ Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the jo
 
 ### By job class: other
 
-Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 6, each job's own part once; shared by several jobs: 0.
+Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 6, each session's time once; shared by several jobs: 0.
 
 | Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
@@ -40,7 +40,7 @@ Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the jo
 
 ### By plugin version: 3.1.0
 
-Muda time: 9000 ms (measured) across 2 of 2 jobs fully labeled; excluded: none. Sessions summed: 2, each job's own part once; shared by several jobs: 0.
+Muda time: 9000 ms (measured) across 2 of 2 jobs fully labeled; excluded: none. Sessions summed: 2, each session's time once; shared by several jobs: 0.
 
 | Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
@@ -55,7 +55,7 @@ Muda time: 9000 ms (measured) across 2 of 2 jobs fully labeled; excluded: none. 
 
 ### By plugin version: 3.1.1
 
-Muda time: 4000 ms (partial) across 1 of 3 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 2, each job's own part once; shared by several jobs: 0.
+Muda time: 4000 ms (partial) across 1 of 3 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 2, each session's time once; shared by several jobs: 0.
 
 | Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
@@ -70,7 +70,7 @@ Muda time: 4000 ms (partial) across 1 of 3 jobs fully labeled; excluded: the job
 
 ### By plugin version: mixed
 
-Muda time: 1000 ms (measured) across 1 of 1 jobs fully labeled; excluded: none. Sessions summed: 2, each job's own part once; shared by several jobs: 0.
+Muda time: 1000 ms (measured) across 1 of 1 jobs fully labeled; excluded: none. Sessions summed: 2, each session's time once; shared by several jobs: 0.
 
 | Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
 | --- | ---: | ---: | ---: | ---: | --- | --- |

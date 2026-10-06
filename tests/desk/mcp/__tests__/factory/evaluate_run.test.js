@@ -106,6 +106,18 @@ test("the brief names the job's own share of the session when its binding record
   assert.equal(brief({ localFacts: shared }).own_share, null, "a session the store will never hold has no share to label")
 })
 
+test("the brief's share follows the store: a sole binding from before workers were recorded owns the session, a subagent-only one has none", () => {
+  const sole = local()
+  sole.jobs = sole.jobs.filter((bound) => bound.job === JOB)
+  assert.deepEqual(brief({ localFacts: sole }).own_share, [{ start_ms: 0, end_ms: PUBLISHED.session.duration_ms }])
+  sole.jobs[0].agents = [1]
+  assert.equal(brief({ localFacts: sole }).own_share, null)
+  assert.equal(brief().own_share, null, "one of several bindings without segments has no known share")
+  // With no share to credit, the evaluator writes no stretches, and that answer is accepted.
+  const empty = { ...labels(), stretches: [] }
+  assert.equal(acceptEvaluation(brief({ localFacts: sole }), bytes(empty)).ok, true)
+})
+
 test("the brief's intervals are exactly the published facts' intervals, so cited evidence matches the store", () => {
   const skewed = local()
   skewed.intervals[0].start = "2026-09-25T07:59:00.000Z"
