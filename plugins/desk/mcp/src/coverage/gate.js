@@ -96,10 +96,13 @@ export function assertCoverageCommandParity({ packageJsonPath, workflowPath }) {
   if (/run:\s*npm test\b/.test(workflow)) {
     issues.push("desk MCP CI still runs npm test instead of npm run test:coverage")
   }
-  const pathFilters = extractWorkflowPathFilters(workflow)
+  const { filters: pathFilters, declared } = extractWorkflowPathFilters(workflow)
   for (const eventName of REQUIRED_WORKFLOW_EVENTS) {
     const eventPaths = pathFilters.get(eventName) ?? []
-    if (!eventPaths.includes(REQUIRED_WORKFLOW_PATH_FILTER)) {
+    // A pull request with no path filter runs on every change, which covers the root scripts. Main requires the workflow's
+    // "CI gate" job, and a filter that skipped the workflow would leave that required check missing.
+    const runsOnEveryPullRequest = eventName === "pull_request" && declared.has(eventName) && !pathFilters.has(eventName)
+    if (!runsOnEveryPullRequest && !eventPaths.includes(REQUIRED_WORKFLOW_PATH_FILTER)) {
       issues.push(
         `desk MCP CI ${eventName}.paths must include ${REQUIRED_WORKFLOW_PATH_FILTER}`,
       )
@@ -167,6 +170,7 @@ function normalizeExclusions(exclusions) {
 
 function extractWorkflowPathFilters(workflow) {
   const filters = new Map()
+  const declared = new Set()
   const stack = []
   for (const line of workflow.split("\n")) {
     const clean = stripYamlComment(line)
@@ -191,8 +195,9 @@ function extractWorkflowPathFilters(workflow) {
     if (!keyMatch) continue
     while (stack.length && stack.at(-1).indent >= indent) stack.pop()
     stack.push({ indent, key: keyMatch[2] })
+    if (stack.length === 2 && stack[0].key === "on") declared.add(keyMatch[2])
   }
-  return filters
+  return { filters, declared }
 }
 
 function collectFiles(dir, extension) {
