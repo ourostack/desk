@@ -1,6 +1,6 @@
 ---
 name: work-orchestration
-description: Align new work before go by gathering every decision that needs the human's judgment into one batch with recommendations, then bind authorized engineering work to the selected Superpowers method and preserve Desk state and cross-repository dependency authority.
+description: Align new work before go by gathering every decision that needs the human's judgment into one batch with recommendations, then bind authorized engineering work to the selected Superpowers method and preserve Desk state and cross-repository dependency authority. Also invoke when a material new requirement arrives mid-task, for the rule on keeping it on the same durable task.
 ---
 
 # Work orchestration

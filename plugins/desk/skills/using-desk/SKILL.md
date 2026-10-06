@@ -27,7 +27,7 @@ Authority follows the human's verb and the surface's owner: investigate and revi
 
 ## Waste judgment
 
-Before and during work, check that each step adds justifiable, necessary, non-duplicative value; the human never needs to know the vocabulary. Make the smallest sufficient change at the nearest layer you own; fold ad-hoc steps into the plan; parallelize independent work and resequence to avoid waiting; when the same failure returns, redesign instead of patching again. "No waste" never means dropping proof.
+Before and during work, check that each step adds justifiable, necessary, non-duplicative value; the human never needs to know the vocabulary. Make the smallest sufficient change at the nearest layer you own; fold ad-hoc steps into the plan; parallelize independent work and batch or resequence to avoid waiting; when the same failure returns, redesign instead of patching again. "No waste" never means dropping proof.
 
 ## Cite every factual claim
 
@@ -55,7 +55,7 @@ Keep a material new requirement on the same durable task and send the affected p
 
 ## Visual proof when it helps
 
-Where a visual would help a human verify a state, capture bounded visual proof at that stage, never secrets or private content; for a claimed rendered, installed, merged or rollout state, capture that real result, not a terminal success line. `evidence-discipline` holds the procedure.
+Where a visual would help a human verify a state, capture bounded visual proof, never secrets or private content; for a claimed rendered, installed, merged or rollout state, capture that real result, not a terminal success line. `evidence-discipline` holds the procedure.
 
 ## Instruction coherence
 
