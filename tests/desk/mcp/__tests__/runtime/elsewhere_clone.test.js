@@ -84,10 +84,10 @@ test("clonedRepos reads the repository of a clone or fetch in every URL form, an
 test("round W and X: the clone the Copilot agent ran is denied, leading with the action and the branch to ask for", async () => {
   const result = await verdict("cd ~/code && git clone https://github.com/anthropics/claude-code.git claude-code && git -C claude-code branch -a")
   assert.equal(result.deny, true)
-  assert.match(result.reason, /^Ask the operator to push relay-heartbeat-15s from the other machine; do not clone or fetch to look for it\. /u)
+  assert.match(result.reason, /^Ask the operator to push relay-heartbeat-15s unless they already said it is pushed; if so, use task_update\. Do not clone or fetch to look for it\. /u)
   assert.match(result.reason, /task beacon-relay-push-check/u)
   // The way out comes right after the first sentence: record the operator's word in the card, then retry.
-  assert.match(result.reason, /\. If the operator says it is pushed now, record that with task_update \(rewrite the next step so it no longer says the work is on another machine\), then retry\. /u)
+  assert.match(result.reason, /\. If the operator's own message in this conversation already says it is pushed, that counts: rewrite the next step with task_update so it no longer says the work is on another machine, then retry, and do not ask again\. /u)
   assertActionable(assert, result.reason)
 })
 
@@ -101,7 +101,7 @@ test("the branch is 'the branch' when the card names none or one longer than 30 
   for (const [command, expected] of [["git clone https://github.com/acme/gadgets.git", "the branch"], ["git clone https://github.com/acme/sprockets.git", "the branch"]]) {
     const result = await verdict(command)
     assert.equal(result.deny, true, command)
-    assert.match(result.reason, new RegExp(`^Ask the operator to push ${expected} from`, "u"))
+    assert.match(result.reason, new RegExp(`^Ask the operator to push ${expected} unless they already said it is pushed; if so, use task_update\\. `, "u"))
     assertActionable(assert, result.reason)
     assert.ok(firstSentence(result.reason).length <= 120)
   }
@@ -123,7 +123,7 @@ test("a clone passes when no card marks that repository as elsewhere", async () 
 test("a card whose blocker (not its next step) says the work is elsewhere denies a clone of its repo, and a repo entry with no name is skipped", async () => {
   const result = await verdict("git clone https://github.com/acme/blocked-repo.git")
   assert.equal(result.deny, true)
-  assert.match(result.reason, /^Ask the operator to push the branch from the other machine; do not clone or fetch to look for it\. .*The card for task blocker-only /u)
+  assert.match(result.reason, /^Ask the operator to push the branch unless they already said it is pushed; if so, use task_update\. Do not clone or fetch to look for it\. .*The card for task blocker-only /u)
 })
 
 test("outside the desk folder, the desk the host binds ($DESK) is the one read", async () => {
@@ -156,7 +156,7 @@ test("the hook denies the clone on Claude and Copilot in their own shapes, and p
     assertActionable(assert, claude.hookSpecificOutput.permissionDecisionReason)
     const copilot = await protectedCheckoutHook({ toolName: "bash", toolArgs: JSON.stringify({ command }), cwd: DESK }, "copilot")
     assert.equal(copilot.permissionDecision, "deny")
-    assert.match(copilot.permissionDecisionReason, /^Ask the operator to push relay-heartbeat-15s/u)
+    assert.match(copilot.permissionDecisionReason, /^Ask the operator to push relay-heartbeat-15s unless they already said it is pushed/u)
     assert.deepEqual(await protectedCheckoutHook({ tool_name: "Bash", tool_input: { command: "ls -la" }, cwd: DESK }, "claude"), {})
     assert.deepEqual(await protectedCheckoutHook({ tool_name: "Bash", tool_input: { command: "git clone https://github.com/acme/widgets.git" }, cwd: DESK }, "claude"), {})
   } finally {
@@ -241,4 +241,12 @@ test("the hook run from a bare plugin folder (no node_modules) still denies the 
   } finally {
     rmSync(bare, { recursive: true, force: true })
   }
+})
+
+test("the first sentence, the way out for an operator who already said it is pushed, fits within 120 characters even with a 30-character branch", async () => {
+  const load = async () => [{ slug: "long-branch", repos: [{ name: "gadgets" }], next_step: "push `abcdefghijklmnopqrstuvwxyz1234` from my other laptop.", blocker: "" }]
+  const result = await elsewhereCloneDenial({ command: "git clone https://github.com/acme/gadgets.git", cwd: "/nowhere", env: {}, load })
+  assert.equal(result.deny, true)
+  assertActionable(assert, result.reason)
+  assert.match(firstSentence(result.reason), /^Ask the operator to push abcdefghijklmnopqrstuvwxyz1234 unless they already said it is pushed; if so, use task_update\.$/u)
 })

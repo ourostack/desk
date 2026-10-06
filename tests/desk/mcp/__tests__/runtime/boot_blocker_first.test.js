@@ -85,7 +85,7 @@ test("with an ask-and-stop blocker the boot omits the factory consent instructio
 test("a task whose next step or blocker says it lives only on another machine gets a not-here note: ask, never clone or fetch to look for it", () => {
   const base = { status: "ready", degraded: [], pending: [] }
   const tasks = (task) => ({ ...base, active_tasks: { task_count: 1, tracks: [{ track: "lighthouse-relay", desk: null, tasks: [{ slug: "push-check", handle: "h", status: "processing", ...task }] }] } })
-  const note = "  not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
+  const note = "  not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is; unless the operator's own message already says it is pushed, in which case record that with task_update and retry"
   const real = "Push relay-heartbeat-15s and open a pull request. The branch lives only on the other laptop, not on this machine. First confirm which GitHub account and route can deliver it from here, and tell me."
   for (const task of [{ next_step: real }, { next_step: "the branch exists only on the work laptop" }, { next_step: "Wait", blocker: "branch is on the other machine" }, { status: "blocked", blocker: "relay-heartbeat is not on this machine" }]) {
     const lines = formatBootText(tasks(task)).split("\n")
