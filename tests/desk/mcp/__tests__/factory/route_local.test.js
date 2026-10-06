@@ -13,6 +13,7 @@ import { cardKey, claimNext, readCards, updateCard, EVALUATOR_NAMES, FLUSH_HEALT
 import { factoryStateDir } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
 import { readStatus, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { FLUSH_CONFIRM_RUNS, MIN_RUN_GAP_HOURS, runRouteLocalStep } from "../../../../../plugins/desk/mcp/src/factory/route-local.js"
+import { reading } from "../../../../../plugins/desk/mcp/src/factory/improvement-verify.js"
 
 const T0 = new Date("2026-10-05T00:00:00Z")
 const at = (hours) => new Date(T0.getTime() + hours * 3600 * 1000)
@@ -111,6 +112,29 @@ for (const code of ["no_account", "auth_failed", "gh_missing", "account_cannot_d
     assert.deepEqual((await cards(ctx))[0].evidence, [])
   }))
 }
+
+test("reproduction r5: a flush that ended before the account check never reads a standing fault as clear", () => scratch(async (ctx) => {
+  // The real observer and the verify step's reading, as the loop runs them.
+  const conditionAt = async () => (await readStatus(ctx.env)).loop.conditions["flush_health:auth_failed"]
+  await setStatus(ctx, { last_flush: { "o/s": { at: "2026-10-05T00:00:00.000Z", result: "auth_failed" } } })
+  await runRouteLocalStep(ctx.env, { deskRoot: ctx.deskRoot, personPrefix: "", now: at(1), writeCardCommitted: commit, labelsCheck: quiet })
+  assert.equal((await conditionAt()).present, true)
+  // What the flush now writes after nothing_pending and offline: the result, with the fault carried (`carriedAccountFault`).
+  for (const [hours, result] of [[8, "nothing_pending"], [15, "offline"], [22, "locked"], [29, "deadline"], [36, "rate_limited"], [43, "unexpected"]]) {
+    await setStatus(ctx, { last_flush: { "o/s": { at: at(hours).toISOString(), result, account_fault: "auth_failed" } } })
+    await runRouteLocalStep(ctx.env, { deskRoot: ctx.deskRoot, personPrefix: "", now: at(hours), writeCardCommitted: commit, labelsCheck: quiet })
+    assert.equal((await conditionAt()).present, true, result)
+  }
+  assert.notEqual(reading(await readStatus(ctx.env), { key: "flush_health:auth_failed", source: "flush_health" }, at(44).getTime()).state, "recovered")
+  // A flush that used the account carries nothing, and the fault then reads as clear.
+  await setStatus(ctx, { last_flush: { "o/s": { at: at(50).toISOString(), result: "delivered_pr_open" } } })
+  await runRouteLocalStep(ctx.env, { deskRoot: ctx.deskRoot, personPrefix: "", now: at(50), writeCardCommitted: commit, labelsCheck: quiet })
+  assert.equal((await conditionAt()).present, false)
+  // A carried code that is not a fault is ignored.
+  await setStatus(ctx, { last_flush: { "o/s": { at: at(57).toISOString(), result: "offline", account_fault: "delivered_pr_open" } } })
+  const odd = await run(ctx, 57)
+  assert.deepEqual(odd.spy.calls.find((call) => call.source === "flush_health").present, [])
+}))
 
 test("held markers and frozen counts count as faults; zero or non-count values do not", () => scratch(async (ctx) => {
   await setStatus(ctx, { last_flush: { a: { result: "delivered", held_elsewhere: 2, retraction_stalled: 1 }, b: { result: "delivered", held_elsewhere: 0, retraction_stalled: "3" }, c: "x" } })

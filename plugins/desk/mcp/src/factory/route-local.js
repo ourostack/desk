@@ -5,7 +5,8 @@
 // check); nothing written holds a path, a store name, an account or a login, and a card holds only fixed codes and
 // pointers.
 //
-// A source that could not be read is never observed: a failed look is not a clear look. After each successful look
+// A source that could not be read is never observed: a failed look is not a clear look. So is a flush that ended before it
+// reached the account: its entry's `account_fault` keeps the fault it could not see past (`flush-health.js`). After each successful look
 // the step records which ids of the source hold now (`observeConditions`), and the verify step closes cards from
 // that record. Two exceptions: `reconcile_class` is never observed here, because the verify step closes those cards
 // from the reconcile summary's own `clear` streaks; and `loop_alarm` is observed by the measure step, which owns every
@@ -66,6 +67,8 @@ function flushCodes(lastFlush) {
   const present = new Set()
   for (const entry of entries) {
     if (FLUSH_RESULT_CODES.includes(entry.result)) present.add(entry.result)
+    // A fault a later flush ended too early to see past is still present (`flush-health.js`).
+    if (FLUSH_RESULT_CODES.includes(entry.account_fault)) present.add(entry.account_fault)
     for (const [field, code] of Object.entries(FLUSH_COUNT_CODES)) if (isCount(entry[field]) && entry[field] > 0) present.add(code)
   }
   return present
