@@ -16,7 +16,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { REPEAT_TIMEOUT_THRESHOLD } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 import { protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
-import { removeFixtureAfter, slowGit, waitForNoProcessesUnder } from "../_process_hygiene.js"
+import { processesWithCwdUnder, removeFixtureAfter, slowGit } from "../_process_hygiene.js"
 
 const require = createRequire(import.meta.url)
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
@@ -169,5 +169,9 @@ test("the real hook process denies with the plain reason every time, and adds th
   assert.match(last.stderr, /^Desk problem: protected-checkout — the same command keeps timing out\n/u)
   assert.match(last.stderr, /file: filing in background/u)
   // The hook exited at its own deadline while Git was still blocked on the FIFO; it must not leave that Git behind.
-  assert.deepEqual(await waitForNoProcessesUnder(f.root, 5000), [])
+  // Only Git is the subject. The Nth call also starts the detached filer on purpose, a Node process that inherits the hook's working directory and may legitimately still be starting when the hook has exited, so a list of every process under the fixture fails on a slow runner without any defect. The fixture cleanup stops the filer.
+  const stillRunning = async () => processesWithCwdUnder(f.root).filter((entry) => /^git(?:\.exe)?$/u.test(entry.command))
+  // Git is signalled before the hook exits; the loop only waits for the OS to finish ending it, and has no bearing on what is asserted.
+  for (let attempt = 0; attempt < 200 && (await stillRunning()).length > 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual(await stillRunning(), [])
 })

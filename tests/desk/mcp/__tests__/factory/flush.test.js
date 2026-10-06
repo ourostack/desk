@@ -441,14 +441,18 @@ test("an unauthenticated retry due only after the deadline is already spent is r
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // For this exact fixture (one plugin, no refs), the flush's own start and the account's gh calls make exactly ten `now()`
-  // reads before the retry's own precheck: a real clock racing them is at the mercy of host load, so this
-  // counts invocations instead. The eleventh read is the retry's precheck, already past a deadline the first
-  // ten never approached.
-  let calls = 0
-  const now = () => { calls += 1; return calls >= 11 ? 2_000_000 : 1_000_000 }
-  const anonymousLookup = async () => { throw new Error("the retry must never be attempted once the deadline is already spent") }
+  // The clock is told where it is being read, not how many times: the read made from inside the unauthenticated retry's own precheck (`anonymousRepo`) reports a time past the deadline, and every other read reports a time the deadline never approached. Adding or removing any other clock read cannot move which check this reaches, and if the retry's precheck is ever renamed or skipped the test fails on `reachedPrecheck` instead of passing without having tested it.
+  let reachedPrecheck = false
+  let attempted = false
+  const now = () => {
+    if (!new Error().stack.includes("anonymousRepo")) return 1_000_000
+    reachedPrecheck = true
+    return 2_000_000
+  }
+  const anonymousLookup = async () => { attempted = true; throw new Error("the retry must never be attempted once the deadline is already spent") }
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup, now, deadlineMs: 500_000 }), { result: "deadline" })
+  assert.equal(reachedPrecheck, true, "the flush reached the unauthenticated retry's precheck")
+  assert.equal(attempted, false)
 }))
 
 test("an unauthenticated retry that never answers is cut off at the deadline", () => scratch(async ({ env }) => {
@@ -457,13 +461,20 @@ test("an unauthenticated retry that never answers is cut off at the deadline", (
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // As above, the eleventh `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
+  // As above, the clock is told where it is read. The retry's own precheck reports the deadline a mere 100ms off,
   // which becomes the real timer the retry races against, so a hung lookup is cut off quickly and
   // deterministically rather than by racing host load against a short wall-clock deadline.
-  let calls = 0
-  const now = () => { calls += 1; return calls === 11 ? 1_100_000 : 1_000_000 }
-  const hung = { ...github, anonymousLookup: () => new Promise(() => {}) }
+  let reachedPrecheck = false
+  let lookups = 0
+  const now = () => {
+    if (!new Error().stack.includes("anonymousRepo")) return 1_000_000
+    reachedPrecheck = true
+    return 1_100_000
+  }
+  const hung = { ...github, anonymousLookup: () => { lookups += 1; return new Promise(() => {}) } }
   assert.deepEqual(await flush(env, { store: STORE, runner: hung.runner, anonymousLookup: hung.anonymousLookup, now, deadlineMs: 100_100 }), { result: "deadline" })
+  assert.equal(reachedPrecheck, true, "the flush reached the unauthenticated retry's precheck")
+  assert.equal(lookups, 1, "the retry was attempted and then cut off by the deadline")
 }))
 
 test("an unauthenticated retry answering with something that is not a result object at all is unexpected", () => scratch(async ({ env }) => {

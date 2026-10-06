@@ -367,10 +367,25 @@ test("syncWorkspace treats the retry-after-quarantine pull's own autostash pop c
 // injected clock throughout -- never a real sleep.
 // ---------------------------------------------------------------------------
 
+// A clock for the budget tests below, driven by which part of `syncWorkspace` is reading it, never by how many reads came before: the sync reads `now` once to set its deadline, then through `remaining()` at its named checkpoints and through `budgetedTimeout()` before each git step. Counting reads made these tests stop reaching their checkpoint, and still pass, whenever a read was added elsewhere. Here a read that does not come from `remaining` sets the deadline (time 0). The checkpoint that is `exhaustedAtCheckpoint` (1-based, in the order `remaining()` is called directly) and everything after it reports the budget long gone; `budgetedTimeout()` reads report it gone only from that checkpoint on, or from the start when `exhaustedFromFirstStep` is set. `checkpoints()` says how many were reached, so a test can assert it got to the one it means.
+function checkpointClock({ exhaustedAtCheckpoint, exhaustedFromFirstStep = false }) {
+  let reached = 0
+  const now = () => {
+    const stack = new Error().stack
+    if (!stack.includes("remaining")) return 0
+    if (!stack.includes("budgetedTimeout")) {
+      reached += 1
+      return reached >= exhaustedAtCheckpoint ? 999_999 : 0
+    }
+    return reached >= exhaustedAtCheckpoint || exhaustedFromFirstStep ? 999_999 : 0
+  }
+  return { now, checkpoints: () => reached }
+}
+
 test("syncWorkspace reports sync_deadline_exceeded and never attempts a pull when the budget is already exhausted", async () => {
   const { cloneA } = await mkOriginWithClone()
-  let calls = 0
-  const now = () => { calls += 1; return calls === 1 ? 0 : 999_999 }
+  const clock = checkpointClock({ exhaustedAtCheckpoint: 1 })
+  const now = clock.now
   let pullCalled = false
   const spawnGit = (cmd, args, opts) => {
     if (args.includes("pull")) pullCalled = true
@@ -380,6 +395,7 @@ test("syncWorkspace reports sync_deadline_exceeded and never attempts a pull whe
   const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
   assert.equal(result.state, "unresolved")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
+  assert.equal(clock.checkpoints(), 1, "the sequence stopped at its first budget checkpoint")
   assert.equal(pullCalled, false, "no real pull was ever attempted once the budget was already exhausted")
   assert.equal(filed.reason, "sync_deadline_exceeded")
 })
@@ -415,12 +431,10 @@ test("syncWorkspace reports sync_deadline_exceeded, without attempting a second 
 
 test("run() itself refuses to spawn once the per-call budget is exhausted, never calling spawnGit for any of the remaining steps", async () => {
   const { cloneA } = await mkOriginWithClone()
-  let calls = 0
-  // call 1 sets deadlineAt; call 2 is the pre-pull checkpoint (still
-  // within budget); every call from here on reports the budget as long
-  // gone, so every git step from stashCount onward hits run()'s own
-  // `timeoutMs <= 0` guard instead of ever reaching spawnGit.
-  const now = () => { calls += 1; return calls <= 2 ? 0 : 999_999 }
+  // The deadline is set, the pre-pull checkpoint is still within budget, and every git step from stashCount onward finds the budget
+  // long gone, so each hits run()'s own `timeoutMs <= 0` guard instead of ever reaching spawnGit.
+  const clock = checkpointClock({ exhaustedAtCheckpoint: 2, exhaustedFromFirstStep: true })
+  const now = clock.now
   let spawnGitCalled = false
   const spawnGit = (cmd, args, opts) => {
     if (["stash", "pull", "diff", "rebase"].some((verb) => args.includes(verb))) spawnGitCalled = true
@@ -428,6 +442,7 @@ test("run() itself refuses to spawn once the per-call budget is exhausted, never
   }
   let filed = null
   const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  assert.ok(clock.checkpoints() >= 1, "the pre-pull checkpoint was passed within budget")
   assert.equal(spawnGitCalled, false, "run()'s own budget-exhausted guard synthesized every remaining step's failure without ever spawning git for it")
   assert.equal(result.state, "unresolved")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
@@ -452,14 +467,11 @@ test("stashCount falls back to 0 when its own git stash list call fails, and aga
 
 test("syncWorkspace reports sync_deadline_exceeded right after the first pull's own conflict is captured and aborted, carrying firstConflicted through", async () => {
   const { cloneA } = await mkConflictFixture()
-  let calls = 0
-  // calls 1-6 cover deadlineAt, the pre-pull checkpoint, stashCount,
-  // the (failing) first pull, conflictedPaths and abortRebase -- all
-  // still within budget. Call 7 is the checkpoint right after that
-  // abort (`if (remaining() <= 0) return deadlineExceeded(firstConflicted)`),
-  // which this scripts as exhausted so the sequence gives up there
-  // instead of ever reaching untrackedPaths/quarantine.
-  const now = () => { calls += 1; return calls <= 6 ? 0 : 999_999 }
+  // The deadline, the pre-pull checkpoint and the git steps up to the abort are all within budget. The second checkpoint is the one
+  // right after that abort (`if (remaining() <= 0) return deadlineExceeded(firstConflicted)`), which this scripts as exhausted so
+  // the sequence gives up there instead of ever reaching untrackedPaths/quarantine.
+  const clock = checkpointClock({ exhaustedAtCheckpoint: 2 })
+  const now = clock.now
   let untrackedCalled = false
   const spawnGit = (cmd, args, opts) => {
     if (args.includes("ls-files")) untrackedCalled = true
@@ -469,6 +481,7 @@ test("syncWorkspace reports sync_deadline_exceeded right after the first pull's 
   const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined, "the budget ran out before quarantine was ever attempted")
+  assert.equal(clock.checkpoints(), 2, "the sequence stopped at the checkpoint right after the first pull's abort")
   assert.equal(untrackedCalled, false, "untrackedPaths was never reached once this checkpoint gave up")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
   assert.match(result.diagnostic, /conflicted: seed\.md/u, "firstConflicted -- captured before the abort that cleared it -- was carried through into the diagnostic")

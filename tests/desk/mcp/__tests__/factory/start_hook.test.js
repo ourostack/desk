@@ -85,12 +85,11 @@ test("a check that overruns its budget is skipped silently, but a check that thr
   const { runBootChecks } = boot()
   const recorded = []
   let aborted = false
-  const started = performance.now()
   const line = await runBootChecks({
     ...quiet,
     record: async (_env, skipped) => { recorded.push(...skipped) },
     checks: [
-      check("slow", (ctx) => new Promise((resolve) => { ctx.signal.addEventListener("abort", () => { aborted = true }); setTimeout(() => resolve({ line: "late" }), 400) }), 50),
+      check("slow", (ctx) => new Promise(() => { ctx.signal.addEventListener("abort", () => { aborted = true }) }), 50),
       check("self-stopped", async () => { throw Object.assign(new Error("over"), { code: "boot_check_budget" }) }),
       check("broken", async () => { throw new Error("boom") }),
       check("fine", async () => ({ line: "fine" })),
@@ -104,22 +103,25 @@ test("a check that overruns its budget is skipped silently, but a check that thr
     "  file: filing in background",
     '  tell: Desk\'s "broken" boot check failed internally this session (boom). Filing this now so it gets fixed.; fine',
   ].join("\n"))
-  assert.ok(performance.now() - started < 300)
+  // The overrunning check never answers on its own, so the run returning at all means it did not wait for it.
   assert.ok(aborted, "the overrunning check is told to stop")
   assert.deepEqual(recorded.map(({ id, reason }) => ({ id, reason })), [{ id: "slow", reason: "budget" }, { id: "self-stopped", reason: "budget" }, { id: "broken", reason: "error" }])
   assert.ok(recorded.every((entry) => Number.isSafeInteger(entry.elapsed_ms) && entry.elapsed_ms >= 0))
 })
 
-const block = (ms) => {
-  const until = performance.now() + ms
-  while (performance.now() < until) { /* a check that never yields */ }
+// A check that never yields, on a clock the test owns: the boot runner reads `performance.now()`, so blocking advances that clock by exactly `ms`. A real busy loop would let a loaded machine add time to every check and change which budget each one overruns.
+let virtualNow = 0
+const block = (ms) => { virtualNow += ms }
+const useVirtualClock = (t) => {
+  virtualNow = 0
+  t.mock.method(performance, "now", () => virtualNow)
 }
 
-test("checks that block synchronously past their budgets are skipped with their real time, and that time counts against the total", async () => {
+test("checks that block synchronously past their budgets are skipped with their real time, and that time counts against the total", async (t) => {
+  useVirtualClock(t)
   const { runBootChecks } = boot()
   const recorded = []
   const repairs = []
-  const started = performance.now()
   const line = await runBootChecks({
     ...quiet,
     record: async (_env, skipped) => { recorded.push(...skipped) },
@@ -138,10 +140,11 @@ test("checks that block synchronously past their budgets are skipped with their 
   assert.equal(byId.c.reason, "budget")
   assert.ok(byId.c.elapsed_ms >= 140, JSON.stringify(byId.c))
   assert.equal(byId.b, undefined, JSON.stringify(recorded))
-  assert.ok(performance.now() - started >= 430)
+  assert.equal(virtualNow, 250 + 40 + 140, "every check ran to its end on the owned clock")
 })
 
-test("the real elapsed time of each check is charged, so a total spent by blocking skips the rest without running them", async () => {
+test("the real elapsed time of each check is charged, so a total spent by blocking skips the rest without running them", async (t) => {
+  useVirtualClock(t)
   const { runBootChecks } = boot()
   const recorded = []
   let ran = false

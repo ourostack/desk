@@ -119,6 +119,12 @@ on:
   # the workflow token start no runs. A dispatched run has no base, so the coverage gate falls back to origin/main.
   workflow_dispatch:
 
+# A new push to a pull request supersedes the runs still going for its older commits, so they stop instead of
+# queueing behind the new run. Pushes to main and manual dispatches each get their own group and always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # The instrumented suite runs as parallel shards, each on its own runner so no timing-sensitive test competes with
   # another shard for CPU. Every shard records raw coverage; the desk-mcp-tests job below merges it and applies the
@@ -157,7 +163,19 @@ jobs:
         env:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        run: npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard"
+        # A shard that has not finished after 10 minutes (a whole shard job takes about 2 to 3) is stuck, not slow. The
+        # watchdog prints what is still running and which test file each process belongs to, so a hang names its test
+        # instead of ending as a silent 30-minute timeout with no output. It stops the shard so the run fails there.
+        run: |
+          (
+            sleep 600
+            echo "::error title=Coverage shard ${SHARD} is stuck::still running after 10 minutes; the process tree follows, and the deepest node process names the test file that is not finishing."
+            ps -eo pid,ppid,etimes,stat,args --forest | cut -c1-400
+            pkill -TERM -P "$$" || true
+          ) &
+          watchdog=$!
+          trap 'kill "$watchdog" 2>/dev/null || true' EXIT
+          npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard"
 
       # A failed shard still writes its manifest with its status, so it is uploaded too and the merge names it.
       - name: Retain the shard's raw coverage
@@ -223,6 +241,11 @@ jobs:
 
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs
+
+      # Every reason Desk can publish needs display text in the factory store, whose site build stops on one it has no words for.
+      # A store that cannot be reached is reported as not checked in the log and the job summary, never as a pass.
+      - name: Check the factory store has text for every Desk reason
+        run: node scripts/check-factory-reason-text.cjs
 
       - name: Build runtime dependency pack
         working-directory: plugins/desk/mcp

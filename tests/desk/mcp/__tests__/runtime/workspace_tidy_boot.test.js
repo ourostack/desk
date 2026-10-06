@@ -198,7 +198,7 @@ const born = Date.now();
 const children = [];
 cp.spawn = function(file, args, options) {
   if (!/(?:^|[\\\\/])(?:git|perl)(?:\\.exe)?$/.test(file)) return original.apply(this, arguments);
-  const child = original(process.execPath, ["-e", "setTimeout(() => {}, 1400)"], options);
+  const child = original(process.execPath, ["-e", "setInterval(() => {}, 1000)"], options);
   children.push({pid: child.pid, spawned: Date.now()});
   child.once("close", () => { children.find(x => x.pid === child.pid).closed = Date.now(); });
   return child;
@@ -222,7 +222,7 @@ process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.strin
   const timing = JSON.parse(await fs.readFile(proof, "utf8"))
   assert.equal(timing.children.length, 1)
   assert.ok(timing.children.every((entry) => entry.closed), "every exact owned child closed")
-  assert.ok(timing.exited - timing.born < 500, JSON.stringify(timing))
+  // The stand-in child never exits by itself, so it can only have closed because the hook cancelled it, and the hook can only have exited because it stopped waiting for it. No wall-clock bound: a loaded machine slows process start, not the cancellation.
   for (const entry of timing.children) assert.throws(() => process.kill(entry.pid, 0), { code: "ESRCH" })
 })
 

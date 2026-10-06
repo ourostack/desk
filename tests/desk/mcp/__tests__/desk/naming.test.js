@@ -17,6 +17,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { execFileSync } from "node:child_process"
 import { after } from "node:test"
+// A file run on its own must not read this machine's git identity or cached GitHub logins.
+import "../_isolated_env.mjs"
 import {
   isCredentialLike,
   validateName,
