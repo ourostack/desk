@@ -507,7 +507,10 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
           const opening = lead.length <= 120 ? lead : "Restate your reply to say the task's acceptance is recorded as unverified."
           return { decision: "block", reason: `${opening} Desk could not tie task ${task.slug}'s answer to a human turn, so it does not count it as accepted; do not ask the operator again.` }
         }
-        if (task.unreadable) return { decision: "block", reason: `Desk could not read task ${task.slug}'s card, so it cannot confirm an acceptance. Restate your reply to say the acceptance is unverified, or ask the operator for the sign-off in the sign-off packet (asked, delivered with proof, accept or send back).` }
+        if (task.unreadable) {
+          const lead = `Restate your reply to say task ${task.slug}'s acceptance is unverified.`
+          return { decision: "block", reason: `${lead.length <= 120 ? lead : "Restate your reply to say the task's acceptance is unverified."} Desk could not read task ${task.slug}'s card, so it cannot confirm an acceptance; if the operator has not answered, ask for the sign-off in the sign-off packet (asked, delivered with proof, accept or send back).` }
+        }
         return { decision: "block", reason: `Restate your reply as delivered, not accepted. Task ${task.slug} awaits the operator's sign-off and no verified acceptance is recorded. Ask the operator for it in the sign-off packet (asked, delivered with proof, accept or send back) and wait for their answer.` }
       }
       removeFile(file)
@@ -534,7 +537,7 @@ function gateErrorBlock(payload, stateDir, error) {
   try {
     if (payload?.stop_hook_active === true || !existsSync(sessionFile(stateDir, payload?.session_id))) return {}
     const named = String(error)
-    return { decision: "block", reason: `Desk's done-claim gate hit an internal error and could not check this reply: ${named.slice(0, 200)}. Restate your reply so it states each touched task's real status and never calls a delivered task accepted; the gate will not block again.` }
+    return { decision: "block", reason: `Restate your reply to state each touched task's real status and never call a delivered task accepted. Desk's done-claim gate hit an internal error and could not check this reply: ${named.slice(0, 200)}. It will not block again.` }
   } catch {
     return {}
   }
