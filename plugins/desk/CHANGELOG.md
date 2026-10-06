@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.192 — 2026-10-06
+
+**`reconcile` no longer reports `status_unobserved` because of an open session's old observation.** The reason compares a card's status with the latest status the store observed for its job, and it ordered the store's observations by this machine's newest local facts. A session that was still open had been derived locally long after its published file was written, so its old observation (for example `drafting`) counted as the latest, and a `done` card whose `done` the store had already seen was reported as `card_status_not_in_store`. Observations are now ordered by when each is known to hold: the end of the published file that made it, or a terminal status's card `updated` when later. See [`reconcile.js`](mcp/src/factory/reconcile.js) and the [factory doc](docs/factory-local-capture.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.191 — 2026-10-06
 
 The factory report now shows, for the numbers on its job and rollup pages, whether each one was measured, partial or not recorded, and why. This covers the waste lines on job pages too. A number that was not recorded is shown as "no data" with its reason and is never shown as zero. A partial number keeps its value as a lower bound and names what is missing. Dollar cost is not measured.
