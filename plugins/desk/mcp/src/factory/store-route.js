@@ -9,9 +9,13 @@
 //      source `overlay`. Each folder's `plugin.json`,
 //      `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` are
 //      read in that order. A missing manifest, or one with no top-level
-//      `desk` key, is skipped. So is a manifest that exists but can't be
-//      read or parsed as a JSON object, with a warning: one broken,
-//      unrelated plugin must not stop every desk's facts.
+//      `desk` key, is skipped. A manifest that exists but can't be read or
+//      parsed as a JSON object is not: it might be the very overlay that
+//      declares a private store, so it holds the route as
+//      `invalid_declaration`, with a warning naming it (fail closed, ruling
+//      2026-10-06). One broken plugin, even an unrelated one, holds the
+//      sessions of every desk that does not declare its own store, until it
+//      is fixed or removed; `desk_doctor` names it.
 //   3. `ourostack/factory` — source `default`.
 // A declaration that is present but invalid returns `{ store: null, source:
 // "invalid_declaration" }`, and the caller holds the facts. It never falls
@@ -25,10 +29,13 @@
 // that is not `owner/repo`. The desk's own `_meta/factory.json` stays the
 // primary declaration; when it decides, no plugin manifest is read.
 //
-// The result carries `warnings`: `{ code, manifest }` for each skipped
-// manifest, `code` being `manifest_unreadable` or `manifest_unparseable`
+// The result carries `warnings`: `{ code, manifest }` for the manifest that
+// held the route, `code` being `manifest_unreadable` or `manifest_unparseable`
 // and `manifest` its local path, for `desk_doctor` to surface. Warnings stay
 // on this machine; they are never part of facts.
+//
+// `recheckRoute(routing, read)` reads again a route a session hook recorded
+// with warnings, for the readers of a marker (`session-route.js`); see it.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -78,15 +85,8 @@ function deskDeclaration(deskRoot, read) {
   return { store: json.store, source: "desk" }
 }
 
-// `undefined` when the manifest declares nothing, else the declaration. A
-// manifest that can't be read as an object adds a warning and declares nothing.
-function manifestDeclaration(file, warnings, read) {
-  const { found, json, problem } = readJson(file, read)
-  if (!found) return undefined
-  if (!isObject(json)) {
-    warnings.push({ code: problem ?? "manifest_unparseable", manifest: file })
-    return undefined
-  }
+// What a manifest that parsed as an object declares: `undefined` for nothing, else the declaration.
+function declarationOf(json) {
   if (Object.hasOwn(json, "desk.factory.store")) return invalid()
   if (!Object.hasOwn(json, "desk")) return undefined
   const { desk } = json
@@ -95,6 +95,18 @@ function manifestDeclaration(file, warnings, read) {
   const { factory } = desk
   if (!isObject(factory) || !isStore(factory.store)) return invalid()
   return { store: factory.store, source: "overlay" }
+}
+
+// `undefined` when the manifest is missing or declares nothing, else the declaration. A manifest that can't be read as an object
+// adds a warning and holds the route: it may be the overlay that declares a private store.
+function manifestDeclaration(file, warnings, read) {
+  const { found, json, problem } = readJson(file, read)
+  if (!found) return undefined
+  if (!isObject(json)) {
+    warnings.push({ code: problem ?? "manifest_unparseable", manifest: file })
+    return invalid()
+  }
+  return declarationOf(json)
 }
 
 function overlayDeclaration(pluginDirs, warnings, read) {
@@ -114,4 +126,30 @@ export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync })
   const warnings = []
   const result = deskDeclaration(deskRoot, read) ?? overlayDeclaration(pluginDirs, warnings, read) ?? { store: DEFAULT_STORE, source: "default" }
   return { ...result, warnings }
+}
+
+/**
+ * A route a session hook recorded (`routing`, the marker's `{ store, source, warnings }`), read again now. A route recorded with no
+ * warnings is returned as it is. A warning means a manifest could not be read when the hook ran, so the recorded route says nothing for
+ * certain: that manifest might have declared a private store. Each warned manifest is read again, in the recorded order (every one of
+ * them came before whatever decided the recorded route, because the scan stops at the first declaration):
+ *
+ * - one that is still unreadable, or is gone, holds the route (`invalid_declaration`, the warnings kept);
+ * - the first one that now declares something decides: its store as `overlay`, or `invalid_declaration`;
+ * - when all of them now declare nothing, the recorded store stands if the hook recorded one (a Desk before 2026-10-06 skipped a broken
+ *   manifest and went on to the next overlay or the default). A hook from 2026-10-06 on records no store once a manifest is broken, so
+ *   what the later plugins declared is not known, and the route stays held.
+ *
+ * A route that a read settles carries no warnings: the manifests it names are readable now.
+ */
+export function recheckRoute(routing, read = readFileSync) {
+  if (routing.warnings.length === 0) return routing
+  const held = { store: null, source: "invalid_declaration", warnings: routing.warnings }
+  for (const { manifest } of routing.warnings) {
+    const { found, json } = readJson(manifest, read)
+    if (!found || !isObject(json)) return held
+    const declaration = declarationOf(json)
+    if (declaration !== undefined) return { ...declaration, warnings: [] }
+  }
+  return routing.store === null ? held : { ...routing, warnings: [] }
 }

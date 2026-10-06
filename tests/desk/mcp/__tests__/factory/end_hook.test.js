@@ -186,6 +186,8 @@ test("two real end-hook exits leave detached derivation running to completion, w
   hook()
   const marker = await session(ctx)
   await setConsent(ctx.env, { store: "ourostack/factory", contribute: true })
+  // A Claude Code home with a plugin registry and no overlay: a missing registry holds the route (store-route fail-closed rule).
+  await json(path.join(ctx.base, ".claude/plugins/installed_plugins.json"), { version: 2, plugins: {} })
   const root = await factoryStateRoot(ctx.env)
   const file = path.join(root, "outbox/ourostack__factory", `claude-code-${ID}.json`)
   const env = { ...ctx.env, NODE_OPTIONS: "" }

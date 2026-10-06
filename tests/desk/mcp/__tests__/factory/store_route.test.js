@@ -4,11 +4,11 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { DEFAULT_STORE, resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
+import { DEFAULT_STORE, recheckRoute, resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
 
 // The result without its warnings; the warning tests below check those.
 function route(args) {
@@ -153,7 +153,7 @@ test("a readable plugin manifest whose desk.factory declaration is malformed hol
   }
 })
 
-test("an unreadable or unparseable plugin manifest is skipped with a warning, so a broken unrelated plugin never blocks the facts", () => {
+test("an unreadable or unparseable plugin manifest holds the route with a warning: it might be the overlay that declares a private store", () => {
   scratch((root) => {
     const desk = makeDesk(root)
     const unreadable = makePlugin(root, "unreadable", undefined)
@@ -161,20 +161,70 @@ test("an unreadable or unparseable plugin manifest is skipped with a warning, so
     const unparseable = makePlugin(root, "unparseable", "{ not json", ".claude-plugin/plugin.json")
     const notObject = makePlugin(root, "not-object", "[]")
     const good = makePlugin(root, "good", overlay("good-org/factory"))
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unreadable, unparseable, notObject, good] }), {
-      store: "good-org/factory",
-      source: "overlay",
-      warnings: [
-        { code: "manifest_unreadable", manifest: path.join(unreadable, "plugin.json") },
-        { code: "manifest_unparseable", manifest: path.join(unparseable, ".claude-plugin", "plugin.json") },
-        { code: "manifest_unparseable", manifest: path.join(notObject, "plugin.json") },
-      ],
-    })
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unreadable] }), {
-      store: "ourostack/factory",
-      source: "default",
-      warnings: [{ code: "manifest_unreadable", manifest: path.join(unreadable, "plugin.json") }],
-    })
+    const held = (code, manifest) => ({ store: null, source: "invalid_declaration", warnings: [{ code, manifest }] })
+    // The scan stops at the first broken manifest: nothing after it can decide.
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unreadable, unparseable, notObject, good] }), held("manifest_unreadable", path.join(unreadable, "plugin.json")))
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unparseable, good] }), held("manifest_unparseable", path.join(unparseable, ".claude-plugin", "plugin.json")))
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [notObject] }), held("manifest_unparseable", path.join(notObject, "plugin.json")))
+    // Never the default store: the reproduction's overlay truncated mid-write.
+    const truncated = makePlugin(root, "truncated", '{"name":"corp","desk":{"factory":{"store":"corp/private-fac')
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [truncated] }), held("manifest_unparseable", path.join(truncated, "plugin.json")))
+    // A read that throws without a code (the hook's bounded reader refuses a hard link or an oversized file) holds too.
+    const refused = (file) => {
+      if (file === path.join(good, "plugin.json")) throw new Error("metadata_unreadable")
+      return readFileSync(file, "utf8")
+    }
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [good], read: refused }), held("manifest_unreadable", path.join(good, "plugin.json")))
+    // A declaring overlay ahead of a broken manifest decides, and the broken one is never read.
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [good, unreadable] }), { store: "good-org/factory", source: "overlay", warnings: [] })
+    // A plugin folder with no manifest at all is still skipped, so the default stands.
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [makePlugin(root, "empty", undefined)] }), { store: "ourostack/factory", source: "default", warnings: [] })
+  })
+})
+
+test("recheckRoute: a recorded route with no warnings stands as recorded", () => {
+  for (const routing of [{ store: "ourostack/factory", source: "default", warnings: [] }, { store: "corp/private", source: "overlay", warnings: [] }, { store: null, source: "invalid_declaration", warnings: [] }]) {
+    assert.equal(recheckRoute(routing, () => assert.fail("no manifest is read")), routing)
+  }
+})
+
+test("recheckRoute: a route recorded while a manifest was unreadable is held until that manifest reads, then corrected", () => {
+  scratch((root) => {
+    const corp = makePlugin(root, "corp", '{"name":"corp","desk":{"factory":{"store":"corp/private-fac')
+    const manifest = path.join(corp, "plugin.json")
+    const warnings = [{ code: "manifest_unparseable", manifest }]
+    const held = { store: null, source: "invalid_declaration", warnings }
+    // A Desk before 2026-10-06 skipped the broken overlay and recorded the default; one from then on records no store.
+    const legacy = { store: "ourostack/factory", source: "default", warnings }
+    const current = { store: null, source: "invalid_declaration", warnings }
+    for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), held, "still unparseable")
+    writeJson(manifest, overlay("corp/private-factory"))
+    for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), { store: "corp/private-factory", source: "overlay", warnings: [] }, "readable again: the overlay it declares")
+    writeJson(manifest, overlay("not a store"))
+    for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), { store: null, source: "invalid_declaration", warnings: [] }, "a malformed declaration holds")
+    writeJson(manifest, { name: "corp", version: "1.0.0" })
+    assert.deepEqual(recheckRoute(legacy), { store: "ourostack/factory", source: "default", warnings: [] }, "declares nothing: the old hook's later answer stands")
+    assert.deepEqual(recheckRoute({ store: "corp/other", source: "overlay", warnings }), { store: "corp/other", source: "overlay", warnings: [] })
+    assert.deepEqual(recheckRoute(current), held, "declares nothing, but what came after it was never recorded")
+    rmSync(corp, { recursive: true, force: true })
+    for (const routing of [legacy, current]) assert.deepEqual(recheckRoute(routing), held, "gone: it can never be read again")
+  })
+})
+
+test("recheckRoute: with several warned manifests, every one must read, and the first that declares decides", () => {
+  scratch((root) => {
+    const first = makePlugin(root, "first", { name: "first" })
+    const second = makePlugin(root, "second", "{ broken")
+    const warnings = [{ code: "manifest_unparseable", manifest: path.join(first, "plugin.json") }, { code: "manifest_unparseable", manifest: path.join(second, "plugin.json") }]
+    const legacy = { store: "ourostack/factory", source: "default", warnings }
+    assert.deepEqual(recheckRoute(legacy), { store: null, source: "invalid_declaration", warnings })
+    writeJson(path.join(second, "plugin.json"), overlay("corp/second"))
+    assert.deepEqual(recheckRoute(legacy), { store: "corp/second", source: "overlay", warnings: [] })
+    writeJson(path.join(first, "plugin.json"), overlay("corp/first"))
+    assert.deepEqual(recheckRoute(legacy), { store: "corp/first", source: "overlay", warnings: [] })
+    // A manifest that reads as something other than an object is still broken.
+    writeJson(path.join(first, "plugin.json"), "null")
+    assert.deepEqual(recheckRoute(legacy), { store: null, source: "invalid_declaration", warnings })
   })
 })
 

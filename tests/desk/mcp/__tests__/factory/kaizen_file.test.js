@@ -171,6 +171,20 @@ test("a Codex marker's default route proves nothing, so kaizen files only by a C
   assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, STORE)
 }))
 
+test("a recorded default route whose overlay manifest could not be read files nothing until that manifest reads", () => scratch(async ({ env, deskRoot, base }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await setConsent(env, { store: WORK_STORE, contribute: true, account: "worker" })
+  const { runner, created } = fakeGh({ repo: { private: true } })
+  const manifest = path.join(base, "plugins", "corp", "plugin.json")
+  mkdirSync(path.dirname(manifest), { recursive: true })
+  writeFileSync(manifest, "{ truncated")
+  await marker(env, { n: 1, deskRoot, routing: { source: "default", store: STORE, warnings: [{ code: "manifest_unparseable", manifest }] } })
+  assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner }), { result: "store_invalid" })
+  assert.equal(created().length, 0, "never the public default store")
+  writeFileSync(manifest, JSON.stringify({ name: "corp", desk: { factory: { store: WORK_STORE } } }))
+  assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, WORK_STORE)
+}))
+
 test("two recorded routings for the desk with the same time still give one route", () => scratch(async ({ env, deskRoot }) => {
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   const { runner } = fakeGh()

@@ -235,7 +235,7 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
         const plugin = JSON.parse(readSmallText(path.join(folder, "plugin.json")));
         add(plugin.name, plugin.version, source);
       } catch {
-        // resolveStore records unreadable manifests as local status warnings.
+        // The plugin is left out of the facts; resolveStore reads the manifest again and holds the route when it is unreadable.
       }
     }
   } else {
@@ -259,9 +259,10 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
           else dirs.push(record.installPath);
         }
       }
-    } catch (error) {
-      // Missing metadata is represented by no plugin facts, never invented.
-      incomplete = error.code !== "ENOENT";
+    } catch {
+      // Missing metadata is represented by no plugin facts, never invented. A registry that is missing or unreadable could have named an
+      // overlay that declares a private store, so the scan is incomplete and the route is held (fail closed, ruling 2026-10-06).
+      incomplete = true;
     }
   }
   late();
