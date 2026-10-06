@@ -803,3 +803,22 @@ test("controller fence rejects a journal backend that cannot open before watcher
     assert.equal(status.freshness.reason, "journal_integrity_failed")
   } finally { await client.close() }
 })
+
+test("workspace watcher watches the long spelling of a Windows root, because libuv aborts the process on an 8.3 short name", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-short-name-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const longRoot = path.join(directory, "a-long-spelling-of-the-workspace")
+  const watched = []
+  const watchFactory = (target, options, handler) => {
+    watched.push(target)
+    return createWatchHarness().watchFactory(target, options, handler)
+  }
+  const onWindows = await createWorkspaceWatcher({ root, platform: "win32", longPath: () => longRoot, watchFactory })
+  t.after(() => onWindows.close())
+  const unresolvable = await createWorkspaceWatcher({ root, platform: "win32", longPath: () => { throw new Error("gone") }, watchFactory })
+  t.after(() => unresolvable.close())
+  const elsewhere = await createWorkspaceWatcher({ root, platform: "linux", longPath: () => longRoot, watchFactory })
+  t.after(() => elsewhere.close())
+  assert.deepEqual(watched, [longRoot, root, root])
+})
