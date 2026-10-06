@@ -1,6 +1,7 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1200000] [--only <file regex>]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1200000] [--only <file regex>] [--tests-root <folder>]
+// Exit code: 1 when any file failed, timed out or reported a failed test, so a job that runs this script is red whenever the suite is. 0 only when every file passed.
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
@@ -12,7 +13,9 @@ const [index, total] = arg("--shard", "1/1").split("/").map(Number)
 const out = arg("--out", "suite-results.json")
 const timeoutMs = Number(arg("--timeout-ms", "1200000"))
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
-const testsRoot = path.join(repoRoot, "tests", "desk", "mcp", "__tests__")
+const isolatedEnv = path.join(repoRoot, "tests", "desk", "mcp", "__tests__", "_isolated_env.mjs")
+// --tests-root points the runner at another folder of test files (the gate test uses a synthetic one).
+const testsRoot = path.resolve(arg("--tests-root", path.join(repoRoot, "tests", "desk", "mcp", "__tests__")))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -61,7 +64,7 @@ const failures = (output) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: 
 const runFile = (file) => new Promise((resolve) => {
   const started = Date.now()
   const child = spawn(process.execPath, [
-    "--import", pathToFileURL(path.join(testsRoot, "_isolated_env.mjs")).href, "--test", "--test-reporter=tap", file,
+    "--import", pathToFileURL(isolatedEnv).href, "--test", "--test-reporter=tap", file,
   ], { cwd: mcpRoot, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, detached: process.platform !== "win32" })
   let output = ""
   child.stdout.on("data", (chunk) => { output += chunk })
@@ -125,5 +128,5 @@ const lines = [
 ]
 if (timeouts.length > 0) lines.push(`Timed out: ${timeouts.map((r) => `\`${r.file}\``).join(", ")}`, "")
 fs.writeFileSync(out.replace(/\.json$/u, "") + "-summary.md", lines.join("\n") + "\n")
-// The comparison is the product; a red suite is reported in the results and the summary rather than as a failed job.
-process.exit(0)
+// The job result is the gate: any failing file, timeout or failed test makes it red. The results and summary are written first so a red job still shows what failed.
+process.exit(bad.length > 0 || timeouts.length > 0 || sum("fail") > 0 ? 1 : 0)

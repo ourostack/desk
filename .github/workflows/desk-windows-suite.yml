@@ -1,12 +1,19 @@
 name: desk MCP tests on Windows
 
-# Runs the whole Desk unit suite (plugins/desk/mcp `npm test`) on a Windows runner two ways:
-#   elevated  - the runner's own administrator account (GitHub's default).
-#   standard  - a new local user outside the Administrators group, which is what a managed Windows machine gives a person.
-# The two modes are compared to show that nothing in the suite depends on elevation. The main desk MCP tests workflow
-# covers Linux only. This workflow is report-only for now: it is not a required check and runs on demand (workflow_dispatch) only. It has no pull_request trigger because the scheduled Superpowers refresh waits on every pull-request workflow, and it must not wait on a Windows suite that is not yet clean.
+# Runs the whole Desk unit suite (plugins/desk/mcp `npm test`) on a Windows runner as a standard user: a new local user outside
+# the Administrators group, which is what a managed Windows machine gives a person. The main desk MCP tests workflow covers Linux only.
+# Pull requests that touch the Desk server, its tests or this workflow run it, and the scheduled Superpowers refresh dispatches it with the
+# other pull-request workflows (CI_WORKFLOWS in superpowers-upstream.yml; scripts/test-refresh-superpowers.cjs checks that the two lists match).
+# A manual dispatch can add the elevated (administrator) mode with `elevated: true`. That mode is a diagnostic and is not gated: Desk refuses to
+# reuse a path owned by the Administrators group, which is what an elevated user's own existing files are.
 
 on:
+  pull_request:
+    paths:
+      - "plugins/desk/mcp/**"
+      - "tests/desk/mcp/**"
+      - ".github/scripts/**"
+      - ".github/workflows/desk-windows-suite.yml"
   workflow_dispatch:
     inputs:
       only:
@@ -31,6 +38,8 @@ jobs:
     name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/6)
     runs-on: windows-latest
     timeout-minutes: 90
+    # The elevated mode is a diagnostic that fails by policy (see the comment at the top), so it never turns the run red; the standard mode does.
+    continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
       fail-fast: false
       matrix:
