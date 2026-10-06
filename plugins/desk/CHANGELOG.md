@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.211 — 2026-10-06
+
+Agents can now record the worktrees and branches they create on the task card, and Desk reminds them to clean each one up when the work's state says it is due. `task_update` takes `resource: {identity, step?, intended?, disposition?, details?}`, which adds or updates one row of the card's `## Resources` table (the six-column table in `task-lifecycle`, created after `## Steps` or `## Outcome` when absent). `identity` is `worktree:<absolute path>` or `branch:<owner/repo>#<name>` (an Azure DevOps `org/project/repo` is accepted too) and is matched trimmed and without a trailing separator; `step` writes `step <id>` in the owning column; `disposition` (`removed-and-absent`, `named transfer` or `retained-with-trigger`) and `details` go into the terminal column.
+
+A row with an empty terminal column is due when its step is delivered or dropped, or the task is done or cancelled; a due worktree whose path is gone from this machine is reported as a `stale row`. "Its pull request closed unmerged" is reached through a dropped step until derived step states land. The `task_update` answer that makes rows due lists them (`cleanup_due`) with why and the safe action, quoted for a shell and naming the clone for a branch; a call that finishes the card, and `task_archive`, list all of them. Desk never removes anything and makes no network call for this.
+
+Session start adds `Cleanup due: N items on M cards (see the task lines)` and `cleanup due: N` under the task (`cleanup_due_count` in `active_tasks`). So a reminder is not lost when a card is finished and archived, each `resource` write keeps a small per-machine index of cards with open rows in Desk's state directory (`cleanup/<desk root key>.json`, like the sync files); boot reads it, recomputes what is due on the live or archived card and names finished cards on their own lines, and only the machine that recorded a row reminds about it (more than 20 finished cards are counted, with "and N more"). Reminders for finished cards are per machine and per desk path. A `resource` call can reach an archived card only to record a disposition on one of its existing rows: it patches that one cell, leaves the frontmatter untouched, and asks for no report or sync. For now rows are written on `task.md`, not an iteration's `doing.md`; a card with no Resources table is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.210 — 2026-10-06
 
 The done-gate can now check delivery for private repos: when neither `GH_TOKEN` nor `GITHUB_TOKEN` is set, `prDelivery` asks the GitHub CLI for a token (`gh auth token --hostname github.com`, three seconds at most) and uses it for that check, so an agent signed in to `gh` gets a real answer for a private repo instead of `not_verified`. The token is kept only in memory for the process and is never logged, printed or written; a failed lookup is remembered for 60 seconds (so a later `gh auth login` is noticed), and a token GitHub refuses with a 401 is dropped and the request repeated anonymously. If `gh` is missing, not signed in or does not answer, the check behaves exactly as before.
