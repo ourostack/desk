@@ -59,7 +59,9 @@
 //     job's `muda_time` counts only its own part. A segment Desk marks
 //     `shared` is held by several jobs, and each holder's `muda_time` counts
 //     it. The Pareto counts each session's time once: where jobs' shares
-//     overlap, the first job by job ID keeps that time. Labels whose job's
+//     overlap, the first job by job ID that labeled a stretch of that time
+//     keeps it, whatever the stretch's class (value included), and a row's
+//     `jobs` are the jobs that add time to it. Labels whose job's
 //     share the facts do not record (`share_unknown`), or that have no
 //     stretch inside it (`outside_share`), are unused, so the job reads
 //     partial or not labeled, never the whole session and never a zero.
@@ -459,19 +461,26 @@ function pareto(records) {
   const summed = []
   const bindingsPerSession = new Map()
   const covered = new Map()
+  const addedBy = new Map() // each summed summary -> the job that added it
   for (const record of [...labeled].sort((left, right) => compareText(left.job, right.job))) {
     for (const session of record.muda_sessions) {
       bindingsPerSession.set(session.key, [...(bindingsPerSession.get(session.key) ?? []), session])
       // A summary that carries no labels (built by hand, not by `jobRecord`) counts as it is.
       if (session.labels === undefined) {
         summed.push(session)
+        addedBy.set(session, record.job)
         continue
       }
       const taken = covered.get(session.key) ?? []
       const remaining = session.labels.stretches.flatMap((stretch) => uncovered(stretch, taken))
       covered.set(session.key, mergeSpans([...taken, ...session.labels.stretches.map((stretch) => [stretch.start_ms, stretch.end_ms])]))
-      if (remaining.length === session.labels.stretches.length && remaining.every((piece, index) => piece === session.labels.stretches[index])) summed.push(session)
-      else if (remaining.length > 0) summed.push(sessionWaste({ ...session.labels, stretches: remaining }))
+      const added = remaining.length === session.labels.stretches.length && remaining.every((piece, index) => piece === session.labels.stretches[index])
+        ? session
+        : remaining.length > 0 ? sessionWaste({ ...session.labels, stretches: remaining }) : null
+      if (added !== null) {
+        summed.push(added)
+        addedBy.set(added, record.job)
+      }
     }
   }
   const base = {
@@ -492,7 +501,8 @@ function pareto(records) {
   // Every row's share is of all labeled waste time, `unknown` included.
   const total = rowWastes.reduce((sum, waste) => sum + sums[waste], 0)
   const rows = rowWastes.map((waste) => {
-    const jobs = labeled.filter((record) => record.muda_sessions.reduce((sum, session) => sum + session.totals[waste], 0) > 0).length
+    // The jobs that add time to the row once each session's time is counted once.
+    const jobs = new Set(summed.filter((session) => session.totals[waste] > 0).map((session) => addedBy.get(session))).size
     return { waste, total_ms: sums[waste], jobs, ...rowEvidence(summed, waste, sums[waste]) }
   }).sort((left, right) => right.total_ms - left.total_ms || compareText(left.waste, right.waste))
   let running = 0
