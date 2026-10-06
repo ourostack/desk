@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.190 — 2026-10-06
+
+The clone guard and the task-status guard now work when their hooks run from the installed plugin folder. Both read task cards' nested `repos:` blocks, which only gray-matter parses, and a hook never restored the runtime dependencies as boot does. The clone guard saw every card as having no repositories and let a clone of a repository named only in `repos:` through. The task-status guard judged a card with a broken `repos:` block readable, so it denied an edit the operator should have been able to repair by hand, and it could not see `repos` changes. One shared step, `ensureHookDependencies`, now restores the pack before either guard reads a card; it costs nothing for commands that never reach card reading.
+
+A guard still fails open when the restore fails (an unwritable cache folder, no pack for the machine), but it no longer does so silently. It leaves a marker under Desk's state folder, and the new `hook-dependencies` boot check reports the degraded guard as a `Desk problem:` at the next session start and files it in the background, throttled to once an hour. A later successful restore clears the marker.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.189 — 2026-10-06
 
 Desk now lets a session say which task it is working on, so the factory credits each job with the work really done on it. The new `task_focus` tool takes a track and slug (or `clear: true` for a side conversation that belongs to no task) and answers with the card's status and its last five progress entries. It writes nothing, needs no write authority, and keeps the focus in memory only. `task_create` takes `focus: true` to create a task and declare it in one call. If the server is still starting, `task_focus` waits up to 2 seconds for it, then answers or refuses.
