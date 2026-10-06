@@ -388,9 +388,9 @@ export function refuse(record, { at, reason, returnReason, verified }) {
   }
 }
 
-// Whether a return counts against first-pass yield: the deciding reason (the human's for a witnessed refusal, else the agent's) is not `changed_ask`, and the return came at review or after delivery, or in the task at or after the first review. The catch point is a recorded fact and needs no milestone; an in-task return with no known first review does not count.
+// Whether a return counts against first-pass yield: the deciding reason (the human's when a refusal recorded one, else the agent's; a `verified` flag plays no part) is not `changed_ask`, and the return came at review or after delivery, or in the task at or after the first review. The catch point is a recorded fact and needs no milestone; an in-task return with no known first review does not count.
 export function returnCounts(entry, firstValidatingAt) {
-  const decided = entry.refusal !== null && entry.refusal_verified === true ? entry.refusal : entry.reason
+  const decided = entry.refusal !== null ? entry.refusal : entry.reason
   if (decided === "changed_ask") return false
   if (entry.caught !== "in_task") return true
   const first = timeOf(firstValidatingAt)

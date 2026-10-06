@@ -859,6 +859,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     factory: null,
     stale_desk: null,
     release_alert: null,
+    desk_problems: null,
   }
 }
 
@@ -1430,7 +1431,8 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
-    release_alert: releaseFinding,
+    release_alert: releaseFinding?.release_alert ?? null,
+    desk_problems: releaseFinding?.desk_problems ?? null,
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
