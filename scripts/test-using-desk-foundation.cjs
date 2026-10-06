@@ -313,8 +313,7 @@ function main() {
     /genuine human gate \(voice, meaning anything sent as the human; a decision that is theirs;/u,
     /frontload in one batch everything you will need from (?:them|the human) for the whole outcome/iu,
     /Frontload again whenever (?:they are|the human is) about to step away/iu,
-    /`interaction-style` holds the procedure/u,
-    /When the human opens a conversation, stay in it until they close it or say go/u,
+    /When the human opens a conversation, stay in it; authorized background work may continue, and nothing new starts on that topic until they close it or say go \(`interaction-style`\)/u,
     /context size.*not (?:a )?reasons? to stop/iu,
     /frontload in one batch[^.]*present(?:ing)? (?:its|the) decisions as one group with your recommendations[\s\S]*later decisions come one group at a time/iu,
   ]);
@@ -328,7 +327,8 @@ function main() {
     /let's step back and reset how we're working/u,
     /concrete adjustment/iu,
     /once/iu,
-    /`interaction-style` holds the rest/u,
+    /never a recurring gate and never widens authority/u,
+    /same correction twice, so record it durably in the desk/u,
   ]);
   // The rest of the coaching rule moved to interaction-style to make room in the foundation (SessionStart size budget).
   for (const phrase of [
@@ -374,7 +374,6 @@ function main() {
     /Changes reach the channel, the branch consumers track, through the repository's normal flow/u,
     /branch from it in a worktree and merge back through a pull request/u,
     /Never pin a commit; a hash is evidence only/u,
-    /reviewers and evaluators use the channel as it stands/u,
     /default branch/iu,
     /`git-hygiene` holds the procedure/u,
   ]);
@@ -398,7 +397,7 @@ function main() {
   assertSectionPhrases(section(skill, "Cite every factual claim"), "using-desk Cite every factual claim", [
     "Every factual claim you make to a human or an agent",
     "inline link to its primary source",
-    "labeled as inference or unverified",
+    "labeled inference or unverified",
     "`evidence-discipline` holds the procedure",
   ]);
 
@@ -458,7 +457,6 @@ function main() {
     "record the friction",
     "must not be silently confused",
     "one owner",
-    "triggered skills keep their procedures",
   ]);
 
   assertSectionPhrases(section(skill, "Child agents"), "using-desk Child agents", [

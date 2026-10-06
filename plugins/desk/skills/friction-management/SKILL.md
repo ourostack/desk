@@ -38,7 +38,7 @@ When the operator asks why skill-driven work omitted something, diverged from an
 
 ## 1. Pin a new card
 
-pin whenever the operator teaches me something about how i work, even offhand. over-logging is cheap; making the operator re-teach it next session is not. an explicit no-write instruction for the run still wins.
+capture friction close to where it hurts. pin whenever the operator teaches me something about how i work, even offhand. over-logging is cheap; making the operator re-teach it next session is not. an explicit no-write instruction for the run still wins.
 
 when the operator hits friction, or when i notice a recurring rough edge:
 

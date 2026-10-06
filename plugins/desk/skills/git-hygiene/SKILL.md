@@ -286,7 +286,7 @@ Never reconcile a dirty checked-out state repository by moving the branch ref in
 
 ## Commit identity and secrets
 
-Before you commit in a clone, set the repository's `user.email` to the commit address the operator lists for that repository's owner; on a new machine, set it once in each clone. GitHub blocks any push whose newest commit carries a private email.
+If the operator lists a commit address for the repository's owner, set the repository's `user.email` to it before committing; on a new machine, set it once in each clone. GitHub can block any push whose newest commit carries a private email.
 
 Do not store secrets, credentials or private tokens in the desk.
 
