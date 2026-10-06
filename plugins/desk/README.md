@@ -97,6 +97,8 @@ See `desk:codex-onboarding` for the repair checklist and verification steps.
 
 ### Work accounting
 
+
+To see your own tasks by name on the factory site, run `node mcp/scripts/private-view.js` from the installed Desk plugin folder with your desk bound (`$DESK` set). It copies the published site into a private folder under your state home (`~/.local/state/desk-private-view/factory/`, never inside a Git checkout) and writes `local-names.json` beside it, mapping each task's published job ID to its title, track and slug, then prints the page path to open. It refuses, with the reason, when a job ID cannot be derived exactly as the factory publishes it. Never copy that folder anywhere public.
 Desk accounts for work automatically. When a session ends, the factory records its facts on the machine, outside any desk, and a finished job gets a report in its factory store ([local capture](docs/factory-local-capture.md)). There is no manual ledger to keep. The manual work-measurement ledger, its tool and its batch profiler are retired; records it left in your state directory stay where they are, and `desk_doctor` counts them without opening, moving or deleting them.
 
 ## Invocation — the default `worker` agent
