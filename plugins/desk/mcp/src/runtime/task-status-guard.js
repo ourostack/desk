@@ -316,7 +316,7 @@ function denyReason(card, change, via, host, { existing = null, proposed = null 
     ? ""
     : ` This edit changes the card's \`status:\` (${shown(change.from)} to ${shown(change.to)}): call \`task_update\` with ${target}, frontmatter: { status: "${change.to === null ? "<new status>" : change.to}" } }; it checks the transition.` +
       (change.to === "done"
-        ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them, a pushed commit from one of them, or a commit in a clone that has no remote at all) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
+        ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code, steps; a card with a `## Steps` table closes only with kind steps; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them, a pushed commit from one of them, or a commit in a clone that has no remote at all) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
         : "")
   return (
     `${opening} ` +

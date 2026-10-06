@@ -4,7 +4,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { readFileSync } from "node:fs"
-import { checkDelivery, prDelivery, makeRunGh, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
+import { promises as fs } from "node:fs"
+import { checkDelivery, findPullRequests, prDelivery, makeRunGh, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
@@ -62,7 +63,9 @@ test("an unlabeled pull request that changes a ruled path is refused, naming the
 test("a pull request that is not merged is never delivered, whatever the rules, and a missing one is refused before the merge-only shortcut", async () => {
   const unmerged = { status: 200, body: { labels: [{ name: "released" }], merged_at: null } }
   await assert.rejects(run(fakeGitHub({ pr: unmerged })), /not delivered: the pull request is not merged/u)
-  assert.deepEqual(await ask(withPolicy({ schema_version: 1, rules: [MERGE_RULE] }, { pr: unmerged })), { status: "undelivered", unmet: [{ need: "be merged" }], merged: false })
+  assert.deepEqual(await ask(withPolicy({ schema_version: 1, rules: [MERGE_RULE] }, { pr: unmerged })), { status: "undelivered", unmet: [{ need: "be merged" }], merged: false, state: "open" })
+  const closed = { status: 200, body: { labels: [], merged_at: null, state: "closed" } }
+  assert.equal((await ask(fakeGitHub({ pr: closed }))).state, "closed")
   assert.equal((await ask(fakeGitHub({ policy: { status: 404, body: "" }, pr: unmerged }))).status, "undelivered")
   assert.deepEqual(await ask(withPolicy({ schema_version: 1, rules: [MERGE_RULE] }, { pr: { status: 404, body: "" } })), { status: "not_found" })
 })
@@ -281,7 +284,7 @@ test("with no rules on the base branch or the default branch, merge counts as de
 
 test("an unmerged pull request is undelivered before any rules are read, even when the rules are unreadable", async () => {
   const fake = fakeGitHub({ pr: { status: 200, body: { labels: [], merged_at: null, base: { ref: "main" } } }, policy: { status: 500, body: "" } })
-  assert.deepEqual(await ask(fake), { status: "undelivered", unmet: [{ need: "be merged" }], merged: false })
+  assert.deepEqual(await ask(fake), { status: "undelivered", unmet: [{ need: "be merged" }], merged: false, state: "open" })
   assert.ok(!fake.calls.some((call) => call.url.includes("/contents/")))
 })
 
@@ -414,4 +417,32 @@ test("task_update on a repo with no rules says so", async () => {
 test("task_archive refuses to bump an undelivered PR's task to done", async () => {
   const root = await deskWithTask("archived")
   await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "archived", evidence: PR }, fetchFn: fakeGitHub().fetchFn }), /is not delivered yet/u)
+})
+
+test("findPullRequests finds every distinct GitHub pull request URL inside some text", () => {
+  assert.deepEqual(findPullRequests("blocked on https://github.com/o/r/pull/12/files and https://github.com/o/r/pull/13 (was: https://github.com/o/r/pull/12)"), [
+    { repo: "o/r", number: 12, url: "https://github.com/o/r/pull/12" },
+    { repo: "o/r", number: 13, url: "https://github.com/o/r/pull/13" },
+  ])
+  assert.deepEqual(findPullRequests("https://dev.azure.com/o/p/_git/r/pullrequest/3"), [])
+  assert.deepEqual(findPullRequests("waits on infra"), [])
+})
+
+test("a card another session changes during the delivery check keeps both changes when the PR closes it", async () => {
+  const root = await deskWithTask("raced")
+  const file = path.join(root, "t", "raced", "task.md")
+  const released = fakeGitHub({ pr: { status: 200, body: { labels: [{ name: "released" }], merged_at: "x" } } })
+  let touched = false
+  const meanwhile = async (address, options) => {
+    if (!touched) {
+      touched = true
+      await fs.writeFile(file, `${(await fs.readFile(file, "utf8")).replace(/\n$/u, "")}\n\nAnother session was here.\n`.replace("status: drafting", "status: drafting\nowner: ari"))
+    }
+    return released.fetchFn(address, options)
+  }
+  await task_update({ deskRoot: root, input: { track: "t", slug: "raced", frontmatter: { status: "done" }, evidence: PR }, fetchFn: meanwhile })
+  const card = await readFront(file)
+  assert.equal(card.data.status, "done")
+  assert.equal(card.data.owner, "ari")
+  assert.match(card.content, /Another session was here\./u)
 })

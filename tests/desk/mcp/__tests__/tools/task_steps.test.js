@@ -120,20 +120,27 @@ test("blocked and dropped need a reason, which is written into Evidence and clea
   assert.equal((await rows(file))[0].evidence, "branch up")
 })
 
-test("merged and delivered can be set by hand with a PR or commit in Evidence", async () => {
+test("callers cannot set in review, merged or delivered where Desk reads them from a GitHub PR or a delegated card", async () => {
   const { root, file } = await newCard()
   await update(root, { id: "a", depends_on: [], repo: "widgets" })
-  await update(root, { id: "b", depends_on: ["a"], repo: "widgets" })
-  await update(root, { id: "c", depends_on: ["a"], repo: "gadgets" })
-  await assert.rejects(update(root, { id: "a", state: "merged" }), /cannot be set to merged without a PR URL or commit in `evidence`/u)
-  await assert.rejects(update(root, { id: "a", state: "delivered", evidence: "shipped" }), /cannot be set to delivered without a PR URL or commit/u)
-  await update(root, { id: "a", state: "merged", evidence: PR })
-  const delivered = await update(root, { id: "a", state: "delivered", evidence: "a1b2c3d4 on origin/main" })
-  assert.equal(delivered.step_note, "now ready: b, c")
+  for (const state of ["in review", "merged", "delivered", "Delivered"]) {
+    await assert.rejects(update(root, { id: "a", state, evidence: PR }), /cannot be set to .*: Desk sets in review, merged and delivered from the step's GitHub PR or delegated card/u)
+  }
+  await assert.rejects(update(root, { id: "a", state: "delivered", evidence: "task:t/other" }), /Leave the state to Desk/u)
+  await assert.rejects(update(root, { id: "a", state: "merged", reason: PR }), /Leave the state to Desk/u)
+  assert.equal((await rows(file))[0].state, "pending")
+})
+
+test("where Desk cannot read the state (an Azure DevOps PR, a commit) the agent declares it with evidence, and the answer says so", async () => {
+  const { root, file } = await newCard()
+  await update(root, { id: "a", depends_on: [], repo: "widgets" })
+  await assert.rejects(update(root, { id: "a", state: "merged" }), /cannot be set to merged without evidence/u)
+  const merged = await update(root, { id: "a", state: "merged", evidence: "https://dev.azure.com/o/p/_git/r/pullrequest/3" })
+  assert.match(merged.step_declared, /the state merged is agent-declared/u)
+  const delivered = await update(root, { id: "a", state: "delivered", evidence: "a1b2c3d4 on origin/main", expect: "merged" })
+  assert.equal(delivered.step.state, "delivered")
   assert.equal((await rows(file))[0].state, "delivered")
-  assert.deepEqual((await update(root, { id: "a", state: "delivered", evidence: "kept" })).step_note, undefined)
-  const viaReason = await update(root, { id: "b", state: "delivered", reason: "https://github.com/o/widgets/commit/abcdef1" })
-  assert.equal(viaReason.step.state, "delivered")
+  assert.equal((await update(root, { id: "a", state: "delivered" })).step_declared, undefined)
 })
 
 test("dropping a step blocks its live dependents unless the call names them as still valid", async () => {
@@ -235,9 +242,9 @@ test("evidence survives a step being blocked and unblocked, and a drop keeps a b
 test("a step leaves delivered or dropped only with expect", async () => {
   const { root, file } = await newCard()
   await update(root, { id: "a", depends_on: [], repo: "widgets" })
-  await update(root, { id: "a", state: "delivered", evidence: PR })
-  await assert.rejects(update(root, { id: "a", state: "in progress" }), /moving it out of delivered needs `expect: "delivered"`/u)
-  await update(root, { id: "a", state: "pending", expect: "delivered" })
+  await update(root, { id: "a", state: "dropped", reason: "not needed" })
+  await assert.rejects(update(root, { id: "a", state: "in progress" }), /moving it out of dropped needs `expect: "dropped"`/u)
+  await update(root, { id: "a", state: "pending", expect: "dropped" })
   assert.equal((await rows(file))[0].state, "pending")
 })
 

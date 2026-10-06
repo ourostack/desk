@@ -20,6 +20,7 @@ import {
   writeMarkdown,
   patchMarkdownFrontmatter,
   pathExists,
+  writeFileAtomic,
 } from "../util/fm.js"
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
@@ -42,7 +43,8 @@ import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
-import { applyStep } from "../desk/steps.js"
+import { applyStep, readSteps, readyOf, setDerived } from "../desk/steps.js"
+import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
 import { recordCleanupCard } from "../desk/cleanup-index.js"
 import { recordArchivedDisposition } from "./task-archived-resource.js"
@@ -52,12 +54,12 @@ import { recordArchivedDisposition } from "./task-archived-resource.js"
 const DESK_COMMIT_NOTE = "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
-const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
+const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code", "steps"])
 const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/repo/pull/123"}'
 const DONE_EVIDENCE_USAGE =
-  "`evidence.kind` is one of pr, commit, ci_run, non_code; `evidence.ref` is a reference in that " +
+  "`evidence.kind` is one of pr, commit, ci_run, non_code, steps; `evidence.ref` is a reference in that " +
   "kind's own checkable shape -- a PR URL for pr, a commit sha or commit URL for commit, an " +
-  "https URL for ci_run, or an https URL or desk-relative path for non_code."
+  "https URL for ci_run, or an https URL or desk-relative path for non_code. A card with a `## Steps` table closes only with `{ kind: \"steps\" }` (no `ref`) once every step is delivered or dropped."
 
 // Per-kind ref shape, checkable without a network call (2026-09-29 review of
 // #106): a reviewer pointed out that an unconstrained `ref` string let
@@ -136,6 +138,24 @@ const DONE_EVIDENCE_REF_CHECKS = {
 // `card` carries what the check needs of the task itself: its recorded `repos`, the card file(s) the task lives in
 // (a `non_code` ref may not be the card, which any agent can write to say anything) and the git seams.
 async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
+  // A card with a `## Steps` heading Desk cannot read is not closed: its author meant it to have steps.
+  if (card.steps?.unreadable !== undefined) {
+    throw new Error(`${toolName}: this card has a \`## Steps\` table Desk cannot read, because ${card.steps.unreadable}, so it cannot tell whether the steps are delivered. Fix the table, then repeat this call with \`evidence: { kind: "steps" }\`.`)
+  }
+  // A card with a readable `## Steps` table closes on its steps, refreshed just before this check, and on nothing else.
+  if (card.steps != null) {
+    if (evidence?.kind !== "steps") {
+      throw new Error(`${toolName}: this card has a \`## Steps\` table, so it closes only with \`evidence: { kind: "steps" }\` once every step is delivered or dropped (Desk checks each step against its pull request). Got ${evidence === undefined ? "no evidence" : JSON.stringify(evidence)}.`)
+    }
+    const unsettled = unsettledSteps(card.steps.rows, card.steps.derived)
+    if (unsettled.length > 0) {
+      throw new Error(`${toolName}: not done: ${unsettled.length} step${unsettled.length === 1 ? " is" : "s are"} not delivered or dropped: ${unsettled.join("; ")}. Finish or drop ${unsettled.length === 1 ? "it" : "each"}, then repeat this call with \`evidence: { kind: "steps" }\`.`)
+    }
+    return null
+  }
+  if (evidence?.kind === "steps") {
+    throw new Error(`${toolName}: \`evidence: { kind: "steps" }\` needs a card with a readable \`## Steps\` table, and this card has none. Use pr, commit, ci_run or non_code evidence.`)
+  }
   if (evidence === undefined) {
     throw new Error(
       `${toolName}: moving a task to \`done\` needs evidence -- pass \`evidence: { kind, ref }\`. ` +
@@ -169,7 +189,7 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
   }
   assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit: card.spawnGit, homeDir: card.homeDir, existingRepos: card.existingRepos, created: card.created })
   // A pull request whose repo ships through a release is delivered only once the release has carried it (`delivery-gate.js`).
-  return checkDelivery({ toolName, evidence, env: card.env, fetchFn: card.fetchFn })
+  return card.delivery ?? checkDelivery({ toolName, evidence, env: card.env, fetchFn: card.fetchFn })
 }
 
 /**
@@ -346,6 +366,70 @@ function deliveryAnswer({ data, slug, ref }) {
     signoff: "delivered_unsigned",
     signoff_packet: [`Asked: ${packetTitle(data, slug)}`, `Delivered: ${ref}`, "Accept or send back?"],
     signoff_note: SIGNOFF_NOTE,
+  }
+}
+
+// The status of the card a delegated step points at (`task:<track>/<slug>`), live or archived; null when there is no readable card.
+const cardStatusIn = (deskRoot, person) => async (track, slug) => {
+  for (const segments of [[track, slug, "task.md"], [track, "_archive", slug, "task.md"]]) {
+    const file = await resolveWriteTarget({ deskRoot, person, segments })
+    if (!(await pathExists(file))) continue
+    try {
+      return String((await readMarkdown(file)).data.status ?? "unknown")
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+// The evidence ref recorded when a card closes on its steps.
+function stepsRef(rows) {
+  const count = (state) => rows.filter((row) => row.state === state).length
+  return `all ${rows.length} steps settled: ${count("delivered")} delivered, ${count("dropped")} dropped`
+}
+
+const NO_DERIVATION = Object.freeze({ changes: new Map(), notes: [], why: new Map(), blocks: new Map() })
+
+// A card's steps with their states derived from their pull requests and delegated cards (nothing derived when the body has no readable, non-empty table).
+// `mode` is "close" when the call moves the card to done (every step with a PR is read again).
+async function refreshSteps(body, { deskRoot, person, env, fetchFn, mode }) {
+  const read = readSteps(body)
+  if (read.rows === undefined || read.rows.length === 0) return { derived: NO_DERIVATION }
+  return { derived: await deriveSteps(read.rows, { env, fetchFn, mode, cardStatus: cardStatusIn(deskRoot, person) }) }
+}
+
+// The derived cells written into a card file in place, leaving its frontmatter bytes alone; true when a cell changed.
+async function writeDerivedCells(filePath, derived) {
+  const raw = await fs.readFile(filePath, "utf8")
+  const [head] = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?/u.exec(raw)
+  const { body, written } = setDerived(raw.slice(head.length), derived.changes)
+  if (written.length > 0) await writeFileAtomic(filePath, head + body)
+  return written.length > 0
+}
+
+// What the done check sees of a card body: null (no steps to close on), `{ unreadable }` (a heading over a table Desk cannot read), or `{ rows, derived }`.
+function stepsView(body, refresh) {
+  const read = readSteps(body)
+  if (!read.found) return null
+  if (read.rows === undefined) return { unreadable: read.reason }
+  return read.rows.length === 0 ? null : { rows: read.rows, derived: refresh.derived }
+}
+
+// The derived cells written into a body, and what the answer says about it: the cells Desk changed, what it could not verify, the steps this made ready.
+function applyRefresh(body, derived) {
+  const before = readSteps(body).rows ?? []
+  const { body: next, written } = setDerived(body, derived.changes)
+  const was = new Map(before.map((row) => [row.id, row.state]))
+  const ready = readyOf(readSteps(next).rows ?? before).filter((id) => !readyOf(before).includes(id))
+  const moved = written.map((id) => `${id}: ${was.get(id)} -> ${derived.changes.get(id).state}`)
+  return {
+    body: next,
+    answer: {
+      ...(moved.length === 0 ? {} : { steps_refreshed: moved }),
+      ...(derived.notes.length === 0 ? {} : { steps_notes: derived.notes }),
+      ready,
+    },
   }
 }
 
@@ -841,6 +925,13 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     )
   }
 
+  // The steps are refreshed from GitHub first, from this read of the card. The card is then read again, whole, and everything this call writes
+  // (its frontmatter, its step, the refreshed cells, the done check) is built from that second read, so nothing another session wrote during the wait is overwritten.
+  const seen = await readMarkdown(filePath)
+  const seenRepos = recordedRepos({ ...seen.data, ...(frontmatter ?? {}) }.repos).map((repo) => repo.name)
+  const refresh = await refreshSteps(step === undefined ? seen.content : applyStep(seen.content, step, "task_update", seenRepos).body, { deskRoot, person, env, fetchFn, mode: frontmatter?.status === "done" ? "close" : "ordinary" })
+  // The delivery of a pull request given as done evidence is checked in this same phase, so nothing slow happens after the card is read again.
+  const delivery = frontmatter?.status === "done" && seen.data.status !== "done" && evidence?.kind === "pr" && typeof evidence.ref === "string" && !readSteps(seen.content).found ? await checkDelivery({ toolName: "task_update", evidence, env, fetchFn }) : null
   const existing = await readMarkdown(filePath)
   assertLocalOnlyUnchanged(frontmatter?.repos, existing.data.repos)
   const merged = { ...existing.data, ...(frontmatter ?? {}) }
@@ -881,15 +972,32 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   let delivered = null
   let report = null
   let deliveryCheck = null
+  // The card as it is now (read after the refresh's network wait): this call's step, the refreshed cells and the done check all apply to it, so nothing another session wrote meanwhile is lost.
+  let stepResult = null
+  let resourceResult = null
+  let newBody = existing.content
+  // Due rows are counted on the card as it is now, before this call's step and refreshed cells, so a step Desk finds delivered makes its rows due once.
+  const dueBefore = dueResources(newBody, { status: existing.data.status }).map((item) => item.identity)
+  const repoNames = recordedRepos(merged.repos).map((repo) => repo.name)
+  if (step !== undefined) {
+    stepResult = applyStep(newBody, step, "task_update", repoNames)
+    newBody = stepResult.body
+  }
+  const applied = applyRefresh(newBody, refresh.derived)
+  newBody = applied.body
+  const refreshed = applied.answer
+  const stepsNow = stepsView(newBody, refresh)
   if (merged.status === "done" && existing.data.status !== "done") {
     deliveryCheck = await assertDoneEvidence(evidence, deskRoot, "task_update", {
+      steps: stepsNow,
+      delivery,
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
       repos: [...asList(existing.data.repos), ...asList(frontmatter.repos)],
       // Only these can earn the local-only exemption: repos added in this call never do (`done-evidence.js`).
       existingRepos: existing.data.repos, created: existing.data.created,
       files: [filePath], spawnGit, homeDir: env.HOME, env, fetchFn,
     })
-    merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
+    merged.evidence = { kind: evidence.kind, ref: stepsNow === null ? evidence.ref : stepsRef(stepsNow.rows), recorded_at: merged.updated }
     delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
     report = await factoryReportFor({ deskRoot, person, track, slug, env })
   } else if (Object.hasOwn(existing.data, "factory_report_unavailable")) {
@@ -913,17 +1021,6 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     if (existing.data.status === "done") delete merged.evidence
   }
 
-  // A step is applied to the card as it is on disk right now, just before the write, so an `expect` holds against a change
-  // another session made while this call ran. Only the body is re-read: the frontmatter is written as this call built it, as for every task_update.
-  let stepResult = null
-  let resourceResult = null
-  let newBody = existing.content
-  if (step !== undefined || resource !== undefined) newBody = (await readMarkdown(filePath)).content
-  const dueBefore = dueResources(newBody, { status: existing.data.status }).map((item) => item.identity)
-  if (step !== undefined) {
-    stepResult = applyStep(newBody, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
-    newBody = stepResult.body
-  }
   // Resources are recorded on the card itself (task.md); Desk reminds about them and never removes anything (desk/resources.js).
   if (resource !== undefined) {
     resourceResult = applyResource(newBody, resource, "task_update", `${track}/${slug}`)
@@ -938,7 +1035,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
 
   const stage = stagingAllowed(filePath, spawnGit)
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
-  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || resource !== undefined })
+  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resource !== undefined })
   // The per-machine index of cards with open resource rows follows each resource write; a state folder that cannot be written never fails the card write.
   if (resource !== undefined) {
     try {
@@ -961,6 +1058,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
   if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
+  Object.assign(result, refreshedAnswer(refreshed, result.step_note))
   if (resourceResult !== null) result.resource = resourceResult.row
   // A call that makes something due lists the card's due rows and the safe action for each; Desk never performs it. A call that finishes the card lists all of them.
   const due = dueResources(newBody, { status: merged.status })
@@ -1007,12 +1105,19 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
 }
 
+// The refresh's part of the answer, with the steps it made ready joined to any the call's own step made ready.
+function refreshedAnswer({ ready, ...rest }, stepNote) {
+  const note = ready.length === 0 ? stepNote : stepNote === undefined ? `now ready: ${ready.join(", ")}` : `${stepNote}, ${ready.join(", ")}`
+  return { ...rest, ...(note === undefined ? {} : { step_note: note }) }
+}
+
 // What the answer says about a step write: the row as it now stands, the dependents a drop blocked, and the steps it made ready.
-function stepAnswer({ row, blocked, ready }) {
+function stepAnswer({ row, blocked, ready, declared }) {
   const shown = { ...row }
   delete shown.line
   return {
     step: shown,
+    ...(declared ? { step_declared: `the state ${row.state} is agent-declared: Desk cannot read it from this evidence (it derives states only from a GitHub PR or a task: card)` } : {}),
     ...(blocked.length === 0 ? {} : { blocked_dependents: blocked }),
     ...(ready.length === 0 ? {} : { step_note: `now ready: ${ready.join(", ")}` }),
   }
@@ -1190,8 +1295,12 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
       } else {
-        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn })
-        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
+        // The steps are refreshed from GitHub first; the check then runs against the card as it is after that wait, so a row added meanwhile counts.
+        const refresh = await refreshSteps(sourceCard.content, { deskRoot, person, env, fetchFn, mode: "close" })
+        const live = await readMarkdown(srcFile)
+        const steps = stepsView(applyRefresh(live.content, refresh.derived).body, refresh)
+        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: live.data.repos, existingRepos: live.data.repos, created: live.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
+        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows) }, derived: refresh.derived }
       }
       // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
       // with the folder untouched, never after a move it would leave unpatched and uncommitted.
@@ -1251,6 +1360,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       await patchMarkdownFrontmatter(filePath, patchFields)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
     }
+    // The cells Desk derived in the done check are written into the archived card, so it does not close over a stale state.
+    if (archiveBump?.derived !== undefined && (await writeDerivedCells(filePath, archiveBump.derived))) await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   }
 
   // Stage + commit the move (and any status bump above, already on disk by

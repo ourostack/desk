@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert"
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { readSteps, readyOf, summarizeSteps } from "../../../../../plugins/desk/mcp/src/desk/steps.js"
+import { readSteps, readyOf, setDerived, summarizeSteps } from "../../../../../plugins/desk/mcp/src/desk/steps.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 
@@ -150,4 +150,14 @@ test("a table that runs to the end of the 64 KiB read is not counted, and the sa
   assert.equal("steps" in tasks.cut, false)
   assert.equal(tasks.whole.steps.total, 12)
   assert.match(readSteps(`${filler(100)}\n${table.slice(0, -10)}`, { truncated: true }).reason, /cut at the read limit/u)
+})
+
+test("setDerived writes only the cells whose evidence is still what the state was derived from, and leaves an unreadable table alone", () => {
+  const body = "## Steps\n\n| Step | Depends on | Repo | State | Evidence |\n|---|---|---|---|---|\n| a | — | — | pending | https://github.com/o/r/pull/1 |\n| b | — | — | pending | https://github.com/o/r/pull/2 |\n| c | — | — | pending | — |\n"
+  const changes = new Map([["a", { state: "in review", evidence: "https://github.com/o/r/pull/1" }], ["b", { state: "merged", evidence: "https://github.com/o/r/pull/9" }], ["c", { state: "pending", evidence: "" }], ["gone", { state: "delivered", evidence: "" }]])
+  const { body: next, written } = setDerived(body, changes)
+  assert.deepEqual(written, ["a"])
+  assert.match(next, /\| a \| — \| — \| in review \| https:\/\/github\.com\/o\/r\/pull\/1 \|\n\| b \| — \| — \| pending \|/u)
+  const unreadable = "## Steps\n\nno table here\n"
+  assert.deepEqual(setDerived(unreadable, changes), { body: unreadable, written: [] })
 })

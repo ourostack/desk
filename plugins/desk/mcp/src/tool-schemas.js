@@ -56,15 +56,15 @@ const RETURN_REASON = {
   description: "Required when this call sends a task backwards (out of `done`, or to a stage below the furthest one it reached): why. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke). Refused on any call that is not a return.",
 }
 
-// Mirrors STEP_STATES in src/desk/steps.js (this file stays free of imports).
+// Mirrors STEP_STATES in src/desk/steps.js, less the states Desk derives (DERIVED_STATES) (this file stays free of imports).
 const STEP = {
   type: "object",
   properties: {
     id: text("The step's name: short kebab-case, unique on the card, never renamed. Unknown names add a row."),
-    state: { type: "string", enum: ["pending", "in progress", "blocked", "merged", "delivered", "dropped"], description: "Where the step is. A new step starts pending. `blocked` and `dropped` need `reason`. `merged` and `delivered` need a PR URL or commit in `evidence`." },
+    state: { type: "string", enum: ["pending", "in progress", "blocked", "dropped"], description: "Where the step is. A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from the PR URL (or `task:<track>/<slug>` for a delegated step) in `evidence`; callers cannot." },
     depends_on: list("The steps that must be delivered (or dropped) first; empty for none. Needed for a new step; changes only while the step is pending."),
     repo: text("One of the card's repos, or \"—\" for none. Needed for a new step; changes only while the step is pending."),
-    evidence: text("The PR URL or commit that backs the step, or a line on where it stands."),
+    evidence: text("The PR URL that backs the step (Desk derives the step's state from it), `task:<track>/<slug>` for a step delegated to its own card, or a line on where it stands."),
     reason: text("Why the step is blocked or dropped; written into the step's Evidence cell."),
     expect: text("The state you last saw. If the step is in another state now, nothing is written and the refusal shows the current row."),
     dependents_ok: list("When dropping a step: the steps that depend on it and are still valid. The others become blocked."),
@@ -98,11 +98,11 @@ const TASK_DONE_EVIDENCE = {
   type: "object",
   additionalProperties: false,
   properties: {
-    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code"], description: "What kind of reference this is." },
-    ref: text('The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
+    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code", "steps"], description: "What kind of reference this is. `steps` closes a card that has a `## Steps` table: it needs no `ref`, and Desk refreshes every step from its pull request and refuses while any is not delivered or dropped." },
+    ref: text('Not needed for `steps`. The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
   },
-  required: ["kind", "ref"],
-  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. A task whose card lists `repos` can only be finished with `pr` (a PR URL in one of those repos) or `commit` (a commit that resolves in a recorded clone and is pushed): `ci_run` and `non_code` are refused, and a commit made in the desk never counts. One exception: a repo Desk recorded as local-only (`local_only: true` on its entry in the card as it was before this call; Desk sets it when `task_create` or boot first sees the clone with no remote and the entry has no `url`, and no call can set it) accepts a commit in that clone that a local branch or HEAD reaches and that was made after the task was created. If the work cannot be delivered yet (nothing pushed, no PR), do not mark the task done: leave it at `validating` and tell the operator the commit sha. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
+  required: ["kind"],
+  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. A card with a readable `## Steps` table can only be finished with `{ kind: \"steps\" }`, and every other card never with it. A task whose card lists `repos` (and has no steps table) can only be finished with `pr` (a PR URL in one of those repos) or `commit` (a commit that resolves in a recorded clone and is pushed): `ci_run` and `non_code` are refused, and a commit made in the desk never counts. One exception: a repo Desk recorded as local-only (`local_only: true` on its entry in the card as it was before this call; Desk sets it when `task_create` or boot first sees the clone with no remote and the entry has no `url`, and no call can set it) accepts a commit in that clone that a local branch or HEAD reaches and that was made after the task was created. If the work cannot be delivered yet (nothing pushed, no PR), do not mark the task done: leave it at `validating` and tell the operator the commit sha. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
 }
 
 const TASK_ARCHIVE_OUTCOME = {

@@ -8,14 +8,15 @@
 // `readSteps` says why, and `applyStep` refuses to write to it, so nothing else about the card is blocked.
 //
 // Only task_update and task_create write the table (tools/task.js); boot and desk_status read it
-// (desk/active-tasks.js). `HAND_SET` is the one place that lets an agent set `merged` or `delivered` by hand: Desk will
-// derive those from the step's PR and stop accepting them from callers.
+// (desk/active-tasks.js). Callers set `pending`, `in progress`, `blocked` and `dropped`; Desk alone sets `in review`, `merged`
+// and `delivered`, from the step's PR or delegated card (desk/step-delivery.js), and `setDerived` writes those cells.
 
 import { scan } from "../tools/task-body.js"
+import { isDerivable } from "./step-delivery.js"
 
-export const STEP_STATES = ["pending", "in progress", "blocked", "merged", "delivered", "dropped"]
+export const STEP_STATES = ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"]
+export const DERIVED_STATES = ["in review", "merged", "delivered"]
 export const STEP_FIELDS = ["id", "state", "depends_on", "repo", "evidence", "reason", "expect", "dependents_ok"]
-const HAND_SET = ["merged", "delivered"]
 const NEEDS_REASON = ["blocked", "dropped"]
 export const SETTLED = ["delivered", "dropped"]
 const HEADING = "## Steps"
@@ -24,8 +25,6 @@ const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u
 const ID_LIMIT = 40
 const NONE = /^(?:—|-)?$/u
 export const SEPARATOR = /^\|?[\s:|-]*-[\s:|-]*$/u
-// A PR URL, a commit URL or a bare commit sha: shape only, as the done check's evidence is.
-const EVIDENCE_REF = /\/pull(?:request)?\/\d+|\/commit\/[0-9a-f]{7,40}\b|\b[0-9a-f]{7,40}\b/iu
 
 export const splitCells = (line) =>
   line.trim().replace(/^\|/u, "").replace(/(?<!\\)\|$/u, "").split(/(?<!\\)\|/u).map((cell) => cell.replace(/\\\|/gu, "|").trim())
@@ -110,14 +109,14 @@ export function readyOf(rows) {
   return rows.filter((row) => row.state === "pending" && row.depends_on.every((id) => SETTLED.includes(known.get(id).state))).map((row) => row.id)
 }
 
-/** A compact summary for boot and desk_status: the steps that count (not dropped), how many are delivered, what is ready, how many are moving (in progress or merged), what is blocked and why. */
+/** A compact summary for boot and desk_status: the steps that count (not dropped), how many are delivered, what is ready, how many are moving (in progress, in review or merged), what is blocked and why. */
 export function summarizeSteps(rows) {
   const counted = rows.filter((row) => row.state !== "dropped")
   return {
     total: counted.length,
     delivered: counted.filter((row) => row.state === "delivered").length,
     ready: readyOf(rows),
-    moving: rows.filter((row) => ["in progress", "merged"].includes(row.state)).length,
+    moving: rows.filter((row) => ["in progress", "in review", "merged"].includes(row.state)).length,
     blocked: rows.filter((row) => row.state === "blocked").map((row) => ({ id: row.id, reason: row.evidence })),
   }
 }
@@ -136,10 +135,12 @@ const rowLine = (row, cells, col, width) => {
 }
 
 // A reason is written after the evidence the step already had, so a PR link survives a step being blocked or dropped: `reason (was: <evidence>)`.
+const TASK_REF = /^task:\S+$/u
 const WAS = /\(was: (.*)\)$/u
 const withReason = (reason, evidence) => (evidence === "" ? reason : `${reason} (was: ${evidence})`)
 // The evidence a step had before a reason was put in front of it: what follows `(was: ...)`, or nothing when the cell was only a reason.
-const evidenceBehind = (row) => (row === undefined ? "" : NEEDS_REASON.includes(row.state) ? (WAS.exec(row.evidence)?.[1] ?? "") : row.evidence)
+// A delegated step Desk derived as blocked keeps its `task:` reference as it is: that is evidence, not a reason.
+const evidenceBehind = (row) => (row === undefined ? "" : NEEDS_REASON.includes(row.state) ? (WAS.exec(row.evidence)?.[1] ?? (TASK_REF.test(row.evidence) ? row.evidence : "")) : row.evidence)
 
 function newTable(rows) {
   const head = `| ${COLUMNS.join(" | ")} |`
@@ -161,7 +162,7 @@ function withNewTable({ lines, fenced }, rows) {
 }
 
 /**
- * The body with one step row added or changed, and what it said: `{ body, row, blocked, ready }`, where `blocked` lists the
+ * The body with one step row added or changed, and what it said: `{ body, row, blocked, ready, declared }`, where `declared` says the state was set by the caller on evidence Desk cannot read, and `blocked` lists the
  * dependents a drop blocked and `ready` the steps this change made ready. `repos` is the card's repo names. Refuses, naming the row
  * and changing nothing, for a step Desk cannot place (see the task_update schema for the rules).
  */
@@ -190,7 +191,14 @@ export function applyStep(body, input, tool, repos) {
   const reason = typeof input.reason === "string" ? input.reason.trim() : ""
   if (NEEDS_REASON.includes(state) && changed && reason === "") refuse(`${named} cannot become ${state} without a \`reason\``)
   const proof = reason === "" ? (typeof input.evidence === "string" ? input.evidence : "") : reason
-  if (HAND_SET.includes(state) && changed && !EVIDENCE_REF.test(proof)) refuse(`${named} cannot be set to ${state} without a PR URL or commit in \`evidence\``)
+  // Desk derives in review, merged and delivered where it can read them (a GitHub pull request, a delegated card); elsewhere (an Azure DevOps pull request, a commit) the agent declares them, with evidence.
+  let declared = false
+  if (input.state !== undefined && DERIVED_STATES.includes(state) && changed) {
+    const shown = proof !== "" ? proof : evidenceBehind(existing)
+    if (isDerivable(shown)) refuse(`${named} cannot be set to ${state}: Desk sets in review, merged and delivered from the step's GitHub PR or delegated card, and its evidence has one. Leave the state to Desk`)
+    if (shown === "") refuse(`${named} cannot be set to ${state} without evidence: Desk derives the state from a GitHub PR URL (or \`task:<track>/<slug>\`) in \`evidence\`; for a PR or commit elsewhere, put it in \`evidence\` and the state is yours to declare`)
+    declared = true
+  }
   const depends = input.depends_on === undefined ? existing.depends_on : names(input.depends_on, "depends_on")
   let repo = existing?.repo ?? null
   if (input.repo !== undefined) repo = NONE.test(String(input.repo).trim()) ? null : String(input.repo).trim()
@@ -222,5 +230,24 @@ export function applyStep(body, input, tool, repos) {
     out = lines
   }
   const before = readyOf(rows)
-  return { body: out.join(read.eol), row, blocked, ready: readyOf(next).filter((item) => !before.includes(item)) }
+  return { body: out.join(read.eol), row, blocked, declared, ready: readyOf(next).filter((item) => !before.includes(item)) }
+}
+
+/**
+ * The body with derived states written: `changes` maps a step name to `{ state, evidence }`, the evidence the state was derived from.
+ * A row whose evidence is no longer that, or whose state is already the derived one, is left as it is. Returns `{ body, written }`
+ * (the names changed); a table Desk cannot read is returned untouched.
+ */
+export function setDerived(body, changes) {
+  const read = readSteps(body)
+  if (read.rows === undefined) return { body, written: [] }
+  const lines = [...read.lines]
+  const written = []
+  for (const row of read.rows) {
+    const change = changes.get(row.id)
+    if (change === undefined || change.evidence !== row.evidence || change.state === row.state) continue
+    lines[row.line] = rowLine({ ...row, state: change.state }, splitCells(lines[row.line]), read.table.col, read.table.width)
+    written.push(row.id)
+  }
+  return { body: lines.join(read.eol), written }
 }
