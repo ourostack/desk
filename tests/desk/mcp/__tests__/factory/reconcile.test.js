@@ -1135,6 +1135,38 @@ test("the publisher and reconcile agree on whether a desk's timing is kept, beca
   assert.ok(src("outbox.js").includes("freshVisibility("), "the cache reader and reconcile apply the same expiry")
 }))
 
+test("status_unobserved orders observations by when each holds, so an open session's old observation does not stand in as the latest", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const remote = "https://github.com/acme/desk.git"
+  const repo = await makeDesk(desk, { remote })
+  repo.commit("2026-09-20T00:00:00Z", { "t/never/task.md": cardText(), "t/late/task.md": cardText(), "t/odd/task.md": cardText({ created: "not a date" }) }, "seed")
+  repo.commit("2026-09-25T10:00:00Z", { "t/never/task.md": cardText({ status: "done", updated: "2026-09-25T10:00:00.000Z" }), "t/never/work.md": "x\n", "t/late/work.md": "x\n", "t/odd/work.md": "x\n" })
+  const root = await factoryStateRoot(env)
+  await writeFile(path.join(root, "visibility.json"), JSON.stringify({ "acme/desk": { visibility: "private", checked_at: "2026-09-25T00:00:00.000Z" } }))
+  const store = path.join(base, "store")
+  const session = (n, slug, observed, span) => {
+    const facts = localFor(n, jobOf(desk, "t", slug, remote))
+    facts.jobs[0].observed = observed
+    Object.assign(facts.session, span)
+    return facts
+  }
+  // This machine's open session: derived locally through 09-26, but its published file stops at 09-24 12:00 and saw the card drafting.
+  const open = { started_at: "2026-09-24T00:00:00.000Z", ended_at: null, derived_through: "2026-09-26T00:00:00.000Z" }
+  await addSession(context, 7, "t", "never", { remote, status: "drafting", span: open })
+  publishTo(store, session(7, "never", { status: "drafting", at: null }, { ...open, derived_through: "2026-09-24T12:00:00.000Z" }), { deskVisibility: "private" })
+  // A short session that ended at 09-25 08:01 and was derived again after the card went done at 10:00: its terminal observation holds from 10:00.
+  publishTo(store, session(8, "never", { status: "done", at: "2026-09-25T10:00:00.000Z" }, { started_at: "2026-09-25T08:00:00.000Z", ended_at: "2026-09-25T08:01:00.000Z", derived_through: "2026-09-25T08:01:00.000Z" }), { deskVisibility: "private" })
+  // The other way round: the card moved on after a terminal observation that a later published file saw replaced.
+  publishTo(store, session(9, "late", { status: "done", at: "2026-09-21T00:00:00.000Z" }, { started_at: "2026-09-20T22:00:00.000Z", ended_at: "2026-09-20T23:00:00.000Z", derived_through: "2026-09-20T23:00:00.000Z" }), { deskVisibility: "private" })
+  publishTo(store, session(10, "late", { status: "validating", at: null }, { started_at: "2026-09-25T08:00:00.000Z", ended_at: "2026-09-25T09:00:00.000Z", derived_through: "2026-09-25T09:00:00.000Z" }), { deskVisibility: "private" })
+  // A card whose created cannot be read places no observation from another machine.
+  publishTo(store, session(11, "odd", { status: "done", at: "2026-09-21T00:00:00.000Z" }, {}), { deskVisibility: "private" })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
+  assert.ok(!reasonsOf(result, "never").includes("status_unobserved"), "the card is done and the store's latest observation is done")
+  assert.ok(reasonsOf(result, "late").includes("status_unobserved"), "the latest observation (validating) is not the card's processing")
+  assert.ok(reasonsOf(result, "odd").includes("status_unobserved"), "an unplaced observation is still the only one, and it differs")
+}))
+
 test("status_unobserved says not_checked with no store, and counts what it found with one", () => scratch(async (context) => {
   const { desk, env, base } = context
   const repo = await standardDesk(desk, [["t", "a"]])

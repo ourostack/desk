@@ -45,7 +45,9 @@
 //   pr_open        delivered, and the store's intake pull request is still open
 //   invalid_status the card's status is outside the eight (reported in addition to any other reason)
 //   status_unobserved  with `--store`: the card's status differs from the latest status the store observed
-//                  for the job (a transition on a card outside a session's focus is not recorded)
+//                  for the job (a transition on a card outside a session's focus is not recorded). Observations are
+//                  ordered by when each is known to hold: the end of the published file that made it, or a terminal
+//                  status's card `updated` when later; an open session counts only as far as its published file goes
 // `store_only`: a store job whose session falls in the window while the desk shows no real activity for it. A
 // job the desk cannot map to a task (unknown, or keyed and not known on this machine) prints `job: null`. On a
 // keyed (public) desk the store's job ids are keyed, so `store_only` fires only for jobs with local facts on this
@@ -459,7 +461,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       for (const job of published.jobs) {
         if (!storeFacts.has(job.job)) storeFacts.set(job.job, [])
         const local = localSessions.get(published.session.id)
-        storeFacts.get(job.job).push({ id: published.session.id, local, offset: job.session_offset_ms, duration: published.session.duration_ms, observed: job.observed === null ? null : job.observed.status })
+        storeFacts.get(job.job).push({ id: published.session.id, local, offset: job.session_offset_ms, duration: published.session.duration_ms, observed: job.observed === null ? null : job.observed.status, observedOffset: job.observed === null ? null : job.observed.offset_ms })
       }
     }
   }
@@ -472,11 +474,16 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const start = created + session.offset
     return [[start, start + session.duration]]
   }
-  // When a store session ended, or -Infinity when nothing places it.
-  const endOf = (session, created) => {
-    if (session.local !== undefined) return session.local.end
-    const place = placement(session, created)
-    return place === null ? -Infinity : place[0][1]
+  // The latest time a store observation is known to hold, or -Infinity when nothing places it: the end of the published file that made it
+  // (its derivation ran then or later), or, for a terminal status, the card's `updated` (`observed.offset_ms`) when that is later. It reads
+  // the published file's own extent, never this machine's local `end`: local facts may be a newer derivation than the published file whose
+  // observation is read (an open session re-derived since it was last published), and taking their end let an old observation stand in as
+  // the latest one.
+  const observedAt = (session, created) => {
+    const known = Number.isFinite(created)
+    const start = session.local !== undefined ? session.local.start : known && session.offset !== null ? created + session.offset : null
+    const derived = start === null ? -Infinity : start + session.duration
+    return Math.max(derived, known && session.observedOffset !== null ? created + session.observedOffset : -Infinity)
   }
 
   // ---- reasons ----
@@ -603,7 +610,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       else if (storeSessions !== null) {
         // The latest status the store observed for the job, when the card has since moved on without a session seeing it.
         const created = createdMs(task.card)
-        const seen = storeSessions.filter((session) => session.observed !== null).sort((a, b) => endOf(a, created) - endOf(b, created)).at(-1)
+        const seen = storeSessions.filter((session) => session.observed !== null).sort((a, b) => observedAt(a, created) - observedAt(b, created)).at(-1)
         if (seen !== undefined && seen.observed !== task.card.status) push(task, "status_unobserved", "card_status_not_in_store")
       }
     }
