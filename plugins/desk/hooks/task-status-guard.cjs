@@ -39,6 +39,9 @@ process.stdin.on("end", async () => {
       process.stdout.write("{}\n");
       return;
     }
+    // The guard reads card frontmatter (nested `repos:` included) with gray-matter; restore it before the module that binds its parser loads.
+    const { ensureHookDependencies } = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/hook-dependencies.js")).href);
+    ensureHookDependencies({ hook: "task-status-guard", env: process.env });
     const { taskStatusGuardHook } = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/task-status-guard.js")).href);
     const output = taskStatusGuardHook(payload, process.argv[2]);
     process.stdout.write(`${JSON.stringify(output)}\n`);

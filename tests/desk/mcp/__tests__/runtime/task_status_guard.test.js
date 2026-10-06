@@ -11,7 +11,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -518,5 +518,33 @@ test("odd roots are handled: the desk folder itself, a filesystem root and a roo
     if (error.code !== "EPERM" && error.code !== "EXDEV") throw error
   } finally {
     rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+// Boot acceptance round AA, same gap as the clone guard: from the installed plugin folder (no node_modules) the guard read cards with the dependency-free reader, which skips nested fields. A card whose nested
+// `repos:` block is broken YAML then looked readable, so a direct edit was denied instead of being left to the operator to repair by hand.
+test("run from a bare plugin folder (no node_modules), the guard restores gray-matter first: a card with a broken nested repos block stays hand-repairable", () => {
+  const bare = realpathSync(mkdtempSync(path.join(tmpdir(), "guard-bare-")))
+  const broken = "---\ntitle: t\nstatus: processing\nrepos:\n  - name: acme/widgets\n    local_path: [unclosed\n---\n\n**Next step:** go.\n"
+  const good = "---\ntitle: t\nstatus: processing\nrepos:\n  - name: acme/widgets\n---\n\n**Next step:** go.\n"
+  try {
+    const copy = path.join(bare, "desk-plugin")
+    cpSync(plugin, copy, { recursive: true, dereference: true, filter: (file) => path.basename(file) !== "node_modules" })
+    const file = path.join(DESK, "greenhouse", "bare-card", "task.md")
+    const run = (text) => {
+      mkdirSync(path.dirname(file), { recursive: true })
+      writeFileSync(file, text)
+      const input = { ...writeInput({ toolName: "Edit", toolInput: { file_path: file, old_string: "go.", new_string: "went." } }), cwd: DESK }
+      const result = spawnSync(process.execPath, [path.join(copy, "hooks", "task-status-guard.cjs"), "claude"], {
+        input: JSON.stringify(input), encoding: "utf8", env: { PATH: process.env.PATH, HOME: bare, DESK, DESK_RUNTIME_CACHE_DIR: path.join(bare, "cache") },
+      })
+      assert.equal(result.status, 0, result.stderr)
+      return JSON.parse(result.stdout)
+    }
+    assert.deepEqual(run(broken), {})
+    assert.equal(run(good).hookSpecificOutput.permissionDecision, "deny")
+  } finally {
+    rmSync(bare, { recursive: true, force: true })
+    rmSync(path.join(DESK, "greenhouse"), { recursive: true, force: true })
   }
 })

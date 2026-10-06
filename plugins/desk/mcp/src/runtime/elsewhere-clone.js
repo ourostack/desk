@@ -11,7 +11,6 @@
 // names `clone` or `fetch` together with a repository reads the desk's cards (bounded reads of at most 64 KiB each, the same listing `desk_status` serves).
 
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
 import { saysElsewhere } from "./elsewhere-note.js"
 
 // A command that names `clone`, `fetch` or `pull` and Git or gh anywhere (a chained command, `bash -c "..."`, a PowerShell statement). Two linear tests, so a command that is not one costs one pass each.
@@ -118,9 +117,7 @@ export async function loadDeskTasks({ cwd, env, ensureDependencies = defaultEnsu
   return root === null ? [] : activeTasks(root).tracks.flatMap((track) => track.tasks)
 }
 
-const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
-
 async function defaultEnsureDependencies(env) {
-  const { ensureBootDependencies } = await import("./boot-dependencies.js")
-  ensureBootDependencies({ mcpRoot: MCP_ROOT, env })
+  const { ensureHookDependencies } = await import("./hook-dependencies.js")
+  ensureHookDependencies({ hook: "elsewhere-clone", env })
 }

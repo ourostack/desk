@@ -165,6 +165,10 @@ export function copilotGates(events) {
 /** The report for a Copilot run that has no session log: nothing is claimed, and the summary says why. */
 export const copilotGatesUnavailable = { events_saved: false, note: "the session's events.jsonl was not found, so no hook activity is known" }
 
+// A SessionStart hook event carries only `hook_name: "SessionStart:startup"` and a `hook_id`: no plugin, no command, and a cancelled hook has no output at all (round AA, slow-or-failing-status run 1:
+// `{"subtype":"hook_response","outcome":"cancelled","exit_code":1,"output":""}`). Desk's hook is therefore known by what it hands the agent: the foundation skill, or the "could not read it" fallback.
+const DESK_START_CONTEXT = /name: using-desk\b|desk worker boot/u
+
 const DENIAL = /^PreToolUse:\w+ hook error\b/mu
 
 const blockText = (block) => (Array.isArray(block.content) ? block.content.map((part) => part?.text ?? "").join("\n") : String(block.content ?? ""))
@@ -181,10 +185,12 @@ export function claudeGates(events) {
   let startHooks = 0
   let startContext = 0
   let startCancelled = 0
+  let deskDelivered = false
   for (const event of events) {
     if (event.type === "system" && event.subtype === "hook_response" && event.hook_event === "SessionStart") {
       startHooks += 1
       if (event.outcome === "cancelled") startCancelled += 1
+      else if (event.outcome !== "error" && DESK_START_CONTEXT.test(String(event.output ?? ""))) deskDelivered = true
       if (/additionalContext/u.test(String(event.output ?? ""))) startContext += 1
     }
     if (!Array.isArray(event.message?.content) || (event.type !== "user" && event.type !== "assistant")) continue
@@ -195,7 +201,7 @@ export function claudeGates(events) {
   }
   return {
     events_saved: true,
-    session_start: { fired: startHooks, injected: startContext > 0, cancelled: startCancelled },
+    session_start: { fired: startHooks, injected: startContext > 0, cancelled: startCancelled, desk_delivered: deskDelivered },
     stop_hook_feedback: stopFeedback,
     pre_tool_use_denials: denials,
   }
@@ -207,12 +213,25 @@ export function gateReport({ host, claudeEvents = [], copilotEventsText = null }
   return claudeGates(claudeEvents)
 }
 
+// The failure checks whose answer is in what Desk's start hook or boot hands the agent: with that hook cancelled, an agent that never ran boot, or never said what boot would have told it, is not shown to have failed.
+// Every other failure (a write, a false claim, an invented delivery, a leak) does not depend on boot and stays a failure.
+const BOOT_DEPENDENT_FAILURES = [
+  /^never ran session-boot\.js$/u,
+  /^did not tell the operator the desk could not sync with its remote$/u,
+  /^did not tell the operator which account and route\b/u,
+]
+
 /**
- * A run whose start hook was cancelled never gave the agent what boot hands it, so a failure there says nothing about the agent: boot acceptance round AA, `slow-or-failing-status` run 1,
- * lost Desk's start hook to a 10 s timeout on a machine at load 90 and then skipped boot. Returns the check result with a `fail` turned into `unknown` and the reason noted; any other result is unchanged.
+ * Round AA, `slow-or-failing-status` run 1 lost Desk's SessionStart hook to its 10 s timeout on a machine at load 90, then skipped boot. When a SessionStart hook was cancelled and none of the others delivered Desk's context,
+ * the boot-dependent failures (`BOOT_DEPENDENT_FAILURES`) are set aside as `DISCOUNTED:` notes, counted in `discounted`. A run left with a real failure stays `fail`; a run whose only failures were set aside becomes `unknown`
+ * (it did not test boot); any other result is returned as it was.
  */
 export function discountCancelledStart(checkResult, gates) {
-  const cancelled = gates?.session_start?.cancelled ?? 0
-  if (checkResult.outcome !== "fail" || cancelled === 0) return checkResult
-  return { ...checkResult, outcome: "unknown", notes: [`INFRASTRUCTURE: ${cancelled} SessionStart hook${cancelled === 1 ? " was" : "s were"} cancelled (timed out), so the agent never got that hook's context; the failures below may follow from that, not from the agent`, ...checkResult.notes] }
+  const start = gates?.session_start
+  if (checkResult.outcome !== "fail" || (start?.cancelled ?? 0) === 0 || start.desk_delivered === true) return checkResult
+  const failures = checkResult.notes.filter((note) => note.startsWith("FAIL: "))
+  const discounted = failures.filter((note) => BOOT_DEPENDENT_FAILURES.some((pattern) => pattern.test(note.slice(6))))
+  if (discounted.length === 0) return checkResult
+  const notes = checkResult.notes.map((note) => (discounted.includes(note) ? `DISCOUNTED: ${note.slice(6)} (Desk's SessionStart hook was cancelled, so boot's output never reached the agent)` : note))
+  return { ...checkResult, outcome: discounted.length === failures.length ? "unknown" : "fail", notes, discounted: discounted.length }
 }

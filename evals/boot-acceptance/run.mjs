@@ -422,6 +422,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     tool_call_count: counted.length,
     tool_call_names: counted.map((t) => t.name),
     outcome: checkResult.outcome,
+    discounted_failures: checkResult.discounted ?? 0,
     outcome_notes: checkResult.notes,
     not_applicable: checkResult.notApplicable,
     // Every check this host could run passed; the checks it could not run are the `not_applicable` list, counted here, never credited as passes.

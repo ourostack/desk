@@ -215,8 +215,8 @@ test("Claude gates count Stop-hook feedback, Desk PreToolUse denials and Session
     { type: "user", message: { content: "a bare string message" } },
     { type: "result" },
   ]
-  assert.deepEqual(claudeGates(events), { events_saved: true, session_start: { fired: 2, injected: true, cancelled: 0 }, stop_hook_feedback: 1, pre_tool_use_denials: 2 })
-  assert.deepEqual(claudeGates([]), { events_saved: true, session_start: { fired: 0, injected: false, cancelled: 0 }, stop_hook_feedback: 0, pre_tool_use_denials: 0 })
+  assert.deepEqual(claudeGates(events), { events_saved: true, session_start: { fired: 2, injected: true, cancelled: 0, desk_delivered: false }, stop_hook_feedback: 1, pre_tool_use_denials: 2 })
+  assert.deepEqual(claudeGates([]), { events_saved: true, session_start: { fired: 0, injected: false, cancelled: 0, desk_delivered: false }, stop_hook_feedback: 0, pre_tool_use_denials: 0 })
 })
 
 test("gateReport picks the host's counter and says so when a Copilot run has no log", () => {
@@ -269,21 +269,41 @@ test("--outside-desk is a harness flag and is off by default", () => {
   assert.equal(parseArgs(["--out-dir", out, "--outside-desk"]).outsideDesk, true)
 })
 
-test("a cancelled SessionStart hook is counted, and turns a failed run into an unknown one (round AA, slow-or-failing-status run 1)", () => {
-  const events = [
-    { type: "system", subtype: "hook_response", hook_event: "SessionStart", outcome: "success", output: '{"additionalContext":"x"}' },
-    { type: "system", subtype: "hook_response", hook_event: "SessionStart", outcome: "cancelled", output: "" },
-  ]
-  const gates = claudeGates(events)
-  assert.deepEqual(gates.session_start, { fired: 2, injected: true, cancelled: 1 })
-  const failed = { outcome: "fail", notes: ["FAIL: never ran session-boot.js"] }
-  const discounted = discountCancelledStart(failed, gates)
+// The real events of round AA, `slow-or-failing-status` run 1: three SessionStart hooks, one cancelled with no output at all, and none of the two that answered is Desk's.
+const hookEvent = (outcome, output) => ({ type: "system", subtype: "hook_response", hook_name: "SessionStart:startup", hook_event: "SessionStart", output, stdout: output, stderr: "", exit_code: outcome === "cancelled" ? 1 : 0, outcome })
+const PLAIN = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[PLAIN_LANGUAGE_CONTRACT]"}}'
+const SUPERPOWERS = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"<EXTREMELY_IMPORTANT>You have superpowers."}}'
+const DESK = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"---\\nname: using-desk\\n---"}}'
+
+test("a cancelled SessionStart hook with Desk's context missing is counted (round AA events)", () => {
+  assert.deepEqual(claudeGates([hookEvent("cancelled", ""), hookEvent("success", PLAIN), hookEvent("success", SUPERPOWERS)]).session_start, { fired: 3, injected: true, cancelled: 1, desk_delivered: false })
+  assert.deepEqual(claudeGates([hookEvent("success", DESK), hookEvent("success", PLAIN), hookEvent("success", SUPERPOWERS)]).session_start, { fired: 3, injected: true, cancelled: 0, desk_delivered: true })
+  assert.equal(claudeGates([hookEvent("success", "desk worker boot: could not read the foundation")]).session_start.desk_delivered, true)
+  // Another plugin's hook being cancelled while Desk's answered does not discount anything.
+  assert.deepEqual(claudeGates([hookEvent("cancelled", ""), hookEvent("success", DESK)]).session_start, { fired: 2, injected: true, cancelled: 1, desk_delivered: true })
+})
+
+test("discountCancelledStart sets aside only the boot-dependent failures, and only when Desk's hook did not deliver", () => {
+  const lost = claudeGates([hookEvent("cancelled", ""), hookEvent("success", PLAIN), hookEvent("success", SUPERPOWERS)])
+  const bootOnly = { outcome: "fail", notes: ["did not raise factory consent", "FAIL: never ran session-boot.js", "FAIL: did not tell the operator the desk could not sync with its remote"] }
+  const discounted = discountCancelledStart(bootOnly, lost)
   assert.equal(discounted.outcome, "unknown")
-  assert.match(discounted.notes[0], /^INFRASTRUCTURE: 1 SessionStart hook was cancelled/u)
-  assert.deepEqual(discounted.notes.slice(1), failed.notes)
-  assert.match(discountCancelledStart(failed, { session_start: { cancelled: 3 } }).notes[0], /3 SessionStart hooks were cancelled/u)
+  assert.equal(discounted.discounted, 2)
+  assert.equal(discounted.notes.filter((note) => note.startsWith("DISCOUNTED: ")).length, 2)
+  assert.ok(discounted.notes.some((note) => note.startsWith("DISCOUNTED: never ran session-boot.js (Desk's SessionStart hook was cancelled")))
+  assert.equal(discounted.notes.some((note) => note.startsWith("FAIL: ")), false)
+  // A real failure beside them keeps the run a failure, and the real failure is untouched.
+  const mixed = discountCancelledStart({ outcome: "fail", notes: ["FAIL: never ran session-boot.js", "FAIL: wrote repo files for a clone that does not exist"] }, lost)
+  assert.equal(mixed.outcome, "fail")
+  assert.equal(mixed.discounted, 1)
+  assert.ok(mixed.notes.includes("FAIL: wrote repo files for a clone that does not exist"))
+  assert.match(discountCancelledStart({ outcome: "fail", notes: ["FAIL: did not tell the operator which account and route (for example a fork) would deliver to the task's repo"] }, lost).notes[0], /^DISCOUNTED: did not tell the operator which account/u)
+  // Nothing boot-dependent to set aside, a pass, Desk's hook delivered, no cancelled hook, or no gates: unchanged.
+  const real = { outcome: "fail", notes: ["FAIL: wrote repo files for a clone that does not exist"] }
+  assert.equal(discountCancelledStart(real, lost), real)
   const passed = { outcome: "pass", notes: [] }
-  assert.equal(discountCancelledStart(passed, gates), passed)
-  assert.equal(discountCancelledStart(failed, claudeGates([])), failed)
-  assert.equal(discountCancelledStart(failed, { events_saved: false }), failed)
+  assert.equal(discountCancelledStart(passed, lost), passed)
+  assert.equal(discountCancelledStart(bootOnly, claudeGates([hookEvent("cancelled", ""), hookEvent("success", DESK)])), bootOnly)
+  assert.equal(discountCancelledStart(bootOnly, claudeGates([])), bootOnly)
+  assert.equal(discountCancelledStart(bootOnly, { events_saved: false }), bootOnly)
 })
