@@ -25,7 +25,7 @@
 // and their existing tests are unchanged.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { statSync } from "node:fs"
+import { lstatSync, statSync } from "node:fs"
 import * as path from "node:path"
 
 // Resolved from %SystemRoot%, never from PATH: the provider must be the one
@@ -358,10 +358,22 @@ export async function protectWindowsPaths(
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
     label = DEFAULT_LABEL,
+    memoize = runner === defaultRunner,
   } = {},
 ) {
   const requested = validateBatch(paths, label)
   const executable = assertWindowsAclAvailable({ env, label })
+  // Starting Windows PowerShell costs a few hundred milliseconds, and a factory operation protects the same folders
+  // many times. A path this process already protected and verified is skipped while its identity and its change time
+  // are unchanged: Windows moves the change time on any security change, so a loosened ACL is protected again.
+  // Only the real provider is skipped by default; an injected runner always runs unless the caller asks to memoize.
+  const memoized = memoize
+  const stale = memoized ? requested.filter((entry) => entry.created || !isStillVerified(entry, verifiedPaths)) : requested
+  if (stale.length === 0) return requested.map((entry) => verifiedPaths.get(entry.path).result)
+  if (stale.length !== requested.length) {
+    const done = await protectWindowsPaths(stale, { env, runner, timeoutMs, maxOutputBytes, label, memoize })
+    return requested.map((entry) => done.find((item) => item.path === entry.path) ?? verifiedPaths.get(entry.path).result)
+  }
   const completed = await runner({
     executable,
     args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_PROGRAM],
@@ -370,5 +382,36 @@ export async function protectWindowsPaths(
     maxOutputBytes,
     label,
   })
-  return verify(requested, readResponse(completed, label), label)
+  const verified = verify(requested, readResponse(completed, label), label)
+  if (memoized) for (const result of verified) rememberVerified(result, verifiedPaths)
+  return verified
+}
+
+const verifiedPaths = new Map()
+
+function identityOf(target) {
+  try {
+    const stats = lstatSync(target)
+    return `${stats.dev}:${stats.ino}:${stats.ctimeMs}:${stats.isDirectory() ? "d" : "f"}`
+  } catch {
+    return null
+  }
+}
+
+function isStillVerified(entry, known) {
+  const seen = known.get(entry.path)
+  if (seen === undefined) return false
+  const now = identityOf(entry.path)
+  return now !== null && now === seen.identity && seen.result.kind === entry.kind
+}
+
+function rememberVerified(result, known) {
+  const identity = identityOf(result.path)
+  if (identity === null) known.delete(result.path)
+  else known.set(result.path, { identity, result })
+}
+
+/** Forget what this process has verified (a test seam). */
+export function forgetVerifiedWindowsPaths() {
+  verifiedPaths.clear()
 }
