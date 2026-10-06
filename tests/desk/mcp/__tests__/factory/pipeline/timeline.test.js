@@ -179,6 +179,21 @@ test("shared_with keeps jobs.length - 1 for a binding without segments, and an u
   assert.equal(sharedWith(OPEN, mixed), 1)
 })
 
+test("a job held only by subagents shares the session with no other job unless they share an agent", () => {
+  const THIRD = "cccccccccccccccccccccccccccccccc"
+  const binding = (job, agents, segments) => ({ job, agents, basis: ["spawn_brief"], session_offset_ms: 0, transitions: [], observed: null, ...(segments ? { segments } : {}) })
+  const session = (...jobs) => ({ ...structuredClone(sessions[2]), jobs })
+  // The controller's job beside two jobs held by different subagents: nothing is shared.
+  const three = session(binding(CLOSED, [0], [{ start_ms: 0, end_ms: 3600000 }]), binding(OPEN, [1]), binding(THIRD, [2]))
+  for (const job of [CLOSED, OPEN, THIRD]) assert.equal(sharedWith(job, three), 0, job)
+  // Two jobs that name the same subagent do overlap, as does a subagent-only job beside a legacy whole-session binding.
+  const sameAgent = session(binding(OPEN, [1]), binding(THIRD, [1, 2]))
+  assert.equal(sharedWith(OPEN, sameAgent), 1)
+  assert.equal(sharedWith(THIRD, sameAgent), 1)
+  const legacy = session(binding(OPEN, [1]), { job: THIRD, basis: ["desk_tool"], session_offset_ms: 0, transitions: [], observed: null })
+  assert.equal(sharedWith(OPEN, legacy), 1)
+})
+
 // ---- jobActiveMs: the one rule for a job's active time in one session, shared with `factory reconcile` ----
 
 const iv = (kind, agent, start_ms, end_ms) => ({ kind, agent, start_ms, end_ms })

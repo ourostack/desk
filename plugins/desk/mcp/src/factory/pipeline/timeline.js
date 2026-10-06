@@ -97,8 +97,14 @@ export function jobActiveMs(session, binding) {
 // Whether two bindings of one session hold overlapping time. A binding with
 // no `segments` holds the whole session, so it overlaps every other binding;
 // two segmented bindings overlap only where a segment of one and a segment of
-// the other share time (segments are half-open).
+// the other share time (segments are half-open). A binding whose workers are
+// all subagents (`agents` without worker 0) holds no controller time, so it
+// overlaps another binding that names its workers only where they share an agent.
+const subagentsOnly = (binding) => Array.isArray(binding.agents) && !binding.agents.includes(0)
 export function bindingsOverlap(left, right) {
+  if ((subagentsOnly(left) && Array.isArray(right.agents)) || (subagentsOnly(right) && Array.isArray(left.agents))) {
+    if (!left.agents.some((agent) => right.agents.includes(agent))) return false
+  }
   if (!Object.hasOwn(left, "segments") || !Object.hasOwn(right, "segments")) return true
   return left.segments.some((a) => right.segments.some((b) => a.start_ms < b.end_ms && b.start_ms < a.end_ms))
 }
