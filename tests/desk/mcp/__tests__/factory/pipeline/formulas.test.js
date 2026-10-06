@@ -676,9 +676,14 @@ test("two jobs with disjoint segments share nothing, and overlapping segments sh
 test("an unsegmented job counts as overlapping every segmented one, and a legacy pair keeps one other job", () => {
   const mixed = segmentedSession(...DISJOINT)
   delete mixed.jobs[1].segments
-  mixed.jobs[1].agents = [2]
+  mixed.jobs[1].agents = [0, 2]
   for (const job of [JOB_A, JOB_B]) {
     assert.deepEqual(calculateFormulas(buildJobTimeline(job, [mixed])).sessions.value, { bound: 1, timeline: 1, shared: 1, shared_with_jobs: 1 })
+  }
+  // A job held only by a subagent holds no controller time, so it shares the session with no job that has none of its agents.
+  mixed.jobs[1].agents = [2]
+  for (const job of [JOB_A, JOB_B]) {
+    assert.deepEqual(calculateFormulas(buildJobTimeline(job, [mixed])).sessions.value, { bound: 1, timeline: 1, shared: 0, shared_with_jobs: 0 })
   }
   const unsegmentedController = segmentedSession(...DISJOINT)
   delete unsegmentedController.jobs[1].segments
