@@ -703,7 +703,9 @@ test("--degraded with a crew-state code serves reads and refuses writes; with --
 // ---- nothing blocks the thread that answers the host ----
 
 // Send tools/list, ping and desk_status every `intervalMs` for `forMs`, or, with `untilState`, until desk_status reports that state and then `afterMs` more; every answer must come within `budgetMs`.
-async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200, intervalMs = 100, untilState = null, afterMs = 0, deadlineMs = 60000 } = {}) {
+// A shared Windows runner jitters by a few milliseconds per call (one run saw 202 ms against 200); the bound still catches a blocked thread, which stalls for seconds.
+const ANSWER_BUDGET_MS = process.platform === "win32" ? 500 : 200
+async function assertAnswersFast(session, { forMs = 4000, budgetMs = ANSWER_BUDGET_MS, intervalMs = 100, untilState = null, afterMs = 0, deadlineMs = 60000 } = {}) {
   const started = Date.now()
   let until = untilState === null ? started + forMs : Infinity
   const timings = []

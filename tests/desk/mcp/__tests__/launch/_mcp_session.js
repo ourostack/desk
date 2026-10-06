@@ -79,7 +79,7 @@ export async function openSession({ command, args = [], env, cwd, timeoutMs = 20
       last = (await call("desk_status", { detail: true })).payload
       if (predicate(last)) return last
       if (Date.now() > deadline) {
-        throw new Error(`desk_status did not reach the expected state within ${deadlineMs} ms; last:\n${JSON.stringify(last, null, 2)}\nstderr:\n${stderr}`)
+        throw new Error(`desk_status did not reach the expected state within ${deadlineMs} ms; the server's last stderr: ${stderr.slice(-700).replace(/\s+/gu, " ")} ; last: state=${last.state} admission=${JSON.stringify(last.admission?.state)}\nfull last status:\n${JSON.stringify(last, null, 2)}\nstderr:\n${stderr}`)
       }
       await new Promise((resolve) => setTimeout(resolve, intervalMs))
     }

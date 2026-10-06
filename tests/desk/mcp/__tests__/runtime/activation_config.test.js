@@ -1050,7 +1050,7 @@ async function runTaskCreateThroughEntrypoint(fixture, {
       name: "task_create",
       arguments: { track, slug: "from-server", title: "From server" },
     })
-    assert.notEqual(created.result?.isError, true, JSON.stringify(created))
+    assert.notEqual(created.result?.isError, true, `the server's last stderr: ${session.stderr().slice(-700).replace(/\s+/gu, " ")} ; ${JSON.stringify(created)}`)
     return {
       initialize: session.initialize,
       created,
