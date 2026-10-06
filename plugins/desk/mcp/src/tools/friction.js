@@ -99,7 +99,7 @@ async function fingerprintIfReady(env, deskRoot, card) {
 // the evidence jobs as pointers, and nothing of the note.
 async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, spawnGit, schedulePush }) {
   if (fingerprint === null) return { improvement: "factory_state_unavailable" }
-  const prefix = path.relative(deskRoot, personPrefix(deskRoot, person))
+  const prefix = deskRelativePath(deskRoot, personPrefix(deskRoot, person))
   const key = cardKey("friction_candidate", fingerprint)
   const evidence = Array.isArray(card.evidenceJobs) ? card.evidenceJobs.map((job) => `job:${job}`) : []
   try {
