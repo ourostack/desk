@@ -114,12 +114,13 @@ test("desk_doctor reports the factory as data and as a summary section, and says
   assert.match(body.summary, /\n\nFactory\n  no store resolved \(invalid_declaration\); facts are held on this machine\n  ourostack\/factory: yes/u)
 }))
 
-test("desk_doctor names skipped plugin manifests by code only", () => scratch(async ({ base, desk, env }) => {
+test("desk_doctor names unreadable plugin manifests by code only, and the route is held", () => scratch(async ({ base, desk, env }) => {
   const host = await plugins(base, env, { declare: false })
   await fs.writeFile(path.join(host.overlay, "plugin.json"), "{ broken")
   const body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.deepEqual(body.factory.warnings, ["manifest_unparseable"])
-  assert.match(body.summary, /\n  plugin manifests skipped: manifest_unparseable\n(  sign-off:[^\n]*\n)?Loop\n  no loop record yet/u)
+  assert.deepEqual([body.factory.store, body.factory.source], [null, "invalid_declaration"], "a broken manifest holds the route")
+  assert.match(body.summary, /\n  plugin manifests that could not be read \(they hold the route until they read\): manifest_unparseable\n(  sign-off:[^\n]*\n)?Loop\n  no loop record yet/u)
   assert.equal(body.summary.includes(base), false)
 }))
 

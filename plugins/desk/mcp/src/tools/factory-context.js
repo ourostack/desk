@@ -148,7 +148,7 @@ export function factorySummary(status, { now = Date.now() } = {}) {
   for (const entry of status.stores) {
     if (entry.kept_frozen > 0) lines.push(`  ${entry.store}: ${entry.kept_frozen} kept copies have no route back and are never published (oldest ${entry.kept_frozen_oldest_days === null ? "of unknown age" : `${entry.kept_frozen_oldest_days} days`}); this is the fail-closed cost of a session whose route can no longer be shown, not a fault.`)
   }
-  if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
+  if (status.warnings.length > 0) lines.push(`  plugin manifests that could not be read (they hold the route until they read): ${status.warnings.join(", ")}`)
   if (status.signoff) lines.push(signoffLine(status.signoff))
   lines.push(...loopLines(status.loop, now))
   return lines.join("\n")
