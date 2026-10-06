@@ -483,7 +483,8 @@ test("the plugin scan stops at the check's deadline and the factory check is the
 // The size budget. Claude Code saves a SessionStart context over 10,000 characters to a file and shows a 2 KB preview, which cut the boot imperative off in round AJ.
 // ---------------------------------------------------------------------------
 
-const CONTEXT_BUDGET = 9500
+// 300 characters under Claude Code's hard limit of 10,000; the measurement below already uses long worst-case paths.
+const CONTEXT_BUDGET = 9700
 
 // One pending migration is the budgeted case. Three (a stale install) can pass 10,000 whatever the foundation does, so that case pins only that the boot imperative still
 // opens the context and names the boot script inside the first 2,000 characters, which Claude Code's preview always shows.

@@ -55,7 +55,7 @@ A material new requirement stays on the same durable task and goes back through 
 
 ## Visual proof when it helps
 
-Capture bounded visual proof, never secrets or private content, of a claimed rendered, installed, merged or rollout state, not a terminal success line (`evidence-discipline`).
+Where a visual helps, capture bounded visual proof, never secrets or private content, of a claimed rendered, installed, merged or rollout state, not a terminal success line (`evidence-discipline`).
 
 ## Instruction coherence
 
