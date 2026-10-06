@@ -214,6 +214,15 @@ test("a card whose frontmatter runs past the head of the file is unreadable, not
   assert.equal(found.not_recorded, 0)
 }))
 
+test("a cut head that holds signoff but whose status sits further down is unreadable, never skipped as not done", () => withDesk(async (desk) => {
+  const head = ["---", "title: Late status", "signoff:", "  state: delivered_unsigned", "  at: null", "  verified: null", "  reason: null"]
+  const late = [...head, ...Array.from({ length: 1500 }, (_, n) => `note_${n}: ${"x".repeat(20)}`), "status: done", "---", ""].join("\n")
+  await put(desk, ["alpha", "late-status"], late)
+  const found = unsignedDeliveries(desk, { now: NOW })
+  assert.equal(found.unreadable, 1)
+  assert.equal(found.count, 0)
+}))
+
 test("unreadable cards make every status figure a lower bound, and the cap reason keeps first place", () => {
   const found = { count: 2, at_least: false, overdue: 1, oldest_age_days: 9, not_recorded: 3, unreadable: 2 }
   const status = signoffStatus(found, NOW)
@@ -295,7 +304,13 @@ test("the status carries measured counts, and a capped scan carries lower bounds
   const cutNoAge = signoffStatus({ count: 2, at_least: true, overdue: 0, oldest_age_days: null, not_recorded: 0 }, NOW)
   assert.deepEqual(cutNoAge.oldest_unsigned_age_days, { state: "unavailable", reason: "age_unknown" })
   const cutNone = signoffStatus({ count: 0, at_least: true, overdue: 0, oldest_age_days: null, not_recorded: 0 }, NOW)
-  assert.deepEqual(cutNone.oldest_unsigned_age_days, { state: "unavailable", reason: "none_unsigned" })
+  assert.deepEqual(cutNone.oldest_unsigned_age_days, { state: "unavailable", reason: "archive_cap" }, "cards the cut left unread may be unsigned, so it is not none")
+  const cutUnreadableNone = signoffStatus({ count: 0, at_least: true, overdue: 0, oldest_age_days: null, not_recorded: 0, unreadable: 2 }, NOW)
+  assert.deepEqual(cutUnreadableNone.oldest_unsigned_age_days, { state: "unavailable", reason: "archive_cap" })
+  const unreadableNone = signoffStatus({ count: 0, at_least: false, overdue: 0, oldest_age_days: null, not_recorded: 0, unreadable: 2 }, NOW)
+  assert.deepEqual(unreadableNone.oldest_unsigned_age_days, { state: "unavailable", reason: "cards_unreadable" })
+  const none = signoffStatus({ count: 0, at_least: false, overdue: 0, oldest_age_days: null, not_recorded: 0 }, NOW)
+  assert.deepEqual(none.oldest_unsigned_age_days, { state: "unavailable", reason: "none_unsigned" })
 })
 
 test("status.json.signoff holds counts and an age and no task name, and keeps every other key", () => scratch(async ({ desk, env }) => {

@@ -145,7 +145,7 @@ function signoffLine({ unsigned, oldest_unsigned_age_days: oldest, not_recorded:
   const days = (n) => `${n} ${n === 1 ? "day" : "days"}`
   const count = unsigned.value
   const earlier = notRecorded.state === "unavailable" || notRecorded.value === 0 ? "" : `; ${least(notRecorded)}${notRecorded.value} delivered before sign-off was recorded`
-  if (count === 0) return `  sign-off: no delivered tasks await sign-off${earlier}`
+  if (count === 0) return unsigned.state === "partial" ? `  sign-off: no delivered task found awaiting sign-off, but not every card was read (${unsigned.reason})${earlier}` : `  sign-off: no delivered tasks await sign-off${earlier}`
   const head = `${least(unsigned)}${count} delivered ${count === 1 ? "task awaits" : "tasks await"} sign-off`
   const age = oldest.state === "unavailable" ? "age unknown" : `${least(oldest)}${days(oldest.value)}`
   return `  sign-off: ${head}, oldest ${age}${earlier}`

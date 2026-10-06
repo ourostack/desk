@@ -248,14 +248,18 @@ export function createHumanTurns({ limit = LIMITS.humanTurns } = {}) {
         basis = stoppedMs !== null ? "after_stop" : "mid_turn"
         since = stoppedMs ?? previousMs
       }
-      if (skew) {
+      // A stop recorded after this prompt (clock skew between the two records) leaves no true wait: a window clamped to 0 would read as a
+      // measured zero, so the turn is dropped and the list flagged, like a prompt dated before the last.
+      const stopSkew = since !== null && since > ms
+      if (stopSkew) skewed = true
+      if (skew || stopSkew) {
         // dropped
       } else if (turns.length >= limit) capped = true
       else {
         turns.push({
           at: new Date(ms).toISOString(),
           basis,
-          window_ms: since === null ? null : Math.max(0, Math.floor(ms - since)),
+          window_ms: since === null ? null : Math.floor(ms - since),
           prompt_class: sizeClass(chars),
           output_class: sizeClass(replyChars),
         })

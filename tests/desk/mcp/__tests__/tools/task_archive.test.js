@@ -625,3 +625,18 @@ test("a validating card delivered by archive, brought back and moved to processi
   assert.equal(result.return_recorded, "done to processing, new_information, caught after_delivery")
   assert.equal((await readFront(file)).data.returns.length, 1)
 })
+
+test("task_archive refuses to cancel a hand-damaged card whose record cannot move, before the folder moves, in words an agent can act on", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "damaged", title: "Damaged" } })
+  const file = path.join(root, "t", "damaged", "task.md")
+  await task_update({ deskRoot: root, input: { track: "t", slug: "damaged", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
+  // A hand edit past the card guard: the status is no longer one of the statuses, and the record says the task reached done.
+  await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(/^status: done$/mu, "status: weird"))
+  await assert.rejects(
+    task_archive({ deskRoot: root, input: { track: "t", slug: "damaged", outcome: "cancelled" } }),
+    /^Error: task_archive: the card's status is not one of the statuses.*Nothing was moved\. Set the card's status with task_update first/u,
+  )
+  assert.ok(await exists(file), "the live folder is where it was")
+  assert.equal(await exists(path.join(root, "t", "_archive", "damaged")), false)
+})

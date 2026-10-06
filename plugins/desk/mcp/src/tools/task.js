@@ -811,6 +811,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     Object.assign(merged, kept)
     // A return from done leaves no current signoff: the card has one current delivery, and its history is in `returns`.
     if (kept.flow !== undefined && kept.signoff === undefined) delete merged.signoff
+    // Nor its evidence: the proof of a delivery that was sent back no longer says the task is done. The next `done` records its own.
+    if (existing.data.status === "done") delete merged.evidence
   }
 
   let newBody = existing.content
@@ -1018,6 +1020,14 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
         await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME })
         archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
       }
+      // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
+      // with the folder untouched, never after a move it would leave unpatched and uncommitted.
+      archiveBump.updated = nowIso()
+      try {
+        archiveBump.record = applyMove(sourceCard.data, { to: archiveBump.status, at: archiveBump.updated })
+      } catch (error) {
+        throw new Error(`task_archive: the card's status is not one of the statuses, so its record decides where it moves from, and ${error.message}. Nothing was moved. Set the card's status with task_update first (a move back from done takes \`return_reason\`), then archive it.`)
+      }
     }
   }
 
@@ -1048,9 +1058,9 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       // Patch only `status:`/`updated:`/`evidence:`/`factory_report:` in
       // place: every other byte of the card — quoting, date formats, block
       // scalars, key order — survives.
-      const updated = nowIso()
+      const { updated } = archiveBump
       // Every status change the archive makes keeps the card's record, the cancel bump included.
-      const patchFields = { status: archiveBump.status, updated, ...applyMove(existing.data, { to: archiveBump.status, at: updated }) }
+      const patchFields = { status: archiveBump.status, updated, ...archiveBump.record }
       if (archiveBump.status === "done") {
         patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
         delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })

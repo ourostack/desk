@@ -125,7 +125,7 @@ What a human turn is, per host:
 - **Copilot CLI.** A human turn is a root `user.message` with no `source`, not an autopilot continuation. The agent's stop is the last root turn end with no root turn start after it. Nothing proves that a `user.message` with no `source` was always typed by a human, so every Copilot list is flagged `host_records_partly`: the list is kept, and the figure is not proven complete or exact.
 - **Codex.** The log does not mark which prompt a human typed. Codex is flagged `host_does_not_record` and writes no list.
 
-A prompt dated before the last kept turn is dropped and flags `source_unreadable`: moving a time would make up a fact, and one skewed line must not void the whole session. A human prompt with no readable time, an unreadable line, and a log that ends mid-record flag `source_unreadable` or `log_truncated` too, and the list is then a lower bound.
+A prompt dated before the last kept turn is dropped and flags `source_unreadable`: moving a time would make up a fact, and one skewed line must not void the whole session. So is a prompt dated before the agent stop that comes before it: its wait would read as a measured zero. A human prompt with no readable time, an unreadable line, and a log that ends mid-record flag `source_unreadable` or `log_truncated` too, and the list is then a lower bound.
 
 What cannot be known. No host records how long a person read a reply or how long they typed, and none records whether the person read while the agent was still writing. The estimate is built from the size classes and the gap the host shows, so it is an estimate and never a measurement. A permission decision is not a human turn: only Copilot records its wait, and Claude Code and Codex record none.
 
