@@ -284,8 +284,9 @@ test("LIMITS.unavailable is at least fields times reasons so no entry set can ov
   assert.ok(LIMITS.unavailable >= ENUMS.unavailableField.length * ENUMS.unavailableReason.length)
 })
 
-test("publishedUnavailableField is the local fields plus job_offsets, existing order kept", () => {
-  assert.deepEqual(ENUMS.publishedUnavailableField, [...ENUMS.unavailableField, "job_offsets"])
+test("publishedUnavailableField is the local fields plus job_offsets before outcomes, existing order kept", () => {
+  assert.deepEqual(ENUMS.publishedUnavailableField, [...ENUMS.unavailableField.slice(0, -1), "job_offsets", "outcomes"])
+  assert.equal(ENUMS.unavailableField.at(-1), "outcomes")
   assert.deepEqual(ENUMS.unavailableField.slice(0, 12), [
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
@@ -767,13 +768,13 @@ test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself
       "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
       "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
       "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
-      "human_turns",
+      "human_turns", "outcomes",
     ],
     publishedUnavailableField: [
       "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
       "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
       "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
-      "human_turns", "job_offsets",
+      "human_turns", "job_offsets", "outcomes",
     ],
     unavailableReason: [
       "host_does_not_record", "log_missing", "log_truncated", "session_open",
@@ -1022,15 +1023,28 @@ test("more than LIMITS.humanTurns entries fails with too_many, and exactly the l
   assertNoLeak(over)
 })
 
-test("human_turns is an accepted unavailable field with every reason, and the unavailable limit is 231", () => {
-  for (const reason of ENUMS.unavailableReason) {
-    const value = golden()
-    value.unavailable = [{ field: "human_turns", reason }]
-    assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] }, reason)
+test("human_turns and outcomes are accepted unavailable fields with every reason, and the unavailable limit is 242", () => {
+  for (const field of ["human_turns", "outcomes"]) {
+    for (const reason of ENUMS.unavailableReason) {
+      const value = golden()
+      value.unavailable = [{ field, reason }]
+      assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] }, `${field}/${reason}`)
+    }
   }
-  assert.equal(ENUMS.publishedUnavailableField.length, 21)
+  assert.equal(ENUMS.publishedUnavailableField.length, 22)
   assert.equal(ENUMS.unavailableReason.length, 11)
-  assert.equal(LIMITS.unavailable, 231)
+  assert.equal(LIMITS.unavailable, 242)
+})
+
+test("a local commit may carry the time the session recorded it, within the session", () => {
+  const value = golden()
+  const duration = Date.parse(value.session.derived_through) - Date.parse(value.session.started_at)
+  value.refs.commits[0].at_ms = duration
+  assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] })
+  value.refs.commits[0].at_ms = duration + 1
+  assertSingle(validateLocalFacts(value), "range", "refs.commits.0.at_ms")
+  value.refs.commits[0].at_ms = -1
+  assertSingle(validateLocalFacts(value), "integer", "refs.commits.0.at_ms")
 })
 
 test("the size and basis enums are exactly the plan's vocabulary", () => {

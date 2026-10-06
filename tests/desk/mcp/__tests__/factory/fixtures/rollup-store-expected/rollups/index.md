@@ -6,82 +6,82 @@ Only finished jobs count: every measure of a job that is not done or cancelled, 
 
 ## Waste by type
 
-Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each session's waste counts once in a total, even when several jobs share the session.
+Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each session's waste counts once in a total, even when several jobs share the session. The unknown row, once any label could say it, is time the evaluator looked at and could not tell: it is not counted in muda time, but each row's share is of all labeled waste time, unknown included. Confidence is the time in the row by how sure the evaluator was; it reads not recorded when a label that speaks to the row is from an evaluator that recorded none. Evaluator versions are the versions of those labels.
 
 ### All jobs
 
 Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 6, each once; shared by several jobs: 0.
 
-| Waste | Muda time | Share | Cumulative | Jobs |
-| --- | ---: | ---: | ---: | ---: |
-| waiting | 8000 ms | 57.14% | 57.14% | 4 |
-| defects | 4000 ms | 28.57% | 85.71% | 2 |
-| extra_processing | 2000 ms | 14.29% | 100.00% | 1 |
-| inventory | 0 ms | 0.00% | 100.00% | 0 |
-| motion | 0 ms | 0.00% | 100.00% | 0 |
-| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 |
-| overproduction | 0 ms | 0.00% | 100.00% | 0 |
-| transportation | 0 ms | 0.00% | 100.00% | 0 |
+| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| waiting | 8000 ms | 57.14% | 57.14% | 4 | not recorded | 3.1.1 |
+| defects | 4000 ms | 28.57% | 85.71% | 2 | not recorded | 3.1.1 |
+| extra_processing | 2000 ms | 14.29% | 100.00% | 1 | not recorded | 3.1.1 |
+| inventory | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| motion | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| overproduction | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| transportation | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
 
 ### By job class: other
 
 Muda time: 14000 ms (partial) across 4 of 6 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 6, each once; shared by several jobs: 0.
 
-| Waste | Muda time | Share | Cumulative | Jobs |
-| --- | ---: | ---: | ---: | ---: |
-| waiting | 8000 ms | 57.14% | 57.14% | 4 |
-| defects | 4000 ms | 28.57% | 85.71% | 2 |
-| extra_processing | 2000 ms | 14.29% | 100.00% | 1 |
-| inventory | 0 ms | 0.00% | 100.00% | 0 |
-| motion | 0 ms | 0.00% | 100.00% | 0 |
-| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 |
-| overproduction | 0 ms | 0.00% | 100.00% | 0 |
-| transportation | 0 ms | 0.00% | 100.00% | 0 |
+| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| waiting | 8000 ms | 57.14% | 57.14% | 4 | not recorded | 3.1.1 |
+| defects | 4000 ms | 28.57% | 85.71% | 2 | not recorded | 3.1.1 |
+| extra_processing | 2000 ms | 14.29% | 100.00% | 1 | not recorded | 3.1.1 |
+| inventory | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| motion | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| overproduction | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| transportation | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
 
 ### By plugin version: 3.1.0
 
 Muda time: 9000 ms (measured) across 2 of 2 jobs fully labeled; excluded: none. Sessions summed: 2, each once; shared by several jobs: 0.
 
-| Waste | Muda time | Share | Cumulative | Jobs |
-| --- | ---: | ---: | ---: | ---: |
-| waiting | 5000 ms | 55.56% | 55.56% | 2 |
-| defects | 2000 ms | 22.22% | 77.78% | 1 |
-| extra_processing | 2000 ms | 22.22% | 100.00% | 1 |
-| inventory | 0 ms | 0.00% | 100.00% | 0 |
-| motion | 0 ms | 0.00% | 100.00% | 0 |
-| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 |
-| overproduction | 0 ms | 0.00% | 100.00% | 0 |
-| transportation | 0 ms | 0.00% | 100.00% | 0 |
+| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| waiting | 5000 ms | 55.56% | 55.56% | 2 | not recorded | 3.1.1 |
+| defects | 2000 ms | 22.22% | 77.78% | 1 | not recorded | 3.1.1 |
+| extra_processing | 2000 ms | 22.22% | 100.00% | 1 | not recorded | 3.1.1 |
+| inventory | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| motion | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| overproduction | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| transportation | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
 
 ### By plugin version: 3.1.1
 
 Muda time: 4000 ms (partial) across 1 of 3 jobs fully labeled; excluded: the job is not finished (1 job), only some sessions supplied it (1 job). Sessions summed: 2, each once; shared by several jobs: 0.
 
-| Waste | Muda time | Share | Cumulative | Jobs |
-| --- | ---: | ---: | ---: | ---: |
-| defects | 2000 ms | 50.00% | 50.00% | 1 |
-| waiting | 2000 ms | 50.00% | 100.00% | 1 |
-| extra_processing | 0 ms | 0.00% | 100.00% | 0 |
-| inventory | 0 ms | 0.00% | 100.00% | 0 |
-| motion | 0 ms | 0.00% | 100.00% | 0 |
-| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 |
-| overproduction | 0 ms | 0.00% | 100.00% | 0 |
-| transportation | 0 ms | 0.00% | 100.00% | 0 |
+| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| defects | 2000 ms | 50.00% | 50.00% | 1 | not recorded | 3.1.1 |
+| waiting | 2000 ms | 50.00% | 100.00% | 1 | not recorded | 3.1.1 |
+| extra_processing | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| inventory | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| motion | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| overproduction | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| transportation | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
 
 ### By plugin version: mixed
 
 Muda time: 1000 ms (measured) across 1 of 1 jobs fully labeled; excluded: none. Sessions summed: 2, each once; shared by several jobs: 0.
 
-| Waste | Muda time | Share | Cumulative | Jobs |
-| --- | ---: | ---: | ---: | ---: |
-| waiting | 1000 ms | 100.00% | 100.00% | 1 |
-| defects | 0 ms | 0.00% | 100.00% | 0 |
-| extra_processing | 0 ms | 0.00% | 100.00% | 0 |
-| inventory | 0 ms | 0.00% | 100.00% | 0 |
-| motion | 0 ms | 0.00% | 100.00% | 0 |
-| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 |
-| overproduction | 0 ms | 0.00% | 100.00% | 0 |
-| transportation | 0 ms | 0.00% | 100.00% | 0 |
+| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| waiting | 1000 ms | 100.00% | 100.00% | 1 | not recorded | 3.1.1 |
+| defects | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| extra_processing | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| inventory | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| motion | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| non_utilized_talent | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| overproduction | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
+| transportation | 0 ms | 0.00% | 100.00% | 0 | not recorded | 3.1.1 |
 
 ## Measures
 

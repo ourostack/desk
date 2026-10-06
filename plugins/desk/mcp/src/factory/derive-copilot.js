@@ -148,7 +148,12 @@
 //     the repository's `origin` normalizes to
 //     `https://github.com/<sessions.repository>` (review I2, fix round 2);
 //     otherwise its repository is `null`, which the publishing transform
-//     drops and counts as private. `issue` rows and malformed values are
+//     drops and counts as private. A kept commit carries `at_ms`, the
+//     milliseconds from `started_at` to the earliest `session_refs.created_at`
+//     of the rows that name it (when the session recorded it), only when that
+//     time is readable and inside the session (`started_at` to
+//     `derived_through`); the times are a query of their own, so a store
+//     without the column still yields its commits, untimed. `issue` rows and malformed values are
 //     ignored. The full SHAs also go to `events.commitShas` and
 //     `events.nativeCommitShas` for M3-4. No database: `{commits,
 //     log_missing}`; an unreadable one (including no `node:sqlite`):
@@ -200,7 +205,7 @@ import * as path from "node:path"
 import { createInterface } from "node:readline"
 
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
-import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
+import { normalizeRow, readSessionCommitTimes, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
 import { addNullable, compareByStart, createHumanTurns, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, shellBinding, usageAbsent, withRequestedModel } from "./derive-common.js"
 import { hostFlagsFor } from "./host-flags.js"
@@ -761,7 +766,24 @@ function usageFromDatabase(sessionId, env, flag) {
   return [...byModel.values()]
 }
 
-function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits }) {
+// When the session recorded each commit row, as milliseconds from `startedAt`, keyed by the row's value, when it falls inside the
+// session (`startedAt` to `derivedThrough`). A row without a readable time, or outside the session, gives none; so does a store that cannot say.
+function commitTimes({ sessionId, env, startedAt, derivedThrough }) {
+  const times = new Map()
+  const startMs = Date.parse(startedAt)
+  const endMs = Date.parse(derivedThrough)
+  for (const { ref_value: value, created_at: createdAt } of readSessionCommitTimes({ sessionId, env }).rows) {
+    const at = normalizeTimestamp(createdAt)
+    // An unreadable time is NaN, which no comparison admits.
+    const ms = at === null ? Number.NaN : Date.parse(at)
+    if (!(ms >= startMs && ms <= endMs)) continue
+    // The store keeps one row per session, kind and value, so each value has one time here.
+    times.set(value, ms - startMs)
+  }
+  return times
+}
+
+function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits, startedAt, derivedThrough }) {
   const result = readSessionRefs({ sessionId, env })
   if (result.status === "missing") flag("commits", "log_missing")
   if (result.status === "unreadable") flag("commits", "source_unreadable")
@@ -791,9 +813,18 @@ function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits }) {
   })
   const sortedCommits = [...commits.keys()].sort()
   if (sortedCommits.length > LIMITS.commits) flag("commits", "capped")
+  // Each kept commit's time: the earliest of the rows that name it, by their full SHA or the short value that resolved to it.
+  const times = commitValues.length === 0 ? new Map() : commitTimes({ sessionId, env, startedAt, derivedThrough })
+  const timeOf = new Map()
+  commitValues.forEach((value, index) => {
+    const found = lookup.fulls[index]
+    const sha = (typeof found === "string" && COMMIT.test(found) ? found : value).toLowerCase()
+    const at = times.get(value)
+    if (at !== undefined && (!timeOf.has(sha) || at < timeOf.get(sha))) timeOf.set(sha, at)
+  })
   return {
     prs: [...prs.values()].sort(comparePrRefs).slice(0, LIMITS.prs),
-    commits: sortedCommits.slice(0, LIMITS.commits).map((sha) => ({ repo: commits.get(sha), sha })),
+    commits: sortedCommits.slice(0, LIMITS.commits).map((sha) => ({ repo: commits.get(sha), sha, ...(timeOf.has(sha) ? { at_ms: timeOf.get(sha) } : {}) })),
     unresolved,
   }
 }
@@ -895,7 +926,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   if (state.unfinishedCalls) flag("tool_durations", openOrTruncated)
   if (state.openTurns) flag("turns", openOrTruncated)
 
-  const refs = refsFromDatabase({ sessionId, env, flag, gitRoot: state.gitRoot, resolveCommits })
+  const refs = refsFromDatabase({ sessionId, env, flag, gitRoot: state.gitRoot, resolveCommits, startedAt: state.earliest, derivedThrough: state.latest })
   const mergedPlugins = mergePlugins(plugins, state.skillPlugins, flag)
   flag("ci_runs", "not_collected_in_slice_1")
   const sessionEntrypoint = entrypoint === "launcher" ? "launcher" : "cli"

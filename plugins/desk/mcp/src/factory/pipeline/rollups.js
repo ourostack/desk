@@ -36,6 +36,23 @@
 //     session's facts and do not declare `facts_missing`. Then a waste the
 //     evaluator did not find is a measured zero. With some sessions labeled
 //     the job is excluded as `partial`; with none, as `not_labeled`.
+//   - The waste Pareto lists the eight wastes and, once any of its sessions
+//     has `desk.factory.labels/2` labels, an `unknown` row: time the
+//     evaluator looked at and could not tell. `unknown` counts in the labeled
+//     time every row's `share` is taken of, but not in `muda_time_ms` or in
+//     any `muda_time` measure, because it is not known to be waste. A store
+//     whose labels are all `/1` has no `unknown` row: those evaluators could
+//     not say "unknown", so a zero there would stand for no data.
+//   - Each Pareto row carries `evaluator_versions`, the distinct evaluator
+//     versions (in release order) of the labels that speak to the row: the
+//     labels with time in it, or, for a row with no time, every label of the
+//     sessions summed (they all judged that waste absent). A `/2` label
+//     carries its own version; a `/1` label speaks with its file's. The row
+//     carries `confidence_ms: { high, medium, low }`, the time in it by the
+//     evaluator's confidence, only when every label that speaks to it
+//     recorded one (`/2`); the three always add up to `total_ms`. A row any
+//     `/1` label speaks to has no `confidence_ms`: its confidence was not
+//     recorded, and is never counted as high.
 //   - In the waste Pareto, each session's labeled waste counts once in any
 //     one total, even when the session is bound to several jobs: the labels of
 //     the first such job by job ID are used. Each Pareto reports how many
@@ -58,7 +75,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { LABEL_WASTES, checkLabelsAgainstFacts } from "../label-schema.js"
+import { LABEL_CONFIDENCE, LABELS_SCHEMAS, LABEL_WASTES, UNKNOWN_LABEL, checkLabelsAgainstFacts, compareVersions as compareEvaluatorVersions } from "../label-schema.js"
 import { covered, retryCoverage, splitSessions } from "./formulas.js"
 import { outcomeSections } from "./report.js"
 import { bindingsOverlap } from "./timeline.js"
@@ -79,6 +96,8 @@ const OPEN_JOB = "open_job"
 const DESK_PLUGIN = "desk"
 const NOT_PUBLISHED = "not_in_published_facts"
 const MUDA_MEASURES = Object.freeze(LABEL_WASTES.map((waste) => `muda_time.${waste}`))
+// The Pareto's rows: the eight wastes and the evaluator's "could not tell".
+const PARETO_WASTES = Object.freeze([...LABEL_WASTES, UNKNOWN_LABEL])
 
 export const MEASURE_IDS = Object.freeze([
   "lead_time",
@@ -236,12 +255,26 @@ function compactions(sources, split) {
   return fromFormula(withState(covered(coverage, () => ({ class: "measured", value: sources.reduce((total, session) => total + (split.has(session) ? 0 : session.counts.compactions), 0) }))))
 }
 
-function wasteTotals(stretches) {
-  const totals = Object.fromEntries(LABEL_WASTES.map((waste) => [waste, 0]))
-  for (const stretch of stretches) {
-    if (stretch.class === "muda") totals[stretch.waste] += stretch.end_ms - stretch.start_ms
+// One labeled session's time per Pareto row, and what each row's labels say about themselves: `confidence[waste]` is the time by
+// confidence, or `null` for a `/1` file, whose labels carry none; `versions[waste]` the labels' versions. `all_versions` and
+// `recorded` (whether every label carries a confidence) answer for a row with no time, which every label of the session speaks to.
+function sessionWaste(entry) {
+  // A valid file is all one shape: every stretch of a `/2` file has a confidence and no stretch of a `/1` file does.
+  const recorded = entry.stretches.every((stretch) => Object.hasOwn(stretch, "confidence"))
+  const totals = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, 0]))
+  const confidence = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, recorded ? Object.fromEntries(LABEL_CONFIDENCE.map((level) => [level, 0])) : null]))
+  const versions = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, []]))
+  const allVersions = new Set()
+  for (const stretch of entry.stretches) {
+    const version = stretch.evaluator_version ?? entry.evaluator.plugin_version
+    allVersions.add(version)
+    if (stretch.class !== "muda" && stretch.class !== UNKNOWN_LABEL) continue
+    const duration = stretch.end_ms - stretch.start_ms
+    totals[stretch.waste] += duration
+    if (!versions[stretch.waste].includes(version)) versions[stretch.waste].push(version)
+    if (recorded) confidence[stretch.waste][stretch.confidence] += duration
   }
-  return totals
+  return { totals, confidence, versions, all_versions: [...allVersions], recorded, can_say_unknown: entry.schema !== LABELS_SCHEMAS[0] }
 }
 
 // The job's muda measures, and each labeled session's waste totals for the
@@ -252,7 +285,7 @@ function mudaMeasures(timeline, labelsByJobSession) {
     if (entry === undefined) return []
     // The binding's own segments (absent for a legacy or subagent-only binding) say whether another job's time overlaps it.
     const binding = timeline.source_sessions[index].jobs.find((candidate) => candidate.job === timeline.job)
-    return [{ key: `${session.host}/${session.id}`, totals: wasteTotals(entry.stretches), ...(Object.hasOwn(binding, "segments") ? { segments: binding.segments } : {}) }]
+    return [{ key: `${session.host}/${session.id}`, ...sessionWaste(entry), ...(Object.hasOwn(binding, "segments") ? { segments: binding.segments } : {}) }]
   })
   if (labeled.length < timeline.sessions.length) {
     const excluded = { excluded: labeled.length === 0 ? "not_labeled" : "partial" }
@@ -352,7 +385,7 @@ function pareto(records) {
   const bindingsPerSession = new Map()
   for (const record of [...labeled].sort((left, right) => compareText(left.job, right.job))) {
     for (const session of record.muda_sessions) {
-      if (!sessions.has(session.key)) sessions.set(session.key, session.totals)
+      if (!sessions.has(session.key)) sessions.set(session.key, session)
       bindingsPerSession.set(session.key, [...(bindingsPerSession.get(session.key) ?? []), session])
     }
   }
@@ -367,18 +400,35 @@ function pareto(records) {
     sessions_shared: [...bindingsPerSession.values()].filter((bindings) => bindings.some((left, index) => bindings.slice(index + 1).some((right) => bindingsOverlap(left, right)))).length,
   }
   if (labeled.length === 0) return { ...base, muda_time_ms: null, wastes: [] }
-  const sums = Object.fromEntries(LABEL_WASTES.map((waste) => [waste, [...sessions.values()].reduce((sum, totals) => sum + totals[waste], 0)]))
-  const total = Object.values(sums).reduce((sum, value) => sum + value, 0)
-  const rows = LABEL_WASTES.map((waste) => {
-    const values = labeled.map((record) => record.measures[`muda_time.${waste}`].value)
-    return { waste, total_ms: sums[waste], jobs: values.filter((value) => value > 0).length }
+  const summed = [...sessions.values()]
+  // Without a `/2` session nothing here could have said "unknown", so that row is left out rather than shown as a zero.
+  const rowWastes = summed.some((session) => session.can_say_unknown) ? PARETO_WASTES : LABEL_WASTES
+  const sums = Object.fromEntries(rowWastes.map((waste) => [waste, summed.reduce((sum, session) => sum + session.totals[waste], 0)]))
+  const mudaTotal = LABEL_WASTES.reduce((sum, waste) => sum + sums[waste], 0)
+  // Every row's share is of all labeled waste time, `unknown` included.
+  const total = rowWastes.reduce((sum, waste) => sum + sums[waste], 0)
+  const rows = rowWastes.map((waste) => {
+    const jobs = labeled.filter((record) => record.muda_sessions.reduce((sum, session) => sum + session.totals[waste], 0) > 0).length
+    return { waste, total_ms: sums[waste], jobs, ...rowEvidence(summed, waste, sums[waste]) }
   }).sort((left, right) => right.total_ms - left.total_ms || compareText(left.waste, right.waste))
   let running = 0
   const wastes = rows.map((row) => {
     running += row.total_ms
     return { ...row, share: total === 0 ? null : row.total_ms / total, cumulative_share: total === 0 ? null : running / total }
   })
-  return { ...base, muda_time_ms: total, wastes }
+  return { ...base, muda_time_ms: mudaTotal, wastes }
+}
+
+// A Pareto row's `evaluator_versions` and, when every label that speaks to it recorded one, its `confidence_ms` (see the header).
+function rowEvidence(summed, waste, totalMs) {
+  const speaking = totalMs === 0 ? summed : summed.filter((session) => session.totals[waste] > 0)
+  const versions = new Set(speaking.flatMap((session) => (totalMs === 0 ? session.all_versions : session.versions[waste])))
+  const recorded = speaking.every((session) => session.recorded)
+  const evaluatorVersions = [...versions].sort(compareEvaluatorVersions)
+  if (!recorded) return { evaluator_versions: evaluatorVersions }
+  // With no time in the row every level is zero; otherwise each speaking session's own split, which adds up to its time in the row.
+  const confidence = Object.fromEntries(LABEL_CONFIDENCE.map((level) => [level, totalMs === 0 ? 0 : speaking.reduce((sum, session) => sum + session.confidence[waste][level], 0)]))
+  return { evaluator_versions: evaluatorVersions, confidence_ms: confidence }
 }
 
 function byGrouping(records, groupings, summarize) {
@@ -532,7 +582,7 @@ export function computeRollups({ records, sessions, labels }) {
     },
     muda: {
       schema: ROLLUPS_SCHEMA,
-      wastes: LABEL_WASTES,
+      wastes: PARETO_WASTES,
       groupings: byGrouping(records, MUDA_GROUPINGS, pareto),
     },
     tool_kinds: toolKinds(sessions),
@@ -571,10 +621,15 @@ function paretoLines(summary) {
   return [
     `Muda time: ${summary.muda_time_ms} ms (${stateWord(summary.state)}) across ${counted} Sessions summed: ${summary.sessions_labeled}, each once; shared by several jobs: ${summary.sessions_shared}.`,
     "",
-    "| Waste | Muda time | Share | Cumulative | Jobs |",
-    "| --- | ---: | ---: | ---: | ---: |",
-    ...summary.wastes.map((row) => `| ${row.waste} | ${row.total_ms} ms | ${percentage(row.share)} | ${percentage(row.cumulative_share)} | ${row.jobs} |`),
+    "| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |",
+    "| --- | ---: | ---: | ---: | ---: | --- | --- |",
+    ...summary.wastes.map((row) => `| ${row.waste} | ${row.total_ms} ms | ${percentage(row.share)} | ${percentage(row.cumulative_share)} | ${row.jobs} | ${confidenceText(row)} | ${row.evaluator_versions.length === 0 ? "none" : row.evaluator_versions.join(", ")} |`),
   ]
+}
+
+// A row's time by confidence, or "not recorded" when a label that speaks to it recorded none: never a zero for missing data.
+function confidenceText(row) {
+  return Object.hasOwn(row, "confidence_ms") ? `${row.confidence_ms.high} / ${row.confidence_ms.medium} / ${row.confidence_ms.low} ms` : "not recorded"
 }
 
 function measureLines(summary, quality) {
@@ -628,7 +683,7 @@ export function renderRollupsMarkdown(rollups) {
     "",
     "## Waste by type",
     "",
-    "Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each session's waste counts once in a total, even when several jobs share the session.",
+    "Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each session's waste counts once in a total, even when several jobs share the session. The unknown row, once any label could say it, is time the evaluator looked at and could not tell: it is not counted in muda time, but each row's share is of all labeled waste time, unknown included. Confidence is the time in the row by how sure the evaluator was; it reads not recorded when a label that speaks to the row is from an evaluator that recorded none. Evaluator versions are the versions of those labels.",
     "",
     ...groupSections(rollups.muda.groupings, paretoLines),
     "## Measures",

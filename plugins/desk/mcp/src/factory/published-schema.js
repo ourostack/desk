@@ -1,4 +1,4 @@
-// Published facts (`desk.factory.published/2`; `/1` files are still read): the public gate.
+// Published facts (`desk.factory.published/3`; `/1` and `/2` files are still read): the public gate.
 //
 // A published facts file is the only thing that ever leaves this machine for
 // a factory store, and the stores are public. It says how the work went and
@@ -47,11 +47,17 @@
 //     job (fix round 3). The store's CI then does not have to trust the
 //     flush's answer about the desk.
 //   - A job's optional `segments` (the controller's spans of the session,
-//     in milliseconds from its start) and a PR's optional `at_ms` never run
-//     past `session.duration_ms`, else `range`. A file marked
-//     `{job_offsets, desk_public}` carries neither, else `inconsistent`:
-//     with a public desk's commit history or a public PR's creation time,
-//     they would date the session. A job carries `segments` only when its
+//     in milliseconds from its start), a PR's optional `at_ms` and a
+//     commit's optional `at_ms` never run past `session.duration_ms`, else
+//     `range`. A file marked `{job_offsets, desk_public}` carries none of
+//     them, else `inconsistent`: with a public desk's commit history, a
+//     public PR's creation time or a public commit's own date, they would
+//     date the session.
+//   - Two things are `/3` only, and a `/1` or `/2` file carrying either is
+//     `inconsistent`: a commit's `at_ms`, and an `unavailable` entry for the
+//     field `outcomes` (a session whose outcome list was cut at
+//     `LIMITS.outcomes`). `/1` and `/2` files without them stay valid, so
+//     records already in a store keep passing. A job carries `segments` only when its
 //     `agents` lists worker 0, else `inconsistent`.
 //   - `jobs[].session_offset_ms` and every `offset_ms` are safe integers
 //     (signed: a session may begin before its task card exists) or `null`,
@@ -87,6 +93,7 @@ import {
   checkBasis,
   checkSegmentAgents,
   checkSessionBounds,
+  commitFields,
   customField,
   enumField,
   isPlainObject,
@@ -103,10 +110,13 @@ import {
 } from "./schema.js"
 import { isCredentialLike } from "./credential.js"
 
-export const PUBLISHED_SCHEMA = "desk.factory.published/2"
+export const PUBLISHED_SCHEMA = "desk.factory.published/3"
 
-/** Every published schema value a reader accepts: the legacy `/1` and the current one. */
-export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", PUBLISHED_SCHEMA])
+/** Every published schema value a reader accepts: the legacy `/1` and `/2`, and the current one. */
+export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA])
+
+/** The schema a file with no `/3`-only content is still published as, so an unchanged session keeps its bytes. */
+export const PUBLISHED_SCHEMA_V2 = PUBLISHED_SCHEMAS[1]
 
 /** An ISO calendar date anywhere in a string. */
 export const DATE_SHAPE = /\d{4}-\d{2}-\d{2}/u
@@ -121,7 +131,7 @@ export const PUBLISHED_LIMITS = Object.freeze({
   maxOffsetMs: 3650 * 24 * 60 * 60 * 1000,
 })
 
-export const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[12]$/u
+export const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[123]$/u
 
 const DATE_PARTS = /(\d{4})-(\d{2})-(\d{2})/u
 const TIME_PARTS = /(\d{2}):(\d{2})/u
@@ -253,7 +263,7 @@ function privateFields(value) {
 
 const REFS = {
   prs: arrayField(objectField(prFieldsPublished), LIMITS.prs),
-  commits: arrayField(objectField(COMMIT), LIMITS.commits),
+  commits: arrayField(objectField((value) => commitFields(value, COMMIT)), LIMITS.commits),
   private: objectField(privateFields),
 }
 
@@ -395,7 +405,7 @@ export const __PUBLISHED_SPECS__ = Object.freeze({
   model: MODEL,
   agent: AGENT,
   pr: PR,
-  commit: COMMIT,
+  commit: commitFields({ at_ms: 0 }, COMMIT),
   private: privateFields({ plugins: 0 }),
   refs: REFS,
   transition: TRANSITION,
@@ -460,14 +470,32 @@ export function validatePublished(value) {
       if (timed) addError(errors, "inconsistent", `jobs.${index}`)
     })
   }
-  // Nor a PR time, which with a public PR's own creation time would date the session.
+  // Nor a PR or commit time, which with a public PR's creation time or a public commit's date would date the session.
   if (deskPublic && refs?.prs) {
     value.refs.prs.forEach((pr, index) => {
       if (isPlainObject(pr) && Object.hasOwn(pr, "at_ms")) addError(errors, "inconsistent", `refs.prs.${index}`)
     })
   }
+  if (deskPublic && refs?.commits) {
+    value.refs.commits.forEach((commit, index) => {
+      if (isPlainObject(commit) && Object.hasOwn(commit, "at_ms")) addError(errors, "inconsistent", `refs.commits.${index}`)
+    })
+  }
+  // A commit time and the outcomes flag are `/3` only.
+  if (results.schema === true && value.schema !== PUBLISHED_SCHEMA) {
+    if (refs?.commits) {
+      value.refs.commits.forEach((commit, index) => {
+        if (isPlainObject(commit) && Object.hasOwn(commit, "at_ms")) addError(errors, "inconsistent", `refs.commits.${index}.at_ms`)
+      })
+    }
+    if (results.unavailable) {
+      value.unavailable.forEach((entry, index) => {
+        if (results.unavailable[index]?.field === true && entry.field === "outcomes") addError(errors, "inconsistent", `unavailable.${index}`)
+      })
+    }
+  }
 
-  // No interval, job segment or PR time may run past the session's end.
+  // No interval, job segment, PR time or commit time may run past the session's end.
   // Checked only when the duration itself is sound, so one bad duration is
   // one error.
   checkSessionBounds(value, results, errors, results.session?.duration_ms === true ? value.session.duration_ms : null)

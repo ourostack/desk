@@ -56,15 +56,17 @@ export const ENUMS = Object.freeze({
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
     "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
-    "human_turns",
+    "human_turns", "outcomes",
   ]),
   // The published form adds `job_offsets`: a job whose offsets could not be
-  // measured (no readable task-card creation time).
+  // measured (no readable task-card creation time). `outcomes` with `capped`
+  // says a session touched more tasks than `LIMITS.outcomes` and the list
+  // was cut; a published file carries it only as `desk.factory.published/3`.
   publishedUnavailableField: Object.freeze([
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
     "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
-    "human_turns", "job_offsets",
+    "human_turns", "job_offsets", "outcomes",
   ]),
   // `log_truncated` is a log that ends mid-record; `capped` is data a deriver
   // trimmed to a schema limit; `desk_public` is job timing the transform
@@ -501,7 +503,7 @@ export function checkSegmentAgents(value, results, errors) {
 }
 
 /**
- * No job segment and no PR time may run past the session's end
+ * No job segment, PR time or commit time may run past the session's end
  * (`durationMs`, or `null` when the session's own times are unsound, which
  * skips the check so one bad time is one error). Shared by the local and
  * published validators.
@@ -517,6 +519,9 @@ export function checkSessionBounds(value, results, errors, durationMs) {
   results.refs?.prs?.forEach((prResult, index) => {
     if (prResult?.at_ms === true && value.refs.prs[index].at_ms > durationMs) addError(errors, "range", `refs.prs.${index}.at_ms`)
   })
+  results.refs?.commits?.forEach((commitResult, index) => {
+    if (commitResult?.at_ms === true && value.refs.commits[index].at_ms > durationMs) addError(errors, "range", `refs.commits.${index}.at_ms`)
+  })
 }
 
 // A commit's repository, when the deriver can attribute one; `null` when it
@@ -524,6 +529,16 @@ export function checkSessionBounds(value, results, errors, durationMs) {
 const COMMIT_SPEC = {
   repo: nullableRepoField(),
   sha: patternField(PATTERNS.commitSha),
+}
+
+/**
+ * A commit's keys: `COMMIT_SPEC` (or the published form's `base`), plus the
+ * optional `at_ms`, milliseconds from session start to when the session
+ * recorded the commit. Optional, so files written before commits were timed
+ * stay valid; it never runs past the session's end (`checkSessionBounds`).
+ */
+export function commitFields(value, base = COMMIT_SPEC) {
+  return Object.hasOwn(value, "at_ms") ? { ...base, at_ms: nonNegIntField() } : base
 }
 
 // `unresolved` counts references the deriver saw but could not publish
@@ -536,7 +551,7 @@ const UNRESOLVED_SPEC = {
 
 const REFS_SPEC = {
   prs: arrayField(objectField(prFields), LIMITS.prs),
-  commits: arrayField(objectField(COMMIT_SPEC), LIMITS.commits),
+  commits: arrayField(objectField(commitFields), LIMITS.commits),
   unresolved: objectField(UNRESOLVED_SPEC),
 }
 
@@ -779,7 +794,7 @@ export const __SPECS__ = Object.freeze({
   agent: AGENT_SPEC,
   pr: prFields({ agent: 0, at_ms: 0 }),
   segment: segmentFields({ shared: true }),
-  commit: COMMIT_SPEC,
+  commit: commitFields({ at_ms: 0 }),
   refs: REFS_SPEC,
   unresolved: UNRESOLVED_SPEC,
   transition: TRANSITION_SPEC,

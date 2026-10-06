@@ -47,11 +47,27 @@ function fixtureRollups() {
   return { sessions, labels, records, rollups: computeRollups({ records, sessions, labels }) }
 }
 
+const PARETO_WASTES = [...LABEL_WASTES, "unknown"]
+
+// One labeled session as `jobRecord` summarizes it, for labels from an evaluator of `version` that recorded no confidence (`/1`).
+function legacySession(key, totals, version = "3.2.0") {
+  const all = { ...Object.fromEntries(PARETO_WASTES.map((waste) => [waste, 0])), ...totals }
+  return {
+    key,
+    totals: all,
+    confidence: Object.fromEntries(PARETO_WASTES.map((waste) => [waste, null])),
+    versions: Object.fromEntries(PARETO_WASTES.map((waste) => [waste, all[waste] > 0 ? [version] : []])),
+    all_versions: [version],
+    recorded: false,
+    can_say_unknown: false,
+  }
+}
+
 // A synthetic finished job; a job with muda values gets one labeled session of its own.
 function record(job, overrides = {}) {
   const measures = { ...Object.fromEntries(MEASURE_IDS.map((id) => [id, { excluded: "not_in_published_facts" }])), ...overrides.measures }
   const labeled = "value" in measures.muda_time
-  const mudaSessions = labeled ? [{ key: `claude-code/${job}`, totals: Object.fromEntries(LABEL_WASTES.map((waste) => [waste, measures[`muda_time.${waste}`].value])) }] : null
+  const mudaSessions = labeled ? [legacySession(`claude-code/${job}`, Object.fromEntries(LABEL_WASTES.map((waste) => [waste, measures[`muda_time.${waste}`].value])))] : null
   return { job, job_class: "other", plugin_version: "3.2.0", host: "claude-code", finished: true, muda_sessions: mudaSessions, ...overrides, measures }
 }
 
@@ -143,7 +159,7 @@ test("jobRecord takes each measure from the formulas, excludes censored, partial
   assert.equal(open.muda_sessions, null)
   for (const id of MEASURE_IDS) assert.deepEqual(open.measures[id], { excluded: "open_job" }, id)
   assert.equal(one.finished, true)
-  assert.deepEqual(one.muda_sessions, [{ key: `claude-code/${S(1)}`, totals: { ...Object.fromEntries(LABEL_WASTES.map((waste) => [waste, 0])), waiting: 2000, defects: 2000 } }])
+  assert.deepEqual(one.muda_sessions, [legacySession(`claude-code/${S(1)}`, { waiting: 2000, defects: 2000 }, "3.1.1")])
 
   const cancelled = byJob[J("5")]
   assert.equal(cancelled.finished, true, "a cancelled job is finished")
@@ -284,11 +300,12 @@ test("the muda Pareto sums labeled waste largest first, breaks ties by waste nam
   assert.equal(overall.sessions_labeled, 6)
   assert.equal(overall.sessions_shared, 0)
   assert.equal(overall.muda_time_ms, 14000)
+  // Every label is /1: each row names its evaluator version, none records a confidence, and there is no unknown row.
   assert.deepEqual(overall.wastes.slice(0, 4), [
-    { waste: "waiting", total_ms: 8000, share: 8000 / 14000, cumulative_share: 8000 / 14000, jobs: 4 },
-    { waste: "defects", total_ms: 4000, share: 4000 / 14000, cumulative_share: 12000 / 14000, jobs: 2 },
-    { waste: "extra_processing", total_ms: 2000, share: 2000 / 14000, cumulative_share: 1, jobs: 1 },
-    { waste: "inventory", total_ms: 0, share: 0, cumulative_share: 1, jobs: 0 },
+    { waste: "waiting", total_ms: 8000, share: 8000 / 14000, cumulative_share: 8000 / 14000, jobs: 4, evaluator_versions: ["3.1.1"] },
+    { waste: "defects", total_ms: 4000, share: 4000 / 14000, cumulative_share: 12000 / 14000, jobs: 2, evaluator_versions: ["3.1.1"] },
+    { waste: "extra_processing", total_ms: 2000, share: 2000 / 14000, cumulative_share: 1, jobs: 1, evaluator_versions: ["3.1.1"] },
+    { waste: "inventory", total_ms: 0, share: 0, cumulative_share: 1, jobs: 0, evaluator_versions: ["3.1.1"] },
   ])
   assert.deepEqual(overall.wastes.map((entry) => entry.waste), ["waiting", "defects", "extra_processing", "inventory", "motion", "non_utilized_talent", "overproduction", "transportation"])
 
@@ -333,8 +350,70 @@ test("a Pareto whose labeled jobs carry no muda has no shares, not zero shares",
   const rollups = computeRollups({ records: [record(J("a"), { measures: zeros })], sessions: [], labels: { files: 1, byJobSession: new Map(), unused: [] } })
   const pareto = rollups.muda.groupings.overall.all
   assert.equal(pareto.muda_time_ms, 0)
-  assert.deepEqual(pareto.wastes[0], { waste: "defects", total_ms: 0, share: null, cumulative_share: null, jobs: 0 })
-  assert.match(renderRollupsMarkdown(rollups), /\| defects \| 0 ms \| n\/a \| n\/a \| 0 \|/u)
+  assert.deepEqual(pareto.wastes[0], { waste: "defects", total_ms: 0, share: null, cumulative_share: null, jobs: 0, evaluator_versions: ["3.2.0"] })
+  assert.match(renderRollupsMarkdown(rollups), /\| defects \| 0 ms \| n\/a \| n\/a \| 0 \| not recorded \| 3\.2\.0 \|/u)
+})
+
+// The fixture's labels with session 1's as `/2`: its waiting stretch high-confidence from an older evaluator version, its defects stretch
+// relabeled "could not tell" with low confidence, its value stretch medium.
+function labelsWithV2() {
+  return fixtureLabels().map((entry) => {
+    if (entry.session !== S(1)) return entry
+    const [value, waiting, defects] = entry.stretches
+    return {
+      ...entry,
+      schema: "desk.factory.labels/2",
+      stretches: [
+        { ...value, confidence: "medium", evaluator_version: "3.1.1" },
+        { ...waiting, confidence: "high", evaluator_version: "3.1.0" },
+        { ...defects, class: "unknown", waste: "unknown", confidence: "low", evaluator_version: "3.1.1" },
+      ],
+    }
+  })
+}
+
+function rollupsOf(labelFiles, keep = () => true) {
+  const sessions = fixtureSessions()
+  const labels = resolveLabels(labelFiles, sessions)
+  const records = buildTimelines(sessions).map((timeline) => jobRecord({ timeline, formulas: calculateFormulas(timeline) }, labels.byJobSession)).filter(keep)
+  return computeRollups({ records, sessions, labels })
+}
+
+test("unknown is its own Pareto row: in labeled time and every share, never in muda time or another waste", () => {
+  const rollups = rollupsOf(labelsWithV2())
+  const overall = rollups.muda.groupings.overall.all
+  assert.equal(overall.muda_time_ms, 12000, "the 2000 ms relabeled unknown left muda time")
+  const row = (waste) => overall.wastes.find((entry) => entry.waste === waste)
+  assert.deepEqual(row("unknown"), { waste: "unknown", total_ms: 2000, share: 2000 / 14000, cumulative_share: row("unknown").cumulative_share, jobs: 1, evaluator_versions: ["3.1.1"], confidence_ms: { high: 0, medium: 0, low: 2000 } })
+  assert.equal(row("defects").total_ms, 2000, "the other defects stretch is untouched")
+  assert.equal(row("waiting").share, 8000 / 14000, "shares are of labeled waste time, unknown included")
+  assert.equal(overall.wastes.at(-1).cumulative_share, 1)
+  assert.deepEqual(overall.wastes.map((entry) => entry.waste).sort(), [...PARETO_WASTES].sort())
+  // A row a /1 label speaks to records no confidence, even where a /2 label has time in it; its versions are every label's behind it.
+  assert.equal(Object.hasOwn(row("waiting"), "confidence_ms"), false)
+  assert.deepEqual(row("waiting").evaluator_versions, ["3.1.0", "3.1.1"])
+  assert.equal(Object.hasOwn(row("motion"), "confidence_ms"), false, "a row with no time is judged by every label, and the /1 ones recorded none")
+  // The per-job measures never hold unknown time.
+  const one = rollups.measures.groupings.overall.all.measures
+  assert.ok(!Object.keys(one).some((id) => id.includes("unknown")))
+  const page = renderRollupsMarkdown(rollups)
+  assert.match(page, /\| unknown \| 2000 ms \| 14\.29% \| [0-9.]+% \| 1 \| 0 \/ 0 \/ 2000 ms \| 3\.1\.1 \|/u)
+  assert.match(page, /\| waiting \| 8000 ms \| 57\.14% \| 57\.14% \| 4 \| not recorded \| 3\.1\.0, 3\.1\.1 \|/u)
+})
+
+test("where every label is /2, each row records its time by confidence, adding up to its total, a row with no time included", () => {
+  const rollups = rollupsOf(labelsWithV2(), (entry) => entry.job === J("1"))
+  const overall = rollups.muda.groupings.overall.all
+  const row = (waste) => overall.wastes.find((entry) => entry.waste === waste)
+  assert.deepEqual(row("waiting"), { waste: "waiting", total_ms: 2000, share: 0.5, cumulative_share: row("waiting").cumulative_share, jobs: 1, evaluator_versions: ["3.1.0"], confidence_ms: { high: 2000, medium: 0, low: 0 } })
+  assert.deepEqual(row("motion").confidence_ms, { high: 0, medium: 0, low: 0 })
+  assert.deepEqual(row("motion").evaluator_versions, ["3.1.0", "3.1.1"])
+  for (const entry of overall.wastes) assert.equal(entry.confidence_ms.high + entry.confidence_ms.medium + entry.confidence_ms.low, entry.total_ms, entry.waste)
+  // A session labeled with no stretches at all speaks for nothing: no versions, and nothing unrecorded.
+  const empty = labelsWithV2().map((entry) => (entry.session === S(1) ? { ...entry, stretches: [] } : entry))
+  const bare = rollupsOf(empty, (entry) => entry.job === J("1")).muda.groupings.overall.all
+  assert.deepEqual(bare.wastes.find((entry) => entry.waste === "unknown"), { waste: "unknown", total_ms: 0, share: null, cumulative_share: null, jobs: 0, evaluator_versions: [], confidence_ms: { high: 0, medium: 0, low: 0 } })
+  assert.match(renderRollupsMarkdown(rollupsOf(empty, (entry) => entry.job === J("1"))), /\| unknown \| 0 ms \| n\/a \| n\/a \| 0 \| 0 \/ 0 \/ 0 ms \| none \|/u)
 })
 
 test("rollups group by job class, and the order of the records never changes the bytes", () => {

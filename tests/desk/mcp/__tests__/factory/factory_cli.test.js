@@ -32,7 +32,8 @@ import {
   runValidatePrCommand,
 } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
-import { factoryStateRoot, readConsent, setConsent, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readConsent, readMachineSecret, setConsent, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { keyedJobId } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { indexJob } from "./_index_helper.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
@@ -138,6 +139,23 @@ test("build writes the deterministic report tree and job-link returns the accept
   })
   await assert.rejects(runBuildCommand({ argv: ["--store", store] }), /Usage: factory\.js build/u)
   await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory"] }), /Usage: factory\.js job-link/u)
+}))
+
+test("job-link --this-machine names where this machine's sessions are reported: the plain job on a private desk, the keyed one elsewhere", () => scratch(async (env) => {
+  const argv = (remote) => ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "factory", "--this-machine", "--slug", "store-pipeline"]
+  await knownPrivate(env, "ourostack/desk")
+  assert.deepEqual(await runJobLinkCommand({ env, argv: argv("git@github.com:OuroStack/Desk.git") }), {
+    link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
+    keyed: false,
+  })
+  // A public desk (here one whose visibility is not known): the card gets no link, the operator gets this machine's keyed one.
+  const remote = "git@github.com:someone/public-desk.git"
+  assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "factory", "--slug", "store-pipeline"] }), { link: null, reason: "visibility_not_known" })
+  const secret = await readMachineSecret(env)
+  const keyed = keyedJobId(jobId({ deskRemote: remote, personPrefix: "", track: "factory", slug: "store-pipeline" }), secret)
+  assert.deepEqual(await runJobLinkCommand({ env, argv: argv(remote) }), { link: `https://github.com/ourostack/factory/blob/reports/jobs/${keyed}.md`, keyed: true })
+  // The flag takes no value of its own, and the usage line names it.
+  await assert.rejects(runJobLinkCommand({ env, argv: ["--this-machine"] }), /--this-machine\]/u)
 }))
 
 test("job-link resolves the card's birth path first when --desk is given, so a renamed card's link matches the job the task tools already agree on (ourostack/desk#76)", () => scratch(async (env) => {

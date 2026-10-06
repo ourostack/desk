@@ -15,6 +15,10 @@ import { fileURLToPath } from "node:url"
 
 import {
   LABELS_SCHEMA,
+  LABELS_SCHEMAS,
+  LABEL_CONFIDENCE,
+  UNKNOWN_LABEL,
+  compareVersions,
   LABEL_CLASSES,
   LABEL_LIMITS,
   LABEL_UNAVAILABLE,
@@ -67,7 +71,11 @@ function expectErrors(value, expected) {
 }
 
 test("the constants carry the brief's exact values", () => {
-  assert.equal(LABELS_SCHEMA, "desk.factory.labels/1")
+  assert.equal(LABELS_SCHEMA, "desk.factory.labels/2")
+  assert.deepEqual(LABELS_SCHEMAS, ["desk.factory.labels/1", LABELS_SCHEMA])
+  assert.deepEqual(LABEL_CONFIDENCE, ["high", "medium", "low"])
+  assert.equal(UNKNOWN_LABEL, "unknown")
+  assert.ok(Object.isFrozen(LABELS_SCHEMAS) && Object.isFrozen(LABEL_CONFIDENCE))
   assert.deepEqual(LABEL_CLASSES, ["value", "support", "muda"])
   assert.deepEqual(LABEL_WASTES, ["defects", "overproduction", "waiting", "non_utilized_talent", "transportation", "inventory", "motion", "extra_processing"])
   assert.deepEqual(LABEL_UNAVAILABLE, ["session_log_missing", "facts_missing"])
@@ -93,6 +101,7 @@ test("every Desk-shaped plugin version and every rubric from 1 to 999 passes", (
   for (const version of ["3.2.0", "0.0.1", "999.999.999", "3.2.0-alpha.58", "3.2.0-beta.7", "3.2.0-rc.1", "3.2.0-alpha.9999"]) {
     const value = golden()
     value.evaluator.plugin_version = version
+    for (const stretch of value.stretches) stretch.evaluator_version = version
     assert.deepEqual(validateLabels(value), { ok: true, errors: [] }, version)
   }
   for (const rubric of ["1", "9", "10", "999"]) {
@@ -371,7 +380,7 @@ test("stretches are in start order and never overlap", () => {
 })
 
 test("the stretch list is capped", () => {
-  const stretch = (index) => ({ start_ms: index * 2, end_ms: index * 2 + 1, class: "value", waste: null, mura: false, muri: false, evidence: [[0, 0]] })
+  const stretch = (index) => ({ start_ms: index * 2, end_ms: index * 2 + 1, class: "value", waste: null, mura: false, muri: false, evidence: [[0, 0]], confidence: "high", evaluator_version: "3.2.0-alpha.40" })
   const over = golden()
   over.stretches = Array.from({ length: LABEL_LIMITS.stretches + 1 }, (_, index) => stretch(index))
   expectErrors(over, [{ code: "too_many", path: "stretches" }])
@@ -470,6 +479,87 @@ test("labels without caught stay valid and labels with a known value are valid",
     assert.deepEqual(validateLabels(value), { ok: true, errors: [] })
   }
   assert.ok(Object.hasOwn(golden().stretches[0], "caught"), "the golden labels carry one placed stretch")
-  assert.equal(LABELS_SCHEMA, "desk.factory.labels/1")
+  assert.equal(LABELS_SCHEMA, "desk.factory.labels/2")
   assert.equal(__LABEL_SPECS__.stretch.caught.check instanceof Function, true)
+  assert.equal(__LABEL_SPECS__.stretchV2.caught.check instanceof Function, true)
+})
+
+// ---------------------------------------------------------------------------
+// Labels /2: confidence, the label's own version and "could not tell".
+// ---------------------------------------------------------------------------
+
+// The golden labels as a `/1` file: no confidence, no version, rubric 1.
+function legacy() {
+  const value = golden()
+  value.schema = "desk.factory.labels/1"
+  value.evaluator.rubric = "1"
+  for (const stretch of value.stretches) {
+    delete stretch.confidence
+    delete stretch.evaluator_version
+  }
+  return value
+}
+
+test("a /1 file stays valid as it is, and a /2 key or the unknown label in one is refused", () => {
+  assert.deepEqual(validateLabels(legacy()), { ok: true, errors: [] })
+  const keyed = legacy()
+  keyed.stretches[0].confidence = "high"
+  expectErrors(keyed, [{ code: "unknown_key", path: "stretches.0" }])
+  const unknown = legacy()
+  unknown.stretches[1].class = "unknown"
+  unknown.stretches[1].waste = "unknown"
+  expectErrors(unknown, [{ code: "enum", path: "stretches.1.class" }, { code: "enum", path: "stretches.1.waste" }])
+})
+
+test("every /2 stretch carries a confidence and the version that assigned it", () => {
+  for (const level of ["high", "medium", "low"]) {
+    const value = golden()
+    value.stretches[0].confidence = level
+    assert.deepEqual(validateLabels(value), { ok: true, errors: [] }, level)
+  }
+  for (const key of ["confidence", "evaluator_version"]) {
+    const value = golden()
+    delete value.stretches[1][key]
+    expectErrors(value, [{ code: "missing", path: `stretches.1.${key}` }])
+  }
+  const sure = golden()
+  sure.stretches[0].confidence = SENTINEL
+  expectErrors(sure, [{ code: "enum", path: "stretches.0.confidence" }])
+  const shaped = golden()
+  shaped.stretches[0].evaluator_version = `3.2.0-${SENTINEL}`
+  expectErrors(shaped, [{ code: "pattern", path: "stretches.0.evaluator_version" }])
+})
+
+test("a label's version may be older than the file's evaluator, never newer", () => {
+  const older = golden()
+  older.stretches[0].evaluator_version = "3.1.9"
+  older.stretches[1].evaluator_version = "3.2.0-alpha.39"
+  assert.deepEqual(validateLabels(older), { ok: true, errors: [] })
+  const newer = golden()
+  newer.stretches[2].evaluator_version = "3.2.0-alpha.41"
+  newer.stretches[3].evaluator_version = "3.2.0"
+  expectErrors(newer, [{ code: "inconsistent", path: "stretches.2.evaluator_version" }, { code: "inconsistent", path: "stretches.3.evaluator_version" }])
+  // A file version that fails its own check is named once, by that check.
+  const unsound = golden()
+  unsound.evaluator.plugin_version = SENTINEL
+  unsound.stretches[0].evaluator_version = "9.9.9"
+  expectErrors(unsound, [{ code: "pattern", path: "evaluator.plugin_version" }])
+})
+
+test("unknown is its own label: class and waste unknown together, never beside another class or waste", () => {
+  const value = golden()
+  value.stretches[1] = { ...value.stretches[1], class: "unknown", waste: "unknown" }
+  assert.deepEqual(validateLabels(value), { ok: true, errors: [] })
+  for (const [klass, waste] of [["unknown", null], ["unknown", "waiting"], ["muda", "unknown"], ["value", "unknown"]]) {
+    const bad = golden()
+    bad.stretches[1] = { ...bad.stretches[1], class: klass, waste }
+    expectErrors(bad, [{ code: "inconsistent", path: "stretches.1.waste" }])
+  }
+})
+
+test("compareVersions orders evaluator versions as releases", () => {
+  assert.ok(compareVersions("3.2.0-alpha.9", "3.2.0-alpha.10") < 0)
+  assert.ok(compareVersions("3.2.0-rc.1", "3.2.0") < 0)
+  assert.equal(compareVersions("3.2.0", "3.2.0"), 0)
+  assert.ok(compareVersions("4.0.0", "3.9.9") > 0)
 })

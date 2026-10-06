@@ -147,7 +147,7 @@ test("the brief builder's caller contracts throw without naming a value", () => 
 })
 
 test("the rubric the skill states is the rubric version labels carry", () => {
-  assert.equal(RUBRIC_VERSION, "1")
+  assert.equal(RUBRIC_VERSION, "2")
   assert.match(SKILL, new RegExp(`^Rubric version: ${RUBRIC_VERSION}$`, "mu"))
   assert.match(SKILL, /^name: factory-evaluator$/mu)
   assert.equal(EVALUATOR_SKILL, "desk:factory-evaluator")
@@ -198,12 +198,38 @@ test("labels for another job or session, or from another evaluator version or ru
   other.job = "5e6f708192a3b4c5d6e7f8091a2b3c4d"
   other.session = "4c1d2e6f-9b2e-4d3f-8a4b-2c3d4e5f6071"
   other.evaluator.plugin_version = "3.2.0-alpha.41"
-  other.evaluator.rubric = "2"
+  other.evaluator.rubric = "3"
   assert.deepEqual(acceptEvaluation(brief(), bytes(other)).errors, [
     { code: "job_mismatch", path: "job" },
     { code: "session_mismatch", path: "session" },
     { code: "evaluator_mismatch", path: "evaluator.plugin_version" },
     { code: "evaluator_mismatch", path: "evaluator.rubric" },
+  ])
+})
+
+test("an answer in the older labels form is refused, and every stretch must carry the brief's version", () => {
+  const old = labels()
+  old.schema = "desk.factory.labels/1"
+  for (const stretch of old.stretches) {
+    delete stretch.confidence
+    delete stretch.evaluator_version
+    delete stretch.caught
+  }
+  assert.deepEqual(acceptEvaluation(brief(), bytes(old)), { ok: false, errors: [{ code: "schema_outdated", path: "schema" }] })
+  const older = labels()
+  older.stretches[1].evaluator_version = "3.2.0-alpha.39"
+  older.stretches[3].evaluator_version = "3.1.0"
+  assert.deepEqual(acceptEvaluation(brief(), bytes(older)).errors, [
+    { code: "evaluator_mismatch", path: "stretches.1.evaluator_version" },
+    { code: "evaluator_mismatch", path: "stretches.3.evaluator_version" },
+  ])
+  // An accepted answer keeps each label's confidence and version, and the "could not tell" label as written.
+  const unsure = labels()
+  unsure.stretches[2] = { ...unsure.stretches[2], class: "unknown", waste: "unknown", confidence: "low" }
+  const accepted = acceptEvaluation(brief(), bytes(unsure))
+  assert.equal(accepted.ok, true)
+  assert.deepEqual(accepted.labels.stretches.map((stretch) => [stretch.class, stretch.confidence, stretch.evaluator_version]), [
+    ["muda", "high", VERSION], ["value", "medium", VERSION], ["unknown", "low", VERSION], ["support", "high", VERSION],
   ])
 })
 
