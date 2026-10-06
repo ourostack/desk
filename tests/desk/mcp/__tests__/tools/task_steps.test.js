@@ -93,7 +93,10 @@ test("depends_on and repo change only while the step is pending", async () => {
   await update(root, { id: "b", state: "in progress" })
   await assert.rejects(update(root, { id: "b", repo: "gadgets" }), /step "b" is in progress; its `depends_on` and `repo` change only while it is pending/u)
   await assert.rejects(update(root, { id: "b", depends_on: [] }), /change only while it is pending/u)
-  await update(root, { id: "b", state: "pending", repo: "gadgets" })
+  // A step that is not pending is not rewired, even by a call that also sets it pending: set it pending, then rewire it.
+  await assert.rejects(update(root, { id: "b", state: "pending", repo: "gadgets" }), /change only while it is pending \(set it to pending in one call, then rewire it in the next\)/u)
+  await update(root, { id: "b", state: "pending" })
+  await update(root, { id: "b", repo: "gadgets" })
   assert.equal((await rows(file))[1].repo, "gadgets")
 })
 
@@ -107,13 +110,14 @@ test("blocked and dropped need a reason, which is written into Evidence and clea
   assert.equal((await rows(file))[0].evidence, "waits on | infra team")
   await update(root, { id: "a", state: "blocked", evidence: "still waiting" })
   assert.equal((await rows(file))[0].evidence, "still waiting")
+  await update(root, { id: "a", expect: "blocked" })
+  assert.equal((await rows(file))[0].evidence, "still waiting")
+  // A reason is not evidence: leaving blocked drops it. Evidence the step already had is kept.
   await update(root, { id: "a", state: "in progress" })
   assert.equal((await rows(file))[0].evidence, "")
   await update(root, { id: "a", evidence: "branch up" })
+  await update(root, { id: "a", state: "pending" })
   assert.equal((await rows(file))[0].evidence, "branch up")
-  await update(root, { id: "a", state: "pending" })
-  await update(root, { id: "a", state: "pending" })
-  assert.equal((await rows(file))[0].evidence, "")
 })
 
 test("merged and delivered can be set by hand with a PR or commit in Evidence", async () => {
@@ -208,4 +212,61 @@ test("refusals name the row and the rule: several unknown fields, a missing or n
   await assert.rejects(update(root, { id: "b", expect: "delivered" }), /now b: state pending, depends on a, repo none, evidence none/u)
   const plain = await update(root, { id: "a", state: "dropped", reason: "no longer needed" })
   assert.deepEqual(plain.blocked_dependents, ["b"])
+})
+
+test("evidence survives a step being blocked and unblocked, and a drop keeps a blocked dependent's evidence behind the reason", async () => {
+  const { root, file } = await newCard()
+  await update(root, { id: "a", depends_on: [], repo: "widgets" })
+  await update(root, { id: "b", depends_on: ["a"], repo: "widgets" })
+  await update(root, { id: "a", state: "in progress", evidence: PR })
+  await update(root, { id: "a", state: "blocked", reason: "waits on infra" })
+  assert.equal((await rows(file))[0].evidence, `waits on infra (was: ${PR})`)
+  await update(root, { id: "a", state: "blocked", reason: "still waits" })
+  assert.equal((await rows(file))[0].evidence, `still waits (was: ${PR})`)
+  await update(root, { id: "a", state: "in progress" })
+  assert.equal((await rows(file))[0].evidence, PR)
+  await update(root, { id: "b", state: "in progress", evidence: "branch b" })
+  await update(root, { id: "a", state: "dropped", reason: "not needed" })
+  assert.deepEqual((await rows(file)).map((row) => row.evidence), [`not needed (was: ${PR})`, "depends on a, which was dropped (was: branch b)"])
+  await update(root, { id: "b", state: "pending", expect: "blocked" })
+  assert.equal((await rows(file))[1].evidence, "branch b")
+})
+
+test("a step leaves delivered or dropped only with expect", async () => {
+  const { root, file } = await newCard()
+  await update(root, { id: "a", depends_on: [], repo: "widgets" })
+  await update(root, { id: "a", state: "delivered", evidence: PR })
+  await assert.rejects(update(root, { id: "a", state: "in progress" }), /moving it out of delivered needs `expect: "delivered"`/u)
+  await update(root, { id: "a", state: "pending", expect: "delivered" })
+  assert.equal((await rows(file))[0].state, "pending")
+})
+
+test("a rewritten row keeps its other cells: an escaped pipe stays one cell, and cells past the header stay", async () => {
+  const table = "| Step | Depends on | Repo | State | Evidence | Note |\n|---|---|---|---|---|---|\n| a | — | widgets | pending | — | left \\| right | extra one | extra two |"
+  const { root, file } = await newCard(`## Outcome\n\nx\n\n## Steps\n\n${table}\n`)
+  await update(root, { id: "a", state: "in progress" })
+  const line = (await fs.readFile(file, "utf8")).split("\n").find((text) => text.startsWith("| a |"))
+  assert.equal(line, "| a | — | widgets | in progress | — | left \\| right | extra one | extra two |")
+  assert.equal((await rows(file))[0].evidence, "")
+  assert.equal((await rows(file))[0].state, "in progress")
+})
+
+test("expect is checked against the card as it is when the write happens", async () => {
+  const { root, file } = await newCard()
+  await update(root, { id: "a", depends_on: [], repo: "widgets" })
+  const original = fs.readFile
+  let reads = 0
+  fs.readFile = async (target, ...rest) => {
+    const content = await original(target, ...rest)
+    // The second read of the card is the one made just before the write: another session changes the row between the two.
+    if (String(target) === file && (reads += 1) === 2) await fs.writeFile(file, content.replace("| pending |", "| in progress |"))
+    return reads === 2 ? original(target, ...rest) : content
+  }
+  try {
+    await assert.rejects(update(root, { id: "a", state: "blocked", reason: "x", expect: "pending" }), /not as you last saw it \(expect "pending"\); now a: state in progress/u)
+  } finally {
+    fs.readFile = original
+  }
+  assert.equal((await rows(file))[0].state, "in progress")
+  assert.deepEqual((await fs.readdir(path.dirname(file))), ["task.md"])
 })

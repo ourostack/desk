@@ -39,7 +39,7 @@ test("a hand-written table reads: extra columns, any column order, prose under t
     { id: "rollout", depends_on: ["ui", "docs"], repo: null, state: "blocked", evidence: "waits on infra" },
   ])
   assert.deepEqual(readyOf(read.rows), ["docs"])
-  assert.deepEqual(summarizeSteps(read.rows), { total: 4, delivered: 1, ready: ["docs"], blocked: [{ id: "rollout", reason: "waits on infra" }] })
+  assert.deepEqual(summarizeSteps(read.rows), { total: 4, delivered: 1, ready: ["docs"], moving: 1, blocked: [{ id: "rollout", reason: "waits on infra" }] })
 })
 
 test("a copy of the table inside a code fence is ignored, and a card with only a fenced copy has no table", () => {
@@ -82,7 +82,7 @@ test("dropped steps do not count, and a dropped dependency does not hold a step 
   const body = "## Steps\n\n| Step | Depends on | Repo | State | Evidence |\n|---|---|---|---|---|\n| a | — | — | dropped | no longer needed |\n| b | a | — | pending | — |\n"
   const { rows } = readSteps(body)
   assert.deepEqual(readyOf(rows), ["b"])
-  assert.deepEqual(summarizeSteps(rows), { total: 1, delivered: 0, ready: ["b"], blocked: [] })
+  assert.deepEqual(summarizeSteps(rows), { total: 1, delivered: 0, ready: ["b"], moving: 0, blocked: [] })
 })
 
 function desk(files) {
@@ -113,7 +113,7 @@ test("a card past 64 KiB below its steps still shows them", () => {
   const body = `## Outcome\n\nShip.\n\n## Steps\n\n| Step | Depends on | Repo | State | Evidence |\n|---|---|---|---|---|\n| a | — | — | delivered | — |\n| b | a | — | pending | — |\n\n## Progress log\n\n${"- 2026-10-01: a long line of progress.\n".repeat(2500)}`
   assert.ok(body.length > 64 * 1024)
   const [task] = activeTasks(desk({ big: body })).tracks[0].tasks
-  assert.deepEqual(task.steps, { total: 2, delivered: 1, ready: ["b"], blocked: [] })
+  assert.deepEqual(task.steps, { total: 2, delivered: 1, ready: ["b"], moving: 0, blocked: [] })
 })
 
 test("boot text shows the steps line, and ranks a card with no ready step and a blocked step with the blocked work", () => {
@@ -121,13 +121,14 @@ test("boot text shows the steps line, and ranks a card with no ready step and a 
   const text = formatBootText({
     status: "ready",
     active_tasks: {
-      task_count: 4,
+      task_count: 5,
       tracks: [{
         track: "t",
         tasks: [
-          task("moving", "processing", { total: 5, delivered: 3, ready: ["x", "y"], blocked: [] }, "2026-10-02"),
-          task("stuck", "processing", { total: 2, delivered: 0, ready: [], blocked: [{ id: "s", reason: "waits on review" }] }, "2026-10-01"),
-          task("flagged", "blocked", { total: 1, delivered: 0, ready: [], blocked: [] }, "2026-10-03"),
+          task("moving", "processing", { total: 5, delivered: 3, ready: ["x", "y"], moving: 0, blocked: [] }, "2026-10-02"),
+          task("stuck", "processing", { total: 2, delivered: 0, ready: [], moving: 0, blocked: [{ id: "s", reason: "waits on review" }] }, "2026-10-01"),
+          task("busy", "processing", { total: 3, delivered: 0, ready: [], moving: 1, blocked: [{ id: "w", reason: "waits" }] }, "2026-10-05"),
+          task("flagged", "blocked", { total: 1, delivered: 0, ready: [], moving: 0, blocked: [] }, "2026-10-03"),
           task("blocker-known", "blocked", null, "2026-10-04"),
         ],
       }],
@@ -136,7 +137,17 @@ test("boot text shows the steps line, and ranks a card with no ready step and a 
   assert.match(text, /- t\/moving[^\n]*\n  next: go\n  Steps: 3 of 5 delivered; ready: x, y/u)
   assert.match(text, /BLOCKED \(3\)[\s\S]*- t\/stuck[^\n]*\n  blocker: s: waits on review\n  next: go\n  Steps: 0 of 2 delivered\n/u)
   assert.match(text, /- t\/flagged[^\n]*\n  blocker: no blocker recorded; next: go\n  Steps: 0 of 1 delivered\n/u)
-  assert.match(text, /\nprocessing \(1\)\n- t\/moving/u)
-  const withBlocker = formatBootText({ status: "ready", active_tasks: { task_count: 1, tracks: [{ track: "t", tasks: [{ ...task("x", "blocked", { total: 1, delivered: 0, ready: [], blocked: [] }, "2026-10-04"), blocker: "infra" }] }] } })
+  assert.match(text, /\nprocessing \(2\)\n- t\/busy[^\n]*\n  next: go\n  Steps: 0 of 3 delivered\n\n?- t\/moving/u)
+  const withBlocker = formatBootText({ status: "ready", active_tasks: { task_count: 1, tracks: [{ track: "t", tasks: [{ ...task("x", "blocked", { total: 1, delivered: 0, ready: [], moving: 0, blocked: [] }, "2026-10-04"), blocker: "infra" }] }] } })
   assert.match(withBlocker, /blocker: infra\n  next: go\n  Steps: 0 of 1 delivered/u)
+})
+
+test("a table that runs to the end of the 64 KiB read is not counted, and the same table inside the read is", () => {
+  const table = `## Steps\n\n| Step | Depends on | Repo | State | Evidence |\n|---|---|---|---|---|\n${Array.from({ length: 12 }, (_, index) => `| step-${index} | — | — | pending | — |`).join("\n")}\n`
+  const filler = (bytes) => `${"x".repeat(79)}\n`.repeat(Math.floor(bytes / 80))
+  const root = desk({ cut: `${filler(65200)}\n${table}`, whole: `${filler(30000)}\n${table}` })
+  const tasks = Object.fromEntries(activeTasks(root).tracks[0].tasks.map((task) => [task.slug, task]))
+  assert.equal("steps" in tasks.cut, false)
+  assert.equal(tasks.whole.steps.total, 12)
+  assert.match(readSteps(`${filler(100)}\n${table.slice(0, -10)}`, { truncated: true }).reason, /cut at the read limit/u)
 })

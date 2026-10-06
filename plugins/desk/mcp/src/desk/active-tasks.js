@@ -145,8 +145,8 @@ function blockerOf(content) {
 
 // The card's `## Steps` table as a compact summary (steps.js), or nothing when it has none, has no rows or is left as prose.
 // The table sits right after `## Outcome`, so it is inside the bounded read of a card that is long below it.
-function stepsOf(content) {
-  const { rows } = readSteps(content)
+function stepsOf(content, truncated) {
+  const { rows } = readSteps(content, { truncated })
   if (rows === undefined || rows.length === 0) return {}
   const summary = summarizeSteps(rows)
   return { steps: { ...summary, blocked: summary.blocked.map(({ id, reason }) => ({ id, reason: redactCredentialLikeText(reason) })) } }
@@ -165,7 +165,7 @@ function readCardData(filePath) {
     const bytesRead = readSync(fd, buffer, 0, MAX_CARD_BYTES, 0)
     try {
       const parsed = parseFrontmatter(buffer.toString("utf8", 0, bytesRead))
-      return { data: parsed.data, content: parsed.content }
+      return { data: parsed.data, content: parsed.content, truncated: bytesRead === MAX_CARD_BYTES }
     } catch {
       return { data: {}, content: "" }
     }
@@ -212,7 +212,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
     for (const taskName of listDirs(trackDir)) {
       const card = readCardData(path.join(trackDir, taskName, "task.md"))
       if (card === null) continue
-      const { data, content } = card
+      const { data, content, truncated } = card
       const status = asText(data.status)
       if (TERMINAL_STATUSES.has(status)) continue
       const slug = redactName(taskName)
@@ -230,7 +230,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
         repos: shownRepos(data.repos),
         next_step: nextStepOf(content),
         blocker: blockerOf(content),
-        ...stepsOf(content),
+        ...stepsOf(content, truncated),
       })
     }
     if (tasks.length === 0) continue

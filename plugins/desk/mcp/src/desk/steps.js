@@ -29,7 +29,7 @@ const EVIDENCE_REF = /\/pull(?:request)?\/\d+|\/commit\/[0-9a-f]{7,40}\b|\b[0-9a
 
 const splitCells = (line) =>
   line.trim().replace(/^\|/u, "").replace(/(?<!\\)\|$/u, "").split(/(?<!\\)\|/u).map((cell) => cell.replace(/\\\|/gu, "|").trim())
-const cellText = (value) => value.replace(/\s*\r?\n\s*/gu, " ").trim().replaceAll("|", "\\|")
+const oneLine = (value) => value.replace(/\s*\r?\n\s*/gu, " ").trim()
 const orNone = (value) => (value === "" || value === null ? "—" : value)
 
 function checkRows(rows) {
@@ -66,9 +66,9 @@ function checkRows(rows) {
 /**
  * The card body's steps table: `{ found: false }` when there is none, `{ found: true, reason }` when there is one Desk
  * cannot read (`reason` says why; the table stays prose), or `{ found: true, rows, table }` where each row is
- * `{ id, depends_on, repo, state, evidence, line }` and `table` locates it for a write.
+ * `{ id, depends_on, repo, state, evidence, line }` and `table` locates it for a write. `truncated` says the body is only the start of the card (boot's bounded read): a table that runs to its end may be missing rows, so it is not read.
  */
-export function readSteps(body) {
+export function readSteps(body, { truncated = false } = {}) {
   const { eol, lines, fenced } = scan(body)
   const heading = lines.findIndex((line, index) => !fenced[index] && line.trim() === HEADING)
   if (heading === -1) return { found: false, lines, eol, fenced }
@@ -97,6 +97,7 @@ export function readSteps(body) {
       line,
     })
   }
+  if (truncated && lines.slice(line).every((text) => text.trim() === "")) return unreadable("the card was cut at the read limit inside the table")
   const reason = checkRows(rows)
   return reason === null ? { found: true, rows, table: { head, end: line, col, width: names.length }, lines, eol, fenced } : unreadable(reason)
 }
@@ -109,28 +110,36 @@ export function readyOf(rows) {
   return rows.filter((row) => row.state === "pending" && row.depends_on.every((id) => SETTLED.includes(known.get(id).state))).map((row) => row.id)
 }
 
-/** A compact summary for boot and desk_status: the steps that count (not dropped), how many are delivered, what is ready, what is blocked and why. */
+/** A compact summary for boot and desk_status: the steps that count (not dropped), how many are delivered, what is ready, how many are moving (in progress or merged), what is blocked and why. */
 export function summarizeSteps(rows) {
   const counted = rows.filter((row) => row.state !== "dropped")
   return {
     total: counted.length,
     delivered: counted.filter((row) => row.state === "delivered").length,
     ready: readyOf(rows),
+    moving: rows.filter((row) => ["in progress", "merged"].includes(row.state)).length,
     blocked: rows.filter((row) => row.state === "blocked").map((row) => ({ id: row.id, reason: row.evidence })),
   }
 }
 
 const describeRow = (row) => `${row.id}: state ${row.state}, depends on ${row.depends_on.join(", ") || "nothing"}, repo ${row.repo ?? "none"}, evidence ${row.evidence || "none"}`
 
+// A row as one table line. `cells` are the line's own cells (as read, unescaped), kept as they are, including any past the header's width; a `|` in any cell is escaped on the way out.
 const rowLine = (row, cells, col, width) => {
-  const out = Array.from({ length: width }, (_, index) => cells[index] ?? "")
+  const out = Array.from({ length: Math.max(width, cells.length) }, (_, index) => cells[index] ?? "")
   out[col.Step] = row.id
-  out[col["Depends on"]] = orNone(cellText(row.depends_on.join(", ")))
-  out[col.Repo] = orNone(row.repo === null ? null : cellText(row.repo))
+  out[col["Depends on"]] = orNone(oneLine(row.depends_on.join(", ")))
+  out[col.Repo] = orNone(row.repo === null ? null : oneLine(row.repo))
   out[col.State] = row.state
-  out[col.Evidence] = orNone(cellText(row.evidence))
-  return `| ${out.join(" | ")} |`
+  out[col.Evidence] = orNone(oneLine(row.evidence))
+  return `| ${out.map((cell) => cell.replaceAll("|", "\\|")).join(" | ")} |`
 }
+
+// A reason is written after the evidence the step already had, so a PR link survives a step being blocked or dropped: `reason (was: <evidence>)`.
+const WAS = /\(was: (.*)\)$/u
+const withReason = (reason, evidence) => (evidence === "" ? reason : `${reason} (was: ${evidence})`)
+// The evidence a step had before a reason was put in front of it: what follows `(was: ...)`, or nothing when the cell was only a reason.
+const evidenceBehind = (row) => (row === undefined ? "" : NEEDS_REASON.includes(row.state) ? (WAS.exec(row.evidence)?.[1] ?? "") : row.evidence)
 
 function newTable(rows) {
   const head = `| ${COLUMNS.join(" | ")} |`
@@ -176,7 +185,8 @@ export function applyStep(body, input, tool, repos) {
   if (existing === undefined && (input.repo === undefined || input.depends_on === undefined)) refuse(`${named} is new, so it needs \`repo\` (a repo of the card, or "—") and \`depends_on\` (a list of step names, empty for none)`)
   const state = input.state === undefined ? (existing?.state ?? "pending") : String(input.state).trim().toLowerCase()
   const changed = existing === undefined || state !== existing.state
-  if (existing !== undefined && state !== "pending" && (input.depends_on !== undefined || input.repo !== undefined)) refuse(`${named} is ${state}; its \`depends_on\` and \`repo\` change only while it is pending (set \`state: "pending"\` in the same call to rewire it)`)
+  if (existing !== undefined && existing.state !== "pending" && (input.depends_on !== undefined || input.repo !== undefined)) refuse(`${named} is ${existing.state}; its \`depends_on\` and \`repo\` change only while it is pending (set it to pending in one call, then rewire it in the next)`)
+  if (existing !== undefined && SETTLED.includes(existing.state) && changed && input.expect === undefined) refuse(`${named} is ${existing.state}; moving it out of ${existing.state} needs \`expect: "${existing.state}"\`, so a step another session settled is not reopened by accident`)
   const reason = typeof input.reason === "string" ? input.reason.trim() : ""
   if (NEEDS_REASON.includes(state) && changed && reason === "") refuse(`${named} cannot become ${state} without a \`reason\``)
   const proof = reason === "" ? (typeof input.evidence === "string" ? input.evidence : "") : reason
@@ -185,7 +195,9 @@ export function applyStep(body, input, tool, repos) {
   let repo = existing?.repo ?? null
   if (input.repo !== undefined) repo = NONE.test(String(input.repo).trim()) ? null : String(input.repo).trim()
   if (repo !== null && !repos.includes(repo)) refuse(`${named} names repo ${JSON.stringify(repo)}, which is not one of the card's repos (${repos.join(", ") || "none"})`)
-  const row = { line: existing?.line, id, depends_on: depends, repo, state, evidence: proof !== "" ? proof : changed ? "" : existing.evidence }
+  // Evidence is kept unless the call gives new text; a blocked or dropped step keeps what it had behind its reason.
+  const evidence = NEEDS_REASON.includes(state) ? (proof === "" ? existing.evidence : withReason(proof, evidenceBehind(existing))) : proof !== "" ? proof : evidenceBehind(existing)
+  const row = { line: existing?.line, id, depends_on: depends, repo, state, evidence }
   const next = existing === undefined ? [...rows, row] : rows.map((item) => (item === existing ? row : item))
   // Dropping a step blocks the live steps that depend on it, unless the call says they are still valid.
   const blocked = []
@@ -193,7 +205,7 @@ export function applyStep(body, input, tool, repos) {
     const stillValid = input.dependents_ok === undefined ? [] : names(input.dependents_ok, "dependents_ok")
     for (const [index, item] of next.entries()) {
       if (!item.depends_on.includes(id) || !["pending", "in progress"].includes(item.state) || stillValid.includes(item.id)) continue
-      next[index] = { ...item, state: "blocked", evidence: `depends on ${id}, which was dropped` }
+      next[index] = { ...item, state: "blocked", evidence: withReason(`depends on ${id}, which was dropped`, evidenceBehind(item)) }
       blocked.push(item.id)
     }
   }

@@ -859,8 +859,6 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
   // A backwards move without a reason is refused here, before anything is written or requested.
   const returnReason = checkReturnReason(existing.data, { to: merged.status, returnReason: values.return_reason })
-  // A step is placed before anything is written, against the card's repos as this call leaves them.
-  const stepResult = step === undefined ? null : applyStep(existing.content, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
   let delivered = null
   let report = null
   if (merged.status === "done" && existing.data.status !== "done") {
@@ -895,7 +893,14 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     if (existing.data.status === "done") delete merged.evidence
   }
 
-  let newBody = stepResult === null ? existing.content : stepResult.body
+  // A step is applied to the card as it is on disk right now, just before the write, so an `expect` holds against a change
+  // another session made while this call ran. Only the body is re-read: the frontmatter is written as this call built it, as for every task_update.
+  let stepResult = null
+  let newBody = existing.content
+  if (step !== undefined) {
+    stepResult = applyStep((await readMarkdown(filePath)).content, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
+    newBody = stepResult.body
+  }
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
   if (typeof body_append === "string" && body_append.length > 0) {
@@ -904,7 +909,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
 
   const stage = stagingAllowed(filePath, spawnGit)
-  await writeMarkdown(filePath, merged, newBody)
+  // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
+  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined })
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined

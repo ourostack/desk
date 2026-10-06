@@ -70,9 +70,19 @@ export function serializeMarkdown(data, content) {
 }
 
 /** Write a markdown file with frontmatter, creating parent dirs as needed. */
-export async function writeMarkdown(filePath, data, content) {
+export async function writeMarkdown(filePath, data, content, { atomic = false } = {}) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, serializeMarkdown(data, content), "utf8")
+  if (!atomic) return fs.writeFile(filePath, serializeMarkdown(data, content), "utf8")
+  // Written beside the card and renamed over it (over what a symlinked card points at), so a reader sees the old card or the new one.
+  const target = await fs.realpath(filePath)
+  const temporary = `${target}.${process.pid}.tmp`
+  try {
+    await fs.writeFile(temporary, serializeMarkdown(data, content), "utf8")
+    await fs.rename(temporary, target)
+  } catch (error) {
+    await fs.rm(temporary, { force: true })
+    throw error
+  }
 }
 
 // A YAML plain scalar is safe here only for the narrow shapes this
