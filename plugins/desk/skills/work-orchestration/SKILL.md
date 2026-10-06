@@ -45,7 +45,7 @@ Invoke `superpowers:requesting-code-review` once at the diff boundary with the c
 
 ## Ready-set scheduling and continuous peer review
 
-This section consumes the cross-repository plan's five-column Markdown DAG, its node states and the T01 adapter's mapped context; it produces ordered dispatch/acceptance events linked to native call IDs, resource ownership and commit-review receipts. It defines no task schema or frontmatter, no universal graph parser, service or database, and it never touches a Superpowers payload.
+This section consumes the cross-repository plan's Markdown DAG, whose table contract is the card's `## Steps` table (`Step | Depends on | Repo | State | Evidence`, defined in `task-card-format`), its node states and the T01 adapter's mapped context; it produces ordered dispatch/acceptance events linked to native call IDs, resource ownership and commit-review receipts. It defines no task schema or frontmatter, no universal graph parser, service or database, and it never touches a Superpowers payload.
 
 ```text
 1. Read the plan and progress; reject unknown dependencies and dependency cycles before dispatch.

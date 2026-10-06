@@ -487,12 +487,12 @@ test("the report README explains the attention estimate, its method version and 
   assert.match(readme, /never more than the gap the host shows, when there is one/u)
   assert.match(readme, /printed beside the attention figures/u)
   assert.match(readme, /counts every human turn of every session in the period[^\n]+including turns on jobs that were refused, are unsigned or were never delivered/u)
-  assert.match(readme, /divided by the jobs accepted and verified/u)
+  assert.match(readme, /divided by the jobs accepted \(recorded by the agent on the operator's word\)/u)
   assert.match(readme, /It is partial, a lower bound, when some session in the period flags the field[^\n]+Codex records no human turns[^\n]+Copilot records them only in part/u)
   assert.match(readme, /It is unavailable, with no value and no total, when no session in the period kept a list[^\n]+no human-turn records[^\n]+turns not recorded/u)
   assert.match(readme, /A turn the estimator cannot read is counted, adds no time and gives the reason that a turn could not be estimated/u)
   assert.match(readme, /also unavailable, with no total, when every turn is unreadable/u)
-  assert.match(readme, /With no verified accepted outcome the headline is unavailable[^\n]+the total so far is still shown/u)
+  assert.match(readme, /With no accepted outcome the headline is unavailable[^\n]+the total so far is still shown/u)
   assert.match(readme, /Sessions in the old format \(`\/1`\) are outside the period/u)
   assert.match(readme, /no accepted outcomes yet/u)
   assert.match(readme, /Permission decisions are shown beside the headline, not in it/u)
@@ -557,18 +557,18 @@ function signoffLine(outcome) {
 
 test("the job page says which sign-off the job has, in the plan's words", () => {
   const class1 = (waitClass, censored) => ({ class: waitClass, censored })
-  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: class1("lt_1d", false) }), ["- Sign-off: accepted (verified), waited under 1 day."])
-  assert.deepEqual(signoffLine({ state: "accepted", verified: false, wait: class1("lt_1h", false) }), ["- Sign-off: accepted (unverified), waited under 1 hour."])
-  assert.deepEqual(signoffLine({ state: "accepted", verified: null, wait: class1("lt_7d", false) }), ["- Sign-off: accepted (unverified), waited under 7 days."])
-  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: class1("ge_7d", false) }), ["- Sign-off: accepted (verified), waited 7 days or more."])
-  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: null }), ["- Sign-off: accepted (verified)."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: class1("lt_1d", false) }), ["- Sign-off: accepted, waited under 1 day."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: false, wait: class1("lt_1h", false) }), ["- Sign-off: accepted, waited under 1 hour."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: null, wait: class1("lt_7d", false) }), ["- Sign-off: accepted, waited under 7 days."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: class1("ge_7d", false) }), ["- Sign-off: accepted, waited 7 days or more."])
+  assert.deepEqual(signoffLine({ state: "accepted", verified: true, wait: null }), ["- Sign-off: accepted."])
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("lt_7d", true) }), ["- Sign-off: delivered, waiting at least 1 day."])
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("lt_1h", true) }), ["- Sign-off: delivered, waiting, under 1 hour so far."])
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("lt_1d", true) }), ["- Sign-off: delivered, waiting at least 1 hour."])
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: class1("ge_7d", true) }), ["- Sign-off: delivered, waiting at least 7 days."])
   assert.deepEqual(signoffLine({ state: "delivered_unsigned", wait: null }), ["- Sign-off: delivered, waiting for sign-off."])
-  assert.deepEqual(signoffLine({ state: "refused", verified: true, reason: "defect", wait: class1("lt_1d", false) }), ["- Sign-off: refused (verified), reason defect, waited under 1 day."])
-  assert.deepEqual(signoffLine({ state: "refused", verified: false, reason: "changed_ask", wait: null }), ["- Sign-off: refused (unverified), reason changed_ask."])
+  assert.deepEqual(signoffLine({ state: "refused", verified: true, reason: "defect", wait: class1("lt_1d", false) }), ["- Sign-off: refused, reason defect, waited under 1 day."])
+  assert.deepEqual(signoffLine({ state: "refused", verified: false, reason: "changed_ask", wait: null }), ["- Sign-off: refused, reason changed_ask."])
   assert.deepEqual(signoffLine({ state: "reopened" }), ["- Sign-off: reopened after delivery."])
   assert.deepEqual(signoffLine({ state: "not_delivered", deliveries: 0 }), ["- Sign-off: not delivered yet."])
 })
@@ -598,7 +598,7 @@ test("the job page says whether the job passed first time and what was sent back
     "- Rework: returned in the task 0, at review 1, after delivery 1; reason check on refusals: compared 1, disagree 0 (a lower bound).",
   ])
   assert.equal(qualityLines({ state: "delivered_unsigned" })[0], "- First-pass yield: 1, upper bound (passed so far, waiting for sign-off).")
-  assert.equal(qualityLines({ state: "accepted", verified: false })[0], "- First-pass yield: 1, upper bound (passed so far, accepted but unverified).")
+  assert.equal(qualityLines({ state: "accepted", verified: false })[0], "- First-pass yield: 1, passed first time.")
   assert.equal(qualityLines({ state: "accepted", verified: true, returns: [{ ...RETURN, reason: "changed_ask", counts: false }] })[0], "- First-pass yield: 1, passed first time; only changed asks came back.")
   assert.equal(qualityLines({ state: "accepted", verified: true, returns: [RETURN], returns_unreadable: 1 })[1].endsWith("(partial: some of what was sent back was not recorded)."), true)
 })
@@ -615,7 +615,7 @@ test("an unavailable first-pass yield or rework figure is listed under what we c
   assert.doesNotMatch(report.split("## What mattered")[0], /First-pass yield/u)
 })
 
-const NO_YIELD = { state: "unavailable", reasons: ["no_delivered_jobs"], n: 0, N: 0, passed: 0, returned: 0, awaiting_signoff: 0, signoff_unverified: 0, changed_ask_only: 0, excluded: [] }
+const NO_YIELD = { state: "unavailable", reasons: ["no_delivered_jobs"], n: 0, N: 0, passed: 0, returned: 0, awaiting_signoff: 0, changed_ask_only: 0, excluded: [] }
 const NO_REWORK = { state: "unavailable", reasons: ["not_recorded"], n: 0, N: 0, reason_check: { state: "unavailable", reasons: ["not_recorded"] } }
 const rollupsOf = (signoff, rest = {}) => ({ schema: "desk.factory.rollups/1", signoff, first_pass_yield: NO_YIELD, rework: NO_REWORK, ...rest })
 
@@ -625,7 +625,7 @@ test("the rollups page section names the sign-off counts, or says they are not r
     "## Sign-off", "", "Sign-off: not recorded in any session of this store.", "",
   ])
   const signoff = {
-    recorded: true, jobs: 9, accepted: 3, accepted_unverified: 1, delivered_unsigned: 2, refused: 1, refused_unverified: 1, reopened: 0, not_recorded: 1, not_delivered: 1,
+    recorded: true, jobs: 9, accepted: 3, accepted_unverified: 0, delivered_unsigned: 2, refused: 1, refused_unverified: 0, reopened: 0, not_recorded: 1, not_delivered: 1,
     no_record: 2, jobs_without_work_record: 1,
     refusal_reasons: { not_what_was_asked: 0, defect: 1, changed_ask: 0, incomplete: 0, other: 0 },
     waits: { signed: { lt_1h: 1, lt_1d: 2, lt_7d: 0, ge_7d: 0 }, unsigned: { lt_1h: 0, lt_1d: 0, lt_7d: 2, ge_7d: 0 } },
@@ -633,8 +633,8 @@ test("the rollups page section names the sign-off counts, or says they are not r
   assert.deepEqual(outcomeSections(rollupsOf(signoff)).slice(0, 11), [
     "## Sign-off", "",
     "- Jobs with a sign-off record: 9; with no work record: 1. Jobs with a work record and no sign-off record: 2.",
-    "- Accepted (verified): 3. Accepted but unverified, not counted as accepted: 1.",
-    "- Delivered, waiting for sign-off: 2. Refused: 1 (unverified: 1). Reopened: 0.",
+    "- Accepted (recorded by the agent on the operator's word): 3.",
+    "- Delivered, waiting for sign-off: 2. Refused: 1. Reopened: 0.",
     "- Delivered before sign-off was recorded: 1. Not delivered yet: 1.",
     "- Refusal reasons: defect 1.",
     "- Waits that ended in an answer: under 1 hour 1, under 1 day 2.",
@@ -646,22 +646,21 @@ test("the rollups page section names the sign-off counts, or says they are not r
 
 test("the rollups page says first-pass yield as n of N, an upper bound while sign-offs are pending, and not recorded when there is none", () => {
   const section = (value) => outcomeSections(rollupsOf({ recorded: false }, value)).join("\n").split("## First-pass yield\n\n")[1].split("\n## Rework")[0]
-  const base = { n: 2, N: 3, passed: 2, returned: 1, awaiting_signoff: 0, signoff_unverified: 0, changed_ask_only: 1, excluded: [{ reason: "history_not_recorded", jobs: 4 }, { reason: "not_delivered", jobs: 1 }] }
+  const base = { n: 2, N: 3, passed: 2, returned: 1, awaiting_signoff: 0, changed_ask_only: 1, excluded: [{ reason: "history_not_recorded", jobs: 4 }, { reason: "not_delivered", jobs: 1 }] }
   assert.equal(section({ first_pass_yield: { state: "measured", value: 2 / 3, reasons: [], ...base } }), [
     "- First-pass yield: 2 of 3 delivered jobs passed first time (66.67%).",
     "- Sent back: 1. Only changed asks came back: 1.",
     "- Left out of the count: 4 jobs (the task card does not record what was sent back), 1 job (the job has no standing delivery yet).",
     "",
   ].join("\n"))
-  const partial = section({ first_pass_yield: { state: "partial", value: 1, reasons: ["awaiting_signoff", "signoff_unverified"], ...base, N: 2, returned: 0, awaiting_signoff: 1, signoff_unverified: 1, excluded: [] } })
+  const partial = section({ first_pass_yield: { state: "partial", value: 1, reasons: ["awaiting_signoff"], ...base, N: 2, returned: 0, awaiting_signoff: 1, excluded: [] } })
   assert.equal(partial, [
-    "- First-pass yield: at most 2 of 2 delivered jobs passed first time (upper bound 100.00%; 1 waiting for sign-off, 1 accepted but unverified).",
+    "- First-pass yield: at most 2 of 2 delivered jobs passed first time (upper bound 100.00%; 1 waiting for sign-off).",
     "- Sent back: 0. Only changed asks came back: 1.",
     "- Left out of the count: none.",
     "",
   ].join("\n"))
   assert.match(section({ first_pass_yield: { state: "partial", value: 1, reasons: ["awaiting_signoff"], ...base, awaiting_signoff: 2 } }), /\(upper bound 100\.00%; 2 waiting for sign-off\)/u)
-  assert.match(section({ first_pass_yield: { state: "partial", value: 1, reasons: ["signoff_unverified"], ...base, signoff_unverified: 1 } }), /\(upper bound 100\.00%; 1 accepted but unverified\)/u)
   assert.match(section({}), /^- First-pass yield: not recorded \(no delivered job has a first-pass result yet\)\.\n/u)
 })
 
@@ -676,7 +675,7 @@ test("the rollups page says what was sent back, where it was caught and how ofte
     "- Jobs with returns recorded: 3 of 3.",
     "- Returns caught in the task: new_information 1. At review: none. After delivery: agent_error 2, changed_ask 1.",
     "- Returns that were changed asks: 1.",
-    "- Reason check on refusals: compared 4, disagree 1, of which 3 of the compared refusals were verified. This is a lower bound on disagreement.",
+    "- Reason check on refusals: compared 4, disagree 1. This is a lower bound on disagreement.",
     "",
   ].join("\n"))
   const partial = section({ state: "partial", reasons: ["history_not_recorded"], n: 1, N: 3, returns, changed_ask: 0, reason_check: { state: "unavailable", reasons: ["no_refusals"] } })

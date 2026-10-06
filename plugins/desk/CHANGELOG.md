@@ -1,5 +1,41 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.209 — 2026-10-06
+
+Session-start sync no longer files a Desk problem when the pull failed because the remote could not be reached, the host's sign-in was refused, or sync ran out of time, since none of those is a Desk defect (the agent still sees the failure and its next step). When a failed pull is filed, the reason now names the cause, for example `pull_rebase_failed:conflict` or `pull_rebase_failed_after_quarantine:diverged`, so the issue says what happened. Refs #103, #138.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.208 — 2026-10-06
+
+Boot now shows an agent the open `desk-problem` issues Desk filed about its own failures, which until now sat on GitHub with no one looking. For a desk whose open task names ourostack/desk, boot prints one line under the release alert, for example `Desk problems open on ourostack/desk: #103 (7 days), #138 (5 days); take the oldest through desk-problem`, naming at most three issues oldest first and counting the rest. The `--json` result carries it as `desk_problems` (`count`, `oldest_days`, `issues` with `number`, `url` and `age_days`, and `line`), or `null`.
+
+It reuses the release alert's single anonymous request, 1.5 second budget, ten-minute cache and silence on any failure, so boot is no slower. `desk_doctor` does not report it yet, because doctor has no GitHub lookup of its own and adding one is separate work.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.207 — 2026-10-06
+
+The Desk factory now counts an acceptance as accepted whenever the task's sign-off state is `accepted`, whether or not the record carries `verified`. A sign-off recorded through `task_signoff` is the agent recording the operator's word, and there is no separate human-verified state. Attention per accepted outcome, first-pass yield and the accepted count in the sign-off rollup all read `state` alone, so old records (with `verified` true or false) and new ones (with no `verified` field) count the same way, and attention per accepted outcome no longer reads "no data" once `verified` is gone. The first-pass yield of an accepted job is measured, the `signoff_unverified` job reason is gone, `signoff_unverified` in the first-pass-yield rollup and `accepted_unverified` in the sign-off rollup stay at 0 for older readers, and the reports say "recorded by the agent on the operator's word" where they said "verified". A sent-back outcome is read the same way: a recorded refusal counts by its recorded reason, with no `verified` distinction, so a refusal's reason decides first-pass yield whoever wrote it. `refused_unverified` stays at 0 and `compared_verified` equals `compared` for older readers, and the report no longer splits refusals by verified.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.206 — 2026-10-06
+
+An outcome that takes several pieces of work now stays one task card. Its pieces are rows of a `## Steps` table that Desk places right after `## Outcome`, with the columns `Step | Depends on | Repo | State | Evidence`, and a step is ready when it is pending and every step it depends on is delivered or dropped.
+
+`task_update` gains a `step` input that adds or changes one row, and `task_create` accepts `steps`. `expect` (the state the caller last saw) refuses a write over a row another session changed and shows the current row. Dropping a step blocks the live steps that depend on it unless the call lists them in `dependents_ok`. A table Desk cannot read stays prose: step writes on that card are refused with the reason and nothing else is blocked. `body_append` never touches the table. A step keeps its PR link when it is blocked or dropped (the reason goes first, then `(was: <evidence>)`). A step that is not pending is not rewired, and a step leaves delivered or dropped only with `expect`. The step is checked against the card as it is on disk just before the write, which is written through a temporary file and a rename (written in place when Windows refuses the rename because something holds the card open). Only the body is re-read: the frontmatter is not, so a status or repos change another session made at the same moment can still be overwritten. A `task_update` answer says `now ready: ...` when a change frees a step.
+
+Session start adds `Steps: 3 of 5 delivered; ready: x, y` to a task's line and ranks a card with no ready or moving step and a blocked step with the blocked work, showing the reason. A table that runs to the end of boot's 64 KiB read is not counted. `desk_status` `active_tasks` entries gain a compact `steps` summary on cards that have a table. The `task-card-format`, `task-lifecycle` and `work-orchestration` skills describe the table.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.205 — 2026-10-06
+
+Added `mcp/scripts/private-view.js`, which builds a private local copy of the factory site that shows your own tasks by name. It copies the published site into a folder under your state home (0700), outside every Git checkout and outside the factory's own state folder, and writes `local-names.json` (0600) beside it. That file maps each task on the bound desk, current and archived, to its title, track and slug under the job ID the factory publishes for it: the same `jobId` derivation and the same plain or machine-keyed rule as `factory.js job-link --this-machine`. It refuses, naming the reason, when the desk's visibility is not known yet or the machine has no secret, and never creates the secret. It then serves the folder on 127.0.0.1 only and prints the URL, because a page opened from a file path cannot fetch its data. Everything is fetched before anything is written and the folder is replaced in one rename; a folder that is a symbolic link, inside a Git work tree or inside the factory's state folder is refused. The server answers only requests addressed to its own loopback host and port. Crew desks are not mapped. The [README](README.md) says how to run it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.204 — 2026-10-06
 
 A merged Desk pull request is now delivered only when a release has carried it, and CI and Desk enforce that so nobody has to remember it.

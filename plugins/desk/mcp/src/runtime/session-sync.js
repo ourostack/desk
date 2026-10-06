@@ -237,6 +237,8 @@ function originUrl(root, spawnGit, timeoutMs) {
   return url === "" ? null : url.replace(/\/\/[^/@\s]+@/u, "//")
 }
 
+const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline"])
+
 const TELL = {
   unreachable: "The remote could not be reached, so `git status` will read clean: work continues on local state; retry sync before pushing.",
   auth_failed: "The remote refused this host's credentials, so `git status` will read clean: sign in again (`gh auth status`), then retry sync before pushing.",
@@ -244,13 +246,18 @@ const TELL = {
 }
 
 function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs }) {
-  const filing = fileProblem({ root, env, reason, host: hostFromEnv(env) })
   const cause = classifyPullFailure({
     stderr: failed?.stderr,
     conflicted,
     timedOut: failed?.error?.code === "ETIMEDOUT" || failed?.signal === "SIGTERM",
     deadline: reason === "sync_deadline_exceeded",
   })
+  // A network outage, an expired sign-in and a ran-out budget are the host's state, not Desk defects: they still
+  // surface to the agent below, but no Desk problem is filed. A failed pull's filed reason names its cause, so the
+  // issue says what happened and each cause gets its own title and fingerprint.
+  const filing = NOT_A_DESK_DEFECT.has(cause)
+    ? undefined
+    : fileProblem({ root, env, reason: failed === undefined ? reason : `${reason}:${cause}`, host: hostFromEnv(env) })
   const diagnostic = formatDeskProblem({
     mechanism: "session-sync",
     symptom: "session-start pull did not resolve",
