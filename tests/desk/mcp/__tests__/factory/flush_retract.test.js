@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
-  factoryStateRoot, keepRetractedCopies, keptSessions, pruneTombstones, pendingFiles, pendingLabels, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
+  factoryStateRoot, keepRetractedCopies, keptSessions, pruneTombstones, pendingFiles, pendingLabels, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, updateStatus, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
@@ -996,6 +996,31 @@ test("P2: a marker pruned while its delete is open keeps retracting with a resol
   assert.equal((await lastFlush(ctx)).retraction_stalled, 1)
   await offline(ctx, github)
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(2)}`])
+}))
+
+test("row 12: status.json lost while an intake PR is open: a machine that delivered before goes online once and closes the PR the state no longer wants", () => scratch(async (ctx) => {
+  const { github } = await delivered(ctx, 1)
+  await another(ctx)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  const open = github.pulls.at(-1)
+  // The session's file goes away locally, and status.json is reset: no last-flush entry, so no intake_pushed and no PR numbers.
+  await fs.rm(await outboxFile(ctx, 9))
+  await updateStatus(ctx.env, (status) => ({ ...status, last_flush: {} }))
+  assert.equal((await readStatus(ctx.env)).last_flush[STORE], undefined)
+  const before = github.calls.length
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  assert.ok(github.calls.length > before, "the flush went online to look")
+  assert.equal(open.state, "closed")
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`])
+  // With the entry written again, an idle flush is offline as before.
+  await offline(ctx, github)
+}))
+
+test("row 12 variant: a first flush on a machine that never delivered stays offline with nothing to do", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  const github = fakeGitHub()
+  await offline(ctx, github)
+  assert.equal(github.calls.length, 0)
 }))
 
 test("Q1: store_missing clears intake_pushed, so an idle flush after it makes no call", () => scratch(async (ctx) => {
