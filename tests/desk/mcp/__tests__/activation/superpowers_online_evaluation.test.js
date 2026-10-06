@@ -37,5 +37,5 @@ test("the retired integration seam no longer carries executable review/accountin
 
 test("the packaged evaluation skill is the exact parent-approved body", () => {
   const body = readFileSync(new URL("plugins/desk/skills/online-evaluation/SKILL.md", repoRoot))
-  assert.equal(createHash("sha256").update(body).digest("hex"), "d8deea7ccf52b1465e6061c8168e9604f19afa7229b7a38db27a16d32de69f85")
+  assert.equal(createHash("sha256").update(body).digest("hex"), "3ebd5440020cc47fe0e792d25e5049a5cb12be21ba1e6244faecd7731d9a1d2c")
 })

@@ -409,11 +409,22 @@ test("where every label is /2, each row records its time by confidence, adding u
   assert.deepEqual(row("motion").confidence_ms, { high: 0, medium: 0, low: 0 })
   assert.deepEqual(row("motion").evaluator_versions, ["3.1.0", "3.1.1"])
   for (const entry of overall.wastes) assert.equal(entry.confidence_ms.high + entry.confidence_ms.medium + entry.confidence_ms.low, entry.total_ms, entry.waste)
-  // A session labeled with no stretches at all speaks for nothing: no versions, and nothing unrecorded.
+  // A session labeled with no stretches at all recorded no confidence: its rows read as not recorded, never as a sound 0 / 0 / 0, and
+  // the file's own evaluator version is still listed.
   const empty = labelsWithV2().map((entry) => (entry.session === S(1) ? { ...entry, stretches: [] } : entry))
+  const version = empty.find((entry) => entry.session === S(1)).evaluator.plugin_version
   const bare = rollupsOf(empty, (entry) => entry.job === J("1")).muda.groupings.overall.all
-  assert.deepEqual(bare.wastes.find((entry) => entry.waste === "unknown"), { waste: "unknown", total_ms: 0, share: null, cumulative_share: null, jobs: 0, evaluator_versions: [], confidence_ms: { high: 0, medium: 0, low: 0 } })
-  assert.match(renderRollupsMarkdown(rollupsOf(empty, (entry) => entry.job === J("1"))), /\| unknown \| 0 ms \| n\/a \| n\/a \| 0 \| 0 \/ 0 \/ 0 ms \| none \|/u)
+  assert.deepEqual(bare.wastes.find((entry) => entry.waste === "unknown"), { waste: "unknown", total_ms: 0, share: null, cumulative_share: null, jobs: 0, evaluator_versions: [version] })
+  assert.match(renderRollupsMarkdown(rollupsOf(empty, (entry) => entry.job === J("1"))), new RegExp(`\\| unknown \\| 0 ms \\| n/a \\| n/a \\| 0 \\| not recorded \\| ${version.replaceAll(".", "\\.")} \\|`, "u"))
+  // So does an empty file of either version beside /2 ones: a row with no time is judged by every file, and an empty one recorded nothing.
+  const allV2 = fixtureLabels().map((entry) => ({ ...entry, schema: "desk.factory.labels/2", stretches: entry.stretches.map((stretch) => ({ ...stretch, confidence: "high", evaluator_version: entry.evaluator.plugin_version })) }))
+  const zeroRows = (files) => rollupsOf(files).muda.groupings.overall.all.wastes.filter((entry) => entry.total_ms === 0)
+  assert.ok(zeroRows(allV2).length > 0 && zeroRows(allV2).every((entry) => Object.hasOwn(entry, "confidence_ms")), "with every file /2 and labeled, a zero row is a sound zero")
+  for (const schema of ["desk.factory.labels/1", "desk.factory.labels/2"]) {
+    const withEmpty = allV2.map((entry) => (entry.session === S(1) ? { ...entry, schema, stretches: [] } : entry))
+    assert.ok(zeroRows(withEmpty).length > 0, schema)
+    assert.ok(zeroRows(withEmpty).every((entry) => !Object.hasOwn(entry, "confidence_ms")), schema)
+  }
 })
 
 test("rollups group by job class, and the order of the records never changes the bytes", () => {

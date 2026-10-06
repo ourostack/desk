@@ -256,11 +256,12 @@ function compactions(sources, split) {
 }
 
 // One labeled session's time per Pareto row, and what each row's labels say about themselves: `confidence[waste]` is the time by
-// confidence, or `null` for a `/1` file, whose labels carry none; `versions[waste]` the labels' versions. `all_versions` and
-// `recorded` (whether every label carries a confidence) answer for a row with no time, which every label of the session speaks to.
+// confidence, or `null` when the file records none; `versions[waste]` the labels' versions. `all_versions` and `recorded` answer for a
+// row with no time, which the whole file speaks to. A file records a confidence only when it is `/2` (every `/2` stretch carries one)
+// and has a stretch: a file with no stretches recorded nothing, so its rows read as not recorded, never as a sound zero. Its own
+// evaluator version still speaks for it.
 function sessionWaste(entry) {
-  // A valid file is all one shape: every stretch of a `/2` file has a confidence and no stretch of a `/1` file does.
-  const recorded = entry.stretches.every((stretch) => Object.hasOwn(stretch, "confidence"))
+  const recorded = entry.schema !== LABELS_SCHEMAS[0] && entry.stretches.length > 0
   const totals = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, 0]))
   const confidence = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, recorded ? Object.fromEntries(LABEL_CONFIDENCE.map((level) => [level, 0])) : null]))
   const versions = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, []]))
@@ -274,6 +275,7 @@ function sessionWaste(entry) {
     if (!versions[stretch.waste].includes(version)) versions[stretch.waste].push(version)
     if (recorded) confidence[stretch.waste][stretch.confidence] += duration
   }
+  if (allVersions.size === 0) allVersions.add(entry.evaluator.plugin_version)
   return { totals, confidence, versions, all_versions: [...allVersions], recorded, can_say_unknown: entry.schema !== LABELS_SCHEMAS[0] }
 }
 
@@ -615,6 +617,7 @@ function groupHeading(grouping, key) {
   return grouping === "overall" ? `### ${GROUPING_TITLES.overall}` : `### ${GROUPING_TITLES[grouping]}: ${key}`
 }
 
+// Every session speaks for itself with at least its file's evaluator version, so a row always lists one.
 function paretoLines(summary) {
   const counted = `${summary.jobs_labeled} of ${summary.jobs} jobs fully labeled; excluded: ${reasonsText(summary.jobs_excluded, "jobs", "job")}.`
   if (summary.muda_time_ms === null) return [`No fully labeled finished job yet (${stateWord(summary.state)}): ${counted}`]
@@ -623,7 +626,7 @@ function paretoLines(summary) {
     "",
     "| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |",
     "| --- | ---: | ---: | ---: | ---: | --- | --- |",
-    ...summary.wastes.map((row) => `| ${row.waste} | ${row.total_ms} ms | ${percentage(row.share)} | ${percentage(row.cumulative_share)} | ${row.jobs} | ${confidenceText(row)} | ${row.evaluator_versions.length === 0 ? "none" : row.evaluator_versions.join(", ")} |`),
+    ...summary.wastes.map((row) => `| ${row.waste} | ${row.total_ms} ms | ${percentage(row.share)} | ${percentage(row.cumulative_share)} | ${row.jobs} | ${confidenceText(row)} | ${row.evaluator_versions.join(", ")} |`),
   ]
 }
 

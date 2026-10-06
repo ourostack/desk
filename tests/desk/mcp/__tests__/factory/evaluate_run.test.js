@@ -433,6 +433,19 @@ test("an edited brief cannot change what the answer is checked against", () => s
   assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), rejected)
 }))
 
+test("a brief written before the rubric changed cannot let /2 labels through as the older rubric", () => scratch(async (env) => {
+  await seed(env)
+  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  const stale = labels()
+  stale.evaluator.rubric = "1"
+  const { brief } = await answer(env, stale)
+  const written = JSON.parse(await fs.readFile(brief, "utf8"))
+  await fs.writeFile(brief, JSON.stringify({ ...written, evaluator: { ...written.evaluator, rubric: "1" } }))
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), {
+    job: JOB, sessions: [{ session: SESSION, result: "rejected", errors: [{ code: "evaluator_mismatch", path: "evaluator.rubric" }] }], request: "kept",
+  })
+}))
+
 test("an answer whose session facts are gone is refused as facts_missing", () => scratch(async (env) => {
   await seed(env)
   await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
