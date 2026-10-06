@@ -25,6 +25,10 @@ Acceptance requires a terminal exact-commit disposition with `source=post_commit
 
 Request re-review with fresh source/diff fingerprints and the disposition record after changes. Retain prior reports and failed runs; a newer source fingerprint does not rewrite their outcome. Close the review gate only when the required independent review accepts the actual current input and all required findings have valid dispositions. Review approval does not authorize publication, main promotion, profile changes or cleanup beyond the recorded mandate.
 
+## Reviewing the factory
+
+When the change is to the factory itself, invoke `factory-work` first and put its review questions in the brief, including whether the change breaks a Lean principle or the terrarium.
+
 ## Evidence boundary
 
 Keep detailed reviewer output and operational evidence at the approved private artifact destination. Desk's canonical doing record holds progress/rulings and approved summaries or references, not an uncontrolled copy of private evidence. A reference and a declared hash alone do not prove an artifact exists or was verified. Preserve provenance labels and coverage limits.

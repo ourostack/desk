@@ -296,6 +296,7 @@ function main() {
     "A child agent never calls task_signoff.",
   ]);
 
+  const owned = (name) => fs.readFileSync(path.join(pluginRoot, "skills", name, "SKILL.md"), "utf8");
   assertSectionConcepts(section(skill, "Human and agent"), [
     /The human supplies intent.*authority.*endpoint/u,
     /The agent owns execution.*sequencing.*verification.*cleanup/u,
@@ -313,10 +314,7 @@ function main() {
     /frontload in one batch everything you will need from (?:them|the human) for the whole outcome/iu,
     /Frontload again whenever (?:they are|the human is) about to step away/iu,
     /`interaction-style` holds the procedure/u,
-    /When the human opens a conversation \(a question, an idea, "let's talk"\), stay in it/u,
-    /design talk goes through `superpowers:brainstorming`/u,
-    /already-authorized background work may continue/iu,
-    /nothing new starts on (?:that|the) topic until they close it or say go/iu,
+    /When the human opens a conversation, stay in it until they close it or say go/u,
     /context size.*not (?:a )?reasons? to stop/iu,
     /frontload in one batch[^.]*present(?:ing)? (?:its|the) decisions as one group with your recommendations[\s\S]*later decisions come one group at a time/iu,
   ]);
@@ -326,15 +324,25 @@ function main() {
     /micromanag/iu,
     /one-shot request/iu,
     /glue/iu,
-    /same correction.*record it durably in the desk/iu,
+    /same correction twice/iu,
     /let's step back and reset how we're working/u,
     /concrete adjustment/iu,
     /once/iu,
-    /never (?:becomes )?a recurring gate/iu,
-    /Ambitious delegation is welcome/u,
-    /shape an overbroad ask into an assessable outcome/iu,
-    /rather than shrinking it/iu,
+    /`interaction-style` holds the rest/u,
   ]);
+  // The rest of the coaching rule moved to interaction-style to make room in the foundation (SessionStart size budget).
+  for (const phrase of [
+    "work pulled back mid-flight by either side",
+    "the same correction twice, which means context is missing: record it durably in the desk",
+    "never becomes a recurring gate or widens your authority",
+    "Ambitious delegation is welcome",
+    "shape an overbroad ask into an assessable outcome rather than shrinking it",
+    "design talk goes through `superpowers:brainstorming`",
+    "already-authorized background work may continue",
+    "nothing new starts on that topic until they close it or say go",
+  ]) {
+    assert.ok(owned("interaction-style").includes(phrase), `interaction-style must carry the rule moved out of the foundation: ${phrase}`);
+  }
 
   assertSectionConcepts(section(skill, "Authority"), [
     /human's verb/iu,
@@ -343,7 +351,7 @@ function main() {
     /Access is not ownership/u,
     /explicit instruction not to write overrides/iu,
     /never widen your own permissions/iu,
-    /`preflight-actions` holds the procedure/u,
+    /`preflight-actions`/u,
   ]);
 
   assertSectionConcepts(section(skill, "Waste judgment"), [
@@ -407,12 +415,8 @@ function main() {
   assertSectionPhrases(section(skill, "Requirements that arrive during execution"), "using-desk Requirements that arrive during execution", [
     "same durable task",
     "implementation and review gates",
-    "silently absorb contradictory scope",
-    "restart the whole task without cause",
-    "return control merely because the plan changed",
     "`work-orchestration` holds the procedure",
   ]);
-  const owned = (name) => fs.readFileSync(path.join(pluginRoot, "skills", name, "SKILL.md"), "utf8");
   assertSectionPhrases(section(owned("work-orchestration"), "Requirements that arrive during execution"), "work-orchestration Requirements that arrive during execution", [
     "governing spec",
     "numbered plan",
@@ -434,7 +438,7 @@ function main() {
     "bounded visual proof",
     "rendered, installed, merged or rollout",
     "terminal success line",
-    "`evidence-discipline` holds the procedure",
+    "(`evidence-discipline`)",
   ]);
   assertSectionPhrases(section(owned("evidence-discipline"), "Visual proof when it helps"), "evidence-discipline Visual proof when it helps", [
     "working or doing logs",

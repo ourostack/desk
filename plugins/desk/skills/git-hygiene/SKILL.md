@@ -284,6 +284,12 @@ Never reconcile a dirty checked-out state repository by moving the branch ref in
 
 (overlay users: consumer overlays often ship a state-repo-specific anti-pattern note — never branch/PR on a state repo even when push-to-main is denied; the denial is a permission config problem, not a workflow problem.)
 
+## Commit identity and secrets
+
+Before you commit in a clone, set the repository's `user.email` to the commit address the operator lists for that repository's owner; on a new machine, set it once in each clone. GitHub blocks any push whose newest commit carries a private email.
+
+Do not store secrets, credentials or private tokens in the desk.
+
 ## Pre-commit scans (authorship, diff-scope)
 
 Two mandatory scans run before every commit, both procedural (no shipped git hook — the plugin is engine-agnostic and does not ship engine-specific `.git/hooks/` content). Operators who want structural enforcement can install a local hook using the recipes below as a starting point.
