@@ -26,7 +26,7 @@ Each brief is a JSON file with these fields:
 - `job` and `session`: what you are labeling.
 - `evaluator`: the `plugin_version` and `rubric` your labels must carry, copied exactly.
 - `facts`: the session on the published clock. `duration_ms` is its length and `intervals` are its turns, tool calls, subagents, waits, API retries and compactions, each with `start_ms` and `end_ms` counted from the session's start. `counts` totals tool calls, failures and retries. `null` when the session can never be published.
-- `own_share`: the job's own spans of the session, each `{ start_ms, end_ms }` on the same clock, or `null` when Desk did not record which part was the job's. A session can hold several jobs, and the factory counts this job's labels only inside its own spans, so label those spans and leave the rest of the session as a gap. When it is `null`, Desk cannot tell which part of the session was this job's, so no label you write can be credited to the job: write the labels file with an empty `stretches` list and move on.
+- `own_share`: the job's own spans of the session, each `{ start_ms, end_ms }` on the same clock. A session can hold several jobs and only these spans count for this job, so label them and leave the rest as a gap. `null` means Desk cannot tell which part was this job's, so nothing you label can count: write an empty `stretches` list and move on.
 - `session_log`: the host's session log for this session, or `null` when it is gone.
 - `clock_origin`: the session's start time. A log line at time `t` sits at `t - clock_origin` milliseconds on the session clock. Use it only to line the log up with the intervals; no time of day goes into labels.
 - `unavailable`: what you cannot read.
