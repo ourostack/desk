@@ -8,7 +8,7 @@
 // Deny by default for anything that involves `gh auth token`. The token may be read in exactly these ways:
 //   1. A real assignment of GH_TOKEN or GITHUB_TOKEN whose whole value is one `gh auth token [--user X] [--hostname H]`
 //      substitution (stderr may go to /dev/null), as a prefix to a command (`GH_TOKEN=$(...) git push`), or exported
-//      (`export GH_TOKEN=$(...)`), and then only git and gh run while it is set.
+//      (`export GH_TOKEN=$(...)`). Child processes may inherit it, but nothing may print it, dump the environment or name it in inline code.
 //   2. Inside a git credential helper passed with -c, in the one shape Desk gives:
 //      `credential.helper='!f(){ echo username=x-access-token; echo password=$(gh auth token --user X); };f'`.
 // Denied: printing, counting or testing the token variable; `gh auth token` with its output going anywhere else (stdout, a file,
@@ -25,7 +25,6 @@ const WHY = "`gh auth token` may only fill GH_TOKEN or GITHUB_TOKEN for one git 
 export const MESSAGES = {
   token: `Use \`GH_TOKEN=$(gh auth token --user <account>) git ...\` or \`gh ...\` directly; never run \`gh auth token\` alone. ${DESK} ${WHY}`,
   print: `Use \`GH_TOKEN=$(gh auth token --user <account>) gh ...\` and leave the token variable alone. ${DESK} Never print, count, test or list the token, or put $GH_TOKEN or $GITHUB_TOKEN in a URL, a header or another command's arguments.`,
-  consumer: `Run only git or gh while GH_TOKEN holds the token, as in \`GH_TOKEN=$(gh auth token --user <account>) git ...\`. ${DESK} Another program could print or send the token.`,
   store: `Use \`gh auth status\` to check a sign-in, and never read gh's or git's credential stores. ${DESK} hosts.yml, .git-credentials, keychain dumps, \`git credential fill\` and \`gh auth git-credential\` print stored tokens.`,
   helper: `Use only the credential helper Desk gives, in exactly its shape, and no other helper or git setting that runs a program. ${DESK} The shape: \`git -c credential.helper='!f(){ echo username=x-access-token; echo password=$(gh auth token --user <account>); };f' push ...\`.`,
   unreadable: `Use \`GH_TOKEN=$(gh auth token --user <account>) git ...\` as one plain command. ${DESK} Desk could not read this command, and it names \`gh auth token\`.`,
@@ -66,6 +65,10 @@ function referencesToken(command) {
 const KEYCHAIN = /^(?:find-[a-z]*-?password|dump-keychain|export)$/u
 // Programs that only show or search the text they are given, so a mention of `gh auth token` in their arguments is data.
 const TEXT_ONLY = new Set(["git", "gh", "echo", "printf", "grep", "egrep", "fgrep", "rg", "ag", "ack", "cat", "head", "tail", "less", "more", "diff", "wc", "sed", "jq", "tee", "mkdir", "touch", "cp", "mv", "ls", "test", "[", "true", "false", "sleep", "date", "pwd", "basename", "dirname", "sort", "uniq", "cut", "tr", "whoami", "hostname", "uname", "rm"])
+const INTERPRETERS = new Set(["node", "nodejs", "deno", "bun", "python", "python2", "python3", "perl", "ruby", "php", "lua", "awk", "gawk", "osascript"])
+const INLINE_TOKEN = /(?:GH|GITHUB)_TOKEN|%ENV\b|os\.environ\s*[,)]|process\.env\s*[,)]/u
+// `set` or `export -p` or `declare -x` alone lists every variable. The inspector does not visit builtins, so this reads the text.
+const ENV_DUMP = /(?:^|[;&|(\n]\s*)(?:set|export\s+-p|(?:declare|typeset)\s+-[xp]\w*)\s*(?=$|[;&|)\n])/u
 const GIT_VALUE_OPTIONS = new Set(["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"])
 const EXECUTABLE_KEYS = /^(?:core\.(?:sshcommand|pager|editor|askpass|fsmonitor|hookspath)|alias\..+|pager\..+|sequence\.editor)$/iu
 
@@ -128,13 +131,17 @@ function judgeCall({ name, args, env, cwd, via, computed }, seen) {
     const inConfig = sub === "config" ? args : args.filter((arg, i) => args[i - 1] === "-c")
     if (inConfig.some((arg) => TOKEN_TEXT.test(arg) && !isHelper(arg))) return MESSAGES.helper
   }
-  // While a variable holds the token, only git and gh may run, and git may not be pointed at a program through its configuration.
+  // Inline interpreter code that names the token variable (`node -e`, `python -c`, `perl -e`, `ruby -e`) reads and can print it.
+  if (INTERPRETERS.has(name) && args.some((arg) => /^-[A-Za-z]*[ecpE]$|^--(?:eval|print)$/u.test(arg)) && args.some((arg) => INLINE_TOKEN.test(arg))) return MESSAGES.print
+  // jq reads the environment through `env` and `$ENV`.
+  if (name === "jq" && args.some((arg) => /(?:^|[^.\w])env\b|\$ENV/u.test(arg))) return MESSAGES.print
+  // `declare -x` and `declare -p` list every variable, token included.
+  if ((name === "declare" || name === "typeset") && (args.length === 0 || args.some((arg) => /^-[A-Za-z]*[xp]/u.test(arg)))) return MESSAGES.print
+  // A child process that only inherits the variable is no exposure, so any program may run while it is set, but a script that is
+  // handed the variable by name (`bash -c 'echo $GH_TOKEN'`) is, and git may not be pointed at a program through its configuration.
   const holds = seen.token && [...TOKEN_VARIABLES].some((variable) => env[variable] !== undefined && env[variable] !== SENTINEL && env[variable].includes(UNKNOWN))
   if (holds) {
-    // A program that only shows its arguments is fine as long as none of them carries a value Desk could not read.
-    // (jq can read the environment, so a jq filter that names it is not one of them.)
-    const shows = TEXT_ONLY.has(name) && !args.some((arg) => arg.includes(UNKNOWN)) && !(name === "jq" && args.some((arg) => /\benv\b|\$ENV/u.test(arg)))
-    if (name !== "git" && name !== "gh" && !shows) return MESSAGES.consumer
+    if (name !== "git" && name !== "gh" && seen.mentions && args.some((arg) => arg.includes(UNKNOWN))) return MESSAGES.print
     if (name === "git") {
       for (let i = 0; i < args.length; i++) {
         if (args[i] !== "-c") continue
@@ -163,6 +170,8 @@ export function judgePowerShell(command) {
 async function judgeBash(command, cwd) {
   const seen = {}
   let reason = STORE_REDIRECT.test(command) ? MESSAGES.store : null
+  if (ENV_DUMP.test(command)) return MESSAGES.print
+  seen.mentions = TOKEN_REFERENCE.test(command)
   try {
     if (referencesToken(command)) return MESSAGES.print
     await inspectShell({

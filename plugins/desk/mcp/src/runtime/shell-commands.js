@@ -506,7 +506,12 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   // The output of a literal pwd, echo, printf '%s' or mktemp, without running it; otherwise unknown.
   async function outputOf(tokens, text, state) {
     const words = []
-    for (const token of tokens) words.push(await expand(token, state))
+    // The words are expanded again to read the output, so an assignment keeps the origin it has when the command runs.
+    for (const token of tokens) {
+      const name = token.parts && /^[A-Za-z_]\w*(?==)/u.exec(token.parts[0].text)?.[0]
+      const leading = words.every((word) => /^[A-Za-z_]\w*=/u.test(word))
+      words.push(await expand(token, state, false, name ? { name, real: leading || words[0] === "export" || words[0] === "env", word: token } : undefined))
+    }
     if (words[0] === "pwd" && words.length === 1) return state.cwd
     // Read-only Git that names the checkout or its branch is answered from the file system.
     const answered = staticGitOutput(words, state.cwd, state.vars)
