@@ -8,7 +8,7 @@
 // <host> is claude or copilot. Copilot's hooks have no matcher, so `track` answers `{}` at once for any tool that is not one of the five, and its `stop` reads the reply from the session transcript.
 // Codex is not wired; the module's doc comment says why.
 //
-// Fails open on every error, the same as the other Desk hooks, and quietly: this gate must never be the reason a turn cannot end. It always exits 0.
+// A failure of this wrapper (a bad payload, a module that will not load) fails open, the same as the other Desk hooks: this gate must never be the reason a turn cannot end. It always exits 0, and it counts the failure for desk_doctor.
 
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
@@ -42,6 +42,13 @@ process.stdin.on("end", async () => {
     const output = mode === "track" ? gate.recordTouchedTask(shaped) : mode === "prompt" ? gate.clearTouchedTasks(shaped) : copilot ? await gate.copilotStopHook(payload) : gate.doneClaimStopHook(payload);
     process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch {
+    // Still fails open, but visibly: the failure is counted for desk_doctor (best effort; if the counter cannot load either, the turn still ends).
+    try {
+      const health = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/gate-health.js")).href);
+      health.recordGateFailure("wrapper_error");
+    } catch {
+      // Nothing more can be done.
+    }
     process.stdout.write("{}\n");
   }
 });

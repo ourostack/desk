@@ -182,6 +182,12 @@ function topLevel(lines, key, block, flow) {
   return key === "returns" ? block(following) : flow(following)
 }
 
+// One top-level scalar from raw frontmatter lines (`status`, say), read the way `recordFromLines` reads its keys: quotes and trailing comments are dropped. Null when the key is absent or holds anything but a scalar.
+export function topLevelScalar(lines, key) {
+  const value = topLevel(Array.isArray(lines) ? lines : [], key, blockList, blockMap)
+  return typeof value === "string" ? scalar(value) : null
+}
+
 // `{ signoff, flow, returns, returns_damaged }` from raw frontmatter lines (the text between the two `---` lines), block or flow form. A line under `returns:` that is not a list item counts as damaged.
 export function recordFromLines(lines) {
   const rows = Array.isArray(lines) ? lines : []

@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { topLevelScalar } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
+import { readGateHealth } from "../../../../../plugins/desk/mcp/src/runtime/gate-health.js"
 import { sentence as signoffSentence } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import {
   acceptanceClaims,
@@ -547,6 +549,7 @@ test("the .cjs entry point records over stdin, blocks over stdout, and fails ope
   const broken = runHook("stop", "not json", env)
   assert.equal(broken.result.status, 0)
   assert.deepEqual(broken.output, {})
+  assert.equal(readGateHealth({ env }).last_kind, "wrapper_error", "the wrapper's own failure is counted for desk_doctor")
 })
 
 test("hooks.json wires the Stop gate beside the factory hook and the tracker on the five task tools", () => {
@@ -797,7 +800,7 @@ test("a verified acceptance passes in either serialization, and the honest state
   assert.deepEqual(gate("status: done", "Delivered, not accepted: it awaits your sign-off.").result, {}, "the honest escape")
   assert.deepEqual(gate("status: done", "Merged and deployed.").result, {}, "no acceptance claim")
   assert.deepEqual(gate("status: cancelled", acceptedReply).result, {}, "a cancelled card is not a delivery")
-  assert.deepEqual(gate("title: x", acceptedReply).result, {}, "a readable card with no status is not a delivery")
+  assert.deepEqual(gate("status: done", "Merged and deployed.").result, {}, "an unreadable status matters only to an acceptance claim")
 })
 
 test("a block over a missing sign-off says so, and over an answer Desk could not verify says unverified", () => {
@@ -811,7 +814,7 @@ test("an unreadable card counts as unaccepted for an acceptance claim, and never
   record(path.join(ROOT, "no-such-desk"), missing)
   const result = stop(missing, acceptedReply)
   assert.equal(blocks(result), true, "a card that is not there")
-  assert.match(result.reason, /^Restate your reply to say task watering-schedule-api's acceptance is unverified\. Desk could not read task watering-schedule-api's card/u)
+  assert.match(result.reason, /^Restate your reply to say Desk could not check task watering-schedule-api's acceptance\. Its card could not be read/u)
   const folder = cardWith("status: done")
   rmSync(folder.card)
   mkdirSync(folder.card)
@@ -867,4 +870,44 @@ test("Copilot's stop hook blocks once on its own error too, and passes where the
   assert.deepEqual(await copilotStopHook({ ...input, stop_hook_active: true }, { stateDir, sleep }), {})
   const bad = { get sessionId() { throw new Error("no id") } }
   assert.deepEqual(await copilotStopHook(bad, { stateDir: touched() }), {}, "nothing to name")
+})
+
+// ---- follow-ups: the status is read by the shared reader, an oversized transcript is read from its tail, quiet failures are counted ----
+
+test("a card whose status the shared reader cannot read is unreadable for an acceptance claim, and one it reads in any form is judged", () => {
+  for (const [label, frontmatter] of [
+    ["no status line", "title: x\nsignoff: { state: accepted, verified: false }"],
+    ["a status that is a list", "status: [done]\nsignoff: { state: accepted, verified: false }"],
+    ["an empty status", "status:\nsignoff: { state: accepted, verified: false }"],
+  ]) assert.match(gate(frontmatter).result.reason, /could not check task watering-schedule-api's acceptance/u, label)
+  for (const [label, frontmatter] of [
+    ["a quoted status with a comment", "status: 'done' # closed\nsignoff: { state: accepted, verified: false }"],
+    ["a double-quoted status", "status: \"done\"\nsignoff:\n  state: delivered_unsigned"],
+  ]) assert.match(gate(frontmatter).result.reason, /Restate your reply/u, label)
+  assert.deepEqual(gate("status: 'done' # closed\nsignoff: { state: accepted, verified: true }").result, {}, "a verified acceptance behind a quoted status")
+  assert.equal(topLevelScalar("not lines", "status"), null)
+})
+
+test("an oversized transcript is read from its last 2 MB, so a long turn is still gated", () => {
+  const big = (reply) => {
+    const file = path.join(ROOT, `big-${(counter += 1)}.jsonl`)
+    const filler = `${JSON.stringify({ type: "user", message: { role: "user", content: "x".repeat(1000) } })}\n`
+    writeFileSync(file, `${filler.repeat(9000)}${JSON.stringify(asked)}\n${JSON.stringify(say(reply))}\n`)
+    return file
+  }
+  const gateOn = (reply) => doneClaimStopHook({ hook_event_name: "Stop", session_id: "s1", transcript_path: big(reply) }, { stateDir: touched() })
+  assert.match(gateOn("Done. All of it.").reason, /real status: processing/u)
+  assert.deepEqual(gateOn("Moved the task to processing; a pull request is next."), {})
+})
+
+test("the gate counts its own quiet failures for desk_doctor", () => {
+  const stateDir = touched()
+  doneClaimStopHook({ hook_event_name: "Stop", session_id: "s1", transcript_path: ROOT }, { stateDir })
+  assert.equal(readGateHealth({ stateDir }).last_kind, "stop_error")
+  // A recording failure: a file sits where the session folder should be, so the record cannot be written, and that is counted.
+  const broken = freshState()
+  mkdirSync(broken, { recursive: true })
+  writeFileSync(path.dirname(sessionFile(broken, "s1")), "x")
+  recordTouchedTask(post(UPDATE, { track: "greenhouse-ops", slug: "watering-schedule-api" }, updated()), { stateDir: broken, root: null })
+  assert.deepEqual({ ...readGateHealth({ stateDir: broken }), last_at: 0 }, { count: 1, last_at: 0, last_kind: "record_failed" })
 })
