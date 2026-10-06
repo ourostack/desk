@@ -59,7 +59,7 @@ import { activeTasks } from "../desk/active-tasks.js"
 import { folderHandle } from "../desk/handles.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
-import { factoryStatus } from "../tools/factory-context.js"
+import { factoryFindingLines, factoryStatus } from "../tools/factory-context.js"
 import {
   claudeBindingPath,
   DESK_ROOT_NOT_FOUND,
@@ -1083,6 +1083,8 @@ function buildInstructionItems(ctx) {
   signoffInstructions(ctx.unsigned, { noninteractive, seen: ctx.signoffSeen === true }).forEach((text) => add(text))
   // An ask-and-stop blocker means the operator has one question to answer first: no card pickup on this boot.
   if (!noninteractive && needsOperator(ctx) === null) for (const text of improvementInstructions(improvement)) add(text)
+  // Factory findings (orphan pass, retention, a capture check that keeps failing) are body lines, so consent stays last.
+  for (const text of factoryFindingLines(factory)) add(`Factory: ${text}`)
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)

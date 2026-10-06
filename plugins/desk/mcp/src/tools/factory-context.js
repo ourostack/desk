@@ -115,6 +115,19 @@ export function reportLink({ env, deskRoot, deskRemote, personPrefix, track, slu
   return factoryReportLink({ env, deskRoot, deskRemote, personPrefix, track, slug, pluginDirs: dirs, pluginScanIncomplete: incomplete })
 }
 
+/**
+ * The factory findings that need someone to act, one plain sentence each, as both the doctor's summary and the plain-text boot print them: the
+ * orphan pass, local retention, and each contributed store whose own capture check keeps failing (the boot prefixes each with `Factory: `). Store names, codes and counts only.
+ */
+export function factoryFindingLines(status) {
+  if (!isPlainObject(status)) return []
+  const lines = []
+  if (status.orphans !== undefined) lines.push(`orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
+  if (status.retention !== undefined) lines.push(`local retention needs attention: ${status.retention}. ${RETENTION_FINDING_ADVICE}`)
+  for (const { store, times } of status.capture_check_unavailable ?? []) lines.push(`${store}: capture record not landing, the store's own check could not read it ${times} times in a row. ${CAPTURE_CHECK_ADVICE(store)}`)
+  return lines
+}
+
 /** The human-readable "Factory" section desk_doctor adds to its summary: store names, codes and counts only. */
 export function factorySummary(status, { now = Date.now() } = {}) {
   const lines = ["Factory"]
@@ -131,9 +144,10 @@ export function factorySummary(status, { now = Date.now() } = {}) {
     lines.push(`  ${entry.store}: ${entry.consent}, ${entry.pending} pending${waiting}${moved}, ${entry.quarantined} quarantined, ${entry.last_flush === null ? "no flush yet" : `last flush ${entry.last_flush}`}`)
   }
   for (const { store, sessions, age } of status.visibility_unasked ?? []) lines.push(`  ${store}: ${sessions} sessions wait because their desk's visibility could not be asked for ${age === "unknown" ? "an unknown time" : "over 7 days"}. ${UNASKED_ADVICE(store)}`)
-  if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
-  if (status.retention !== undefined) lines.push(`  local retention needs attention: ${status.retention}. ${RETENTION_FINDING_ADVICE}`)
-  for (const { store, times } of status.capture_check_unavailable ?? []) lines.push(`  ${store}: capture record not landing, the store's own check could not read it ${times} times in a row. ${CAPTURE_CHECK_ADVICE(store)}`)
+  lines.push(...factoryFindingLines(status).map((line) => `  ${line}`))
+  for (const entry of status.stores) {
+    if (entry.kept_frozen > 0) lines.push(`  ${entry.store}: ${entry.kept_frozen} kept copies have no route back and are never published (oldest ${entry.kept_frozen_oldest_days === null ? "of unknown age" : `${entry.kept_frozen_oldest_days} days`}); this is the fail-closed cost of a session whose route can no longer be shown, not a fault.`)
+  }
   if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
   if (status.signoff) lines.push(signoffLine(status.signoff))
   lines.push(...loopLines(status.loop, now))

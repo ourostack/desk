@@ -63,7 +63,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { readFileSync, readdirSync } from "node:fs"
+import { readFileSync, readdirSync, statSync } from "node:fs"
 import * as path from "node:path"
 
 import { consentDecision, consentRecords as readConsentRecords, factoryStateDir } from "./boot-check.js"
@@ -73,7 +73,7 @@ import { readSmallText, validMarker } from "./marker.js"
 import { jobReportUrl } from "./pipeline/build.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
 import { captureCheckFindings, retentionFinding } from "./retention.js"
-import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
+import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, isFolder, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 
 const STATE_BYTES = 8 * 1024 * 1024
@@ -228,32 +228,51 @@ function placer(dir, receipts) {
   let siblings = null
   const listSiblings = () => (siblings ??= outboxNames(path.join(dir, "markers")).map(markerOf).filter((marker) => marker !== null))
   // `retracting` is the store's retracting records and tombstones, by name. `kept`: a copy in `retracted-copies/` is here only on a positive
-  // route, as the flush reads it.
+  // route, as the flush reads it; so is one whose recorded desk folder no longer resolves. Returns `{ place, positive }`.
   return (store, name, retracting, kept) => {
     // An outbox name, like a labels key, ends in the 36-character session id and `.json`.
     const session = name.slice(-41, -5)
     const names = ENUMS.host.map((host) => `${host}-${session}.json`)
     const marker = names.map(markerOf).find((found) => found !== null) ?? null
     const records = Object.entries(retracting).filter(([key, record]) => key.slice(-41, -5) === session && isPlainObject(record)).map(([, record]) => record)
-    const route = sessionRoute(marker, { siblings: listSiblings, deskRoot: deskRootOf(receipts, names) })
+    const deskRoot = deskRootOf(receipts, names)
+    const route = sessionRoute(marker, { siblings: listSiblings, deskRoot })
     const place = sessionPlace(store, route, derivedStoreOf(receipts, names), records)
-    return place === "here" && kept && route.kind !== "store" ? "stale" : place
+    const recorded = [marker?.desk_root, deskRoot].filter((root) => typeof root === "string")
+    const gone = recorded.length > 0 && !recorded.some(isFolder)
+    return { place: place === "here" && route.kind !== "store" && (kept || gone) ? "stale" : place, positive: route.kind === "store" }
   }
 }
 
-function storeEntry(dir, records, store, lastFlush, place) {
+function storeEntry(dir, consents, store, lastFlush, place, now) {
   const slug = store.replace("/", "__")
   const delivered = readState(path.join(dir, "delivered", `${slug}.json`), {})
   const quarantined = new Set(outboxNames(path.join(dir, "quarantine", slug)))
   const retracting = readState(path.join(dir, "retracting", `${slug}.json`), {})
   // The kept copies of sessions that left the store (`session-route.js`) count with the outbox files: they are what `route_changed` reports.
+  const records = retracting === UNREADABLE ? {} : retracting
   const live = new Set(outboxNames(path.join(dir, "outbox", slug)))
-  const listed = [...new Set([...live, ...outboxNames(path.join(dir, RETRACTED_COPIES, slug))])].filter((name) => !quarantined.has(name))
-  const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, retracting === UNREADABLE ? {} : retracting, !live.has(name)))))
+  const keptDir = path.join(dir, RETRACTED_COPIES, slug)
+  const kept = outboxNames(keptDir).filter((name) => !live.has(name))
+  const listed = [...new Set([...live, ...kept])].filter((name) => !quarantined.has(name))
+  const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, records, !live.has(name)).place)))
+  // Kept copies with no positive route anywhere are frozen for good (never published, never deleted): counted, with the oldest one's age.
+  const frozen = kept.filter((name) => !place(store, name, records, true).positive)
+  const ages = frozen.map((name) => keptAgeDays(path.join(keptDir, name), now)).filter((days) => days !== null)
   const pending = listed.filter((name) => !away.has(name) && (delivered === UNREADABLE || !Object.hasOwn(delivered, name))).length
   const flush = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) ? lastFlush[store].result : null
   const waiting = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) && Number.isSafeInteger(lastFlush[store].visibility_unasked) ? lastFlush[store].visibility_unasked : 0
-  return { store, consent: decision(records, store), pending, ...(waiting > 0 ? { waiting_for_visibility: waiting } : {}), route_changed: away.size, quarantined: quarantined.size, last_flush: typeof flush === "string" && RESULT_CODE.test(flush) ? flush : null }
+  const frozenFields = frozen.length > 0 ? { kept_frozen: frozen.length, kept_frozen_oldest_days: ages.length > 0 ? Math.max(...ages) : null } : {}
+  return { store, consent: decision(consents, store), pending, ...(waiting > 0 ? { waiting_for_visibility: waiting } : {}), route_changed: away.size, quarantined: quarantined.size, ...frozenFields, last_flush: typeof flush === "string" && RESULT_CODE.test(flush) ? flush : null }
+}
+
+// A kept copy's age in whole days from its file's time, or null when it cannot be read.
+function keptAgeDays(file, now) {
+  try {
+    return Math.max(0, Math.floor((now - statSync(file).mtimeMs) / (24 * 60 * 60 * 1000)))
+  } catch {
+    return null
+  }
 }
 
 /** See the header. Never writes and never throws for missing or unreadable state. */
@@ -273,12 +292,13 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const unasked = visibilityUnasked(lastFlush, stores)
   const hung = status === UNREADABLE ? 0 : orphansHung(status.orphans, version)
   const retention = status === UNREADABLE ? null : retentionFinding(status)
-  const captureCheck = status === UNREADABLE ? [] : captureCheckFindings(status).filter(({ store }) => PATTERNS.prRepo.test(store))
+  // Only a store this machine still contributes to: a count left from before consent was withdrawn never settles, so it is no finding.
+  const captureCheck = status === UNREADABLE ? [] : captureCheckFindings(status).filter(({ store }) => PATTERNS.prRepo.test(store) && decision(records, store) === "yes")
   return {
     store: routing.store,
     source: routing.source,
     consent: routing.store === null ? "held" : decision(records, routing.store),
-    stores: stores.map((store) => storeEntry(dir, records, store, lastFlush, place)),
+    stores: stores.map((store) => storeEntry(dir, records, store, lastFlush, place, Date.now())),
     warnings: [...new Set(routing.warnings.map((warning) => warning.code))].sort(),
     ...(orphans === null ? {} : { orphans }),
     ...(unasked.length > 0 ? { visibility_unasked: unasked } : {}),

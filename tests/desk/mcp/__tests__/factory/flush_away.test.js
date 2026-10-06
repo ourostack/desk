@@ -16,7 +16,7 @@ import {
   factoryStateRoot, gitBlobSha, keptSessions, quarantine, readConsent, readDelivered, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
-import { STORE, scratch } from "./_session_helpers.js"
+import { STORE, json, scratch } from "./_session_helpers.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -339,4 +339,133 @@ test("variant, an invalid declaration (unknown) keeps the copies too, and they s
   await loseStatus(ctx)
   await onlineAgain(ctx, github)
   assert.deepEqual([...github.mainFiles().keys()], [`facts/${nameOf(9)}`])
+}))
+
+// ---------------------------------------------------------------------------
+// Review round 1: a sweep routes copies with no marker too; a gone desk folder is not here; a labels-only quarantine holds nothing.
+// ---------------------------------------------------------------------------
+
+// Session 1 derived into the store's outbox with a receipt naming its desk; then consent goes off, `before` runs, and the desk moves.
+async function movedWithoutMarker(ctx, before) {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  const desk = await deskFor(ctx.base, "desk-1", STORE)
+  await marker(ctx.env, ctx.base, 1, desk)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, desk_root: desk } } })
+  await setConsent(ctx.env, { store: STORE, contribute: false })
+  await before(desk)
+  await reroute(desk, OTHER)
+  return desk
+}
+
+for (const [name, old] of Object.entries({ "its marker already deleted (P1)": false, "its marker reading 40 days old after a clock skew (P7)": true })) {
+  test(`a desk that moves with ${name}, while the old store's consent is off: the sweep keeps the copy by the desk its receipt recorded, so the old store never publishes it`, () => scratch(async (ctx) => {
+    await movedWithoutMarker(ctx, async (desk) => {
+      if (old) await marker(ctx.env, ctx.base, 1, desk, { updated_at: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString() })
+      else await loseMarker(ctx)
+    })
+    const summary = await sweep(ctx.env, { quietMs: 600000 })
+    assert.equal(summary.kept_elsewhere, 1)
+    assert.equal(await keptHas(ctx, 1), true)
+    await loseStatus(ctx)
+    await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+    const github = fakeGitHub()
+    await onlineAgain(ctx, github)
+    assert.deepEqual([...github.mainFiles().keys()], [`facts/${nameOf(9)}`])
+  }))
+}
+
+// A Claude Code transcript for session `n` whose first line names `cwd`, under the scratch home's projects folder.
+async function transcript(ctx, n, cwd) {
+  const dir = path.join(ctx.base, ".claude", "projects", "p")
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, `${sessionId(n)}.jsonl`), `${JSON.stringify({ type: "user", sessionId: sessionId(n), cwd })}\n`)
+}
+const realDesk = async (ctx, name, store) => {
+  const desk = await deskFor(ctx.base, name, store)
+  await fs.mkdir(path.join(desk, "_archive"), { recursive: true })
+  return desk
+}
+
+test("with no marker and no receipt (status.json lost), the sweep routes a copy by its transcript's desk, and keeps a copy with no route at all", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  for (const n of [1, 2, 3, 4]) assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(n))).written, true)
+  // 1: its transcript names a desk declaring this store, so it stays for the orphan pass. 2: a desk declaring the other store. 3: no transcript.
+  // 4: a desk that routes by default: nothing new is known, so it stays.
+  await transcript(ctx, 1, await realDesk(ctx, "desk-1", STORE))
+  await transcript(ctx, 2, await realDesk(ctx, "desk-2", OTHER))
+  await transcript(ctx, 4, await realDesk(ctx, "desk-4", null))
+  // Session 2 has a copy in the other store too, routed once for both; it stays there.
+  await setConsent(ctx.env, { store: OTHER, contribute: true, account: "contributor" })
+  assert.equal((await writeLocalFacts(ctx.env, OTHER, localFacts(2))).written, true)
+  // 6: a Codex marker on a default route nothing proves: nothing new is known, its desk folder is there, so it stays.
+  const codexDesk = await realDesk(ctx, "desk-6", null)
+  await writeMarker(ctx.env, { schema_version: 1, host: "codex-cli", session_id: sessionId(6), log_path: path.join(ctx.base, "log-6.jsonl"), cwd: codexDesk, desk_root: codexDesk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString(), routing: { store: STORE, source: "default", warnings: [] } })
+  const codex = localFacts(6)
+  codex.session.host = "codex-cli"
+  assert.equal((await writeLocalFacts(ctx.env, STORE, codex)).written, true)
+  // A transcript that cannot be read is no route either.
+  await transcript(ctx, 5, ctx.base)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(5))).written, true)
+  await fs.chmod(path.join(ctx.base, ".claude", "projects", "p", `${sessionId(5)}.jsonl`), 0)
+  try {
+    await sweep(ctx.env, { quietMs: 600000 })
+  } finally {
+    await fs.chmod(path.join(ctx.base, ".claude", "projects", "p", `${sessionId(5)}.jsonl`), 0o600)
+  }
+  assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(2), sessionId(3), sessionId(5)])
+  assert.equal(await outboxHas(ctx, 1), true)
+  assert.equal(await outboxHas(ctx, 4), true)
+  assert.equal(await outboxHas(ctx, 2, "shared-internal-tools__ms-desk-factory"), true)
+  assert.equal(await fs.stat(path.join(await root(ctx), "outbox", SLUG, nameOf(6, "codex-cli"))).then(() => true, () => false), true)
+}))
+
+test("a kept copy is not derived again: a sweep with an unchanged transcript leaves it kept and writes no outbox copy", () => scratch(async (ctx) => {
+  const { deriveMarker } = await import("../../../../../plugins/desk/mcp/src/factory/derive-run.js")
+  const helpers = await import("./_session_helpers.js")
+  const marker = await helpers.session(ctx)
+  await json(path.join(ctx.desk, "_meta", "factory.json"), { schema_version: 1, store: STORE })
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const state = await root(ctx)
+  const name = `claude-code-${helpers.ID}.json`
+  await fs.mkdir(path.join(state, "retracted-copies", SLUG), { recursive: true })
+  await fs.rename(path.join(state, "outbox", SLUG, name), path.join(state, "retracted-copies", SLUG, name))
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped")
+  assert.equal(await fs.stat(path.join(state, "outbox", SLUG, name)).then(() => true, () => false), false)
+}))
+
+test("a desk folder renamed as it reroutes (P2): with its marker fresh and every record intact, the session is frozen, never published to the old store", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  const desk = await deskFor(ctx.base, "desk-1", STORE)
+  await marker(ctx.env, ctx.base, 1, desk)
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, desk_root: desk } } })
+  await reroute(desk, OTHER)
+  await fs.rename(desk, `${desk}-renamed`)
+  const github = fakeGitHub()
+  await onlineAgain(ctx, github)
+  assert.deepEqual([...github.mainFiles().keys()], [`facts/${nameOf(9)}`])
+  assert.equal(await keptHas(ctx, 1), true)
+  // The folder comes back: a positive route here restores and publishes it.
+  await fs.rename(`${desk}-renamed`, desk)
+  await reroute(desk, STORE)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.notEqual(mainBlob(github, 1), undefined)
+}))
+
+test("a labels-only quarantine holds nothing (P8): a session that still routes here publishes its facts after the marker and status.json are lost", () => scratch(async (ctx) => {
+  await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
+  await marker(ctx.env, ctx.base, 1, await deskFor(ctx.base, "desk-1", STORE))
+  assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
+  assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), session: sessionId(1) })).written, true)
+  await quarantine(ctx.env, STORE, `labels/${LABELS.job}/${sessionId(1)}.json`, "too_large")
+  await loseMarker(ctx)
+  await loseStatus(ctx)
+  const github = fakeGitHub()
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  assert.notEqual(mainBlob(github, 1), undefined)
+  assert.deepEqual(await keptSessions(ctx.env, STORE), [])
 }))

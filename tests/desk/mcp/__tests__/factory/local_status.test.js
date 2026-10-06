@@ -144,7 +144,27 @@ test("a kept copy counts as pending only on a positive route here, as the flush 
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: STORE })
   await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
   await writeStatus(env, { derivations: { [names[1]]: { store: STORE }, [names[2]]: { store: STORE } } })
-  assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 1, quarantined: 0, last_flush: null })
+  // Session 2's kept copy has no positive route anywhere: frozen for good, counted with its age.
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 1, quarantined: 0, kept_frozen: 1, kept_frozen_oldest_days: 0, last_flush: null })
+}))
+
+test("a kept copy whose age cannot be read is still counted frozen, with no age; a desk folder that no longer resolves is never pending", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async ({ base, desk, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const root = await factoryStateRoot(env)
+  const slug = STORE.replace("/", "__")
+  const [kept, gone] = [await outboxFile(env, STORE, 1), await outboxFile(env, STORE, 2)]
+  const keptDir = path.join(root, "retracted-copies", slug)
+  await fs.mkdir(keptDir, { recursive: true })
+  await fs.rename(path.join(root, "outbox", slug, kept), path.join(keptDir, kept))
+  // Session 2's receipt records a desk folder that is gone (moved or renamed): it is not here.
+  await writeStatus(env, { derivations: { [gone]: { store: STORE, desk_root: path.join(base, "renamed-desk") } } })
+  await fs.chmod(keptDir, 0o600)
+  try {
+    assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).stores[0], { store: STORE, consent: "yes", pending: 0, route_changed: 2, quarantined: 0, kept_frozen: 1, kept_frozen_oldest_days: null, last_flush: null })
+  } finally {
+    await fs.chmod(keptDir, 0o700)
+  }
 }))
 
 test("the desk's declaration picks the store, and every other decided store is listed after it", () => scratch(async ({ desk, env }) => {

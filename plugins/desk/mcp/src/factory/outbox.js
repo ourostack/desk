@@ -1492,13 +1492,13 @@ export async function keepRetractedCopies(env, store, sessions, { platform = pro
 }
 
 /**
- * `keepCopiesElsewhere(env, routes) -> { store, name }[]`: `routes` maps a session id to the store its marker positively routes it to now
- * (`session-route.js` `sessionRoute`). Every copy of such a session in another store's outbox or labels folder moves to that store's
- * `retracted-copies/` (`keepRetractedCopies`), so the store it left never publishes it again, even when that store's own flush does not run
- * (its consent is off) and every other record of the move is later lost. Each store's folders are listed once. Store names compare without
- * regard to case. Returns what moved, by store and name.
+ * `keepCopiesElsewhere(env, routeOf) -> { store, name }[]`: for every session with a copy in some store's outbox or labels folder, `await routeOf(session)`
+ * says where it belongs now: a store name (it routes there positively), `null` (no route can be found: it belongs nowhere), or `undefined`
+ * (nothing new is known: leave it). A copy in a store it does not belong to moves to that store's `retracted-copies/` (`keepRetractedCopies`), so
+ * that store never publishes it again, even when its own flush does not run (its consent is off) and every other record of the move is later lost.
+ * Each store's folders are listed once. Store names compare without regard to case. Returns what moved, by store and name.
  */
-export async function keepCopiesElsewhere(env, routes, { platform = process.platform, runner = undefined } = {}) {
+export async function keepCopiesElsewhere(env, routeOf, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   const moved = []
   for (const slug of [...new Set([...(await listDirSafe(path.join(root, "outbox"))), ...(await listDirSafe(path.join(root, "labels")))])].sort()) {
@@ -1509,7 +1509,11 @@ export async function keepCopiesElsewhere(env, routes, { platform = process.plat
     for (const job of await listDirSafe(live.labels)) {
       if (PATTERNS.jobId.test(job)) for (const file of await listRegularFiles(path.join(live.labels, job), LABELS_NAME_PATTERN)) present.add(file.slice(0, -5))
     }
-    const away = [...present].filter((session) => typeof routes.get(session) === "string" && routes.get(session).toLowerCase() !== store.toLowerCase())
+    const away = []
+    for (const session of [...present].sort()) {
+      const target = await routeOf(session)
+      if (target === null || (typeof target === "string" && target.toLowerCase() !== store.toLowerCase())) away.push(session)
+    }
     if (away.length > 0) moved.push(...(await keepRetractedCopies(env, store, away, { platform, runner })).map((name) => ({ store, name })))
   }
   return moved

@@ -87,9 +87,10 @@
 //   and never deleted, and never send a flush online. "Away" is durable
 //   outside `status.json`: the local copies of every session that is not
 //   here leave the outbox for `retracted-copies/` (the sweep does the same
-//   for a session whose marker routes it to another store), and a session
-//   with a kept copy, or a held one with no derivation receipt, is here only
-//   on a positive route, else frozen. I2: an online flush
+//   for every store a session no longer routes to, or for every store when
+//   it has no route at all), and a session with a kept copy, a held one with
+//   no derivation receipt, or one whose recorded desk folder no longer
+//   resolves, is here only on a positive route, else frozen. I2: an online flush
 //   rebuilds the intake branch from the change set the current state wants
 //   (publishes plus the deletes still needed); when that set is empty it
 //   closes this machine's open intake PR and resets the branch. Every online
@@ -186,7 +187,7 @@ import { serializePublished, toPublished, toPublishedLabels } from "./publish.js
 import { validatePublishedBytes } from "./published-schema.js"
 import { isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
 import { PATTERNS, isPlainObject } from "./schema.js"
-import { derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
+import { derivedStoreOf, deskRootOf, isFolder, sessionPlace, sessionRoute } from "./session-route.js"
 
 /** Every result `flush` can return. */
 export const FLUSH_CODES = Object.freeze([
@@ -903,8 +904,8 @@ async function deliver(env, context) {
   progress.newerFormat = newer.size
   // The kept copies of sessions that left this store, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
-  // The sessions held (a quarantine record for facts or labels) before anything is released.
-  const heldBefore = new Set([...delivered.quarantined].map(sessionOfName))
+  // The sessions held (a facts quarantine record: a labels-only quarantine holds nothing) before anything is released.
+  const heldBefore = new Set([...delivered.quarantined].filter((name) => !LABELS_KEY.test(name)).map(sessionOfName))
   const keptSet = new Set(keptNow)
   // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
@@ -932,10 +933,13 @@ async function deliver(env, context) {
     const route = sessionRoute(marker, { siblings: () => markers, deskRoot })
     let place = sessionPlace(store, route, derivedStoreOf(receipts, names), recordsOf.get(session))
     // "Here" without a positive route rests on records that can be lost, so it fails closed where anything says the session left: a kept copy
-    // (every session that was not here had its copies moved to `retracted-copies/`, below), or a held copy with no receipt to say where it was
-    // derived. Such a session is frozen (`stale`: never published, never deleted) until a positive route says here, so a lost, unreadable or
+    // (every session that was not here had its copies moved to `retracted-copies/`, below), a held copy with no receipt to say where it was
+    // derived, or a recorded desk folder that no longer resolves (moved or renamed: where it routes now cannot be read). Such a session is frozen (`stale`: never published, never deleted) until a positive route says here, so a lost, unreadable or
     // stale `status.json`, or a pruned tombstone, can never read as "no record, so here" and publish what left this store.
-    const unproven = keptSet.has(session) || (heldBefore.has(session) && derivedStoreOf(receipts, names) === undefined)
+    // A desk folder that was recorded (the marker's or the receipt's) and no longer resolves says nothing about where the desk routes now: not here.
+    const recorded = [marker?.desk_root, deskRoot].filter((root) => typeof root === "string")
+    const deskGone = recorded.length > 0 && !recorded.some(isFolder)
+    const unproven = keptSet.has(session) || (heldBefore.has(session) && derivedStoreOf(receipts, names) === undefined) || deskGone
     if (place === "here" && route.kind !== "store" && unproven) place = "stale"
     places.set(session, place)
     if (route.kind !== "store") continue
