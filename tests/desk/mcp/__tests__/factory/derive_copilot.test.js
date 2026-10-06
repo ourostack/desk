@@ -1311,7 +1311,7 @@ test("a bash git add and commit gives shellGitCommits paths, a redirect gives fi
     { cwd: `/tmp/${SENTINEL}`, paths: [`/tmp/${SENTINEL}/t/s/task.md`] },
     { cwd: `/tmp/${SENTINEL}`, paths: [] },
   ])
-  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: posixSpelling(written), agent })), [
     { at: at(3), path: `/tmp/${SENTINEL}/out.txt`, agent: 0 },
   ])
   assert.equal(JSON.stringify(facts).includes("task.md"), false)
@@ -1330,7 +1330,7 @@ test("desk_save paths become fileWrites when the call succeeded, and a failed, p
     ...run("d3", 5, { content: "x" }),
     ...run("d4", 7, "not an object"),
   ])
-  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: posixSpelling(written), agent })), [
     { at: at(1), path: "notes/a.md", agent: 0 },
     { at: at(1), path: "notes/b.md", agent: 0 },
   ])

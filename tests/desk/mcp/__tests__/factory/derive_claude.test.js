@@ -1242,7 +1242,7 @@ test("a Bash git add and commit gives shellGitCommits paths, and a Bash redirect
     { cwd: "/w", paths: ["/w/t/s/task.md"] },
     { cwd: "/w", paths: [] },
   ])
-  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: posixSpelling(written), agent })), [
     { at: "2026-09-25T08:00:03.000Z", path: "/w/out.txt", agent: 0 },
   ])
   assert.equal(JSON.stringify(facts).includes("task.md"), false)
@@ -1259,7 +1259,7 @@ test("desk_save paths become fileWrites when the call succeeded, and a failed or
     call("d3", SAVE_TOOL, { content: "x" }),
     result("d3"),
   ])
-  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: posixSpelling(written), agent })), [
     { at: "2026-09-25T08:00:01.000Z", path: "notes/a.md", agent: 0 },
     { at: "2026-09-25T08:00:01.000Z", path: "notes/b.md", agent: 0 },
   ])

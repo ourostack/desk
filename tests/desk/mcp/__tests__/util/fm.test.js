@@ -276,7 +276,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: root,
     input: { track: "t1", theme: "mañana notes", body: "Updated friction." },
   })
-  assert.equal(friction.path, path.join("t1", "_friction", `${today()}-mañana-notes.md`))
+  assert.equal(friction.path, `t1/_friction/${today()}-mañana-notes.md`)
   assert.equal(await fs.readFile(frictionPath, "utf8"), "Original friction.\n")
   assert.match(await fs.readFile(path.join(root, friction.path), "utf8"), /Updated friction/)
 

@@ -979,7 +979,8 @@ test("an invalid entry that is not a folder is refused as unreadable_folder and 
   await fs.chmod(path.join(folderOf(where), SET_ASIDE_FOLDER), 0o000).catch(() => {})
   const listed = await readCards(where)
   await fs.chmod(path.join(folderOf(where), SET_ASIDE_FOLDER), 0o700)
-  assert.equal(listed.unreadable, process.getuid?.() === 0 ? false : true)
+  // A folder with no permission bits is unreadable only on POSIX and not for root; Windows ignores chmod.
+  assert.equal(listed.unreadable, process.getuid?.() === 0 || process.platform === "win32" ? false : true)
 })
 
 test("a claim_id never reaches a card that is no longer claimed by that claim", async () => {

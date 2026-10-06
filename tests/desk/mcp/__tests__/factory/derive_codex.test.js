@@ -954,7 +954,7 @@ test("a shell git add and commit gives shellGitCommits paths, a redirect gives f
     { cwd: "/w", paths: ["/w/t/s/task.md"] },
     { cwd: "/w", paths: [] },
   ])
-  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: posixSpelling(written), agent })), [
     { at: at(3), path: "/w/out.txt", agent: 0 },
     { at: at(9), path: "notes/a.md", agent: 0 },
     { at: at(9), path: "notes/b.md", agent: 0 },
