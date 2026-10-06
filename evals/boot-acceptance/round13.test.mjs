@@ -304,6 +304,7 @@ test("missing-clone: a reply must say the repository itself is absent; a bare 'c
     "The valve-firmware flag is not available yet.",
     "I could not find the dry-run flag; valve-firmware looks fine.",
     "The repository isn't available for review yet, but the dry-run flag is unavailable.",
+    "The task expects valve-firmware at ~/code, but it is not ready to review yet.",
   ]) assert.ok(failures(check("missing-clone", BOOT_PLAIN, reply)).includes(`never reported ${missing}`), reply)
   for (const reply of [
     "I cannot find valve-firmware on this machine.",
@@ -314,5 +315,6 @@ test("missing-clone: a reply must say the repository itself is absent; a bare 'c
     "The `~/code/valve-firmware` folder is missing.",
     "The boot found that **valve-firmware** repo is missing. Where is valve-firmware cloned?",
     "The task is set to resume, but the repository isn't available. Where is valve-firmware cloned?",
+    "The task expects it at `~/code/valve-firmware`, but it's not there. Tell me the location.",
   ]) assert.equal(check("missing-clone", BOOT_PLAIN, reply).outcome, "pass", reply)
 })
