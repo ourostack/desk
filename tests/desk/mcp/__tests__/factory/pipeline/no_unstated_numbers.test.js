@@ -483,7 +483,7 @@ test("every reason the outcome figures carry has plain text for the operator, fo
   const patterns = [/\bmissing\("(\w+)"\)/gu, /\bpartialResult\([^\n]*?\["(\w+)"\]/gu, /\breasons: \["(\w+)"\]/gu, /\breasons\.push\([^)]*?"(\w+)" : "(\w+)"\)/gu, /\breasons\.push\("(\w+)"\)/gu]
   for (const pattern of patterns) for (const match of source.matchAll(pattern)) match.slice(1).filter(Boolean).forEach((code) => found.add(code))
   // The reasons the plan names, so a pattern that stops matching cannot hide one.
-  const NAMED = ["not_recorded", "signoff_not_recorded", "history_not_recorded", "not_delivered", "returns_not_fully_recorded", "awaiting_signoff", "signoff_unverified", "no_delivered_jobs", "no_refusals", "no_labels", "no_finished_jobs", "not_all_labeled", "active_time_unavailable", "catch_point_not_recorded"]
+  const NAMED = ["not_recorded", "signoff_not_recorded", "history_not_recorded", "not_delivered", "returns_not_fully_recorded", "awaiting_signoff", "no_delivered_jobs", "no_refusals", "no_labels", "no_finished_jobs", "not_all_labeled", "active_time_unavailable", "catch_point_not_recorded"]
   for (const code of NAMED) assert.ok(found.has(code), `${code} is produced in outcomes.js`)
   assert.deepEqual([...found].filter((code) => !NAMED.includes(code)), [], "a reason outcomes.js produces that this test does not name")
   for (const code of found) {

@@ -53,13 +53,13 @@ export function signoffFormula(outcome) {
   return measuredResult(outcome.state, { verified: outcome.verified, reason: outcome.reason, wait: outcome.wait })
 }
 
-// The reason that decides a return: the human's for a witnessed refusal, else the agent's (as `returnCounts` decides it).
-const decidedReason = (entry) => (entry.refusal !== null && entry.refusal_verified === true ? entry.refusal : entry.reason)
+// The reason that decides a return: the human's when a refusal recorded one, else the agent's (as `returnCounts` decides it).
+const decidedReason = (entry) => (entry.refusal !== null ? entry.refusal : entry.reason)
 const isChangedAsk = (entry) => decidedReason(entry) === "changed_ask"
 const recordedInFull = (outcome) => !(outcome.returns_unreadable > 0) && outcome.returns_truncated !== true
 
 /**
- * `firstPassFormula(outcome) -> result`: whether the job's delivery passed first time, from the returns the card recorded. 0 when any return counts. Otherwise 1, measured once the human's verified yes is in, and partial (an upper bound) while the answer is pending or unwitnessed.
+ * `firstPassFormula(outcome) -> result`: whether the job's delivery passed first time, from the returns the card recorded. 0 when any return counts. Otherwise 1, measured once the human's yes is recorded by the agent on the operator's word, and partial (an upper bound) while the answer is pending.
  */
 export function firstPassFormula(outcome) {
   if (!outcome) return missing("not_recorded")
@@ -72,7 +72,7 @@ export function firstPassFormula(outcome) {
   const extra = { returns: { counting, changed_ask: changedAsk }, changed_ask_only: counting === 0 && changedAsk > 0 }
   if (counting > 0) return measuredResult(0, extra)
   if (!recordedInFull(outcome)) return missing("returns_not_fully_recorded")
-  if (outcome.state === "accepted") return outcome.verified === true ? measuredResult(1, extra) : partialResult(1, ["signoff_unverified"], extra)
+  if (outcome.state === "accepted") return measuredResult(1, extra)
   if (outcome.state === "delivered_unsigned" || outcome.state === "refused") return partialResult(1, ["awaiting_signoff"], extra)
   if (outcome.state === "not_recorded") return missing("not_recorded")
   // Only a card whose record is inconsistent can reach this: a delivery taken back has a return line and a card delivered again is `delivered_unsigned`. Such a card reads as passing so far.
@@ -84,16 +84,15 @@ export function firstPassFormula(outcome) {
 function reasonCheckOf(returns) {
   let compared = 0
   let disagree = 0
-  let comparedVerified = 0
   for (const entry of returns) {
     if (entry.refusal === null) continue
     const agree = reasonsAgree(entry.refusal, entry.reason)
     if (agree === null) continue
     compared += 1
     if (!agree) disagree += 1
-    if (entry.refusal_verified === true) comparedVerified += 1
   }
-  return { compared, disagree, compared_verified: comparedVerified }
+  // `compared_verified` stays for older readers and equals `compared`: every recorded refusal counts.
+  return { compared, disagree, compared_verified: compared }
 }
 
 /**
@@ -110,8 +109,8 @@ export function reworkFormula(outcome) {
 const countBy = (keys, items, keyOf) => Object.fromEntries(keys.map((key) => [key, items.filter((item) => keyOf(item) === key).length]))
 const sortedUnique = (reasons) => [...new Set(reasons)].sort(compareText)
 
-// The one definition of an accepted outcome: the human's yes, witnessed. The sign-off count and the attention headline's denominator both use it, so they cannot disagree.
-const isAccepted = (entry) => entry.state === "accepted" && entry.verified === true
+// The one definition of an accepted outcome: the human's yes, recorded by the agent on the operator's word (a `verified` flag on the record, old or new, plays no part). The sign-off count and the attention headline's denominator both use it, so they cannot disagree.
+const isAccepted = (entry) => entry.state === "accepted"
 
 function signoffCounts(outcomes, timelineJobs) {
   const entries = [...outcomes.values()]
@@ -121,10 +120,12 @@ function signoffCounts(outcomes, timelineJobs) {
     recorded: true,
     jobs: entries.length,
     accepted: entries.filter(isAccepted).length,
-    accepted_unverified: inState("accepted").filter((entry) => !isAccepted(entry)).length,
+    // Kept at 0 so a reader of the older shape still finds it: an acceptance is no longer split into verified and unverified.
+    accepted_unverified: 0,
     delivered_unsigned: inState("delivered_unsigned").length,
     refused: inState("refused").length,
-    refused_unverified: inState("refused").filter((entry) => entry.verified !== true).length,
+    // Kept at 0, like `accepted_unverified`: a refusal is no longer split by a verified flag.
+    refused_unverified: 0,
     reopened: inState("reopened").length,
     not_recorded: inState("not_recorded").length,
     not_delivered: inState("not_delivered").length,
@@ -150,7 +151,8 @@ function yieldRollup(verdicts) {
     passed,
     returned: counted.length - passed,
     awaiting_signoff: partial.filter((verdict) => verdict.reasons.includes("awaiting_signoff")).length,
-    signoff_unverified: partial.filter((verdict) => verdict.reasons.includes("signoff_unverified")).length,
+    // Kept at 0, like `accepted_unverified`: the store site reads it, and an acceptance is no longer split by a verified flag.
+    signoff_unverified: 0,
     changed_ask_only: counted.filter((verdict) => verdict.changed_ask_only === true).length,
     excluded: [...excluded].sort(([left], [right]) => compareText(left, right)).map(([reason, jobs]) => ({ reason, jobs })),
   }
@@ -248,7 +250,7 @@ function groupFigures({ sessions, outcomes, timelineJobs, jobs, groupOfJob, atte
 /**
  * `computeOutcomeRollups({ sessions, reports, records, labels }) -> { schema, signoff, first_pass_yield, rework, attention, groupings }`: the figures across jobs, from the entries of `collectOutcomes` and the jobs that have a work record (`reports`: `{ timeline }` each). `records` (`jobRecord`'s results) and `labels` (`resolveLabels`' result) feed `rework.defects`; without them it reads `no_finished_jobs`. `signoff` says `recorded: false` and nothing else when no session carries an `outcomes` key, so an empty store never reads as zero accepted.
  *
- * `attention` is the headline: estimated human attention over every session in the period (`attention-rollup.js`), per accepted, verified outcome (the same count as `signoff.accepted`), with its companions. `groupings.plugin_version` repeats `signoff`, `first_pass_yield` and the attention figures per version group, where a job's group is the `plugin_version` of its job record (a job with no record is `unknown`).
+ * `attention` is the headline: estimated human attention over every session in the period (`attention-rollup.js`), per accepted outcome (the same count as `signoff.accepted`), with its companions. `groupings.plugin_version` repeats `signoff`, `first_pass_yield` and the attention figures per version group, where a job's group is the `plugin_version` of its job record (a job with no record is `unknown`).
  */
 export function computeOutcomeRollups({ sessions, reports, records = [], labels = { byJobSession: new Map() } }) {
   const outcomes = collectOutcomes(sessions)
