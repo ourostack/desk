@@ -176,7 +176,8 @@ test("sweep derives even when the rebuild fails", { skip: process.getuid?.() ===
     assert.equal((await sweep(ctx.env)).written, 1)
     assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), false, "the failed rebuild will retry")
   } finally {
-    await fs.chmod(file, 0o600)
+    // The copy has no route at all, so the sweep may have kept it away (making it owner-readable first).
+    await fs.chmod(file, 0o600).catch(() => {})
   }
 }))
 
@@ -704,6 +705,15 @@ const reasons = async (ctx) => {
   return Object.fromEntries(Object.entries(orphans.frozen).filter(([, count]) => count > 0))
 }
 
+// A copy with no route at all (no marker, no receipt desk root, no transcript desk) is kept away by the sweep; this puts it back in the outbox.
+async function unkeep(ctx, name) {
+  const root = await factoryStateRoot(ctx.env)
+  const kept = path.join(root, "retracted-copies", "ourostack__factory", name)
+  assert.equal(existsSync(kept), true, "the sweep kept the copy that has no route")
+  await fs.rename(kept, path.join(root, "outbox", "ourostack__factory", name))
+  await fs.rm(path.join(root, "retracted-copies"), { recursive: true })
+}
+
 const rebuilt = async (ctx) => {
   const { sweep } = await runner()
   const summary = await sweep(ctx.env)
@@ -902,6 +912,7 @@ test("an orphan whose outbox copy is unreadable stays frozen as no_facts, and on
   await fs.writeFile(marker.log_path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
   assert.deepEqual(await rebuilt(ctx), [0, 1])
   assert.deepEqual(await reasons(ctx), { no_desk_root: 1 })
+  await unkeep(ctx, name)
   await fs.writeFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "not json")
   assert.deepEqual(await rebuilt(ctx), [0, 1])
   assert.deepEqual(await reasons(ctx), { no_facts: 1 })
@@ -929,6 +940,7 @@ test("the first cwd is read past a line that is not JSON; a relative cwd, or one
       return receipt
     })
     assert.deepEqual(await rebuilt(ctx), [0, 1], cwd)
+    await unkeep(ctx, `claude-code-${ID}.json`)
   }
 }))
 

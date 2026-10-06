@@ -12,15 +12,13 @@ const PR = { kind: "pr", ref: "https://github.com/ourostack/desk/pull/200" }
 const LABEL_RULE = { paths: ["plugins/desk/**"], delivered_at: { kind: "github_label", name: "released" } }
 const MERGE_RULE = { paths: ["**"], delivered_at: { kind: "merge" } }
 const POLICY = { schema_version: 1, rules: [LABEL_RULE, MERGE_RULE] }
-const TAG_RULE = { paths: ["src/**"], delivered_at: { kind: "git_ref", pattern: "refs/tags/v*" } }
 
 // A fake GitHub: routes by path, records every request.
 function fakeGitHub({
   policy = { status: 200, body: JSON.stringify(POLICY) },
   pr = { status: 200, body: { labels: [], merged_at: "2026-10-06T00:00:00Z", merge_commit_sha: "abc123" } },
   files = [{ status: 200, body: [{ filename: "plugins/desk/mcp/src/x.js" }] }],
-  refs = { status: 200, body: [] },
-  compare = () => ({ status: 200, body: { status: "behind" } }),
+  repo = { status: 200, body: { full_name: "ourostack/desk" } },
 } = {}) {
   const calls = []
   const answer = ({ status, body }) => ({ status, text: async () => (typeof body === "string" ? body : JSON.stringify(body)) })
@@ -28,8 +26,7 @@ function fakeGitHub({
     calls.push({ url, options })
     if (url.includes("/contents/")) return answer(policy)
     if (url.includes("/files?")) return answer(files[Math.min(Number(/&page=(\d+)/u.exec(url)[1]) - 1, files.length - 1)])
-    if (url.includes("/matching-refs/")) return answer(refs)
-    if (url.includes("/compare/")) return answer(compare(url))
+    if (url.endsWith("/repos/ourostack/desk")) return answer(repo)
     return answer(pr)
   }
   return { fetchFn, calls }
@@ -56,8 +53,12 @@ test("an unlabeled pull request that changes a ruled path is refused, naming the
   })
 })
 
-test("an unmerged pull request says so", async () => {
-  await assert.rejects(run(fakeGitHub({ pr: { status: 200, body: { labels: [], merged_at: null } } })), /\(the pull request is not merged\)/u)
+test("a pull request that is not merged is never delivered, whatever the rules, and a missing one is refused before the merge-only shortcut", async () => {
+  const unmerged = { status: 200, body: { labels: [{ name: "released" }], merged_at: null } }
+  await assert.rejects(run(fakeGitHub({ pr: unmerged })), /not delivered: the pull request is not merged/u)
+  assert.deepEqual(await ask(withPolicy({ schema_version: 1, rules: [MERGE_RULE] }, { pr: unmerged })), { status: "undelivered", unmet: [{ need: "be merged" }], merged: false })
+  assert.equal((await ask(fakeGitHub({ policy: { status: 404, body: "" }, pr: unmerged }))).status, "undelivered")
+  assert.deepEqual(await ask(withPolicy({ schema_version: 1, rules: [MERGE_RULE] }, { pr: { status: 404, body: "" } })), { status: "not_found" })
 })
 
 test("the first matching rule wins for each file, and a pull request is delivered when every rule it matched is", async () => {
@@ -96,7 +97,7 @@ test("the files are read page by page, up to three pages", async () => {
   assert.equal((await ask(fake)).status, "undelivered")
   assert.equal(fake.calls.filter((call) => call.url.includes("/files?")).length, 3)
   const endless = fakeGitHub({ files: [{ status: 200, body: full }] })
-  assert.equal((await ask(endless)).status, "delivered")
+  assert.equal((await ask(endless)).status, "not_verified")
   assert.equal(endless.calls.filter((call) => call.url.includes("/files?")).length, 3)
 })
 
@@ -106,13 +107,28 @@ test("a repo with no policy defaults to merge and says no delivery rule is decla
   assert.match(none.basis, /^no delivery rule declared in ourostack\/desk/u)
   const merge = withPolicy({ schema_version: 1, rules: [MERGE_RULE] })
   assert.deepEqual(await ask(merge), { status: "delivered", basis: "every rule delivers at merge" })
-  assert.equal(merge.calls.length, 1)
+  assert.ok(!merge.calls.some((call) => call.url.includes("/files?")))
 })
 
 test("the process environment is the default", async () => {
   const fake = fakeGitHub()
   const answer = await prDelivery({ repo: "ourostack/desk", number: 200, fetchFn: fake.fetchFn })
   assert.equal(answer.status, "undelivered")
+})
+
+test("a 404 for the rules file is believed only when the repo itself is visible", async () => {
+  const hidden = await ask(fakeGitHub({ policy: { status: 404, body: "" }, repo: { status: 404, body: "" } }))
+  assert.equal(hidden.status, "not_verified")
+  assert.match(hidden.reason, /not visible to GitHub requests from here \(HTTP 404\).*set GH_TOKEN/u)
+  const down = await ask({ fetchFn: async (url) => { if (url.includes("/contents/")) return { status: 404, text: async () => "" }; throw new Error("down") } })
+  assert.match(down.reason, /unreachable/u)
+})
+
+test("a file listing that stops at its page cap with a full last page is not_verified", async () => {
+  const full = { status: 200, body: Array.from({ length: 100 }, (_, i) => ({ filename: `tests/${i}.js` })) }
+  const answer = await ask(fakeGitHub({ files: [full] }))
+  assert.equal(answer.status, "not_verified")
+  assert.match(answer.reason, /more than 300 files/u)
 })
 
 test("evidence that is not a GitHub pull request is not checked", async () => {
@@ -136,7 +152,7 @@ test("every way GitHub cannot answer is not_verified, never refused", async () =
   assert.match(await reason(fakeGitHub({ policy: { status: 403, body: "" } })), /delivery rules could not be read.*HTTP 403/u)
   assert.match(await reason(fakeGitHub({ policy: { status: 200, body: "not json" } })), /not a usable delivery policy/u)
   assert.match(await reason(fakeGitHub({ policy: { status: 200, body: { schema_version: 1 } } })), /not a usable/u)
-  for (const rule of [null, { paths: [], delivered_at: { kind: "merge" } }, { paths: [1], delivered_at: { kind: "merge" } }, { paths: ["a"] }, { paths: ["a"], delivered_at: { kind: "carrier_pigeon" } }, { paths: ["a"], delivered_at: { kind: "github_label", name: "" } }, { paths: ["a"], delivered_at: { kind: "git_ref", pattern: "tags/v*" } }, { paths: ["a"], delivered_at: { kind: "git_ref" } }]) {
+  for (const rule of [null, { paths: [], delivered_at: { kind: "merge" } }, { paths: [1], delivered_at: { kind: "merge" } }, { paths: ["a"] }, { paths: ["a"], delivered_at: { kind: "carrier_pigeon" } }, { paths: ["a"], delivered_at: { kind: "github_label", name: "" } }, { paths: ["a"], delivered_at: { kind: "git_ref", pattern: "refs/tags/v*" } }]) {
     assert.match(await reason(withPolicy({ schema_version: 1, rules: [MERGE_RULE, rule] })), /not a usable/u, JSON.stringify(rule))
   }
   assert.match(await reason(fakeGitHub({ pr: { status: 502, body: "" } })), /ourostack\/desk#200 could not be read.*HTTP 502/u)
@@ -148,43 +164,8 @@ test("every way GitHub cannot answer is not_verified, never refused", async () =
   assert.match(await reason(offline), /unreachable/u)
   const noPr = { fetchFn: async (url) => { if (url.includes("/contents/")) return { status: 200, text: async () => JSON.stringify(POLICY) }; throw new Error("down") } }
   assert.match(await reason(noPr), /pull request ourostack\/desk#200 could not be read.*unreachable/u)
-  const noFiles = { fetchFn: async (url) => { if (url.includes("/files?")) throw new Error("down"); return { status: 200, text: async () => (url.includes("/contents/") ? JSON.stringify(POLICY) : JSON.stringify({ labels: [] })) } } }
+  const noFiles = { fetchFn: async (url) => { if (url.includes("/files?")) throw new Error("down"); return { status: 200, text: async () => (url.includes("/contents/") ? JSON.stringify(POLICY) : JSON.stringify({ labels: [], merged_at: "x" })) } } }
   assert.match(await reason(noFiles), /files of .*unreachable/u)
-})
-
-test("a git_ref rule is delivered when the merge commit is an ancestor of a matching ref, newest-listed first", async () => {
-  const policy = { schema_version: 1, rules: [TAG_RULE, MERGE_RULE] }
-  const refs = { status: 200, body: [{ ref: "refs/tags/v1", object: { sha: "s1" } }, { ref: "refs/tags/v2", object: { sha: "s2" } }, { ref: "refs/tags/vnext/x", object: { sha: "s3" } }, { ref: "refs/tags/other", object: { sha: "s4" } }] }
-  const reached = withPolicy(policy, { files: filesOf("src/a.js"), refs, compare: (url) => ({ status: 200, body: { status: url.includes("...s1") ? "ahead" : "behind" } }) })
-  assert.deepEqual(await ask(reached), { status: "delivered", basis: "its merge commit is in refs/tags/v1" })
-  assert.ok(reached.calls.some((call) => call.url.includes("/matching-refs/tags/v?per_page=100")))
-  assert.ok(reached.calls.some((call) => call.url.includes("/compare/abc123...s1?per_page=1")))
-  const identical = withPolicy(policy, { files: filesOf("src/a.js"), refs, compare: () => ({ status: 200, body: { status: "identical" } }) })
-  assert.equal((await ask(identical)).status, "delivered")
-  const not = withPolicy(policy, { files: filesOf("src/a.js"), refs })
-  const answer = await ask(not)
-  assert.equal(answer.status, "undelivered")
-  assert.match(answer.unmet[0].need, /^reach a ref matching `refs\/tags\/v\*`$/u)
-  assert.equal(not.calls.filter((call) => call.url.includes("/compare/")).length, 2, "a tag in another folder and a tag the pattern does not match are never compared")
-  // A change outside the rule needs no ref at all.
-  assert.equal((await ask(withPolicy(policy, { files: filesOf("README.md"), refs }))).status, "delivered")
-  // An unmerged pull request has no merge commit to find.
-  const unmerged = await ask(withPolicy(policy, { files: filesOf("src/a.js"), pr: { status: 200, body: { labels: [], merged_at: null } } }))
-  assert.equal(unmerged.status, "undelivered")
-  assert.match(unmerged.unmet[0].need, /^be merged and reach /u)
-  // A pattern with no wildcard names one ref.
-  const exact = withPolicy({ schema_version: 1, rules: [{ paths: ["src/**"], delivered_at: { kind: "git_ref", pattern: "refs/heads/release" } }] }, { files: filesOf("src/a.js"), refs: { status: 200, body: [{ ref: "refs/heads/release", object: { sha: "r" } }] }, compare: () => ({ status: 200, body: { status: "ahead" } }) })
-  assert.equal((await ask(exact)).status, "delivered")
-})
-
-test("a git_ref rule that GitHub cannot answer is not_verified", async () => {
-  const policy = { schema_version: 1, rules: [TAG_RULE] }
-  const refs = { status: 200, body: [{ ref: "refs/tags/v1", object: { sha: "s1" } }] }
-  const rest = { files: filesOf("src/a.js") }
-  assert.match((await ask(withPolicy(policy, { ...rest, refs: { status: 500, body: "" } }))).reason, /refs matching refs\/tags\/v\* could not be read.*HTTP 500/u)
-  assert.match((await ask(withPolicy(policy, { ...rest, refs: { status: 200, body: "{}" } }))).reason, /could not be read/u)
-  assert.match((await ask(withPolicy(policy, { ...rest, refs, compare: () => ({ status: 404, body: "" }) }))).reason, /refs\/tags\/v1 could not be compared.*HTTP 404/u)
-  assert.match((await ask(withPolicy(policy, { ...rest, refs: { status: 200, body: [null, { ref: "refs/tags/v2" }] }, compare: () => ({ status: 200, body: "null" }) }))).reason, /could not be compared/u)
 })
 
 test("a request that hangs is aborted at the budget and skipped", async () => {
@@ -236,7 +217,7 @@ test("task_update refuses done on an undelivered PR and leaves the card alone; t
   const file = path.join(root, "t", "gated", "task.md")
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "gated", frontmatter: { status: "done" }, evidence: PR }, fetchFn: fakeGitHub().fetchFn }), /task_update: ourostack\/desk#200 is not delivered yet/u)
   assert.notEqual((await readFront(file)).data.status, "done")
-  const released = fakeGitHub({ pr: { status: 200, body: { labels: [{ name: "released" }] } } })
+  const released = fakeGitHub({ pr: { status: 200, body: { labels: [{ name: "released" }], merged_at: "x" } } })
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "gated", frontmatter: { status: "done" }, evidence: PR }, fetchFn: released.fetchFn })
   assert.equal((await readFront(file)).data.status, "done")
   assert.equal(result.delivery_check, "delivered: carries the `released` label")

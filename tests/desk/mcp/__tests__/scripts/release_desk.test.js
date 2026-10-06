@@ -170,6 +170,10 @@ const stepNamed = (job, name) => {
   return found
 }
 
+function sharedScript() {
+  return readFileSync(path.join(repoRoot, "scripts", "build-and-check-release.sh"), "utf8")
+}
+
 test("the release workflow runs on main one at a time and daily, checks the release, pushes it and reports a failure", () => {
   const { text, workflow } = releaseWorkflow()
   assert.deepEqual(workflow.on.push, { branches: ["main"], paths: ["plugins/desk/changelog.d/**"] })
@@ -179,9 +183,9 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false })
   assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "announce", "report"])
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
-  assert.match(build, /node scripts\/release-desk\.cjs --date/u)
-  assert.match(build, /node scripts\/check-release-integrity\.cjs/u)
-  assert.match(build, /"\.\.\/\.\.\/\.\.\/tests\/desk\/mcp\/__tests__\/release\/\*\*\/\*\.test\.js"/u)
+  assert.match(build, /scripts\/build-and-check-release\.sh$/mu)
+  assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)
+  assert.match(sharedScript(), /node scripts\/check-release-integrity\.cjs/u)
   const report = workflow.jobs.report
   assert.deepEqual(report.needs, ["build", "push", "announce"])
   assert.deepEqual(report.permissions, { issues: "write" })
@@ -203,15 +207,17 @@ test("the release workflow checks every release surface in a read-only job and p
   assert.deepEqual(push.permissions, { contents: "write", actions: "write" })
   assert.doesNotMatch(JSON.stringify(build), /github\.token|secrets\./u, "the build job never receives a write credential")
   for (const job of [build, push]) assert.equal(stepNamed(job, "Check out main").with["persist-credentials"], false)
-  const checks = stepNamed(build, "Build and check the release").run
+  // The release and the pull request dry run run the same script, so the checks below are the checks of both.
+  assert.match(stepNamed(build, "Build and check the release").run, /scripts\/build-and-check-release\.sh$/mu)
+  const checks = sharedScript()
   for (const check of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) {
     assert.match(checks, new RegExp(check, "u"), check)
   }
   for (const folder of ["release", "activation", "artifacts", "docs", "scripts"]) {
-    assert.ok(checks.includes(`"../../../tests/desk/mcp/__tests__/${folder}/**/*.test.js"`), folder)
+    assert.match(checks, new RegExp(`^patterns=\\(.*\\b${folder}\\b.*\\)$`, "mu"), folder)
   }
-  assert.match(checks, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
-  assert.match(checks, /echo "sha=\$sha"; echo "base=\$base"/u)
+  assert.match(stepNamed(build, "Build and check the release").run, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
+  assert.match(checks, /output "released=true" "summary=\$summary" "sha=\$sha" "base=\$base"/u)
   // The push job uses only actions and git: no npm, no node and no script from the repository.
   assert.equal(push.needs, "build")
   assert.equal(push.if, "needs.build.outputs.released == 'true'")
@@ -237,71 +243,155 @@ test("the release workflow checks every release surface in a read-only job and p
   assert.equal(report.permissions.issues, "write")
 })
 
-test("the release workflow marks every pull request a release carries, once, after the push", () => {
+test("the release workflow marks every released pull request that lacks the mark, once, even on a run with nothing to release", () => {
   const { workflow } = releaseWorkflow()
-  const { build, announce } = workflow.jobs
-  assert.equal(build.outputs.version, "${{ steps.release.outputs.version }}")
-  assert.match(stepNamed(build, "Build and check the release").run, /echo "version=\$version"/u)
+  const { announce } = workflow.jobs
   assert.deepEqual(announce.needs, ["build", "push"])
-  assert.equal(announce.if, "needs.build.outputs.released == 'true' && needs.push.result == 'success' && needs.push.outputs.handed_off != 'true'")
+  assert.match(announce.if, /needs\.build\.result == 'success'/u)
+  assert.doesNotMatch(announce.if, /outputs\.released/u, "a run with nothing to release still catches up")
+  assert.match(announce.if, /needs\.push\.outputs\.handed_off != 'true'/u)
   assert.deepEqual(announce.permissions, { contents: "read", issues: "write", "pull-requests": "write" })
   assert.doesNotMatch(JSON.stringify(announce), /secrets\.|DEPLOY_KEY|\bnpm\b|\bnode\b/u, "marking holds no deploy key and runs no dependency or repository code")
-  assert.equal(stepNamed(announce, "Check out the release").with["persist-credentials"], false)
-  assert.equal(stepNamed(announce, "Check out the release").with.ref, "${{ needs.build.outputs.sha }}")
-  const run = stepNamed(announce, "Comment on and label every pull request the release carries").run
-  assert.match(run, /--grep='\^Release Desk \[0-9\]'/u, "the previous release is found by its subject")
-  assert.match(run, /range="\$previous\.\.\$BASE"/u, "the release carries what merged since the previous release, up to the commit it was built on")
-  assert.match(run, /commits\/\$commit\/pulls/u)
-  assert.match(run, /gh label create "\$LABEL" /u, "the label is created when missing")
-  assert.match(run, /labels\/\$LABEL" --jq \.name\)" = "\$LABEL"/u, "a label that already exists counts as there")
-  assert.match(run, /body="Released in Desk \$VERSION"/u)
+  const checkout = stepNamed(announce, "Check out main")
+  assert.equal(checkout.with["persist-credentials"], false)
+  assert.equal(checkout.with["fetch-depth"], 0)
+  const run = stepNamed(announce, "Comment on and label every released pull request that lacks the label").run
+  assert.match(run, /--search "-label:\$LABEL"/u)
+  assert.match(run, /--grep='\^Release Desk \[0-9\]'/u, "the carrying release is found by its subject")
   assert.match(run, /grep -qxF -- "\$body"/u, "a rerun does not comment twice")
   assert.equal(announce.env.LABEL, "released")
+  // The issue stays open until marking has succeeded.
+  assert.match(stepNamed(workflow.jobs.report, "Close the release issue after a successful run").if, /needs\.announce\.result == 'success'/u)
 })
 
-test("the marking logic finds the pull requests between the previous release and the base, and is safe to repeat", () => {
+// Runs the marking step for real against a scratch history and a fake gh.
+function markingRun({ commentsOn = {}, mark }) {
   const { workflow } = releaseWorkflow()
-  const run = stepNamed(workflow.jobs.announce, "Comment on and label every pull request the release carries").run
+  const run = stepNamed(workflow.jobs.announce, "Comment on and label every released pull request that lacks the label").run
   const dir = mkdtempSync(path.join(tmpdir(), "announce-"))
-  const git = (...args) => spawnSync("git", ["-C", dir, "-c", "user.name=u", "-c", "user.email=u@example.com", ...args], { encoding: "utf8" })
+  const git = (...args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" })
   git("init", "-q", "-b", "main")
-  const commit = (name, email, message) => spawnSync("git", ["-C", dir, "-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "-q", "--allow-empty", "-m", message], { encoding: "utf8" })
-  commit("github-actions[bot]", "b@example.com", "Release Desk 3.2.0-alpha.1")
-  commit("Dev", "d@example.com", "Release Desk 3.2.0-alpha.9 is mentioned by a person (#1)")
-  commit("Dev", "d@example.com", "first change (#10)")
-  commit("Dev", "d@example.com", "second change (#11)")
-  const base = git("rev-parse", "HEAD").stdout.trim()
-  const shas = git("log", "--format=%s=%H").stdout.trim().split("\n")
-  const sha = (subject) => shas.find((line) => line.startsWith(subject)).split("=").pop()
-  // A fake gh answers the commit-to-pull-request lookup and records every write.
+  const commit = (name, message) => spawnSync("git", ["-C", dir, "-c", `user.name=${name}`, "-c", "user.email=u@example.com", "commit", "-q", "--allow-empty", "-m", message], { encoding: "utf8" })
+  const shaOf = {}
+  for (const [name, message] of mark.history) {
+    commit(name === "bot" ? "github-actions[bot]" : "Dev", message)
+    shaOf[message] = git("rev-parse", "HEAD").stdout.trim()
+  }
   const bin = path.join(dir, "bin")
   mkdirSync(bin)
   const ghLog = path.join(dir, "gh.log")
-  const existing = path.join(dir, "existing")
-  writeFileSync(existing, "Released in Desk 3.2.0-alpha.2\n")
+  const listing = mark.unlabeled.map(([number, message]) => `echo "${number} ${shaOf[message]}"`).join("\n")
+  const commentCases = Object.entries(commentsOn).map(([number, body]) => `  *"/issues/${number}/comments"*"--jq"*) echo "${body}" ;;`).join("\n")
   writeFileSync(path.join(bin, "gh"), `#!/bin/sh
 echo "$*" >> "${ghLog}"
 case "$*" in
-  *"/commits/${sha("first change")}/pulls"*) echo 10 ;;
-  *"/commits/${sha("second change")}/pulls"*) echo 11; echo 10 ;;
-  *"/issues/10/comments"*"--jq"*) cat "${existing}" ;;
+  "pr list"*) ${listing || ":"} ;;
+${commentCases}
 esac
+${mark.failOn ? `case "$*" in *"${mark.failOn}"*) exit 1 ;; esac` : ""}
 `, { mode: 0o755 })
-  const env = { ...process.env, RUNNER_TEMP: dir, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: path.join(dir, "summary"), LABEL: "released", BASE: base, VERSION: "3.2.0-alpha.2" }
+  const env = { ...process.env, RUNNER_TEMP: dir, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: path.join(dir, "summary"), LABEL: "released" }
   const result = spawnSync("bash", ["-c", run], { cwd: dir, env, encoding: "utf8" })
-  assert.equal(result.status, 0, result.stderr)
-  const calls = readFileSync(ghLog, "utf8")
-  assert.match(calls, /label create released --repo o\/r /u)
-  // #10 already has this release's comment: only the label call is repeated. #11 gets both.
-  assert.doesNotMatch(calls, /POST o\/r\/issues\/10\/comments|--method POST repos\/o\/r\/issues\/10\/comments/u)
-  assert.match(calls, /--method POST repos\/o\/r\/issues\/10\/labels --raw-field labels\[\]=released/u)
-  assert.match(calls, /--method POST repos\/o\/r\/issues\/11\/comments --field body=Released in Desk 3\.2\.0-alpha\.2/u)
-  assert.match(calls, /--method POST repos\/o\/r\/issues\/11\/labels/u)
-  assert.equal(calls.split("\n").filter((line) => line.includes("/commits/")).length, 3, "the previous release itself is outside the range, a person's commit that mentions a release subject is inside it")
-  // With nothing merged since the previous release nothing is marked.
-  writeFileSync(ghLog, "")
-  const none = spawnSync("bash", ["-c", run], { cwd: dir, env: { ...env, PATH: `${bin}:${process.env.PATH}`, BASE: sha("Release Desk 3.2.0-alpha.1") }, encoding: "utf8" })
-  assert.equal(none.status, 0, none.stderr)
-  assert.doesNotMatch(readFileSync(ghLog, "utf8"), /POST/u)
+  const calls = existsSync(ghLog) ? readFileSync(ghLog, "utf8") : ""
   rmSync(dir, { recursive: true, force: true })
+  return { result, calls }
+}
+const HISTORY = [["bot", "Release Desk 3.2.0-alpha.1"], ["dev", "first (#10)"], ["dev", "second (#11)"], ["bot", "Release Desk 3.2.0-alpha.2"], ["dev", "third (#12)"], ["bot", "Release Desk 3.2.0-alpha.3"], ["dev", "Release Desk 3.2.0-alpha.9 quoted by a person (#13)"], ["dev", "unreleased (#14)"]]
+
+test("marking labels each unlabeled released pull request with the first release after it, and skips unreleased ones", () => {
+  const { result, calls } = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"], [12, "third (#12)"], [14, "unreleased (#14)"], [13, "Release Desk 3.2.0-alpha.9 quoted by a person (#13)"]] } })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(calls, /label create released --repo o\/r /u)
+  for (const [number, version] of [[10, "alpha.2"], [11, "alpha.2"], [12, "alpha.3"]]) {
+    assert.match(calls, new RegExp(`--method POST repos/o/r/issues/${number}/comments --field body=Released in Desk 3\\.2\\.0-${version.replace(".", "\\.")}`, "u"), `#${number}`)
+    assert.match(calls, new RegExp(`--method POST repos/o/r/issues/${number}/labels --raw-field labels\\[\\]=released`, "u"), `#${number}`)
+  }
+  // #13 sits after the last release by a person's commit that merely quotes a release subject; #14 is after it too.
+  assert.doesNotMatch(calls, /issues\/1[34]\/(comments|labels)/u)
+})
+
+test("announce failed on one release, the next release succeeds: the earlier release's pull requests are marked with their own version", () => {
+  // Alpha.2's marking failed (nothing was labeled). A later run, after alpha.3, still finds #10 and #11 unlabeled and marks them alpha.2.
+  const failed = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"]], failOn: "/issues/10/labels" } })
+  assert.notEqual(failed.result.status, 0, "a failed label call fails the job, so the issue stays open")
+  const caught = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"]] } })
+  assert.equal(caught.result.status, 0, caught.result.stderr)
+  assert.match(caught.calls, /issues\/10\/comments --field body=Released in Desk 3\.2\.0-alpha\.2/u)
+  assert.match(caught.calls, /issues\/11\/labels/u)
+})
+
+test("marking is safe to repeat: an existing comment is not repeated, and nothing to mark is a clean run", () => {
+  const { result, calls } = markingRun({ commentsOn: { 10: "Released in Desk 3.2.0-alpha.2" }, mark: { history: HISTORY, unlabeled: [[10, "first (#10)"]] } })
+  assert.equal(result.status, 0, result.stderr)
+  assert.doesNotMatch(calls, /--method POST repos\/o\/r\/issues\/10\/comments/u)
+  assert.match(calls, /--method POST repos\/o\/r\/issues\/10\/labels/u)
+  const none = markingRun({ mark: { history: HISTORY, unlabeled: [] } })
+  assert.equal(none.result.status, 0, none.result.stderr)
+  assert.doesNotMatch(none.calls, /POST|label create/u)
+})
+
+test("pull request CI dry-runs the release through the same script, and the CI gate waits for it", () => {
+  const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
+  const job = tests.jobs["release-dry-run"]
+  assert.equal(job.name, "Release dry run")
+  assert.equal(job["continue-on-error"], undefined)
+  assert.equal(job.if, undefined)
+  assert.match(stepNamed(job, "Build and check the release without keeping it").run, /^scripts\/build-and-check-release\.sh --dry-run$/u)
+  assert.ok(tests.jobs["ci-gate"].needs.includes("release-dry-run"))
+  const release = stepNamed(releaseWorkflow().workflow.jobs.build, "Build and check the release").run
+  assert.match(release, /scripts\/build-and-check-release\.sh$/mu)
+  assert.doesNotMatch(release, /--dry-run/u)
+})
+
+test("the shared release script fails a test step that matches no file or runs no test", () => {
+  const text = sharedScript()
+  assert.match(text, /matches no test file/u)
+  assert.match(text, /\[ "\$\{ran:-0\}" -gt 0 \]/u)
+})
+
+// Runs the real script in a temporary repository whose release scripts are stubs, so the dry run's own behaviour is exercised.
+function dryRunRepo({ tests }) {
+  const root = mkdtempSync(path.join(tmpdir(), "dry-run-"))
+  const put = (file, text) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
+    writeFileSync(path.join(root, file), text)
+  }
+  put("scripts/build-and-check-release.sh", readRepo("scripts/build-and-check-release.sh"))
+  put("scripts/release-desk.cjs", `const fs = require("node:fs"); const dir = "plugins/desk/changelog.d";
+const found = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.endsWith(".md") && n !== "README.md") : [];
+if (found.length) { for (const n of found) fs.rmSync(dir + "/" + n); fs.writeFileSync("plugins/desk/released.txt", "x"); }
+console.log(JSON.stringify({ released: found.length > 0, to: "9.9.9-alpha.1", fragments: found.map((n) => dir + "/" + n) }));\n`)
+  for (const name of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) put(`scripts/${name}.cjs`, "")
+  put(".claude-plugin/marketplace.json", "{}\n")
+  put("plugins/desk/changelog.d/README.md", "readme\n")
+  put("plugins/desk/mcp/package.json", "{}\n")
+  put("tests/desk/mcp/__tests__/_isolated_env.mjs", "")
+  for (const name of ["release", "activation", "artifacts", "docs", "scripts"]) put(`tests/desk/mcp/__tests__/${name}/a.test.js`, tests)
+  const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, encoding: "utf8" })
+  git("init", "-q", "-b", "main")
+  git("add", "--all")
+  git("commit", "-q", "-m", "start")
+  return { root, git, head: () => git("rev-parse", "HEAD").stdout.trim() }
+}
+const runDryRun = (repo) => spawnSync("bash", ["scripts/build-and-check-release.sh", "--dry-run"], { cwd: repo.root, encoding: "utf8", env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT")) })
+
+test("a dry run with no fragment pending still folds and checks a throwaway fragment, then restores the tree", () => {
+  const repo = dryRunRepo({ tests: 'require("node:test")("t", () => {})\n' })
+  const before = repo.head()
+  const result = runDryRun(repo)
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /builds and passes every check/u)
+  assert.equal(repo.head(), before)
+  assert.equal(repo.git("status", "--porcelain").stdout, "")
+  assert.equal(repo.git("branch", "--show-current").stdout.trim(), "main")
+  rmSync(repo.root, { recursive: true, force: true })
+})
+
+test("a dry run whose release tests are all skipped fails, because only passing tests count", () => {
+  const repo = dryRunRepo({ tests: 'require("node:test")("t", { skip: true }, () => {})\n' })
+  const result = runDryRun(repo)
+  assert.equal(result.status, 1, result.stdout + result.stderr)
+  assert.match(result.stdout + result.stderr, /passed 0 tests/u)
+  assert.equal(repo.git("status", "--porcelain").stdout, "")
+  rmSync(repo.root, { recursive: true, force: true })
 })

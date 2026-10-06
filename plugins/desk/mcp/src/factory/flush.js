@@ -84,7 +84,13 @@
 //   session away. Three invariants hold. I1: only a `here` session is
 //   published, or released from quarantine, to the store; unknown, stale,
 //   stalled and held (facts quarantined) sessions are frozen, never published
-//   and never deleted, and never send a flush online. I2: an online flush
+//   and never deleted, and never send a flush online. "Away" is durable
+//   outside `status.json`: the local copies of every session that is not
+//   here leave the outbox for `retracted-copies/` (the sweep does the same
+//   for every store a session no longer routes to, or for every store when
+//   it has no route at all), and a session with a kept copy, a held one with
+//   no derivation receipt, or one whose recorded desk folder no longer
+//   resolves, is here only on a positive route, else frozen. I2: an online flush
 //   rebuilds the intake branch from the change set the current state wants
 //   (publishes plus the deletes still needed); when that set is empty it
 //   closes this machine's open intake PR and resets the branch. Every online
@@ -181,7 +187,7 @@ import { serializePublished, toPublished, toPublishedLabels } from "./publish.js
 import { validatePublishedBytes } from "./published-schema.js"
 import { isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
 import { PATTERNS, isPlainObject } from "./schema.js"
-import { derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
+import { derivedStoreOf, deskRootOf, isFolder, sessionPlace, sessionRoute } from "./session-route.js"
 
 /** Every result `flush` can return. */
 export const FLUSH_CODES = Object.freeze([
@@ -868,8 +874,6 @@ async function deliver(env, context) {
   if (!INTAKE_ID.test(record.intake_id ?? "")) stop("unexpected")
   const { account } = record
 
-  // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so they go again.
-  await releaseRefusedPluginNames(env, store)
   const status = await readStatus(env)
   const prior = status.last_flush?.[store] ?? {}
   const priorRefused = new Set(list(prior.refused_retractions).filter((name) => typeof name === "string"))
@@ -898,8 +902,10 @@ async function deliver(env, context) {
   let candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed })
   let labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed })
   progress.newerFormat = newer.size
-  // The kept copies of retracted sessions, which a lost record may leave with no session to name them.
+  // The kept copies of sessions that left this store, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
+  // The sessions held (a facts quarantine record: a labels-only quarantine holds nothing) before anything is released.
+  const heldBefore = new Set([...delivered.quarantined].filter((name) => !LABELS_KEY.test(name)).map(sessionOfName))
   const keptSet = new Set(keptNow)
   // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
@@ -926,21 +932,34 @@ async function deliver(env, context) {
     const deskRoot = deskRootOf(receipts, names)
     const route = sessionRoute(marker, { siblings: () => markers, deskRoot })
     let place = sessionPlace(store, route, derivedStoreOf(receipts, names), recordsOf.get(session))
-    // A session with a kept (retracted) copy fails closed: without a positive route here it stays away, so a lost or unreadable `status.json`, or a pruned tombstone, can never read as "no record, so here" and publish what was withdrawn.
-    if (place === "here" && route.kind !== "store" && keptSet.has(session)) place = "away"
+    // "Here" without a positive route rests on records that can be lost, so it fails closed where anything says the session left: a kept copy
+    // (every session that was not here had its copies moved to `retracted-copies/`, below), a held copy with no receipt to say where it was
+    // derived, or a recorded desk folder that no longer resolves (moved or renamed: where it routes now cannot be read). Such a session is frozen (`stale`: never published, never deleted) until a positive route says here, so a lost, unreadable or
+    // stale `status.json`, or a pruned tombstone, can never read as "no record, so here" and publish what left this store.
+    // A desk folder that was recorded (the marker's or the receipt's) and no longer resolves says nothing about where the desk routes now: not here.
+    const recorded = [marker?.desk_root, deskRoot].filter((root) => typeof root === "string")
+    const deskGone = recorded.length > 0 && !recorded.some(isFolder)
+    const unproven = keptSet.has(session) || (heldBefore.has(session) && derivedStoreOf(receipts, names) === undefined) || deskGone
+    if (place === "here" && route.kind !== "store" && unproven) place = "stale"
     places.set(session, place)
     if (route.kind !== "store") continue
     const root = marker?.desk_root ?? deskRoot
     for (const name of names.filter((name) => localNames.includes(name) && (receipts[name]?.route !== route.store || receipts[name]?.desk_root !== root))) routes[name] = { store: route.store, deskRoot: root }
   }
   if (Object.keys(routes).length > 0) await recordRoutes(env, routes)
-  // The local copies of a retracted session live in `retracted-copies/`, out of reach of an older Desk's flush. A session with a record that does
-  // not route here has its copies moved there now (which also adopts any left in the outbox); one that routes back has them moved home before it publishes.
+  // "Away" is durable outside `status.json`: the local copies of every session that is not here (away, stale, stalled or unknown, held or not,
+  // delivered or not) leave the outbox for `retracted-copies/`, out of reach of an older Desk's flush, and a kept copy is never here again without
+  // a positive route (above). One that routes back has its copies moved home before it publishes.
   const retractedSessions = [...new Set([...recordsOf.keys(), ...keptNow])]
-  await keepRetractedCopies(env, store, retractedSessions.filter((session) => places.get(session) !== "here"))
-  if ((await restoreRetractedCopies(env, store, retractedSessions.filter((session) => places.get(session) === "here"))).length > 0) {
+  await keepRetractedCopies(env, store, [...places].filter(([, place]) => place !== "here").map(([session]) => session))
+  const restored = await restoreRetractedCopies(env, store, retractedSessions.filter((session) => places.get(session) === "here"))
+  // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so those of a session
+  // that is here go again.
+  const refusedReleased = await releaseRefusedPluginNames(env, store, { sessions: new Set([...places].filter(([, place]) => place === "here").map(([session]) => session)) })
+  if (restored.length > 0 || refusedReleased.facts.length + refusedReleased.labels.length > 0) {
     candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed })
     labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed })
+    delivered = await readDelivered(env, store)
   }
   // Kept copies still waiting (their session routes elsewhere) are what finds an away session's files in the store when its records are lost.
   const keptCandidates = [

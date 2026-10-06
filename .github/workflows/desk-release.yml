@@ -13,9 +13,9 @@ name: Desk release
 # - push holds the write token and runs no npm and no repository script. It takes the checked commit from build as a
 #   git bundle, verifies it is one commit on the main build started from that changes only release surfaces and
 #   removes only fragments, and pushes that commit with hooks disabled.
-# - announce runs after a successful push and marks every pull request the release carries: a comment "Released in Desk
-#   <version>" and the `released` label. A merged pull request is delivered only when a release has carried it, and Desk's
-#   done-gate (plugins/desk/mcp/src/tools/release-gate.js, rules in .desk/delivery.json) reads that label.
+# - announce runs when build and push did not fail and marks every merged pull request a release has carried that lacks the
+#   mark: a comment "Released in Desk <version>" and the `released` label. It catches up on earlier runs. A merged pull request is delivered only when a release has carried it, and Desk's
+#   done-gate (plugins/desk/mcp/src/tools/delivery-gate.js, rules in .desk/delivery.json) reads that label.
 # - report opens, updates or closes the "Desk release needs attention" issue.
 # Main requires the CI gate before a change lands (.github/rulesets/main-requires-ci.json), and GitHub does not let a
 # ruleset bypass list name the workflow token (GitHub Actions is refused as a bypass actor). So the push uses a deploy
@@ -55,7 +55,6 @@ jobs:
       summary: ${{ steps.release.outputs.summary }}
       sha: ${{ steps.release.outputs.sha }}
       base: ${{ steps.release.outputs.base }}
-      version: ${{ steps.release.outputs.version }}
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
@@ -77,37 +76,21 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
-      # Builds the release on the checked-out main and runs every check that reads a version surface, the changelog or a
-      # fragment. The list follows the release-sensitive checks in validate-skills.yml.
+      # Builds the release on the checked-out main and runs every check on the release commit. The steps live in
+      # scripts/build-and-check-release.sh, which pull request CI also runs as a dry run (desk-mcp-tests.yml), so a
+      # release that would fail fails its pull request first.
       - name: Build and check the release
         id: release
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           base="$(git rev-parse HEAD)"
-          node scripts/release-desk.cjs --date "$(date -u +%F)" > "$RUNNER_TEMP/release.json"
-          if [ "$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").released')" != "true" ]; then
-            echo "No changelog fragment is pending; nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "released=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          RELEASE_OUTPUT="$GITHUB_OUTPUT" RELEASE_RUN_URL="$RUN_URL" scripts/build-and-check-release.sh
+          if grep -qx 'released=true' "$GITHUB_OUTPUT"; then
+            mkdir -p "$RUNNER_TEMP/desk-release"
+            git bundle create "$RUNNER_TEMP/desk-release/release.bundle" refs/heads/main "^$base"
+          else
+            echo "No changelog fragment is pending; nothing to release." >> "$GITHUB_STEP_SUMMARY"
           fi
-          summary="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/release.json"); `Desk ${r.to} from ${r.fragments.length} changelog fragment(s): ${r.fragments.map((f) => f.split("/").pop()).join(", ")}`')"
-          version="$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").to')"
-          git add --all -- .claude-plugin plugins/desk tests/desk
-          git commit --quiet --message "Release Desk $version" --message "$summary. Released by $RUN_URL."
-          sha="$(git rev-parse HEAD)"
-          # The checks run on the commit that will be pushed: some list tracked files, which must not include the fragments
-          # the release deleted.
-          test -z "$(git status --porcelain)"
-          node scripts/check-release-integrity.cjs
-          for check in validate-skills test-desk-docs test-desk-host-manifests test-desk-generated-artifacts test-desk-contracts; do
-            node "scripts/$check.cjs"
-          done
-          (cd plugins/desk/mcp && node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test "../../../tests/desk/mcp/__tests__/release/**/*.test.js" "../../../tests/desk/mcp/__tests__/activation/**/*.test.js" "../../../tests/desk/mcp/__tests__/artifacts/**/*.test.js" "../../../tests/desk/mcp/__tests__/docs/**/*.test.js" "../../../tests/desk/mcp/__tests__/scripts/**/*.test.js")
-          mkdir -p "$RUNNER_TEMP/desk-release"
-          git bundle create "$RUNNER_TEMP/desk-release/release.bundle" refs/heads/main "^$base"
-          { echo "released=true"; echo "summary=$summary"; echo "sha=$sha"; echo "base=$base"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
 
       - name: Hand the checked release commit to the push job
         if: steps.release.outputs.released == 'true'
@@ -215,15 +198,16 @@ jobs:
           echo "::error::The release push was refused: $result $(cat "$RUNNER_TEMP/push-error.txt"). If main now refuses this push, check the ruleset's bypass list and the DESK_RELEASE_DEPLOY_KEY secret."
           exit 1
 
-  # The pull requests a release carries are the merged ones between the previous release commit and the commit this release
-  # was built on (the release commit has exactly that base): a release folds in every fragment pending on main, so it carries
-  # everything merged since the last release that succeeded, including what an earlier failed run left behind. This job runs
-  # only gh and git, never a repository script, and holds no write access to code. A rerun finds the comment and the label
-  # already there and changes nothing, so "Re-run failed jobs" is always safe.
+  # Marking is a catch-up, not a one-shot: every merged pull request on main that lacks the `released` label and has a release
+  # commit after its merge commit gets a "Released in Desk <version>" comment (the version of the first release after it) and the
+  # label. So a run whose marking failed, or a release that was handed off, is repaired by the next run that gets this far, and a
+  # run with nothing to release still marks what an earlier run left. The "Desk release needs attention" issue stays open until a run
+  # finishes with marking done. This job runs only gh and git, never a repository script, and holds no write access to code. A rerun
+  # finds the comment and the label already there and changes nothing, so "Re-run failed jobs" is always safe.
   announce:
-    name: Mark the pull requests the release carries
+    name: Mark the pull requests the releases carry
     needs: [build, push]
-    if: needs.build.outputs.released == 'true' && needs.push.result == 'success' && needs.push.outputs.handed_off != 'true'
+    if: always() && needs.build.result == 'success' && (needs.push.result == 'success' || needs.push.result == 'skipped') && needs.push.outputs.handed_off != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -234,51 +218,45 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       LABEL: released
-      BASE: ${{ needs.build.outputs.base }}
-      VERSION: ${{ needs.build.outputs.version }}
     steps:
-      - name: Check out the release
+      - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.build.outputs.sha }}
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Comment on and label every pull request the release carries
+      - name: Comment on and label every released pull request that lacks the label
         run: |
           set -euo pipefail
-          [[ "$BASE" =~ ^[0-9a-f]{40}$ && "$VERSION" =~ ^[0-9A-Za-z.+-]+$ ]] || { echo "::error::The build job handed over no valid base or version."; exit 1; }
-          # The previous release is the last commit the release bot made with a release subject before this release's base.
-          previous="$(git log -n 1 --format=%H --extended-regexp --author='github-actions\[bot\]' --grep='^Release Desk [0-9]' "$BASE")"
-          if [ -n "$previous" ]; then
-            range="$previous..$BASE"
-          else
-            range="-n 100 $BASE"
-            echo "No earlier release commit found; marking the pull requests merged in the last 100 commits." | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
-          numbers=""
-          for commit in $(git rev-list $range); do
-            found="$(gh api "repos/$GITHUB_REPOSITORY/commits/$commit/pulls" --jq '.[] | select(.merged_at != null and .base.ref == "main") | .number')"
-            numbers="$(printf '%s\n%s\n' "$numbers" "$found")"
-          done
-          numbers="$(printf '%s\n' "$numbers" | grep -E '^[0-9]+$' | sort -un || true)"
-          if [ -z "$numbers" ]; then
-            echo "Desk $VERSION carries no merged pull request; nothing to mark." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          # Creating a label that already exists is refused, so the label counts as there when it can be read afterwards.
-          if ! gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" --color 0e8a16 --description "A Desk release has carried this pull request" 2> "$RUNNER_TEMP/label-error.txt"; then
-            [ "$(gh api "repos/$GITHUB_REPOSITORY/labels/$LABEL" --jq .name)" = "$LABEL" ] || { echo "::error::Could not create the $LABEL label: $(cat "$RUNNER_TEMP/label-error.txt")"; exit 1; }
-          fi
-          body="Released in Desk $VERSION"
-          for number in $numbers; do
+          head="$(git rev-parse HEAD)"
+          candidates="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --search "-label:$LABEL" --limit 200 --json number,mergeCommit --jq '.[] | select(.mergeCommit != null) | "\(.number) \(.mergeCommit.oid)"')"
+          created=false
+          marked=0
+          while read -r number commit; do
+            [ -n "$number" ] || continue
+            # Carried only when a release commit by the release bot follows its merge commit on main.
+            git merge-base --is-ancestor "$commit" "$head" 2>/dev/null || continue
+            subject="$(git log --reverse --ancestry-path --format=%s --extended-regexp --author='github-actions\[bot\]' --grep='^Release Desk [0-9]' "$commit..$head" | sed -n 1p)"
+            [ -n "$subject" ] || continue
+            version="${subject#Release Desk }"
+            if [ "$created" = false ]; then
+              # Creating a label that already exists is refused, so the label counts as there when it can be read afterwards.
+              if ! gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" --color 0e8a16 --description "A Desk release has carried this pull request" 2> "$RUNNER_TEMP/label-error.txt"; then
+                [ "$(gh api "repos/$GITHUB_REPOSITORY/labels/$LABEL" --jq .name)" = "$LABEL" ] || { echo "::error::Could not create the $LABEL label: $(cat "$RUNNER_TEMP/label-error.txt")"; exit 1; }
+              fi
+              created=true
+            fi
+            body="Released in Desk $version"
             comments="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$number/comments" --jq '.[].body')"
             if ! grep -qxF -- "$body" <<< "$comments"; then
               gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$number/comments" --field body="$body" > /dev/null
             fi
             gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$number/labels" --raw-field "labels[]=$LABEL" > /dev/null
-            echo "Marked #$number as released in Desk $VERSION." | tee -a "$GITHUB_STEP_SUMMARY"
-          done
+            marked=$((marked + 1))
+            echo "Marked #$number as released in Desk $version." | tee -a "$GITHUB_STEP_SUMMARY"
+          done <<< "$candidates"
+          [ "$marked" -gt 0 ] || echo "Every released pull request already carries the $LABEL label." | tee -a "$GITHUB_STEP_SUMMARY"
 
   # One open issue per problem: a new failure comments on it, and the next run that releases or finds nothing pending
   # closes it. A run that handed its release to a new run leaves it open, because its fragments are still pending.

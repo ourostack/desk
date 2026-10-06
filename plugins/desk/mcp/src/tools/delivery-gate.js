@@ -14,9 +14,7 @@
 //   - `merge`: always;
 //   - `github_label` (`name`): the pull request carries the label, which the repo's own CI sets when the release that carries it is published
 //     (desk-release.yml puts `released` on every pull request a release carries);
-//   - `git_ref` (`pattern`, such as `refs/tags/v*`): the pull request's merge commit is an ancestor of a ref that matches the pattern. Read
-//     here through GitHub's API; a host without that API reports `not_verified`.
-// A repo with no policy file defaults to `merge` and the answer says "no delivery rule declared". The policy is read from the repo, not from
+// A pull request that is not merged is never delivered, whatever the rules. A repo with no policy file (and visible to the caller) defaults to `merge` and the answer says "no delivery rule declared". The policy is read from the repo, not from
 // this plugin, so another repo declares its own without a Desk release.
 //
 // Two functions, one rule. `prDelivery` answers "is this pull request delivered" for any caller (the done-gate here, step delivery later) and
@@ -28,14 +26,13 @@
 // `not_verified` and the done-gate lets the move through and says so. A desk with no network must still be able to close a task, and a gate
 // that failed closed would make that impossible for as long as GitHub is unreachable. The release workflow and the boot alert are what make an
 // unreleased merge visible; this gate only closes the one door. A pull request GitHub says does not exist is refused: nothing can carry it.
-// Limits: a pull request's first 300 changed files are read, and a `git_ref` pattern is checked against at most its 100 newest-listed refs.
+// Limit: a pull request's first 300 changed files are read; more than that is `not_verified`.
 
 import { looksLikeNodeTestRunner } from "../runtime/test-state-guard.js"
 
 export const POLICY_PATH = ".desk/delivery.json"
 const REQUEST_BUDGET_MS = 5000
 const FILE_PAGES = 3
-const MAX_REFS = 100
 const GITHUB_PR = /^https:\/\/(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+)\/pull\/(\d+)(?:[/?#].*)?$/iu
 const MERGE = Object.freeze({ kind: "merge" })
 
@@ -80,35 +77,17 @@ function globToRegExp(glob) {
   return new RegExp(`^${source}$`, "u")
 }
 
-const GIT_REF = /^refs\/[^*?]+(?:[*?][^/]*)?$/u
 function usableRule(rule) {
   const at = rule?.delivered_at
   if (!Array.isArray(rule?.paths) || rule.paths.length === 0 || !rule.paths.every((entry) => typeof entry === "string" && entry !== "") || at === null || typeof at !== "object") return null
   if (at.kind === "merge") return { paths: rule.paths.map(globToRegExp), delivered_at: MERGE, label: "merge" }
   if (at.kind === "github_label" && typeof at.name === "string" && at.name !== "") return { paths: rule.paths.map(globToRegExp), delivered_at: { kind: at.kind, name: at.name }, label: `the \`${at.name}\` label` }
-  if (at.kind === "git_ref" && typeof at.pattern === "string" && GIT_REF.test(at.pattern)) return { paths: rule.paths.map(globToRegExp), delivered_at: { kind: at.kind, pattern: at.pattern }, label: `a ref matching \`${at.pattern}\`` }
   return null
-}
-
-// Whether `sha` is an ancestor of some ref that matches `pattern` (GitHub: matching-refs for the pattern's literal prefix, then compare).
-async function reachedByRef(ask, repo, sha, pattern) {
-  const prefix = pattern.slice("refs/".length).split(/[*?]/u)[0]
-  const listed = await github(ask, `/repos/${repo}/git/matching-refs/${prefix}?per_page=${MAX_REFS}`)
-  const refs = listed.status === 200 ? parse(listed.body) : null
-  if (!Array.isArray(refs)) return { error: `the refs matching ${pattern} could not be read from GitHub (${why(listed.status)})` }
-  const matcher = globToRegExp(pattern)
-  for (const ref of refs.filter((item) => matcher.test(String(item?.ref))).reverse()) {
-    const compared = await github(ask, `/repos/${repo}/compare/${sha}...${encodeURIComponent(String(ref.object?.sha))}?per_page=1`)
-    const answer = compared.status === 200 ? parse(compared.body) : null
-    if (answer === null) return { error: `${ref.ref} could not be compared with the merge commit on GitHub (${why(compared.status)})` }
-    if (answer.status === "ahead" || answer.status === "identical") return { reached: ref.ref }
-  }
-  return { reached: null }
 }
 
 /**
  * Is pull request `repo`#`number` delivered? Never throws. `{ status: "delivered", basis }` (`basis` says why: "no delivery rule declared",
- * "merge", the label, the ref), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged }` with a ready sentence in `need`,
+ * "merge", the label), `{ status: "undelivered", unmet: [{ paths, delivered_at, need }], merged }` with a ready sentence in `need`,
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
  * `fetchFn` and `budgetMs` (per request) are test seams.
  */
@@ -116,19 +95,27 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
   const ask = { fetchFn: fetchFn ?? globalThis.fetch, env, budgetMs }
   const policyAnswer = await github(ask, `/repos/${repo}/contents/${POLICY_PATH}`, "application/vnd.github.raw+json")
-  if (policyAnswer.status === 404) return { status: "delivered", basis: `no delivery rule declared in ${repo} (${POLICY_PATH}); merge counts as delivery` }
-  if (policyAnswer.status !== 200) return notVerified(`${repo}'s delivery rules could not be read from GitHub (${why(policyAnswer.status)})`)
-  const policy = parse(policyAnswer.body)
-  const rules = Array.isArray(policy?.rules) ? policy.rules.map(usableRule) : []
-  if (rules.length === 0 || rules.includes(null)) return notVerified(`${repo}'s ${POLICY_PATH} is not a usable delivery policy (every rule needs \`paths\` and a \`delivered_at\` of kind merge, github_label or git_ref)`)
-  if (rules.every((rule) => rule.delivered_at.kind === "merge")) return { status: "delivered", basis: "every rule delivers at merge" }
+  let rules = null
+  if (policyAnswer.status === 404) {
+    // A repo that is private or hidden from the caller also answers 404, so "no policy" is believed only when the repo itself is visible.
+    const visible = await github(ask, `/repos/${repo}`)
+    if (visible.status !== 200) return notVerified(`${repo} is not visible to GitHub requests from here (${why(visible.status)}), so whether it declares delivery rules is unknown; set GH_TOKEN for a private repo`)
+  } else {
+    if (policyAnswer.status !== 200) return notVerified(`${repo}'s delivery rules could not be read from GitHub (${why(policyAnswer.status)})`)
+    const policy = parse(policyAnswer.body)
+    rules = Array.isArray(policy?.rules) ? policy.rules.map(usableRule) : []
+    if (rules.length === 0 || rules.includes(null)) return notVerified(`${repo}'s ${POLICY_PATH} is not a usable delivery policy (every rule needs \`paths\` and a \`delivered_at\` of kind merge or github_label)`)
+  }
 
+  // The pull request must exist and be merged whatever the rules say.
   const prAnswer = await github(ask, `/repos/${repo}/pulls/${number}`)
   if (prAnswer.status === 404) return { status: "not_found" }
   const pr = prAnswer.status === 200 ? parse(prAnswer.body) : null
   if (pr === null || !Array.isArray(pr.labels)) return notVerified(`pull request ${repo}#${number} could not be read from GitHub (${why(prAnswer.status)})`)
+  if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false }
+  if (rules === null) return { status: "delivered", basis: `no delivery rule declared in ${repo} (${POLICY_PATH}); merge counts as delivery` }
+  if (rules.every((rule) => rule.delivered_at.kind === "merge")) return { status: "delivered", basis: "every rule delivers at merge" }
   const labels = new Set(pr.labels.map((label) => label?.name))
-  const merged = Boolean(pr.merged_at)
 
   // Which rules does this pull request's change fall under? Files are read only when a rule that needs more than the merge exists.
   const changed = []
@@ -138,6 +125,7 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
     if (!Array.isArray(files)) return notVerified(`the files of ${repo}#${number} could not be read from GitHub (${why(filesAnswer.status)})`)
     changed.push(...files.map((file) => String(file?.filename ?? "")).filter((name) => name !== ""))
     if (files.length < 100) break
+    if (page === FILE_PAGES) return notVerified(`${repo}#${number} changes more than ${FILE_PAGES * 100} files, so its rules cannot be matched`)
   }
   const matched = new Set()
   for (const file of changed) {
@@ -149,22 +137,11 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
   for (const rule of matched) {
     const at = rule.delivered_at
     if (at.kind === "merge") continue
-    if (at.kind === "github_label") {
-      if (labels.has(at.name)) bases.push(`carries the \`${at.name}\` label`)
-      else unmet.push({ delivered_at: at, need: `carry ${rule.label}` })
-      continue
-    }
-    if (!merged) {
-      unmet.push({ delivered_at: at, need: `be merged and reach ${rule.label}` })
-      continue
-    }
-    const reached = await reachedByRef(ask, repo, String(pr.merge_commit_sha), at.pattern)
-    if (reached.error !== undefined) return notVerified(reached.error)
-    if (reached.reached === null) unmet.push({ delivered_at: at, need: `reach ${rule.label}` })
-    else bases.push(`its merge commit is in ${reached.reached}`)
+    if (labels.has(at.name)) bases.push(`carries the \`${at.name}\` label`)
+    else unmet.push({ delivered_at: at, need: `carry ${rule.label}` })
   }
   if (unmet.length === 0) return { status: "delivered", basis: bases.length === 0 ? "its changes deliver at merge" : bases.join(" and ") }
-  return { status: "undelivered", unmet, merged }
+  return { status: "undelivered", unmet, merged: true }
 }
 
 /**
@@ -181,9 +158,10 @@ export async function checkDelivery({ toolName, evidence, env = process.env, fet
   if (answer.status === "not_found") throw new Error(`${toolName}: ${evidence.ref.trim()} does not exist on GitHub, so nothing can carry it. Supply the URL of the pull request that did the work.`)
   if (answer.status === "undelivered") {
     const need = answer.unmet.map((entry) => entry.need).join(" and ")
+    if (!answer.merged) throw new Error(`${toolName}: ${repo}#${number} is not delivered: the pull request is not merged. Merge it, and wait for the release that carries it, before closing the task.`)
     throw new Error(
       `${toolName}: ${repo}#${number} is not delivered yet: ${repo} ships these changes through more than the merge, so the pull request must ${need}, and it does not. ` +
-        `The release has not carried it yet${answer.merged ? "" : " (the pull request is not merged)"}. ` +
+        `The release has not carried it yet. ` +
         "Leave the task at `validating`, check the release run (the \"Desk release needs attention\" issue lists a failed one) and repeat this call once that is true.",
     )
   }

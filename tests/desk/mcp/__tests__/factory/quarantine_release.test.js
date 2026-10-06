@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
-  factoryStateRoot, quarantine, readConsent, readMachineSecret, releaseRefusedPluginNames, setConsent, writeLocalFacts, writeLocalLabels,
+  factoryStateRoot, quarantine, readConsent, readMachineSecret, releaseRefusedPluginNames, setConsent, writeLocalFacts, writeLocalLabels, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
@@ -31,6 +31,8 @@ async function put(env, n, { labels = true } = {}) {
   facts.session.id = sessionId(n)
   facts.refs = { prs: [], commits: [], unresolved: { prs: 0, commits: 0 } }
   assert.equal((await writeLocalFacts(env, STORE, facts)).written, true)
+  // The derivation receipt a sweep writes, so a held session is known to have been derived for this store.
+  await writeStatus(env, { derivations: { [`claude-code-${sessionId(n)}.json`]: { store: STORE } } })
   if (labels) assert.equal((await writeLocalLabels(env, STORE, { ...structuredClone(LABELS), session: sessionId(n) })).written, true)
 }
 
@@ -78,6 +80,17 @@ test("releaseRefusedPluginNames lifts only the older client's refusal and the la
   assert.deepEqual(await record(env, nameOf(6)), ["private_plugins_missing"])
   // A second call finds nothing left to release.
   assert.deepEqual(await releaseRefusedPluginNames(env, STORE), { facts: [], labels: [] })
+}))
+
+test("releaseRefusedPluginNames with a set of sessions lifts only those sessions' refusals", () => scratch(async ({ env }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  for (const n of [1, 2]) {
+    await quarantine(env, STORE, nameOf(n), "private_plugins_missing")
+    await quarantine(env, STORE, keyOf(n), "private_plugins_missing")
+  }
+  assert.deepEqual(await releaseRefusedPluginNames(env, STORE, { sessions: new Set([sessionId(2)]) }), { facts: [nameOf(2)], labels: [keyOf(2)] })
+  assert.equal((await record(env, nameOf(1))).reason, "private_plugins_missing")
+  assert.equal((await record(env, keyOf(1))).reason, "private_plugins_missing")
 }))
 
 test("releaseRefusedPluginNames never follows a symlink or reads outside the labels shape", () => scratch(async ({ base, env }) => {
