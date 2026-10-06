@@ -189,3 +189,15 @@ test("cancelling a card with steps needs no steps evidence", async () => {
   await update(root, { frontmatter: { status: "cancelled" } })
   assert.equal(((await readFront(file)).data).status, "cancelled")
 })
+
+test("a delegated step Desk derived as blocked keeps its card reference when it is dropped, and a card Desk cannot read counts as not found", async () => {
+  const { root, file } = await newCard("| a | — | widgets | pending | task:t/card-stuck |\n| b | — | widgets | pending | task:t/card-bad |")
+  await task_create({ deskRoot: root, input: { track: "t", slug: "card-stuck", title: "S", status: "blocked" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "card-bad", title: "B" } })
+  await fs.writeFile(path.join(root, "t", "card-bad", "task.md"), "---\nstatus: [unclosed\n---\n")
+  const result = await update(root, note)
+  assert.deepEqual(await rows(file), { a: "blocked", b: "pending" })
+  assert.deepEqual(result.steps_notes, ["step b: the card t/card-bad was not found, so its state is left as it is"])
+  await update(root, { step: { id: "a", state: "dropped", reason: "no longer needed", expect: "blocked" } })
+  assert.match(await fs.readFile(file, "utf8"), /\| a \| — \| widgets \| dropped \| no longer needed \(was: task:t\/card-stuck\) \|/u)
+})

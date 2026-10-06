@@ -19,7 +19,7 @@ const TASK_EVIDENCE = /^task:([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-
  * Returns `{ changes, notes, why }`: `changes` maps a step name to `{ state, evidence }` for every step whose derived state differs from its cell;
  * `notes` are sentences for the answer (a closed pull request, an answer not verified); `why` maps a step name to why it is where it is.
  */
-export async function deriveSteps(rows, { env = process.env, fetchFn, budgetMs, cardStatus }) {
+export async function deriveSteps(rows, { env, fetchFn, budgetMs, cardStatus }) {
   const asked = new Map()
   const ask = (pr) => {
     if (!asked.has(pr.url)) asked.set(pr.url, prDelivery({ repo: pr.repo, number: pr.number, env, fetchFn, budgetMs }))
