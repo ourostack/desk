@@ -19,7 +19,7 @@ import * as os from "node:os"
 import { loadEndHook, pluginRootFor } from "../factory/end-hook.js"
 import { readSmallText } from "../factory/marker.js"
 import { PATTERNS } from "../factory/schema.js"
-import { ORPHAN_FINDING_ADVICE, factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
+import { ORPHAN_FINDING_ADVICE, UNASKED_ADVICE, factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
 
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
@@ -64,6 +64,7 @@ export function factorySummary(status) {
     const moved = entry.route_changed > 0 ? `, ${entry.route_changed} routed elsewhere` : ""
     lines.push(`  ${entry.store}: ${entry.consent}, ${entry.pending} pending${moved}, ${entry.quarantined} quarantined, ${entry.last_flush === null ? "no flush yet" : `last flush ${entry.last_flush}`}`)
   }
+  for (const { store, sessions } of status.visibility_unasked ?? []) lines.push(`  ${store}: ${sessions} sessions wait because their desk's visibility could not be asked for over 7 days. ${UNASKED_ADVICE(store)}`)
   if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
   if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
   return lines.join("\n")

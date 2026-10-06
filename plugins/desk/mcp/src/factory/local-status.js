@@ -27,6 +27,8 @@
 // counts its quarantined files; `last_flush` is the last flush's result
 // code, or `null`.
 //
+// `visibility_unasked` is present only when a store's flushes have held sessions back, unable to ask their desk's visibility, for over 7 days:
+// `[{ store, sessions }]` (the last flush records `visibility_unasked` and `visibility_unasked_since`).
 // `orphans` is present only when the orphan pass (`derive-run.js` `rebuildOrphans`) needs attention: `"pass_failed"` (the last pass threw),
 // `"pass_interrupted"` (a record with a start older than `ORPHAN_INTERRUPTED_MS`, or with a start that does not parse, and no result),
 // `"orphans_hung"` (an orphan was interrupted twice and is frozen; `orphans_hung` then counts them), `"pass_stale"` (the last pass ran more than
@@ -134,6 +136,22 @@ function endedSessionRecently(dir, now = Date.now()) {
   })
 }
 
+/** How long a desk's visibility may go unasked (every flush deferring its sessions) before the doctor reports it. */
+export const UNASKED_REPORT_MS = 7 * 24 * 60 * 60 * 1000
+
+/** `[{ store, sessions }]` for each store whose last flush has held sessions back for want of a visibility answer for longer than `UNASKED_REPORT_MS`. */
+export function visibilityUnasked(lastFlush, stores, now = Date.now()) {
+  if (!isPlainObject(lastFlush)) return []
+  return stores.flatMap((store) => {
+    const entry = lastFlush[store]
+    if (!isPlainObject(entry) || !Number.isSafeInteger(entry.visibility_unasked) || entry.visibility_unasked <= 0) return []
+    return now - Date.parse(entry.visibility_unasked_since) > UNASKED_REPORT_MS ? [{ store, sessions: entry.visibility_unasked }] : []
+  })
+}
+
+/** One sentence saying what to do about sessions held back for want of a visibility answer. */
+export const UNASKED_ADVICE = (store) => `Run \`node mcp/scripts/factory.js flush --store ${store}\` from the Desk plugin folder and read its result; if it keeps failing, file a Desk problem.`
+
 /** One sentence saying what to do about a finding. */
 export const ORPHAN_FINDING_ADVICE = "Run `node mcp/scripts/factory.js status` from the Desk plugin folder and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem."
 
@@ -218,7 +236,10 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const decided = records === UNREADABLE ? [] : Object.keys(records).filter((store) => PATTERNS.prRepo.test(store)).sort()
   const stores = [...new Set([...(routing.store === null ? [] : [routing.store]), ...decided])]
   const version = ownVersion()
-  const orphans = status === UNREADABLE ? null : orphanPassFinding(status.orphans, Date.now(), { version, active: endedSessionRecently(dir) })
+  // Contribution must be switched on for a stale pass to mean anything: a machine that wrote markers but never opted in has no pass to run.
+  const contributing = stores.some((store) => decision(records, store) === "yes")
+  const orphans = status === UNREADABLE ? null : orphanPassFinding(status.orphans, Date.now(), { version, active: contributing && endedSessionRecently(dir) })
+  const unasked = visibilityUnasked(lastFlush, stores)
   const hung = status === UNREADABLE ? 0 : orphansHung(status.orphans, version)
   return {
     store: routing.store,
@@ -227,6 +248,7 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
     stores: stores.map((store) => storeEntry(dir, records, store, lastFlush, place)),
     warnings: [...new Set(routing.warnings.map((warning) => warning.code))].sort(),
     ...(orphans === null ? {} : { orphans }),
+    ...(unasked.length > 0 ? { visibility_unasked: unasked } : {}),
     ...(hung > 0 ? { orphans_hung: hung } : {}),
   }
 }

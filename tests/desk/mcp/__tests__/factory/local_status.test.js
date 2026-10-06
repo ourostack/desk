@@ -355,3 +355,13 @@ test("the orphan pass reads as one line, and a failed, interrupted or stalled pa
   assert.match(orphanPassLine({ ...ran, frozen: { a: "x", b: 2 } }, now), /frozen 2, /u, "a count that is not a count adds nothing")
   assert.equal(orphanPassLine({ ran_at: ran.ran_at, frozen: 7, examined: -1 }, now), "orphan pass: ran 2026-10-06T11:59:10.000Z, examined unknown, unexamined unknown, pending unknown, frozen 0, last full walk never, unknown sweeps into the walk")
 })
+
+test("sessions held back for want of a visibility answer are a finding only after seven days", async () => {
+  const { visibilityUnasked, UNASKED_REPORT_MS, UNASKED_ADVICE } = await load()
+  const now = Date.parse("2026-10-20T00:00:00.000Z")
+  const since = (ms) => new Date(now - ms).toISOString()
+  const flush = { "a/old": { visibility_unasked: 3, visibility_unasked_since: since(UNASKED_REPORT_MS + 1) }, "a/new": { visibility_unasked: 2, visibility_unasked_since: since(UNASKED_REPORT_MS - 1) }, "a/none": { result: "x" }, "a/zero": { visibility_unasked: 0, visibility_unasked_since: since(UNASKED_REPORT_MS + 1) } }
+  assert.deepEqual(visibilityUnasked(flush, ["a/old", "a/new", "a/none", "a/zero", "a/absent"], now), [{ store: "a/old", sessions: 3 }])
+  assert.deepEqual(visibilityUnasked(undefined, ["a/old"], now), [])
+  assert.match(UNASKED_ADVICE("a/old"), /`node mcp\/scripts\/factory\.js flush --store a\/old`/u)
+})
