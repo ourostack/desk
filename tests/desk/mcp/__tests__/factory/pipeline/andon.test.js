@@ -282,3 +282,35 @@ test("syncAndon uses the given author for its own issues", async () => {
   assert.deepEqual((await syncAndon({ client: github.client, records, plugins: ["desk"], author: "other[bot]" })).alarms.map((alarm) => alarm.action), ["closed"])
   assert.equal(BOT, "github-actions[bot]")
 })
+
+// A finished Claude job whose api_retries is partial through api_retries/host_records_partly: the value is a lower bound and keeps its state.
+function claudeJob(version, retries) {
+  const record = job(version, 0)
+  return { ...record, measures: { ...record.measures, api_retries: { value: retries, state: "partial", reasons: ["host_records_partly"] } } }
+}
+
+test("a partial measure still reaches the alarm with its state", () => {
+  const records = [...LOW.map((value) => claudeJob("1.0.0", value)), ...HIGH.map((value) => claudeJob("1.1.0", value))]
+  const alarms = planAndon(records, DESK)
+  assert.equal(alarms.length, 1)
+  const [alarm] = alarms
+  assert.equal(alarm.measure, "api_retries")
+  assert.equal(alarm.state, "partial")
+  assert.deepEqual(alarm.reasons, ["host_records_partly"])
+  assert.match(alarm.body, /The `api_retries` numbers here are a lower bound: the host records them only partly\./u)
+  assert.deepEqual(alarm.comparison.after, { jobs: 6, groups: 6, median: 9 })
+})
+
+test("an alarm over measured values says measured and carries no lower-bound sentence", () => {
+  const [alarm] = planAndon([...jobs("1.0.0", LOW), ...jobs("1.1.0", HIGH)], DESK)
+  assert.equal(alarm.state, "measured")
+  assert.deepEqual(alarm.reasons, [])
+  assert.doesNotMatch(alarm.body, /lower bound/u)
+})
+
+test("one partial job among measured ones makes the alarm partial", () => {
+  const records = [...jobs("1.0.0", LOW), ...jobs("1.1.0", HIGH)]
+  const mixed = records.map((record, index) => index === 7 ? { ...record, measures: { ...record.measures, tool_retries: { value: record.measures.tool_retries.value, state: "partial", reasons: ["host_records_partly"] } } } : record)
+  const [alarm] = planAndon(mixed, DESK)
+  assert.equal(alarm.state, "partial")
+})

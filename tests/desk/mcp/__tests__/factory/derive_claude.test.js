@@ -12,6 +12,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
+import { hostFlagsFor } from "../../../../../plugins/desk/mcp/src/factory/host-flags.js"
 import * as common from "../../../../../plugins/desk/mcp/src/factory/derive-common.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
@@ -85,7 +86,7 @@ test("no sentinel from the fixture's messages, prompts, thinking, tool input, to
 
 test("the deriver writes local facts: the local schema value, no contributor, no commit refs", async () => {
   const { facts } = await deriveFull()
-  assert.equal(facts.schema, "desk.factory.local/1")
+  assert.equal(facts.schema, "desk.factory.local/2")
   assert.equal(Object.hasOwn(facts, "contributor"), false)
   assert.deepEqual(facts.refs.commits, [])
 })
@@ -136,8 +137,9 @@ test("odd but parseable shapes (non-object lines, non-numeric usage, missing inp
   // Back-to-back prompts: the first turn has no activity and ends where it starts.
   const turns = findInterval(facts.intervals, (iv) => iv.kind === "turn")
   assert.equal(turns[0].start, turns[0].end)
-  // A missing usage object counts as 0; "12" and -3 are no counts, so the input and output totals are unknown.
-  assert.deepEqual(facts.models, [{ id: "claude-opus-5-5", requests: 3, tokens: { input: null, output: null, cache_read: 0, cache_write: 4, reasoning: null } }])
+  // A missing usage object is unknown, not 0, so the cache totals are unknown too; "12" and -3 are no counts, so the input and output totals are unknown.
+  assert.deepEqual(facts.models, [{ id: "claude-opus-5-5", requests: 3, tokens: { input: null, output: null, cache_read: null, cache_write: null, reasoning: null } }])
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "field_absent"))
   assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   // Both retryable errors count; neither can form an interval.
   assert.equal(facts.counts.api_retries, 2)
@@ -605,9 +607,10 @@ test("unavailable always covers permission_waits, ci_runs and commits", async ()
   assert.deepEqual(
     facts.unavailable.filter((entry) => ["permission_waits", "ci_runs", "commits"].includes(entry.field)),
     [
+      // The host table now supplies commits and permission_waits first, so ci_runs follows them; each appears once.
+      { field: "commits", reason: "host_does_not_record" },
       { field: "permission_waits", reason: "host_does_not_record" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
-      { field: "commits", reason: "host_does_not_record" },
     ],
   )
 })
@@ -788,9 +791,11 @@ test("applyLimits trims over-cap agents (with their intervals), intervals, model
   assert.deepEqual(unavailable, [
     { field: "turns", reason: "capped" },
     { field: "tool_durations", reason: "capped" },
+    { field: "agents", reason: "capped" },
     { field: "api_retries", reason: "capped" },
     { field: "human_waits", reason: "capped" },
     { field: "models", reason: "capped" },
+    { field: "prs", reason: "capped" },
   ])
 })
 
@@ -975,10 +980,27 @@ const assistant = (id, usage, model = "claude-opus-5-5") => ({ type: "assistant"
 test("a fractional or unsafe token count is unknown with a tokens entry, and the facts stay valid", async () => {
   for (const bad of [1.5, 2 ** 53 + 2, -1]) {
     const { facts } = await deriveInline([assistant("a", { input_tokens: bad, output_tokens: 7 })])
-    assert.deepEqual(facts.models[0].tokens, { input: null, output: 7, cache_read: 0, cache_write: 0, reasoning: null }, String(bad))
+    assert.deepEqual(facts.models[0].tokens, { input: null, output: 7, cache_read: null, cache_write: null, reasoning: null }, String(bad))
     assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
     assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
   }
+})
+
+test("a count that stays unknown across repeats of a message keeps the stronger reason: unreadable beats absent, and two absences stay absent", async () => {
+  const rest = { output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  const reasons = (facts) => facts.unavailable.filter((entry) => entry.field === "tokens").map((entry) => entry.reason).sort()
+  // Unreadable first, then absent: the count is still unreadable, so no "absent" reason is reported.
+  const unreadableThenAbsent = await deriveInline([assistant("a", { input_tokens: 1.5, ...rest }), assistant("a", rest)])
+  assert.equal(unreadableThenAbsent.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(unreadableThenAbsent.facts), ["source_unreadable"])
+  // Absent first, then unreadable: the same result in the other order.
+  const absentThenUnreadable = await deriveInline([assistant("a", rest), assistant("a", { input_tokens: 1.5, ...rest })])
+  assert.equal(absentThenUnreadable.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(absentThenUnreadable.facts), ["source_unreadable"])
+  // Absent both times: the count is absent, and only the "absent" reason is reported.
+  const absentTwice = await deriveInline([assistant("a", rest), assistant("a", rest)])
+  assert.equal(absentTwice.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(absentTwice.facts), ["field_absent"])
 })
 
 test("a good repeat of a message recovers an unreadable count, and a malformed repeat never erases a good one", async () => {
@@ -987,13 +1009,13 @@ test("a good repeat of a message recovers an unreadable count, and a malformed r
     assistant("a", { input_tokens: 4, output_tokens: 9 }),
     assistant("b", { input_tokens: 4, output_tokens: 1 }),
   ])
-  assert.deepEqual(facts.models[0].tokens, { input: 8, output: 10, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.deepEqual(facts.models[0].tokens, { input: 8, output: 10, cache_read: null, cache_write: null, reasoning: null })
   assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   assert.equal(facts.models[0].requests, 2)
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
   // A malformed repeat of a message keeps the earlier good value and is flagged; a good repeat recovers an earlier bad one.
   const kept = await deriveInline([assistant("a", { input_tokens: 4, output_tokens: 7 }), assistant("a", { input_tokens: 1.5, output_tokens: 9 })])
-  assert.deepEqual(kept.facts.models[0].tokens, { input: 4, output: 9, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.deepEqual(kept.facts.models[0].tokens, { input: 4, output: 9, cache_read: null, cache_write: null, reasoning: null })
   assert.ok(kept.facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   const recovered = await deriveInline([assistant("a", { input_tokens: 1.5 }), assistant("a", { input_tokens: 6 })])
   assert.equal(recovered.facts.models[0].tokens.input, 6)
@@ -1265,4 +1287,113 @@ test("two commits in one directory give one shellGitCommits entry with every pat
     { cwd: "/w", paths: ["/w/a.md", "/w/b.md"] },
     { cwd: "/elsewhere", paths: [] },
   ])
+})
+
+
+// --- Number states: what the host does not record and what the log left out ---
+
+const hasFlag = (facts, field, reason) => facts.unavailable.some((entry) => entry.field === field && entry.reason === reason)
+
+test("a Claude session carries compaction_waits and reasoning_tokens as not recorded by the host", async () => {
+  const { facts } = await deriveFull()
+  assert.ok(hasFlag(facts, "compaction_waits", "host_does_not_record"))
+  assert.ok(hasFlag(facts, "reasoning_tokens", "host_does_not_record"))
+})
+
+test("a Claude session carries prs as recorded only partly", async () => {
+  const { facts } = await deriveFull()
+  assert.ok(hasFlag(facts, "prs", "host_records_partly"))
+})
+
+test("the facts carry every flag the host table returns for Claude Code, api_retries included", async () => {
+  const { facts } = await deriveFull()
+  const flags = hostFlagsFor("claude-code")
+  assert.ok(flags.some((flag) => flag.field === "api_retries" && flag.reason === "host_records_partly"))
+  for (const flag of flags) assert.ok(hasFlag(facts, flag.field, flag.reason), `${flag.field}/${flag.reason}`)
+})
+
+test("an assistant message with no usage object gives null counters and tokens field_absent, not zeros", async () => {
+  const { facts } = await deriveInline([assistant("a", undefined), assistant("b", { input_tokens: 3, output_tokens: 4 })])
+  assert.deepEqual(facts.models[0].tokens, { input: null, output: null, cache_read: null, cache_write: null, reasoning: null })
+  assert.equal(facts.models[0].requests, 2)
+  assert.ok(hasFlag(facts, "tokens", "field_absent"))
+  assert.equal(hasFlag(facts, "tokens", "source_unreadable"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+test("a measured zero stays zero with no tokens flag", async () => {
+  const { facts } = await deriveInline([assistant("a", { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })])
+  assert.deepEqual(facts.models[0].tokens, { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.equal(facts.unavailable.some((entry) => entry.field === "tokens"), false)
+})
+
+test("a good repeat of an absent-usage message recovers the counters with no tokens flag", async () => {
+  const { facts } = await deriveInline([assistant("a", undefined), assistant("a", { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 })])
+  assert.deepEqual(facts.models[0].tokens, { input: 1, output: 2, cache_read: 3, cache_write: 4, reasoning: null })
+  assert.equal(facts.unavailable.some((entry) => entry.field === "tokens"), false)
+})
+
+test("an assistant message with a malformed counter still flags tokens source_unreadable", async () => {
+  const { facts } = await deriveInline([assistant("a", { input_tokens: "7", output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })])
+  assert.equal(facts.models[0].tokens.input, null)
+  assert.ok(hasFlag(facts, "tokens", "source_unreadable"))
+  assert.equal(hasFlag(facts, "tokens", "field_absent"), false)
+})
+
+test("a session with no assistant usage flags models, tokens and requests field_absent", async () => {
+  const { facts } = await deriveInline([{ type: "user", message: { role: "user", content: "hi" } }])
+  assert.deepEqual(facts.models, [])
+  for (const field of ["models", "tokens", "requests"]) assert.ok(hasFlag(facts, field, "field_absent"), field)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+test("an unreadable subagents folder flags agents source_unreadable, and a missing folder does not", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-nosub-"))
+  try {
+    const root = path.join(dir, `${SUB_SESSION_ID}.jsonl`)
+    writeFileSync(root, `${JSON.stringify({ sessionId: SUB_SESSION_ID, version: "2.1.282", timestamp: "2026-09-25T08:00:00.000Z", type: "user", message: { role: "user", content: "go" } })}\n`)
+    const none = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: null })
+    assert.equal(hasFlag(none.facts, "agents", "source_unreadable"), false)
+    writeFileSync(path.join(dir, SUB_SESSION_ID), "not a folder")
+    const broken = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: null })
+    assert.ok(hasFlag(broken.facts, "agents", "source_unreadable"))
+    assert.deepEqual(validateLocalFacts(broken.facts), { ok: true, errors: [] })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a missing subagent meta file flags agents source_unreadable, and a readable one does not", async () => {
+  const { line, assistant: worker } = workerLines()
+  const root = [line({ type: "user", message: { role: "user", content: "go" } }), worker("r1", "claude-opus-5-5")]
+  const child = [worker("s1", "claude-sonnet-5", [{ type: "text", text: "hi" }])]
+  const missing = await deriveWithSubagents(root, [{ stem: "agent-1", lines: child }])
+  assert.ok(hasFlag(missing.facts, "agents", "source_unreadable"))
+  const present = await deriveWithSubagents(root, [{ stem: "agent-1", meta: { agentType: "fork" }, lines: child }])
+  assert.equal(hasFlag(present.facts, "agents", "source_unreadable"), false)
+})
+
+test("more PRs than the cap flags prs capped", async () => {
+  const lines = [{ type: "user", message: { role: "user", content: "go" } }]
+  for (let number = 1; number <= 501; number += 1) lines.push({ type: "pr-link", prRepository: "a/b", prNumber: number })
+  const { facts } = await deriveInline(lines)
+  assert.equal(facts.refs.prs.length, 500)
+  assert.ok(hasFlag(facts, "prs", "capped"))
+  assert.ok(hasFlag(facts, "prs", "host_records_partly"))
+})
+
+test("a sentinel in a prompt, command and file path reaches neither facts nor flags", async () => {
+  const { facts } = await deriveInline([
+    { type: "user", message: { role: "user", content: `go ${SENTINEL}` } },
+    { type: "assistant", message: { id: "a", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "t", name: "Bash", input: { command: `echo ${SENTINEL}`, file_path: `/tmp/${SENTINEL}` } }] } },
+  ])
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts.unavailable).includes(SENTINEL), false)
+})
+
+test("facts written by the Claude deriver validate as /2", async () => {
+  for (const { facts } of [await deriveFull(), await deriveInline([assistant("a", undefined)])]) {
+    assert.equal(facts.schema, "desk.factory.local/2")
+    assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  }
 })

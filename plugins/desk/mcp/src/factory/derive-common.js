@@ -86,6 +86,7 @@ export function applyLimits({ agents, intervals, models, prs }, unavailable, lim
     keptIntervals = keptIntervals.filter((interval) => keptNs.has(interval.agent))
     addUnavailable(unavailable, "turns", "capped")
     addUnavailable(unavailable, "tool_durations", "capped")
+    addUnavailable(unavailable, "agents", "capped")
   }
 
   const ordered = []
@@ -110,12 +111,27 @@ export function applyLimits({ agents, intervals, models, prs }, unavailable, lim
   }
 
   const keptNs = new Set(keptAgents.map((agent) => agent.n))
+  if (prs.length > limits.prs) addUnavailable(unavailable, "prs", "capped")
   const keptPrs = prs.slice(0, limits.prs).map(({ agent, ...ref }) => (keptNs.has(agent) ? { ...ref, agent } : ref))
   return { agents: keptAgents, intervals: keptIntervals, models: keptModels, prs: keptPrs }
 }
 
 /** A token or request count the schema accepts (a safe non-negative integer), else `null`. */
 export const countOrNull = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
+
+/** A usage count the log carries as a safe non-negative integer, else `null`. An absent value is `null` too, never 0; ask `usageAbsent` to tell absent from malformed. */
+export const usageOrNull = (value) => countOrNull(value)
+
+/** True when the log leaves the usage value out (`undefined` or `null`), so the caller flags `field_absent`; a present but malformed value is `source_unreadable` instead. */
+export const usageAbsent = (value) => value === undefined || value === null
+
+/** When no model was recorded, flags `models`, `tokens` and `requests` as `field_absent`, skipping any of the three that already carries a flag. */
+export function flagEmptyUsage(unavailable, models) {
+  if (models.length > 0) return
+  for (const field of ["models", "tokens", "requests"]) {
+    if (!unavailable.some((entry) => entry.field === field)) addUnavailable(unavailable, field, "field_absent")
+  }
+}
 
 /** The sum of two counts; `null` when either is unknown or the sum is unsafe. */
 export function addNullable(total, value) {

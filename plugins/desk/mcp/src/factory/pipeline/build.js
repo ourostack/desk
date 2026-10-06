@@ -116,6 +116,7 @@ function writeRollups(directory, rollups) {
   writeFileSync(path.join(directory, "muda.json"), `${stableStringify(rollups.muda)}\n`)
   writeFileSync(path.join(directory, "tool-kinds.json"), `${stableStringify(rollups.tool_kinds)}\n`)
   writeFileSync(path.join(directory, "coverage.json"), `${stableStringify(rollups.coverage)}\n`)
+  writeFileSync(path.join(directory, "totals.json"), `${stableStringify(rollups.totals)}\n`)
 }
 
 // Everything the build derives from a store's `facts/` and `labels/`.

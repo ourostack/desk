@@ -1,6 +1,8 @@
 import { ACTIVE_KINDS, bindingsOverlap, duration, overlappingBindings, union } from "./timeline.js"
+import { fieldsFeeding, reasonsOf, withState } from "./number-states.js"
 
 const WAIT_KINDS = Object.freeze(["human_wait", "permission_wait", "api_retry", "compaction"])
+const PARTLY = "host_records_partly"
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const CONTRIBUTOR_ORDER = Object.freeze([
   "active_in_lead_ms",
@@ -10,22 +12,6 @@ const CONTRIBUTOR_ORDER = Object.freeze([
   "api_retry_ms",
   "compaction_ms",
 ])
-
-// The published `unavailable` fields whose absence leaves a value incomplete.
-// Interval kinds map to fields as in `publish.js`: turns and compactions are
-// `turns`, tools and subagents are `tool_durations`. Active time needs turns;
-// a `tool_durations` gap (an unfinished or dropped tool call) only means some
-// tool intervals are missing, so it makes active time partial, never
-// unavailable.
-const ACTIVE_FIELDS = Object.freeze(["turns"])
-const ACTIVE_PARTIAL_FIELDS = Object.freeze(["tool_durations"])
-const WAIT_FIELDS = Object.freeze({
-  human_wait: Object.freeze(["human_waits"]),
-  permission_wait: Object.freeze(["permission_waits"]),
-  api_retry: Object.freeze(["api_retries"]),
-  compaction: Object.freeze(["turns"]),
-})
-const ANY_WAIT_FIELDS = Object.freeze(["human_waits", "permission_waits", "api_retries", "turns"])
 
 const measured = (value, extra = {}) => ({ class: "measured", value, ...extra })
 const inferred = (value, extra = {}) => ({ class: "inferred", value, ...extra })
@@ -106,33 +92,46 @@ function unavailableGroups(sessions) {
 // uncovered once, and the coverage says how many were cut for that reason.
 // `shared` holds the sessions whose workers also belong to another job, so
 // their time is counted for each of those jobs; it is reported the same way.
-export function fieldCoverage(sessions, fields, partialFields = [], split = new Set(), shared = new Set()) {
+export function fieldCoverage(sessions, fields, partialFields, split = new Set(), shared = new Set()) {
   const reasons = new Set()
+  const flagReasons = new Set()
   let uncovered = 0
   let lacking = 0
   let splitCount = 0
   let sharedCount = 0
   for (const session of sessions) {
-    const missing = session.unavailable.filter((entry) => fields.includes(entry.field))
-    const incomplete = session.unavailable.some((entry) => partialFields.includes(entry.field))
+    // A host that records a number only in part leaves it incomplete, never missing.
+    const missing = session.unavailable.filter((entry) => fields.includes(entry.field) && entry.reason !== PARTLY)
+    const incomplete = session.unavailable.filter((entry) => partialFields.includes(entry.field) || (fields.includes(entry.field) && entry.reason === PARTLY))
     const divided = split.has(session)
     if (divided) splitCount += 1
     const overlapping = shared.has(session)
     if (overlapping) sharedCount += 1
-    if (missing.length > 0 || incomplete || divided || overlapping) uncovered += 1
+    if (missing.length > 0 || incomplete.length > 0 || divided || overlapping) uncovered += 1
+    for (const entry of [...missing, ...incomplete]) flagReasons.add(entry.reason)
     if (missing.length === 0) continue
     lacking += 1
     for (const entry of missing) reasons.add(entry.reason)
   }
-  return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText), split: splitCount, shared: sharedCount }
+  return {
+    uncovered,
+    none: lacking === sessions.length,
+    reasons: [...reasons].sort(compareText),
+    partialReasons: [...flagReasons].sort(compareText),
+    split: splitCount,
+    shared: sharedCount,
+  }
 }
+
+// The coverage of one formula, with the fields that feed it read from the table.
+const coverageOf = (formulaId, sessions, split, shared) => fieldCoverage(sessions, fieldsFeeding(formulaId, "unavailable"), fieldsFeeding(formulaId, "partial"), split, shared)
 
 // Retries have no worker, so a split session cannot say which of them were the
 // job's. A job whose sessions are all split therefore has none to report: that
 // is unavailable, never a measured zero. With some whole sessions the sum
 // covers those only, and the measure stays partial (`worker_split`).
-export function retryCoverage(sessions, fields, split, shared) {
-  const coverage = fieldCoverage(sessions, fields, [], split, shared)
+export function retryCoverage(sessions, fields, split, shared, partialFields = []) {
+  const coverage = fieldCoverage(sessions, fields, partialFields, split, shared)
   if (sessions.length === 0 || split.size < sessions.length) return coverage
   return { ...coverage, none: true, reasons: [...new Set([...coverage.reasons, "worker_split"])].sort(compareText) }
 }
@@ -144,14 +143,56 @@ function missingValue(coverage) {
 function withCoverage(value, coverage) {
   if (value.class === "unavailable" || coverage.uncovered === 0) return value
   const marked = { ...value, partial: true, uncovered_sessions: coverage.uncovered }
-  const reasons = [...(coverage.split > 0 ? ["worker_split"] : []), ...(coverage.shared > 0 ? ["worker_shared"] : [])]
-  return reasons.length > 0 ? { ...marked, partial_reasons: reasons } : marked
+  const reasons = [...new Set([...(coverage.split > 0 ? ["worker_split"] : []), ...(coverage.shared > 0 ? ["worker_shared"] : []), ...coverage.partialReasons])]
+  return { ...marked, partial_reasons: reasons }
 }
 
 // Missing data is never a measured zero: a value no covering session could
 // supply is unavailable, and one only some sessions supply is partial.
 export function covered(coverage, compute) {
   return coverage.none ? missingValue(coverage) : withCoverage(compute(), coverage)
+}
+
+const TOKEN_TYPES = Object.freeze(["input", "output", "cache_read", "cache_write", "reasoning"])
+
+// The job's token totals. Tokens are counted per model for the whole session, so a
+// session in which the job owns only some workers is not counted and no share of it
+// is guessed (`worker_split`). A counter that is null, or a session with no model at
+// all, is unknown rather than 0: that session is left out of the type and the type
+// is partial (`field_absent`), or unavailable when no session could supply it.
+function tokenTotalFor(type, sessions, split) {
+  const formulaId = `tokens_total.${type}`
+  const fields = fieldsFeeding(formulaId, "unavailable")
+  const partialFields = fieldsFeeding(formulaId, "partial")
+  const checked = new Map(sessions.map((session) => {
+    const flagged = session.unavailable.some((entry) => fields.includes(entry.field) && entry.reason !== PARTLY)
+    const absent = session.models.length === 0 || session.models.some((model) => model.tokens[type] === null || model.tokens[type] === undefined)
+    return [session, { unavailable: flagged || !absent ? session.unavailable : [...session.unavailable, { field: "tokens", reason: "field_absent" }], counts: session.models.reduce((total, model) => total + model.tokens[type], 0) }]
+  }))
+  const entries = [...checked.values()]
+  const splitEntries = new Set(sessions.filter((session) => split.has(session)).map((session) => checked.get(session)))
+  if (entries.length === 0) return unavailable("job_offsets_unavailable")
+  const whole = entries.filter((entry) => !splitEntries.has(entry))
+  const own = fieldCoverage(whole, fields, partialFields)
+  const reasons = [...new Set([...own.reasons, ...(splitEntries.size > 0 ? ["worker_split"] : [])])].sort(compareText)
+  const coverage = { ...fieldCoverage(entries, fields, partialFields, splitEntries), none: own.none, reasons }
+  const lacking = (entry) => fieldCoverage([entry], fields, partialFields).none
+  return covered(coverage, () => measured(whole.filter((entry) => !lacking(entry)).reduce((total, entry) => total + entry.counts, 0)))
+}
+
+function tokenSum(input, output) {
+  const parts = [input, output]
+  const gone = parts.filter((part) => part.class === "unavailable")
+  if (gone.length > 0) return missingValue({ reasons: [...new Set(gone.flatMap(reasonsOf))].sort(compareText) })
+  const partial = parts.filter((part) => part.partial === true)
+  const result = measured(input.value + output.value)
+  if (partial.length === 0) return result
+  return { ...result, partial: true, uncovered_sessions: Math.max(...partial.map((part) => part.uncovered_sessions)), partial_reasons: [...new Set(partial.flatMap((part) => part.partial_reasons))].sort(compareText) }
+}
+
+function tokenTotals(sessions, split) {
+  const types = Object.fromEntries(TOKEN_TYPES.map((type) => [type, tokenTotalFor(type, sessions, split)]))
+  return { total: tokenSum(types.input, types.output), ...types }
 }
 
 function currentStatus(timeline) {
@@ -219,15 +260,37 @@ function leadContributors({ lead, timingUnavailable, activeInLead, queue, waits,
   if (timingUnavailable) return unavailable("job_offsets_unavailable")
   if (lead.value === 0) return unavailable("zero_lead_time")
   const entries = []
-  if (activeInLead.class !== "unavailable") entries.push(contributor("active_in_lead_ms", activeInLead.value, lead.value, activeInLead))
-  entries.push(contributor("queue_before_start_ms", Math.min(queue.value, lead.value), lead.value, queue))
+  const sources = []
+  // A kind that is not measured is left out, never listed as zero, and the list says why it is incomplete.
+  const missing = []
+  if (activeInLead.class === "unavailable") missing.push(...reasonsOf(activeInLead))
+  else {
+    entries.push(contributor("active_in_lead_ms", activeInLead.value, lead.value, activeInLead))
+    sources.push(activeInLead)
+  }
+  if (queue.class === "unavailable") missing.push(...reasonsOf(queue))
+  else {
+    entries.push(contributor("queue_before_start_ms", Math.min(queue.value, lead.value), lead.value, queue))
+    sources.push(queue)
+  }
   for (const kind of WAIT_KINDS) {
     const wait = waits[`${kind}_ms`]
-    if (wait.class === "unavailable") continue
+    if (wait.class === "unavailable") {
+      missing.push(...reasonsOf(wait))
+      continue
+    }
     entries.push(contributor(`${kind}_ms`, duration(clip(waitUnions[kind], 0, lead.value)), lead.value, wait))
+    sources.push(wait)
+  }
+  // With no entry left there is no breakdown to show: that is unavailable, never an empty partial list.
+  if (entries.length === 0) {
+    const gone = [...new Set(missing)].sort(compareText)
+    return gone.length === 1 ? unavailable(gone[0]) : unavailable("mixed", { reasons: gone })
   }
   entries.sort((left, right) => right.value_ms - left.value_ms || CONTRIBUTOR_ORDER.indexOf(left.key) - CONTRIBUTOR_ORDER.indexOf(right.key))
-  return inferred(entries, { censored: lead.censored, method: "clipped_to_lead_window" })
+  const reasons = [...new Set([...missing, ...sources.flatMap((source) => source.partial_reasons ?? [])])].sort(compareText)
+  const result = inferred(entries, { censored: lead.censored, method: "clipped_to_lead_window" })
+  return reasons.length === 0 ? result : { ...result, partial: true, partial_reasons: reasons }
 }
 
 function bindingOf(session, job) {
@@ -372,10 +435,39 @@ function uniqueReferences(timeline) {
   return { pullRequests, commits: commits.size, withheld }
 }
 
+// Every result, at the top or inside `waits` and `rework_signals`, gains its
+// state and reasons from the one place that derives them (`withState`).
+function decorate(results) {
+  return Object.fromEntries(Object.entries(results).map(([name, result]) => [name, Object.hasOwn(result, "class") ? withState(result) : decorate(result)]))
+}
+
+// The composite keeps its value object as readers know it, except that a count
+// whose part is unavailable is null, never 0. It is unavailable only when every
+// part is; otherwise any part that is not measured makes it partial. Either way
+// its reasons are the union of the parts' reasons.
+function referencesResult(references, parts, privateCounts) {
+  const count = (name, number) => parts[name].result.class === "unavailable" ? null : number
+  const value = measured({
+    public_pull_requests: references.pullRequests,
+    public_prs: count("public_prs", references.pullRequests.length),
+    public_commits: count("public_commits", references.commits),
+    private_prs: count("private_prs", privateCounts.privatePrs),
+    private_commits: count("private_commits", privateCounts.privateCommits),
+  })
+  const entries = Object.values(parts)
+  const reasons = [...new Set(entries.flatMap((entry) => entry.result.reasons))].sort(compareText)
+  const uncovered = Math.max(...entries.map((entry) => entry.coverage.uncovered))
+  const allMissing = entries.every((entry) => entry.result.class === "unavailable")
+  // Public pull requests have no field that can make them unavailable, so every part is unavailable only for a job with no sessions, and then all four share the one reason the job clock gives.
+  const result = allMissing ? { ...value, class: "unavailable", reason: reasons[0] } : reasons.length === 0 ? value : { ...value, partial: true, uncovered_sessions: uncovered, partial_reasons: reasons }
+  return { ...result, parts: Object.fromEntries(Object.entries(parts).map(([name, entry]) => [name, entry.result])) }
+}
+
 export function calculateFormulas(timeline) {
   const sourceSessions = timeline.source_sessions
   const timedSessions = timeline.sessions.filter((session) => session.offset_ms !== null)
-  const timedSources = sourceSessions.filter((_, index) => timeline.sessions[index].offset_ms !== null)
+  // A session that says its job offsets were lost puts none of its time on the job clock, but its time exists, so it still counts in the coverage of every clock-fed number.
+  const clockSources = sourceSessions.filter((session, index) => timeline.sessions[index].offset_ms !== null || session.unavailable.some((entry) => entry.field === "job_offsets"))
   // Only jobs whose time really overlaps this job's in a session count as sharing with it.
   const otherJobs = new Set(sourceSessions.flatMap((session) => overlappingBindings(session, bindingOf(session, timeline.job)).map((binding) => binding.job)).filter((job) => job !== timeline.job))
   const sessions = measured({
@@ -383,7 +475,7 @@ export function calculateFormulas(timeline) {
     timeline: timedSessions.length,
     shared: timeline.sessions.filter((session) => session.shared_with > 0).length,
     shared_with_jobs: otherJobs.size,
-  })
+  }, { basis: "captured_sessions" })
   const status = currentStatus(timeline)
   const timingUnavailable = timedSessions.length === 0
   const timed = (compute) => timingUnavailable ? unavailable("job_offsets_unavailable") : compute()
@@ -404,36 +496,37 @@ export function calculateFormulas(timeline) {
     byAgent.get(agentKey).push(interval)
   }
 
-  const activeCoverage = fieldCoverage(timedSources, ACTIVE_FIELDS, ACTIVE_PARTIAL_FIELDS, new Set(), sharedSessions(timeline))
-  const activeValue = (compute) => timed(() => covered(activeCoverage, compute))
-  const whenActive = (compute) => activeValue(() => activeMs === 0 ? unavailable("no_active_intervals") : compute())
-  const active = activeValue(() => measured(activeMs))
-  const busy = activeValue(() => measured(busyMs))
-  const activeBeforeCard = activeValue(() => measured(duration(clip(activeUnion, -Infinity, 0))))
+  const sharedTime = sharedSessions(timeline)
+  const activeCoverage = (formulaId) => coverageOf(formulaId, clockSources, new Set(), sharedTime)
+  const activeValue = (formulaId, compute) => timed(() => covered(activeCoverage(formulaId), compute))
+  const whenActive = (formulaId, compute) => activeValue(formulaId, () => activeMs === 0 ? unavailable("no_active_intervals") : compute())
+  const active = activeValue("active_time_ms", () => measured(activeMs))
+  const busy = activeValue("busy_time_ms", () => measured(busyMs))
+  const activeBeforeCard = activeValue("active_before_card_ms", () => measured(duration(clip(activeUnion, -Infinity, 0))))
   const activeInLead = lead.class === "unavailable"
     ? unavailable(lead.reason)
-    : activeValue(() => measured(duration(clip(activeUnion, 0, lead.value))))
-  const parallelism = whenActive(() => inferred(busyMs / activeMs, { method: "busy_time_ms/active_time_ms" }))
-  const concurrentSessions = whenActive(() => inferred(concurrency(activeUnion, bySession), { method: "active_session_interval_concurrency" }))
-  const concurrentAgents = whenActive(() => inferred(concurrency(activeUnion, byAgent), { method: "active_agent_interval_concurrency" }))
+    : activeValue("active_in_lead_ms", () => measured(duration(clip(activeUnion, 0, lead.value))))
+  const parallelism = whenActive("parallelism", () => inferred(busyMs / activeMs, { method: "busy_time_ms/active_time_ms" }))
+  const concurrentSessions = whenActive("concurrent_sessions", () => inferred(concurrency(activeUnion, bySession), { method: "active_session_interval_concurrency" }))
+  const concurrentAgents = whenActive("concurrent_agents", () => inferred(concurrency(activeUnion, byAgent), { method: "active_agent_interval_concurrency" }))
 
   const waits = {}
   const waitUnions = {}
   for (const kind of WAIT_KINDS) {
     waitUnions[kind] = union(timeline.intervals.filter((interval) => interval.kind === kind))
-    waits[`${kind}_ms`] = timed(() => covered(fieldCoverage(timedSources, WAIT_FIELDS[kind]), () => measured(duration(waitUnions[kind]))))
+    waits[`${kind}_ms`] = timed(() => covered(coverageOf(`waits.${kind}_ms`, clockSources), () => measured(duration(waitUnions[kind]))))
   }
   const visibleWaitKinds = WAIT_KINDS.filter((kind) => waits[`${kind}_ms`].class !== "unavailable")
   const longest = timed(() => visibleWaitKinds.length === 0
     ? unavailable("wait_fields_unavailable")
-    : withCoverage(longestWait(timeline.intervals.filter((interval) => visibleWaitKinds.includes(interval.kind))), fieldCoverage(timedSources, ANY_WAIT_FIELDS)))
-  const queue = timed(() => measured(Math.max(0, Math.min(...timedSessions.map((session) => session.offset_ms)))))
+    : withCoverage(longestWait(timeline.intervals.filter((interval) => visibleWaitKinds.includes(interval.kind))), coverageOf("longest_wait", clockSources)))
+  const queue = timed(() => covered(coverageOf("queue_before_start_ms", clockSources, new Set(), new Set()), () => measured(Math.max(0, Math.min(...timedSessions.map((session) => session.offset_ms))), { basis: "first_captured_session" })))
 
   let flowEfficiency
   if (lead.class === "unavailable") flowEfficiency = unavailable(lead.reason)
   else if (lead.value === 0) flowEfficiency = unavailable("zero_lead_time")
   else if (activeInLead.class === "unavailable") flowEfficiency = activeInLead
-  else flowEfficiency = withCoverage(inferred(activeInLead.value / lead.value, { censored: lead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage)
+  else flowEfficiency = withCoverage(inferred(activeInLead.value / lead.value, { censored: lead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency"))
 
   const hosts = {}
   for (const session of sourceSessions) hosts[session.session.host] = (hosts[session.session.host] ?? 0) + 1
@@ -441,11 +534,24 @@ export function calculateFormulas(timeline) {
   const split = splitSessions(timeline)
   const counted = jobCounted(timeline, split)
   const sharedSegments = sharedSegmentSessions(timeline)
-  const splitCoverage = fieldCoverage(sourceSessions, [], [], split, sharedSegments)
+  const countCoverage = (formulaId) => fieldCoverage(sourceSessions, fieldsFeeding(formulaId, "unavailable"), fieldsFeeding(formulaId, "partial"), split, sharedSegments)
   const privatePrs = sourceSessions.reduce((total, session) => total + session.refs.private.prs, 0)
   const privateCommits = sourceSessions.reduce((total, session) => total + session.refs.private.commits, 0)
+  // Public counts keep the withheld sessions (a worker shared with another job) as uncovered; private counts are summed over every session.
+  // A job with no source sessions has nothing to count: every part is unavailable for the same cause the job clock gives.
+  const part = (formulaId, shared, count) => {
+    if (sourceSessions.length === 0) return { coverage: coverageOf(formulaId, sourceSessions, new Set(), shared), result: withState(unavailable("job_offsets_unavailable")) }
+    const coverage = coverageOf(formulaId, sourceSessions, new Set(), shared)
+    return { coverage, result: withState(covered(coverage, () => measured(count))) }
+  }
+  const parts = {
+    public_prs: part("references.public_prs", references.withheld, references.pullRequests.length),
+    public_commits: part("references.public_commits", references.withheld, references.commits),
+    private_prs: part("references.private_prs", new Set(), privatePrs),
+    private_commits: part("references.private_commits", new Set(), privateCommits),
+  }
 
-  return {
+  return decorate({
     status,
     sessions,
     sessions_by_host: measured(Object.fromEntries(Object.entries(hosts).sort(([left], [right]) => compareText(left, right)))),
@@ -462,21 +568,16 @@ export function calculateFormulas(timeline) {
     longest_wait: longest,
     lead_contributors: leadContributors({ lead, timingUnavailable, activeInLead, queue, waits, waitUnions }),
     flow_efficiency: flowEfficiency,
-    tool_calls_by_kind: withCoverage(measured(sumMap(counted, "tool_calls")), splitCoverage),
-    references: withCoverage(measured({
-      public_pull_requests: references.pullRequests,
-      public_prs: references.pullRequests.length,
-      public_commits: references.commits,
-      private_prs: privatePrs,
-      private_commits: privateCommits,
-    }), fieldCoverage(sourceSessions, [], [], new Set(), references.withheld)),
+    tool_calls_by_kind: withCoverage(measured(sumMap(counted, "tool_calls")), countCoverage("tool_calls_by_kind")),
+    references: referencesResult(references, parts, { privatePrs, privateCommits }),
     rework_signals: {
-      tool_failures: withCoverage(inferred(Object.values(sumMap(counted, "tool_failures")).reduce((total, value) => total + value, 0)), splitCoverage),
-      tool_retries: covered(retryCoverage(sourceSessions, [], split, sharedSegments), () => inferred(sumField(counted, "tool_retries"))),
-      api_retries: covered(retryCoverage(sourceSessions, ["api_retries"], split, sharedSegments), () => inferred(sumField(counted, "api_retries"))),
-      session_retouches: inferred(Math.max(0, sourceSessions.length - 1)),
+      tool_failures: withCoverage(inferred(Object.values(sumMap(counted, "tool_failures")).reduce((total, value) => total + value, 0)), countCoverage("rework_signals.tool_failures")),
+      tool_retries: covered(retryCoverage(sourceSessions, fieldsFeeding("rework_signals.tool_retries", "unavailable"), split, sharedSegments, fieldsFeeding("rework_signals.tool_retries", "partial")), () => inferred(sumField(counted, "tool_retries"))),
+      api_retries: covered(retryCoverage(sourceSessions, fieldsFeeding("rework_signals.api_retries", "unavailable"), split, sharedSegments), () => inferred(sumField(counted, "api_retries"))),
+      session_retouches: inferred(Math.max(0, sourceSessions.length - 1), { basis: "captured_sessions" }),
     },
+    tokens_total: tokenTotals(sourceSessions, split),
     unavailable: measured(unavailableGroups(sourceSessions)),
     first_pass_yield: unavailable("not_collected_in_slice_1"),
-  }
+  })
 }

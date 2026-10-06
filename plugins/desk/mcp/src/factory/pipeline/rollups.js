@@ -13,9 +13,19 @@
 //   - Only complete values count. A job's measure is excluded, with its
 //     reason, when the formulas mark it unavailable, `partial` (some sessions
 //     could not supply it) or `censored` (an open job's lead time or flow
-//     efficiency). Every group reports how many jobs each measure counted and
-//     why the rest were excluded; a measure no job supplies has no median, not
-//     a zero.
+//     efficiency). Every group reports `n` of `N`: how many jobs each measure
+//     counted (`n`, which is `jobs_counted`) of how many jobs the group holds
+//     (`N`, open jobs included), the stat's `state` (measured when `n === N`,
+//     partial when `0 < n < N`, unavailable when `n === 0`) and why the rest
+//     were excluded; a measure no job supplies has no median, not a zero.
+//   - One partial value stays in the job record: a formula that is partial
+//     only because the host records its numbers partly
+//     (`host_records_partly`) keeps its `value`, a lower bound, with
+//     `state: "partial"` and its `reasons`, so andon and the kaizen check can
+//     still compare it and say so. It is never counted in a median or in `n`;
+//     it counts in `N` and is listed under its reason. Every other partial
+//     value is `{ excluded: "partial" }`, and every value that is counted says
+//     `state: "measured"`.
 //   - Medians and 75th percentiles use the nearest-rank method: sort the
 //     counted values ascending and take the value at 1-based rank
 //     `ceil(p * n)` (rank 1 when that is 0). The result is always one of the
@@ -51,6 +61,8 @@
 import { LABEL_WASTES, checkLabelsAgainstFacts } from "../label-schema.js"
 import { covered, retryCoverage, splitSessions } from "./formulas.js"
 import { bindingsOverlap } from "./timeline.js"
+import { NUMBER_STATES, fieldsFeeding, withState } from "./number-states.js"
+import { reasonText } from "./report.js"
 import { compareVersions } from "./versions.js"
 
 export const ROLLUPS_SCHEMA = "desk.factory.rollups/1"
@@ -157,12 +169,35 @@ export function resolveLabels(labels, sessions) {
   return { files: labels.length, byJobSession, unused: countReasons(reasons, "files") }
 }
 
-// A formula value as a rollup input: a complete value, or the reason it is left out.
-function fromFormula(value) {
-  if (value.class === "unavailable") return { excluded: value.reason }
+const PARTLY = "host_records_partly"
+
+// A formula result as a rollup input: a complete value (`state: "measured"`),
+// a lower bound the host records only partly (kept with its state), or the
+// reason it is left out.
+// A formula result always says its state; a missing or unknown one is a defect upstream, never read as measured.
+export function fromFormula(value) {
+  if (!NUMBER_STATES.includes(value.state)) throw new Error(`a formula result has no known state: ${String(value.state)}`)
+  if (value.state === "unavailable") return { excluded: value.reason }
   if (value.censored) return { excluded: "censored" }
-  if (value.partial) return { excluded: "partial" }
-  return { value: value.value }
+  if (value.state === "partial") return value.reasons.length === 1 && value.reasons[0] === PARTLY ? { value: value.value, state: "partial", reasons: [PARTLY] } : { excluded: "partial" }
+  return { value: value.value, state: "measured" }
+}
+
+// A job's measure counts only when it is measured; a partial value is kept for the alarm but never counted.
+function counted(measure) {
+  return measure.state === "measured"
+}
+
+// The reason a measure is left out of the count, or `null` when it is counted.
+function leftOut(measure) {
+  if (counted(measure)) return null
+  return "excluded" in measure ? measure.excluded : measure.reasons[0]
+}
+
+// How many of `N` jobs supplied a measured value, and what that makes of the whole.
+function countState(n, N) {
+  if (n === 0) return "unavailable"
+  return n === N ? "measured" : "partial"
 }
 
 function oneOrMixed(values) {
@@ -197,7 +232,7 @@ function pluginRanges(sources) {
 // has none to report (`worker_split`), as for retries.
 function compactions(sources, split) {
   const coverage = retryCoverage(sources, ["turns"], split)
-  return fromFormula(covered(coverage, () => ({ class: "measured", value: sources.reduce((total, session) => total + (split.has(session) ? 0 : session.counts.compactions), 0) })))
+  return fromFormula(withState(covered(coverage, () => ({ class: "measured", value: sources.reduce((total, session) => total + (split.has(session) ? 0 : session.counts.compactions), 0) }))))
 }
 
 function wasteTotals(stretches) {
@@ -225,8 +260,8 @@ function mudaMeasures(timeline, labelsByJobSession) {
   const totals = Object.fromEntries(LABEL_WASTES.map((waste) => [waste, labeled.reduce((sum, session) => sum + session.totals[waste], 0)]))
   return {
     measures: {
-      muda_time: { value: Object.values(totals).reduce((total, value) => total + value, 0) },
-      ...Object.fromEntries(LABEL_WASTES.map((waste) => [`muda_time.${waste}`, { value: totals[waste] }])),
+      muda_time: { value: Object.values(totals).reduce((total, value) => total + value, 0), state: "measured" },
+      ...Object.fromEntries(LABEL_WASTES.map((waste) => [`muda_time.${waste}`, { value: totals[waste], state: "measured" }])),
     },
     sessions: labeled,
   }
@@ -241,7 +276,7 @@ function finished(formulas) {
  * `jobRecord({ timeline, formulas }, labelsByJobSession) -> record`: one
  * job's grouping keys, each plugin's version range (`plugins`), its session
  * ids (`sessions`, which the comparisons group by), whether it is finished, its catalog values (each
- * `{ value }` or `{ excluded: reason }`), and, when it is finished and fully
+ * `{ value, state: "measured" }`, `{ value, state: "partial", reasons }` for a lower bound the host records partly, or `{ excluded: reason }`), and, when it is finished and fully
  * labeled, each session's waste totals (`muda_sessions`) for the Pareto.
  */
 export function jobRecord({ timeline, formulas }, labelsByJobSession) {
@@ -292,12 +327,15 @@ function groupRecords(records, grouping) {
 }
 
 function measureStats(records, id) {
-  const values = records.flatMap((record) => "value" in record.measures[id] ? [record.measures[id].value] : [])
+  const values = records.flatMap((record) => counted(record.measures[id]) ? [record.measures[id].value] : [])
   return {
     jobs_counted: values.length,
+    n: values.length,
+    N: records.length,
+    state: countState(values.length, records.length),
     median: quantile(values, 0.5),
     p75: quantile(values, 0.75),
-    jobs_excluded: countReasons(records.flatMap((record) => "excluded" in record.measures[id] ? [record.measures[id].excluded] : []), "jobs"),
+    jobs_excluded: countReasons(records.flatMap((record) => leftOut(record.measures[id]) ?? []), "jobs"),
   }
 }
 
@@ -306,8 +344,8 @@ function measureGroup(records) {
 }
 
 function pareto(records) {
-  const labeled = records.filter((record) => "value" in record.measures.muda_time)
-  const excluded = countReasons(records.flatMap((record) => "excluded" in record.measures.muda_time ? [record.measures.muda_time.excluded] : []), "jobs")
+  const labeled = records.filter((record) => counted(record.measures.muda_time))
+  const excluded = countReasons(records.flatMap((record) => leftOut(record.measures.muda_time) ?? []), "jobs")
   // Each session once: the first labeled job by job ID supplies its totals.
   const sessions = new Map()
   const bindingsPerSession = new Map()
@@ -320,6 +358,9 @@ function pareto(records) {
   const base = {
     jobs: records.length,
     jobs_labeled: labeled.length,
+    n: labeled.length,
+    N: records.length,
+    state: countState(labeled.length, records.length),
     jobs_excluded: excluded,
     sessions_labeled: sessions.size,
     sessions_shared: [...bindingsPerSession.values()].filter((bindings) => bindings.some((left, index) => bindings.slice(index + 1).some((right) => bindingsOverlap(left, right)))).length,
@@ -346,20 +387,105 @@ function byGrouping(records, groupings, summarize) {
   ]))
 }
 
+// What one session adds to a fact-level total, read from the table in number-states.js. `fields` are the published fields that feed the number and `count(session)` is the session's own count, or `null` when the session recorded none.
+//   - A session with a flag on any feeding field other than `host_records_partly` supplied nothing usable: it is left out of `n` and of the value, and its reasons are listed.
+//   - A session with a null count and no such flag is left out the same way, as `field_absent`.
+//   - A session flagged only `host_records_partly` supplied a lower bound: it is left out of `n`, so the number is partial, but its count stays in the value.
+// `value` is the key absent, never 0 and never null, when no session supplied a count. The state is measured when `n === N`, partial when a value exists and `n < N`, and unavailable when no session supplied a count.
+// A rollup number that is not measured always names why; the one place that refuses one that does not.
+export function assertNamed(number) {
+  if (number.state !== "measured" && number.reasons.length === 0) throw new Error(`a ${number.state} rollup number has no reason`)
+  return number
+}
+
+// Report-only reason for a total over no sessions; it is not a facts enum value.
+const NO_SESSIONS = "no_sessions"
+
+function totalOf(sessions, fields, count) {
+  let n = 0
+  let supplied = 0
+  let value = 0
+  const reasons = new Set()
+  for (const session of sessions) {
+    const flags = session.unavailable.filter((entry) => fields.includes(entry.field))
+    const counted = count(session)
+    for (const flag of flags) reasons.add(flag.reason)
+    if (flags.some((flag) => flag.reason !== PARTLY)) continue
+    if (counted === null) {
+      reasons.add("field_absent")
+      continue
+    }
+    supplied += 1
+    value += counted
+    if (flags.length === 0) n += 1
+  }
+  const state = sessions.length > 0 && n === sessions.length ? "measured" : supplied > 0 ? "partial" : "unavailable"
+  if (sessions.length === 0) reasons.add(NO_SESSIONS)
+  return assertNamed({ state, ...(supplied > 0 ? { value } : {}), n, N: sessions.length, reasons: state === "measured" ? [] : [...reasons].sort(compareText) })
+}
+
+const sumOrNull = (values) => values.some((entry) => entry === null || entry === undefined) ? null : values.reduce((total, entry) => total + entry, 0)
+const sumCounts = (counts) => Object.values(counts).reduce((total, entry) => total + entry, 0)
+const feeding = (formulaId) => [...fieldsFeeding(formulaId, "unavailable"), ...fieldsFeeding(formulaId, "partial")]
+const TOKEN_TYPES = Object.freeze(["input", "output", "cache_read", "cache_write", "reasoning"])
+
+// A session with no model at all, or with a null counter on any model, has no count of that kind.
+const modelSum = (session, read) => session.models.length === 0 ? null : sumOrNull(session.models.map(read))
+
+function totalsOf(sessions) {
+  const tokens = Object.fromEntries(TOKEN_TYPES.map((type) => [
+    type,
+    totalOf(sessions, [...feeding("totals.tokens"), ...(type === "reasoning" ? feeding("totals.tokens.reasoning") : [])], (session) => modelSum(session, (model) => model.tokens[type])),
+  ]))
+  return {
+    sessions: { state: "measured", value: sessions.length, n: sessions.length, N: sessions.length, reasons: [] },
+    tool_calls: totalOf(sessions, feeding("totals.tool_calls"), (session) => sumCounts(session.counts.tool_calls)),
+    tool_failures: totalOf(sessions, feeding("totals.tool_failures"), (session) => sumCounts(session.counts.tool_failures)),
+    model_requests: totalOf(sessions, feeding("totals.model_requests"), (session) => modelSum(session, (model) => model.requests)),
+    tokens,
+    subagent_dispatches: totalOf(sessions, feeding("totals.subagent_dispatches"), (session) => session.agents.filter((agent) => agent.parent !== null).length),
+  }
+}
+
+function totals(sessions) {
+  const hosts = [...new Set(sessions.map((session) => session.session.host))].sort(compareText)
+  return {
+    schema: ROLLUPS_SCHEMA,
+    hosts: Object.fromEntries(hosts.map((host) => [host, totalsOf(sessions.filter((session) => session.session.host === host))])),
+    all: totalsOf(sessions),
+  }
+}
+
 function toolKinds(sessions) {
+  const fields = [...feeding("totals.tool_calls"), ...feeding("totals.tool_failures")]
   const totals = new Map()
   for (const session of sessions) {
     const tools = new Set([...Object.keys(session.counts.tool_calls), ...Object.keys(session.counts.tool_failures)])
     for (const tool of tools) {
-      const entry = totals.get(tool) ?? { tool, calls: 0, failures: 0, sessions: 0 }
-      entry.calls += session.counts.tool_calls[tool] ?? 0
-      entry.failures += session.counts.tool_failures[tool] ?? 0
-      entry.sessions += 1
+      const entry = totals.get(tool) ?? { tool, members: [] }
+      entry.members.push(session)
       totals.set(tool, entry)
     }
   }
-  const rows = [...totals.values()].sort((left, right) => right.failures - left.failures || right.calls - left.calls || compareText(left.tool, right.tool))
+  const rows = [...totals.values()].map(({ tool, members }) => {
+    const calls = totalOf(members, fields, (session) => session.counts.tool_calls[tool] ?? 0)
+    const failures = totalOf(members, fields, (session) => session.counts.tool_failures[tool] ?? 0)
+    // An absent count sorts as 0 below for ordering only; it is never displayed as 0.
+    return { tool, ...(calls.value === undefined ? {} : { calls: calls.value, failures: failures.value }), sessions: members.length, state: calls.state, n: calls.n, N: calls.N, reasons: calls.reasons }
+  }).sort((left, right) => (right.failures ?? 0) - (left.failures ?? 0) || (right.calls ?? 0) - (left.calls ?? 0) || compareText(left.tool, right.tool))
   return { schema: ROLLUPS_SCHEMA, sessions: sessions.length, tool_kinds: rows }
+}
+
+// How many sessions carry each flag, over every session with facts.
+function flagCounts(sessions) {
+  const counts = new Map()
+  for (const session of sessions) {
+    for (const flag of new Set(session.unavailable.map((entry) => `${entry.field}\u0000${entry.reason}`))) counts.set(flag, (counts.get(flag) ?? 0) + 1)
+  }
+  return [...counts.entries()].map(([key, count]) => {
+    const [field, reason] = key.split("\u0000")
+    return { field, reason, sessions: count, N: sessions.length }
+  }).sort((left, right) => compareText(left.field, right.field) || compareText(left.reason, right.reason))
 }
 
 function coverage(records, sessions, labels) {
@@ -377,13 +503,15 @@ function coverage(records, sessions, labels) {
       files: labels.files,
       used: labels.files - labels.unused.reduce((total, entry) => total + entry.files, 0),
       unused: labels.unused,
-      jobs_labeled: muda.filter((value) => "value" in value).length,
+      jobs_labeled: muda.filter(counted).length,
       jobs_partially_labeled: muda.filter((value) => value.excluded === "partial").length,
       jobs_unlabeled: muda.filter((value) => value.excluded === "not_labeled").length,
     },
     jobs_open: records.filter((record) => !record.finished).length,
     job_class: { assigned: DEFAULT_JOB_CLASS, reason: NOT_PUBLISHED },
     search_waste: { reason: NOT_PUBLISHED },
+    hosts: [...new Set(sessions.map((session) => session.session.host))].sort(compareText).map((host) => ({ host, sessions: sessions.filter((session) => session.session.host === host).length })),
+    flagged: flagCounts(sessions),
   }
 }
 
@@ -408,6 +536,7 @@ export function computeRollups({ records, sessions, labels }) {
     },
     tool_kinds: toolKinds(sessions),
     coverage: coverage(records, sessions, labels),
+    totals: totals(sessions),
   }
 }
 
@@ -417,13 +546,18 @@ function percentage(value) {
 
 /** `formatMeasure(id, value) -> string`: a measure's value as the pages print it (`ms` for durations, a percentage for ratios). */
 export function formatMeasure(id, value) {
-  if (value === null) return "unavailable"
+  if (value === null) return "not recorded"
   if (RATIO_MEASURES.has(id)) return percentage(value)
   return DURATION_MEASURES.has(id) ? `${value} ms` : `${value}`
 }
 
-function reasonsText(entries, noun) {
-  return entries.length === 0 ? "none" : entries.map((entry) => `${entry.reason} ${entry[noun]}`).join(", ")
+function reasonsText(entries, noun, singular) {
+  return entries.length === 0 ? "none" : entries.map((entry) => `${reasonText(entry.reason)} (${entry[noun]} ${entry[noun] === 1 ? singular : noun})`).join(", ")
+}
+
+// The words for a state; nothing recorded reads "not recorded", never a zero or a blank.
+function stateWord(state) {
+  return state === "unavailable" ? "not recorded" : state
 }
 
 function groupHeading(grouping, key) {
@@ -431,10 +565,10 @@ function groupHeading(grouping, key) {
 }
 
 function paretoLines(summary) {
-  const counted = `${summary.jobs_labeled} of ${summary.jobs} jobs fully labeled; excluded: ${reasonsText(summary.jobs_excluded, "jobs")}.`
-  if (summary.muda_time_ms === null) return [`No fully labeled finished job yet: ${counted}`]
+  const counted = `${summary.jobs_labeled} of ${summary.jobs} jobs fully labeled; excluded: ${reasonsText(summary.jobs_excluded, "jobs", "job")}.`
+  if (summary.muda_time_ms === null) return [`No fully labeled finished job yet (${stateWord(summary.state)}): ${counted}`]
   return [
-    `Muda time: ${summary.muda_time_ms} ms across ${counted} Sessions summed: ${summary.sessions_labeled}, each once; shared by several jobs: ${summary.sessions_shared}.`,
+    `Muda time: ${summary.muda_time_ms} ms (${stateWord(summary.state)}) across ${counted} Sessions summed: ${summary.sessions_labeled}, each once; shared by several jobs: ${summary.sessions_shared}.`,
     "",
     "| Waste | Muda time | Share | Cumulative | Jobs |",
     "| --- | ---: | ---: | ---: | ---: |",
@@ -446,12 +580,12 @@ function measureLines(summary, quality) {
   return [
     `Jobs: ${summary.jobs}; open, and so left out of every measure: ${summary.jobs_open}.`,
     "",
-    "| Measure | Jobs counted | Median | p75 | Excluded |",
-    "| --- | ---: | ---: | ---: | --- |",
+    "| Measure | State | Jobs counted (n of N) | Median | p75 | Excluded |",
+    "| --- | --- | ---: | ---: | ---: | --- |",
     ...MEASURE_IDS.map((id) => {
       const stats = summary.measures[id]
-      const name = quality.has(id) ? `${id} (quality)` : id
-      return `| ${name} | ${stats.jobs_counted} | ${formatMeasure(id, stats.median)} | ${formatMeasure(id, stats.p75)} | ${reasonsText(stats.jobs_excluded, "jobs")} |`
+      const name = [id === "compactions" ? "compactions (count)" : id, ...(quality.has(id) ? ["(quality)"] : [])].join(" ")
+      return `| ${name} | ${stateWord(stats.state)} | ${stats.n} of ${stats.N} | ${formatMeasure(id, stats.median)} | ${formatMeasure(id, stats.p75)} | ${reasonsText(stats.jobs_excluded, "jobs", "job")} |`
     }),
   ]
 }
@@ -489,7 +623,7 @@ export function renderRollupsMarkdown(rollups) {
     "",
     "Totals and distributions across jobs, grouped by plugin version, host, job class and waste type; tool kinds are summed per session. They name no person, machine, date or time of day.",
     "",
-    "Only finished jobs count: every measure of a job that is not done or cancelled, or whose lead time is censored, is excluded as open_job. Only complete values count: a measure a finished job could not supply, or could supply only for some sessions (partial), is excluded and listed with its reason, never counted as zero. Medians and p75 use the nearest-rank method: the value at rank ceil(p × n) of the counted values sorted ascending.",
+    "Only finished jobs count: every measure of a job that is not done or cancelled, or whose lead time is censored, is excluded because the job is not finished. Only complete values count: a measure a finished job could not supply, or could supply only for some sessions, is excluded and listed with its reason, never counted as zero. Jobs counted reads n of N: the jobs whose value counted, of all jobs in the group, open ones included. Compactions (count) is how many compactions happened, which every host records; compaction wait time is a different number and is recorded only where the host records it. Every group has a state: measured when n equals N, partial when some jobs counted, and not recorded when none did, in which case there is no median. A value the host records only partly is a lower bound, so it is left out of n and listed under its reason. Medians and p75 use the nearest-rank method: the value at rank ceil(p × n) of the counted values sorted ascending.",
     "",
     "## Waste by type",
     "",
@@ -508,9 +642,9 @@ export function renderRollupsMarkdown(rollups) {
     ...(tools.length === 0
       ? ["- None."]
       : [
-          "| Tool kind | Calls | Failures | Sessions |",
-          "| --- | ---: | ---: | ---: |",
-          ...tools.map((row) => `| ${row.tool} | ${row.calls} | ${row.failures} | ${row.sessions} |`),
+          "| Tool kind | State | Calls | Failures | Sessions counted (n of N) | Why not whole |",
+          "| --- | --- | ---: | ---: | ---: | --- |",
+          ...tools.map((row) => `| ${row.tool} | ${stateWord(row.state)} | ${row.calls ?? "not recorded"} | ${row.failures ?? "not recorded"} | ${row.n} of ${row.N} | ${row.reasons.length === 0 ? "none" : row.reasons.map(reasonText).join(" and ")} |`),
         ]),
     "",
     "## Coverage",
@@ -518,7 +652,7 @@ export function renderRollupsMarkdown(rollups) {
     `- Jobs: ${cover.jobs}; open: ${cover.jobs_open}.`,
     `- Unattributed sessions: ${cover.unattributed_sessions} of ${cover.sessions_with_facts} (${cover.unattributed_session_time_ms} ms of ${cover.session_time_ms} ms session time).`,
     `- Jobs fully labeled: ${cover.labels.jobs_labeled}; partially labeled: ${cover.labels.jobs_partially_labeled}; unlabeled: ${cover.labels.jobs_unlabeled}.`,
-    `- Labels files: ${cover.labels.files}; used: ${cover.labels.used}; unused: ${reasonsText(cover.labels.unused, "files")}.`,
+    `- Labels files: ${cover.labels.files}; used: ${cover.labels.used}; unused: ${reasonsText(cover.labels.unused, "files", "file")}.`,
     `- Job class: every job is ${cover.job_class.assigned}; published facts do not carry the task card's kind.`,
     "- Search waste: unavailable; published facts do not carry the organization signal.",
     "",

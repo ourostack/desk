@@ -1,4 +1,4 @@
-// Published facts v1 (`desk.factory.published/1`): the public gate.
+// Published facts (`desk.factory.published/2`; `/1` files are still read): the public gate.
 //
 // A published facts file is the only thing that ever leaves this machine for
 // a factory store, and the stores are public. It says how the work went and
@@ -96,7 +96,10 @@ import {
 } from "./schema.js"
 import { isCredentialLike } from "./credential.js"
 
-export const PUBLISHED_SCHEMA = "desk.factory.published/1"
+export const PUBLISHED_SCHEMA = "desk.factory.published/2"
+
+/** Every published schema value a reader accepts: the legacy `/1` and the current one. */
+export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", PUBLISHED_SCHEMA])
 
 /** An ISO calendar date anywhere in a string. */
 export const DATE_SHAPE = /\d{4}-\d{2}-\d{2}/u
@@ -111,7 +114,7 @@ export const PUBLISHED_LIMITS = Object.freeze({
   maxOffsetMs: 3650 * 24 * 60 * 60 * 1000,
 })
 
-const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/1$/u
+export const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[12]$/u
 
 const DATE_PARTS = /(\d{4})-(\d{2})-(\d{2})/u
 const TIME_PARTS = /(\d{2}):(\d{2})/u

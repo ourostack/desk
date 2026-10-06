@@ -1,4 +1,4 @@
-// Local facts v1 (`desk.factory.local/1`): schema, privacy gate and
+// Local facts (`desk.factory.local/2`; `/1` files are still read): schema, privacy gate and
 // validator, plus the spec walker the published schema reuses.
 //
 // Local facts are what the derivers and binding write to the local outbox,
@@ -51,15 +51,19 @@ export const ENUMS = Object.freeze({
     "drafting", "processing", "validating", "collaborating", "paused", "blocked", "done", "cancelled",
   ]),
   jobBasis: Object.freeze(["desk_tool", "file_write", "desk_commit", "spawn_brief", "inherited"]),
+  // A field a file lists here was not recorded; its value in the file is not a measured zero.
   unavailableField: Object.freeze([
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+    "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
   ]),
   // The published form adds `job_offsets`: a job whose offsets could not be
   // measured (no readable task-card creation time).
   publishedUnavailableField: Object.freeze([
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
-    "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at", "job_offsets",
+    "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+    "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
+    "job_offsets",
   ]),
   // `log_truncated` is a log that ends mid-record; `capped` is data a deriver
   // trimmed to a schema limit; `desk_public` is job timing the transform
@@ -67,13 +71,17 @@ export const ENUMS = Object.freeze({
   unavailableReason: Object.freeze([
     "host_does_not_record", "log_missing", "log_truncated", "session_open",
     "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
+    "field_absent", "host_records_partly", "withheld_public",
   ]),
 })
 
-export const LOCAL_SCHEMA = "desk.factory.local/1"
+export const LOCAL_SCHEMA = "desk.factory.local/2"
+
+/** Every local schema value a reader accepts: the legacy `/1` and the current one. */
+export const LOCAL_SCHEMAS = Object.freeze(["desk.factory.local/1", LOCAL_SCHEMA])
 
 export const PATTERNS = Object.freeze({
-  schema: /^desk\.factory\.local\/1$/u,
+  schema: /^desk\.factory\.local\/[12]$/u,
   sessionId: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
   // The prerelease part is bounded (controller ruling, M1): unbounded free text there
   // would let word-shaped strings ride through as a "version".
@@ -100,7 +108,8 @@ export const LIMITS = Object.freeze({
   jobs: 1000,
   jobTransitions: 1000,
   jobSegments: 200,
-  unavailable: 64,
+  // Every field with every reason once: no entry set can overflow when an enum grows.
+  unavailable: ENUMS.publishedUnavailableField.length * ENUMS.unavailableReason.length,
 })
 
 export const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)

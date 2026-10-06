@@ -250,7 +250,9 @@ function countReasons(reasons) {
  * `confirmed`, `not_confirmed`, `too_few_jobs` (no interval) or
  * `no_clear_change` (an interval that touches or spans zero), `comparison` is
  * `compareMedians`' result, `jobs` the number of jobs in the card's class
- * and `excluded` each reason a job was left out with its count. `records`
+ * and `excluded` each reason a job was left out with its count, and `state`
+ * (`partial`, with the `reasons`, when a compared value is a lower bound the
+ * host records only partly; else `measured`). `records`
  * are the rollups' job records (`jobRecord`).
  */
 export function checkCard(card, records, { seed }) {
@@ -259,6 +261,7 @@ export function checkCard(card, records, { seed }) {
   const before = []
   const after = []
   const reasons = []
+  const partly = new Set()
   for (const record of inClass) {
     const range = record.plugins[card.plugin] ?? null
     const measure = record.measures[card.hypothesis.measure]
@@ -267,11 +270,14 @@ export function checkCard(card, records, { seed }) {
     else if (side === null) reasons.push("plugin_not_reported")
     else if (side === undefined) reasons.push("mixed_versions")
     else if (!("value" in measure)) reasons.push(measure.excluded)
-    else side.push({ job: record.job, sessions: record.sessions, value: measure.value })
+    else {
+      side.push({ job: record.job, sessions: record.sessions, value: measure.value })
+      if (measure.state === "partial") for (const reason of measure.reasons) partly.add(reason)
+    }
   }
   const comparison = compareMedians(clusterJobs(before), clusterJobs(after), { seed })
   const verdict = comparison.interval === null ? "too_few_jobs" : comparison.direction === null ? "no_clear_change" : comparison.direction === card.hypothesis.direction ? "confirmed" : "not_confirmed"
-  return { status: "checked", verdict, comparison, jobs: inClass.length, excluded: countReasons(reasons) }
+  return { status: "checked", verdict, comparison, jobs: inClass.length, excluded: countReasons(reasons), state: partly.size === 0 ? "measured" : "partial", reasons: [...partly].sort() }
 }
 
 const HEADINGS = Object.freeze({ confirmed: "confirmed", not_confirmed: "not confirmed", too_few_jobs: "not enough independent jobs yet", no_clear_change: "no clear change so far" })
@@ -314,6 +320,7 @@ export function kaizenComment({ card, result, errors }) {
     `- ${CONFIDENCE * 100}% bootstrap interval: ${comparison.interval === null ? `none yet; each side needs at least ${MIN_GROUPS_PER_SIDE} independent groups of jobs for a ${CONFIDENCE * 100}% interval to exist` : `[${format(comparison.interval[0])}, ${format(comparison.interval[1])}]`}.`,
     `- Jobs left out: ${result.excluded.length === 0 ? "none" : result.excluded.map((entry) => `${entry.reason} ${entry.jobs}`).join(", ")}.`,
     "",
+    ...(result.state === "partial" ? [`The \`${measure}\` numbers here are a lower bound: the host records them only partly.`, ""] : []),
     RULE,
     "",
   ].join("\n")

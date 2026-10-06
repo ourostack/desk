@@ -21,6 +21,7 @@ import {
   PATTERNS,
   LIMITS,
   LOCAL_SCHEMA,
+  LOCAL_SCHEMAS,
   __SPECS__,
 } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
@@ -90,7 +91,7 @@ test("a non-string value in a timestamp-checked field fails with type", () => {
 // --- One violation per value-rule-table row -------------------------------
 
 const SIMPLE_VIOLATIONS = [
-  { name: "schema must match the literal pattern", keys: ["schema"], value: `desk.factory.local/2 ${SENTINEL}`, code: "pattern", path: "schema" },
+  { name: "schema must match the literal pattern", keys: ["schema"], value: `desk.factory.local/3 ${SENTINEL}`, code: "pattern", path: "schema" },
   { name: "the retired M3-1 schema value is refused", keys: ["schema"], value: "desk.factory.facts/1", code: "pattern", path: "schema" },
   { name: "the published schema value is refused by the local gate", keys: ["schema"], value: "desk.factory.published/1", code: "pattern", path: "schema" },
   { name: "session.host must be a known host", keys: ["session", "host"], value: SENTINEL, code: "enum", path: "session.host" },
@@ -240,9 +241,58 @@ test("the local schema has no contributor: a contributor key is an unknown key a
 })
 
 test("LOCAL_SCHEMA is the local schema value the golden fixture carries", () => {
-  assert.equal(LOCAL_SCHEMA, "desk.factory.local/1")
+  assert.equal(LOCAL_SCHEMA, "desk.factory.local/2")
   assert.equal(golden().schema, LOCAL_SCHEMA)
   assert.ok(PATTERNS.schema.test(LOCAL_SCHEMA))
+  assert.deepEqual(LOCAL_SCHEMAS, ["desk.factory.local/1", LOCAL_SCHEMA])
+})
+
+test("local facts accept schema /1 and /2 and refuse /3", () => {
+  for (const schema of ["desk.factory.local/1", "desk.factory.local/2"]) {
+    assert.equal(validateLocalFacts(setPath(golden(), ["schema"], schema)).ok, true, schema)
+  }
+  assertSingle(validateLocalFacts(setPath(golden(), ["schema"], `desk.factory.local/3 ${SENTINEL}`)), "pattern", "schema")
+  assertSingle(validateLocalFacts(setPath(golden(), ["schema"], "desk.factory.local/3")), "pattern", "schema")
+})
+
+const NEW_FIELDS = ["compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments"]
+const NEW_REASONS = ["field_absent", "host_records_partly", "withheld_public"]
+
+test("every new unavailable field and reason is accepted in local facts", () => {
+  for (const field of NEW_FIELDS) {
+    for (const reason of NEW_REASONS) {
+      const value = golden()
+      value.unavailable = [{ field, reason }]
+      assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] }, `${field}/${reason}`)
+    }
+  }
+})
+
+test("a sentinel in an unavailable field or reason is refused as an enum error and never echoed", () => {
+  for (const key of ["field", "reason"]) {
+    const value = golden()
+    value.unavailable = [{ field: "tokens", reason: "capped", [key]: SENTINEL }]
+    const result = validateLocalFacts(value)
+    assertSingle(result, "enum", `unavailable.0.${key}`)
+    assertNoLeak(result)
+  }
+})
+
+test("LIMITS.unavailable is at least fields times reasons so no entry set can overflow", () => {
+  assert.equal(LIMITS.unavailable, ENUMS.publishedUnavailableField.length * ENUMS.unavailableReason.length)
+  assert.ok(LIMITS.unavailable >= ENUMS.unavailableField.length * ENUMS.unavailableReason.length)
+})
+
+test("publishedUnavailableField is the local fields plus job_offsets, existing order kept", () => {
+  assert.deepEqual(ENUMS.publishedUnavailableField, [...ENUMS.unavailableField, "job_offsets"])
+  assert.deepEqual(ENUMS.unavailableField.slice(0, 12), [
+    "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
+    "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+  ])
+})
+
+test("writers emit the current schema constants (local golden)", () => {
+  assert.equal(GOLDEN.schema, LOCAL_SCHEMA)
 })
 
 test("the retired M3-1 alias names are no longer exported (M3-12)", async () => {
@@ -525,7 +575,7 @@ test("exactly 1000 transitions in one job is accepted", () => {
   assert.equal(validateLocalFacts(value).ok, true)
 })
 
-test("more than 64 unavailable entries fails with too_many (sentinel planted in the unread items, no leak)", () => {
+test("more than LIMITS.unavailable entries fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
   value.unavailable = fillWithSentinel({ field: SENTINEL, reason: "host_does_not_record" }, LIMITS.unavailable + 1)
   const result = validateLocalFacts(value)
@@ -533,7 +583,7 @@ test("more than 64 unavailable entries fails with too_many (sentinel planted in 
   assertNoLeak(result)
 })
 
-test("exactly 64 unavailable entries is accepted", () => {
+test("exactly LIMITS.unavailable entries is accepted", () => {
   const value = golden()
   value.unavailable = new Array(LIMITS.unavailable).fill(value.unavailable[0])
   assert.equal(validateLocalFacts(value).ok, true)
@@ -715,14 +765,18 @@ test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself
     unavailableField: [
       "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
       "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+      "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
     ],
     publishedUnavailableField: [
       "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
-      "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at", "job_offsets",
+      "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+      "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
+      "job_offsets",
     ],
     unavailableReason: [
       "host_does_not_record", "log_missing", "log_truncated", "session_open",
       "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
+      "field_absent", "host_records_partly", "withheld_public",
     ],
   }
   assert.deepEqual(Object.keys(ENUMS).sort(), Object.keys(table).sort())

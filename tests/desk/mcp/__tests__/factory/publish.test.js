@@ -328,33 +328,82 @@ test("unavailable keeps the local entries, adds each new one once, and stays wit
   const value = local()
   value.jobs = [value.jobs[2], { ...value.jobs[2], job: "9f2c4b1a7d3e5f60718293a4b5c6d7e9" }]
   const combos = ENUMS.unavailableField.flatMap((field) => ENUMS.unavailableReason.map((reason) => ({ field, reason })))
-  value.unavailable = [...combos.slice(0, LIMITS.unavailable - 1), combos[0]]
-  const { published } = publish(value)
-  assert.equal(published.unavailable.length, LIMITS.unavailable, "a repeated local entry is kept once; the new one fills the last place")
-  assert.deepEqual(published.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" })
-  assert.equal(validatePublished(published).ok, true)
-
-  value.unavailable = combos.slice(0, LIMITS.unavailable)
+  // Every local field with every reason fits with room for the transform's own entries, so the cap never cuts a valid local file.
+  assert.ok(combos.length < LIMITS.unavailable)
+  value.unavailable = combos
   const full = publish(value).published
-  assert.equal(full.unavailable.length, LIMITS.unavailable)
-  assert.deepEqual(full.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" }, "the transform's own entry displaces the last local one")
-  assert.deepEqual(full.unavailable.slice(0, -1), combos.slice(0, LIMITS.unavailable - 1))
+  assert.deepEqual(full.unavailable.slice(0, combos.length), combos)
+  assert.deepEqual(full.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" })
+  assert.equal(full.unavailable.length, combos.length + 1)
   assert.equal(validatePublished(full).ok, true)
 
-  // The local file already holds the marker, in the place the cap cuts.
-  const cut = local()
-  cut.jobs = []
-  cut.intervals.push({ kind: "turn", agent: 0, start: "2026-09-25T09:29:00.000Z", end: "2026-09-25T09:31:00.000Z" })
-  const others = combos.filter((entry) => !(entry.field === "turns" && entry.reason === "source_unreadable"))
-  cut.unavailable = [...others.slice(0, LIMITS.unavailable - 1), { field: "turns", reason: "source_unreadable" }]
-  const kept = publish(cut).published.unavailable
-  assert.equal(kept.length, LIMITS.unavailable)
-  assert.deepEqual(kept.at(-1), { field: "turns", reason: "source_unreadable" }, "the transform's own marker is kept first")
+  // A repeated local entry is kept once.
+  value.unavailable = [...combos.slice(0, 5), combos[0]]
+  const deduped = publish(value).published.unavailable
+  assert.equal(deduped.length, 6)
+  assert.equal(validatePublished({ ...publish(value).published }).ok, true)
 
   const few = local()
   few.jobs = [few.jobs[2], { ...few.jobs[2], job: "9f2c4b1a7d3e5f60718293a4b5c6d7e9" }]
   const result = publish(few).published.unavailable
   assert.equal(result.filter((entry) => entry.field === "job_offsets").length, 1)
+})
+
+test("a public store hides plugins and flags plugins withheld_public", () => {
+  for (const storeVisibility of ["public", undefined, "unknown"]) {
+    const { published } = publish(withPlugins(), { storeVisibility })
+    const flags = published.unavailable.filter((entry) => entry.field === "plugins")
+    assert.deepEqual(flags, [{ field: "plugins", reason: "withheld_public" }], String(storeVisibility))
+    assert.equal(validatePublished(published).ok, true)
+  }
+})
+
+test("a store with nothing hidden carries no plugins flag, and a flag the local file already held is not repeated", () => {
+  const none = local()
+  none.plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
+  assert.equal(publish(none, { storeVisibility: "public" }).published.unavailable.some((entry) => entry.field === "plugins"), false)
+  const held = withPlugins()
+  held.unavailable = [{ field: "plugins", reason: "withheld_public" }]
+  const flags = publish(held, { storeVisibility: "public" }).published.unavailable.filter((entry) => entry.field === "plugins")
+  assert.deepEqual(flags, [{ field: "plugins", reason: "withheld_public" }])
+})
+
+test("a private store names its plugins and carries no plugins flag", () => {
+  for (const storeVisibility of ["private", "internal"]) {
+    const { published } = publish(withPlugins(), { storeVisibility })
+    assert.equal(published.plugins.length, 5)
+    assert.equal(published.unavailable.some((entry) => entry.field === "plugins"), false, storeVisibility)
+  }
+})
+
+test("published refs.private counts are unchanged", () => {
+  const { published, dropped } = publish(withPlugins(), { storeVisibility: "public" })
+  assert.deepEqual(Object.keys(published.refs.private).sort(), Object.keys(dropped).sort())
+  assert.equal(published.refs.private.plugins, 4)
+  assert.deepEqual(published.refs.private, dropped)
+})
+
+test("publishing a file that carries every field and reason pair keeps all of them", () => {
+  const value = withPlugins()
+  value.jobs = [value.jobs[2], { ...value.jobs[2], job: "9f2c4b1a7d3e5f60718293a4b5c6d7e9" }]
+  const combos = ENUMS.unavailableField.flatMap((field) => ENUMS.unavailableReason.map((reason) => ({ field, reason })))
+  value.unavailable = combos
+  // The worst case: a public desk and store, so desk_public and plugins withheld are both added.
+  for (const options of [{ deskVisibility: "public", storeVisibility: "public", machineSecret: SECRET }, { deskVisibility: "private", storeVisibility: "public" }]) {
+    const published = publish(value, options).published
+    for (const entry of combos) assert.ok(published.unavailable.some((item) => item.field === entry.field && item.reason === entry.reason), `${entry.field}/${entry.reason}`)
+    assert.ok(published.unavailable.length <= LIMITS.unavailable)
+    assert.equal(new Set(published.unavailable.map((entry) => `${entry.field}|${entry.reason}`)).size, published.unavailable.length)
+    assert.deepEqual(validatePublishedBytes(serializePublished(published)), { ok: true, errors: [] })
+  }
+})
+
+test("a sentinel plugin name never reaches the published unavailable list", () => {
+  const value = local()
+  value.plugins = [{ name: "sentinel-7f3a", version: "1.0.0", source: "private-org/private-repo" }]
+  const { published } = publish(value, { storeVisibility: "public" })
+  assert.doesNotMatch(JSON.stringify(published), /sentinel-7f3a/u)
+  assert.deepEqual(published.unavailable.filter((entry) => entry.field === "plugins"), [{ field: "plugins", reason: "withheld_public" }])
 })
 
 // ---------------------------------------------------------------------------
@@ -707,7 +756,7 @@ function randomLocal(random) {
   })
   const repos = ["ourostack/desk", "private-org/private-repo", `${SENTINEL}/secret`, "acme/notes-2031-01-01", null]
   return {
-    schema: "desk.factory.local/1",
+    schema: "desk.factory.local/2",
     session: {
       host: pick(ENUMS.host),
       id: `${hex(8)}-${hex(4)}-4${hex(3)}-8${hex(3)}-${hex(12)}`,

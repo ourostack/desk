@@ -99,9 +99,9 @@
 // `labels/<job>/<session id>.json`.
 //
 // `unavailable` keeps the local entries once each and adds the transform's
-// own markers after them; when the list would pass the schema limit, the
-// transform's markers are kept first (even one the local file already held)
-// and the last local entries give way. The transform is
+// own markers after them. Nothing is trimmed: the schema limit holds every
+// field with every reason once, so the union always fits. A public store
+// that hides a plugin adds `{plugins, withheld_public}`. The transform is
 // pure and deterministic: it never mutates its input, shares no object with
 // it and reads no clock.
 //
@@ -114,7 +114,7 @@ import { publishedAgentType } from "./agent-types.js"
 import { validateLabels } from "./label-schema.js"
 import { PRIVATE_VISIBILITIES, deskTimingKept } from "./desk-visibility.js"
 import { intervalInSession } from "./pipeline/timeline.js"
-import { LIMITS, validateLocalFacts } from "./schema.js"
+import { validateLocalFacts } from "./schema.js"
 import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
 /** Why `toPublished` returned no file. */
@@ -400,6 +400,8 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
   const refs = publishRefs(local.refs, isPublic, deskPrivate && local.jobs.some((job) => Object.hasOwn(job, "segments")))
   const plugins = publishPlugins(local.plugins, isPublic, storeVisibility)
   const dropped = { ...refs.dropped, plugins: plugins.hidden }
+  // A list with names left out says so, so a short list never reads as the whole one.
+  if (plugins.hidden > 0) flag("plugins", "withheld_public")
   const jobs = deskPrivate
     ? local.jobs.map((job) => publishJob(job, startedMs, flag))
     : local.jobs.map((job) => protectedJob(job, machineSecret)).sort((a, b) => (a.job < b.job ? -1 : 1))
@@ -421,7 +423,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
     },
     refs: { prs: refs.prs, commits: refs.commits, private: { ...dropped } },
     jobs,
-    unavailable: [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)).slice(0, LIMITS.unavailable - own.length), ...own],
+    unavailable: [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)), ...own],
   }
   return { published, dropped: { ...dropped } }
 }

@@ -55,7 +55,7 @@
 //   - `entrypoint` is the caller's (`cli` or `launcher`, default `cli`) and
 //     is never inferred: `producer` is always `copilot-agent` and
 //     `context.hostType` names the repository host, so nothing in the log
-//     identifies a launcher. The end hook (M3-7) knows, because an Agency
+//     identifies a launcher, so a `cli` entrypoint carries `{entrypoint, host_does_not_record}`. The end hook (M3-7) knows, because an Agency
 //     session copies plugins under `~/.local/agency/plugins/sessions/`.
 //   - A `turn` is one root interaction, as in the Claude deriver where a turn
 //     runs from a human prompt to its last activity: from the first root
@@ -189,7 +189,8 @@ import { createInterface } from "node:readline"
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
-import { addNullable, compareByStart, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, shellBinding, withRequestedModel } from "./derive-common.js"
+import { addNullable, compareByStart, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, shellBinding, usageAbsent, withRequestedModel } from "./derive-common.js"
+import { hostFlagsFor } from "./host-flags.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
@@ -309,7 +310,12 @@ function compareModels(a, b) {
 // Exposed only so a unit test can drive the comparator through every
 // direction; which pairs a sort compares depends on the input's incidental
 // order, which a fixture cannot reliably force.
-export const __internals__ = { compareModels }
+/** The `unavailable` list: every distinct flag, in the order raised. The schema limit equals the count of every field and reason pair, so nothing is cut. */
+function unavailableList(flags) {
+  return [...flags.values()]
+}
+
+export const __internals__ = { compareModels, unavailableList }
 
 // ---------------------------------------------------------------------------
 // The single streaming pass.
@@ -617,9 +623,11 @@ function parseModelMetrics(metrics, flag) {
     }
     const requests = isObject(metric) && isObject(metric.requests) ? metric.requests.count : undefined
     const usage = isObject(metric) && isObject(metric.usage) ? metric.usage : {}
+    const requestCount = countOrNull(requests)
+    if (requestCount === null) flag("requests", usageAbsent(requests) ? "field_absent" : "source_unreadable")
     models.push({
       id,
-      requests: countOrNull(requests),
+      requests: requestCount,
       tokens: {
         input: countOrNull(usage.inputTokens),
         output: countOrNull(usage.outputTokens),
@@ -804,6 +812,9 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   models.sort(compareModels)
   if (models.length > LIMITS.models) flag("models", "capped")
   models = models.slice(0, LIMITS.models)
+  const emptyUsage = [...state.flags.values()]
+  flagEmptyUsage(emptyUsage, models)
+  for (const { field, reason } of emptyUsage) flag(field, reason)
   state.agents[0].model = rootModel(models)
   withRequestedModel(state.agents[0], state.selectedModel)
 
@@ -816,6 +827,8 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   const refs = refsFromDatabase({ sessionId, env, flag, gitRoot: state.gitRoot, resolveCommits })
   const mergedPlugins = mergePlugins(plugins, state.skillPlugins, flag)
   flag("ci_runs", "not_collected_in_slice_1")
+  const sessionEntrypoint = entrypoint === "launcher" ? "launcher" : "cli"
+  for (const { field, reason } of hostFlagsFor(HOST, { entrypoint: sessionEntrypoint })) flag(field, reason)
 
   const facts = {
     schema: LOCAL_SCHEMA,
@@ -823,7 +836,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
       host: HOST,
       id: sessionId,
       host_version: state.hostVersion,
-      entrypoint: entrypoint === "launcher" ? "launcher" : "cli",
+      entrypoint: sessionEntrypoint,
       started_at: state.earliest,
       ended_at: safeEndReason === null ? null : state.latest,
       end_reason: safeEndReason,
@@ -842,7 +855,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
     },
     refs: { prs: refs.prs, commits: refs.commits, unresolved: refs.unresolved },
     jobs: [],
-    unavailable: [...state.flags.values()].slice(0, LIMITS.unavailable),
+    unavailable: unavailableList(state.flags),
   }
 
   const events = {

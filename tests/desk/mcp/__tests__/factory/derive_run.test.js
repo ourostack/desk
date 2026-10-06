@@ -1303,3 +1303,43 @@ test("orphans recorded by a newer Desk advance the cursor, so enough of them can
   assert.equal(two.rebuilt, 1, "the next sweep went on past them to the good orphan")
   assert.equal(typeof good, "string")
 }))
+
+// Focus on a task, then on a task whose card is gone (which clears), over and over: each stretch of the task stands alone between cleared stretches, so a cap that is exceeded has to drop time.
+async function standaloneSession(ctx, stretches) {
+  const marker = await session(ctx)
+  await writeCard(ctx, "track/task")
+  await appendCalls(marker, Array.from({ length: stretches * 2 }, (_, index) => ["mcp__desk__task_focus", { track: "track", slug: index % 2 === 0 ? "task" : "gone" }]))
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  return marker
+}
+
+test("a session whose segment cap dropped time carries job_segments capped", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await standaloneSession(ctx, 210)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const name = `claude-code-${ID}.json`
+  const receipt = (await readStatus(ctx.env)).derivations[name]
+  assert.ok(receipt.segments_capped_ms > 0, "the fixture must exceed the segment cap with time lost")
+  const facts = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "utf8"))
+  assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "job_segments"), [{ field: "job_segments", reason: "capped" }])
+  assert.equal(validateLocalFacts(facts).ok, true)
+}))
+
+test("a session with no dropped time carries no job_segments flag", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await standaloneSession(ctx, 3)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const name = `claude-code-${ID}.json`
+  assert.equal((await readStatus(ctx.env)).derivations[name].segments_capped_ms, 0)
+  const facts = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "utf8"))
+  assert.equal(facts.unavailable.some((entry) => entry.field === "job_segments"), false)
+}))
+
+test("the receipt still records segments_capped_ms as before", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await standaloneSession(ctx, 210)
+  await deriveMarker(ctx.env, marker)
+  const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
+  assert.equal(Number.isInteger(receipt.segments_capped_ms) && receipt.segments_capped_ms > 0, true)
+  assert.equal(receipt.binding_version, 5)
+}))
