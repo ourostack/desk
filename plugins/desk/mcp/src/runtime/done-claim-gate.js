@@ -446,19 +446,24 @@ function liveCard(task) {
 // Acceptance is judged by word, not by phrasing (poka-yoke over inspection): a list of claim shapes can never be complete ("Status:
 // accepted.", "soil-sensor is accepted.", "Ari accepted it."), while one extra block on a reply that mentions acceptance in passing is
 // cheap. So while a touched card is done with no verified acceptance, any acceptance word anywhere in the reply blocks once, unless the
-// reply also states the honest state. Code spans and quotations are left out: quoting a word claims nothing.
-const ACCEPTANCE_WORD = /\b(?:accept(?:s|ed|ance|ing)?|signed[ -]off|sign-?off\s+(?:is\s+)?complete|approved\s+by)\b/iu
-// The honest state. A bare "delivered" is not enough: "Delivered the fix, and the task is accepted." claims both.
-const HONEST_STATE = /\b(?:delivered,?\s+(?:but\s+)?not\s+(?:yet\s+)?accepted|delivered,?\s+(?:and\s+)?(?:awaiting|pending)\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaiting\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaits\s+(?:your\s+|the\s+operator's\s+)?sign-?off|not\s+(?:yet\s+)?accepted|unsigned|send\s+(?:it\s+|them\s+)?back)\b/iu
+// reply also states the honest state. Only fenced blocks and block quotes are left out: a state in a code span or in double quotes
+// ("Status: `accepted`.") is the likeliest careless form, because `accepted` is the literal Desk state.
+// The gate catches careless claims, not deliberate rewording ("LGTM", "good to go"); the unverified record and the
+// delivery-to-sign-off wait still expose those.
+const ACCEPTANCE_WORD = /\b(?:accept(?:s|ed|ance|ing)?|approve[sd]?|signed[ -]off|sign-?off\s+(?:is\s+|was\s+|has\s+been\s+)?(?:complete|recorded|received|done|given))\b/iu
+// The honest state. A bare "delivered" is not enough: "Delivered the fix, and the task is accepted." claims both. "Unverified" is
+// task_signoff's own word for an answer Desk could not tie to a human turn. "Send back" counts only in the sign-off packet's own
+// form ("accept or send back", "send it back?"), so "nothing to send back" is no honest state.
+const HONEST_STATE = /(?:\b(?:delivered,?\s+(?:but\s+)?not\s+(?:yet\s+)?accepted|delivered,?\s+(?:and\s+)?(?:awaiting|pending)\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaiting\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaits\s+(?:your\s+|the\s+operator's\s+)?sign-?off|not\s+(?:yet\s+)?accepted|unsigned|unverified|accept(?:\s+it|\s+them)?,?\s+or\s+send\s+(?:it\s+|them\s+)?back)\b|\bsend\s+(?:it|them)\s+back\?)/iu
 
-/** The sentences of `text` that use an acceptance word (code spans and quotations left out). */
+/** The sentences of `text` that use an acceptance word (fenced blocks and block quotes left out). */
 export function acceptanceClaims(text) {
-  return sentencesOf(withoutQuotedText(withoutBlockQuotes(text))).filter((sentence) => ACCEPTANCE_WORD.test(sentence))
+  return sentencesOf(withoutBlockQuotes(text)).filter((sentence) => ACCEPTANCE_WORD.test(sentence))
 }
 
-/** Whether `text` states that a delivery is not accepted yet: "delivered, not accepted", "awaiting sign-off", "unsigned", "send back". */
+/** Whether `text` states that a delivery is not accepted yet: "delivered, not accepted", "awaiting sign-off", "unsigned", "unverified", "accept or send back". */
 export function statesUnaccepted(text) {
-  return HONEST_STATE.test(withoutQuotedText(withoutBlockQuotes(text)))
+  return HONEST_STATE.test(withoutBlockQuotes(text))
 }
 
 /**
@@ -481,7 +486,7 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
       const card = liveCard(task)
       if (card.status !== null && !TERMINAL.has(card.status)) open.push({ ...task, status: card.status })
       // Only a verified acceptance counts: `accepted` with `verified` false or null is the agent's own record, not the operator's answer.
-      else if (card.status === "done" && card.signoff !== null && !(card.signoff === "accepted" && card.verified)) unaccepted.push(task)
+      else if (card.status === "done" && card.signoff !== null && !(card.signoff === "accepted" && card.verified)) unaccepted.push({ ...task, signoff: card.signoff })
     }
     const reply = open.length === 0 && unaccepted.length === 0 ? null : finalReply(payload)
     // A claim that the task itself is done stands whatever status the reply states; a claim about the work is cleared by an honest status statement.
@@ -490,6 +495,13 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
       // A delivery is done, not accepted: only the operator's own answer, recorded and verified, is an acceptance.
       if (reply !== null && unaccepted.length > 0 && acceptanceClaims(reply).length > 0 && !statesUnaccepted(reply)) {
         const [task] = unaccepted
+        // An answer the witness could not tie to a human turn was still the operator's answer as far as anyone knows: say how it is
+        // recorded, and never ask the operator a second time for an answer already given.
+        if (task.signoff === "accepted") {
+          const lead = `Restate your reply to say task ${task.slug}'s acceptance is recorded as unverified.`
+          const opening = lead.length <= 120 ? lead : "Restate your reply to say the task's acceptance is recorded as unverified."
+          return { decision: "block", reason: `${opening} Desk could not tie task ${task.slug}'s answer to a human turn, so it does not count it as accepted; do not ask the operator again.` }
+        }
         return { decision: "block", reason: `Restate your reply as delivered, not accepted. Task ${task.slug} awaits the operator's sign-off and no verified acceptance is recorded. Ask the operator for it in the sign-off packet (asked, delivered with proof, accept or send back) and wait for their answer.` }
       }
       removeFile(file)

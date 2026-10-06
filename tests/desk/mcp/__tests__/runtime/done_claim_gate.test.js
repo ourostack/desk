@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { sentence as signoffSentence } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import {
   acceptanceClaims,
   statesUnaccepted,
@@ -693,7 +694,12 @@ test("acceptance is judged by word, not phrasing: any acceptance word counts unl
     assert.equal(statesUnaccepted(honest), true, honest)
     assert.equal(blocked(honest), false, honest)
   }
-  for (const quiet of ["`Accepted.`", "> The task is accepted.", "Merged and deployed.", "Delivered the fix."]) assert.equal(acceptanceClaims(quiet).length, 0, quiet)
+  for (const quiet of ["```\nAccepted.\n```", "> The task is accepted.", "Merged and deployed.", "Delivered the fix."]) assert.equal(acceptanceClaims(quiet).length, 0, quiet)
+  // A state in a code span or double quotes is a claim: `accepted` is the literal Desk state. Bare "approved" and the sign-off-recorded family count.
+  for (const claim of ["Status: `accepted`.", "Task soil-sensor: `accepted`", "Task soil-sensor is \"accepted\".", "Ari approved it.", "Approved.", "The operator approved the delivery.", "Sign-off received.", "Your sign-off is recorded.", "Sign-off was given."]) assert.equal(blocked(claim), true, claim)
+  // "Send back" is honest only in the packet's own form.
+  for (const claim of ["You accepted it, so there is nothing to send back.", "Accepted. Nothing to send back."]) assert.equal(blocked(claim), true, claim)
+  for (const honest of ["Accept it, or send it back?", "Should I send it back?", "Accepted (unverified)."]) assert.equal(blocked(honest), false, honest)
 })
 
 test("a reply that says a delivered task was accepted is blocked while its card has no accepted sign-off; an accepted card, a card with no record, or no claim passes", () => {
@@ -734,8 +740,23 @@ test("the reproduction: an acceptance recorded with verified false (no human tur
   recordTouchedTask(post(SIGNOFF, { track: "greenhouse-ops", slug: "watering-schedule-api", outcome: "accepted" }, JSON.stringify({ status: "signed", path: "greenhouse-ops/watering-schedule-api/task.md" })), { stateDir, root: card.root })
   const result = stop(stateDir, "Delivered the fix, and the task is accepted.")
   assert.equal(blocks(result), true)
-  assert.match(result.reason, /^Restate your reply as delivered, not accepted\./u)
+  assert.equal(result.reason, "Restate your reply to say task watering-schedule-api's acceptance is recorded as unverified. Desk could not tie task watering-schedule-api's answer to a human turn, so it does not count it as accepted; do not ask the operator again.")
+  assert.doesNotMatch(result.reason, /sign-off packet|Ask the operator/u, "an answer already given is never asked for again")
   const unread = freshState()
   recordTouchedTask(post(UPDATE, { track: "greenhouse-ops", slug: "watering-schedule-api", status: "done" }, JSON.stringify({ status: "updated", path: "greenhouse-ops/watering-schedule-api/task.md" })), { stateDir: unread, root: path.join(ROOT, "no-such-desk") })
   assert.deepEqual(stop(unread, "The task is accepted."), {}, "a card that cannot be read is not judged")
+})
+
+test("task_signoff's own sentence for an unverified answer passes the gate: the gate never blocks its own tool's output", () => {
+  for (const verified of ["false", "null"]) {
+    const card = signedCard("accepted", verified)
+    const stateDir = freshState()
+    deliveredIn(stateDir, card.root)
+    const say = signoffSentence({ slug: "watering-schedule-api", outcome: "accepted", changed: true, verified: false })
+    assert.match(say, /recorded as unverified\.$/u)
+    assert.deepEqual(stop(stateDir, `Done. ${say}`), {}, `verified ${verified}`)
+    const dir = freshState()
+    deliveredIn(dir, card.root)
+    assert.deepEqual(stop(dir, "You accepted it; Desk recorded it as unverified."), {})
+  }
 })

@@ -179,9 +179,9 @@ test("the done-claim gate's acceptance block opens with the fix", (t) => {
   const stateDir = mkdtempSync(path.join(tmpdir(), "lint-accept-"))
   const desk = mkdtempSync(path.join(tmpdir(), "lint-accept-desk-"))
   t.after(() => { rmSync(stateDir, { recursive: true, force: true }); rmSync(desk, { recursive: true, force: true }) })
-  for (const slug of ["watering-api", "a-very-long-task-name-".repeat(5)]) {
+  for (const [slug, signoff] of ["watering-api", "a-very-long-task-name-".repeat(5)].flatMap((slug) => [[slug, "  state: delivered_unsigned\n"], [slug, "  state: accepted\n  verified: false\n"]])) {
     mkdirSync(path.join(desk, "greenhouse", slug), { recursive: true })
-    writeFileSync(path.join(desk, "greenhouse", slug, "task.md"), "---\nstatus: done\nsignoff:\n  state: delivered_unsigned\n---\n\nbody\n")
+    writeFileSync(path.join(desk, "greenhouse", slug, "task.md"), `---\nstatus: done\nsignoff:\n${signoff}---\n\nbody\n`)
     recordTouchedTask({ hook_event_name: "PostToolUse", session_id: "s2", tool_name: "mcp__plugin_desk_desk__task_update", tool_input: { track: "greenhouse", slug, status: "done" }, tool_response: JSON.stringify({ status: "updated", path: `greenhouse/${slug}/task.md` }) }, { stateDir, root: desk })
     const result = doneClaimStopHook({ hook_event_name: "Stop", session_id: "s2", last_assistant_message: "Shipped, and the task is accepted." }, { stateDir })
     assert.equal(result.decision, "block", slug)
@@ -249,7 +249,7 @@ test("every file under plugins/desk that emits a denial is accounted for in this
   // Files that build a denial's own text, with how many sites each has. A new guard adds its messages to the tests above
   // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
-    "mcp/src/runtime/ask-gate.js": 2, "mcp/src/runtime/done-claim-gate.js": 2, "mcp/src/runtime/guard-unknowns.js": 4,
+    "mcp/src/runtime/ask-gate.js": 2, "mcp/src/runtime/done-claim-gate.js": 3, "mcp/src/runtime/guard-unknowns.js": 4,
     "mcp/src/runtime/brief-task-line.js": 2,
     "mcp/src/runtime/host-enforcement.js": 7, "mcp/src/runtime/powershell-commands.js": 5, "mcp/src/runtime/process-kill-guard.js": 4, "mcp/src/runtime/protected-checkout.js": 12,
     "mcp/src/runtime/task-status-guard.js": 6, "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
