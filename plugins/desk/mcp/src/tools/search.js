@@ -13,6 +13,7 @@
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
+import { toDeskPath } from "../util/paths.js"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath, closeDb } from "../db/init.js"
@@ -125,9 +126,9 @@ function computePinPrefixes(db, featuredTrack) {
       if (typeof entry.path !== "string" || !entry.path.length) continue
       // entry.path is relative to the task dir (e.g. "./OrderService/...").
       // Normalize against the task dir so we get a desk-root-relative prefix.
-      const taskDir = path.dirname(row.path)
+      const taskDir = path.posix.dirname(toDeskPath(row.path))
       let rel = entry.path.replace(/^\.\//, "")
-      const combined = path.join(taskDir, rel)
+      const combined = path.posix.join(taskDir, toDeskPath(rel))
       prefixes.add(combined)
       break
     }
@@ -143,7 +144,6 @@ function isPinned(docPath, pinPrefixes) {
   for (const p of pinPrefixes) {
     if (
       docPath === p ||
-      docPath.startsWith(p + path.sep) ||
       docPath.startsWith(p + "/")
     ) {
       return true

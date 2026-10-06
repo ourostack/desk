@@ -48,7 +48,7 @@ test("task_create person:ari → desks/ari/<track>/<slug>/task.md", async () => 
   assert.equal(res.status, "created")
   assert.equal(
     res.path,
-    path.join("desks", "ari", "europe-trip", "book-flights", "task.md"),
+    path.posix.join("desks", "ari", "europe-trip", "book-flights", "task.md"),
   )
   assert.ok(
     await exists(path.join(root, "desks", "ari", "europe-trip", "book-flights", "task.md")),
@@ -68,7 +68,7 @@ test("task_create person:null → byte-identical top-level path (OFF)", async ()
     person: null,
     input: { track: "europe-trip", slug: "book-flights", title: "T" },
   })
-  assert.equal(res.path, path.join("europe-trip", "book-flights", "task.md"))
+  assert.equal(res.path, path.posix.join("europe-trip", "book-flights", "task.md"))
   assert.ok(await exists(path.join(root, "europe-trip", "book-flights", "task.md")))
   assert.equal(await exists(path.join(root, "desks")), false, "no desks/ dir when OFF")
 })
@@ -79,7 +79,7 @@ test("task_create omitted person behaves exactly like person:null", async () => 
     deskRoot: root,
     input: { track: "t", slug: "book-flights", title: "T" },
   })
-  assert.equal(res.path, path.join("t", "book-flights", "task.md"))
+  assert.equal(res.path, path.posix.join("t", "book-flights", "task.md"))
 })
 
 // ── task_update (same builder → must resolve to the person path) ──────────────
@@ -97,7 +97,7 @@ test("task_update under person:ari finds + rewrites the person-scoped task", asy
     input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
   })
   assert.equal(res.status, "updated")
-  assert.equal(res.path, path.join("desks", "ari", "t", "book-flights", "task.md"))
+  assert.equal(res.path, path.posix.join("desks", "ari", "t", "book-flights", "task.md"))
   const { data } = await readFront(path.join(root, "desks", "ari", "t", "book-flights", "task.md"))
   assert.equal(data.status, "processing")
 })
@@ -119,7 +119,7 @@ test("task_archive person:ari → desks/ari/<track>/_archive/<slug>/", async () 
   assert.equal(res.status, "archived")
   assert.equal(
     res.path,
-    path.join("desks", "ari", "t", "_archive", "book-flights", "task.md"),
+    path.posix.join("desks", "ari", "t", "_archive", "book-flights", "task.md"),
   )
   assert.ok(
     await exists(path.join(root, "desks", "ari", "t", "_archive", "book-flights", "task.md")),
@@ -137,7 +137,7 @@ test("track_create person:ari → desks/ari/<slug>/track.md", async () => {
     person: "ari",
     input: { slug: "europe-trip", title: "Europe", scope: TRACK_SCOPE },
   })
-  assert.equal(res.path, path.join("desks", "ari", "europe-trip", "track.md"))
+  assert.equal(res.path, path.posix.join("desks", "ari", "europe-trip", "track.md"))
   assert.ok(await exists(path.join(root, "desks", "ari", "europe-trip", "track.md")))
 })
 
@@ -147,7 +147,7 @@ test("track_create person:null → byte-identical top-level (OFF)", async () => 
     deskRoot: root,
     input: { slug: "europe-trip", title: "Europe", scope: TRACK_SCOPE },
   })
-  assert.equal(res.path, path.join("europe-trip", "track.md"))
+  assert.equal(res.path, path.posix.join("europe-trip", "track.md"))
 })
 
 test("track_update under person:ari rewrites the person-scoped track", async () => {
@@ -162,7 +162,7 @@ test("track_update under person:ari rewrites the person-scoped track", async () 
     person: "ari",
     input: { slug: "europe-trip", frontmatter: { status: "paused" } },
   })
-  assert.equal(res.path, path.join("desks", "ari", "europe-trip", "track.md"))
+  assert.equal(res.path, path.posix.join("desks", "ari", "europe-trip", "track.md"))
 })
 
 // ── friction_add — both branches ──────────────────────────────────────────────
@@ -175,7 +175,7 @@ test("friction_add track-local person:ari → desks/ari/<track>/_friction/...", 
     input: { track: "t", theme: "slow-build", body: "x" },
   })
   assert.equal(res.status, "added")
-  const segs = res.path.split(path.sep)
+  const segs = res.path.split("/")
   assert.equal(segs[0], "desks")
   assert.equal(segs[1], "ari")
   assert.equal(segs[2], "t")
@@ -191,7 +191,7 @@ test("friction_add cross-cutting person:ari → desks/ari/_meta/friction.md", as
     person: "ari",
     input: { body: "cross-cutting pain" },
   })
-  assert.equal(res.path, path.join("desks", "ari", "_meta", "friction.md"))
+  assert.equal(res.path, path.posix.join("desks", "ari", "_meta", "friction.md"))
   assert.ok(await exists(path.join(root, "desks", "ari", "_meta", "friction.md")))
 })
 
@@ -203,7 +203,7 @@ test("friction_add omission-compatible track values stay cross-cutting inside th
       person: "ari",
       input: { track, body: "cross-cutting pain" },
     })
-    assert.equal(res.path, path.join("desks", "ari", "_meta", "friction.md"))
+    assert.equal(res.path, path.posix.join("desks", "ari", "_meta", "friction.md"))
     assert.ok(await exists(path.join(root, res.path)))
   }
 })
@@ -214,7 +214,7 @@ test("friction_add cross-cutting person:null → byte-identical _meta/friction.m
     deskRoot: root,
     input: { body: "cross-cutting pain" },
   })
-  assert.equal(res.path, path.join("_meta", "friction.md"))
+  assert.equal(res.path, path.posix.join("_meta", "friction.md"))
 })
 
 // ── lesson_add ────────────────────────────────────────────────────────────────
@@ -226,7 +226,7 @@ test("lesson_add person:ari → desks/ari/_meta/tips/<topic>.md", async () => {
     person: "ari",
     input: { topic: "EMU push auth", body: "use the personal token" },
   })
-  assert.equal(res.path, path.join("desks", "ari", "_meta", "tips", "emu-push-auth.md"))
+  assert.equal(res.path, path.posix.join("desks", "ari", "_meta", "tips", "emu-push-auth.md"))
   assert.ok(await exists(path.join(root, "desks", "ari", "_meta", "tips", "emu-push-auth.md")))
 })
 
@@ -236,7 +236,7 @@ test("lesson_add person:null → byte-identical _meta/tips/<topic>.md (OFF)", as
     deskRoot: root,
     input: { topic: "EMU push auth", body: "x" },
   })
-  assert.equal(res.path, path.join("_meta", "tips", "emu-push-auth.md"))
+  assert.equal(res.path, path.posix.join("_meta", "tips", "emu-push-auth.md"))
 })
 
 // ── empty / whitespace person → OFF (treated as null) ─────────────────────────
@@ -248,7 +248,7 @@ test("empty-string person is OFF (top-level path)", async () => {
     person: "",
     input: { track: "t", slug: "book-flights", title: "T" },
   })
-  assert.equal(res.path, path.join("t", "book-flights", "task.md"))
+  assert.equal(res.path, path.posix.join("t", "book-flights", "task.md"))
 })
 
 test("whitespace-only person is OFF (top-level path)", async () => {
@@ -258,7 +258,7 @@ test("whitespace-only person is OFF (top-level path)", async () => {
     person: "   ",
     input: { track: "t", slug: "book-flights", title: "T" },
   })
-  assert.equal(res.path, path.join("t", "book-flights", "task.md"))
+  assert.equal(res.path, path.posix.join("t", "book-flights", "task.md"))
 })
 
 // ── alias safety: path-traversal rejected across every write op ───────────────

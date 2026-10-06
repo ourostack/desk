@@ -48,7 +48,7 @@ test("lesson_add creates _meta/tips/<topic-slug>.md with header on first write",
   assert.equal(result.status, "added")
   assert.equal(
     result.path,
-    path.join("_meta", "tips", "working-with-gh-cli-on-emu.md"),
+    path.posix.join("_meta", "tips", "working-with-gh-cli-on-emu.md"),
   )
   const filePath = path.join(root, result.path)
   assert.ok(await exists(filePath))
@@ -139,7 +139,7 @@ test("lesson_add stages and commits exactly the lesson file it wrote", async () 
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "lesson_add: topic-x")
-  assert.deepEqual(lastCommitFiles(root), [path.join("_meta", "tips", "topic-x.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("_meta", "tips", "topic-x.md")])
 })
 
 test("lesson_add commits only its own file, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
@@ -158,7 +158,7 @@ test("lesson_add commits only its own file, leaving another process's staged, un
   })
 
   assert.equal(result.commit, undefined, "lesson_add's own commit succeeded")
-  assert.deepEqual(lastCommitFiles(root), [path.join("_meta", "tips", "topic-x.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("_meta", "tips", "topic-x.md")])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })
@@ -243,7 +243,10 @@ test("lesson_add skips staging and committing when the file held unstaged change
   assert.equal(calls.length, 0, "schedulePush is never called when the commit is skipped")
 })
 
-test("lesson_add commits both the rename and the write as one commit", async () => {
+// "con.md" is a reserved device name on Windows: Git refuses to stage it ("invalid path"), so the seeded legacy file cannot be committed there.
+const legacyReservedNameSkip = process.platform === "win32" ? "Windows reserves the file name con.md (a device name), so Git cannot stage the legacy file this test seeds" : false
+
+test("lesson_add commits both the rename and the write as one commit", { skip: legacyReservedNameSkip }, async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   const legacyPath = path.join(root, "_meta", "tips", "con.md")
@@ -266,11 +269,11 @@ test("lesson_add commits both the rename and the write as one commit", async () 
     schedulePush: () => {},
   })
 
-  assert.equal(result.path, path.join("_meta", "tips", "_con.md"))
+  assert.equal(result.path, path.posix.join("_meta", "tips", "_con.md"))
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "lesson_add: _con")
-  assert.deepEqual(lastCommitFiles(root), [path.join("_meta", "tips", "_con.md"), path.join("_meta", "tips", "con.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("_meta", "tips", "_con.md"), path.posix.join("_meta", "tips", "con.md")])
   assert.equal(await exists(legacyPath), false, "the legacy path is gone")
   const content = await fs.readFile(path.join(root, result.path), "utf8")
   assert.match(content, /Original reserved lesson/)
@@ -294,7 +297,7 @@ test("lesson_add skips staging and committing when the pre-rename file held unst
     schedulePush,
   })
 
-  assert.equal(result.path, path.join("_meta", "tips", "_con.md"))
+  assert.equal(result.path, path.posix.join("_meta", "tips", "_con.md"))
   assert.equal(result.commit, undefined, "no commit attempted when the pre-rename file was already dirty")
   assert.equal(await exists(legacyPath), false, "the rename still happens despite the dirty pre-rename identity")
   const destPath = path.join(root, result.path)

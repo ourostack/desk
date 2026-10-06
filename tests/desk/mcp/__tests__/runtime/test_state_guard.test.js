@@ -15,6 +15,7 @@ import {
   assertNotRealStateUnderTest,
   isUnderOsTmpdir,
   looksLikeNodeTestRunner,
+  tmpdirSpellingsOf,
 } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
 
 test("looksLikeNodeTestRunner is true whenever NODE_TEST_CONTEXT is a non-blank string", () => {
@@ -105,4 +106,14 @@ test("assertNotRealStateUnderTest defaults env to process.env", () => {
   // The real process.env here always looks like a node:test run and never opts in, so the only thing this can
   // exercise safely is the allowed (temp) path — the refusing path is exercised above with an explicit env.
   assert.doesNotThrow(() => assertNotRealStateUnderTest(path.join(os.tmpdir(), "desk-state-default-env")))
+})
+
+test("tmpdirSpellingsOf keeps the operating system's long spelling of a short temp path (Windows 8.3 names) and survives a path that cannot be resolved", () => {
+  const spellings = tmpdirSpellingsOf("C:\\Users\\RUNNER~1\\Temp", {
+    realpath: (target) => target,
+    native: () => "C:\\Users\\runneradmin\\Temp",
+  })
+  assert.deepEqual([...spellings].sort(), ["C:\\Users\\RUNNER~1\\Temp", "C:\\Users\\runneradmin\\Temp"])
+  const unresolved = tmpdirSpellingsOf("/gone", { realpath: () => { throw new Error("ENOENT") }, native: () => { throw new Error("ENOENT") } })
+  assert.deepEqual([...unresolved], ["/gone"])
 })

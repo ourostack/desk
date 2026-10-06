@@ -380,7 +380,7 @@ for (const scenario of [
       assert.equal(result.isError, false, JSON.stringify(result.payload))
       assert.equal(desk.handle.session.context.person, scenario.expected)
       const prefix = scenario.expected ? ["desks", scenario.expected] : []
-      assert.equal(result.payload.path, path.join(...prefix, "ops", "task-bound", "task.md"))
+      assert.equal(result.payload.path, path.posix.join(...prefix, "ops", "task-bound", "task.md"))
       assert.equal(fs.existsSync(path.join(root, ...prefix, "ops", "task-bound", "task.md")), true)
       assert.equal(fs.existsSync(path.join(root, "desks", "bob")), false)
       await controller.barrier({ capability: "lexical", wait: true })

@@ -46,7 +46,7 @@ test("track_create writes a v1 track.md with required + default fields", async (
     input: { slug: "europe-trip", title: "Europe trip 2026", scope: SCOPE },
   })
   assert.equal(result.status, "created")
-  assert.equal(result.path, path.join("europe-trip", "track.md"))
+  assert.equal(result.path, path.posix.join("europe-trip", "track.md"))
 
   const filePath = path.join(root, "europe-trip", "track.md")
   assert.ok(await exists(filePath))
@@ -269,7 +269,7 @@ test("track_create stages and commits exactly the track.md it wrote", async () =
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "track_create: europe-trip")
-  assert.deepEqual(lastCommitFiles(root), [path.join("europe-trip", "track.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("europe-trip", "track.md")])
 })
 
 test("track_create commits only its own file, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
@@ -288,7 +288,7 @@ test("track_create commits only its own file, leaving another process's staged, 
   })
 
   assert.equal(result.commit, undefined, "track_create's own commit succeeded")
-  assert.deepEqual(lastCommitFiles(root), [path.join("europe-trip", "track.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("europe-trip", "track.md")])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })

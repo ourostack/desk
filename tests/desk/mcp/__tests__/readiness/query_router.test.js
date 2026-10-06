@@ -1245,7 +1245,7 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
     })
     assert.equal(written.status, "created")
     const result = await second.call("desk_search", { query: "mutationquartz" })
-    assert.ok(result.results.some((r) => r.path === path.join("track", "canonical-mutation", "task.md")))
+    assert.ok(result.results.some((r) => r.path === path.posix.join("track", "canonical-mutation", "task.md")))
   })
   await t.test("same-mtime external write is visible to the next query", async () => {
     const file = path.join(deskRoot, "track", "work", "task.md")

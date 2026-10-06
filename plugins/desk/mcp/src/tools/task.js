@@ -359,8 +359,20 @@ async function assertArchiveSourceIsRelocationSafe({
     path.join(realArchiveDir, path.basename(srcFile)),
     { realSrcDir, realArchiveDir },
   )
-  if (relocatedReferent !== expectedReferent) {
+  // The walk above follows the link text as written; the real path is the operating system's own spelling (on Windows a
+  // link written with an 8.3 short name or other letter case), so a referent that already exists is compared by that.
+  const relocatedSpelling = relocatedReferent === null ? null : await realpathOrSame(relocatedReferent)
+  if (relocatedSpelling !== expectedReferent) {
     throw new Error(`task_archive: task.md symlink would change referent when archived: ${srcFile}`)
+  }
+}
+
+async function realpathOrSame(candidate) {
+  try {
+    return await fs.realpath(candidate)
+  } catch {
+    // A path that does not exist yet (inside the archive folder about to be created) has only the spelling it was given.
+    return candidate
   }
 }
 

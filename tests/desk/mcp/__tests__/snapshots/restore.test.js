@@ -469,7 +469,8 @@ test("restoreSnapshotToState surfaces unwritable state paths", async () => {
       deskRoot,
       ...expectedContext(),
     }),
-    (error) => error?.code === "EISDIR" || error?.code === "ENOTDIR",
+    // Windows refuses a rename onto a directory with EPERM; POSIX reports EISDIR or ENOTDIR.
+    (error) => ["EISDIR", "ENOTDIR", ...(process.platform === "win32" ? ["EPERM"] : [])].includes(error?.code),
   )
 })
 

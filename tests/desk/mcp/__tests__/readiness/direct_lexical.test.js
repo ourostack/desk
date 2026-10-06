@@ -12,7 +12,7 @@ import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.
 import { mkTempDeskRoot, writeFile, makeFailingFetch } from "../tools/_search_helpers.js"
 
 const now = Date.parse("2026-09-19T12:00:00Z")
-const p = (...parts) => path.join(...parts)
+const p = (...parts) => path.posix.join(...parts)
 
 function redaction(documentPath, body, rotation = "read-consistency") {
   return {
@@ -37,7 +37,7 @@ async function nestedRedactionFixture(t) {
 
 test("portable tombstones match nested Windows and native document paths without mutating them", () => {
   const row = redaction("track/private/task.md", "quartz redacted")
-  for (const documentPath of ["track\\private\\task.md", p("track", "private", "task.md")]) {
+  for (const documentPath of ["track\\private\\task.md", path.join("track", "private", "task.md")]) {
     const doc = { path: documentPath, hash: row.document_hash }
     assert.equal(tombstoneDecisionForDoc({ ledger: { valid: true, rows: [row] }, doc }).tombstoned, true)
     assert.equal(doc.path, documentPath)
@@ -205,7 +205,7 @@ test("lexical tie ordering and candidate limits do not depend on index insertion
     const direct = await directLexicalSearch(request)
     const indexed = await indexedSearch({ deskRoot: root, input: request, opts: { now, lexicalOnly: true } })
     assert.deepEqual(indexed.results, direct.results)
-    assert.equal(indexed.results[0].path, path.join("track", "alpha", "task.md"))
+    assert.equal(indexed.results[0].path, path.posix.join("track", "alpha", "task.md"))
   }
 })
 

@@ -299,7 +299,7 @@ test("normalizeDate preserves strings and normalizes Date or scalar values", () 
 
 test("a merged duplicate's card is indexed as merged-task, never as a task", async () => {
   const root = await mkTempRoot("desk-discover-merged-")
-  const rel = path.join("trackA", "keep-task", "_iterations", "2026-09-01-dup-task", "merged-task.md")
+  const rel = path.posix.join("trackA", "keep-task", "_iterations", "2026-09-01-dup-task", "merged-task.md")
   await fs.mkdir(path.join(root, path.dirname(rel)), { recursive: true })
   await fs.writeFile(path.join(root, rel), "---\nstatus: processing\nmerged_into: keep-task\n---\n# The duplicate's goal\n", "utf8")
 

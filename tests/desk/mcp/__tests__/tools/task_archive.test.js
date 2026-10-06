@@ -108,7 +108,7 @@ test("task_archive is idempotent when source already archived", async () => {
   assert.equal(second.status, "already_archived")
   assert.equal(
     second.path,
-    path.join("t", "_archive", "book-flights", "task.md"),
+    path.posix.join("t", "_archive", "book-flights", "task.md"),
   )
 })
 
@@ -248,7 +248,7 @@ test("task_archive stages and commits exactly the moved paths", async () => {
   assert.equal(lastCommitMessage(root), "task_archive: t/book-flights")
   assert.deepEqual(
     lastCommitFiles(root),
-    [path.join("t", "_archive", "book-flights", "task.md"), path.join("t", "book-flights", "task.md")].sort(),
+    [path.posix.join("t", "_archive", "book-flights", "task.md"), path.posix.join("t", "book-flights", "task.md")].sort(),
   )
 })
 
@@ -283,7 +283,7 @@ test("task_archive commits only its own paths, leaving another process's staged,
   assert.equal(result.commit, undefined, "task_archive's own commit succeeded")
   assert.deepEqual(
     lastCommitFiles(root),
-    [path.join("t", "_archive", "book-flights", "task.md"), path.join("t", "book-flights", "task.md")].sort(),
+    [path.posix.join("t", "_archive", "book-flights", "task.md"), path.posix.join("t", "book-flights", "task.md")].sort(),
   )
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")

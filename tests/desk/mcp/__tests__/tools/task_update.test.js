@@ -511,7 +511,7 @@ test("task_update stages and commits exactly the task.md it updated", async () =
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "task_update: t/book-flights")
-  assert.deepEqual(lastCommitFiles(root), [path.join("t", "book-flights", "task.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("t", "book-flights", "task.md")])
 })
 
 test("task_update calls schedulePush exactly once with { root: deskRoot } on a successful commit", async () => {
@@ -547,7 +547,7 @@ test("task_update commits only its own file, leaving another process's staged, u
   })
 
   assert.equal(result.commit, undefined, "task_update's own commit succeeded")
-  assert.deepEqual(lastCommitFiles(root), [path.join("t", "book-flights", "task.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("t", "book-flights", "task.md")])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })
