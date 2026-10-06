@@ -49,15 +49,21 @@ export function openDb(deskRoot, opts = {}) {
     ensureCardGuard(deskRoot)
   }
   const db = new Database(dbPath)
-  // Pragmas: WAL gives concurrent-reader friendliness (the search tools will
-  // read while the indexer writes). foreign_keys lets ON DELETE CASCADE
-  // actually cascade. FULL makes committed event coverage durable before journal compaction.
-  db.pragma("journal_mode = WAL")
-  db.pragma("synchronous = FULL")
-  db.pragma("foreign_keys = ON")
-  // sqlite-vec must be loaded before any vec0 virtual-table reference resolves.
-  sqliteVec.load(db)
-  runMigrations(db)
+  try {
+    // Pragmas: WAL gives concurrent-reader friendliness (the search tools will
+    // read while the indexer writes). foreign_keys lets ON DELETE CASCADE
+    // actually cascade. FULL makes committed event coverage durable before journal compaction.
+    db.pragma("journal_mode = WAL")
+    db.pragma("synchronous = FULL")
+    db.pragma("foreign_keys = ON")
+    // sqlite-vec must be loaded before any vec0 virtual-table reference resolves.
+    sqliteVec.load(db)
+    runMigrations(db)
+  } catch (error) {
+    // An unreadable database fails on the first pragma, after the handle is open. Windows will not rename or delete a file that is still open, so the quarantine that moves a corrupt index aside would fail while the handle waits for garbage collection.
+    try { db.close() } catch { /* the original error is the one to report */ }
+    throw error
+  }
   return db
 }
 
