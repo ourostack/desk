@@ -1479,8 +1479,22 @@ requires(
   "the MCP readme lists the three improvement tools",
   /## Tools exposed \(23\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 23 tools are wired/u,
 );
-contract("the changelog fragment for the loop exists, has no heading and says what changed for the reader", () => {
-  const fragment = text("plugins/desk/changelog.d/factory-closed-loop.md");
+contract("the changelog text for the loop has no heading and says what changed for the reader", () => {
+  // Before a release the text is the fragment. The release folds the fragment into the changelog and deletes it, and
+  // the release workflow checks that release commit, so after a release the same paragraphs sit under the new version.
+  const fragmentPath = "plugins/desk/changelog.d/factory-closed-loop.md";
+  const opening = "The factory's improvement loop now runs by itself.";
+  let fragment;
+  if (fs.existsSync(path.join(root, fragmentPath))) {
+    fragment = text(fragmentPath);
+  } else {
+    const changelog = text("plugins/desk/CHANGELOG.md");
+    const start = changelog.indexOf(opening);
+    assert.notEqual(start, -1, "neither the fragment nor the released changelog holds the loop's text");
+    const rest = changelog.slice(start);
+    const end = rest.search(/^## /mu);
+    fragment = (end === -1 ? rest : rest.slice(0, end)).split(/\n\n/u).slice(0, 5).join("\n\n");
+  }
   assert.doesNotMatch(fragment, /^#{1,2} /mu);
   assert.match(fragment, /improvement card/iu);
   assert.match(fragment, /improvement_next/u);
