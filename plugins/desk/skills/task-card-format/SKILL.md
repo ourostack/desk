@@ -29,7 +29,8 @@ validator: "ari"                        # who validates completion
 artifacts: [https://github.com/.../pull/123]  # outputs produced by this task (PR URLs / file paths)
 active_bridge: "bridge-abc123"          # set by bridge promotion — bridge ID this task durably records
 bridge_sessions: ["sess-xyz789"]        # set by bridge promotion — session IDs the bridge is coordinating
-factory_report: https://github.com/<store>/blob/reports/jobs/<job>.md  # set by the task tools at done when the factory store has consent
+factory_report: https://github.com/<store>/blob/reports/jobs/<job>.md  # set by the task tools at done, only on a desk known to be private
+factory_report_unavailable: desk_not_private  # set by the task tools instead of the link: the reason code a done card has no link
 evidence:                               # required by task_update, or by task_archive archiving a non-terminal task without outcome: cancelled; see task-lifecycle "Resuming a task"
   kind: pr                              # pr | commit | ci_run | non_code
   ref: https://github.com/<org>/<repo>/pull/123
@@ -100,7 +101,8 @@ these fields are read by the harness, not the agent. set them when the task repr
 - **`artifacts`** — list of outputs this task produced. PR URLs, file paths, document references. appended to as the task progresses.
 - **`active_bridge`** — set automatically by `promoteBridgeToDesk`. records the bridge ID this task durably represents. read by the bridge lifecycle reconciler to auto-resolve bridges when their backing task reaches `done` / `cancelled`.
 - **`bridge_sessions`** — set automatically by `promoteBridgeToDesk`. session IDs the bridge is coordinating across. read by the same reconciler.
-- **`factory_report`** — the link to this job's factory report, written by `task_update` or `task_archive` on the transition to `done` when the desk's resolved factory store has consent (see `desk:session-start` Step 2.7). the link is deterministic, so it is written at once and may not resolve until the store has merged the job's facts and rebuilt its reports; `done` never waits for that. cards without consent, cards finished before the field existed and `cancelled` cards have no link. never write or edit it by hand.
+- **`factory_report`** — the link to this job's factory report, written by `task_update` or `task_archive` on the transition to `done` when the desk's resolved factory store has consent (see `desk:session-start` Step 2.7) and the desk is known to be private. A public desk's card never links its job, because that would tie the public card to the store's job. The link is deterministic, so it is written at once and may not resolve until the store has merged the job's facts and rebuilt its reports; `done` never waits for that. Cards without consent, cards finished before the field existed and `cancelled` cards have no link. Never write or edit it by hand: `task_update` and `task_create` refuse it in `frontmatter`.
+- **`factory_report_unavailable`** — written by the task tools instead of `factory_report` when the store has consent but no link can be named, as a reason code only: `desk_not_private` (a public desk, one GitHub answered as unknown, or one with no GitHub remote; meant to last), `visibility_not_known` (the cached visibility answer is expired, absent or unreadable) or `job_identity_unavailable`. The tool result carries the same field. A later `task_update` of the card, or `task_archive` of it (again, for an archived card), asks again and replaces the field with the link once one can be named. Never write, edit or remove it by hand: `task_update` and `task_create` refuse it in `frontmatter`.
 
 agents creating tasks via `desk` skills don't typically set runtime fields directly — they're added by `ouro reminder create`, by bridge promotion, or by the operator. but agents reading task cards should understand what these fields mean so they don't strip them on edits.
 

@@ -17,6 +17,10 @@
 // Measures. A number that may be missing is never a bare number, 0, null or a string: it is `{ state, value }` (`measure`), `state` one of
 // `measured` (with `value`), `not_recorded` (the receipt or facts cannot say), `not_checked` (the check was not run, as `status_unobserved`
 // without `--store`) or `withheld` (the desk keeps no job timing, so the pipeline publishes no timeline). A total over sessions is
+// `counts.report_link_unavailable` is desk-wide, not limited to the window: `{ cards, archived, by_reason }` over every card, live or archived,
+// that records why it has no report link (`factory_report_unavailable`), `by_reason` keyed by the three reason codes and `unrecognized` for
+// any other text, which is never echoed. A live card fills its link on its next task_update; an archived one when task_archive is called for
+// it again. `desk_not_private` is meant to last.
 // `{ state, value, sessions, sessions_not_recorded }`: `sessions` were measured, `sessions_not_recorded` were not, and `value` (in its own unit:
 // milliseconds, directories or commits, never sessions) is a floor when `sessions_not_recorded` is above zero.
 //
@@ -226,6 +230,19 @@ function activeMsOf(facts, binding, startedMs, created) {
  * absolute path, `since` and `until` exact UTC timestamps with `since < until`. Returns the report, or
  * `{ ok: false, error }` for a desk that cannot be read; never throws.
  */
+const REPORT_REASONS = new Set(["desk_not_private", "visibility_not_known", "job_identity_unavailable"])
+
+// The desk's cards that record why they have no report link: how many, how many are archived, and how many by reason code.
+function reportLinkUnavailable(cards) {
+  const missing = cards.filter((card) => card.report_unavailable !== null)
+  const byReason = {}
+  for (const card of missing) {
+    const reason = REPORT_REASONS.has(card.report_unavailable) ? card.report_unavailable : "unrecognized"
+    byReason[reason] = (byReason[reason] ?? 0) + 1
+  }
+  return { cards: missing.length, archived: missing.filter((card) => card.archived).length, by_reason: byReason }
+}
+
 export function reconcile(options) {
   try {
     return run(options)
@@ -252,7 +269,8 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
 
   const readers = createDeskReaders({ deskRoot: root, personPrefix, git })
   const rule = taskCommitRule({ alias, isCardHousekeeping: readers.isCardHousekeeping })
-  const cards = new Map(allTasks({ deskRoot: root, personPrefix }).map((card) => [`${card.track}/${card.slug}`, card]))
+  const cardList = allTasks({ deskRoot: root, personPrefix })
+  const cards = new Map(cardList.map((card) => [`${card.track}/${card.slug}`, card]))
   const deskRemote = readDeskRemote({ deskRoot: root, git }) || `local:${root}`
 
   // job IDs, computed as the task tools compute them (birth path, then `jobId`).
@@ -334,8 +352,10 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const list = receiptOf(name)?.focus_disagrees
     return Array.isArray(list) && list.includes(job)
   }
+  // A receipt measure counts only from a current receipt: an older binder's value (its `segments_capped_ms: 0` among them) is not this binder's.
   const measureOf = (name, field) => {
-    const value = receiptOf(name)?.[field]
+    const receipt = receiptOf(name)
+    const value = isCurrent(receipt) ? receipt[field] : undefined
     return Number.isSafeInteger(value) && value >= 0 ? measure("measured", value) : measure("not_recorded")
   }
   const sameDesk = new Map()
@@ -731,6 +751,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       status_unobserved: storeCompared ? measure("measured", byReason.status_unobserved ?? 0, unordered > 0 ? { not_checked: unordered, reason: "observations_unordered" } : {}) : measure("not_checked", undefined, storeDir === null ? {} : { reason: "visibility_not_known" }),
       bound_by: boundBy, segments_capped_ms: totalOf(sessions.map((session) => session.segments_capped_ms)),
       repository_evidence_unavailable: totalOf(sessions.map((session) => session.repository_evidence_unavailable)),
+      report_link_unavailable: reportLinkUnavailable(cardList),
     },
     ...(warnings.size > 0 ? { warnings: [...warnings] } : {}),
   }

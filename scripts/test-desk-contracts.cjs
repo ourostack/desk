@@ -1086,11 +1086,13 @@ contract("archive-workflow stages only the paths it moved", () => {
 requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap asks the factory question once at the converged endpoint",
   /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start`'s boot script puts in its `instructions`[\s\S]+factory\.js consent/u);
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle says done writes the report link and never waits for the store",
-  /transitioning to `done`[^\n]+`task_update`[^\n]+`factory_report: <link>`[^\n]+resolved store has consent[^\n]+finalize request[^\n]+`done` does not wait for the store[^\n]+resolves once the store merges/u);
+  /transitioning to `done`[^\n]+`task_update`[^\n]+`factory_report: <link>`[^\n]+resolved store has consent and the desk is known to be private[^\n]+`factory_report_unavailable: <reason code>`[^\n]+finalize request[^\n]+fills a missing link by itself[^\n]+`done` does not wait for the store[^\n]+resolves once the store merges/u);
 contract("task-card-format documents the optional factory_report field", () => {
   const skill = text("plugins/desk/skills/task-card-format/SKILL.md");
   assert.match(skill, /^factory_report: https:\/\/github\.com\/<store>\/blob\/reports\/jobs\/<job>\.md +# /mu);
-  assert.match(skill, /\*\*`factory_report`\*\*[^\n]+written by `task_update` or `task_archive`[^\n]+transition to `done`[^\n]+consent[^\n]+may not resolve until[^\n]+never write or edit it by hand/u);
+  assert.match(skill, /\*\*`factory_report`\*\*[^\n]+written by `task_update` or `task_archive`[^\n]+transition to `done`[^\n]+consent[^\n]+known to be private[^\n]+may not resolve until[^\n]+Never write or edit it by hand: `task_update` and `task_create` refuse it/u);
+  assert.match(skill, /^factory_report_unavailable: desk_not_private +# /mu);
+  assert.match(skill, /\*\*`factory_report_unavailable`\*\*[^\n]+reason code only[^\n]+`desk_not_private`[^\n]+`visibility_not_known`[^\n]+`job_identity_unavailable`[^\n]+asks again[^\n]+Never write, edit or remove it by hand/u);
 });
 contract("the card format skill documents signoff, flow and returns as tool-written", () => {
   const skill = text("plugins/desk/skills/task-card-format/SKILL.md");

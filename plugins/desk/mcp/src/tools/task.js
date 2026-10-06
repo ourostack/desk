@@ -291,9 +291,16 @@ export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 const RECORD_KEYS = ["signoff", "flow", "returns", "returns_damaged"]
 const RECORD_REFUSAL = "these records are written by the task tools; to record an answer call task_signoff"
 
+// The report link fields are the task tools' answer about the factory report, never the caller's: a hand-set link could name any job on a
+// public desk's card, and a hand-set reason would not be a reason code.
+const REPORT_KEYS = ["factory_report", "factory_report_unavailable"]
+const REPORT_REFUSAL = "`factory_report` and `factory_report_unavailable` are written by the task tools: the move to done writes the link or the reason it has none, and a later update fills a missing link by itself"
+
 function refuseRecordKeys(tool, ...sources) {
   for (const source of sources) {
-    if (source != null && RECORD_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${RECORD_REFUSAL}`)
+    if (source == null) continue
+    if (RECORD_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${RECORD_REFUSAL}`)
+    if (REPORT_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${REPORT_REFUSAL}`)
   }
 }
 
@@ -912,6 +919,26 @@ async function archivedTaskStatus(archivedFile) {
   }
 }
 
+// A card already in `_archive/` that records why it has no report link (`factory_report_unavailable`) is asked again whenever task_archive is
+// called for it, which is the one tool path that reaches an archived card; `factory reconcile` counts such cards (`report_link_unavailable`).
+// Returns the result fields: the filled link or the current reason, and `commit` when committing the card failed.
+async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush }) {
+  let data
+  try {
+    data = (await readMarkdown(archivedFile)).data
+  } catch {
+    return {}
+  }
+  if (!Object.hasOwn(data, "factory_report_unavailable")) return {}
+  const report = await factoryReportFor({ deskRoot, person, track, slug, env })
+  await patchMarkdownFrontmatter(archivedFile, reportFields(report))
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
+  const root = path.resolve(personPrefix(deskRoot, person))
+  const commit = stageAndCommitMove(root, [archivedFile], `task_archive: ${track}/${slug} report link`, spawnGit)
+  if (commit === undefined && isGitRepository(root, spawnGit)) schedulePush({ root: deskRoot })
+  return { ...reportResult(report, true), ...(commit === undefined ? {} : { commit }) }
+}
+
 // An archive never changes the held focus: the factory credits a declared task until the next `task_focus` call, so the held focus
 // stays what the transcript says, and a later update of another card gets the "focused on" hint. An archive of any other card
 // carries the hint for a session that is focused elsewhere, or the no-focus hint.
@@ -1007,10 +1034,12 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
 
   if (!srcExists && dstExists) {
     const archivedStatus = await archivedTaskStatus(archivedFile)
+    const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
     return withArchiveFocus(statusContext, { track, slug }, {
       status: "already_archived",
       path: relPath(deskRoot, archivedFile),
+      ...refilled,
     })
   }
   if (!srcExists && !dstExists) {
@@ -1079,22 +1108,26 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   if (await pathExists(filePath)) {
     const existing = await readMarkdown(filePath)
     finalStatus = existing.data.status
+    // Patch only the fields this archive changes (`status:`, `updated:`, the record, `evidence:` and the report link fields) in place:
+    // every other byte of the card — quoting, date formats, block scalars, key order — survives.
+    const patchFields = {}
     if (archiveBump) {
-      // Patch only `status:`/`updated:`/`evidence:`/`factory_report:` in
-      // place: every other byte of the card — quoting, date formats, block
-      // scalars, key order — survives.
       const { updated } = archiveBump
       // Every status change the archive makes keeps the card's record, the cancel bump included.
-      const patchFields = { status: archiveBump.status, updated, ...archiveBump.record }
+      Object.assign(patchFields, { status: archiveBump.status, updated, ...archiveBump.record })
       if (archiveBump.status === "done") {
         patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
         delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
         report = await factoryReportFor({ deskRoot, person, track, slug, env })
-        Object.assign(patchFields, reportFields(report))
       }
+      finalStatus = archiveBump.status
+    }
+    // A card that records why it has no report link is asked again whenever it is archived, so archiving never makes the reason permanent.
+    if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable")) report = await factoryReportFor({ deskRoot, person, track, slug, env })
+    if (report !== null) Object.assign(patchFields, reportFields(report))
+    if (Object.keys(patchFields).length > 0) {
       await patchMarkdownFrontmatter(filePath, patchFields)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-      finalStatus = archiveBump.status
     }
   }
 
@@ -1108,7 +1141,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const result = { status: "archived", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
-  Object.assign(result, reportResult(report, false))
+  Object.assign(result, reportResult(report, delivered === null))
   return withArchiveFocus(statusContext, { track, slug }, result)
 }
 

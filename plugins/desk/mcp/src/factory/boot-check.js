@@ -466,9 +466,10 @@ export function finishedTasks({ deskRoot, personPrefix = "", now = Date.now(), d
 }
 
 /**
- * `[{ track, slug, archived, status, created, updated }]`: every readable card of the desk, live or archived, with no
- * status or age filter (`finishedTasks` is this walk with one). `status` is the card's raw text, `created` and `updated`
- * are exact UTC timestamps or `null`. A person prefix reads `desks/<alias>`.
+ * `[{ track, slug, archived, status, created, updated, report_unavailable }]`: every readable card of the desk, live or archived, with
+ * no status or age filter (`finishedTasks` is this walk with one). `status` is the card's raw text, `created` and `updated`
+ * are exact UTC timestamps or `null`, and `report_unavailable` is the card's `factory_report_unavailable` text or `null`. A person
+ * prefix reads `desks/<alias>`.
  */
 export function allTasks({ deskRoot, personPrefix = "" }) {
   const alias = checkPersonPrefix(personPrefix, "allTasks")
@@ -477,7 +478,7 @@ export function allTasks({ deskRoot, personPrefix = "" }) {
     const head = readCardHead(file)
     if (head === null) continue
     const fields = frontmatter(head)
-    tasks.push({ track, slug, archived, status: fields.status ?? null, created: normalizeTimestamp(fields.created), updated: normalizeTimestamp(fields.updated) })
+    tasks.push({ track, slug, archived, status: fields.status ?? null, created: normalizeTimestamp(fields.created), updated: normalizeTimestamp(fields.updated), report_unavailable: fields.factory_report_unavailable ?? null })
   }
   return tasks
 }

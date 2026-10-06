@@ -8,7 +8,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import matter from "gray-matter"
@@ -244,4 +244,98 @@ test("a newer answer never leaves an older link on the card: no link, a reason o
   const archived = await card(desk, "track/_archive/archived-work/task.md")
   assert.equal(Object.hasOwn(archived, "factory_report"), false)
   assert.equal(archived.factory_report_unavailable, "desk_not_private")
+}))
+
+test("archiving a card that already carries a reason asks again: the link is filled once it can be named, else the reason is kept current", () => scratch(async ({ base, desk, env: scratchEnv }) => {
+  const env = await hostEnv(base, scratchEnv)
+  await contribute(env)
+  await githubDesk(base, desk, env, null)
+  for (const slug of ["now-private", "still-unknown"]) {
+    await task_create({ deskRoot: desk, input: { track: "track", slug, title: "fixture", status: "processing" } })
+    assert.equal((await done(desk, env, slug)).factory_report_unavailable, "visibility_not_known")
+  }
+  // Still unknown when archived: the reason stays, and the result says so.
+  const kept = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "still-unknown" } })
+  assert.equal(kept.factory_report_unavailable, "visibility_not_known")
+  assert.equal((await card(desk, "track/_archive/still-unknown/task.md")).factory_report_unavailable, "visibility_not_known")
+  // Known private by the time it is archived: the archive fills the link and clears the reason, with no status change of its own.
+  await visibility(env, "private")
+  const filled = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "now-private" } })
+  assert.equal(filled.factory_report, expectedLink({ slug: "now-private" }))
+  const archived = await card(desk, "track/_archive/now-private/task.md")
+  assert.equal(archived.status, "done")
+  assert.equal(archived.factory_report, expectedLink({ slug: "now-private" }))
+  assert.equal(Object.hasOwn(archived, "factory_report_unavailable"), false)
+}))
+
+test("a card already in _archive/ with a reason is reached by calling task_archive again, which fills and commits the link", () => scratch(async ({ base, desk, env: scratchEnv }) => {
+  const env = await hostEnv(base, scratchEnv)
+  await contribute(env)
+  await githubDesk(base, desk, env, null)
+  const pushes = []
+  const schedulePush = (request) => pushes.push(request)
+  await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture", status: "processing" } })
+  await done(desk, env)
+  await task_archive({ deskRoot: desk, env, schedulePush, input: { track: "track", slug: "finished-work" } })
+  const file = "track/_archive/finished-work/task.md"
+  assert.equal((await card(desk, file)).factory_report_unavailable, "visibility_not_known")
+
+  const again = await task_archive({ deskRoot: desk, env, schedulePush, input: { track: "track", slug: "finished-work" } })
+  assert.equal(again.status, "already_archived")
+  assert.equal(again.factory_report_unavailable, "visibility_not_known", "still unknown: the reason is reported, not hidden")
+
+  await visibility(env, "private")
+  const before = pushes.length
+  const filled = await task_archive({ deskRoot: desk, env, schedulePush, input: { track: "track", slug: "finished-work" } })
+  assert.equal(filled.status, "already_archived")
+  assert.equal(filled.factory_report, expectedLink())
+  assert.equal(Object.hasOwn(filled, "commit"), false, "the card's commit succeeded")
+  assert.equal(pushes.length, before + 1, "the commit is pushed like every other card commit")
+  const data = await card(desk, file)
+  assert.equal(data.factory_report, expectedLink())
+  assert.equal(Object.hasOwn(data, "factory_report_unavailable"), false)
+  assert.equal(git(desk, "status", "--porcelain", "--", file).toString(), "", "the filled card is committed")
+  assert.match(git(desk, "log", "-1", "--format=%s").toString(), /^task_archive: track\/finished-work report link\n$/u)
+
+  // Once linked, a further call changes nothing.
+  const quiet = await task_archive({ deskRoot: desk, env, schedulePush, input: { track: "track", slug: "finished-work" } })
+  assert.deepEqual(Object.keys(quiet).filter((key) => key.startsWith("factory_report")), [])
+}))
+
+test("a failed commit of a refilled archived card is reported, and a desk outside Git is patched with no commit", () => scratch(async ({ base, desk, env: scratchEnv }) => {
+  const env = await hostEnv(base, scratchEnv)
+  await contribute(env)
+  // Outside Git: a desk with no GitHub remote keeps `desk_not_private`, patched in place.
+  await task_create({ deskRoot: desk, input: { track: "track", slug: "plain-desk", title: "fixture", status: "processing" } })
+  await done(desk, env, "plain-desk")
+  await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "plain-desk" } })
+  const plain = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "plain-desk" } })
+  assert.equal(plain.factory_report_unavailable, "desk_not_private")
+  assert.equal(Object.hasOwn(plain, "commit"), false)
+
+  await githubDesk(base, desk, env, null)
+  await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture", status: "processing" } })
+  await done(desk, env)
+  await task_archive({ deskRoot: desk, env, schedulePush: () => {}, input: { track: "track", slug: "finished-work" } })
+  await visibility(env, "private")
+  const failingCommit = (command, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit refused" } : spawnSync(command, args, options))
+  const result = await task_archive({ deskRoot: desk, env, spawnGit: failingCommit, schedulePush: () => assert.fail("a failed commit is not pushed"), input: { track: "track", slug: "finished-work" } })
+  assert.equal(result.factory_report, expectedLink())
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit refused" })
+}))
+
+test("the link fields are the tools' own: task_update and task_create refuse them in frontmatter", () => scratch(async ({ base, desk, env: scratchEnv }) => {
+  const env = await hostEnv(base, scratchEnv)
+  await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
+  for (const key of ["factory_report", "factory_report_unavailable"]) {
+    await assert.rejects(
+      task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { [key]: "anything" } } }),
+      /^Error: task_update: `factory_report` and `factory_report_unavailable` are written by the task tools/u,
+    )
+    await assert.rejects(
+      task_create({ deskRoot: desk, input: { track: "track", slug: `new-${key.length}`, title: "fixture", frontmatter: { [key]: "anything" } } }),
+      /^Error: task_create: `factory_report` and `factory_report_unavailable` are written by the task tools/u,
+    )
+  }
+  assert.equal(Object.hasOwn(await card(desk, "track/finished-work/task.md"), "factory_report_unavailable"), false)
 }))

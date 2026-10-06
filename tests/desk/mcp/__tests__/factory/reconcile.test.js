@@ -953,6 +953,37 @@ test("the receipt's two measures are reported per session and as totals; a recei
   assert.deepEqual(none.counts.segments_capped_ms, NOT_RECORDED_OF(0), "no sessions means no measurement, not zero")
 }))
 
+test("an older binder's receipt measures nothing for this binder: its segments_capped_ms: 0 reads not recorded, never a measured zero", () => scratch(async (context) => {
+  const { desk, env } = context
+  await standardDesk(desk, [["t", "old"], ["t", "new"]])
+  await addSession(context, 1, "t", "old", { boundBy: "focus", receipt: BINDING_VERSION - 1, receiptFields: { segments_capped_ms: 0, repo_unresolved: 0 } })
+  await addSession(context, 2, "t", "new", { boundBy: "focus", receiptFields: { segments_capped_ms: 0, repo_unresolved: 0 } })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  const pick = ({ session, segments_capped_ms, repository_evidence_unavailable }) => [session, segments_capped_ms, repository_evidence_unavailable]
+  assert.deepEqual(result.sessions.map(pick), [[sessionName(1), NOT_RECORDED, NOT_RECORDED], [sessionName(2), got(0), got(0)]])
+  assert.deepEqual(result.counts.segments_capped_ms, got(0, { sessions: 1, sessions_not_recorded: 1 }))
+  assert.ok(result.mismatches.some((item) => item.reason === "stale_binding"), "the old receipt is still reported as stale")
+}))
+
+test("cards that record why they have no report link are counted desk-wide, live and archived, by reason code, never echoing other text", () => scratch(async (context) => {
+  const { desk, env } = context
+  await standardDesk(desk, [["t", "a"]])
+  const write = async (relative, reason) => {
+    await mkdir(path.join(desk, path.dirname(relative)), { recursive: true })
+    await writeFile(path.join(desk, relative), `---\nstatus: done\ncreated: 2026-09-20T00:00:00.000Z\nupdated: 2026-09-21T00:00:00.000Z\n${reason === null ? "" : `factory_report_unavailable: ${reason}\n`}---\n\n# Card\n`)
+  }
+  const before = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(before.counts.report_link_unavailable, { cards: 0, archived: 0, by_reason: {} })
+  await write("t/live-one/task.md", "visibility_not_known")
+  await write("t/live-two/task.md", "desk_not_private")
+  await write("t/_archive/old-one/task.md", "job_identity_unavailable")
+  await write("t/_archive/old-two/task.md", "a hand-written secret")
+  await write("t/_archive/linked/task.md", null)
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(result.counts.report_link_unavailable, { cards: 4, archived: 2, by_reason: { visibility_not_known: 1, desk_not_private: 1, job_identity_unavailable: 1, unrecognized: 1 } })
+  assert.equal(JSON.stringify(result).includes("hand-written"), false)
+}))
+
 test("focus_disagrees is copied from the receipt", () => scratch(async (context) => {
   const { desk, env } = context
   const repo = await standardDesk(desk, [["t", "split"], ["t", "fine"]])
