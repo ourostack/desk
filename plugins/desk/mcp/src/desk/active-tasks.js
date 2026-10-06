@@ -27,6 +27,7 @@ import { loadFrontmatterParser } from "./organization.js"
 import { redactCredentialLikeText, redactName, redactTitle, REDACTED_SEGMENT, REDACTED_TITLE } from "../util/redact.js"
 import { folderHandle } from "./handles.js"
 import { TERMINAL_STATES } from "./lifecycle.js"
+import { readSteps, summarizeSteps } from "./steps.js"
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const MAX_CARD_BYTES = 64 * 1024
@@ -142,6 +143,15 @@ function blockerOf(content) {
   return null
 }
 
+// The card's `## Steps` table as a compact summary (steps.js), or nothing when it has none, has no rows or is left as prose.
+// The table sits right after `## Outcome`, so it is inside the bounded read of a card that is long below it.
+function stepsOf(content, truncated) {
+  const { rows } = readSteps(content, { truncated })
+  if (rows === undefined || rows.length === 0) return {}
+  const summary = summarizeSteps(rows)
+  return { steps: { ...summary, blocked: summary.blocked.map(({ id, reason }) => ({ id, reason: redactCredentialLikeText(reason) })) } }
+}
+
 // null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
 function readCardData(filePath) {
   let fd
@@ -155,7 +165,7 @@ function readCardData(filePath) {
     const bytesRead = readSync(fd, buffer, 0, MAX_CARD_BYTES, 0)
     try {
       const parsed = parseFrontmatter(buffer.toString("utf8", 0, bytesRead))
-      return { data: parsed.data, content: parsed.content }
+      return { data: parsed.data, content: parsed.content, truncated: bytesRead === MAX_CARD_BYTES }
     } catch {
       return { data: {}, content: "" }
     }
@@ -202,7 +212,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
     for (const taskName of listDirs(trackDir)) {
       const card = readCardData(path.join(trackDir, taskName, "task.md"))
       if (card === null) continue
-      const { data, content } = card
+      const { data, content, truncated } = card
       const status = asText(data.status)
       if (TERMINAL_STATUSES.has(status)) continue
       const slug = redactName(taskName)
@@ -220,6 +230,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
         repos: shownRepos(data.repos),
         next_step: nextStepOf(content),
         blocker: blockerOf(content),
+        ...stepsOf(content, truncated),
       })
     }
     if (tasks.length === 0) continue
@@ -236,7 +247,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
  *
  * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
  * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
- * where `repos` is `[{ name?, local_path?, mode? }]`.
+ * where `repos` is `[{ name?, local_path?, mode? }]`, and `steps` (only on a card with a readable `## Steps` table) is `{ total, delivered, ready: [id], blocked: [{ id, reason }] }`, dropped steps not counted.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.
  * `redacted`: `{ names, titles }`, how many names and titles were hidden.

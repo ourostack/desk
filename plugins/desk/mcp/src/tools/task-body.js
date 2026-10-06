@@ -19,7 +19,7 @@ function oneLine(text) {
 }
 
 /** The body's lines, its line ending, and which lines sit inside a fenced code block (fence lines included). */
-function scan(body) {
+export function scan(body) {
   const eol = body.includes("\r\n") ? "\r\n" : "\n"
   const lines = body.split(/\r?\n/u)
   const fenced = []
