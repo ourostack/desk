@@ -28,6 +28,9 @@ async function scratch(run) {
   mkdirSync(path.join(root, "track-a/_hidden"), { recursive: true })
   mkdirSync(path.join(root, "track-a/no-card"), { recursive: true })
   mkdirSync(path.join(root, "_meta"), { recursive: true })
+  mkdirSync(path.join(root, ".git-like"), { recursive: true })
+  mkdirSync(path.join(root, "track-a/.dot"), { recursive: true })
+  card(root, "track-a/blank", "---\ntitle: \"\"\n---\n")
   const env = { HOME: home, DESK: root }
   try {
     return await run({ env, root, home })
@@ -43,6 +46,7 @@ test("a desk not known private publishes keyed job IDs, so the names map keyed I
   assert.deepEqual(jobs, {
     [keyedJobId(plain("track-a", "first"), secret)]: { title: "First task", track: "track-a", task: "first" },
     [keyedJobId(plain("track-a", "old"), secret)]: { title: "Old task", track: "track-a", task: "old" },
+    [keyedJobId(plain("track-a", "blank"), secret)]: { title: "blank", track: "track-a", task: "blank" },
     [keyedJobId(plain("track-a", "untitled"), secret)]: { title: "untitled", track: "track-a", task: "untitled" },
   })
 }))
@@ -66,14 +70,12 @@ test("a desk known private maps plain job IDs", () => scratch(async ({ env, root
 test("main copies the site and writes the names privately", () => scratch(async ({ env, home }) => {
   await readMachineSecret(env)
   const fetched = []
-  const lines = []
-  assert.equal(await main({ env, fetchFile: async (url) => { fetched.push(url); return `copy of ${url}` }, write: (text) => lines.push(text) }), 0)
   const dir = viewDir(env)
+  assert.equal(await main({ env, fetchFile: async (url) => { fetched.push(url); return `copy of ${url}` } }), path.join(dir, "index.html"))
   assert.equal(dir, path.join(home, ".local", "state", "desk-private-view", "factory"))
-  assert.deepEqual(lines, [`${path.join(dir, "index.html")}\n`])
   assert.ok(fetched.every((url) => url.startsWith(SITE)))
   assert.equal(readFileSync(path.join(dir, "app.js"), "utf8"), `copy of ${SITE}app.js`)
-  assert.equal(Object.keys(JSON.parse(readFileSync(path.join(dir, "local-names.json"), "utf8")).jobs).length, 3)
+  assert.equal(Object.keys(JSON.parse(readFileSync(path.join(dir, "local-names.json"), "utf8")).jobs).length, 4)
   assert.equal(statSync(dir).mode & 0o777, 0o700)
   assert.equal(statSync(path.join(dir, "local-names.json")).mode & 0o777, 0o600)
   assert.equal(statSync(path.join(dir, "data.json")).mode & 0o777, 0o600)
@@ -94,32 +96,34 @@ test("main uses the global fetch and fails on a bad response", () => scratch(asy
   const original = globalThis.fetch
   try {
     globalThis.fetch = async () => ({ ok: true, text: async () => "page" })
-    assert.equal(await main({ env, write: () => {} }), 0)
+    assert.equal(typeof (await main({ env })), "string")
     globalThis.fetch = async () => ({ ok: false, status: 503 })
-    await assert.rejects(main({ env, write: () => {} }), /503/u)
+    await assert.rejects(main({ env }), /503/u)
   } finally {
     globalThis.fetch = original
   }
 }))
 
-test("runIfMain runs only as the entry point and reports a failure as exit code 1", async () => {
+test("runIfMain runs only as the entry point, printing the path or the failure", async () => {
   const url = "file:///x/private-view.js"
-  assert.equal(await runIfMain(url, undefined, async () => 0), false)
-  assert.equal(await runIfMain(url, "/elsewhere.js", async () => 0), false)
+  assert.equal(await runIfMain(url, undefined, async () => "p"), false)
+  assert.equal(await runIfMain(url, "/elsewhere.js", async () => "p"), false)
   const code = process.exitCode
-  const stderr = process.stderr.write
-  const messages = []
-  process.stderr.write = (text) => { messages.push(text); return true }
+  const { write: stdout } = process.stdout
+  const { write: stderr } = process.stderr
+  const out = []
+  process.stdout.write = (text) => { out.push(text); return true }
+  process.stderr.write = (text) => { out.push(text); return true }
   try {
-    assert.equal(await runIfMain(url, "/x/private-view.js", async () => 0), true)
-    assert.equal(process.exitCode, 0)
+    assert.equal(await runIfMain(url, "/x/private-view.js", async () => "/a/index.html"), true)
     assert.equal(await runIfMain(url, "/x/private-view.js", async () => { throw new Error("nope") }), true)
     assert.equal(process.exitCode, 1)
   } finally {
+    process.stdout.write = stdout
     process.stderr.write = stderr
     process.exitCode = code
   }
-  assert.deepEqual(messages, ["nope\n"])
+  assert.deepEqual(out, ["/a/index.html\n", "nope\n"])
 })
 
 test("run as a process, an unbound desk exits 1 with the reason", () => scratch(({ home }) => {

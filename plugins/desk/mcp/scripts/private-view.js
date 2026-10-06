@@ -66,7 +66,7 @@ export async function taskNames({ root, env }) {
 }
 
 /** Builds the view and returns the path of its page. */
-export async function main({ env = process.env, fetchFile = (url) => fetch(url).then((res) => (res.ok ? res.text() : Promise.reject(new Error(`${url}: ${res.status}`)))), write = (text) => process.stdout.write(text) } = {}) {
+export async function main({ env, fetchFile = (url) => fetch(url).then((res) => (res.ok ? res.text() : Promise.reject(new Error(`${url}: ${res.status}`)))) }) {
   const { root, error } = resolveHookDeskRoot({ env })
   if (root === null) throw new Error(`private-view: no desk is bound on this machine (${error})`)
   const dir = viewDir(env)
@@ -77,15 +77,14 @@ export async function main({ env = process.env, fetchFile = (url) => fetch(url).
   const names = path.join(dir, "local-names.json")
   writeFileSync(names, `${JSON.stringify({ version: 1, jobs })}\n`, { mode: 0o600 })
   chmodSync(names, 0o600)
-  write(`${path.join(dir, "index.html")}\n`)
-  return 0
+  return path.join(dir, "index.html")
 }
 
 /** Runs `main` when this module is the entry point. */
 export async function runIfMain(importMetaUrl, argv1, run = main) {
   if (typeof argv1 !== "string" || importMetaUrl !== pathToFileURL(argv1).href) return false
   try {
-    process.exitCode = await run()
+    process.stdout.write(`${await run({ env: process.env })}\n`)
   } catch (error) {
     process.stderr.write(`${error.message}\n`)
     process.exitCode = 1
