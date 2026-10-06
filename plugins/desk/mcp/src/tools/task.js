@@ -43,6 +43,9 @@ import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
 import { applyStep } from "../desk/steps.js"
+import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
+import { recordCleanupCard } from "../desk/cleanup-index.js"
+import { recordArchivedDisposition } from "./task-archived-resource.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -288,7 +291,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -348,6 +351,8 @@ function deliveryAnswer({ data, slug, ref }) {
 
 // How a step input that arrives as a JSON string is read, and what the refusal says about it.
 const STEP_INPUT = { tool: "task_update", field: "step", effect: "no step was changed", example: '{"id": "api-change", "depends_on": [], "repo": "widgets"}' }
+
+const RESOURCE_INPUT = { tool: "task_update", field: "resource", effect: "no resource was changed", example: '{"identity": "worktree:/Users/me/code/widgets-worktrees/api", "step": "api-change"}' }
 
 const asList = (value) => (Array.isArray(value) ? value : [])
 
@@ -699,6 +704,9 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  *     step?: object,          // adds or changes one row of the card's `## Steps`
  *                             // table (desk/steps.js); the answer carries `step`,
  *                             // and `step_note` ("now ready: ...") when it made steps ready
+ *     resource?: object,      // adds or updates one row of the card's `## Resources` table
+ *                             // (desk/resources.js); the answer carries `resource`, and
+ *                             // `cleanup_due` and `cleanup_note` when this call made rows due
  *   }
  *
  * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place, and on a
@@ -801,6 +809,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
   refuseRecordKeys("task_update", frontmatter)
   const step = objectInput(values.step, STEP_INPUT)
+  const resource = objectInput(values.resource, RESOURCE_INPUT)
   const nextStep = nextStepValue === undefined ? undefined : requiredText(nextStepValue, nextStepKey)
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
@@ -814,11 +823,18 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     throw new Error(`task_update: ${invalidStatusMessage(frontmatter.status)} (set in \`status\` or \`frontmatter.status\`)`)
   }
 
-  const filePath = await resolveWriteTarget({
+  let filePath = await resolveWriteTarget({
     deskRoot,
     person,
     segments: [track, slug, "task.md"],
   })
+  // An archived card takes one thing: a disposition on one of its existing resource rows, so a cleanup reminder left on a finished card can be closed (task-archived-resource.js).
+  if (!(await pathExists(filePath)) && resource !== undefined) {
+    const archived = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug, "task.md"] })
+    if (await pathExists(archived)) {
+      return recordArchivedDisposition({ deskRoot, file: archived, track, slug, values, resource, readiness, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush, recordCanonicalChanges } })
+    }
+  }
   if (!(await pathExists(filePath))) {
     throw new Error(
       `task_update: task does not exist at ${relPath(deskRoot, filePath)}`,
@@ -900,10 +916,18 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // A step is applied to the card as it is on disk right now, just before the write, so an `expect` holds against a change
   // another session made while this call ran. Only the body is re-read: the frontmatter is written as this call built it, as for every task_update.
   let stepResult = null
+  let resourceResult = null
   let newBody = existing.content
+  if (step !== undefined || resource !== undefined) newBody = (await readMarkdown(filePath)).content
+  const dueBefore = dueResources(newBody, { status: existing.data.status }).map((item) => item.identity)
   if (step !== undefined) {
-    stepResult = applyStep((await readMarkdown(filePath)).content, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
+    stepResult = applyStep(newBody, step, "task_update", recordedRepos(merged.repos).map((repo) => repo.name))
     newBody = stepResult.body
+  }
+  // Resources are recorded on the card itself (task.md); Desk reminds about them and never removes anything (desk/resources.js).
+  if (resource !== undefined) {
+    resourceResult = applyResource(newBody, resource, "task_update", `${track}/${slug}`)
+    newBody = resourceResult.body
   }
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
@@ -914,7 +938,15 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
 
   const stage = stagingAllowed(filePath, spawnGit)
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
-  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined })
+  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || resource !== undefined })
+  // The per-machine index of cards with open resource rows follows each resource write; a state folder that cannot be written never fails the card write.
+  if (resource !== undefined) {
+    try {
+      recordCleanupCard(deskRoot, relPath(deskRoot, path.dirname(filePath)), openResources(newBody).length > 0, env)
+    } catch {
+      // The reminder still comes from the card itself while it is unfinished.
+    }
+  }
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
@@ -929,6 +961,11 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
   if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
+  if (resourceResult !== null) result.resource = resourceResult.row
+  // A call that makes something due lists the card's due rows and the safe action for each; Desk never performs it. A call that finishes the card lists all of them.
+  const due = dueResources(newBody, { status: merged.status })
+  const finishes = TERMINAL_STATUSES.has(merged.status) && !TERMINAL_STATUSES.has(existing.data.status)
+  if (finishes || due.some((item) => !dueBefore.includes(item.identity))) Object.assign(result, cleanupAnswer(due))
   if (returnReason !== undefined) {
     const line = parseReturn(merged.returns.at(-1))
     result.return_recorded = `${line.from} to ${line.to}, ${line.reason}, caught ${line.caught}`
@@ -1186,11 +1223,13 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   await target([track, "_archive", slug])
   const filePath = await target([track, "_archive", slug, "task.md"])
   let finalStatus = null
+  let cardBody = ""
   let delivered = null
   let report = null
   if (await pathExists(filePath)) {
     const existing = await readMarkdown(filePath)
     finalStatus = existing.data.status
+    cardBody = existing.content
     // Patch only the fields this archive changes (`status:`, `updated:`, the record, `evidence:` and the report link fields) in place:
     // every other byte of the card — quoting, date formats, block scalars, key order — survives.
     const patchFields = {}
@@ -1225,6 +1264,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
+  // Archiving finishes the card, so every due resource row is listed, as for a task_update that finishes it.
+  Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
   return withArchiveFocus(statusContext, { track, slug }, result)
 }
 

@@ -74,6 +74,21 @@ const STEP = {
   description: "One row of the card's `## Steps` table, a JSON object.",
 }
 
+// Mirrors DISPOSITIONS and RESOURCE_FIELDS in src/desk/resources.js.
+const RESOURCE = {
+  type: "object",
+  properties: {
+    identity: text("`worktree:<absolute path>` or `branch:<owner/repo>#<name>` (or `branch:<org/project/repo>#<name>` for Azure DevOps): a worktree or branch you created. Unknown identities add a row; known ones update it."),
+    step: text("The step (a name in the card's `## Steps` table) that owns it; written as `step <id>`. Cleanup is due when that step is delivered or dropped."),
+    intended: text("What you intend to do with it, in a few words (for example `remove after merge`)."),
+    disposition: { type: "string", enum: ["removed-and-absent", "named transfer", "retained-with-trigger"], description: "Record this once the resource is dealt with; needs `details`. Desk removes nothing." },
+    details: text("With `disposition`: removed-and-absent, the readback that it is gone; named transfer, who took it and that they acknowledged; retained-with-trigger, why, who owns it and what triggers its cleanup."),
+  },
+  required: ["identity"],
+  additionalProperties: false,
+  description: "One row of the card's `## Resources` table, a JSON object.",
+}
+
 const TASK_PROGRESS = {
   note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
   next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
@@ -143,7 +158,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table; each may depend on the ones before it. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),

@@ -188,6 +188,8 @@ Create the following headings and tables in that record when needed, using this 
 | <repository/worktree path or host resource/operation identity; exact generation> | <canonical task; attempt; owning process generation> | <exact active writers/consumers or verified none> | <intended disposition and cleanup/transfer owner> | <approved evidence pointer> | <removed-and-absent: absence readback; or named transfer: named transferee and acknowledgement; or retained-with-trigger: reason, owner and cleanup trigger> |
 ```
 
+Desk can record rows of this table and remind you of them: `task_update`'s `resource: {identity, step?, intended?, disposition?, details?}` adds or updates a worktree or branch row on the card (`task-card-format`), and Desk reminds you, in the answer that makes a row due and in one session-start line, to clean it up. Desk never removes anything.
+
 `cleanup_pending` is a Markdown delivery state while the canonical task status stays `validating`; it is not a ninth task state. A process exit, merged PR or successful build is not completion while resources remain unaccounted for. Every resource requires one verified disposition before transition to `done`:
 
 - **removed-and-absent**: exact-owner cleanup plus source-system/host readback proving the resource and its owned writers or descendants are absent.

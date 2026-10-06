@@ -17,17 +17,17 @@ export const STEP_STATES = ["pending", "in progress", "blocked", "merged", "deli
 export const STEP_FIELDS = ["id", "state", "depends_on", "repo", "evidence", "reason", "expect", "dependents_ok"]
 const HAND_SET = ["merged", "delivered"]
 const NEEDS_REASON = ["blocked", "dropped"]
-const SETTLED = ["delivered", "dropped"]
+export const SETTLED = ["delivered", "dropped"]
 const HEADING = "## Steps"
 const COLUMNS = ["Step", "Depends on", "Repo", "State", "Evidence"]
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u
 const ID_LIMIT = 40
 const NONE = /^(?:—|-)?$/u
-const SEPARATOR = /^\|?[\s:|-]*-[\s:|-]*$/u
+export const SEPARATOR = /^\|?[\s:|-]*-[\s:|-]*$/u
 // A PR URL, a commit URL or a bare commit sha: shape only, as the done check's evidence is.
 const EVIDENCE_REF = /\/pull(?:request)?\/\d+|\/commit\/[0-9a-f]{7,40}\b|\b[0-9a-f]{7,40}\b/iu
 
-const splitCells = (line) =>
+export const splitCells = (line) =>
   line.trim().replace(/^\|/u, "").replace(/(?<!\\)\|$/u, "").split(/(?<!\\)\|/u).map((cell) => cell.replace(/\\\|/gu, "|").trim())
 const oneLine = (value) => value.replace(/\s*\r?\n\s*/gu, " ").trim()
 const orNone = (value) => (value === "" || value === null ? "—" : value)
