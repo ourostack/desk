@@ -44,7 +44,7 @@ export function ghTokenRead(command) {
   return false
 }
 
-const CREDENTIAL_FILE = /(?:\.config\/gh|GH_CONFIG_DIR)[^\s;&|]*\/?hosts\.yml|\bgh\/hosts\.yml|\.copilot\/(?:config|settings)\.json|COPILOT_HOME[^\s;&|]*\/(?:config|settings)\.json/
+const CREDENTIAL_FILE = /(?:\.config\/gh|GH_CONFIG_DIR)[^\s;&|]*\/?hosts\.yml|\bgh\/hosts\.yml|\.copilot\/(?:config|settings)\.json|COPILOT_HOME[^\s;&|]*\/(?:config|settings)\.json|\.claude\/\.credentials\.json/
 
 /**
  * Every credential read the calls attempted, as `{ kind, text }`: `kind` is the rule that matched and `text` the (token-redacted, shortened) command or path.

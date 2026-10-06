@@ -2,11 +2,12 @@
 // leading with the action; every other command passes without the guard reading the desk.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { clonedRepos, elsewhereCloneDenial } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-clone.js"
+import { clonedRepos, elsewhereCloneDenial, loadDeskTasks } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-clone.js"
 import { task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { saysElsewhere, ELSEWHERE_NOTE } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-note.js"
@@ -47,6 +48,8 @@ put("lighthouse-relay/local-job/task.md", card("local-job", "processing", "acme/
 put("lighthouse-relay/long-branch/task.md", card("long-branch", "processing", "acme/gadgets", "push `feature/a-very-long-branch-name-over-thirty` from my other laptop."))
 put("lighthouse-relay/text-only/task.md", card("text-only", "processing", "acme/unlisted-name", "the work for `acme/sprockets` is only on my old laptop."))
 put("lighthouse-relay/blocker-only/task.md", "---\ntitle: blocker-only\nstatus: blocked\nrepos:\n  - local_path: \"\"\n  - name: acme/blocked-repo\n---\n\n## Blocker\n\nThe branch is not on this machine.\n")
+// The repository only in the card's `repos:` list, as in the boot acceptance `elsewhere-clone` card: nothing in its text names it, so only a reader that parses `repos:` finds it.
+put("lighthouse-relay/listed-only/task.md", card("listed-only", "processing", "ari-fixture/listed-only", "push `listed-branch` from my other laptop, then review the branch here."))
 put("lighthouse-relay/finished/task.md", card("finished", "done", "acme/finished-repo", "push the branch from my other laptop."))
 test.after(() => { for (const dir of [HOME, DESK, OTHER]) rmSync(dir, { recursive: true, force: true }) })
 
@@ -208,5 +211,34 @@ test("the guard fails open: an error reading a card allows the command and the h
     assert.deepEqual(await elsewhereCloneDenial({ command, cwd: broken, env: { HOME } }), { deny: false })
   } finally {
     rmSync(broken, { recursive: true, force: true })
+  }
+})
+
+// Boot acceptance round AA: the hook runs from the plugin folder, where no node_modules is installed. Reading a card's nested `repos:` list needs gray-matter, so the guard restores the runtime pack first (as boot does).
+// Under the dependency-free reader every card has no repos, and 4 of 4 `elsewhere-clone` runs cloned freely. The unit tests above run beside node_modules and never saw it.
+test("the desk's cards are read only after the runtime dependencies are restored", async () => {
+  const calls = []
+  const tasks = await loadDeskTasks({ cwd: DESK, env, ensureDependencies: async (given) => { calls.push(given) } })
+  assert.deepEqual(calls, [env])
+  assert.ok(tasks.some((task) => task.slug === "beacon-relay-push-check"))
+  await assert.rejects(loadDeskTasks({ cwd: DESK, env, ensureDependencies: async () => { throw new Error("no pack") } }), /no pack/u)
+})
+
+test("the hook run from a bare plugin folder (no node_modules) still denies the clone, and still passes another repository", () => {
+  const bare = realpathSync(mkdtempSync(path.join(tmpdir(), "elsewhere-bare-")))
+  try {
+    const plugin = path.join(bare, "desk")
+    cpSync(path.resolve(import.meta.dirname, "../../../../../plugins/desk"), plugin, { recursive: true, dereference: true, filter: (file) => path.basename(file) !== "node_modules" })
+    const run = (command) => spawnSync(process.execPath, [path.join(plugin, "hooks", "protected-checkout.cjs"), "claude"], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: DESK }),
+      env: { PATH: process.env.PATH, HOME: bare, DESK_RUNTIME_CACHE_DIR: path.join(bare, "cache") },
+      encoding: "utf8",
+    })
+    const denied = run("cd ~/code && git clone https://github.com/ari-fixture/listed-only.git listed-only")
+    assert.equal(denied.status, 0, denied.stderr)
+    assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny")
+    assert.equal(run("git clone https://github.com/acme/widgets.git").stdout.trim(), "{}")
+  } finally {
+    rmSync(bare, { recursive: true, force: true })
   }
 })

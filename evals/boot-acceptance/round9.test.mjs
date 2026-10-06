@@ -3,13 +3,13 @@
 
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, lstatSync, readlinkSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { test } from "node:test"
 
 import { claimSources, commitMessages, doneAttempts, referencedPaths, selfReferentialEvidence, sentences, syncWorkedClaims, taskDoneClaims, testPassClaims, testRuns } from "./claims.mjs"
-import { addMissingCloneTask, buildPluginDir, createIsolatedHome, materializeFixture, materializeGreenhouseClone, sourcePaths } from "./lib.mjs"
+import { CLAUDE_CREDENTIALS, CLAUDE_PROFILE, addMissingCloneTask, buildPluginDir, claudeCredentialsLink, createIsolatedHome, materializeFixture, materializeGreenhouseClone, sourcePaths } from "./lib.mjs"
 import { buildContext, parseStreamJson } from "./run.mjs"
 import { findScenario } from "./scenarios.mjs"
 
@@ -437,5 +437,47 @@ test("the isolated home carries Claude Code settings with commit and pull-reques
     assert.equal(settings.includeCoAuthoredBy, false)
   } finally {
     rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// Claude Code 2.1.290 and later keep their sign-in in the credentials file of the Claude profile folder (round AA: "Not logged in" in every Claude run). It is linked, never copied.
+test("createIsolatedHome links the real Claude credentials file into the run's .claude, and never copies it", () => {
+  const base = mkdtempSync(path.join(os.tmpdir(), "creds-link-"))
+  try {
+    const real = path.join(base, "real")
+    mkdirSync(path.join(real, CLAUDE_PROFILE), { recursive: true })
+    mkdirSync(path.join(real, "Library", "Keychains"), { recursive: true })
+    writeFileSync(path.join(real, CLAUDE_PROFILE, CLAUDE_CREDENTIALS), '{"t":"1"}')
+    const home = path.join(base, "run")
+    createIsolatedHome({ homeDir: home, host: "claude", keychain: true, ghAccounts: false, credentials: true, realHome: real })
+    const link = path.join(home, CLAUDE_PROFILE, CLAUDE_CREDENTIALS)
+    assert.equal(lstatSync(link).isSymbolicLink(), true)
+    assert.equal(readlinkSync(link), path.join(real, CLAUDE_PROFILE, CLAUDE_CREDENTIALS))
+    assert.equal(lstatSync(path.join(home, "Library", "Keychains")).isSymbolicLink(), true)
+    assert.equal(lstatSync(path.join(home, CLAUDE_PROFILE, "settings.json")).isSymbolicLink(), false)
+    // Without the option, or on Copilot, nothing is linked.
+    const plain = path.join(base, "plain")
+    createIsolatedHome({ homeDir: plain, host: "claude", keychain: false, ghAccounts: false, realHome: real })
+    assert.equal(existsSync(path.join(plain, CLAUDE_PROFILE, CLAUDE_CREDENTIALS)), false)
+    // Removing the run's folder removes the link and leaves the operator's file.
+    rmSync(home, { recursive: true, force: true })
+    assert.equal(readFileSync(path.join(real, CLAUDE_PROFILE, CLAUDE_CREDENTIALS), "utf8"), '{"t":"1"}')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test("claudeCredentialsLink: only the Claude host, no OAuth token in the environment, and a credentials file that exists", () => {
+  const real = mkdtempSync(path.join(os.tmpdir(), "creds-real-"))
+  try {
+    assert.equal(claudeCredentialsLink({ host: "claude", env: {}, realHome: real }), false)
+    mkdirSync(path.join(real, CLAUDE_PROFILE), { recursive: true })
+    writeFileSync(path.join(real, CLAUDE_PROFILE, CLAUDE_CREDENTIALS), "{}")
+    assert.equal(claudeCredentialsLink({ host: "claude", env: {}, realHome: real }), true)
+    assert.equal(claudeCredentialsLink({ host: "claude", env: { CLAUDE_CODE_OAUTH_TOKEN: "x" }, realHome: real }), false)
+    assert.equal(claudeCredentialsLink({ host: "copilot", env: {}, realHome: real }), false)
+    assert.equal(typeof claudeCredentialsLink({ host: "claude" }), "boolean")
+  } finally {
+    rmSync(real, { recursive: true, force: true })
   }
 })

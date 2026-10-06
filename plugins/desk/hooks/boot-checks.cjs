@@ -412,6 +412,35 @@ const hostEnforcementCheck = {
   },
 };
 
+// A guard hook fails open, so one that could not restore its runtime dependencies (an unwritable cache, no pack for this machine) would stop guarding without a word. The hook leaves a marker
+// (mcp/src/runtime/hook-dependencies.js); this check turns it into a `Desk problem:` block and files it in the background, the same way the registration check above does.
+const HOOK_DEPENDENCIES_FIX_ATTEMPT = "not auto-repaired -- make the runtime cache folder writable, then start a new session.";
+const hookDependenciesCheck = {
+  id: "hook-dependencies",
+  budgetMs: 20,
+  async run(ctx) {
+    const [{ degradedHooks }, { formatDeskProblem }, { argvSafeReason }, { shouldLaunchFiler }] = await Promise.all([
+      runtime("runtime/hook-dependencies.js"), runtime("runtime/index-drift.js"), runtime("runtime/argv-safe-reason.js"), runtime("runtime/filer-throttle.js"),
+    ]);
+    const degraded = degradedHooks({ env: ctx.env });
+    if (degraded.length === 0) return {};
+    const names = degraded.map((entry) => entry.hook).join(", ");
+    const reason = degraded.map((entry) => `${entry.hook}: ${entry.reason}`).join("; ");
+    const safeReason = argvSafeReason(reason);
+    const launch = shouldLaunchFiler({ env: ctx.env, mechanism: "hook-dependencies", signature: safeReason });
+    const block = formatDeskProblem({
+      mechanism: "hook-dependencies",
+      symptom: `the ${names} guard could not restore its dependencies`,
+      broke: reason,
+      means: "that guard cannot read task cards, so it allows what it would have checked",
+      fix: HOOK_DEPENDENCIES_FIX_ATTEMPT,
+      file: launch ? "filing in background" : "filing already queued (within the last hour)",
+      tell: `Desk's ${names} guard is degraded: it could not restore its runtime dependencies (${reason}) and is not guarding. Filing this now so it gets fixed.`,
+    });
+    return { line: block, repair: launch ? { command: compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "hook-dependencies", "--reason", safeReason, "--host", ctx.host || "unknown", "--fix-attempt", HOOK_DEPENDENCIES_FIX_ATTEMPT) } : undefined };
+  },
+};
+
 // ---------------------------------------------------------------------------
 // The registry.
 // ---------------------------------------------------------------------------
@@ -736,8 +765,8 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 module.exports = {
-  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck],
-  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck,
+  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck],
+  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck,
   runBootChecks, startFactory, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };

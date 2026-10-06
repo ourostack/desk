@@ -25,9 +25,9 @@ import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import * as process from "node:process"
 
-import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, addElsewhereCloneTask, materializeOfflineFork, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
+import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, addElsewhereCloneTask, materializeOfflineFork, materializeGreenhouseClone, createIsolatedHome, claudeCredentialsLink, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
-import { gateReport, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
+import { discountCancelledStart, gateReport, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
 import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactSecrets, writeGitConfig } from "./safety.mjs"
 import { COPILOT_DEFAULT_MODEL, COPILOT_TOKEN_VAR, GH_TOKEN_WARNING, META_TOOLS, authFailureProblem, compactCopilotTranscript, copilotFlags, copilotResumeArgs, findCopilotBinary, installCopilotPlugins, installedBootScript, notApplicableFor, parseCopilotTranscript, resolveCopilotAuth, shareCopilotPackageCache, writeCopilotProfile } from "./copilot.mjs"
 
@@ -303,9 +303,9 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   // `--outside-desk`: the session opens in an ordinary folder under the run's temp dir, with no `_meta`/`_archive` and no saved binding anywhere.
   const sessionFolder = args.outsideDesk ? path.join(runTmp, "plain-project") : deskRoot
   if (args.outsideDesk) mkdirSync(sessionFolder, { recursive: true })
-  // The login keychain is linked into the run's HOME only for Claude Code without `CLAUDE_CODE_OAUTH_TOKEN` (its sign-in reads it); `gh` reaches the operator's login through the shim, never through this HOME.
+  // The login keychain, and Claude Code's credentials file in its profile folder when it exists (2.1.290 and later), are linked (never copied) into the run's HOME only for Claude Code without `CLAUDE_CODE_OAUTH_TOKEN` (its sign-in reads them); `gh` reaches the operator's login through the shim, never through this HOME.
   const keychain = args.host === "claude" && !process.env.CLAUDE_CODE_OAUTH_TOKEN
-  createIsolatedHome({ homeDir, sharedCacheDir, host: args.host, keychain, ghAccounts: false })
+  createIsolatedHome({ homeDir, sharedCacheDir, host: args.host, keychain, ghAccounts: false, credentials: claudeCredentialsLink({ host: args.host }) })
   // The `watering-schedule-api` card records `~/code/greenhouse-irrigation`;
   // `~` is this run's temp HOME, so the clone lives under the temp dir.
   // `valve-firmware` (the `missing-clone` scenario's repo) is never created.
@@ -393,7 +393,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     ctx.ghDenials = []
   }
   if (ctx.ghDenials.length) writeFileSync(path.join(runDir, "gh-denied.jsonl"), ctx.ghDenials.map((d) => JSON.stringify(d)).join("\n") + "\n")
-  const checkResult = scoreRun(scenario, ctx, args.host)
+  const checkResult = discountCancelledStart(scoreRun(scenario, ctx, args.host), gates)
 
   const counted = ctx.toolCalls.filter((t) => !META_TOOLS.has(t.name))
   const summary = {
@@ -422,6 +422,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     tool_call_count: counted.length,
     tool_call_names: counted.map((t) => t.name),
     outcome: checkResult.outcome,
+    discounted_failures: checkResult.discounted ?? 0,
     outcome_notes: checkResult.notes,
     not_applicable: checkResult.notApplicable,
     // Every check this host could run passed; the checks it could not run are the `not_applicable` list, counted here, never credited as passes.
@@ -454,7 +455,7 @@ async function main() {
   console.log(`host:         ${args.host} (${args.binary}) on model ${args.model}`)
   console.log(`worktree:     ${worktreeRoot}`)
   console.log(`plugins:      ${args.pluginDir ? path.resolve(args.pluginDir) : `desk, superpowers, plain-language from ${worktreeRoot}/plugins`}`)
-  console.log(`real HOME:    ${REAL_HOME} (only Library/Keychains${args.host === "copilot" ? " and the account's gh login name" : ""} is ever read from it)`)
+  console.log(`real HOME:    ${REAL_HOME} (only Library/Keychains${args.host === "copilot" ? " and the account's gh login name" : " and .claude/.credentials.json"} ${args.host === "copilot" ? "is" : "are"} ever read from it)`)
   console.log(`shared cache: ${sharedCacheDir} (Desk runtime-dependency pack reuse only, no operator content)`)
   console.log(`out-dir:      ${args.outDir}`)
   console.log("")
