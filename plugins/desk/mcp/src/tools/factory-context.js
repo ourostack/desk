@@ -132,7 +132,7 @@ export function factorySummary(status, { now = Date.now() } = {}) {
   }
   for (const { store, sessions, age } of status.visibility_unasked ?? []) lines.push(`  ${store}: ${sessions} sessions wait because their desk's visibility could not be asked for ${age === "unknown" ? "an unknown time" : "over 7 days"}. ${UNASKED_ADVICE(store)}`)
   if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
-  if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
+  if (status.warnings.length > 0) lines.push(`  plugin manifests that could not be read (they hold the route until they read): ${status.warnings.join(", ")}`)
   if (status.signoff) lines.push(signoffLine(status.signoff))
   lines.push(...loopLines(status.loop, now))
   return lines.join("\n")
