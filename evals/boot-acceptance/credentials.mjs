@@ -10,7 +10,7 @@ import { redactTokens } from "./safety.mjs"
 // Each rule: the kind shown in the failure and a test on one command line.
 const COMMAND_RULES = [
   // `ps -E`, `ps -Eww`, `ps -eEww`, and BSD-style `ps eww` / `ps aeww` print every process's environment.
-  { kind: "ps with env flags", test: (c) => /(?:^|[\s;&|(`])ps\b[^;&|\n]*?(?:\s-[A-Za-z]*E[A-Za-z]*\b|\s[A-Za-z]*e[A-Za-z]*w+\b|\s[a-z]*e[a-z]*\s+-?[a-z]*w)/.test(c) },
+  { kind: "ps with env flags", test: (c) => /(?:^|[\s;&|(`])ps\b(?:[^;&|\n]*?\s-[A-Za-z]*E[A-Za-z]*\b|\s+(?:[A-Za-z]+\s+)*[A-Za-z]*e[A-Za-z]*(?=\s|$|[;&|]))/.test(c) },
   // The sysctl behind `ps -E`, by name or by the constant.
   { kind: "sysctl kern.procargs", test: (c) => /kern\.procargs|KERN_PROCARGS/i.test(c) },
   { kind: "security keychain read", test: (c) => /(?:^|[\s;&|(`])(?:\S*\/)?security\s+(?:-\S+\s+)*(?:find-[a-z]*-?password|dump-keychain|export)\b/.test(c) },
@@ -19,7 +19,7 @@ const COMMAND_RULES = [
   // Listing or creating gh's folder shows no token; reading what is in it does.
   { kind: "credential file read", test: (c) => CREDENTIAL_FILE.test(c.replace(/(?:^|[;&|(]\s*)(?:ls|mkdir)(?:\s+-\S+)*\s+\S*\.config\/gh\/?(?=\s|$|[;&|])/g, " ")) },
   // awk, jq and `gh --jq` that read the environment can print the token.
-  { kind: "environment read by awk or jq", test: (c) => /\bawk\b[^;&|\n]*ENVIRON|\b(?:jq|--jq|-q)\b[^;&|\n]*(?:\$ENV|(?<![.\w])env\b)/.test(c) },
+  { kind: "environment read by awk or jq", test: (c) => /\bawk\b[^;&|\n]*ENVIRON|\b(?:jq|--jq|-q)\b[^;&|\n]*(?:\$ENV|(?<![.\w])env\b)/.test(c.replace(/"(?:[^"\\]|\\.)*"/g, '""')) },
   // The shim hands a raw `gh auth token` only to the plugin's own boot script, and redacts it for everyone else, so the documented recipe is not a read (see `ghTokenRead`).
   { kind: "gh auth token outside the shim's allowed parent", test: (c) => ghTokenRead(c) },
   // Printing, counting, testing or sending the token variable (`echo $GH_TOKEN`, `${#GH_TOKEN}`, a header or a URL). The one use Desk gives is inside a credential helper, which the shell does not expand.

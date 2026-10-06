@@ -48,6 +48,8 @@ const TOKEN_VARIABLES = new Set(["GH_TOKEN", "GITHUB_TOKEN"])
 
 const ACCOUNT = "[A-Za-z0-9][A-Za-z0-9_.-]*"
 const GH_CALL = `gh auth token(?: (?:--user|-u)[ =]${ACCOUNT})?(?: (?:--hostname|-h)[ =]${ACCOUNT})?`
+// An account name, an unset variable's empty value, or a default the shell has not expanded (`"${GH_USER:-x}"`).
+const ACCOUNT_VALUE = new RegExp(`^(?:${ACCOUNT}|\\$\\{[A-Za-z_]\\w*:-${ACCOUNT}\\}|)$`, "u")
 const IDENTITY = "echo username=[A-Za-z0-9_.@-]+"
 // The one credential-helper text Desk gives, in the two orders git accepts, written with `gh auth token` or with the exported variable.
 const HELPER_VALUES = [
@@ -65,7 +67,7 @@ function isHelper(arg) {
 }
 
 // Credential stores, as normalized paths: a file, or the directory that holds them (which only a program that reads contents may name).
-const STORE_FILE = /(?:^|\/)(?:gh\/hosts\.yml|\.git-credentials|\.netrc|\.config\/git\/credentials|\.copilot\/(?:config|settings)\.json|\.claude\/\.credentials\.json)$|^\/hosts\.yml$/u
+export const STORE_FILE = /(?:^|\/)(?:gh\/hosts\.yml|\.git-credentials|\.netrc|\.config\/git\/credentials|\.copilot\/(?:config|settings)\.json|\.claude\/\.credentials\.json)$|^\/hosts\.yml$/u
 const STORE_DIRECTORY = /(?:^|\/)\.config\/gh(?:\/\*)?$/u
 const READERS = new Set(["cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "ag", "ack", "sed", "awk", "gawk", "cp", "strings", "xxd", "od", "base64", "bat", "tar", "zip"])
 const STORE_REDIRECT = /<\s*["']?[^\s"'<>;&|]*(?:gh\/hosts\.yml|\.git-credentials|\.netrc|\.config\/git\/credentials)/u
@@ -82,6 +84,7 @@ const INLINE_TOKEN = /(?:GH|GITHUB)_TOKEN|%ENV\b|os\.environ\s*[,)]|process\.env
 // visit builtins, so this reads the text. A dump piped to `grep PATH` shows no secret unless the token is set in the same command.
 const ENV_DUMP = /(?:^|[;&|(\n]\s*)(?:env|printenv|set|export\s+-p|(?:declare|typeset)(?:\s+-[A-Za-z]+)*)[ \t]*(?=$|[;&|)\n])/gu
 const DUMP_FILTER = /^[ \t]*\|[ \t]*(?:grep|egrep|fgrep|rg)[ \t]+(?:-\S+[ \t]+)*(\S+)/u
+const DUMP_COUNT = /^[ \t]*\|[ \t]*wc[ \t]+-[lcw]\b/u
 const SECRETISH = /token|secret|key|pass|gh_|github|auth|cred|copilot|\*|\./iu
 const TRACE = /(?:^|[;&|(\n]\s*)set\s+(?:-[A-Za-z]*x|-o\s+xtrace)|\b(?:bash|sh|zsh|dash|ksh)\s+(?:-\S+\s+)*-[A-Za-z]*x\b/u
 const SHELL_CODE = /\b(?:bash|sh|zsh|dash|ksh)\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*c\s+("(?:[^"\\]|\\.)*"|'[^']*')/gu
@@ -108,7 +111,7 @@ function judgeGhAuth(args, via, seen) {
   // Only `--user X` and `--hostname H` (or -u, -h, and the `--user=X` form) with plain values may follow.
   const options = rest.slice(1).flatMap((arg) => (/^--?[a-z]+=/u.test(arg) ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg]))
   for (let i = 0; i < options.length; i += 2) {
-    if (!["--user", "-u", "--hostname", "-h"].includes(options[i]) || !new RegExp(`^${ACCOUNT}$`, "u").test(options[i + 1] ?? "")) return MESSAGES.token
+    if (!["--user", "-u", "--hostname", "-h"].includes(options[i]) || !ACCOUNT_VALUE.test(options[i + 1] ?? "")) return MESSAGES.token
   }
   if (!via?.real || !TOKEN_VARIABLES.has(via.name)) return MESSAGES.token
   // The assignment's whole value is this one substitution, which holds one plain command (stderr may go to /dev/null).
@@ -124,16 +127,36 @@ function judgeGhAuth(args, via, seen) {
   return null
 }
 
-/** Whether `ps` is asked to show each process's environment (`-E`, BSD `e`, `eww`). */
-const psEnvironment = (args) => args.some((arg) => /^-[A-Za-z]*E/u.test(arg) || (/^[A-Za-z]+$/u.test(arg) && arg.includes("e")))
+// `ps` options that take a value (`-o user`, `-p 123`, `-u me`, `-C node`): the value is not a flag.
+const PS_VALUE_LETTERS = new Set("oOpPuUCGgtsqU")
+/** Whether `ps` is asked to show each process's environment: `-E`, or the BSD `e` flag word (`e`, `eww`, `aux e`) before any dashed option. */
+function psEnvironment(args) {
+  let leading = true
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg.startsWith("-")) {
+      if (leading && /^[A-Za-z]+$/u.test(arg) && arg.includes("e")) return true
+      continue
+    }
+    leading = false
+    if (/^-[A-Za-z]*E/u.test(arg)) return true
+    if (/^-[A-Za-z]+$/u.test(arg) && PS_VALUE_LETTERS.has(arg.at(-1))) i++
+  }
+  return false
+}
+
+// The jq words that read the environment, outside string literals: `env`, `env.X`, `env | keys`, `{env, x}` and `$ENV`.
+const readsEnvironment = (filter) => /(?:^|[^.\w$])env(?=\s*(?:$|[.|),}\][]))|\$ENV\b/u.test(filter.replace(/"(?:[^"\\]|\\.)*"/gu, '""'))
 
 /** The reason to deny one visited command, or null. `seen` records that an allowed `gh auth token` ran. */
 function judgeCall({ name, args, env, cwd, via, computed }, seen) {
   if (name === "security" && args.some((arg) => KEYCHAIN.test(arg))) return MESSAGES.store
   if (name.startsWith("git-credential")) return MESSAGES.store
   const paths = args.map((arg) => path.posix.normalize(arg))
+  // `test -f ~/.config/gh/hosts.yml` and `[ -e ... ]` ask whether the file exists, and read none of it.
+  const exists = (name === "test" || name === "[" || name === "[[") && /^-[a-zA-Z]$/u.test(args[0])
   const bareHosts = /(?:^|\/)\.config\/gh$/u.test(cwd) && args.includes("hosts.yml")
-  if (bareHosts || paths.some((arg) => STORE_FILE.test(arg) || (READERS.has(name) && STORE_DIRECTORY.test(arg)))) return MESSAGES.store
+  if (!exists && (bareHosts || paths.some((arg) => STORE_FILE.test(arg) || (READERS.has(name) && STORE_DIRECTORY.test(arg))))) return MESSAGES.store
   const sub = name === "git" ? gitSubcommand(args) : ""
   if (sub === "credential" || sub.startsWith("credential-")) return MESSAGES.store
   if (name === "gh" && args.includes("auth")) {
@@ -145,9 +168,8 @@ function judgeCall({ name, args, env, cwd, via, computed }, seen) {
   // A program Desk could not name that is given `auth token` is `gh auth token` by another name.
   if (computed && args.includes("auth") && args.includes("token")) return MESSAGES.token
   // The environment, token included: `printenv NAME`, `ps e`, `awk ENVIRON`, jq or gh --jq reading `env`, `declare -p GH_TOKEN`.
-  const reads = (filter) => /(?:^|[^.\w])env\b|\$ENV/u.test(filter)
   const jq = name === "jq" ? args : name === "gh" ? args.filter((arg, i) => args[i - 1] === "--jq" || args[i - 1] === "-q" || arg.startsWith("--jq=")) : []
-  if (jq.some(reads) || (name === "printenv" && args.some((arg) => /TOKEN/iu.test(arg))) || (name === "ps" && psEnvironment(args)) || ((name === "awk" || name === "gawk") && args.some((arg) => arg.includes("ENVIRON")))) return MESSAGES.print
+  if (jq.some(readsEnvironment) || (name === "printenv" && args.some((arg) => /TOKEN/iu.test(arg))) || (name === "ps" && psEnvironment(args)) || ((name === "awk" || name === "gawk") && args.some((arg) => arg.includes("ENVIRON")))) return MESSAGES.print
   if ((name === "declare" || name === "typeset") && args.some((arg) => !arg.includes("=") && /TOKEN/iu.test(arg))) return MESSAGES.print
   // `env` with no command (the inspector reports it with an empty name) and `printenv` list the environment: denied here while the
   // token is set in the same command, and otherwise by the text check, which lets a filtered listing through.
@@ -187,6 +209,7 @@ function judgeHeld(command, seen) {
   // An environment dump is denied when the token is set in the same command or when nothing filters it, and allowed when it is piped to a grep for something that is no secret.
   for (const match of command.matchAll(ENV_DUMP)) {
     const filter = DUMP_FILTER.exec(command.slice(match.index + match[0].length))
+    if (!seen.token && DUMP_COUNT.test(command.slice(match.index + match[0].length))) continue
     if (seen.token || filter === null || SECRETISH.test(filter[1])) return MESSAGES.print
   }
   return null

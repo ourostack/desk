@@ -12,7 +12,7 @@ const kinds = (command) => credentialReads([bash(command)]).map((r) => r.kind)
 
 test("ps with environment flags, in the forms an agent writes them", () => {
   for (const command of ["ps -Eww -p 123", "ps -E", "ps -eEww | grep copilot", "ps eww -p $PPID", "ps aeww", "cd /x && ps -wwE -o command= -p 9"]) assert.deepEqual(kinds(command), ["ps with env flags"], command)
-  for (const command of ["ps aux", "ps -ef", "ps -o ppid= -p 1", "ps -p 1 -o command=", "echo steps -E"]) assert.deepEqual(kinds(command), [], command)
+  for (const command of ["ps aux", "ps -ef", "ps -u arimendelow", "ps -o user -p 123", "ps -p 123 -o etime", "ps -C node", "ps -o ppid= -p 1", "ps -p 1 -o command=", "echo steps -E"]) assert.deepEqual(kinds(command), [], command)
 })
 
 test("sysctl of kern.procargs, by name or by the constant", () => {
@@ -93,7 +93,7 @@ test("a mention of gh auth token is text, and only a gh that is run counts, as t
 
 test("awk and jq that read the environment count", () => {
   for (const command of ["awk 'BEGIN{print ENVIRON[\"GH_TOKEN\"]}'", "jq -n 'env.GH_TOKEN'", "jq -n '$ENV | keys'", "gh api x --jq 'env.GH_TOKEN'"]) assert.deepEqual(kinds(command), ["environment read by awk or jq"], command)
-  for (const command of ["jq .env file.json", "jq '.env' file.json", "awk '{print $1}' f", "gh api x --jq .login"]) assert.deepEqual(kinds(command), [], command)
+  for (const command of ["jq .env file.json", "gh api x --jq '.[] | select(.name==\"env\")'", "gh api x --jq '.[] | select(.name|contains(\"env\"))'", "jq '.env' file.json", "awk '{print $1}' f", "gh api x --jq .login"]) assert.deepEqual(kinds(command), [], command)
 })
 
 test("a finding carries the rule and a shortened, token-redacted command, never a token value", () => {

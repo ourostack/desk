@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { assertActionable } from "./_guard_text.js"
-import { credentialProbeGuardHook, judgeCredentialProbe, judgePowerShell, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/credential-probe-guard.js"
+import { credentialProbeGuardHook, judgeCredentialProbe, judgePowerShell, MESSAGES, STORE_FILE } from "../../../../../plugins/desk/mcp/src/runtime/credential-probe-guard.js"
 import { credentialReads } from "../../../../../evals/boot-acceptance/credentials.mjs"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
@@ -48,7 +48,7 @@ const HARMLESS = [
   "gh auth status", "gh auth status 2>&1; ls -la ~/Desktop", "gh auth status --hostname github.com", "gh auth login --hostname github.com", "gh auth refresh -s workflow",
   "git status", "git push origin main", "gh pr list --repo a/b", "ls hosts.yml", "echo hi", "cat ~/.config/ghostty/config", "git config credential.helper",
   "git commit -m 'document gh auth token usage and hosts.yml'", "gh pr create --body 'use GH_TOKEN=$(gh auth token --user x) git push'", "grep -rn 'gh auth token' docs",
-  "echo 'gh auth token'", "node scripts/test.js \"gh auth token\"", "claude -p \"explain gh auth token\"", "make test-gh-auth-token", "gh auth token --help", "ls ~/.config/gh", "mkdir -p ~/.config/gh", "env | grep -i path", "printenv HOME", "printenv PATH | tr : '\\n'", "env FOO=1 node x.js", "security list-keychains", "git log --oneline",
+  "echo 'gh auth token'", "node scripts/test.js \"gh auth token\"", "claude -p \"explain gh auth token\"", "make test-gh-auth-token", "gh auth token --help", "ls ~/.config/gh", "mkdir -p ~/.config/gh", "env | grep -i path", "ps -u arimendelow", "ps -p 123 -o etime", "gh api x --jq '.[] | select(.name==\"env\")'", "printenv HOME", "printenv PATH | tr : '\\n'", "env FOO=1 node x.js", "security list-keychains", "git log --oneline",
   "git -c user.name=me -c user.email=me@example.com commit -m x", "git config --global user.name me", "git config --get remote.origin.url",
   "GH_TOKEN=$(cat /tmp/tok) git push", "echo $PATH", "git -C /tmp/x fetch", "git --git-dir /tmp/x/.git fetch",
   "git push https://github.com/a/b.git HEAD:main",
@@ -238,7 +238,7 @@ test("the guard and the boot-acceptance check agree: every allowed recipe is no 
     "gh auth status 2>&1; echo \"---\"; ls -la ~/.config/gh/hosts.yml 2>&1",
     "GH_TOKEN=$(gh auth token --user arimendelow --hostname github.com 2>&1) && echo \"Token retrieved (${#GH_TOKEN} chars)\" || echo \"Failed: $GH_TOKEN\"",
     "gh api -H \"Authorization: token $GH_TOKEN\" /user", "gh auth token", "echo $(gh auth token)", "cat ~/.git-credentials", "git credential fill", "gh auth git-credential get", "gh auth status --show-token",
-    "awk 'BEGIN{print ENVIRON[\"X\"]}'", "jq -n 'env.X'", "gh api x --jq 'env.X'", "ps eww -p 1", "cat ~/.config/gh/*", "bash -c 'gh auth token'",
+    "awk 'BEGIN{print ENVIRON[\"X\"]}'", "jq -n 'env.X'", "gh api x --jq 'env.X'", "ps eww -p 1", "ps aux e", "jq '{env, name}' f", "cat ~/.config/gh/*", "bash -c 'gh auth token'",
   ]) assert.ok(credentialReads([{ name: "Bash", input: { command } }]).length > 0, command)
 })
 
@@ -283,7 +283,7 @@ test("what a mention is, and what honest scripts do, is allowed: names, argument
 })
 
 test("environment dumps are denied when they can show the token, and a dump filtered to no secret is allowed", async () => {
-  for (const command of ["env", "printenv", "set", "export -p", "declare -x", "declare", "typeset -p", "env | sort", "env | grep -i token", "env | grep -i secret", "printenv | wc -l", "set | grep -i key", "env | grep .", "cd /tmp && env"]) {
+  for (const command of ["env", "printenv", "set", "export -p", "declare -x", "declare", "typeset -p", "env | sort", "env | grep -i token", "env | grep -i secret", "set | grep -i key", "env | grep .", "cd /tmp && env"]) {
     assert.equal(await sh(command), MESSAGES.print, command)
   }
   for (const command of [
@@ -390,6 +390,48 @@ test("the hook script reaches every rule: one command per rule, denied through t
   // What the prefilter answers at once is still allowed, and so are the allowed shapes it lets through.
   for (const command of ["ls -la", "git status", "env | grep -i path", "GH_TOKEN=$(gh auth token --user a) gh api x | jq .", "export GH_TOKEN=$(gh auth token --user a); cd /tmp && node run.mjs"]) {
     for (const [host, payload] of [["claude", claude("Bash", command)], ["copilot", copilot("bash", command)]]) assert.deepEqual(JSON.parse(run(host, payload).stdout), {}, `${host}: ${command}`)
+  }
+})
+
+test("ps, jq strings, counts, existence tests and a default in the account name are not denied", async () => {
+  for (const command of [
+    "ps -u arimendelow", "ps -o user -p 123", "ps -p 123 -o etime", "ps -C node", "ps -eo pid,etime", "ps -o pid,command -p 1 -p 2", "ps aux", "ps -ef", "ps -e",
+    "gh api x --jq '.[] | select(.name==\"env\")'", "gh api x --jq '.[] | select(.name|contains(\"env\"))'", "gh api x -q '.env.name'", "jq '.env' f.json", "jq '.a.env' f.json", "jq '.[] | select(.k == \"$ENV\")' f.json",
+    "env | wc -l", "printenv | wc -c", "test -f ~/.config/gh/hosts.yml", "[ -e ~/.config/gh/hosts.yml ]", "[ -d ~/.config/gh ]", "[[ -f ~/.git-credentials ]] && echo yes",
+    "GH_TOKEN=$(gh auth token --user \"${GH_USER:-x}\") git push", "GH_TOKEN=$(gh auth token --user \"$ACCOUNT\") git push", "GH_TOKEN=$(gh auth token --user ${GH_USER:-me} --hostname github.com) gh pr list",
+  ]) assert.equal(await sh(command), null, command)
+  for (const command of ["ps e", "ps aux e", "ps eww -p 1", "ps -E", "ps -Eww", "ps axe", "ps -p 1 -E", "jq '{env, name}' f.json", "jq -n 'env'", "jq -n 'env.X'", "jq -n 'env | keys'", "jq -n '$ENV'", "jq 'env[\"X\"]' f", "gh api x --jq '[env.A]'", "env | sort", "test -s ~/.config/gh/hosts.yml; cat ~/.config/gh/hosts.yml"]) {
+    assert.notEqual(await sh(command), null, command)
+  }
+  assert.equal(await sh("GH_TOKEN=$(gh auth token --user \"${GH_USER:-x y}\") git push"), MESSAGES.token, "a default that is not a plain name")
+})
+
+// The prefilter in the .cjs must let through every command the module can deny, or the module's rule never runs (the class of defect found for env, set and ~/.copilot).
+const alternatives = (source) => {
+  const group = /^\(\?:\^\|\\\/\)\(\?:(.*)\)\$\|/u.exec(source)[1]
+  const parts = []
+  let depth = 0, current = ""
+  for (const character of group) {
+    if (character === "(") depth++
+    if (character === ")") depth--
+    if (character === "|" && depth === 0) { parts.push(current); current = "" } else current += character
+  }
+  return [...parts, current]
+}
+const expand = (text) => {
+  const choice = /\(\?:([^()]*\|[^()]*)\)/u.exec(text)
+  return choice === null ? [text.replaceAll("\\", "")] : choice[1].split("|").flatMap((option) => expand(text.replace(choice[0], option)))
+}
+
+test("every credential-store path the module denies reaches it through the real hook, on both hosts", () => {
+  const paths = alternatives(STORE_FILE.source).flatMap(expand)
+  assert.ok(paths.length >= 7, `the module names at least 7 store files (${paths.length})`)
+  assert.ok(paths.includes("gh/hosts.yml") && paths.includes(".copilot/config.json") && paths.includes(".copilot/settings.json") && paths.includes(".claude/.credentials.json"))
+  for (const file of paths) {
+    for (const command of [`cat ~/${file}`, `grep -i auth ~/${file}`, `head -3 $HOME/.x/${file}`]) {
+      assert.equal(JSON.parse(run("claude", claude("Bash", command)).stdout).hookSpecificOutput?.permissionDecisionReason, MESSAGES.store, `claude: ${command}`)
+      assert.equal(JSON.parse(run("copilot", copilot("bash", command)).stdout).permissionDecisionReason, MESSAGES.store, `copilot: ${command}`)
+    }
   }
 })
 
