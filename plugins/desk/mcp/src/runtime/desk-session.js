@@ -47,6 +47,8 @@ const STATUS_BUDGET_MS = 90
 // How long one runtime status computation may run before desk_status stops waiting on it and starts another. It is well above the 2 s the controller status check allows itself, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
 const STATUS_RUN_LIMIT_MS = 10000
 const GATE_WAIT_MS = 10000
+// How long task_focus waits for a session that is still admitting: short, because the call is a declaration, not work.
+const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
 const WRITE_PING_MS = 1000
 const CONTROLLER_FAILURE = /readiness controller|ECONNREFUSED|ECONNRESET|ENOENT|EPIPE|ETIMEDOUT|EADDRINUSE/u
@@ -57,9 +59,31 @@ export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
   "identity_unavailable", "identity_not_emu", "identity_unregistered", "identity_ambiguous",
 ])
 
+/**
+ * The task this session's main agent declared it is working on, held in memory for the life of the session (module
+ * state in the runtime pack can reset when the pack is reloaded; this closure cannot). `get()` is `{ track, slug }` or
+ * null; `set(value)` replaces it (null clears) and counts as a declaration; `declared()` is false until the first one, so
+ * the no-focus hint is repeated on task tool results until the session sets a focus or clears it on purpose. Never
+ * written to disk: the transcript is the record.
+ */
+export function createFocusHolder() {
+  let current = null
+  let declared = false
+  return {
+    get: () => current,
+    set(value) {
+      current = value
+      declared = true
+    },
+    declared: () => declared,
+  }
+}
+
 /** What a tool needs from admission: "status", "doctor", "read", "controller" or "write". */
 export function toolRequirement(name) {
   if (name === "desk_status" || name === "desk_doctor") return name.slice(5)
+  // Focus is held in this session and read from the card on disk: it needs the desk and the runtime, never write authority.
+  if (name === "task_focus") return "focus"
   if (READ_TOOLS.has(name)) return "read"
   if (name === "desk_reindex") return "controller"
   return "write"
@@ -69,7 +93,7 @@ export function toolRequirement(name) {
 export function requirementMet(requirement, context) {
   if (context.launcher?.mode === "refuse") return false
   const readable = Boolean(context.runtimeServer && context.root)
-  if (requirement === "read") return readable
+  if (requirement === "read" || requirement === "focus") return readable
   if (requirement === "controller") return readable && Boolean(context.admission?.controller)
   const authorized = readable && context.authorityAdmitted === true
   if (requirement === "authority") return authorized
@@ -106,6 +130,7 @@ export function createDeskSession(deps) {
   }
   const context = { pendingRepairs: [], exceptions: [], hung: { misses: 0 }, launcher }
   const lexicalViews = new WeakMap()
+  const focus = createFocusHolder()
   let headWatch = null
   let headTimer = null
   let disposed = false
@@ -469,6 +494,7 @@ export function createDeskSession(deps) {
       root: context.root,
       activation: context.activation,
       runtime: context.runtime,
+      focus,
       ...(admissionContext === null ? {} : { admission: admissionContext }),
     }
   }
@@ -499,6 +525,11 @@ export function createDeskSession(deps) {
     const requirement = toolRequirement(name)
     if (requirement === "status") return deskStatus(input, signal)
     if (requirement === "doctor") return deskDoctor(input, signal)
+    // A focus call needs the runtime and a root, never a write: while Desk is still admitting it waits a short, bounded time, like the read tools, then refuses.
+    if (requirement === "focus") {
+      if (!requirementMet(requirement, context)) await admission.refresh({ waitMs: deps.focusWaitMs ?? FOCUS_WAIT_MS })
+      return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null) : refusal(name, requirement)
+    }
     if (!requirementMet(requirement, context)) {
       // A Desk that is still admitting, or one a retry could fix now, gets one bounded chance before the tool is refused.
       await admission.refresh({ waitMs: GATE_WAIT_MS })
@@ -794,6 +825,7 @@ export function createDeskSession(deps) {
 const STATUS_BY_STATE = { no_desk_root: "setup_required" }
 const REQUIREMENT_TEXT = {
   read: "the desk root and the Desk runtime",
+  focus: "the desk root and the Desk runtime",
   controller: "the shared readiness controller",
   write: "admitted write authority and the checkout on its state branch",
 }

@@ -1,5 +1,5 @@
 // Codex CLI deriver: turns one session's rollout files into a local facts
-// object (`desk.factory.local/1`; `jobs: []`, filled in by `binding.js`) plus
+// object (`desk.factory.local/2`; `jobs: []`, filled in by `binding.js`) plus
 // in-memory binding events, in the same shape the Claude and Copilot derivers
 // produce. A session is the root thread; every spawned child thread has its
 // own rollout file, and the tree is rebuilt from each child's `session_meta`.
@@ -66,7 +66,7 @@
 //     `reasoning_output_tokens` is part of `output_tokens`, so `input` and
 //     `output` exclude them.
 //   - Binding events, as the Claude deriver's: `deskToolCalls` (an MCP call
-//     named `mcp__*desk*__task_create|task_update|task_archive`, whether the
+//     named `mcp__*desk*__task_create|task_update|task_archive|task_signoff`, whether the
 //     rollout stores the name joined or as namespace plus name),
 //     `fileWrites` (`*** Add File`, `*** Update File` and `*** Move to` paths
 //     of a successful `apply_patch`), `shellGitCommits` (successful
@@ -75,6 +75,11 @@
 //     messages, through `./desk-task-line.js`) and PR refs (only from a
 //     successful `gh pr create` whose output holds the PR URL, with
 //     `created: true` for the worker that ran it, which outranks any other).
+//     The same session also yields the in-memory declared-focus events (never
+//     written to facts): `focusCalls` (a successful `task_focus`), `spawns` (each
+//     child with its parent, its `spawn_agent` call's time, else its own first
+//     record's, and its task), `prRefs`, and `paths` on each `shellGitCommits`
+//     entry plus shell redirect writes and `desk_save` paths in `fileWrites`.
 //   - A child rollout's records below its `subagent_history_start_ordinal`
 //     are inherited context and skipped, so a parent's calls are not counted
 //     twice.
@@ -94,15 +99,15 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
 
-import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, sanitizePlugins, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, sanitizePlugins, shellBinding, usageAbsent, usageOrNull, withRequestedModel } from "./derive-common.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
+import { hostFlagsFor } from "./host-flags.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject } from "./schema.js"
-import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
 
 const HOST = "codex-cli"
-const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive)$/u
+const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save|task_signoff)$/u
 const PR_URL_PATTERN = /github\.com\/([^/\s]+\/[^/\s]+?)(?:\.git)?\/pull\/(\d+)/u
 const PR_CREATE_PATTERN = /\bgh\s+pr\s+create\b/u
 const PATCH_PATH_PATTERN = /^\*\*\* (?:Add File|Update File|Move to): (.+)$/gmu
@@ -120,8 +125,6 @@ const RUNNING_HEADER = /^Process running with session ID /mu
 // Small, defensive helpers. None of these ever throw on an unexpected shape.
 // ---------------------------------------------------------------------------
 
-// A usage field the log leaves out counts as 0; one it carries that is no safe non-negative integer is unknown (`null`).
-const usageCount = (value) => (value === undefined || value === null ? 0 : countOrNull(value))
 const matching = (pattern, ...candidates) => candidates.find((value) => typeof value === "string" && pattern.test(value)) ?? null
 const validModel = (value) => typeof value === "string" && PATTERNS.modelId.test(value)
 
@@ -234,6 +237,7 @@ function metaOfFirstLine(text) {
 
 async function streamJsonl(file, onLine) {
   let lastLineFailed = false
+  let dropped = false
   const rl = createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity })
   for await (const raw of rl) {
     if (raw.trim().length === 0) continue
@@ -243,11 +247,13 @@ async function streamJsonl(file, onLine) {
       lastLineFailed = false
     } catch {
       lastLineFailed = true
+      dropped = true
       continue
     }
     if (isPlainObject(parsed)) onLine(parsed)
+    else dropped = true
   }
-  return { truncated: lastLineFailed }
+  return { truncated: lastLineFailed, dropped }
 }
 
 // ---------------------------------------------------------------------------
@@ -319,8 +325,8 @@ async function findChildren(root, sessionsDir, lastAt, limit = LIMITS.agents) {
 // ---------------------------------------------------------------------------
 
 function createThreadProcessor({ agentIndex, meta }) {
-  const pendingCalls = new Map() // call id -> { name, kind, start, isSpawn, isPrCreate, cwds, paths, desk }
-  const spawnByCall = new Map() // spawn call id -> { task, agentType }
+  const pendingCalls = new Map() // call id -> { name, kind, start, isSpawn, isPrCreate, commits, paths, desk, focus }
+  const spawnByCall = new Map() // spawn call id -> { at, task, agentType, model }
   const spawnedChildren = new Map() // child thread id -> { task, agentType }
   const lastFinishedByKind = new Map() // kind -> { end, outcome, retried }
   const modelCounts = new Map()
@@ -333,6 +339,7 @@ function createThreadProcessor({ agentIndex, meta }) {
   const fileWrites = []
   const deskToolCalls = []
   const shellGitCommits = []
+  const focusCalls = []
   let previousTotal = { input: 0, cached: 0, write: 0, output: 0, reasoning: 0 }
   let currentModel = null
   let currentCwd = meta.cwd
@@ -350,6 +357,8 @@ function createThreadProcessor({ agentIndex, meta }) {
   let hadUnreadableTime = false
   let invalidModelSeen = false
   let tokensUnreadable = false
+  const absentKeys = new Set()
+  let tokenSamples = 0
 
   function startCall({ callId, name, args, input, ts }) {
     if (typeof callId !== "string") {
@@ -362,8 +371,10 @@ function createThreadProcessor({ agentIndex, meta }) {
     const patchText = [input, args.input, command].find((value) => typeof value === "string") ?? ""
     const isPatch = name === "apply_patch" || /^\s*apply_patch\b/u.test(command ?? "")
     const isSpawn = name === "spawn_agent"
-    if (isSpawn) spawnByCall.set(callId, { task: parseDeskTaskLine(args.message), agentType: matching(PATTERNS.agentType, args.agent_type), model: matching(PATTERNS.modelId, args.model) })
-    const cwds = kind === "shell" && command !== undefined ? gitCommitCwds({ command, cwd, home: os.homedir() }) : []
+    if (isSpawn) spawnByCall.set(callId, { at: ts, task: parseDeskTaskLine(args.message), agentType: matching(PATTERNS.agentType, args.agent_type), model: matching(PATTERNS.modelId, args.model) })
+    // The command is matched here and dropped; only paths and directories are kept.
+    const shell = kind === "shell" && command !== undefined ? shellBinding({ command, cwd, home: os.homedir() }) : { commits: [], writes: [] }
+    const deskVerb = DESK_CALL_PATTERN.exec(name)?.[1]
     const previous = lastFinishedByKind.get(kind)
     if (previous && previous.outcome !== "ok" && !previous.retried && ts > previous.end) {
       toolRetries += 1
@@ -375,11 +386,12 @@ function createThreadProcessor({ agentIndex, meta }) {
       start: ts,
       isSpawn,
       isPrCreate: command !== undefined && PR_CREATE_PATTERN.test(command),
-      cwds,
-      paths: isPatch ? patchPaths(patchText, cwd) : [],
-      desk: DESK_CALL_PATTERN.test(name)
-        ? { at: ts, name, track: args.track, slug: args.slug, person: args.person ?? null, status: args.status ?? null }
+      commits: shell.commits,
+      paths: [...(isPatch ? patchPaths(patchText, cwd) : []), ...shell.writes, ...(deskVerb === "desk_save" ? deskSavePaths(args) : [])],
+      desk: deskVerb !== undefined && deskVerb !== "task_focus" && deskVerb !== "desk_save"
+        ? { at: ts, name, track: args.track, slug: args.slug, person: args.person ?? null, ...deskCallStatus(args) }
         : null,
+      focus: deskVerb === undefined ? null : declaredFocus(deskVerb, args),
     })
   }
 
@@ -402,12 +414,13 @@ function createThreadProcessor({ agentIndex, meta }) {
     lastFinishedByKind.set(pending.kind, { end: ts, outcome, retried: false })
     if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, agent: agentIndex, ok: credited })
     if (!credited) return
+    if (pending.focus !== null) focusCalls.push({ agent: agentIndex, at: pending.start, ...pending.focus })
     // A creation needs a recognised exit code of 0: a failed `gh pr create` can still print an existing PR URL.
     if (pending.isPrCreate && code === 0) {
       const ref = prRef(text, agentIndex)
       if (ref !== null) prRefs.push({ ...ref, at: ts })
     }
-    for (const cwd of pending.cwds) shellGitCommits.push({ start: pending.start, end: ts, cwd, agent: agentIndex })
+    for (const { cwd, paths } of pending.commits) shellGitCommits.push({ start: pending.start, end: ts, cwd, paths, agent: agentIndex })
     for (const file of pending.paths) fileWrites.push({ at: pending.start, path: file, agent: agentIndex })
   }
 
@@ -433,27 +446,27 @@ function createThreadProcessor({ agentIndex, meta }) {
     const total = info?.total_token_usage
     if (!isPlainObject(total)) return
     // An unreadable field keeps its previous baseline, so a later readable total carries the whole increase; it is flagged.
-    const raw = {
-      input: usageCount(total.input_tokens),
-      cached: usageCount(total.cached_input_tokens),
-      write: usageCount(total.cache_write_input_tokens),
-      output: usageCount(total.output_tokens),
-      reasoning: usageCount(total.reasoning_output_tokens),
-    }
+    tokenSamples += 1
+    const sent = { input: total.input_tokens, cached: total.cached_input_tokens, write: total.cache_write_input_tokens, output: total.output_tokens, reasoning: total.reasoning_output_tokens }
+    const raw = Object.fromEntries(Object.entries(sent).map(([key, value]) => [key, usageOrNull(value)]))
+    // A counter the log leaves out is unknown, not 0: its total stays `null` and tokens say `field_absent`. A malformed one is `source_unreadable`.
+    const absent = Object.keys(sent).filter((key) => usageAbsent(sent[key]))
+    for (const key of absent) absentKeys.add(key)
     const current = Object.fromEntries(Object.keys(raw).map((key) => [key, raw[key] ?? previousTotal[key]]))
-    if (Object.values(raw).includes(null)) tokensUnreadable = true
+    if (Object.keys(raw).some((key) => raw[key] === null && !absent.includes(key))) tokensUnreadable = true
     // A total that went down is a new baseline, not negative usage.
     const base = current.input + current.output < previousTotal.input + previousTotal.output ? { input: 0, cached: 0, write: 0, output: 0, reasoning: 0 } : previousTotal
-    const delta = Object.fromEntries(Object.keys(current).map((key) => [key, Math.max(0, current[key] - base[key])]))
+    const delta = Object.fromEntries(Object.keys(current).map((key) => [key, absent.includes(key) ? null : Math.max(0, current[key] - base[key])]))
     previousTotal = current
     // No readable increase is no new request.
-    if (delta.input === 0 && delta.output === 0) return
+    if ((delta.input ?? 0) === 0 && (delta.output ?? 0) === 0) return
     if (currentModel === null) {
       invalidModelSeen = true
       return
     }
-    const entry = usage.get(currentModel) ?? { requests: 0, input: 0, cached: 0, write: 0, output: 0, reasoning: 0 }
+    const entry = usage.get(currentModel) ?? { requests: 0, input: 0, cached: 0, write: 0, output: 0, reasoning: 0, absent: new Set() }
     entry.requests += 1
+    for (const key of absent) entry.absent.add(key)
     for (const key of Object.keys(delta)) entry[key] = addNullable(entry[key], delta[key])
     usage.set(currentModel, entry)
   }
@@ -510,8 +523,8 @@ function createThreadProcessor({ agentIndex, meta }) {
         : modelOrder.reduce((best, candidate) => (modelCounts.get(candidate) > modelCounts.get(best) ? candidate : best), modelOrder[0])
       return {
         meta, model, firstModel: modelOrder[0] ?? null, usage, intervals, toolCallCounts, toolFailureCounts, toolRetries, compactions,
-        prRefs, fileWrites, deskToolCalls, shellGitCommits, spawnedChildren, firstPromptTask, earliest, latest,
-        hadUnresolvedCall, hadUnresolvedTurn, hadUnreadableTime, invalidModelSeen, tokensUnreadable,
+        prRefs, fileWrites, deskToolCalls, shellGitCommits, focusCalls, spawnedChildren, firstPromptTask, earliest, latest,
+        hadUnresolvedCall, hadUnresolvedTurn, hadUnreadableTime, invalidModelSeen, tokensUnreadable, absentKeys, tokenSamples,
       }
     },
   }
@@ -578,7 +591,9 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
   const safeEndReason = endReason === null || ENUMS.endReason.includes(endReason) ? endReason : null
 
   const rootProcessor = createThreadProcessor({ agentIndex: 0, meta: { ...rootMeta, startOrdinal: null } })
-  let truncatedAny = (await streamJsonl(rolloutPath, (line) => rootProcessor.pushLine(line))).truncated
+  const rootRead = await streamJsonl(rolloutPath, (line) => rootProcessor.pushLine(line))
+  let truncatedAny = rootRead.truncated
+  let droppedAny = rootRead.dropped
   const rootResult = rootProcessor.finish()
 
   // Children are numbered in start order, so a run's numbering does not depend on folder listing order.
@@ -588,13 +603,16 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
   const numberOf = new Map([[rootMeta.id, 0]])
   for (const { file, meta } of joined) {
     const processor = createThreadProcessor({ agentIndex: results.length, meta })
-    truncatedAny = (await streamJsonl(file, (line) => processor.pushLine(line))).truncated || truncatedAny
+    const read = await streamJsonl(file, (line) => processor.pushLine(line))
+    truncatedAny = read.truncated || truncatedAny
+    droppedAny = read.dropped || droppedAny
     numberOf.set(meta.id, results.length)
     results.push(processor.finish())
   }
 
   const agents = []
   const spawnTasks = []
+  const spawns = []
   const intervals = []
   for (const [n, result] of results.entries()) {
     const agent = { n, parent: null, model: result.model }
@@ -608,6 +626,7 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
       if (agentType !== null) agent.agent_type = agentType
       const task = spawn?.task ?? result.firstPromptTask
       // The child's own span is the spawning call's subagent interval on its parent's clock.
+      spawns.push({ agent: n, parent, at: spawn?.at ?? result.earliest, task })
       if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug, start: result.earliest, end: result.latest })
       intervals.push({ kind: "subagent", agent: parent, start: result.earliest, end: result.latest })
     }
@@ -630,13 +649,32 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
   const unavailable = []
   if (safeEndReason === null) addUnavailable(unavailable, "ended_at", "session_open")
   const models = aggregateModels(results)
-  if (models.length === 0 || results.some((result) => result.invalidModelSeen)) addUnavailable(unavailable, "models", "source_unreadable")
-  if (results.some((result) => result.firstModel !== null && result.usage.size === 0) || results.some((result) => result.tokensUnreadable) || models.some(({ tokens }) => Object.values(tokens).includes(null))) addUnavailable(unavailable, "tokens", "source_unreadable")
+  const absentKeys = new Set(results.flatMap((result) => [...result.absentKeys]))
+  const absentById = new Map()
+  for (const result of results) {
+    for (const [id, entry] of result.usage) absentById.set(id, new Set([...(absentById.get(id) ?? []), ...entry.absent]))
+  }
+  // A null total is explained by an absent counter when one of the counters it is built from was absent; any other null is an unreadable or overflowing sum.
+  const sources = { input: ["input", "cached"], output: ["output", "reasoning"], cache_read: ["cached"], cache_write: ["write"], reasoning: ["reasoning"] }
+  const unexplainedNull = models.some(({ id, tokens }) => Object.entries(tokens).some(([key, value]) => value === null && !sources[key].some((source) => absentById.get(id).has(source))))
+  if (results.some((result) => result.invalidModelSeen)) addUnavailable(unavailable, "models", "source_unreadable")
+  // A log that lost lines or records and ended with no models did not leave the fields out: say it is unreadable.
+  if (models.length === 0 && (droppedAny || results.some((result) => result.hadUnreadableTime))) {
+    for (const field of ["models", "tokens", "requests"]) addUnavailable(unavailable, field, "source_unreadable")
+  }
+  if (absentKeys.size > 0) addUnavailable(unavailable, "tokens", "field_absent")
+  // Samples were read but none counted for a model: unreadable. No sample at all is absent, which `flagEmptyUsage` says below.
+  if (results.some((result) => result.usage.size === 0 && result.tokenSamples > 0) || results.some((result) => result.tokensUnreadable) || unexplainedNull) addUnavailable(unavailable, "tokens", "source_unreadable")
+  flagEmptyUsage(unavailable, models)
+  for (const { field, reason } of hostFlagsFor(HOST)) addUnavailable(unavailable, field, reason)
   addUnavailable(unavailable, "permission_waits", "host_does_not_record")
   addUnavailable(unavailable, "api_retries", "host_does_not_record")
   addUnavailable(unavailable, "ci_runs", "not_collected_in_slice_1")
   addUnavailable(unavailable, "commits", "host_does_not_record")
-  if (capped) addUnavailable(unavailable, "turns", "capped")
+  if (capped) {
+    addUnavailable(unavailable, "turns", "capped")
+    addUnavailable(unavailable, "agents", "capped")
+  }
   if (truncatedAny) addUnavailable(unavailable, "turns", "log_truncated")
   if (results.some((result) => result.hadUnresolvedTurn)) addUnavailable(unavailable, "turns", safeEndReason === null ? "session_open" : "log_truncated")
   if (results.some((result) => result.hadUnresolvedCall)) addUnavailable(unavailable, "tool_durations", safeEndReason === null ? "session_open" : "log_truncated")
@@ -687,6 +725,9 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
     shellGitCommits: results.flatMap((result) => result.shellGitCommits),
     nativeCommitShas: [],
     spawnTasks,
+    focusCalls: results.flatMap((result) => result.focusCalls),
+    spawns,
+    prRefs: results.flatMap((result) => result.prRefs).map(({ agent, at, repo, created }) => ({ agent, at, repo, created })),
   }
 
   return { facts, events }

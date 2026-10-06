@@ -21,8 +21,10 @@ import {
   PATTERNS,
   LIMITS,
   LOCAL_SCHEMA,
+  LOCAL_SCHEMAS,
   __SPECS__,
 } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { CATCH_POINTS, OUTCOME_STATES, REFUSAL_REASONS, RETURN_REASONS } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
@@ -90,7 +92,7 @@ test("a non-string value in a timestamp-checked field fails with type", () => {
 // --- One violation per value-rule-table row -------------------------------
 
 const SIMPLE_VIOLATIONS = [
-  { name: "schema must match the literal pattern", keys: ["schema"], value: `desk.factory.local/2 ${SENTINEL}`, code: "pattern", path: "schema" },
+  { name: "schema must match the literal pattern", keys: ["schema"], value: `desk.factory.local/3 ${SENTINEL}`, code: "pattern", path: "schema" },
   { name: "the retired M3-1 schema value is refused", keys: ["schema"], value: "desk.factory.facts/1", code: "pattern", path: "schema" },
   { name: "the published schema value is refused by the local gate", keys: ["schema"], value: "desk.factory.published/1", code: "pattern", path: "schema" },
   { name: "session.host must be a known host", keys: ["session", "host"], value: SENTINEL, code: "enum", path: "session.host" },
@@ -240,9 +242,58 @@ test("the local schema has no contributor: a contributor key is an unknown key a
 })
 
 test("LOCAL_SCHEMA is the local schema value the golden fixture carries", () => {
-  assert.equal(LOCAL_SCHEMA, "desk.factory.local/1")
+  assert.equal(LOCAL_SCHEMA, "desk.factory.local/2")
   assert.equal(golden().schema, LOCAL_SCHEMA)
   assert.ok(PATTERNS.schema.test(LOCAL_SCHEMA))
+  assert.deepEqual(LOCAL_SCHEMAS, ["desk.factory.local/1", LOCAL_SCHEMA])
+})
+
+test("local facts accept schema /1 and /2 and refuse /3", () => {
+  for (const schema of ["desk.factory.local/1", "desk.factory.local/2"]) {
+    assert.equal(validateLocalFacts(setPath(golden(), ["schema"], schema)).ok, true, schema)
+  }
+  assertSingle(validateLocalFacts(setPath(golden(), ["schema"], `desk.factory.local/3 ${SENTINEL}`)), "pattern", "schema")
+  assertSingle(validateLocalFacts(setPath(golden(), ["schema"], "desk.factory.local/3")), "pattern", "schema")
+})
+
+const NEW_FIELDS = ["compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments"]
+const NEW_REASONS = ["field_absent", "host_records_partly", "withheld_public"]
+
+test("every new unavailable field and reason is accepted in local facts", () => {
+  for (const field of NEW_FIELDS) {
+    for (const reason of NEW_REASONS) {
+      const value = golden()
+      value.unavailable = [{ field, reason }]
+      assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] }, `${field}/${reason}`)
+    }
+  }
+})
+
+test("a sentinel in an unavailable field or reason is refused as an enum error and never echoed", () => {
+  for (const key of ["field", "reason"]) {
+    const value = golden()
+    value.unavailable = [{ field: "tokens", reason: "capped", [key]: SENTINEL }]
+    const result = validateLocalFacts(value)
+    assertSingle(result, "enum", `unavailable.0.${key}`)
+    assertNoLeak(result)
+  }
+})
+
+test("LIMITS.unavailable is at least fields times reasons so no entry set can overflow", () => {
+  assert.equal(LIMITS.unavailable, ENUMS.publishedUnavailableField.length * ENUMS.unavailableReason.length)
+  assert.ok(LIMITS.unavailable >= ENUMS.unavailableField.length * ENUMS.unavailableReason.length)
+})
+
+test("publishedUnavailableField is the local fields plus job_offsets, existing order kept", () => {
+  assert.deepEqual(ENUMS.publishedUnavailableField, [...ENUMS.unavailableField, "job_offsets"])
+  assert.deepEqual(ENUMS.unavailableField.slice(0, 12), [
+    "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
+    "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+  ])
+})
+
+test("writers emit the current schema constants (local golden)", () => {
+  assert.equal(GOLDEN.schema, LOCAL_SCHEMA)
 })
 
 test("the retired M3-1 alias names are no longer exported (M3-12)", async () => {
@@ -525,7 +576,7 @@ test("exactly 1000 transitions in one job is accepted", () => {
   assert.equal(validateLocalFacts(value).ok, true)
 })
 
-test("more than 64 unavailable entries fails with too_many (sentinel planted in the unread items, no leak)", () => {
+test("more than LIMITS.unavailable entries fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
   value.unavailable = fillWithSentinel({ field: SENTINEL, reason: "host_does_not_record" }, LIMITS.unavailable + 1)
   const result = validateLocalFacts(value)
@@ -533,7 +584,7 @@ test("more than 64 unavailable entries fails with too_many (sentinel planted in 
   assertNoLeak(result)
 })
 
-test("exactly 64 unavailable entries is accepted", () => {
+test("exactly LIMITS.unavailable entries is accepted", () => {
   const value = golden()
   value.unavailable = new Array(LIMITS.unavailable).fill(value.unavailable[0])
   assert.equal(validateLocalFacts(value).ok, true)
@@ -715,15 +766,22 @@ test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself
     unavailableField: [
       "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
       "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+      "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
+      "human_turns",
     ],
     publishedUnavailableField: [
       "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
-      "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at", "job_offsets",
+      "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
+      "compaction_waits", "agents", "prs", "reasoning_tokens", "entrypoint", "tool_outcomes", "job_segments",
+      "human_turns", "job_offsets",
     ],
     unavailableReason: [
       "host_does_not_record", "log_missing", "log_truncated", "session_open",
       "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
+      "field_absent", "host_records_partly", "withheld_public",
     ],
+    sizeClass: ["none", "xs", "s", "m", "l", "xl"],
+    turnBasis: ["first", "after_stop", "mid_turn"],
   }
   assert.deepEqual(Object.keys(ENUMS).sort(), Object.keys(table).sort())
   for (const [name, expected] of Object.entries(table)) {
@@ -783,4 +841,226 @@ test("refs.prs[].agent outside agents[] fails with agent_unknown, and a negative
 test("an unsorted jobs[].agents is refused with order (canonical form is ascending)", () => {
   assertSingle(validateLocalFacts(setPath(golden(), ["jobs", 0, "agents"], [1, 0])), "order", "jobs.0.agents")
   assert.equal(validateLocalFacts(setPath(golden(), ["jobs", 0, "agents"], [0, 1])).ok, true)
+})
+
+// --- outcomes: the outcome record of each task the session touched ---------
+
+const OUTCOME = {
+  job: "1a2b3c4d5e6f708192a3b4c5d6e7f809",
+  rev: 3,
+  state: "accepted",
+  verified: true,
+  reason: null,
+  deliveries: 1,
+  delivered_at: "2026-09-25T09:00:00.000Z",
+  signed_at: "2026-09-25T09:20:00.000Z",
+  observed_at: "2026-09-25T09:30:00.000Z",
+}
+
+test("local facts without outcomes are valid and facts with a well-formed list are valid", () => {
+  const without = golden()
+  delete without.outcomes
+  assert.deepEqual(validateLocalFacts(without), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts({ ...without, outcomes: [] }), { ok: true, errors: [] })
+  const states = ["not_delivered", "not_recorded", "delivered_unsigned", "accepted", "refused", "reopened"]
+  const entries = states.map((state, index) => ({ ...OUTCOME, job: index.toString(16).padStart(32, "0"), state, verified: state === "refused" ? false : null, reason: state === "refused" ? "defect" : null, signed_at: null, delivered_at: null }))
+  assert.deepEqual(validateLocalFacts({ ...without, outcomes: [OUTCOME, ...entries.map((entry, index) => ({ ...entry, job: `f${index}`.padEnd(32, "0") }))] }), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts(golden()), { ok: true, errors: [] }, "the golden carries outcomes")
+  assert.equal(Array.isArray(GOLDEN.outcomes), true)
+  assert.equal(LIMITS.outcomes, 256)
+  assert.equal(typeof __SPECS__.outcome.state.check, "function")
+})
+
+for (const [name, change, code, where] of [
+  ["an unknown state", { state: `${SENTINEL}-state` }, "enum", "outcomes.0.state"],
+  ["an unknown reason", { reason: SENTINEL }, "enum", "outcomes.0.reason"],
+  ["a verified that is not a boolean or null", { verified: SENTINEL }, "type", "outcomes.0.verified"],
+  ["a negative rev", { rev: -1 }, "integer", "outcomes.0.rev"],
+  ["a fractional deliveries", { deliveries: 1.5 }, "integer", "outcomes.0.deliveries"],
+  ["a job that is not a job ID", { job: SENTINEL }, "pattern", "outcomes.0.job"],
+  ["a time that is not a timestamp", { signed_at: "2026-09-25" }, "pattern", "outcomes.0.signed_at"],
+  ["a time that is no real instant", { delivered_at: "2026-99-99T99:99:99.999Z" }, "pattern", "outcomes.0.delivered_at"],
+  ["a number for a time", { observed_at: 5 }, "type", "outcomes.0.observed_at"],
+]) {
+  test(`an outcome with ${name} is rejected with ${code} at its path and no value`, () => {
+    const facts = { ...golden(), outcomes: [{ ...OUTCOME, ...change }] }
+    const result = validateLocalFacts(facts)
+    assertSingle(result, code, where)
+    assertNoLeak(result)
+  })
+}
+
+test("an outcome with an unknown key or a missing key is rejected with a path and no value", () => {
+  const extra = validateLocalFacts({ ...golden(), outcomes: [{ ...OUTCOME, [`${SENTINEL}-key`]: SENTINEL }] })
+  assertSingle(extra, "unknown_key", "outcomes.0")
+  assertNoLeak(extra)
+  for (const key of Object.keys(OUTCOME)) {
+    const { [key]: _gone, ...rest } = OUTCOME
+    assertSingle(validateLocalFacts({ ...golden(), outcomes: [rest] }), "missing", `outcomes.0.${key}`)
+  }
+  assertSingle(validateLocalFacts({ ...golden(), outcomes: [null] }), "type", "outcomes.0")
+  assertSingle(validateLocalFacts({ ...golden(), outcomes: "none" }), "type", "outcomes")
+})
+
+test("two outcomes for one job are rejected as a duplicate, and a list over the cap with too_many", () => {
+  assertSingle(validateLocalFacts({ ...golden(), outcomes: [OUTCOME, { ...OUTCOME, rev: 4 }] }), "duplicate", "outcomes.1.job")
+  const many = Array.from({ length: LIMITS.outcomes + 1 }, (_, index) => ({ ...OUTCOME, job: index.toString(16).padStart(32, "0") }))
+  assertSingle(validateLocalFacts({ ...golden(), outcomes: many }), "too_many", "outcomes")
+  assert.equal(validateLocalFacts({ ...golden(), outcomes: many.slice(0, LIMITS.outcomes) }).ok, true)
+})
+
+test("the schema accepts exactly the outcome states and refusal reasons outcome.js defines", () => {
+  const facts = (change) => ({ ...golden(), outcomes: [{ ...OUTCOME, ...change }] })
+  for (const state of OUTCOME_STATES) assert.equal(validateLocalFacts(facts({ state })).ok, true, state)
+  for (const reason of REFUSAL_REASONS) assert.equal(validateLocalFacts(facts({ reason })).ok, true, reason)
+  assert.equal(validateLocalFacts(facts({ state: "signed" })).ok, false)
+  assert.equal(validateLocalFacts(facts({ reason: "nope" })).ok, false)
+})
+
+// --- outcomes: the record's start and its returns ---------------------------
+
+const RETURN = { reason: "agent_error", caught: "at_review", counts: true, refusal: null, refusal_verified: null }
+const FULL = { ...OUTCOME, since: "created", first_validating_at: "2026-09-25T08:40:00.000Z", first_delivered_at: "2026-09-25T09:00:00.000Z", returns: [RETURN] }
+const outcomeFacts = (entry) => ({ ...golden(), outcomes: [entry] })
+
+test("an outcome entry without the new keys stays valid, and one with every new key is valid", () => {
+  assert.deepEqual(validateLocalFacts(outcomeFacts(OUTCOME)), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts(outcomeFacts(FULL)), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts(outcomeFacts({ ...FULL, since: "adopted", returns: [], returns_truncated: true, returns_unreadable: 2 })), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts(outcomeFacts({ ...OUTCOME, since: null, first_validating_at: null, first_delivered_at: null })), { ok: true, errors: [] })
+  const withRefusal = { ...RETURN, caught: "after_delivery", refusal: "defect", refusal_verified: false }
+  assert.deepEqual(validateLocalFacts(outcomeFacts({ ...FULL, returns: [withRefusal, { ...withRefusal, refusal_verified: null }, { ...withRefusal, refusal_verified: true }] })), { ok: true, errors: [] })
+  assert.equal(LIMITS.returns, 32)
+  assert.equal(typeof __SPECS__.return.reason.check, "function")
+})
+
+for (const [name, change, code, where] of [
+  ["a reason off the list", { returns: [{ ...RETURN, reason: `${SENTINEL}-reason` }] }, "enum", "outcomes.0.returns.0.reason"],
+  ["a catch point off the list", { returns: [{ ...RETURN, caught: `${SENTINEL}-point` }] }, "enum", "outcomes.0.returns.0.caught"],
+  ["a refusal off the list", { returns: [{ ...RETURN, refusal: SENTINEL }] }, "enum", "outcomes.0.returns.0.refusal"],
+  ["a counts flag that is not a boolean", { returns: [{ ...RETURN, counts: SENTINEL }] }, "type", "outcomes.0.returns.0.counts"],
+  ["a refusal_verified that is not a boolean or null", { returns: [{ ...RETURN, refusal_verified: SENTINEL }] }, "type", "outcomes.0.returns.0.refusal_verified"],
+  ["a since off the list", { since: SENTINEL }, "enum", "outcomes.0.since"],
+  ["a first_validating_at that is a date", { first_validating_at: "2026-09-25" }, "pattern", "outcomes.0.first_validating_at"],
+  ["a first_delivered_at that is a number", { first_delivered_at: 5 }, "type", "outcomes.0.first_delivered_at"],
+  ["a returns_truncated of false", { returns_truncated: false }, "type", "outcomes.0.returns_truncated"],
+  ["a negative returns_unreadable", { returns_unreadable: -1 }, "integer", "outcomes.0.returns_unreadable"],
+  ["returns that is not a list", { returns: SENTINEL }, "type", "outcomes.0.returns"],
+  ["a return that is not an object", { returns: [SENTINEL] }, "type", "outcomes.0.returns.0"],
+  ["an unknown key in a return", { returns: [{ ...RETURN, [`${SENTINEL}-key`]: SENTINEL }] }, "unknown_key", "outcomes.0.returns.0"],
+]) {
+  test(`an outcome with ${name} is rejected with ${code} at its path and no value`, () => {
+    const result = validateLocalFacts(outcomeFacts({ ...FULL, ...change }))
+    assertSingle(result, code, where)
+    assertNoLeak(result)
+  })
+}
+
+test("a return missing a key is rejected, and more than 32 returns are too_many", () => {
+  for (const key of Object.keys(RETURN)) {
+    const { [key]: _gone, ...rest } = RETURN
+    assertSingle(validateLocalFacts(outcomeFacts({ ...FULL, returns: [rest] })), "missing", `outcomes.0.returns.0.${key}`)
+  }
+  assert.equal(validateLocalFacts(outcomeFacts({ ...FULL, returns: Array.from({ length: 32 }, () => RETURN) })).ok, true)
+  assertSingle(validateLocalFacts(outcomeFacts({ ...FULL, returns: Array.from({ length: 33 }, () => RETURN) })), "too_many", "outcomes.0.returns")
+})
+
+test("the schema accepts exactly the return reasons and catch points outcome.js defines", () => {
+  const facts = (change) => outcomeFacts({ ...FULL, returns: [{ ...RETURN, ...change }] })
+  for (const reason of RETURN_REASONS) assert.equal(validateLocalFacts(facts({ reason })).ok, true, reason)
+  for (const caught of CATCH_POINTS) assert.equal(validateLocalFacts(facts({ caught })).ok, true, caught)
+  assert.equal(validateLocalFacts(facts({ reason: "nope" })).ok, false)
+  assert.equal(validateLocalFacts(facts({ caught: "nope" })).ok, false)
+})
+
+test("a local returns_unreadable of 0 is rejected: it is written only when above 0", () => {
+  assertSingle(validateLocalFacts(outcomeFacts({ ...FULL, returns_unreadable: 0 })), "integer", "outcomes.0.returns_unreadable")
+  assert.equal(validateLocalFacts(outcomeFacts({ ...FULL, returns_unreadable: 1 })).ok, true)
+})
+
+// --- human_turns: one content-free entry per human prompt -------------------
+
+const TURN = { at: "2026-09-25T10:00:00.000Z", basis: "after_stop", window_ms: 3000, prompt_class: "xs", output_class: "l" }
+
+test("facts without human_turns are valid, and a turn with an extra key or an unknown class is rejected", () => {
+  const without = golden()
+  delete without.human_turns
+  assert.deepEqual(validateLocalFacts(without), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts({ ...without, human_turns: [] }), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts({ ...without, human_turns: [TURN, { ...TURN, basis: "first", window_ms: null, prompt_class: "none", output_class: "xl" }] }), { ok: true, errors: [] })
+  const extra = validateLocalFacts({ ...without, human_turns: [{ ...TURN, [`${SENTINEL}-key`]: SENTINEL }] })
+  assertSingle(extra, "unknown_key", "human_turns.0")
+  assertNoLeak(extra)
+  const cases = [
+    ["an unknown prompt class", { prompt_class: SENTINEL }, "enum", "human_turns.0.prompt_class"],
+    ["an unknown output class", { output_class: `${SENTINEL} text` }, "enum", "human_turns.0.output_class"],
+    ["an unknown basis", { basis: SENTINEL }, "enum", "human_turns.0.basis"],
+    ["a text in the window", { window_ms: SENTINEL }, "integer", "human_turns.0.window_ms"],
+    ["a negative window", { window_ms: -1 }, "integer", "human_turns.0.window_ms"],
+    ["a fractional window", { window_ms: 1.5 }, "integer", "human_turns.0.window_ms"],
+    ["a time that is not a timestamp", { at: SENTINEL }, "pattern", "human_turns.0.at"],
+  ]
+  for (const [name, change, code, where] of cases) {
+    const result = validateLocalFacts({ ...without, human_turns: [{ ...TURN, ...change }] })
+    assertSingle(result, code, where)
+    assertNoLeak(result)
+    assert.ok(name)
+  }
+  for (const key of Object.keys(TURN)) {
+    const { [key]: _gone, ...rest } = TURN
+    assertSingle(validateLocalFacts({ ...without, human_turns: [rest] }), "missing", `human_turns.0.${key}`)
+  }
+  assertSingle(validateLocalFacts({ ...without, human_turns: SENTINEL }), "type", "human_turns")
+})
+
+test("more than LIMITS.humanTurns entries fails with too_many, and exactly the limit is accepted", () => {
+  const base = golden()
+  delete base.human_turns
+  assert.deepEqual(validateLocalFacts({ ...base, human_turns: new Array(LIMITS.humanTurns).fill(TURN) }), { ok: true, errors: [] })
+  const over = validateLocalFacts({ ...base, human_turns: new Array(LIMITS.humanTurns + 1).fill({ ...TURN, prompt_class: SENTINEL }) })
+  assertSingle(over, "too_many", "human_turns")
+  assertNoLeak(over)
+})
+
+test("human_turns is an accepted unavailable field with every reason, and the unavailable limit is 231", () => {
+  for (const reason of ENUMS.unavailableReason) {
+    const value = golden()
+    value.unavailable = [{ field: "human_turns", reason }]
+    assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] }, reason)
+  }
+  assert.equal(ENUMS.publishedUnavailableField.length, 21)
+  assert.equal(ENUMS.unavailableReason.length, 11)
+  assert.equal(LIMITS.unavailable, 231)
+})
+
+test("the size and basis enums are exactly the plan's vocabulary", () => {
+  assert.deepEqual(ENUMS.sizeClass, ["none", "xs", "s", "m", "l", "xl"])
+  assert.deepEqual(ENUMS.turnBasis, ["first", "after_stop", "mid_turn"])
+  assert.ok(Object.isFrozen(ENUMS.sizeClass) && Object.isFrozen(ENUMS.turnBasis))
+})
+
+test("a /1 file stays valid and a /2 file may carry human_turns", () => {
+  const base = golden()
+  delete base.human_turns
+  assert.deepEqual(validateLocalFacts({ ...base, schema: "desk.factory.local/1" }), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts({ ...base, schema: "desk.factory.local/2", human_turns: [TURN] }), { ok: true, errors: [] })
+})
+
+test("a turn is refused unless window_ms is null exactly when basis is first", () => {
+  const base = golden()
+  const first = { ...TURN, basis: "first", window_ms: null }
+  assert.deepEqual(validateLocalFacts({ ...base, human_turns: [first, TURN] }), { ok: true, errors: [] })
+  assertSingle(validateLocalFacts({ ...base, human_turns: [{ ...first, window_ms: 5 }] }), "inconsistent", "human_turns.0.window_ms")
+  for (const basis of ["after_stop", "mid_turn"]) {
+    assertSingle(validateLocalFacts({ ...base, human_turns: [first, { ...TURN, basis, window_ms: null }] }), "inconsistent", "human_turns.1.window_ms")
+  }
+})
+
+test("turns must be in time order; equal times are allowed", () => {
+  const base = golden()
+  const later = { ...TURN, at: "2026-09-25T10:00:05.000Z" }
+  assert.deepEqual(validateLocalFacts({ ...base, human_turns: [TURN, TURN, later] }), { ok: true, errors: [] })
+  const result = validateLocalFacts({ ...base, human_turns: [later, TURN] })
+  assertSingle(result, "order", "human_turns.1.at")
+  assertNoLeak(result)
 })

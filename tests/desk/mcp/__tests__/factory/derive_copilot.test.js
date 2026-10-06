@@ -15,8 +15,10 @@ import vm from "node:vm"
 import { deriveCopilotSession, __internals__ } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../../../../plugins/desk/mcp/src/factory/copilot-usage.js"
 import { spawnSync } from "node:child_process"
-import { validateLocalFacts, validateLocalFactsBytes } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { hostFlagsFor } from "../../../../../plugins/desk/mcp/src/factory/host-flags.js"
+import { ENUMS, LIMITS, validateLocalFacts, validateLocalFactsBytes } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
+  HUMAN_TURNS_SESSION,
   SENTINEL,
   SESSIONS,
   FULL_FINAL_METRICS,
@@ -27,6 +29,7 @@ import {
   defaultStoreRows,
   eventWriter,
   manySubagentsText,
+  sizedText,
   usageRow,
   writeLargeEvents,
 } from "./fixtures/copilot/make.js"
@@ -123,7 +126,7 @@ test("the full session derives one valid session across three resumes and four s
       end_reason: "complete",
       derived_through: at(99),
     })
-    assert.equal(facts.schema, "desk.factory.local/1")
+    assert.equal(facts.schema, "desk.factory.local/2")
     assert.equal(Object.hasOwn(facts, "contributor"), false, "local facts carry no contributor")
     assert.deepEqual(facts.jobs, [])
     assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(45, 46), span(47, 48), span(61, 74), span(75.4, 75.6), span(91, 92), span(96, 97)])
@@ -186,8 +189,13 @@ test("with neither a shutdown nor database rows, tokens are unavailable, not zer
     assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "unknown", requested_model: "claude-opus-5-5" }])
     assert.deepEqual(facts.unavailable, [
       { field: "tokens", reason: "session_open" },
+      { field: "models", reason: "field_absent" },
+      { field: "requests", reason: "field_absent" },
       { field: "commits", reason: "log_missing" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
+      { field: "prs", reason: "host_records_partly" },
+      { field: "human_turns", reason: "host_records_partly" },
+      { field: "entrypoint", reason: "host_does_not_record" },
     ])
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -338,8 +346,8 @@ test("binding events: Desk task tools with track and slug, and only successful f
   try {
     const { events } = await derive(home, SESSIONS.full)
     assert.deepEqual(events.deskToolCalls, [
-      { at: at(25), name: "desk-task_update", track: `${SENTINEL}-track`, slug: `${SENTINEL}-slug`, person: null, status: `${SENTINEL}-status`, agent: 0, ok: true },
-      { at: at(27), name: "desk-task_create", track: `${SENTINEL}-track`, slug: `${SENTINEL}-other`, person: `${SENTINEL}-person`, status: null, agent: 0, ok: false },
+      { at: at(25), name: "desk-task_update", track: `${SENTINEL}-track`, slug: `${SENTINEL}-slug`, person: null, status: `${SENTINEL}-status`, statusOnly: false, agent: 0, ok: true },
+      { at: at(27), name: "desk-task_create", track: `${SENTINEL}-track`, slug: `${SENTINEL}-other`, person: `${SENTINEL}-person`, status: null, statusOnly: false, agent: 0, ok: false },
     ])
     assert.deepEqual(events.fileWrites, [
       { at: at(10), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md`, agent: 0 },
@@ -391,12 +399,16 @@ test("an open session: open turn, orphan tool, failed subagent, truncated last l
     assert.deepEqual(facts.counts.tool_failures, { agent: 1 })
     assert.deepEqual(facts.unavailable, [
       { field: "models", reason: "source_unreadable" },
+      { field: "human_turns", reason: "source_unreadable" },
       { field: "tokens", reason: "source_unreadable" },
       { field: "ended_at", reason: "session_open" },
       { field: "turns", reason: "log_truncated" },
+      { field: "human_turns", reason: "log_truncated" },
       { field: "tool_durations", reason: "session_open" },
       { field: "turns", reason: "session_open" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
+      { field: "prs", reason: "host_records_partly" },
+      { field: "human_turns", reason: "host_records_partly" },
     ])
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -642,8 +654,14 @@ test("odd turn, tool, permission, subagent and compaction shapes are skipped or 
     { field: "plugins", reason: "source_unreadable" },
     { field: "turns", reason: "source_unreadable" },
     { field: "tokens", reason: "session_open" },
+    { field: "models", reason: "field_absent" },
+    { field: "requests", reason: "field_absent" },
+    { field: "human_turns", reason: "source_unreadable" },
     { field: "commits", reason: "log_missing" },
     { field: "ci_runs", reason: "not_collected_in_slice_1" },
+    { field: "prs", reason: "host_records_partly" },
+    { field: "human_turns", reason: "host_records_partly" },
+    { field: "entrypoint", reason: "host_does_not_record" },
   ])
 })
 
@@ -979,12 +997,12 @@ test("only a successful bash or powershell git commit call becomes a shellGitCom
   )
   const { facts, events } = await deriveText(lines)
   assert.deepEqual(events.shellGitCommits, [
-    { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, agent: 0 },
-    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, agent: 0 },
-    { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, agent: 0 },
-    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed`, agent: 0 },
-    { start: at(17), end: at(18), cwd: null, agent: 0 },
-    { start: at(22), end: at(23), cwd: null, agent: 0 },
+    { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, paths: [], agent: 0 },
+    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, paths: [], agent: 0 },
+    { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, paths: [], agent: 0 },
+    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed`, paths: [], agent: 0 },
+    { start: at(17), end: at(18), cwd: null, paths: [], agent: 0 },
+    { start: at(22), end: at(23), cwd: null, paths: [], agent: 0 },
   ])
   assert.ok(!JSON.stringify(facts).includes(COMMIT_MESSAGE_SENTINEL))
   assert.ok(!JSON.stringify(facts).includes(SENTINEL), "the planted directories never reach facts")
@@ -1002,7 +1020,7 @@ test("a session.start with no readable context leaves the directory unknown", as
     ev("tool.execution_complete", 4, { toolCallId: "g2", success: true }),
   ]
   const { events } = await deriveText(lines)
-  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, agent: 0 }, { start: at(3), end: at(4), cwd: path.normalize("/abs"), agent: 0 }])
+  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, paths: [], agent: 0 }, { start: at(3), end: at(4), cwd: "/abs", paths: [], agent: 0 }])
 })
 
 test("nativeCommitShas carries this session's session_refs commits, which bind directly", async () => {
@@ -1119,4 +1137,520 @@ test("spawn prompts: each worker gets its own Desk-Task line; a malformed or rep
   const { events } = await deriveText(lines)
   assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "one" }, { agent: 5, track: "eng", slug: "two" }])
   assert.ok(!JSON.stringify(events.spawnTasks).includes(SENTINEL))
+})
+
+// --- Declared focus: focus calls, spawns, own-commit paths, shell writes, status ---
+
+test("a successful task_focus call becomes a focusCall at its start time; failed and invalid ones yield nothing, and it is not a deskToolCall", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { facts, events } = await deriveText([
+    start(ev),
+    ...run("f1", 1, "desk-task_focus", { track: "desk-plugin", slug: "some-task" }), // 1
+    ...run("f2", 3, "desk-task_focus", { track: "other", slug: "failed" }, { success: false }),
+    ...run("f3", 5, "desk-task_focus", { clear: true }), // 5
+    ...run("f4", 7, "desk-task_focus", { track: "..", slug: "bad" }),
+    ...run("f5", 9, "desk-task_focus", {}),
+    ...run("f6", 11, "desk-task_focus", "not an object"),
+    ...run("f7", 13, "desk-task_focus", { track: 4, slug: "x", note: SENTINEL }),
+    ev("tool.execution_start", 15, { toolCallId: "f8", toolName: null, arguments: { clear: true } }),
+    ev("tool.execution_complete", 16, { toolCallId: "f8", success: true }),
+  ])
+  assert.deepEqual(events.focusCalls, [
+    { agent: 0, at: at(1), track: "desk-plugin", slug: "some-task" },
+    { agent: 0, at: at(5), clear: true },
+  ])
+  assert.deepEqual(events.deskToolCalls, [])
+  assert.equal(JSON.stringify(facts).includes("some-task"), false)
+  assertValid(facts)
+})
+
+test("a subagent's task_focus call carries the subagent's agent number", async () => {
+  const ev = eventWriter()
+  const { events } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "t1", toolName: "task", arguments: { prompt: "x" } }),
+    ev("subagent.started", 2, { toolCallId: "t1", model: "gpt-5.2" }),
+    ev("tool.execution_start", 3, { toolCallId: "f1", toolName: "desk-task_focus", arguments: { track: "a", slug: "b" }, parentToolCallId: "t1" }),
+    ev("tool.execution_complete", 4, { toolCallId: "f1", success: true }),
+  ])
+  assert.deepEqual(events.focusCalls, [{ agent: 1, at: at(3), track: "a", slug: "b" }])
+})
+
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { facts, events } = await deriveText([
+    start(ev),
+    ...run("c1", 1, "desk-task_create", { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }), // 1
+    ...run("c2", 3, "desk-task_create", { track: "desk-plugin", slug: "parked", focus: false }),
+    ...run("c3", 5, "desk-task_create", { track: "desk-plugin", slug: "truthy", focus: "true" }),
+    ...run("c4", 7, "desk-task_create", { track: "desk-plugin", slug: "failed", focus: true }, { success: false }),
+    ...run("c5", 9, "desk-task_create", { track: "..", slug: "bad", focus: true }),
+    ...run("c6", 11, "desk-task_create", { track: "desk-plugin", focus: true }),
+    ...run("c7", 13, "desk-task_create", { track: "desk-plugin", slug: "plain" }),
+    ...run("c8", 15, "desk-task_update", { track: "desk-plugin", slug: "updated", focus: true }),
+    ...run("c9", 17, "desk-task_create", "not an object"),
+  ])
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: at(1), track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assertValid(facts)
+})
+
+test("each deriver records a successful task_signoff call and ignores a failed one (Copilot)", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { facts, events } = await deriveText([
+    start(ev),
+    ...run("s1", 1, "desk-task_signoff", { track: "desk-plugin", slug: "signed", outcome: "accepted", reason: SENTINEL }),
+    ...run("s2", 3, "desk-task_signoff", { track: "desk-plugin", slug: "failed", outcome: "refused", reason: SENTINEL }, { success: false }),
+  ])
+  assert.deepEqual(events.deskToolCalls.map(({ name, slug, ok, status }) => ({ name, slug, ok, status })), [
+    { name: "desk-task_signoff", slug: "signed", ok: true, status: null },
+    { name: "desk-task_signoff", slug: "failed", ok: false, status: null },
+  ])
+  assert.deepEqual(events.focusCalls, [])
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("signed"), false)
+  assertValid(facts)
+})
+
+test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
+  const ev = eventWriter()
+  const inputs = [
+    { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },
+    { track: "a", slug: "b", frontmatter: { status: "done" }, progress: "x" },
+    { track: "a", slug: "b", person: "p", frontmatter: { status: "doing" } },
+    { track: "a", slug: "b", status: "blocked" },
+    { track: "a", slug: "b", frontmatter: { status: "done", title: "t" } },
+    { track: "a", slug: "b", frontmatter: "not json" },
+    { track: "a", slug: "b", frontmatter: "[1]" },
+    { track: "a", slug: "b", frontmatter: 7 },
+    { track: "a", slug: "b", frontmatter: { status: 4 } },
+    { track: "a", slug: "b", frontmatter: {} },
+    { track: "a", slug: "b" },
+  ]
+  const lines = [start(ev)]
+  inputs.forEach((input, index) => lines.push(
+    ev("tool.execution_start", 1 + index * 2, { toolCallId: `u${index}`, toolName: "desk-task_update", arguments: input }),
+    ev("tool.execution_complete", 2 + index * 2, { toolCallId: `u${index}`, success: true }),
+  ))
+  const { events } = await deriveText(lines)
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [
+    { status: "done", statusOnly: true },
+    { status: "done", statusOnly: false },
+    { status: "doing", statusOnly: true },
+    { status: "blocked", statusOnly: false },
+    { status: "done", statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+  ])
+})
+
+test("a top-level status that is not a string reads as no status", async () => {
+  const ev = eventWriter()
+  const { events } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "u1", toolName: "desk-task_update", arguments: { track: "a", slug: "b", status: 5 } }),
+    ev("tool.execution_complete", 2, { toolCallId: "u1", success: true }),
+  ])
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [{ status: null, statusOnly: false }])
+})
+
+test("every subagent appears in spawns with its parent, its subagent.started time and its task, and prRefs is empty", async () => {
+  const ev = eventWriter()
+  const { events, facts } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "t1", toolName: "task", arguments: { prompt: "Desk-Task: eng/one" } }),
+    ev("subagent.started", 2, { toolCallId: "t1", model: "gpt-5.2" }), // 2
+    ev("tool.execution_start", 3, { toolCallId: "t2", toolName: "task", arguments: { prompt: "no line" }, parentToolCallId: "t1" }),
+    ev("subagent.started", 4, { toolCallId: "t2", model: "gpt-5.2" }),
+  ])
+  assert.deepEqual(events.spawns, [
+    { agent: 1, parent: 0, at: at(2), task: { track: "eng", slug: "one" } },
+    { agent: 2, parent: 1, at: at(4), task: null },
+  ])
+  assert.deepEqual(events.prRefs, [])
+  assert.equal("prRefs" in facts, false)
+})
+
+test("a bash git add and commit gives shellGitCommits paths, a redirect gives fileWrites, only when the call succeeded", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, name, command, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: name, arguments: { command } }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { events, facts } = await deriveText([
+    start(ev),
+    ...run("g1", 1, "bash", "git add t/s/task.md && git commit -qm x"), // 1
+    ...run("g2", 3, "bash", "echo hi > out.txt"), // 3
+    ...run("g3", 5, "bash", "echo no > failed.txt && git add f.md && git commit -m x", { success: false }),
+    ...run("g4", 7, "bash", "git commit -m x"),
+    ...run("g5", 9, "powershell", "Set-Content -Path a.txt x"),
+  ])
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: `/tmp/${SENTINEL}`, paths: [`/tmp/${SENTINEL}/t/s/task.md`] },
+    { cwd: `/tmp/${SENTINEL}`, paths: [] },
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+    { at: at(3), path: `/tmp/${SENTINEL}/out.txt`, agent: 0 },
+  ])
+  assert.equal(JSON.stringify(facts).includes("task.md"), false)
+})
+
+test("desk_save paths become fileWrites when the call succeeded, and a failed, pathless or malformed call gives none", async () => {
+  const ev = eventWriter()
+  const run = (id, seconds, args, data = {}) => [
+    ev("tool.execution_start", seconds, { toolCallId: id, toolName: "desk-desk_save", arguments: args }),
+    ev("tool.execution_complete", seconds + 1, { toolCallId: id, success: true, ...data }),
+  ]
+  const { events } = await deriveText([
+    start(ev),
+    ...run("d1", 1, { paths: ["notes/a.md", "notes/b.md", 5] }), // 1
+    ...run("d2", 3, { paths: ["failed.md"] }, { success: false }),
+    ...run("d3", 5, { content: "x" }),
+    ...run("d4", 7, "not an object"),
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+    { at: at(1), path: "notes/a.md", agent: 0 },
+    { at: at(1), path: "notes/b.md", agent: 0 },
+  ])
+  assert.deepEqual(events.deskToolCalls, [])
+})
+
+test("sentinel: the focus, spawn, path and write events never carry prompt, command or content text, and facts stay clean", async () => {
+  const ev = eventWriter()
+  const { events, facts } = await deriveText([
+    start(ev),
+    ev("tool.execution_start", 1, { toolCallId: "s1", toolName: "desk-task_focus", arguments: { track: "a", slug: "b", note: SENTINEL } }),
+    ev("tool.execution_complete", 2, { toolCallId: "s1", success: true, result: { content: SENTINEL } }),
+    ev("tool.execution_start", 3, { toolCallId: "s2", toolName: "bash", arguments: { command: `echo ${SENTINEL} > out.txt && git add x.md && git commit -m ${SENTINEL}` } }),
+    ev("tool.execution_complete", 4, { toolCallId: "s2", success: true }),
+    ev("tool.execution_start", 5, { toolCallId: "s3", toolName: "desk-desk_save", arguments: { paths: ["p.md"], content: SENTINEL } }),
+    ev("tool.execution_complete", 6, { toolCallId: "s3", success: true }),
+    ev("tool.execution_start", 7, { toolCallId: "s4", toolName: "task", arguments: { prompt: `${SENTINEL}\nDesk-Task: a/b` } }),
+    ev("subagent.started", 8, { toolCallId: "s4", model: "gpt-5.2" }),
+  ])
+  assert.equal(JSON.stringify(events.fileWrites).includes("echo"), false)
+  assert.equal(JSON.stringify(events.spawns).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+})
+
+// ---------------------------------------------------------------------------
+// Flags for what the host does not record, or records only in part.
+// ---------------------------------------------------------------------------
+
+const hasFlag = (facts, field, reason) => facts.unavailable.some((entry) => entry.field === field && entry.reason === reason)
+
+test("a Copilot cli session flags entrypoint as not recorded and a launcher session does not", async () => {
+  const ev = eventWriter()
+  const events = [start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { requests: { count: 1 }, usage: { inputTokens: 1 } } } })]
+  const cli = await deriveText(events)
+  assert.equal(cli.facts.session.entrypoint, "cli")
+  assert.ok(hasFlag(cli.facts, "entrypoint", "host_does_not_record"))
+  const launcher = await deriveText(events, { entrypoint: "launcher" })
+  assert.equal(launcher.facts.session.entrypoint, "launcher")
+  assert.equal(launcher.facts.unavailable.some((entry) => entry.field === "entrypoint"), false)
+})
+
+test("a Copilot session carries prs as recorded only partly", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev)], { entrypoint: "launcher" })
+  assert.ok(hasFlag(facts, "prs", "host_records_partly"))
+})
+
+test("facts carry every flag the host table returns for their entrypoint", async () => {
+  const ev = eventWriter()
+  for (const entrypoint of ["cli", "launcher"]) {
+    const { facts } = await deriveText([start(ev)], { entrypoint })
+    for (const flag of hostFlagsFor("copilot-cli", { entrypoint })) assert.ok(hasFlag(facts, flag.field, flag.reason), `${entrypoint}: ${flag.field}`)
+  }
+})
+
+test("a null request count flags requests field_absent", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { usage: { inputTokens: 5 } } } })])
+  assert.equal(facts.models[0].requests, null)
+  assert.ok(hasFlag(facts, "requests", "field_absent"))
+  const measured = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { requests: { count: 0 }, usage: { inputTokens: 5 } } } })])
+  assert.equal(measured.facts.models[0].requests, 0)
+  assert.equal(measured.facts.unavailable.some((entry) => entry.field === "requests"), false, "a measured zero is not flagged")
+})
+
+test("a malformed request count is flagged unreadable, not absent", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: { "model-a": { requests: { count: -1 }, usage: {} } } })])
+  assert.equal(facts.models[0].requests, null)
+  assert.ok(hasFlag(facts, "requests", "source_unreadable"))
+  assert.equal(hasFlag(facts, "requests", "field_absent"), false)
+})
+
+test("empty models with no token flag now flags models, tokens and requests field_absent", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: {} })])
+  assert.deepEqual(facts.models, [])
+  for (const field of ["models", "tokens", "requests"]) assert.ok(hasFlag(facts, field, "field_absent"), field)
+})
+
+test("empty models that already carry a token flag keep it and add no second tokens flag", async () => {
+  const { facts } = await deriveText([start(eventWriter())])
+  assert.ok(hasFlag(facts, "tokens", "session_open"))
+  assert.equal(hasFlag(facts, "tokens", "field_absent"), false)
+  assert.ok(hasFlag(facts, "models", "field_absent"))
+})
+
+test("the unavailable list is not trimmed when it holds every field and reason", async () => {
+  const flags = new Map()
+  for (const field of ENUMS.unavailableField) for (const reason of ENUMS.unavailableReason) flags.set(`${field}|${reason}`, { field, reason })
+  const list = __internals__.unavailableList(flags)
+  assert.equal(list.length, ENUMS.unavailableField.length * ENUMS.unavailableReason.length)
+  assert.ok(list.length <= LIMITS.unavailable)
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev)])
+  assertValid({ ...facts, unavailable: list })
+})
+
+test("a sentinel in event text reaches neither facts nor flags", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([
+    start(ev),
+    ev("session.shutdown", 1, { modelMetrics: { [`bad ${SENTINEL}`]: { requests: { count: SENTINEL }, usage: { inputTokens: SENTINEL } }, "model-a": { requests: SENTINEL, usage: { outputTokens: SENTINEL } } }, note: SENTINEL }),
+  ])
+  assert.equal(JSON.stringify(facts.unavailable).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+})
+
+test("facts written by the Copilot deriver validate as /2", async () => {
+  const home = makeHome()
+  try {
+    for (const [sessionId, endReason] of [[SESSIONS.full, "complete"], [SESSIONS.noShutdown, null], [SESSIONS.noUsage, "user_exit"]]) {
+      const { facts } = await derive(home, sessionId, { endReason })
+      assert.equal(facts.schema, "desk.factory.local/2")
+      assertValid(facts)
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Human turns.
+// ---------------------------------------------------------------------------
+
+function humanHome() {
+  const home = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-human-"))
+  const dir = path.join(home, "session-state", HUMAN_TURNS_SESSION)
+  mkdirSync(dir, { recursive: true })
+  cpSync(path.join(FIXTURES, HUMAN_TURNS_SESSION, "events.jsonl"), path.join(dir, "events.jsonl"))
+  return home
+}
+
+async function humanFacts() {
+  const home = humanHome()
+  try {
+    return await derive(home, HUMAN_TURNS_SESSION, { endReason: "complete" })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+const PLAIN_ID = "a1b2c3d4-0000-4000-8000-000000000001"
+
+/** Derives a session built from the given event lines (a header is added); `raw` lines are appended as they are. */
+async function deriveLines(build, { raw = [] } = {}) {
+  let n = 5000
+  const ev = (type, seconds, data = {}, extra = {}) => {
+    n += 1
+    return { type, data, id: `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`, timestamp: seconds === null ? "not a time" : at(seconds), parentId: null, ...extra }
+  }
+  const header = ev("session.start", 0, { sessionId: PLAIN_ID, version: 1, producer: "copilot-agent", copilotVersion: "1.0.88", context: { cwd: "/tmp/x", gitRoot: "/tmp/x" } })
+  const text = [header, ...build(ev)].map((line) => JSON.stringify(line)).concat(raw).join("\n")
+  const home = makeHome({ sessions: [], store: null, texts: { [PLAIN_ID]: `${text}\n` } })
+  try {
+    return await derive(home, PLAIN_ID)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+const humanFlags = (facts) => facts.unavailable.filter((entry) => entry.field === "human_turns" && entry.reason !== "host_records_partly")
+
+test("a typed prompt is one human turn with its size class", async () => {
+  const { facts } = await humanFacts()
+  assertValid(facts)
+  assert.deepEqual(facts.human_turns[0], { at: at(2), basis: "first", window_ms: null, prompt_class: "xs", output_class: "none" })
+  assert.deepEqual(facts.human_turns.map((turn) => turn.prompt_class), ["xs", "s", "l", "none"])
+  assert.deepEqual(humanFlags(facts), [])
+})
+
+test("a message with source agent, autopilot or schedule is not a human turn", async () => {
+  const { facts } = await humanFacts()
+  // The fixture holds four such messages (and three more human ones): only the four typed prompts count.
+  assert.equal(facts.human_turns.length, 4)
+  assert.deepEqual(facts.human_turns.map((turn) => turn.at), [at(2), at(41), at(47), at(110)])
+  const flagged = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "a", source: "skill-x" }),
+    ev("user.message", 2, { content: "b", source: "schedule-1" }),
+    ev("user.message", 3, { content: "c", isAutopilotContinuation: true }),
+    ev("user.message", 4, { content: "d", source: null, isAutopilotContinuation: false }),
+  ])
+  assert.deepEqual(flagged.facts.human_turns.map((turn) => turn.at), [at(4)])
+})
+
+test("an event with an agentId is not a human turn and adds no reply size", async () => {
+  const { facts } = await humanFacts()
+  // The subagent's 6,000-character reply would make the second turn's output class xl; the root's 300 characters make it m.
+  assert.equal(facts.human_turns[1].output_class, "m")
+  assert.equal(facts.human_turns.length, 4)
+  const { facts: other } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "typed by a subagent" }, { agentId: "agent-1" }),
+    ev("assistant.message", 2, { content: sizedText(5001) }, { agentId: "agent-1" }),
+    ev("user.message", 3, { content: "typed" }),
+  ])
+  assert.deepEqual(other.human_turns, [{ at: at(3), basis: "first", window_ms: null, prompt_class: "xs", output_class: "none" }])
+})
+
+test("a permission decision is not a human turn and the permission_wait interval is unchanged", async () => {
+  const { facts } = await humanFacts()
+  assert.deepEqual(intervalsOf(facts, "permission_wait"), [{ kind: "permission_wait", agent: 0, ...span(4.7, 9.7) }])
+  assert.equal(facts.human_turns.length, 4)
+  assert.deepEqual(facts.human_turns.map((turn) => turn.at), [at(2), at(41), at(47), at(110)])
+})
+
+test("the window is the gap from the turn end to the prompt", async () => {
+  const { facts } = await humanFacts()
+  assert.deepEqual(facts.human_turns[1], { at: at(41), basis: "after_stop", window_ms: 30000, prompt_class: "s", output_class: "m" })
+  // The agent started again at 45, so the prompt at 47 follows the previous prompt, not a stop.
+  assert.deepEqual(facts.human_turns[2], { at: at(47), basis: "mid_turn", window_ms: 6000, prompt_class: "l", output_class: "s" })
+  assert.deepEqual(facts.human_turns[3], { at: at(110), basis: "after_stop", window_ms: 60000, prompt_class: "none", output_class: "none" })
+})
+
+test("SENTINEL in a message reaches no fact", async () => {
+  const { facts, events } = await humanFacts()
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  const home = makeHome()
+  try {
+    const full = await derive(home, SESSIONS.full)
+    assert.equal(JSON.stringify(full.facts.human_turns).includes(SENTINEL), false)
+    assert.deepEqual(full.facts.human_turns.map((turn) => turn.at), [at(2), at(44), at(60), at(75.2), at(90), at(95)])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a prompt with no readable time or text is not recorded and the list is flagged", async () => {
+  const noText = await deriveLines((ev) => [ev("user.message", 1, { content: sizedText(30) }), ev("user.message", 2, { interactionId: "i" }), ev("user.message", 3, { content: "ok" })])
+  assert.deepEqual(noText.facts.human_turns.map((turn) => turn.at), [at(1), at(3)])
+  assert.deepEqual(humanFlags(noText.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+  const noTime = await deriveLines((ev) => [ev("user.message", null, { content: "ok" }), ev("user.message", 3, { content: "ok" })])
+  assert.equal(noTime.facts.human_turns.length, 1)
+  assert.deepEqual(humanFlags(noTime.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a root reply with no readable text flags the list, and a turn end with no time is no stop", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "ok" }),
+    ev("assistant.message", 2, { content: 7 }),
+    ev("assistant.turn_start", 2.5, { turnId: "0" }),
+    ev("assistant.turn_end", null, { turnId: "0" }),
+    ev("user.message", 9, { content: "ok" }),
+  ])
+  assert.deepEqual(facts.human_turns[1], { at: at(9), basis: "mid_turn", window_ms: 8000, prompt_class: "xs", output_class: "none" })
+  assert.deepEqual(humanFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a log that lost lines flags the list as a lower bound", async () => {
+  const cut = await deriveLines((ev) => [ev("user.message", 1, { content: "ok" })], { raw: [`{"type":"user.message","timestamp":"${at(5)}","data":{"content":"cut`] })
+  assert.deepEqual(humanFlags(cut.facts), [{ field: "human_turns", reason: "log_truncated" }])
+  const bad = await deriveLines((ev) => [ev("user.message", 1, { content: "ok" })], { raw: ["42", JSON.stringify({ type: "user.message", timestamp: at(6), data: null })] })
+  assert.deepEqual(humanFlags(bad.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a prompt dated before the last one is dropped and the list is flagged", async () => {
+  const { facts } = await deriveLines((ev) => [ev("user.message", 10, { content: "ok" }), ev("user.message", 5, { content: "ok" })])
+  assert.equal(facts.human_turns.length, 1)
+  assert.deepEqual(humanFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+const TURN = (ev, seconds, id, interaction, end = null) => [ev("assistant.turn_start", seconds, { turnId: id, interactionId: interaction }), ...(end === null ? [] : [ev("assistant.turn_end", end, { turnId: id })])]
+
+test("a prompt logged between two iterations of one interaction is mid_turn", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go", interactionId: "i1" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("user.message", 5, { content: "wait, stop", interactionId: "i2" }),
+    ...TURN(ev, 6, "1", "i1", 7),
+  ])
+  assert.deepEqual(facts.human_turns[1], { at: at(5), basis: "mid_turn", window_ms: 4000, prompt_class: "xs", output_class: "none" })
+})
+
+test("a prompt after a stop, followed by a turn of a new interaction, is after_stop", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go", interactionId: "i1" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("user.message", 5, { content: "next", interactionId: "i2" }),
+    ...TURN(ev, 6, "1", "i2", 7),
+  ])
+  assert.deepEqual(facts.human_turns[1], { at: at(5), basis: "after_stop", window_ms: 2000, prompt_class: "xs", output_class: "none" })
+})
+
+test("a prompt the next event cannot place is after_stop, and a reply after it counts for the next prompt", async () => {
+  const last = await deriveLines((ev) => [ev("user.message", 1, { content: "go" }), ...TURN(ev, 2, "0", "i1", 3), ev("user.message", 5, { content: "end of log" })])
+  assert.equal(last.facts.human_turns[1].basis, "after_stop")
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("user.message", 5, { content: "late" }),
+    ev("assistant.message", 5.5, { content: sizedText(300) }),
+    ev("user.message", 9, { content: "again" }),
+    ev("assistant.turn_end", 10, { turnId: "9" }),
+  ])
+  assert.deepEqual(facts.human_turns.map((turn) => [turn.basis, turn.output_class]), [["first", "none"], ["after_stop", "none"], ["mid_turn", "m"]])
+})
+
+test("every Copilot session that writes a list flags it as not proven complete", async () => {
+  const { facts } = await humanFacts()
+  assert.ok(hasFlag(facts, "human_turns", "host_records_partly"))
+  const empty = await deriveLines((ev) => [])
+  assert.deepEqual(empty.facts.human_turns, [])
+  assert.ok(hasFlag(empty.facts, "human_turns", "host_records_partly"))
+})
+
+test("an abort event adds no turn and leaves the stop at its turn end", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go", interactionId: "i1" }),
+    ...TURN(ev, 2, "0", "i1", 3),
+    ev("abort", 4, { reason: "user_initiated" }),
+    ev("user.message", 8, { content: "next", interactionId: "i2" }),
+    ...TURN(ev, 9, "1", "i2", 10),
+  ])
+  assert.equal(facts.human_turns.length, 2)
+  assert.equal(facts.human_turns[1].window_ms, 5000)
+})
+
+test("a tool-only reply with no content key adds nothing and does not flag the list", async () => {
+  const { facts } = await deriveLines((ev) => [
+    ev("user.message", 1, { content: "go" }),
+    ev("assistant.message", 2, { toolRequests: [{ toolCallId: "t", name: "bash", arguments: {} }] }),
+    ev("user.message", 9, { content: "next" }),
+  ])
+  assert.deepEqual(humanFlags(facts), [])
+  assert.equal(facts.human_turns[1].output_class, "none")
 })

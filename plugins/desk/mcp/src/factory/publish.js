@@ -86,6 +86,17 @@
 //     without losing the model. That date is the model's or plugin's
 //     release, not when the work happened, so keeping its digits says
 //     nothing about the session.
+//   - Outcomes. Each task outcome entry keeps its state, verified flag,
+//     reason code, delivery count and a wait class (`lt_1h`, `lt_1d`,
+//     `lt_7d`, `ge_7d`, and whether the wait is still running); the
+//     delivery, sign-off and observation times, and any exact wait, stay
+//     local. The job ID is keyed exactly as the `jobs` entries' are, on every
+//     desk class.
+//   - Human turns. Each turn keeps its basis, its gap and two size classes;
+//     its time becomes `at_ms`, milliseconds since `started_at`, on the same
+//     clock as the intervals. A turn outside that clock is dropped, never
+//     moved, and `human_turns` is marked `source_unreadable`. A desk that is
+//     not private publishes the same list: it holds no text and no date.
 //
 // `publishedClock(local)` is the session clock alone: the same duration,
 // intervals and refusals `toPublished` produces, for the waste evaluator,
@@ -99,9 +110,9 @@
 // `labels/<job>/<session id>.json`.
 //
 // `unavailable` keeps the local entries once each and adds the transform's
-// own markers after them; when the list would pass the schema limit, the
-// transform's markers are kept first (even one the local file already held)
-// and the last local entries give way. The transform is
+// own markers after them. Nothing is trimmed: the schema limit holds every
+// field with every reason once, so the union always fits. A public store
+// that hides a plugin adds `{plugins, withheld_public}`. The transform is
 // pure and deterministic: it never mutates its input, shares no object with
 // it and reads no clock.
 //
@@ -112,7 +123,10 @@ import { createHmac } from "node:crypto"
 
 import { publishedAgentType } from "./agent-types.js"
 import { validateLabels } from "./label-schema.js"
-import { LIMITS, validateLocalFacts } from "./schema.js"
+import { PRIVATE_VISIBILITIES, deskTimingKept } from "./desk-visibility.js"
+import { waitClass } from "./outcome.js"
+import { intervalInSession } from "./pipeline/timeline.js"
+import { validateLocalFacts } from "./schema.js"
 import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
 /** Why `toPublished` returned no file. */
@@ -122,10 +136,7 @@ export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_n
 export const EARLIEST_SESSION_START = "2025-01-01T00:00:00.000Z"
 
 // Desks whose remote is known not to be public keep their job timing.
-const PRIVATE_DESKS = new Set(["private", "internal"])
-
 // Stores known not to be public (a work store) keep every plugin's name.
-const PRIVATE_STORES = PRIVATE_DESKS
 
 const MIN_SECRET_BYTES = 32
 
@@ -171,7 +182,7 @@ function publishIntervals(intervals, startedMs, durationMs, flag) {
   for (const interval of intervals) {
     const startMs = Date.parse(interval.start) - startedMs
     const endMs = Date.parse(interval.end) - startedMs
-    if (startMs < 0 || endMs > durationMs) {
+    if (!intervalInSession(startMs, endMs, durationMs)) {
       flag(INTERVAL_FIELD[interval.kind], "source_unreadable")
       continue
     }
@@ -257,7 +268,7 @@ function publishModels(models, flag) {
 // repository; the rest are counted. A store known not to be public names them all.
 // A name the published validator would refuse (a credential-shaped one) is hidden the same way.
 function publishPlugins(plugins, isPublic, storeVisibility) {
-  const privateStore = PRIVATE_STORES.has(storeVisibility)
+  const privateStore = PRIVATE_VISIBILITIES.has(storeVisibility)
   const kept = []
   const names = []
   let hidden = 0
@@ -293,7 +304,7 @@ function publishedSessionId(id, machineSecret, caller) {
 
 // Whether job timing is kept; a desk that withholds it needs the key for its job IDs.
 function deskIsPrivate(deskVisibility, machineSecret, caller) {
-  const deskPrivate = PRIVATE_DESKS.has(deskVisibility)
+  const deskPrivate = deskTimingKept(deskVisibility)
   if (!deskPrivate && !validSecret(machineSecret)) {
     throw new TypeError(`${caller}: a desk that is not private needs a machineSecret of at least 32 bytes`)
   }
@@ -354,6 +365,50 @@ function publishJob(job, startedMs, flag) {
   }
 }
 
+// How long a delivery waited for its sign-off, as a coarse class and never a number. A signed delivery (accepted or refused) waited from delivery to sign-off; an unsigned one has waited at least from delivery to the time it was observed (`censored`). Any other state, a missing time, or a difference that is negative or not finite has no wait: `null`, never a zero and never the lowest class.
+function publishWait(entry) {
+  const censored = entry.state === "delivered_unsigned"
+  if (!censored && entry.state !== "accepted" && entry.state !== "refused") return null
+  const end = censored ? entry.observed_at : entry.signed_at
+  if (entry.delivered_at === null || end === null) return null
+  const ms = Date.parse(end) - Date.parse(entry.delivered_at)
+  if (!Number.isFinite(ms) || ms < 0) return null
+  return { class: waitClass(ms), censored }
+}
+
+// The published counts stop at 9999 (read it as "9999 or more"), so a larger local value never makes the whole file invalid.
+const capped = (count) => Math.min(count, 9999)
+
+// A return as published: its codes and flag, and no time.
+const publishReturn = (item) => ({ reason: item.reason, caught: item.caught, counts: item.counts, refusal: item.refusal, refusal_verified: item.refusal_verified })
+
+// The outcome entries as published: the state and its codes, the delivery count, the wait class and, when the entry has them, the record's start and its returns, with no time (the milestone times stay local). `keyJob` gives a job's published id, which is exactly the id its `jobs` entry has.
+function publishOutcomes(local, { keyJob }) {
+  return local.outcomes
+    .map((entry) => ({
+      job: keyJob(entry.job), rev: capped(entry.rev), state: entry.state, verified: entry.verified, reason: entry.reason, deliveries: capped(entry.deliveries), wait: publishWait(entry),
+      ...(Object.hasOwn(entry, "since") ? { since: entry.since } : {}),
+      ...(Object.hasOwn(entry, "returns") ? { returns: entry.returns.map(publishReturn) } : {}),
+      ...(Object.hasOwn(entry, "returns_truncated") ? { returns_truncated: entry.returns_truncated } : {}),
+      ...(Object.hasOwn(entry, "returns_unreadable") ? { returns_unreadable: capped(entry.returns_unreadable) } : {}),
+    }))
+    .sort((a, b) => (a.job < b.job ? -1 : 1))
+}
+
+// The human turns on the session clock, as intervals are: `at_ms` is the prompt's time minus `started_at`. A turn before the start or after `derived_through` cannot be placed on that clock; it is dropped, never moved, and the field is marked `source_unreadable`, as for an interval.
+function publishHumanTurns(turns, startedMs, durationMs, flag) {
+  const kept = []
+  for (const turn of turns) {
+    const atMs = Date.parse(turn.at) - startedMs
+    if (!intervalInSession(atMs, atMs, durationMs)) {
+      flag("human_turns", "source_unreadable")
+      continue
+    }
+    kept.push({ at_ms: atMs, basis: turn.basis, window_ms: turn.window_ms, prompt_class: turn.prompt_class, output_class: turn.output_class })
+  }
+  return kept
+}
+
 /**
  * `toPublished(local, { visibility, deskVisibility, storeVisibility,
  * machineSecret }) -> { published, dropped: { prs, commits, plugins } }`,
@@ -395,12 +450,16 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
   }
 
   const intervals = publishIntervals(local.intervals, startedMs, durationMs, flag)
+  // Marked before `unavailable` is built below; absent in local facts stays absent.
+  const humanTurns = Object.hasOwn(local, "human_turns") ? publishHumanTurns(local.human_turns, startedMs, durationMs, flag) : null
   const isPublic = publicRepos(visibility)
   // Job segments and controller PR times are job timing: a desk that withholds its timing publishes neither.
   // Elsewhere a PR's `at_ms` is published only where it decides a PR's job: a controller (worker 0) PR in a session whose jobs carry segments.
   const refs = publishRefs(local.refs, isPublic, deskPrivate && local.jobs.some((job) => Object.hasOwn(job, "segments")))
   const plugins = publishPlugins(local.plugins, isPublic, storeVisibility)
   const dropped = { ...refs.dropped, plugins: plugins.hidden }
+  // A list with names left out says so, so a short list never reads as the whole one.
+  if (plugins.hidden > 0) flag("plugins", "withheld_public")
   const jobs = deskPrivate
     ? local.jobs.map((job) => publishJob(job, startedMs, flag))
     : local.jobs.map((job) => protectedJob(job, machineSecret)).sort((a, b) => (a.job < b.job ? -1 : 1))
@@ -422,7 +481,9 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
     },
     refs: { prs: refs.prs, commits: refs.commits, private: { ...dropped } },
     jobs,
-    unavailable: [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)).slice(0, LIMITS.unavailable - own.length), ...own],
+    unavailable: [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)), ...own],
+    ...(Object.hasOwn(local, "outcomes") ? { outcomes: publishOutcomes(local, { keyJob: deskPrivate ? (job) => job : (job) => keyedJobId(job, machineSecret) }) } : {}),
+    ...(humanTurns === null ? {} : { human_turns: humanTurns }),
   }
   return { published, dropped: { ...dropped } }
 }
@@ -488,6 +549,7 @@ export function toPublishedLabels(labels, { deskVisibility, machineSecret } = {}
       mura: stretch.mura,
       muri: stretch.muri,
       evidence: stretch.evidence.map((range) => [range[0], range[1]]),
+      ...(Object.hasOwn(stretch, "caught") ? { caught: stretch.caught } : {}),
     })),
     unavailable: [...labels.unavailable],
   }

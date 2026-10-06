@@ -29,6 +29,7 @@ import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
+import { focusNote } from "./task-focus.js"
 import { resolveTaskHandle, resolveTrackHandle } from "../desk/handles.js"
 import {
   validateName,
@@ -413,7 +414,7 @@ function trueOrAbsent(tool, field, value) {
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function task_move({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_move({ deskRoot, input, person = null, readiness, statusContext = {}, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = taskMoveSource(deskRoot, person, values)
   rejectTraversalShapedInput("task_move", "track", track)
@@ -625,6 +626,16 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     mentions: mentions.map(shownPath),
   }
   if (commit) result.commit = commit
+  // The held focus follows the card it names (a merge follows into the card that keeps the job); with nothing
+  // focused, a task tool call carries the no-focus hint until the session declares. A different focus is left alone.
+  const focus = statusContext.focus
+  const current = focus?.get() ?? null
+  if (current !== null && current.track === track && current.slug === slug) {
+    focus.set({ track: toTrack, slug: intoTask ?? toSlug })
+  } else {
+    const note = focusNote(statusContext)
+    if (note !== undefined) result.focus_note = note
+  }
   return result
 }
 

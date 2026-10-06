@@ -21,6 +21,7 @@ import {
   patchMarkdownFrontmatter,
   pathExists,
 } from "../util/fm.js"
+import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
@@ -39,6 +40,7 @@ import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
+import { focusNote } from "./task-focus.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -187,6 +189,18 @@ async function requestTaskFinalize({ deskRoot, env, identity }) {
   }
 }
 
+// The job identity, or `null` when it cannot be resolved: both finalize requests then fail the same way reading `identity.job`, and each logs its own deferred message.
+async function taskJobOrNull(args) {
+  try {
+    return await taskJob(args)
+  } catch {
+    return null
+  }
+}
+
+// The finalize request after a recorded return; `finalize` is injected in tests.
+const requestTaskReturnSync = async ({ deskRoot, person, track, slug, env, finalize }) => finalize({ deskRoot, env, identity: await taskJobOrNull({ deskRoot, person, track, slug }) })
+
 // Records the job's waste-evaluator request (`evaluate-requests/<job>.json`),
 // like a finalize request: same opt-in gate (no factory state yet => no-op,
 // and never creates it just to check), and any failure is swallowed so it
@@ -212,29 +226,36 @@ async function requestTaskEvaluation({ deskRoot, env, identity }) {
 // both; if resolving it throws, both calls still degrade the same way each
 // would have on its own, so both deferred messages are logged below.
 async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, status }) {
-  let identity = null
-  try {
-    identity = await taskJob({ deskRoot, person, track, slug })
-  } catch {
-    // Left null: requestTaskFinalize/requestTaskEvaluation each fail the
-    // same way reading `identity.job`/`identity.root`, and each logs its
-    // own deferred message via its own try/catch below.
-  }
+  const identity = await taskJobOrNull({ deskRoot, person, track, slug })
   await requestTaskFinalize({ deskRoot, env, identity })
   if (TERMINAL_STATUSES.has(status)) await requestTaskEvaluation({ deskRoot, env, identity })
 }
 
-// The `factory_report` link written on the transition to `done`, or `null`
-// when the desk's resolved store has no consent. It is deterministic and
-// resolves once the store merges the job's facts; done never waits for it,
-// and nothing here can fail the task update.
+// The task's factory report answer, `{ link }` or `{ link: null, reason? }` (`local-status.js` `factoryReportLink`): asked on the
+// transition to `done`, and on any later update of a card that records why it has no link. A link is deterministic, so done never waits
+// for delivery, and nothing here can fail the task operation: a job identity that cannot be read is the reason `job_identity_unavailable`.
 async function factoryReportFor({ deskRoot, person, track, slug, env }) {
   try {
     const { root, prefix, deskRemote, track: birthTrack, slug: birthSlug } = await taskJob({ deskRoot, person, track, slug })
     return reportLink({ env, deskRoot: root, deskRemote, personPrefix: prefix, track: birthTrack, slug: birthSlug })
   } catch {
-    return null
+    return { link: null, reason: "job_identity_unavailable" }
   }
+}
+
+// The card fields one report answer sets: `factory_report` (the link) or `factory_report_unavailable` (the reason code, and nothing else),
+// each `undefined` (removed from the card) when the answer does not carry it, so an older link or reason never outlives a newer answer.
+// Without consent the factory is not in use for the desk, and both are removed.
+function reportFields(report) {
+  return { factory_report: report.link ?? undefined, factory_report_unavailable: report.link === null ? report.reason : undefined }
+}
+
+// What a tool result says about the report answer: the reason a card has no link, always, and the link itself when this call filled it
+// in on a card that already was done (`filled`); a new delivery's link is on the card, as before.
+function reportResult(report, filled) {
+  if (report === null) return {}
+  if (report.link !== null) return filled ? { factory_report: report.link } : {}
+  return report.reason === undefined ? {} : { factory_report_unavailable: report.reason }
 }
 
 // Optional runtime fields the operator (or harness) may pass at create time.
@@ -262,9 +283,64 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // OPTIONAL_RUNTIME_FIELDS is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
-export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason"]
+export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", ...OPTIONAL_RUNTIME_FIELDS]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
+
+// The three outcome records are written only by the task tools; a caller never supplies them.
+const RECORD_KEYS = ["signoff", "flow", "returns", "returns_damaged"]
+const RECORD_REFUSAL = "these records are written by the task tools; to record an answer call task_signoff"
+
+// The report link fields are the task tools' answer about the factory report, never the caller's: a hand-set link could name any job on a
+// public desk's card, and a hand-set reason would not be a reason code.
+const REPORT_KEYS = ["factory_report", "factory_report_unavailable"]
+const REPORT_REFUSAL = "`factory_report` and `factory_report_unavailable` are written by the task tools: the move to done writes the link or the reason it has none, and a later update fills a missing link by itself"
+
+function refuseRecordKeys(tool, ...sources) {
+  for (const source of sources) {
+    if (source == null) continue
+    if (RECORD_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${RECORD_REFUSAL}`)
+    if (REPORT_KEYS.some((key) => Object.hasOwn(source, key))) throw new Error(`${tool}: ${REPORT_REFUSAL}`)
+  }
+}
+
+// Where the record follows a status change on an existing card. The caller writes the returned keys, which are empty when nothing in the record changes (`move` returns its input then). A card whose status is missing or off the list is read as moving from `drafting`.
+const movingFrom = (data) => (STATUSES.includes(data.status) ? data.status : (readRecord(data).flow?.reached ?? "drafting"))
+function applyMove(data, { to, at, returnReason }) {
+  const record = readRecord(data)
+  const moved = move(record, { from: movingFrom(data), to, at, returnReason })
+  return moved === record ? {} : toFrontmatter(moved)
+}
+
+// The reason a status change gives for going backwards, checked before anything is written: the reason when this change is a return, `undefined` when it is not. A refusal says what to do next, in words an agent can act on.
+const REASON_LIST = "agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke)"
+function checkReturnReason(data, { to, returnReason }) {
+  const from = movingFrom(data)
+  const needs = needsReturnReason({ from, to, reached: readRecord(data).flow?.reached })
+  const given = returnReason !== undefined && returnReason !== null
+  if (given && !needs) throw new Error("task_update: `return_reason` is only for moving a task back; this call is not a return, so drop it.")
+  if (needs && !given) throw new Error(`task_update: moving this task from ${from} back to ${to} is a return and needs a reason. Repeat the call with \`return_reason\` set to one of ${REASON_LIST}.`)
+  if (needs && !RETURN_REASONS.includes(returnReason)) throw new Error(`task_update: \`return_reason\` must be one of ${RETURN_REASONS.join(", ")}.`)
+  return needs ? returnReason : undefined
+}
+
+// The first non-blank line of the title, trimmed and cut to 120 characters, so the packet stays three one-line strings.
+const TITLE_LIMIT = 120
+function packetTitle(data, slug) {
+  const first = typeof data.title === "string" ? data.title.split(/\r?\n/u).map((line) => line.trim()).find((line) => line !== "") : undefined
+  return first === undefined ? slug : first.slice(0, TITLE_LIMIT).trimEnd()
+}
+
+// What the answer says after a delivery: the state, three lines for the agent to adapt, and one note.
+const SIGNOFF_NOTE =
+  "This task is delivered, not accepted. If the operator is in this conversation, end your reply with the three lines; do not wait for the answer and do not ask again in this session. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff."
+function deliveryAnswer({ data, slug, ref }) {
+  return {
+    signoff: "delivered_unsigned",
+    signoff_packet: [`Asked: ${packetTitle(data, slug)}`, `Delivered: ${ref}`, "Accept or send back?"],
+    signoff_note: SIGNOFF_NOTE,
+  }
+}
 
 const asList = (value) => (Array.isArray(value) ? value : [])
 
@@ -491,7 +567,7 @@ function splitAbsolutePath(candidate) {
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md", commit? }
  */
-export async function task_create({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_create({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -507,6 +583,10 @@ export async function task_create({ deskRoot, input, person = null, readiness, e
   if (values.status != null && !LIFECYCLE_STATES.includes(values.status)) {
     throw new Error(`task_create: ${invalidStatusMessage(values.status)}`)
   }
+  if (values.focus !== undefined && typeof values.focus !== "boolean") {
+    throw new Error("task_create: `focus` must be true or false")
+  }
+  refuseRecordKeys("task_create", values, values.frontmatter)
 
   const filePath = await resolveWriteTarget({
     deskRoot,
@@ -528,6 +608,10 @@ export async function task_create({ deskRoot, input, person = null, readiness, e
       `task_create: task already exists at ${relPath(deskRoot, filePath)}`,
     )
   }
+  // A delivered task sits in the archive under its own slug; creating over it would start the job again with a clean record.
+  if (await pathExists(await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug] }))) {
+    throw new Error(`task_create: ${track}/${slug} already exists in the archive. To work on it again, bring it back with task_move (unarchive: true), then task_update with return_reason. To start different work, choose another slug.`)
+  }
 
   const ts = nowIso()
   const data = {
@@ -541,6 +625,17 @@ export async function task_create({ deskRoot, input, person = null, readiness, e
   for (const k of OPTIONAL_RUNTIME_FIELDS) {
     if (values[k] !== undefined) data[k] = values[k]
   }
+  // A card starts its flow record here, then moves from drafting to its first status through the same `move` every later change uses, so a card born at `validating` has its first review point and one born `done` is delivered at once, unsigned (it carries no evidence).
+  const startedFlow = {
+    since: "created",
+    rev: 0,
+    reached: "drafting",
+    first_validating_at: null,
+    first_delivered_at: null,
+    delivered_at: null,
+    deliveries: 0,
+  }
+  Object.assign(data, toFrontmatter(move(readRecord({ flow: startedFlow }), { from: "drafting", to: data.status, at: ts })))
   // Desk records which repos are local-only (a clone with no remote and no `url`), here and when boot first sees one; a
   // `local_only` the caller wrote is dropped (see `local-only.js`).
   if (data.repos !== undefined) data.repos = withLocalOnlyRecorded(data.repos, { spawnGit, homeDir: env.HOME, deskRoot })
@@ -554,6 +649,19 @@ export async function task_create({ deskRoot, input, person = null, readiness, e
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
+  if (data.status === "done") {
+    result.signoff = "delivered_unsigned"
+    result.signoff_note = "This task was created already done, with no evidence, so there is nothing to show the operator; it stays unsigned. Create a task at drafting and finish it with evidence instead."
+  }
+  // The focus moves only once the card exists: a create that threw above never reaches this line. A create without
+  // `focus` (a parked follow-up) leaves the focus alone and, with nothing focused, carries the no-focus hint.
+  if (values.focus === true && statusContext.focus) {
+    statusContext.focus.set({ track, slug })
+    result.focused = true
+  } else if (values.focus !== true) {
+    const note = focusNote(statusContext)
+    if (note !== undefined) result.focus_note = note
+  }
   return result
 }
 
@@ -616,7 +724,7 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  * "failed", reason }` on the result, omitted entirely on a normal, silent
  * success, when the file was already dirty, or on a non-Git desk.
  *
- * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note? } (when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
+ * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note?, factory_report?, factory_report_unavailable? } (`factory_report_unavailable` is the reason code a card that reached done has no report link, and `factory_report` the link when this call filled it in on such a card; when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
  * `next_step_note` when the call added a note or changed the status without passing `next_step`: the card's current next
  * step, or null, and a reminder; `report_as` and `report_note` whenever the status is not terminal: the sentence to
  * report the task with, and a line against calling it done)
@@ -629,7 +737,7 @@ function requiredText(value, field) {
   return value
 }
 
-export async function task_update({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
@@ -653,6 +761,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     throw new Error("task_update: `status` and `frontmatter.status` disagree; pass the status once, as `status`")
   }
   const frontmatter = values.status === undefined ? givenFrontmatter : { ...(givenFrontmatter ?? {}), status: values.status }
+  refuseRecordKeys("task_update", frontmatter)
   const nextStep = values.next_step === undefined ? undefined : requiredText(values.next_step, "next_step")
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
@@ -712,6 +821,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     }
     merged.repos_removed = [...asList(existing.data.repos_removed), ...priorRepos.map((repo) => ({ name: repo.name, reason, at: merged.updated }))]
   }
+  // A backwards move without a reason is refused here, before anything is written or requested.
+  const returnReason = checkReturnReason(existing.data, { to: merged.status, returnReason: values.return_reason })
+  let delivered = null
+  let report = null
   if (merged.status === "done" && existing.data.status !== "done") {
     await assertDoneEvidence(evidence, deskRoot, "task_update", {
       // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
@@ -721,8 +834,27 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
       files: [filePath], spawnGit, homeDir: env.HOME,
     })
     merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
-    const link = await factoryReportFor({ deskRoot, person, track, slug, env })
-    if (link !== null) merged.factory_report = link
+    delivered = deliveryAnswer({ data: merged, slug, ref: merged.evidence.ref })
+    report = await factoryReportFor({ deskRoot, person, track, slug, env })
+  } else if (Object.hasOwn(existing.data, "factory_report_unavailable")) {
+    // A card that reached done without a link is asked again on every later update, so a link that can now be named is filled in.
+    report = await factoryReportFor({ deskRoot, person, track, slug, env })
+  }
+  if (report !== null) {
+    for (const [key, value] of Object.entries(reportFields(report))) {
+      if (value === undefined) delete merged[key]
+      else merged[key] = value
+    }
+  }
+
+  // Every status change keeps the card's record (`flow`, and `returns` when work went backwards), not only a move to done.
+  if (merged.status !== existing.data.status) {
+    const kept = applyMove(existing.data, { to: merged.status, at: merged.updated, returnReason })
+    Object.assign(merged, kept)
+    // A return from done leaves no current signoff: the card has one current delivery, and its history is in `returns`.
+    if (kept.flow !== undefined && kept.signoff === undefined) delete merged.signoff
+    // Nor its evidence: the proof of a delivery that was sent back no longer says the task is done. The next `done` records its own.
+    if (existing.data.status === "done") delete merged.evidence
   }
 
   let newBody = existing.content
@@ -742,8 +874,16 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
+  // A return asks the factory to re-derive the job's sessions, as a terminal move does; a return to a terminal status was asked for just above.
+  else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
+  if (delivered !== null) Object.assign(result, delivered)
+  Object.assign(result, reportResult(report, delivered === null))
+  if (returnReason !== undefined) {
+    const line = parseReturn(merged.returns.at(-1))
+    result.return_recorded = `${line.from} to ${line.to}, ${line.reason}, caught ${line.caught}`
+  }
   // Said outright so no agent makes a redundant `git commit` of the card: Desk committed it, and its push is scheduled
   // in the background (so `desk_pushed` is false at this moment, not a failure).
   if (deskCommit !== null) {
@@ -768,6 +908,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     result.report_as = `Task ${slug} is at ${status} (not done): ${reportStep(currentStep)}`
     result.report_note = `Do not tell the operator this task is done; it is at ${status}.`
   }
+  const focus = focusNote(statusContext, { track, slug })
+  if (focus !== undefined) result.focus_note = focus
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
 }
@@ -787,6 +929,38 @@ async function archivedTaskStatus(archivedFile) {
   } catch {
     return null
   }
+}
+
+// A card already in `_archive/` that records why it has no report link (`factory_report_unavailable`) is asked again whenever task_archive is
+// called for it, which is the one tool path that reaches an archived card; `factory reconcile` counts such cards (`report_link_unavailable`).
+// Returns the result fields: the filled link or the current reason, `commit` when committing the card failed, and
+// `factory_report_unchanged: true` when the answer is the one the card already records, so nothing was written or committed.
+async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush }) {
+  let data
+  try {
+    data = (await readMarkdown(archivedFile)).data
+  } catch {
+    return {}
+  }
+  if (!Object.hasOwn(data, "factory_report_unavailable")) return {}
+  const report = await factoryReportFor({ deskRoot, person, track, slug, env })
+  const fields = reportFields(report)
+  // The same answer the card already records changes nothing: no write and no commit (an empty commit would read as a failed one).
+  if (Object.entries(fields).every(([key, value]) => data[key] === value)) return { ...reportResult(report, false), factory_report_unchanged: true }
+  await patchMarkdownFrontmatter(archivedFile, fields)
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
+  const root = path.resolve(personPrefix(deskRoot, person))
+  const commit = stageAndCommitMove(root, [archivedFile], `task_archive: ${track}/${slug} report link`, spawnGit)
+  if (commit === undefined && isGitRepository(root, spawnGit)) schedulePush({ root: deskRoot })
+  return { ...reportResult(report, true), ...(commit === undefined ? {} : { commit }) }
+}
+
+// An archive never changes the held focus: the factory credits a declared task until the next `task_focus` call, so the held focus
+// stays what the transcript says, and a later update of another card gets the "focused on" hint. An archive of any other card
+// carries the hint for a session that is focused elsewhere, or the no-focus hint.
+function withArchiveFocus(statusContext, target, result) {
+  const note = focusNote(statusContext, target)
+  return note === undefined ? result : { ...result, focus_note: note }
 }
 
 /**
@@ -836,7 +1010,7 @@ async function archivedTaskStatus(archivedFile) {
  *
  * Returns: { status: "archived" | "already_archived", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -876,11 +1050,13 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
 
   if (!srcExists && dstExists) {
     const archivedStatus = await archivedTaskStatus(archivedFile)
+    const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
-    return {
+    return withArchiveFocus(statusContext, { track, slug }, {
       status: "already_archived",
       path: relPath(deskRoot, archivedFile),
-    }
+      ...refilled,
+    })
   }
   if (!srcExists && !dstExists) {
     throw new Error(
@@ -913,6 +1089,14 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
         await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, existingRepos: sourceCard.data.repos, created: sourceCard.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME })
         archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
       }
+      // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
+      // with the folder untouched, never after a move it would leave unpatched and uncommitted.
+      archiveBump.updated = nowIso()
+      try {
+        archiveBump.record = applyMove(sourceCard.data, { to: archiveBump.status, at: archiveBump.updated })
+      } catch (error) {
+        throw new Error(`task_archive: nothing was moved. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused (${error.message}). Set the card's status with task_update first (a move back from done takes \`return_reason\`), then archive it.`)
+      }
     }
   }
 
@@ -935,23 +1119,31 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   await target([track, "_archive", slug])
   const filePath = await target([track, "_archive", slug, "task.md"])
   let finalStatus = null
+  let delivered = null
+  let report = null
   if (await pathExists(filePath)) {
     const existing = await readMarkdown(filePath)
     finalStatus = existing.data.status
+    // Patch only the fields this archive changes (`status:`, `updated:`, the record, `evidence:` and the report link fields) in place:
+    // every other byte of the card — quoting, date formats, block scalars, key order — survives.
+    const patchFields = {}
     if (archiveBump) {
-      // Patch only `status:`/`updated:`/`evidence:`/`factory_report:` in
-      // place: every other byte of the card — quoting, date formats, block
-      // scalars, key order — survives.
-      const updated = nowIso()
-      const patchFields = { status: archiveBump.status, updated }
+      const { updated } = archiveBump
+      // Every status change the archive makes keeps the card's record, the cancel bump included.
+      Object.assign(patchFields, { status: archiveBump.status, updated, ...archiveBump.record })
       if (archiveBump.status === "done") {
         patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
-        const link = await factoryReportFor({ deskRoot, person, track, slug, env })
-        if (link !== null) patchFields.factory_report = link
+        delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
+        report = await factoryReportFor({ deskRoot, person, track, slug, env })
       }
+      finalStatus = archiveBump.status
+    }
+    // A card that records why it has no report link is asked again whenever it is archived, so archiving never makes the reason permanent.
+    if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable")) report = await factoryReportFor({ deskRoot, person, track, slug, env })
+    if (report !== null) Object.assign(patchFields, reportFields(report))
+    if (Object.keys(patchFields).length > 0) {
       await patchMarkdownFrontmatter(filePath, patchFields)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-      finalStatus = archiveBump.status
     }
   }
 
@@ -964,5 +1156,10 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
   const result = { status: "archived", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
-  return result
+  if (delivered !== null) Object.assign(result, delivered)
+  Object.assign(result, reportResult(report, delivered === null))
+  return withArchiveFocus(statusContext, { track, slug }, result)
 }
+
+// The write, stage, commit and finalize helpers `task_signoff` uses, so a sign-off goes through the same path as `task_update`.
+export { DESK_COMMIT_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize }

@@ -22,6 +22,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import {
+  allOutboxNames,
   clearFinalize,
   factoryStateRoot,
   gitBlobSha,
@@ -39,6 +40,7 @@ import {
   requestFinalize,
   setConsent,
   setJobsForFile,
+  updateStatus,
   rebuildJobsIndex,
   writeLocalFacts,
   writeMarker,
@@ -98,7 +100,7 @@ async function scratch(run) {
 
 function validLocalFacts(overrides = {}) {
   return {
-    schema: "desk.factory.local/1",
+    schema: "desk.factory.local/2",
     session: {
       host: "claude-code",
       id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60",
@@ -900,6 +902,31 @@ test("writeStatus rejects a non-object patch", () => scratch(async (env) => {
   await assert.rejects(() => writeStatus(env, []), TypeError)
 }))
 
+test("updateStatus keeps unrelated top-level keys and serializes concurrent mutations", () => scratch(async (env) => {
+  await writeStatus(env, { note: "kept", derivations: { a: { route: STORE } } })
+  await Promise.all([1, 2, 3, 4].map((n) => updateStatus(env, (current) => ({ ...current, count: (current.count ?? 0) + n }))))
+  const status = await readStatus(env)
+  assert.equal(status.count, 10)
+  assert.equal(status.note, "kept")
+  assert.deepEqual(status.derivations, { a: { route: STORE } })
+  assert.deepEqual(status.last_flush, {})
+}))
+
+test("updateStatus returns the written value", () => scratch(async (env) => {
+  const next = await updateStatus(env, (current) => ({ ...current, x: 1 }))
+  assert.deepEqual(next, { last_flush: {}, x: 1 })
+  assert.deepEqual(await readStatus(env), next)
+}))
+
+test("updateStatus refuses a mutation without a last_flush object and writes nothing", () => scratch(async (env) => {
+  await writeStatus(env, { note: "kept" })
+  await assert.rejects(() => updateStatus(env, () => ({ note: "lost" })), /last_flush/)
+  await assert.rejects(() => updateStatus(env, () => null), TypeError)
+  await assert.rejects(() => updateStatus(env, () => ({ last_flush: [] })), TypeError)
+  assert.equal((await readStatus(env)).note, "kept")
+  await assert.rejects(() => updateStatus(env, "not a function"), TypeError)
+}))
+
 // ---------------------------------------------------------------------------
 // Visibility cache.
 // ---------------------------------------------------------------------------
@@ -1247,6 +1274,19 @@ test("rebuildJobsIndex mirrors the outbox and writes its stamp", () => scratch(a
   assert.equal(typeof stamp.at, "string")
 }))
 
+test("a rebuilt jobs index lists an outcome-only job, and an outcomes value that is not a list is ignored", () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const outcome = (job) => ({ job, rev: 1, state: "delivered_unsigned", verified: null, reason: null, deliveries: 1, delivered_at: null, signed_at: null, observed_at: null })
+  const written = await writeLocalFacts(env, STORE, validLocalFacts({ jobs: [{ job: JOB, basis: ["desk_tool"], task_created_at: null, transitions: [], observed: null }], outcomes: [outcome(JOB), outcome(JOB2)] }))
+  assert.ok(written.written, JSON.stringify(written.errors))
+  const other = await writeLocalFacts(env, STORE, validLocalFacts({ session: { ...validLocalFacts().session, id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f62" } }))
+  const dir = path.join(await factoryStateRoot(env), "outbox", "ourostack__factory")
+  const facts = JSON.parse(readFileSync(path.join(dir, other.name), "utf8"))
+  writeFileSync(path.join(dir, other.name), JSON.stringify({ ...facts, outcomes: "nope" }))
+  assert.deepEqual(await rebuildJobsIndex(env, STORE), { jobs: 2, files: 2 })
+  assert.deepEqual(await readJobsIndex(env), { [JOB]: [written.name], [JOB2]: [written.name] })
+}))
+
 test("rebuildJobsIndex ignores non-directory entries in the outbox", () => scratch(async (env) => {
   const root = await factoryStateRoot(env)
   mkdirSync(path.join(root, "outbox"), { recursive: true })
@@ -1456,4 +1496,32 @@ test("withLock propagates an unexpected failure checking a held lock's staleness
   } finally {
     mocked.mock.restore()
   }
+}))
+
+test("allOutboxNames lists every store's facts names across the outbox, the retracted copies and the quarantine, names only", () => scratch(async (env, base) => {
+  const root = await factoryStateRoot(env)
+  const a = "claude-code-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60.json"
+  const b = "copilot-cli-4b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f61.json"
+  const c = "codex-cli-5b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f62.json"
+  const put = (folder, slug, name, text = "{}") => {
+    mkdirSync(path.join(root, folder, slug), { recursive: true })
+    writeFileSync(path.join(root, folder, slug, name), text)
+  }
+  put("outbox", "ourostack__factory", a)
+  put("outbox", "other__store", b)
+  put("outbox", "ourostack__factory", "notes.txt")
+  put("outbox", "not-a-store", c)
+  put("retracted-copies", "ourostack__factory", c)
+  put("quarantine", "other__store", a)
+  // A link is never listed, and a leftover folder is not a store.
+  symlinkSync(path.join(root, "outbox", "other__store", b), path.join(root, "outbox", "other__store", c))
+  const listed = await allOutboxNames(env)
+  const key = ({ store, name }) => `${store} ${name}`
+  assert.deepEqual(listed.copies.map(key).sort(), [`other/store ${b}`, `ourostack/factory ${a}`, `ourostack/factory ${c}`].sort())
+  assert.deepEqual(listed.quarantined.map(key), [`other/store ${a}`])
+  assert.equal(JSON.stringify(listed).includes(base), false)
+}))
+
+test("allOutboxNames returns nothing when no store has a folder yet", () => scratch(async (env) => {
+  assert.deepEqual(await allOutboxNames(env), { copies: [], quarantined: [] })
 }))

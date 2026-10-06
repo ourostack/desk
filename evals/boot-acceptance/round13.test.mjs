@@ -285,3 +285,38 @@ test("cleanupRunDir kills a real background process that names the run folder, t
     try { process.kill(-child.pid, "SIGKILL") } catch { /* gone */ }
   }
 })
+
+// Round AA: the first-hand replies that said the clone is absent in words the check did not know.
+test("missing-clone: Claude's \"doesn't exist\" and Copilot's \"is not available on this machine\" (round AA) report the clone as missing", () => {
+  const claude = "**Blocker:** The valve-firmware repo referenced in the task (`~/code/valve-firmware`) doesn't exist in this environment.\n\nWhich would you prefer?"
+  const copilot = "The `valve-firmware` repo is not available on this machine. Per the instructions, I need to ask where it is or have you push it from the other machine."
+  for (const reply of [claude, copilot]) assert.equal(check("missing-clone", BOOT_PLAIN, reply).outcome, "pass", reply)
+  assert.ok(failures(check("missing-clone", BOOT_PLAIN, "valve-firmware-flasher is processing; the next step is the dry-run flag.")).includes("never reported the task's local clone as missing"))
+})
+
+test("missing-clone: a reply must say the repository itself is absent; a bare 'clone', 'unavailable' or 'cannot find' beside the name is not a report (round AA review)", () => {
+  const missing = "the task's local clone as missing"
+  for (const reply of [
+    "The dry-run flag is unavailable.",
+    "I cannot find the flag in valve-firmware.",
+    "valve-firmware is cloned at ~/code/valve-firmware and ready.",
+    "I can clone valve-firmware if you want.",
+    "The valve-firmware flag is not available yet.",
+    "I could not find the dry-run flag; valve-firmware looks fine.",
+    "The repository isn't available for review yet, but the dry-run flag is unavailable.",
+    "The task expects valve-firmware at ~/code, but it is not ready to review yet.",
+    "The valve-firmware repository is fine, but the dry-run flag isn't in cli.py yet.",
+  ]) assert.ok(failures(check("missing-clone", BOOT_PLAIN, reply)).includes(`never reported ${missing}`), reply)
+  for (const reply of [
+    "I cannot find valve-firmware on this machine.",
+    "I couldn't find the `valve-firmware` repo.",
+    "There is no local clone of valve-firmware.",
+    "The repository isn't at its recorded path `~/code/valve-firmware`.",
+    "valve-firmware does not exist here.",
+    "The `~/code/valve-firmware` folder is missing.",
+    "The boot found that **valve-firmware** repo is missing. Where is valve-firmware cloned?",
+    "The task is set to resume, but the repository isn't available. Where is valve-firmware cloned?",
+    "The task expects it at `~/code/valve-firmware`, but it's not there. Tell me the location.",
+    "I need to locate the `valve-firmware` repository. The boot found the card, but the repo it references isn't at the expected location (`~/code/valve-firmware`).",
+  ]) assert.equal(check("missing-clone", BOOT_PLAIN, reply).outcome, "pass", reply)
+})

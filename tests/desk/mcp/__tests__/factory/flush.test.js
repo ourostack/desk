@@ -12,12 +12,13 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
-  factoryStateRoot, gitBlobSha, readConsent, readMachineSecret, readStatus, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus, writeVisibilityCache,
+  factoryStateRoot, gitBlobSha, listFinalizeRequests, readConsent, readMachineSecret, readStatus, requestFinalize, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus, writeVisibilityCache,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { serializePublished, toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { BOT, TOKEN, fakeGitHub, httpError } from "./_fake_github.js"
+import { indexJob } from "./_index_helper.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
@@ -440,14 +441,18 @@ test("an unauthenticated retry due only after the deadline is already spent is r
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // For this exact fixture (one plugin, no refs), the account's own gh calls make exactly eight `now()`
-  // reads before the retry's own precheck: a real clock racing them is at the mercy of host load, so this
-  // counts invocations instead. The ninth read is the retry's precheck, already past a deadline the first
-  // eight never approached.
-  let calls = 0
-  const now = () => { calls += 1; return calls >= 9 ? 2_000_000 : 1_000_000 }
-  const anonymousLookup = async () => { throw new Error("the retry must never be attempted once the deadline is already spent") }
+  // The clock is told where it is being read, not how many times: the read made from inside the unauthenticated retry's own precheck (`anonymousRepo`) reports a time past the deadline, and every other read reports a time the deadline never approached. Adding or removing any other clock read cannot move which check this reaches, and if the retry's precheck is ever renamed or skipped the test fails on `reachedPrecheck` instead of passing without having tested it.
+  let reachedPrecheck = false
+  let attempted = false
+  const now = () => {
+    if (!new Error().stack.includes("anonymousRepo")) return 1_000_000
+    reachedPrecheck = true
+    return 2_000_000
+  }
+  const anonymousLookup = async () => { attempted = true; throw new Error("the retry must never be attempted once the deadline is already spent") }
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup, now, deadlineMs: 500_000 }), { result: "deadline" })
+  assert.equal(reachedPrecheck, true, "the flush reached the unauthenticated retry's precheck")
+  assert.equal(attempted, false)
 }))
 
 test("an unauthenticated retry that never answers is cut off at the deadline", () => scratch(async ({ env }) => {
@@ -456,13 +461,20 @@ test("an unauthenticated retry that never answers is cut off at the deadline", (
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // As above, the ninth `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
+  // As above, the clock is told where it is read. The retry's own precheck reports the deadline a mere 100ms off,
   // which becomes the real timer the retry races against, so a hung lookup is cut off quickly and
   // deterministically rather than by racing host load against a short wall-clock deadline.
-  let calls = 0
-  const now = () => { calls += 1; return calls === 9 ? 1_100_000 : 1_000_000 }
-  const hung = { ...github, anonymousLookup: () => new Promise(() => {}) }
+  let reachedPrecheck = false
+  let lookups = 0
+  const now = () => {
+    if (!new Error().stack.includes("anonymousRepo")) return 1_000_000
+    reachedPrecheck = true
+    return 1_100_000
+  }
+  const hung = { ...github, anonymousLookup: () => { lookups += 1; return new Promise(() => {}) } }
   assert.deepEqual(await flush(env, { store: STORE, runner: hung.runner, anonymousLookup: hung.anonymousLookup, now, deadlineMs: 100_100 }), { result: "deadline" })
+  assert.equal(reachedPrecheck, true, "the flush reached the unauthenticated retry's precheck")
+  assert.equal(lookups, 1, "the retry was attempted and then cut off by the deadline")
 }))
 
 test("an unauthenticated retry answering with something that is not a result object at all is unexpected", () => scratch(async ({ env }) => {
@@ -600,6 +612,264 @@ test("a public or unknown desk publishes machine-keyed job IDs without timing; a
   const privatePublished = read(names[1])
   assert.deepEqual(privatePublished.jobs.map((job) => job.job), plain)
   assert.equal(privatePublished.jobs[0].session_offset_ms, 86400000)
+}))
+
+test("agreement table, flush row: a session with no marker keeps the desk its receipt recorded; with neither it is withheld, never public", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const privateDesk = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  await markerFor(env, privateDesk, 1)
+  const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
+  // Session 2's marker was pruned but its receipt names the private desk; session 3 has no marker and no receipt desk.
+  await writeStatus(env, { derivations: { [names[1]]: { desk_root: privateDesk, desk_repo: "acme/private-desk" }, [names[2]]: { binding_version: 5 } } })
+  const github = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const head = github.headFacts(STORE, await intakeBranch(env))
+  const read = (name) => JSON.parse(github.blobs.get(head.get(name).sha))
+  const secret = await readMachineSecret(env)
+  const keyed = (job) => createHmac("sha256", secret).update(job).digest("hex").slice(0, 32)
+  const plain = GOLDEN.jobs.map((job) => job.job)
+  for (const name of [names[0], names[1]]) {
+    const published = read(name)
+    assert.deepEqual(published.jobs.map((job) => job.job), plain, name)
+    assert.equal(published.jobs[0].session_offset_ms, 86400000, name)
+  }
+  const withheld = read(names[2])
+  assert.deepEqual(withheld.jobs.map((job) => job.job).sort(), plain.map(keyed).sort())
+  assert.ok(withheld.jobs.every((job) => job.session_offset_ms === null))
+}))
+
+// What a store file says about a session's jobs, read back from the fake GitHub.
+async function storedJobs(github, env, name) {
+  const head = github.headFacts(STORE, await intakeBranch(env))
+  return JSON.parse(github.blobs.get(head.get(name).sha)).jobs
+}
+
+test("a session published while its desk was public is never published plain once its marker is gone, even when the desk is private now", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/flipped-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  await writeStatus(env, { derivations: { [name]: { desk_root: desk, desk_repo: "acme/flipped-desk" } } })
+  const github = fakeGitHub({ visibility: { "acme/flipped-desk": "public" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const secret = await readMachineSecret(env)
+  const keyed = GOLDEN.jobs.map((job) => createHmac("sha256", secret).update(job.job).digest("hex").slice(0, 32)).sort()
+  assert.deepEqual((await storedJobs(github, env, name)).map((job) => job.job).sort(), keyed, "published keyed while public")
+  assert.equal((await readStatus(env)).derivations[name].desk_unprotected, true, "the flush marks it")
+  // The marker is pruned and the desk turned private (its answer is fresh in the cache).
+  await fs.rm(path.join(await factoryStateRoot(env), "markers", `claude-code-${sessionId(1)}.json`))
+  await writeVisibilityCache(env, { "acme/flipped-desk": { visibility: "private", checked_at: new Date().toISOString() } })
+  // A changed local copy (the session derived again) goes out again: it must still publish keyed.
+  const again = localFacts(1)
+  again.session.ended_at = "2026-09-25T09:31:00.000Z"
+  again.session.derived_through = again.session.ended_at
+  await put(env, again)
+  const result = (await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result
+  assert.equal(result, "delivered_pr_open", "the changed copy was published again")
+  const jobs = await storedJobs(github, env, name)
+  assert.deepEqual(jobs.map((job) => job.job).sort(), keyed, "still keyed: never less protected than it was published")
+  assert.ok(jobs.every((job) => job.session_offset_ms === null))
+}))
+
+test("a marker-less session whose root now holds another repository, or whose receipt recorded no repository, is withheld", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
+  await writeStatus(env, { derivations: {
+    [names[0]]: { desk_root: desk, desk_repo: "acme/old-desk" },
+    [names[1]]: { desk_root: desk },
+    [names[2]]: { desk_root: desk, desk_repo: "acme/private-desk" },
+  } })
+  const github = fakeGitHub({ visibility: { "acme/private-desk": "private", "acme/old-desk": "private" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const secret = await readMachineSecret(env)
+  const keyed = GOLDEN.jobs.map((job) => createHmac("sha256", secret).update(job.job).digest("hex").slice(0, 32)).sort()
+  for (const name of [names[0], names[1]]) {
+    const jobs = await storedJobs(github, env, name)
+    assert.deepEqual(jobs.map((job) => job.job).sort(), keyed, name)
+    assert.ok(jobs.every((job) => job.session_offset_ms === null), name)
+  }
+  assert.deepEqual((await storedJobs(github, env, names[2])).map((job) => job.job), GOLDEN.jobs.map((job) => job.job), "the same repository, recorded, never unprotected: plain")
+}))
+
+test("a marker session whose desk root now holds another repository, or none, is published in its protected form", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const swapped = await deskRepository(base, "https://github.com/acme/other-private-desk.git")
+  const gone = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  const same = await deskRepository(base, "https://github.com/acme/private-desk.git")
+  await markerFor(env, swapped, 1)
+  await markerFor(env, gone, 2)
+  await markerFor(env, same, 3)
+  const names = [await put(env, localFacts(1)), await put(env, localFacts(2)), await put(env, localFacts(3))]
+  // The receipts record the session's own desk, a public one for the first and the private one for the others.
+  await writeStatus(env, { derivations: {
+    [names[0]]: { desk_root: swapped, desk_repo: "acme/public-desk" },
+    [names[1]]: { desk_root: gone, desk_repo: "acme/private-desk" },
+    [names[2]]: { desk_root: same, desk_repo: "acme/private-desk" },
+  } })
+  execFileSync("git", ["-C", gone, "remote", "set-url", "origin", "git@gitlab.com:acme/private-desk.git"])
+  const github = fakeGitHub({ visibility: { "acme/other-private-desk": "private", "acme/private-desk": "private", "acme/public-desk": "public" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const secret = await readMachineSecret(env)
+  const keyed = GOLDEN.jobs.map((job) => createHmac("sha256", secret).update(job.job).digest("hex").slice(0, 32)).sort()
+  for (const name of [names[0], names[1]]) {
+    const jobs = await storedJobs(github, env, name)
+    assert.deepEqual(jobs.map((job) => job.job).sort(), keyed, name)
+    assert.ok(jobs.every((job) => job.session_offset_ms === null), name)
+  }
+  assert.deepEqual((await storedJobs(github, env, names[2])).map((job) => job.job), GOLDEN.jobs.map((job) => job.job), "the same repository still: plain")
+}))
+
+const hoursAgo = (hours) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
+
+// One private-desk session with a marker, a cached answer of `cached` checked `hours` ago and a GitHub that says `truth`.
+async function cachedDesk(context, { cached, hours, truth }) {
+  const { base, env } = context
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/cached-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  await writeVisibilityCache(env, { "acme/cached-desk": { visibility: cached, checked_at: hoursAgo(hours) } })
+  const github = fakeGitHub({ visibility: { "acme/cached-desk": truth } })
+  const result = await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  const asked = apiCalls(github, "GET", /^repos\/acme\/cached-desk$/u).length
+  const delivered = result.result === "delivered_pr_open"
+  const plain = delivered && (await storedJobs(github, env, name)).some((job) => job.session_offset_ms !== null)
+  return { result, asked, plain, stored: delivered, github, env, name }
+}
+
+test("a desk made public within the hour publishes nothing plain: its private answer is asked again whatever its age", () => scratch(async (context) => {
+  const turned = await cachedDesk(context, { cached: "private", hours: 1, truth: "public" })
+  assert.equal(turned.asked, 1, "asked afresh although the answer was an hour old")
+  assert.equal(turned.plain, false, "the desk is public now: protected form")
+  assert.equal((await readVisibilityCache(turned.env))["acme/cached-desk"].visibility, "public", "and the answer is kept")
+}))
+
+test("a private answer asked afresh and still private publishes plain, with one ask per desk per flush", () => scratch(async (context) => {
+  const young = await cachedDesk(context, { cached: "private", hours: 1, truth: "private" })
+  assert.deepEqual([young.asked, young.plain], [1, true])
+}))
+
+test("a desk never asked before is asked once, not twice, in a flush", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/new-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  const github = fakeGitHub({ visibility: { "acme/new-desk": "private" } })
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  assert.equal(apiCalls(github, "GET", /^repos\/acme\/new-desk$/u).length, 1)
+  assert.ok((await storedJobs(github, env, name)).some((job) => job.session_offset_ms !== null))
+}))
+
+test("a protected form never needs a fresh answer: a public answer inside seven days is used without asking, even if the desk is private now", () => scratch(async (context) => {
+  const open = await cachedDesk(context, { cached: "public", hours: 72, truth: "private" })
+  assert.deepEqual([open.asked, open.plain], [0, false])
+}))
+
+test("an unknown cached answer inside seven days makes no call and publishes protected", () => scratch(async (context) => {
+  const unknown = await cachedDesk(context, { cached: "unknown", hours: 1, truth: "private" })
+  assert.deepEqual([unknown.asked, unknown.plain], [0, false])
+}))
+
+test("when the fresh question cannot be answered the desk's sessions wait: nothing is published, the count is recorded, and nothing is marked", () => scratch(async (context) => {
+  const failed = await cachedDesk(context, { cached: "private", hours: 72, truth: 500 })
+  assert.equal(failed.asked, 1)
+  assert.equal(failed.result.result, "nothing_pending", "nothing else to deliver")
+  assert.equal(failed.stored, false, "no file of this session reached the store")
+  const flushEntry = (await readStatus(failed.env)).last_flush[STORE]
+  assert.equal(flushEntry.visibility_unasked, 1)
+  assert.match(flushEntry.visibility_unasked_since, /^\d{4}-/u)
+  assert.equal((await readStatus(failed.env)).derivations?.[failed.name]?.desk_unprotected, undefined, "a transient failure loses no credit for good")
+  // A second flush that still cannot ask keeps the first time; one that can ask publishes and clears the record.
+  const { flush } = await load()
+  const again = fakeGitHub({ visibility: { "acme/cached-desk": 500 } })
+  await flush(failed.env, { store: STORE, runner: again.runner, anonymousLookup: again.anonymousLookup })
+  assert.equal((await readStatus(failed.env)).last_flush[STORE].visibility_unasked_since, flushEntry.visibility_unasked_since)
+  const working = fakeGitHub({ visibility: { "acme/cached-desk": "private" } })
+  assert.equal((await flush(failed.env, { store: STORE, runner: working.runner, anonymousLookup: working.anonymousLookup })).result, "delivered_pr_open")
+  assert.ok((await storedJobs(working, failed.env, failed.name)).some((job) => job.session_offset_ms !== null), "published plain once the desk could be asked")
+  const after = (await readStatus(failed.env)).last_flush[STORE]
+  assert.equal(after.visibility_unasked, undefined)
+  assert.equal(after.visibility_unasked_since, undefined)
+}))
+
+test("a deadline that falls during the fresh visibility question ends the flush as deadline and leaves the recorded deferral count as it was", () => scratch(async (outer) => {
+  const { flush } = await load()
+  const prepare = async ({ base, env }) => {
+    await optIn(env)
+    const desk = await deskRepository(base, "https://github.com/acme/cached-desk.git")
+    await markerFor(env, desk, 1)
+    await put(env, localFacts(1))
+    await writeVisibilityCache(env, { "acme/cached-desk": { visibility: "private", checked_at: hoursAgo(72) } })
+  }
+  // A probe flush finds which call is the fresh question; the real one runs the clock out during that call, so its own boundary reports the deadline.
+  await prepare(outer)
+  const probe = fakeGitHub({ visibility: { "acme/cached-desk": "private" } })
+  await flush(outer.env, { store: STORE, runner: probe.runner, anonymousLookup: probe.anonymousLookup })
+  const askAt = probe.calls.findIndex((call) => call.args.some((arg) => /^repos\/acme\/cached-desk$/u.test(arg)))
+  assert.ok(askAt > 0)
+  await scratch(async (context) => {
+    await prepare(context)
+    const since = "2026-09-20T00:00:00.000Z"
+    await writeStatus(context.env, { last_flush: { [STORE]: { at: "2026-09-27T00:00:00.000Z", result: "nothing_pending", visibility_unasked: 3, visibility_unasked_since: since } } })
+    let clock = Date.now()
+    const github = fakeGitHub({ visibility: { "acme/cached-desk": "private" }, intercept: (_call, index) => { if (index === askAt) clock += 200_000 } })
+    const result = await flush(context.env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup, now: () => clock, deadlineMs: 120_000 })
+    assert.deepEqual(result, { result: "deadline" })
+    assert.equal(github.calls.length, askAt + 1, "nothing is asked after the deadline")
+    const entry = (await readStatus(context.env)).last_flush[STORE]
+    assert.equal(entry.result, "deadline")
+    assert.equal(entry.visibility_unasked, 3, "not rewritten by a flush that never got to ask")
+    assert.equal(entry.visibility_unasked_since, since)
+  })
+}))
+
+test("finalize does not call a job delivered while its sessions wait for a visibility answer", () => scratch(async ({ base, env }) => {
+  const { finalize, flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/cached-desk.git")
+  await markerFor(env, desk, 1)
+  const name = await put(env, localFacts(1))
+  const job = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
+  await indexJob(env, job, name)
+  await writeStatus(env, { derivations: { [name]: { store: STORE, marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
+  await requestFinalize(env, { job, deskRoot: desk })
+  await writeVisibilityCache(env, { "acme/cached-desk": { visibility: "private", checked_at: hoursAgo(72) } })
+  const failing = fakeGitHub({ visibility: { "acme/cached-desk": 500 } })
+  const waiting = await finalize(env, { job, runner: failing.runner, anonymousLookup: failing.anonymousLookup, derive: async () => ({ result: "written", store: STORE }) })
+  assert.equal(waiting.result, "retained", "held for a visibility answer is not delivered")
+  assert.equal(waiting.flushes[STORE], "nothing_pending")
+  assert.equal((await listFinalizeRequests(env)).some((entry) => entry.job === job), true, "the request stays for the next try")
+  const working = fakeGitHub({ visibility: { "acme/cached-desk": "private" } })
+  // Once the answer can be asked the files go out; the job is delivered when the store has them on its default branch.
+  const sent = await finalize(env, { job, runner: working.runner, anonymousLookup: working.anonymousLookup, derive: async () => ({ result: "written", store: STORE }) })
+  assert.deepEqual(sent, { result: "retained", flushes: { [STORE]: "delivered_pr_open" } })
+  working.mergeOpenPr()
+  const done = await finalize(env, { job, runner: working.runner, anonymousLookup: working.anonymousLookup, derive: async () => ({ result: "written", store: STORE }) })
+  assert.equal(done.result, "cleared", JSON.stringify(done))
+  assert.equal((await listFinalizeRequests(env)).some((entry) => entry.job === job), false)
+  // A plain flush has no pending list to show.
+  assert.equal(Object.hasOwn(await flush(env, { store: STORE, runner: working.runner, anonymousLookup: working.anonymousLookup }), "pending"), false)
+}))
+
+test("a flush that stops before it can tell keeps the deferral count the last flush recorded, with or without its start time", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const github = fakeGitHub()
+  await writeStatus(env, { last_flush: { [STORE]: { at: "2026-09-27T00:00:00.000Z", result: "nothing_pending", visibility_unasked: 3 } } })
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  const kept = (await readStatus(env)).last_flush[STORE]
+  assert.equal(kept.visibility_unasked, 3)
+  assert.equal(kept.visibility_unasked_since, undefined, "no start was ever recorded, none is invented")
+  await writeStatus(env, { last_flush: { [STORE]: { at: "2026-09-27T00:00:00.000Z", result: "nothing_pending", visibility_unasked: 3, visibility_unasked_since: "2026-09-20T00:00:00.000Z" } } })
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  assert.equal((await readStatus(env)).last_flush[STORE].visibility_unasked_since, "2026-09-20T00:00:00.000Z")
 }))
 
 // ---------------------------------------------------------------------------

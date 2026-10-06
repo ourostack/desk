@@ -19,6 +19,7 @@ import { publishedAgentType } from "../../../../../plugins/desk/mcp/src/factory/
 import { reconcileMarker } from "../../../../../plugins/desk/mcp/src/factory/session-lifetime.js"
 import { factoryStateRoot, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { hostFlagsFor } from "../../../../../plugins/desk/mcp/src/factory/host-flags.js"
 import { END, SENTINEL as RUN_SENTINEL, START, STORE, scratch } from "./_session_helpers.js"
 import {
   CHILD_MODEL,
@@ -502,9 +503,9 @@ test("shell outcomes, retries, commits, MCP names, patches and PRs", () => withH
   assert.deepEqual(facts.counts.tool_failures, { shell: 3, edit: 1, desk: 1 }, "c2, c5 and r6; the failed patch; the failed desk call")
   assert.deepEqual(events.fileWrites.map(({ path: file }) => file), [path.resolve("/work/repo/rel/new.md"), "/abs/moved.md", path.resolve("/work/repo/a.md"), "/abs/shell.md"])
   assert.deepEqual(events.deskToolCalls, [
-    { at: at(33), name: "mcp__desk__task_create", track: "trk", slug: "one", person: "pat", status: "drafting", agent: 0, ok: true },
-    { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, agent: 0, ok: false },
-    { at: at(37), name: "mcp__desk__task_archive", track: "trk", slug: "three", person: null, status: null, agent: 0, ok: true },
+    { at: at(33), name: "mcp__desk__task_create", track: "trk", slug: "one", person: "pat", status: "drafting", statusOnly: false, agent: 0, ok: true },
+    { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, statusOnly: false, agent: 0, ok: false },
+    { at: at(37), name: "mcp__desk__task_archive", track: "trk", slug: "three", person: null, status: null, statusOnly: false, agent: 0, ok: true },
   ])
   assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 7, agent: 0, at_ms: 52000 }])
   assert.equal(facts.counts.tool_calls.desk, 4)
@@ -559,12 +560,13 @@ test("token totals are cumulative: each increase is a request, a lower total is 
 }))
 
 test("an unreadable total field keeps its baseline and is flagged; the next good total recovers the increase", () => withHome(async (home) => {
+  const rest = { cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 }
   for (const bad of [1.5, 2 ** 53 + 2, -5, "x"]) {
     const { facts } = await deriveRoot(home, [
       meta(), turnContext(1, ROOT_MODEL),
-      tokens(2, { input_tokens: 10, output_tokens: 5 }),
-      tokens(3, { input_tokens: bad, output_tokens: 8 }),
-      tokens(4, { input_tokens: 30, output_tokens: 9 }),
+      tokens(2, { ...rest, input_tokens: 10, output_tokens: 5 }),
+      tokens(3, { ...rest, input_tokens: bad, output_tokens: 8 }),
+      tokens(4, { ...rest, input_tokens: 30, output_tokens: 9 }),
     ])
     assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 3, tokens: { input: 30, output: 9, cache_read: 0, cache_write: 0, reasoning: 0 } }], String(bad))
     assert.ok(unavailable(facts, "tokens", "source_unreadable"))
@@ -578,8 +580,9 @@ test("a bad cached or reasoning field never nulls a good input or output, and a 
     tokens(2, { input_tokens: 100, cached_input_tokens: 1.5, output_tokens: 50, reasoning_output_tokens: -1 }),
     tokens(3, { input_tokens: "x", cached_input_tokens: 1.5, output_tokens: 2 ** 53 + 2 }),
   ])
-  assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: 100, output: 50, cache_read: 0, cache_write: 0, reasoning: 0 } }])
+  assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: 100, output: 50, cache_read: 0, cache_write: null, reasoning: 0 } }])
   assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+  assert.ok(unavailable(facts, "tokens", "field_absent"), "the counter the log left out is absent, not unreadable")
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 }))
 
@@ -588,8 +591,8 @@ test("token sums past the safe range are unknown and flagged, never an invalid f
   const lines = [meta(), turnContext(1, ROOT_MODEL)]
   // Each cycle climbs to a huge total, then resets low, so the deltas add up past 2**53.
   for (let cycle = 0; cycle < 3; cycle += 1) {
-    lines.push(tokens(2 + cycle * 2, { input_tokens: big, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 }))
-    lines.push(tokens(3 + cycle * 2, { input_tokens: 0, output_tokens: 0 }))
+    lines.push(tokens(2 + cycle * 2, { input_tokens: big, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 }))
+    lines.push(tokens(3 + cycle * 2, { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 }))
   }
   const { facts } = await deriveRoot(home, lines)
   assert.equal(facts.models[0].tokens.input, null)
@@ -605,8 +608,10 @@ test("tokens with no known model, a bad model, or no usage at all are flagged, n
   assert.equal(agentOf(badModel.facts, 0).model, "unknown")
   assert.ok(unavailable(badModel.facts, "models", "source_unreadable"))
   const noUsage = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL)])
-  assert.ok(unavailable(noUsage.facts, "tokens", "source_unreadable"))
-  assert.ok(unavailable(noUsage.facts, "models", "source_unreadable"))
+  assert.ok(unavailable(noUsage.facts, "tokens", "field_absent"))
+  assert.ok(unavailable(noUsage.facts, "models", "field_absent"))
+  const unusable = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), event(2, { type: "token_count", info: { total_token_usage: { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 } } })])
+  assert.ok(unavailable(unusable.facts, "tokens", "source_unreadable"), "samples that count for no model are unreadable")
 }))
 
 test("the most-used model wins, and ties keep the first seen", () => withHome(async (home) => {
@@ -790,4 +795,343 @@ test("a codex marker's end stands until a later model or tool record, then the s
   const quiet = codexMarker(ctx)
   writeFileSync(quiet.log_path, `${readFileSync(quiet.log_path, "utf8")}${JSON.stringify({ timestamp: later, type: "event_msg", payload: { type: "token_count" } })}\n`)
   assert.equal((await reconcileMarker(quiet)).ended_at, END, "a token count after the end is not activity")
+}))
+
+// --- Declared focus: focus calls, spawns, own-commit paths, shell writes, PRs, status ---
+
+test("a successful task_focus call becomes a focusCall at its call time; failed, running and invalid ones yield nothing, and it is not a deskToolCall", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "f1", "task_focus", { track: "desk-plugin", slug: "some-task" }, "mcp__desk__"), // 1
+    output(2, "f1", "ok"),
+    call(3, "f2", "task_focus", { track: "other", slug: "failed" }, "mcp__desk__"),
+    output(4, "f2", "Process exited with code 1"),
+    call(5, "f3", "task_focus", { clear: true }, "mcp__desk__"), // 5
+    output(6, "f3", "ok"),
+    call(7, "f4", "task_focus", { track: "..", slug: "bad" }, "mcp__desk__"),
+    output(8, "f4", "ok"),
+    call(9, "f5", "task_focus", {}, "mcp__desk__"),
+    output(10, "f5", "ok"),
+    call(11, "f6", "mcp__desk__task_focus", { track: 4, slug: "x", note: SENTINEL }),
+    output(12, "f6", "ok"),
+    call(13, "f7", "task_focus", { track: "a", slug: "b" }, "mcp__desk__"),
+    output(14, "f7", "Process running with session ID 3"),
+  ]
+  const { facts, events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.focusCalls, [
+    { agent: 0, at: at(1), track: "desk-plugin", slug: "some-task" },
+    { agent: 0, at: at(5), clear: true },
+  ])
+  assert.deepEqual(events.deskToolCalls, [])
+  assert.equal(JSON.stringify(facts).includes("some-task"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "c1", "task_create", { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }, "mcp__desk__"), // 1
+    output(2, "c1", "ok"),
+    call(3, "c2", "task_create", { track: "desk-plugin", slug: "parked", focus: false }, "mcp__desk__"),
+    output(4, "c2", "ok"),
+    call(5, "c3", "task_create", { track: "desk-plugin", slug: "truthy", focus: "true" }, "mcp__desk__"),
+    output(6, "c3", "ok"),
+    call(7, "c4", "task_create", { track: "desk-plugin", slug: "failed", focus: true }, "mcp__desk__"),
+    output(8, "c4", "Process exited with code 1"),
+    call(9, "c5", "task_create", { track: "..", slug: "bad", focus: true }, "mcp__desk__"),
+    output(10, "c5", "ok"),
+    call(11, "c6", "task_create", { track: "desk-plugin", focus: true }, "mcp__desk__"),
+    output(12, "c6", "ok"),
+    call(13, "c7", "task_create", { track: "desk-plugin", slug: "plain" }, "mcp__desk__"),
+    output(14, "c7", "ok"),
+    call(15, "c8", "task_update", { track: "desk-plugin", slug: "updated", focus: true }, "mcp__desk__"),
+    output(16, "c8", "ok"),
+  ]
+  const { facts, events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: at(1), track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], [undefined, true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
+test("each deriver records a successful task_signoff call and ignores a failed one (Codex)", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "s1", "task_signoff", { track: "desk-plugin", slug: "signed", outcome: "accepted", reason: SENTINEL }, "mcp__desk__"),
+    output(2, "s1", "ok"),
+    call(3, "s2", "task_signoff", { track: "desk-plugin", slug: "failed", outcome: "refused", reason: SENTINEL }, "mcp__desk__"),
+    output(4, "s2", "Process exited with code 1"),
+  ]
+  const { facts, events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.deskToolCalls.map(({ name, slug, ok, status }) => ({ name, slug, ok, status })), [
+    { name: "mcp__desk__task_signoff", slug: "signed", ok: true, status: null },
+    { name: "mcp__desk__task_signoff", slug: "failed", ok: false, status: null },
+  ])
+  assert.deepEqual(events.focusCalls, [])
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("signed"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
+test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", () => withHome(async (home) => {
+  const inputs = [
+    { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },
+    { track: "a", slug: "b", frontmatter: { status: "done" }, progress: "x" },
+    { track: "a", slug: "b", person: "p", frontmatter: { status: "doing" } },
+    { track: "a", slug: "b", status: "blocked" },
+    { track: "a", slug: "b", frontmatter: { status: "done", title: "t" } },
+    { track: "a", slug: "b", frontmatter: "not json" },
+    { track: "a", slug: "b", frontmatter: "[1]" },
+    { track: "a", slug: "b", frontmatter: 7 },
+    { track: "a", slug: "b", frontmatter: { status: 4 } },
+    { track: "a", slug: "b", frontmatter: {} },
+    { track: "a", slug: "b" },
+  ]
+  const lines = [meta()]
+  inputs.forEach((input, index) => lines.push(call(1 + index * 2, `u${index}`, "task_update", input, "mcp__desk__"), output(2 + index * 2, `u${index}`, "ok")))
+  const { events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [
+    { status: "done", statusOnly: true },
+    { status: "done", statusOnly: false },
+    { status: "doing", statusOnly: true },
+    { status: "blocked", statusOnly: false },
+    { status: "done", statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+  ])
+}))
+
+test("every child appears in spawns with its parent, the spawn_agent call's time and its task; a v2 child with no link uses its first record time", () => withHome(async (home) => {
+  const [V1, V2, V3] = [uuid(2), uuid(3), uuid(4)]
+  const rootLines = [
+    meta(),
+    call(10, "s1", "spawn_agent", { message: "Desk-Task: trk/slug-a\nbrief" }, "multi_agent_v1"), // 10
+    output(11, "s1", JSON.stringify({ agent_id: V1 })),
+    call(12, "s2", "spawn_agent", { message: "x" }), // v2: no id in the output
+    output(13, "s2", JSON.stringify({ task_name: "t" })),
+  ]
+  put(home, V1, at(20), [meta({ id: V1, parent: ROOT, startIso: at(20) }), item(2, { type: "message", role: "user", content: "no task line" }, at(20))])
+  put(home, V2, at(21), [meta({ id: V2, parent: ROOT, startIso: at(21) }), item(1, { type: "message", role: "user", content: "Desk-Task: trk/slug-b" }, at(21))])
+  put(home, V3, at(22), [meta({ id: V3, parent: V1, startIso: at(22) })])
+  const { events } = await deriveRoot(home, rootLines)
+  assert.deepEqual(events.spawns, [
+    { agent: 1, parent: 0, at: at(10), task: { track: "trk", slug: "slug-a" } },
+    { agent: 2, parent: 0, at: at(21), task: { track: "trk", slug: "slug-b" } },
+    { agent: 3, parent: 1, at: at(22), task: null },
+  ])
+}))
+
+test("a shell git add and commit gives shellGitCommits paths, a redirect gives fileWrites, desk_save gives its paths, only when the call succeeded", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    turnContext(0.5, ROOT_MODEL, { cwd: "/w" }),
+    call(1, "g1", "exec_command", { cmd: "git add t/s/task.md && git commit -qm x" }),
+    output(2, "g1", "Process exited with code 0\nok"),
+    call(3, "g2", "exec_command", { cmd: "echo hi > out.txt" }),
+    output(4, "g2", "Process exited with code 0\nok"),
+    call(5, "g3", "exec_command", { cmd: "echo no > failed.txt && git add f.md && git commit -m x" }),
+    output(6, "g3", "Process exited with code 1\nfailed"),
+    call(7, "g4", "exec_command", { cmd: "git commit -m x" }),
+    output(8, "g4", "Process exited with code 0\nok"),
+    call(9, "d1", "desk_save", { paths: ["notes/a.md", "notes/b.md", 5] }, "mcp__desk__"),
+    output(10, "d1", "saved"),
+    call(11, "d2", "desk_save", { paths: ["failed.md"] }, "mcp__desk__"),
+    output(12, "d2", "Process exited with code 1"),
+    call(13, "d3", "desk_save", { content: "x" }, "mcp__desk__"),
+    output(14, "d3", "saved"),
+  ]
+  const { events, facts } = await deriveRoot(home, lines)
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: "/w", paths: ["/w/t/s/task.md"] },
+    { cwd: "/w", paths: [] },
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+    { at: at(3), path: "/w/out.txt", agent: 0 },
+    { at: at(9), path: "notes/a.md", agent: 0 },
+    { at: at(9), path: "notes/b.md", agent: 0 },
+  ])
+  assert.deepEqual(events.deskToolCalls, [], "desk_save is not a deskToolCall")
+  assert.equal(JSON.stringify(facts).includes("task.md"), false)
+}))
+
+test("a gh pr create result becomes a prRefs event with created true", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "r1", "exec_command", { cmd: "gh pr create --fill" }),
+    output(2, "r1", "Process exited with code 0\nhttps://github.com/acme/widgets/pull/7\n"),
+    call(3, "r2", "exec_command", { cmd: "gh pr create" }),
+    output(4, "r2", "Process exited with code 1\nhttps://github.com/acme/widgets/pull/8"),
+  ]
+  const { events, facts } = await deriveRoot(home, lines)
+  assert.deepEqual(events.prRefs, [{ agent: 0, at: at(2), repo: "acme/widgets", created: true }])
+  assert.equal("prRefs" in facts, false)
+}))
+
+test("sentinel: the focus, spawn, path, write and PR events never carry prompt, command or content text", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "s1", "task_focus", { track: "a", slug: "b", note: SENTINEL }, "mcp__desk__"),
+    output(2, "s1", SENTINEL),
+    call(3, "s2", "exec_command", { cmd: `echo ${SENTINEL} > out.txt && git add x.md && git commit -m ${SENTINEL}`, workdir: "/w" }),
+    output(4, "s2", `Process exited with code 0\n${SENTINEL}`),
+    call(5, "s3", "desk_save", { paths: ["p.md"], content: SENTINEL }, "mcp__desk__"),
+    output(6, "s3", SENTINEL),
+    call(7, "s4", "spawn_agent", { message: `${SENTINEL}\nDesk-Task: a/b` }),
+    output(8, "s4", SENTINEL),
+  ]
+  const { events, facts } = await deriveRoot(home, lines)
+  for (const key of ["focusCalls", "spawns", "shellGitCommits", "fileWrites", "prRefs"]) assert.equal(JSON.stringify(events[key]).includes(SENTINEL), false, key)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+}))
+
+// --- Number states: what the host does not record and what the log left out ---
+
+const flagsOf = (facts, field) => facts.unavailable.filter((entry) => entry.field === field).map((entry) => entry.reason).sort()
+
+test("a Codex session carries compaction_waits as not recorded and prs, requests, tokens and tool_outcomes as recorded partly", async () => {
+  const { facts } = await deriveFixtureRoot()
+  assert.deepEqual(hostFlagsFor("codex-cli", { entrypoint: facts.session.entrypoint }).map((flag) => flag.reason).sort(), ["host_does_not_record", "host_does_not_record", "host_does_not_record", "host_does_not_record", "host_does_not_record", "host_records_partly", "host_records_partly", "host_records_partly", "host_records_partly"])
+  for (const flag of hostFlagsFor("codex-cli", { entrypoint: facts.session.entrypoint })) assert.ok(unavailable(facts, flag.field, flag.reason), `${flag.field}/${flag.reason}`)
+  assert.ok(unavailable(facts, "compaction_waits", "host_does_not_record"))
+  for (const field of ["prs", "tool_outcomes", "requests", "tokens"]) assert.ok(unavailable(facts, field, "host_records_partly"), field)
+  for (const [field, reason] of [["commits", "host_does_not_record"], ["permission_waits", "host_does_not_record"], ["api_retries", "host_does_not_record"], ["ci_runs", "not_collected_in_slice_1"]]) assert.ok(unavailable(facts, field, reason), field)
+})
+
+test("an absent usage counter gives null and tokens field_absent", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [
+    meta(), turnContext(1, ROOT_MODEL),
+    tokens(2, { input_tokens: 10, cached_input_tokens: 2, output_tokens: 5, reasoning_output_tokens: 1 }),
+    tokens(3, { input_tokens: 20, cached_input_tokens: 4, output_tokens: 9, reasoning_output_tokens: 2 }),
+  ])
+  assert.equal(facts.models[0].tokens.cache_write, null)
+  assert.equal(facts.models[0].tokens.input, 16)
+  assert.ok(unavailable(facts, "tokens", "field_absent"))
+  assert.equal(unavailable(facts, "tokens", "source_unreadable"), false, "absent is not unreadable")
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  const whole = await deriveRoot(home, [
+    meta(), turnContext(1, ROOT_MODEL),
+    tokens(2, { input_tokens: 10, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 }),
+  ])
+  assert.deepEqual(whole.facts.models[0].tokens, { input: 10, output: 5, cache_read: 0, cache_write: 0, reasoning: 0 }, "a measured 0 stays 0")
+  assert.deepEqual(flagsOf(whole.facts, "tokens"), ["host_records_partly"], "a measured 0 carries no absent flag")
+}))
+
+test("an absent input counter with a rising output still counts a request and leaves input unknown", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 })])
+  assert.deepEqual(facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: null, output: 5, cache_read: 0, cache_write: 0, reasoning: 0 } }])
+  assert.ok(unavailable(facts, "tokens", "field_absent"))
+  const outputGone = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { input_tokens: 7, cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 })])
+  assert.deepEqual(outputGone.facts.models, [{ id: ROOT_MODEL, requests: 1, tokens: { input: 7, output: null, cache_read: 0, cache_write: 0, reasoning: 0 } }])
+  const neither = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), tokens(2, { cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 })])
+  assert.deepEqual(neither.facts.models, [], "no input and no output is no known request")
+  assert.ok(unavailable(neither.facts, "tokens", "field_absent"))
+}))
+
+test("empty models without a parse failure flags field_absent, and with one flags source_unreadable", () => withHome(async (home) => {
+  const none = await deriveRoot(home, [meta()])
+  assert.deepEqual(none.facts.models, [])
+  assert.ok(unavailable(none.facts, "models", "field_absent"))
+  assert.equal(unavailable(none.facts, "models", "source_unreadable"), false)
+  assert.ok(unavailable(none.facts, "requests", "field_absent"))
+  assert.ok(unavailable(none.facts, "tokens", "field_absent"))
+  const bad = await deriveRoot(home, [meta(), tokens(2, { input_tokens: 10, output_tokens: 5 })])
+  assert.deepEqual(bad.facts.models, [])
+  assert.ok(unavailable(bad.facts, "models", "source_unreadable"))
+  assert.equal(unavailable(bad.facts, "models", "field_absent"), false)
+  assert.ok(unavailable(bad.facts, "requests", "field_absent"), "no request was counted")
+  for (const { facts } of [none, bad]) assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
+test("the joined-thread cap flags agents capped", () => withHome(async (home) => {
+  for (const n of [2, 3, 4]) put(home, uuid(n), at(n), [meta({ id: uuid(n), parent: ROOT, startIso: at(n) })])
+  const capped = await deriveRoot(home, [meta()], { maxThreads: 2 })
+  assert.ok(unavailable(capped.facts, "agents", "capped"))
+  assert.ok(unavailable(capped.facts, "turns", "capped"))
+  const roomy = await deriveRoot(home, [meta()], { maxThreads: 10 })
+  assert.equal(unavailable(roomy.facts, "agents", "capped"), false)
+}))
+
+test("a sentinel in prompt and command text reaches neither facts nor flags", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [
+    meta(), turnContext(1, ROOT_MODEL),
+    user(2, [{ type: "input_text", text: `${SENTINEL} prompt` }]),
+    call(3, "c1", "shell", { command: ["bash", "-lc", `echo ${SENTINEL}`] }),
+    output(4, "c1", `${SENTINEL} out`),
+    tokens(5, { input_tokens: 10, output_tokens: 5 }),
+  ])
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts.unavailable).includes(SENTINEL), false)
+}))
+
+test("facts written by the Codex deriver validate as /2", async () => {
+  const { facts } = await deriveFixtureRoot()
+  assert.equal(facts.schema, "desk.factory.local/2")
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+// --- Fix round 1: a damaged log is unreadable, not absent ---
+
+test("a damaged log with no models reads as unreadable, and a clean empty log stays absent", () => withHome(async (home) => {
+  const full = { input_tokens: 10, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 }
+  const damaged = {
+    "an unparseable mid-file line": [meta(), "{not json", event(3, { type: "task_started" })],
+    "a record with an unreadable timestamp": [meta(), { timestamp: "nope", type: "turn_context", payload: { turn_id: "t", model: ROOT_MODEL } }, { timestamp: "nope", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: full } } }],
+    "a line that is JSON but not an object": [meta(), "[1,2]", "7"],
+  }
+  for (const [name, lines] of Object.entries(damaged)) {
+    const { facts } = await deriveRoot(home, lines)
+    assert.deepEqual(facts.models, [], name)
+    for (const field of ["models", "tokens", "requests"]) {
+      assert.ok(unavailable(facts, field, "source_unreadable"), `${name}: ${field}`)
+      assert.equal(unavailable(facts, field, "field_absent"), false, `${name}: ${field} is not absent`)
+    }
+  }
+  const clean = await deriveRoot(home, [meta()])
+  for (const field of ["models", "tokens", "requests"]) assert.ok(unavailable(clean.facts, field, "field_absent"), field)
+  assert.equal(unavailable(clean.facts, "models", "source_unreadable"), false)
+}))
+
+test("an overflow on one model is still unreadable when another model has an absent counter", () => withHome(async (home) => {
+  const big = Number.MAX_SAFE_INTEGER - 1
+  const full = (input, output) => ({ input_tokens: input, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: output, reasoning_output_tokens: 0 })
+  const lines = [meta(), turnContext(1, "model-a")]
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    lines.push(tokens(2 + cycle * 2, full(big, 1)))
+    lines.push(tokens(3 + cycle * 2, full(0, 0)))
+  }
+  lines.push(turnContext(20, "model-b"), tokens(21, { cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 }))
+  const { facts } = await deriveRoot(home, lines)
+  assert.equal(facts.models.find((model) => model.id === "model-a").tokens.input, null)
+  assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+  assert.ok(unavailable(facts, "tokens", "field_absent"))
+}))
+
+test("samples with no known model leave tokens unreadable as well as models", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [meta(), tokens(2, { input_tokens: 10, output_tokens: 5 })])
+  assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+}))
+
+// --- Human turns: a Codex rollout cannot tell a human prompt from injected context ---
+
+test("a Codex session writes no human_turns list and flags the field host_does_not_record", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), user(2, "hello"), user(30, "and another")])
+  assert.equal(Object.hasOwn(facts, "human_turns"), false)
+  assert.equal(unavailable(facts, "human_turns", "host_does_not_record"), true)
+  assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "human_turns"), [{ field: "human_turns", reason: "host_does_not_record" }])
+  assert.equal(validateLocalFacts(facts).ok, true)
+  assert.ok(hostFlagsFor("codex-cli", {}).some((flag) => flag.field === "human_turns" && flag.reason === "host_does_not_record"))
+}))
+
+test("a user-role message in a rollout does not create a human turn", () => withHome(async (home) => {
+  const lines = [meta(), turnContext(1, ROOT_MODEL), user(2, SENTINEL), user(10, [{ type: "input_text", text: SENTINEL }]), user(20, "")]
+  const { facts } = await deriveRoot(home, lines)
+  assert.equal(Object.hasOwn(facts, "human_turns"), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  const without = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL)])
+  assert.deepEqual(facts.unavailable, without.facts.unavailable)
 }))

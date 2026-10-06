@@ -14,6 +14,7 @@
 //   node scripts/factory.js kaizen-check --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js andon --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js reconcile --desk <absolute desk root> --since <iso> --until <iso> [--store <directory>] [--person-prefix desks/<alias>]
+//   node scripts/factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]
 //
 // `account` names the signed-in GitHub account that can open intake pull
 // requests on the store, asking GitHub with each account's own token rather
@@ -24,8 +25,9 @@
 // Candidate revisions are inspected through Git as bytes and are never loaded.
 // validate-pr judges the tree that merging the head into the base produces
 // (`git merge-tree`, Git 2.38 or later), not a diff against one merge base.
-// `validate-pr` accepts published facts (`facts/<host>-<session id>.json`) and
-// published labels (`labels/<job>/<session id>.json`) from anyone; anything
+// `validate-pr` accepts published facts (`facts/<host>-<session id>.json`),
+// published labels (`labels/<job>/<session id>.json`) and a machine's capture
+// record (`capture/<intake id>.json`) from anyone; anything
 // else is maintenance. `evaluate` prepares the waste evaluator's briefs for a
 // finished task's sessions and `evaluate-accept` checks what the evaluator
 // wrote; both print paths and codes only, never session content.
@@ -38,7 +40,10 @@
 // store without that file tracks none. Both print their JSON result and exit
 // 1 when any card or issue failed, after checking the rest. `reconcile` compares
 // a desk's real task activity in a window with the factory's jobs and prints each
-// mismatch with a reason code (`src/factory/reconcile.js`); it only reads.
+// mismatch with a reason code (`src/factory/reconcile.js`); it only reads. `loop` is the
+// detached loop worker (`src/factory/loop-worker.js`, started by `hooks/loop-start.cjs`
+// at session start): it runs the improvement steps once and prints one line of codes
+// and integers, with no path, name or id in it.
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
@@ -47,17 +52,19 @@ import { pathToFileURL } from "node:url"
 import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
+import { orphanPassLine, ownVersion, publishedJobId } from "../src/factory/local-status.js"
+import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { normalizeTimestamp } from "../src/factory/time.js"
 import { reconcile } from "../src/factory/reconcile.js"
-import { build, jobLink, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
+import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
-import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
+import { factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -130,7 +137,8 @@ export async function runFinalizeCommand({ argv, env, runner }) {
 
 export async function runStatusCommand({ argv, env }) {
   if (argv.length) throw new Error("Usage: factory.js status")
-  return { ...await readStatus(env), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
+  const status = await readStatus(env)
+  return { ...status, orphan_pass: orphanPassLine(status.orphans, Date.now(), { version: ownVersion() }), retention: retentionLine(status), capture_check: captureCheckLines(status), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
 }
 
 function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {
@@ -241,7 +249,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     const result = validatePr({ changes: Array.from({ length: 501 }) })
     return { ...result, maintenance: false }
   }
-  // Anything but a published facts or labels file, including a non-fact file
+  // Anything but a published facts, labels or capture file, including a non-fact file
   // under `facts/` or `labels/`, is maintenance: the store's merge workflow
   // never merges it. A maintainer's deletion of a facts or labels file is a
   // retraction and validates like any other change at those paths; anyone
@@ -250,7 +258,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   const errors = []
   listed.forEach((change, index) => {
     const labels = labelsPathParts(change.path)
-    if (!isFactsPath(change.path) && labels === null) {
+    if (!isFactsPath(change.path) && labels === null && !isCapturePath(change.path)) {
       maintenance = true
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
       return
@@ -294,9 +302,12 @@ const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-r
  * `--track`/`--slug` as-is, so a renamed or moved card's report will not be
  * found there; pass `--desk <desk root>` (the same value the task tools see)
  * to resolve the card's birth path first, exactly as the task tools and the
- * boot check do, so the link matches the job they already agree on.
+ * boot check do, so the link matches the job they already agree on. It
+ * follows the task card's rule (`publishedJobId`): only a desk known private
+ * gets a link, to its plain job ID; any other desk prints
+ * `{ link: null, reason }` (`desk_not_private` or `visibility_not_known`).
  */
-export async function runJobLinkCommand({ argv }) {
+export async function runJobLinkCommand({ argv, env = process.env }) {
   const options = parseOptions(argv)
   const required = ["store", "desk-remote", "track", "slug"]
   const allowed = [...required, "person-prefix", "desk"]
@@ -318,15 +329,12 @@ export async function runJobLinkCommand({ argv }) {
     track = birth.track
     slug = birth.slug
   }
-  return {
-    link: jobLink({
-      store: options.get("store"),
-      deskRemote: options.get("desk-remote"),
-      personPrefix,
-      track,
-      slug,
-    }),
-  }
+  const store = options.get("store")
+  const deskRemote = options.get("desk-remote")
+  // A bad store fails with the usage error before any state is read.
+  jobReportUrl({ store, job: "0".repeat(32) })
+  const published = publishedJobId({ env, deskRemote, job: jobId({ deskRemote, personPrefix, track, slug }) })
+  return published.job === null ? { link: null, reason: published.reason } : { link: jobReportUrl({ store, job: published.job }) }
 }
 
 /** The installed Desk plugin's version, which the evaluator's labels carry. */
@@ -441,6 +449,20 @@ export async function runReconcileCommand({ argv, env, git = "git" }) {
   })
 }
 
+const LOOP_USAGE = "Usage: factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]"
+
+/** Runs `loop`: one run of the improvement steps for the desk and person given (`src/factory/loop-worker.js`); returns codes and integers only. `impls`, `pluginVersion` and the rest of `extra` are test seams. */
+export async function runLoopCommand({ argv, env, pluginVersion = deskVersion(), ...extra }) {
+  const options = parseOptions(argv)
+  const person = options?.get("person-prefix") ?? ""
+  if (options === null || [...options.keys()].some((key) => key !== "desk" && key !== "person-prefix") || (options.has("desk") && !path.isAbsolute(options.get("desk"))) || !/^(?:|desks\/[A-Za-z0-9][A-Za-z0-9._-]*)$/u.test(person)) {
+    throw new Error(LOOP_USAGE)
+  }
+  const { runLoopWorker } = await import("../src/factory/loop-worker.js")
+  const { impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl } = extra
+  return runLoopWorker(env, { deskRoot: options.get("desk") ?? null, personPrefix: person, pluginVersion, impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl })
+}
+
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
 export async function runConsentCommand({ argv, env }) {
   const options = parseOptions(argv)
@@ -479,6 +501,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       "kaizen-check": runKaizenCheckCommand,
       andon: runAndonCommand,
       reconcile: runReconcileCommand,
+      loop: runLoopCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)

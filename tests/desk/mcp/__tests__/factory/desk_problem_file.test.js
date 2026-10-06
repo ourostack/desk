@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url"
 import { deskProblemFingerprint, normalizeErrorSignature } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-template.js"
 import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
+import { KNOWN_KEY } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { osEnv } from "../_os_env.js"
 
@@ -96,6 +97,62 @@ test("a matching fingerprint in an open-or-closed issue returns 'known' and file
   const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected twice", runner })
   assert.deepEqual(result, { result: "known", url: `https://github.com/${STORE}/issues/5` })
   assert.equal(calls.some((call) => call.args[2] === "POST"), false, "a known fingerprint files nothing new")
+}))
+
+const KNOWN_ISSUES = (fingerprint) => [{
+  number: 5, html_url: `https://github.com/${STORE}/issues/5`, title: "t", body: `${FINGERPRINT_PREFIX}${fingerprint} -->`, labels: [{ name: LABEL }], state: "closed", pull_request: null,
+}]
+const RUNNING = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/plugin.json", import.meta.url), "utf8")).version
+
+test("a 'known' result records the hit with the running Desk version; a second hit makes count 2 and moves last_at", () => scratch(async ({ env }) => {
+  const { runner } = fakeGh({ ...ONE_ACCOUNT, issues: KNOWN_ISSUES(fingerprintOf("desk-sync", "x")) })
+  const first = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner, now: clock("2026-10-01T00:00:00Z") })
+  assert.deepEqual(first, { result: "known", url: `https://github.com/${STORE}/issues/5` })
+  assert.deepEqual((await readStatus(env))[KNOWN_KEY], { 5: { count: 1, last_at: "2026-10-01T00:00:00.000Z", last_version: RUNNING } })
+  await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner, now: clock("2026-10-02T00:00:00Z") })
+  assert.deepEqual((await readStatus(env))[KNOWN_KEY][5], { count: 2, last_at: "2026-10-02T00:00:00.000Z", last_version: RUNNING })
+}))
+
+test("a 'filed' result records no known hit", () => scratch(async ({ env }) => {
+  const { runner } = fakeGh(ONE_ACCOUNT)
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "y", runner })).result, "filed")
+  assert.equal((await readStatus(env))[KNOWN_KEY], undefined)
+}))
+
+test("a failed status write leaves the 'known' result unchanged and logs one stable code", () => scratch(async ({ env }) => {
+  const { runner } = fakeGh({ ...ONE_ACCOUNT, issues: KNOWN_ISSUES(fingerprintOf("desk-sync", "x")) })
+  const lines = []
+  const original = process.stderr.write
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true }
+  try {
+    const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner, recordKnown: async () => ({ recorded: false, code: "status_write_failed" }) })
+    assert.deepEqual(result, { result: "known", url: `https://github.com/${STORE}/issues/5` })
+  } finally {
+    process.stderr.write = original
+  }
+  assert.deepEqual(lines, ["desk-problem: known_hit_not_recorded status_write_failed\n"])
+}))
+
+test("a recorder that throws or rejects never changes or breaks the 'known' result", () => scratch(async ({ env }) => {
+  const { runner } = fakeGh({ ...ONE_ACCOUNT, issues: KNOWN_ISSUES(fingerprintOf("desk-sync", "x")) })
+  const lines = []
+  const original = process.stderr.write
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true }
+  try {
+    for (const recordKnown of [async () => { throw new Error("boom") }, () => { throw new Error("boom") }]) {
+      assert.deepEqual(await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner, recordKnown }), { result: "known", url: `https://github.com/${STORE}/issues/5` })
+    }
+  } finally {
+    process.stderr.write = original
+  }
+  assert.deepEqual(lines, Array(2).fill("desk-problem: known_hit_not_recorded record_failed\n"))
+}))
+
+test("a headless factory session records no known hit", () => scratch(async ({ env }) => {
+  const { runner } = fakeGh({ ...ONE_ACCOUNT, issues: KNOWN_ISSUES(fingerprintOf("desk-sync", "x")) })
+  const result = await fileDeskProblem({ ...env, DESK_FACTORY_HEADLESS: "1" }, { mechanism: "desk-sync", rawText: "x", runner })
+  assert.equal(result.result, "known")
+  assert.equal((await readStatus(env))[KNOWN_KEY], undefined)
 }))
 
 test("no existing fingerprint match files a new issue labeled desk-problem and bug", () => scratch(async ({ env }) => {
@@ -252,13 +309,20 @@ test("a deadline spent entirely by a successful account selection is caught by f
   // chooseAccount can spend a whole deadline choosing an account and still succeed (its own internal
   // races only stop it when time runs out *during* a gh call, never merely because none is left over
   // afterward). fileDeskProblem's own `if (remaining() <= 0)` right after selection exists for exactly
-  // that gap. A ticking fake clock -- one unit per `now()` call, shared with chooseAccount -- reproduces
-  // it deterministically: tuned so every check *inside* account selection still sees time left, but the
-  // very next tick, taken right after selection succeeds, has none.
-  let tick = -1
-  const now = () => { tick += 1; return tick }
+  // that gap. The fake clock is told who is reading it, not how many reads came before: every read reports time 0, except the
+  // one `fileDeskProblem` makes through its own `remaining()` right after selection succeeds, which finds the deadline spent.
+  // `remaining()` is also read once before selection, to size its budget, so that read is the first and is within time. The
+  // test asserts it reached the second, so a read added anywhere else cannot make it stop testing this check.
+  let remainingReads = 0
+  const now = () => {
+    const caller = (new Error().stack.split("\n")[2] ?? "").trim()
+    if (!caller.startsWith("at remaining ")) return 0
+    remainingReads += 1
+    return remainingReads === 1 ? 0 : 1_000
+  }
   const { runner } = fakeGh(ONE_ACCOUNT)
   const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner, now, deadlineMs: 10 })
+  assert.equal(remainingReads, 2, "the check right after account selection is the one that found the deadline spent")
   assert.equal(result.result, "not_filed")
   assert.equal(result.reason, "deadline")
   assert.match(result.body, /desk-problem-fingerprint/u)

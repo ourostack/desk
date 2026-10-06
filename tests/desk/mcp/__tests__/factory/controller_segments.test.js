@@ -1,9 +1,10 @@
-// Controller segments: a controller (worker 0) that works several jobs in one
-// session has its time and its pull requests split across those jobs instead
-// of copied into each. Covers the binder (`controllerSegments`, `bindSession`
-// with `session`), timed PR refs (`dedupePrRefs`), both schemas, publishing,
-// the pipeline (`timeline.js` clipping, `worker_shared`, PR crediting) and one
-// derive -> bind -> publish -> build run. Every input is invented.
+// Controller segments: a controller (worker 0) has its time and its pull
+// requests given to the job it was working on at each moment, declared with
+// `task_focus` or inferred, never copied into several. Covers the binder
+// (`bindSession` with `session`), timed PR refs (`dedupePrRefs`), both
+// schemas, publishing, the pipeline (`timeline.js` clipping, `worker_shared`
+// for files from before, PR crediting) and one derive -> bind -> publish ->
+// build run. Every input is invented.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -13,7 +14,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const FACTORY = "../../../../../plugins/desk/mcp/src/factory/"
-const { bindSession, controllerSegments, jobId } = await import(`${FACTORY}binding.js`)
+const { bindSession, jobId } = await import(`${FACTORY}binding.js`)
 const { applyLimits, dedupePrRefs } = await import(`${FACTORY}derive-common.js`)
 const { deriveClaudeSession } = await import(`${FACTORY}derive-claude.js`)
 const { LIMITS, validateLocalFacts } = await import(`${FACTORY}schema.js`)
@@ -39,13 +40,13 @@ const deskCall = (seconds, slug, agent = 0) => ({ at: seconds === null ? null : 
 
 // `session` and `agents` may be passed as `undefined` to leave them out.
 function bind(events, options = {}) {
-  const { commits = [], native = {}, cards = null } = options
+  const { native = {}, cards = null } = options
   const session = Object.hasOwn(options, "session") ? options.session : SESSION
   const agents = Object.hasOwn(options, "agents") ? options.agents : AGENTS
   return bindSession({
     events, agents, session, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
     readTask: (track, slug) => (cards === null || cards.includes(slug) ? CARD : null),
-    deskCommitsBetween: () => commits,
+    repoLookup: () => ({ none: true }),
     gitCommitTaskPaths: (sha) => native[sha] ?? { exists: false, taskPaths: [] },
     isCardHousekeeping: () => false,
     resolveJobIdentity: (track, slug) => ({ track, slug }),
@@ -71,140 +72,135 @@ function assertPartition(jobs, durationMs) {
 
 // --- Binding ------------------------------------------------------------------
 
-test("three jobs worked in sequence split the controller's session at each job's first evidence", () => {
-  const jobs = bind({ deskToolCalls: [deskCall(10, "a"), deskCall(20, "a"), deskCall(30, "b"), deskCall(60, "c")], fileWrites: [{ at: iso(45), path: "/desk/t/b/notes.md", agent: 0 }] })
-  // Time before the first evidence is the first job's; the last runs to the session's end.
+const focus = (seconds, slug, agent = 0) => (slug === null ? { agent, at: iso(seconds), clear: true } : { agent, at: iso(seconds), track: "t", slug })
+const spawn = (agent, seconds, slug = null, parent = 0) => ({ agent, parent, at: iso(seconds), task: slug === null ? null : { track: "t", slug } })
+const writeAt = (seconds, slug, agent = 0) => ({ at: iso(seconds), path: `/desk/t/${slug}/notes.md`, agent })
+// A session long enough for inference: 100 minutes.
+const LONG = { started_at: iso(0), derived_through: iso(6000) }
+
+test("three jobs declared in sequence split the controller's session at each declaration", () => {
+  const jobs = bind({ focusCalls: [focus(10, "a"), focus(30, "b"), focus(60, "c")], deskToolCalls: [deskCall(20, "a")], fileWrites: [writeAt(45, "b")] })
+  // Time before the first declaration is the first declared job's; the last runs to the session's end.
   assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 30000)], [B]: [span(30000, 60000)], [C]: [span(60000, 100000)] })
   assertPartition(jobs, 100000)
 })
 
-test("a commit window that binds two tasks is a span both jobs hold, marked shared", () => {
+test("three jobs inferred in sequence: each significant episode is its job's, and the main task holds the rest", () => {
+  const jobs = bind({ fileWrites: [
+    ...[0, 600, 1200].map((seconds) => writeAt(seconds, "a")),
+    ...[1800, 2400, 3000].map((seconds) => writeAt(seconds, "b")),
+    ...[3600, 4200, 4800, 5400].map((seconds) => writeAt(seconds, "c")),
+  ] }, { session: LONG })
+  // c has the most events, so it is the main task and takes the ten minutes between a's episode and b's.
+  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 1200000)], [B]: [span(1800000, 3000000)], [C]: [span(1200000, 1800000), span(3000000, 6000000)] })
+  assertPartition(jobs, 6000000)
+  // The same evidence in a session too short for an episode: every moment is the main task's.
+  const brief = bind({ fileWrites: [...[1, 2, 3].map((seconds) => writeAt(seconds, "a")), ...[4, 5, 6, 7].map((seconds) => writeAt(seconds, "c"))] })
+  assert.deepEqual(segmentsOf(brief), { [C]: [span(0, 100000)] })
+})
+
+test("no controller moment belongs to two jobs: a commit naming two tasks is an event on each, and no span is shared", () => {
   const jobs = bind({
-    deskToolCalls: [deskCall(10, "a"), deskCall(70, "c")],
-    shellGitCommits: [{ start: iso(40), end: iso(50), cwd: "/desk", agent: 0 }],
-  }, { commits: [{ sha: "1".repeat(40), committed_at: iso(45), taskPaths: ["t/a/notes.md", "t/b/notes.md"] }] })
-  // The window's evidence names a and b at one instant, so both hold the window and the stretch after it, until c.
-  assert.deepEqual(segmentsOf(jobs), {
-    [A]: [span(0, 40000), span(40000, 70000, true)],
-    [B]: [span(40000, 70000, true)],
-    [C]: [span(70000, 100000)],
-  })
-  assertPartition(jobs, 100000)
+    fileWrites: [writeAt(0, "a"), writeAt(600, "a"), writeAt(1800, "b"), writeAt(2400, "b")],
+    shellGitCommits: [{ start: iso(1200), end: iso(1210), cwd: "/desk", paths: ["/desk/t/a/notes.md", "/desk/t/b/notes.md"], agent: 0 }],
+  }, { session: LONG })
+  // a's episode ends where b's starts, at the commit; a (the earlier first event) is the main task.
+  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 1200000), span(2400000, 6000000)], [B]: [span(1200000, 2400000)] })
+  for (const job of jobs) for (const segment of job.segments) assert.deepEqual(Object.keys(segment), ["start_ms", "end_ms"])
+  assertPartition(jobs, 6000000)
 })
 
-test("two Desk calls at one instant share the stretch after them, and a first group shares the time before it", () => {
-  assert.deepEqual(segmentsOf(bind({ deskToolCalls: [deskCall(10, "a"), deskCall(40, "c"), deskCall(40, "b")] })), {
-    [A]: [span(0, 40000)],
-    [B]: [span(40000, 100000, true)],
-    [C]: [span(40000, 100000, true)],
-  })
-  assert.deepEqual(segmentsOf(bind({ deskToolCalls: [deskCall(10, "c"), deskCall(10, "b"), deskCall(50, "a")] })), {
-    [A]: [span(50000, 100000)],
-    [B]: [span(0, 50000, true)],
-    [C]: [span(0, 50000, true)],
-  })
+test("two focus calls at one instant: the later in key order holds the time after them", () => {
+  assert.deepEqual(segmentsOf(bind({ focusCalls: [focus(10, "a"), focus(40, "c"), focus(40, "b")] })), { [A]: [span(0, 40000)], [C]: [span(40000, 100000)] })
+  assert.deepEqual(segmentsOf(bind({ focusCalls: [focus(10, "c"), focus(10, "b"), focus(50, "a")] })), { [A]: [span(50000, 100000)], [C]: [span(0, 50000)] })
 })
 
-test("a zero-length commit window that binds two tasks shares the stretch after it", () => {
-  const jobs = bind({
-    deskToolCalls: [deskCall(10, "a"), deskCall(70, "a")],
-    shellGitCommits: [{ start: iso(40), end: iso(40), cwd: "/desk", agent: 0 }],
-  }, { commits: [{ sha: "1".repeat(40), committed_at: iso(40), taskPaths: ["t/b/notes.md", "t/c/notes.md"] }] })
-  assert.deepEqual(segmentsOf(jobs), {
-    [A]: [span(0, 40000), span(70000, 100000)],
-    [B]: [span(40000, 70000, true)],
-    [C]: [span(40000, 70000, true)],
-  })
+test("a spawn brief does not move a declared controller; the subagent and its own subagent are in the brief's job", () => {
+  const jobs = bind({ focusCalls: [focus(10, "a"), focus(20, "b")], spawns: [spawn(1, 40, "a"), spawn(2, 50, null, 1)] })
+  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 20000)], [B]: [span(20000, 100000)] })
+  assert.deepEqual(Object.fromEntries(jobs.map((job) => [job.job, job.agents])), { [A]: [0, 1, 2], [B]: [0] })
 })
 
-test("two jobs on one commit window take none of each other's surrounding time by name, and share the time after it", () => {
-  // The review's hand scenario: a 10, b 20, a 35 (a file write), a window [45,55] whose commit binds b and c, c 70.
-  const jobs = bind({
-    deskToolCalls: [deskCall(10, "a"), deskCall(20, "b"), deskCall(70, "c")],
-    fileWrites: [{ at: iso(35), path: "/desk/t/a/notes.md", agent: 0 }],
-    shellGitCommits: [{ start: iso(45), end: iso(55), cwd: "/desk", agent: 0 }],
-  }, { commits: [{ sha: "1".repeat(40), committed_at: iso(50), taskPaths: ["t/b/notes.md", "t/c/notes.md"] }] })
-  assert.deepEqual(segmentsOf(jobs), {
-    [A]: [span(0, 20000), span(35000, 45000)],
-    [B]: [span(20000, 35000), span(45000, 70000, true)],
-    [C]: [span(45000, 70000, true), span(70000, 100000)],
-  })
-  assertPartition(jobs, 100000)
-})
-
-test("a controller spawn for one of its jobs places the controller in that job for the spawn's span", () => {
-  const jobs = bind({
-    deskToolCalls: [deskCall(10, "a"), deskCall(20, "b")],
-    spawnTasks: [
-      { agent: 1, track: "t", slug: "a", start: iso(40), end: iso(60) },
-      // A nested spawn (worker 2's parent is 1) and an untimed one place nothing.
-      { agent: 2, track: "t", slug: "b", start: iso(70), end: iso(80) },
-      { agent: 1, track: "t", slug: "b" },
-    ],
-  })
-  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 20000), span(40000, 100000)], [B]: [span(20000, 40000)] })
-})
-
-test("a controller spawn for a job the controller does not bind moves none of its time", () => {
-  const jobs = bind({ deskToolCalls: [deskCall(10, "a"), deskCall(20, "b")], spawnTasks: [{ agent: 1, track: "t", slug: "c", start: iso(40), end: iso(60) }] })
+test("a subagent whose brief names a job the controller never works is in that job, which carries no segments", () => {
+  const jobs = bind({ focusCalls: [focus(10, "a"), focus(20, "b")], spawns: [spawn(1, 40, "c")] })
   assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 20000)], [B]: [span(20000, 100000)], [C]: "none" })
+  assert.deepEqual(jobs.find((job) => job.job === C).agents, [1, 2], "worker 2 is worker 1's own subagent")
   // A spawn whose child `agents` does not list binds nothing and places nothing.
-  const unlisted = bind({ deskToolCalls: [deskCall(10, "a"), deskCall(20, "b")], spawnTasks: [{ agent: 7, track: "t", slug: "a", start: iso(40), end: iso(60) }] })
+  const unlisted = bind({ focusCalls: [focus(10, "a"), focus(20, "b")], spawns: [spawn(7, 40, "c")] })
   assert.deepEqual(segmentsOf(unlisted), { [A]: [span(0, 20000)], [B]: [span(20000, 100000)] })
 })
 
-test("a controller bound to one job gets no segments, exactly as before", () => {
-  const events = { deskToolCalls: [deskCall(10, "a"), deskCall(20, "a"), deskCall(30, "b", 1)] }
-  const jobs = bind(events)
-  assert.deepEqual(segmentsOf(jobs), { [A]: "none", [B]: "none" })
-  assert.deepEqual(jobs, bind(events, { session: undefined }))
+test("a controller bound to one job still gets its segments, so a cleared stretch is never counted", () => {
+  const jobs = bind({ focusCalls: [focus(0, "a"), focus(40, null), focus(70, "a")], spawns: [spawn(1, 50, "b"), spawn(2, 60, null, 1)] })
+  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 40000), span(70000, 100000)], [B]: "none" })
+  const facts = localFacts({ jobs })
+  facts.agents = AGENTS.map((agent) => ({ ...agent, model: "claude-sonnet-5" }))
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 })
 
-test("no segments without the session's times, without agents, or with a session that ends before it starts", () => {
-  const events = { deskToolCalls: [deskCall(10, "a"), deskCall(30, "b")] }
-  for (const options of [{ session: undefined }, { session: { started_at: iso(0) } }, { session: { started_at: "bad", derived_through: iso(9) } }, { session: { started_at: iso(50), derived_through: iso(10) } }, { agents: undefined }]) {
-    assert.ok(bind(events, options).every((job) => !Object.hasOwn(job, "segments")), JSON.stringify(options))
+test("no timeline without the session's times or with a session that ends before it starts; without agents the session is worker 0 alone", () => {
+  const events = { focusCalls: [focus(10, "a"), focus(30, "b")] }
+  for (const options of [{ session: undefined }, { session: { started_at: iso(0) } }, { session: { started_at: "bad", derived_through: iso(9) } }, { session: { started_at: iso(50), derived_through: iso(10) } }]) {
+    assert.deepEqual(bind(events, options), [], JSON.stringify(options))
   }
+  const alone = bind(events, { agents: undefined })
+  assert.deepEqual(segmentsOf(alone), { [A]: [span(0, 30000)], [B]: [span(30000, 100000)] })
+  assert.deepEqual(alone.map((job) => job.agents), [[0], [0]])
   // Worker 0 missing from `agents` binds nothing, so nothing is split.
   assert.deepEqual(bind(events, { agents: [{ n: 1, parent: null, model: "m" }] }), [])
 })
 
-test("a controller job with no timed evidence leaves the session unsplit", () => {
-  // Job c is bound only through a native commit, which has no time.
-  const native = { ["2".repeat(40)]: { exists: true, taskPaths: ["t/c/notes.md"] } }
-  const jobs = bind({ deskToolCalls: [deskCall(10, "a"), deskCall(30, "b")], nativeCommitShas: [{ sha: "2".repeat(40), agent: 0 }] }, { native })
-  assert.equal(jobs.length, 3)
-  assert.ok(jobs.every((job) => !Object.hasOwn(job, "segments")))
+test("evidence with no time never earns a task time over a task with timed evidence", () => {
+  // Task c is evidenced only through four native commits, which have no time: more events than a, and still no time and no job.
+  const shas = ["2", "3", "4", "5"].map((digit) => digit.repeat(40))
+  const native = Object.fromEntries(shas.map((sha) => [sha, { exists: true, taskPaths: ["t/c/notes.md"] }]))
+  const jobs = bind({ fileWrites: [0, 600, 1200].map((seconds) => writeAt(seconds, "a")), nativeCommitShas: shas.map((sha) => ({ sha, agent: 0 })) }, { native, session: LONG })
+  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 6000000)] })
   // Likewise a Desk call with no readable time.
-  assert.ok(bind({ deskToolCalls: [deskCall(10, "a"), deskCall(null, "b")] }).every((job) => !Object.hasOwn(job, "segments")))
+  const untimed = bind({ fileWrites: [0, 600, 1200].map((seconds) => writeAt(seconds, "a")), deskToolCalls: [1, 2, 3, 4].map(() => deskCall(null, "b")) }, { session: LONG })
+  assert.deepEqual(segmentsOf(untimed), { [A]: [span(0, 6000000)] })
+  // Alone in a session, the native commits still bind it: that is what counting toward candidacy means.
+  const alone = bind({ nativeCommitShas: shas.map((sha) => ({ sha, agent: 0 })) }, { native, session: LONG })
+  assert.deepEqual(segmentsOf(alone), { [C]: [span(0, 6000000)] })
 })
 
-test("past LIMITS.jobSegments segments a job, the whole session falls back to no segments", () => {
+test("past LIMITS.jobSegments segments, a job's shortest segments join their neighbours: no time is lost and the facts stay valid", () => {
   assert.equal(LIMITS.jobSegments, 200)
   const session = { started_at: iso(0), derived_through: iso(1000) }
-  const alternating = (count) => ({ deskToolCalls: Array.from({ length: count }, (_, index) => deskCall(index, index % 2 === 0 ? "a" : "b")) })
+  const alternating = (count) => ({ focusCalls: Array.from({ length: count }, (_, index) => focus(index, index % 2 === 0 ? "a" : "b")) })
+  const valid = (jobs) => validateLocalFacts(localFacts({ jobs, derivedThrough: iso(1000) })).ok
+  const total = (jobs) => jobs.flatMap((job) => job.segments).reduce((sum, segment) => sum + segment.end_ms - segment.start_ms, 0)
   const atCap = bind(alternating(400), { session })
   assert.deepEqual(atCap.map((job) => job.segments.length), [200, 200])
-  assert.equal(validateLocalFacts(localFacts({ jobs: atCap.map(({ segments, ...job }) => ({ ...job, segments: segments.map((s) => ({ ...s })) })), derivedThrough: iso(1000) })).ok, true)
+  assert.equal(valid(atCap), true)
+  // 402 calls give each job 201 one-second stretches. A declared timeline has no main task, so a's first second joins b's
+  // beside it, and then one of b's seconds joins a's on either side of it.
   const over = bind(alternating(402), { session })
-  assert.equal(over.length, 2)
-  assert.ok(over.every((job) => !Object.hasOwn(job, "segments")))
+  assert.deepEqual(segmentsOf(over)[A].length, 199)
+  assert.deepEqual(segmentsOf(over)[B].length, 200)
+  assert.deepEqual(segmentsOf(over)[B][0], span(0, 2000))
+  assert.deepEqual(segmentsOf(over)[A][0], span(2000, 5000))
+  assert.deepEqual(segmentsOf(over)[B].at(-1), span(401000, 1000000))
+  assert.equal(total(over), 1000000, "every declared second is still in a job")
+  assertPartition(over, 1000000)
+  assert.equal(valid(over), true)
+  // The reviewer's case: 500 declarations over 90 minutes keep all 90.
+  const long = { started_at: iso(0), derived_through: iso(5400) }
+  const many = bind({ focusCalls: Array.from({ length: 500 }, (_, index) => ({ agent: 0, at: new Date(T0 + index * 10800).toISOString(), track: "t", slug: index % 2 === 0 ? "a" : "b" })) }, { session: long })
+  assert.equal(total(many), 5400000)
+  for (const job of many) assert.ok(job.segments.length <= 200)
+  const ordered = many.flatMap((job) => job.segments).sort((x, y) => x.start_ms - y.start_ms)
+  ordered.forEach((segment, index) => assert.equal(segment.start_ms, index === 0 ? 0 : ordered[index - 1].end_ms, "no gap and no overlap"))
+  assert.deepEqual(validateLocalFacts(localFacts({ jobs: many, derivedThrough: iso(5400) })), { ok: true, errors: [] })
 })
 
-test("hostile evidence: out of order, at one instant, before the start and past the end, all handled", () => {
-  const jobs = bind({ deskToolCalls: [deskCall(30, "b"), deskCall(-10, "a"), deskCall(30, "a"), deskCall(30, "b")] })
-  // a's evidence before the start counts from 0; a and b at one instant share what follows, never a zero-length segment.
-  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 30000), span(30000, 100000, true)], [B]: [span(30000, 100000, true)] })
+test("hostile focus calls: out of order, before the start and past the end, all handled", () => {
+  const jobs = bind({ focusCalls: [focus(30, "b"), focus(-10, "a"), focus(500, "c"), focus(30, "b")] })
+  // a's call before the start counts from 0; c's past the end holds no time, so it is no job.
+  assert.deepEqual(segmentsOf(jobs), { [A]: [span(0, 30000)], [B]: [span(30000, 100000)] })
   assertPartition(jobs, 100000)
-  // c's only evidence is past the end: it clamps to the end, would hold no time at all, so the session is not split.
-  const clamped = bind({ deskToolCalls: [deskCall(500, "c"), deskCall(30, "b"), deskCall(-10, "a")] })
-  assert.equal(clamped.length, 3)
-  assert.ok(clamped.every((entry) => !Object.hasOwn(entry, "segments")))
-  // A window whose end precedes its start is an instant.
-  assert.deepEqual(controllerSegments({ evidence: [{ key: "x", start: T0 + 5000, end: T0 }, { key: "y", start: T0 + 8000, end: T0 + 8000 }], keys: new Set(["x", "y"]), startedMs: T0, endMs: T0 + 10000 }),
-    new Map([["x", [span(0, 8000)]], ["y", [span(8000, 10000)]]]))
-  // A zero-length session is not split.
-  assert.equal(controllerSegments({ evidence: [{ key: "x", start: T0, end: T0 }, { key: "y", start: T0, end: T0 }], keys: new Set(["x", "y"]), startedMs: T0, endMs: T0 }), null)
+  // A zero-length session binds nothing.
+  assert.deepEqual(bind({ focusCalls: [focus(0, "a")] }, { session: { started_at: iso(0), derived_through: iso(0) } }), [])
 })
 
 // --- Timed PR refs -----------------------------------------------------------
@@ -279,7 +275,7 @@ test("local facts refuse a PR time that is negative or past the session's end, a
 
 function publishedSession(jobs, prs = []) {
   return {
-    schema: "desk.factory.published/1",
+    schema: "desk.factory.published/2",
     session: { host: "claude-code", id: "55555555-5555-4555-8555-555555555555", host_version: "2.1.0", entrypoint: "cli", duration_ms: 100000, ended: true, end_reason: "complete" },
     plugins: [],
     models: [],
@@ -375,11 +371,11 @@ test("three jobs in sequence: the controller's time is split, and the jobs' acti
   const [a, b, c] = ["a", "b", "c"].map((hex) => formulasOf(hex, [session]))
   // Worker 0 is active [0,20000) + [25000,70000) + [80000,100000) = 85000 ms.
   // a: [0,20000) + [25000,30000); b: [30000,60000); c: [60000,70000) + [80000,100000).
-  assert.deepEqual([a, b, c].map((formulas) => formulas.active_time_ms), [25000, 30000, 30000].map((value) => ({ class: "measured", value })))
+  assert.deepEqual([a, b, c].map((formulas) => formulas.active_time_ms), [25000, 30000, 30000].map((value) => ({ class: "measured", value, state: "measured", reasons: [] })))
   assert.equal(a.active_time_ms.value + b.active_time_ms.value + c.active_time_ms.value, 85000)
   // The same session with no segments copies the controller's whole time into each job, marked worker_shared.
   const copied = formulasOf("a", [publishedSession(THREE.map(([hex, agents]) => [hex, agents]))])
-  assert.deepEqual(copied.active_time_ms, { class: "measured", value: 85000, partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"] })
+  assert.deepEqual(copied.active_time_ms, { class: "measured", value: 85000, partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"], state: "partial", reasons: ["worker_shared"] })
 })
 
 test("other workers' time is not clipped by the controller's segments", () => {
@@ -397,11 +393,11 @@ test("an overlap span is shared: only the jobs holding it are worker_shared, and
     ["c", [0], [span(70000, 100000)]],
   ]
   const session = publishedSession(overlap)
-  const shared = { partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"] }
+  const shared = { partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"], state: "partial", reasons: ["worker_shared"] }
   // a: [0,20000) + [25000,50000); b: [40000,70000); c: [80000,100000).
   assert.deepEqual(formulasOf("a", [session]).active_time_ms, { class: "measured", value: 45000, ...shared })
   assert.deepEqual(formulasOf("b", [session]).active_time_ms, { class: "measured", value: 30000, ...shared })
-  assert.deepEqual(formulasOf("c", [session]).active_time_ms, { class: "measured", value: 20000 })
+  assert.deepEqual(formulasOf("c", [session]).active_time_ms, { class: "measured", value: 20000, state: "measured", reasons: [] })
   // The jobs' times sum to the controller's 85000 plus the shared span counted twice (10000), which is flagged.
   assert.equal(45000 + 30000 + 20000, 85000 + 10000)
   // Without the shared span, nothing is worker_shared.
@@ -442,8 +438,8 @@ test("tool and API retries carry the same partial reasons: split, and shared whe
   whole.counts = { tool_calls: {}, tool_failures: {}, tool_retries: 2, api_retries: 1, compactions: 0 }
   const signals = formulasOf("a", [segmented, whole]).rework_signals
   const reasons = ["worker_split", "worker_shared"]
-  assert.deepEqual(signals.tool_retries, { class: "inferred", value: 2, partial: true, uncovered_sessions: 1, partial_reasons: reasons })
-  assert.deepEqual(signals.api_retries, { class: "inferred", value: 1, partial: true, uncovered_sessions: 1, partial_reasons: reasons })
+  assert.deepEqual(signals.tool_retries, { class: "inferred", value: 2, partial: true, uncovered_sessions: 1, partial_reasons: reasons, state: "partial", reasons: [...reasons].sort() })
+  assert.deepEqual(signals.api_retries, { class: "inferred", value: 1, partial: true, uncovered_sessions: 1, partial_reasons: reasons, state: "partial", reasons: [...reasons].sort() })
   // Every session split: nothing to report, for either.
   const alone = formulasOf("a", [segmented]).rework_signals
   assert.deepEqual([alone.tool_retries.class, alone.api_retries.class, alone.api_retries.reason], ["unavailable", "unavailable", "worker_split"])
@@ -502,7 +498,7 @@ test("a published file from before segments builds with exactly the old numbers"
 // --- Derive -> bind -> publish -> build ----------------------------------------
 
 const SID = "7a3b4c5d-6e7f-4809-9a0b-1c2d3e4f5a6b"
-const DT = "mcp__plugin_desk_desk__task_update"
+const FT = "mcp__plugin_desk_desk__task_focus"
 const at = (minute) => new Date(T0 + minute * 60000).toISOString()
 
 function writeSession(dir) {
@@ -518,11 +514,11 @@ function writeSession(dir) {
   ]
   const root = [
     prompt(0, "go"),
-    assistant(1, [use("d1", DT, { track: "t", slug: "a", status: "processing" })]), result(2, "d1"),
+    assistant(1, [use("d1", FT, { track: "t", slug: "a" })]), result(2, "d1"),
     ...created(3, "p1", 20),
-    assistant(5, [use("d2", DT, { track: "t", slug: "b", status: "processing" })]), result(6, "d2"),
+    assistant(5, [use("d2", FT, { track: "t", slug: "b" })]), result(6, "d2"),
     assistant(7, [use("s1", "Agent", { prompt: "Desk-Task: t/b\nbrief" })]), result(20, "s1"),
-    assistant(21, [use("d3", DT, { track: "t", slug: "c", status: "processing" })]), result(22, "d3"),
+    assistant(21, [use("d3", FT, { track: "t", slug: "c" })]), result(22, "d3"),
     ...created(23, "p2", 21),
     assistant(25, [{ type: "text", text: "done" }]),
   ]
@@ -545,10 +541,10 @@ test("a Claude controller working three jobs: derive, bind, publish and build sp
     facts.jobs = bindSession({
       events, agents: facts.agents, session: facts.session, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
       readTask: () => ({ status: "processing", created_at: at(-60), updated_at: at(0) }),
-      deskCommitsBetween: () => [], gitCommitTaskPaths: () => ({ exists: false }), isCardHousekeeping: () => false,
+      repoLookup: () => ({ none: true }), gitCommitTaskPaths: () => ({ exists: false }), isCardHousekeeping: () => false,
       resolveJobIdentity: (track, slug) => ({ track, slug }),
     }).jobs
-    // The spawn for b keeps the controller on b through its span.
+    // Each declaration holds until the next; the minute before the first is the first job's.
     assert.deepEqual(segmentsOf(facts.jobs), { [A]: [span(0, 5 * 60000)], [B]: [span(5 * 60000, 21 * 60000)], [C]: [span(21 * 60000, 25 * 60000)] })
     assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 
@@ -561,7 +557,7 @@ test("a Claude controller working three jobs: derive, bind, publish and build sp
     const built = (hex) => JSON.parse(readFileSync(path.join(out, "jobs", `${hex}.json`), "utf8")).formulas
 
     // Worker 0 is active the whole 25 minutes; the child (in b only) adds nothing outside b's span.
-    assert.deepEqual([A, B, C].map((hex) => built(hex).active_time_ms), [5, 16, 4].map((minutes) => ({ class: "measured", value: minutes * 60000 })))
+    assert.deepEqual([A, B, C].map((hex) => built(hex).active_time_ms), [5, 16, 4].map((minutes) => ({ class: "measured", value: minutes * 60000, state: "measured", reasons: [] })))
     // Each PR is in exactly one job: the controller's by time, the child's by its worker.
     assert.deepEqual([A, B, C].map((hex) => built(hex).references.value.public_pull_requests.map((pr) => pr.number)), [[20], [22], [21]])
   } finally {

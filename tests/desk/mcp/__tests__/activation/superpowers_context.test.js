@@ -83,6 +83,8 @@ test("Superpowers context prints exact paths without introducing a second progre
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
     briefRules: [
       "Desk-Task: track/outcome",
+      "Never call task_focus; your work is credited through the Desk-Task line.",
+      "Never call task_signoff.",
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
     ],
@@ -478,6 +480,7 @@ test("the mapped brief names its task first, in a form the factory binder accept
   const output = await resolve(context())
   assert.equal(output.briefRules[0], "Desk-Task: track/outcome")
   assert.deepEqual(parseDeskTaskLine(output.briefRules[0]), { track: "track", slug: "outcome" })
+  assert.equal(output.briefRules[1], "Never call task_focus; your work is credited through the Desk-Task line.")
 })
 
 test("a person-off desk names the task from the desk root", async () => {
@@ -489,7 +492,7 @@ test("a person-off desk names the task from the desk root", async () => {
   assert.equal((await resolve(moved)).briefRules[0], "Desk-Task: desk-plugin/some-task")
 })
 
-test("a task path that is not exactly track and slug omits the Desk-Task rule", async () => {
+test("a task path that is not exactly track and slug omits the Desk-Task rule and the task_focus rule that points at it", async () => {
   for (const segments of [["track", "outcome", "deeper"], ["_meta", "outcome"]]) {
     const input = context()
     const taskPath = path.join(input.deskRoot, "desks", "member", ...segments)
@@ -498,6 +501,21 @@ test("a task path that is not exactly track and slug omits the Desk-Task rule", 
     seedCanonicalFiles(moved)
     const { briefRules } = await resolve(moved)
     assert.equal(briefRules.some((rule) => rule.startsWith("Desk-Task:")), false, segments.join("/"))
-    assert.equal(briefRules.length, 2)
+    assert.equal(briefRules.some((rule) => rule.includes("task_focus")), false, segments.join("/"))
+    assert.equal(briefRules.length, 3)
+  }
+})
+
+test("the brief a Superpowers mapping produces forbids task_signoff", async () => {
+  const output = await resolve(context())
+  assert.equal(output.briefRules.filter((rule) => rule === "Never call task_signoff.").length, 1)
+  assert.equal(output.briefRules[2], "Never call task_signoff.")
+  for (const segments of [["track", "outcome", "deeper"], ["_meta", "outcome"]]) {
+    const input = context()
+    const taskPath = path.join(input.deskRoot, "desks", "member", ...segments)
+    const iterationPath = path.join(taskPath, "repo")
+    const moved = { ...input, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") }
+    seedCanonicalFiles(moved)
+    assert.equal((await resolve(moved)).briefRules[0], "Never call task_signoff.", "a task path the binder would not accept still carries the sign-off rule")
   }
 })

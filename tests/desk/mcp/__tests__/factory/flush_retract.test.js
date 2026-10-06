@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
-  factoryStateRoot, keepRetractedCopies, pendingFiles, pendingLabels, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
+  factoryStateRoot, keepRetractedCopies, keptSessions, pruneTombstones, pendingFiles, pendingLabels, quarantine, readConsent, readDelivered, readMachineSecret, readStatus, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
@@ -924,6 +924,39 @@ test("P1b: a finished retraction keeps a tombstone, so losing status.json after 
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.deepEqual(Object.keys(JSON.parse(await fs.readFile(await retractingFile(ctx), "utf8"))), [])
   assert.deepEqual(dataFiles(github), [`facts/${nameOf(1)}`, `facts/${nameOf(9)}`, `labels/${job}/${sessionId(1)}.json`])
+}))
+
+// A retraction merged, the marker pruned, status.json lost; `lose` then takes away the tombstone's protection in one of two ways.
+async function retractedAndLost(ctx, lose) {
+  const { github, desks } = await delivered(ctx, 1, { labelled: [1] })
+  await reroute(desks[0], OTHER)
+  await run(ctx.env, github)
+  github.mergeOpenPr()
+  assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
+  const root = await factoryStateRoot(ctx.env)
+  await lose(root)
+  await fs.rm(path.join(root, "markers", nameOf(1)))
+  await fs.rm(path.join(root, "status.json"))
+  await another(ctx)
+  assert.equal((await run(ctx.env, github)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  return github
+}
+
+test("C1: a tombstone past its retention is not pruned while a kept copy exists, so losing status.json afterwards never republishes the session", () => scratch(async (ctx) => {
+  const github = await retractedAndLost(ctx, async () => {
+    assert.equal(await pruneTombstones(ctx.env, { now: () => new Date(Date.now() + 200 * 24 * 60 * 60 * 1000).toISOString() }), 0, "stamped now by the first sweep that sees it")
+    assert.equal(await pruneTombstones(ctx.env, { now: () => new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString() }), 0, "kept copies exist: nothing goes")
+  })
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(9)}`])
+  assert.equal(Object.keys(JSON.parse(await fs.readFile(await retractingFile(ctx), "utf8"))).length, 2, "both tombstones stay")
+}))
+
+test("C1: a kept copy with no record and no positive route fails closed: it stays away even with the tombstone gone and status.json lost", () => scratch(async (ctx) => {
+  const github = await retractedAndLost(ctx, async () => { await fs.writeFile(await retractingFile(ctx), "{}") })
+  assert.deepEqual(dataFiles(github), [`facts/${nameOf(9)}`], "the retracted session is not published again")
+  const kept = await keptSessions(ctx.env, STORE)
+  assert.deepEqual(kept, [sessionId(1)], "its copies are still kept, not restored")
 }))
 
 test("P2c: a desk that reroutes after its sessions' markers were pruned retracts them, read from the desk root the receipt recorded", () => scratch(async (ctx) => {

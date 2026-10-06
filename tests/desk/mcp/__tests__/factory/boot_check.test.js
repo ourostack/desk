@@ -325,7 +325,8 @@ test("a crew person's finished job is found through its pending request even whe
 }))
 
 test("labelsBootCheck counts retained evaluation requests only for a contributing store, with or without options", () => scratch(async ({ env, desk }) => {
-  const { labelsBootCheck, labelsLine } = await load()
+  const { labelsBootCheck: labels } = await load()
+  const labelsBootCheck = (options) => { const { count, quarantined } = labels(options); return { count, quarantined } }
   assert.deepEqual(labelsBootCheck(), { count: 0, quarantined: 0 })
   assert.deepEqual(labelsBootCheck({}), { count: 0, quarantined: 0 })
   assert.deepEqual(labelsBootCheck({ env }), { count: 0, quarantined: 0 })
@@ -333,11 +334,11 @@ test("labelsBootCheck counts retained evaluation requests only for a contributin
   const { requestEvaluation } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
   assert.deepEqual(labelsBootCheck({ env }), { count: 1, quarantined: 0 })
-  assert.equal(labelsLine(1), "Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background")
 }))
 
 test("labelsBootCheck reports quarantined labels, and a request whose every session is held back is not counted as waiting", () => scratch(async ({ env, desk }) => {
-  const { labelsBootCheck, labelsQuarantinedLine } = await load()
+  const { labelsBootCheck: labels } = await load()
+  const labelsBootCheck = (options) => { const { count, quarantined } = labels(options); return { count, quarantined } }
   const { requestEvaluation } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   const OTHER_STORE = "ourostack/other"
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
@@ -372,11 +373,10 @@ test("labelsBootCheck reports quarantined labels, and a request whose every sess
   // Without an index to consult, nothing is held back and every request waits.
   await fs.writeFile(path.join(root, "jobs-index.json"), "not json")
   assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 3, quarantined: 2 })
-  assert.equal(labelsQuarantinedLine(2), "Factory: 2 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
 }))
 
-test("andonBootCheck returns the recorded open andon issues of each contributing store, and andonLine names them", () => scratch(async ({ env }) => {
-  const { andonBootCheck, andonLine } = await load()
+test("andonBootCheck returns the recorded open andon issues of each contributing store", () => scratch(async ({ env }) => {
+  const { andonBootCheck } = await load()
   assert.deepEqual(andonBootCheck({ env }), [])
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await setConsent(env, { store: "acme/declined", contribute: false, account: "contributor" })
@@ -394,8 +394,6 @@ test("andonBootCheck returns the recorded open andon issues of each contributing
     },
   }))
   assert.deepEqual(andonBootCheck({ env }), [{ store: STORE, issues: [issue(12), issue(15)] }])
-  assert.equal(andonLine(STORE, [issue(12), issue(15)]), "Factory: 2 open andon issues in ourostack/factory (#12, #15); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)")
-  assert.match(andonLine(STORE, [issue(12)]), /^Factory: 1 open andon issue in /u)
   // A malformed record, a malformed andon map or unreadable status gives nothing.
   await fs.writeFile(path.join(root, "status.json"), JSON.stringify({ last_flush: {}, andon: { [STORE]: { issues: "no" }, "acme/work": null } }))
   assert.deepEqual(andonBootCheck({ env }), [])
@@ -408,7 +406,7 @@ test("andonBootCheck returns the recorded open andon issues of each contributing
 test("allTasks lists every readable card, live and archived, with no status or age filter, under the person prefix", () => scratch(async ({ desk }) => {
   const { allTasks } = await load()
   await card(path.join(desk, "live", "one"), { status: "active", updated: iso(NOW - 400 * DAY) })
-  await card(path.join(desk, "live", "_archive", "two"), { status: "done" })
+  await card(path.join(desk, "live", "_archive", "two"), { status: "done", extra: "factory_report_unavailable: visibility_not_known\n" })
   await card(path.join(desk, "_archive", "gone", "three"), { status: "cancelled" })
   await card(path.join(desk, "_archive", "gone", "_archive", "four"), { status: "drafting" })
   await card(path.join(desk, "desks", "bo", "theirs", "five"))
@@ -419,6 +417,7 @@ test("allTasks lists every readable card, live and archived, with no status or a
   const found = allTasks({ deskRoot: desk }).map(({ track, slug, archived, status }) => `${track}/${slug} ${archived} ${status}`).sort()
   assert.deepEqual(found, ["gone/four true drafting", "gone/three true cancelled", "live/bare false null", "live/one false active", "live/two true done"])
   assert.equal(allTasks({ deskRoot: desk })[0].updated !== undefined, true)
+  assert.deepEqual(allTasks({ deskRoot: desk }).filter((task) => task.report_unavailable !== null).map(({ slug, report_unavailable }) => `${slug} ${report_unavailable}`), ["two visibility_not_known"])
   assert.deepEqual(allTasks({ deskRoot: desk, personPrefix: "desks/bo" }).map(({ track, slug }) => `${track}/${slug}`), ["theirs/five"])
   assert.throws(() => allTasks({ deskRoot: desk, personPrefix: "bo" }), /personPrefix/)
 }))

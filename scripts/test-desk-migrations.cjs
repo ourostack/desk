@@ -908,7 +908,7 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   // Fix round 1: other sessions' work, loose files, judgment on merges, names in commits, the revert.
   assert.match(blocks.Migrate, /Leave alone every task and track that holds uncommitted changes[\s\S]{0,200}left alone in the announcement/u);
   assert.match(blocks.Migrate, /untracked loose file that is not ignored gets git add first, then git mv\. Leave ignored files where they are\./u);
-  assert.match(blocks.Migrate, /git diff --cached --name-status -- <tidy paths>[\s\S]{0,300}run the defer command above, and stop with one line[\s\S]{0,200}commit with git commit -- <tidy paths> <the record> and nothing else, so any other staged work stays staged exactly as it was and is never committed with the tidy; never unstage anyone else's work\./u);
+  assert.match(blocks.Migrate, /git diff --cached --name-status -- <tidy paths>[\s\S]{0,300}run the defer command above, and stop with one line[\s\S]{0,200}commit with desk_save \(tidy: true, message, and paths: <tidy paths> plus the record\) and nothing else\.[\s\S]{0,500}commits only those paths as they are staged, so any other staged work stays staged exactly as it was and is never committed with the tidy; it never unstages anyone else's work\./u);
   // Review of the startup-hook change: stage only the tidy's own paths, write the record only after the checks, and defer instead of stopping silently.
   assert.match(blocks.Migrate, /stage only what the tidy itself changed[\s\S]{0,400}never git add a folder, a pattern or -A\./u);
   assert.match(blocks.Migrate, /If the tidy cannot finish in this session for any reason[\s\S]{0,200}run: \$defer/u);
@@ -916,14 +916,14 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   // Fix round 4: the tidy stages as it goes, so its own earlier steps never read as another session's work.
   assert.match(blocks.Migrate, /Stage as you go[\s\S]{0,200}task_move, track_rename, track_create and track_update stage what they write\. Right after any other change the tidy makes[\s\S]{0,120}git add exactly that path[.;]/u);
   assert.match(blocks.Migrate, /let staged changes through as this tidy's own work and refuse unstaged changes or untracked files, which belong to another session; never pass allow_dirty/u);
-  assert.match(blocks.Migrate, /git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing[\s\S]{0,400}Otherwise write _meta\/organization\.json[\s\S]{0,40}\$record\n {3}Then git add the record and commit/u);
+  assert.match(blocks.Migrate, /git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing[\s\S]{0,400}Otherwise write _meta\/organization\.json[\s\S]{0,40}\$record\n {3}Then commit with desk_save/u);
   assert.doesNotMatch(blocks.Migrate, /git status --porcelain -- <path>/u, "mid-tidy, git status also lists the tidy's own staged work");
   assert.match(blocks.Migrate, /never write an old name that failed the credential or prompt check[\s\S]{0,200}Describe such a move by its new name only\./u);
   assert.match(blocks.Migrate, /Merge a group only when you judge that both cards describe the same outcome; leave the others and mention them\./u);
   assert.match(blocks.Migrate, /Never hide a live task: when the duplicate is not done or cancelled and the kept task is, keep the live one instead, or skip the merge\./u);
   assert.match(blocks.Migrate, /to_track when the kept task is in another track[\s\S]{0,300}re-file that track's tasks first/u);
   assert.match(blocks.Migrate, /into _meta\/ when it concerns the whole desk\. Never create a task just to hold files\. A loose folder that is clearly a task gets a card with task_create instead of a move\. A loose entry whose name fails the name rules gets an outcome name/u);
-  assert.match(blocks.Migrate, /git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- [^,]+organization\.json, and commit both together/u);
+  assert.match(blocks.Migrate, /git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- [^,]+organization\.json, and commit both with desk_save/u);
   assert.doesNotMatch(blocks["Safety check"], /--safety|tidy-status/u, "anything that only has to wait never fails the Safety check");
 });
 

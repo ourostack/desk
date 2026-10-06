@@ -72,7 +72,7 @@ The two cycles include graceful handover and abrupt mid-batch interruption, with
 $DESK/<track>/<task>/task.md
 ```
 
-note: `status`, `planning_complete` (if set), `repos[]`, any `collaborating`/`blocked` reason fields. the card is the memory of what was happening; read it before reaching for anything else.
+note: `status`, `planning_complete` (if set), `repos[]`, any `collaborating`/`blocked` reason fields. the card is the memory of what was happening; read it before reaching for anything else. Then the main agent calls `task_focus` for this task, unless `session-start` already did.
 
 ## Check the repo workspaces
 
@@ -131,6 +131,8 @@ Only after writer release, source and effect reconciliation, current authority a
 | `blocked` | Show the blocker description + when/why. Ask whether it's resolved. If yes, go back to the pre-block state. |
 
 full transition rules and state machine live in the `task-lifecycle` skill.
+
+A task found at `done` is delivered, and it may still be waiting for the operator's answer. Do not treat it as accepted. If its `signoff` is `delivered_unsigned`, raise it once as three lines (what was asked, what was delivered with its proof, accept or send back?) and record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery"). To work on it again, move it back with `task_update` and `return_reason`.
 
 ## Commit any state changes
 

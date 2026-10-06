@@ -108,6 +108,8 @@ function main() {
   lines.push(`${summaries.length} runs.\n`)
   const naTotal = summaries.reduce((n, s) => n + (s.not_applicable_count ?? 0), 0)
   if (naTotal > 0) lines.push(`${summaries.filter((s) => (s.not_applicable_count ?? 0) > 0).length} runs have checks their host could not run (N/A); an outcome with N/A beside it is judged on the remaining checks only.\n`)
+  const discounted = summaries.reduce((n, s) => n + (s.discounted_failures ?? 0), 0)
+  if (discounted > 0) lines.push(`${discounted} failure checks in ${summaries.filter((s) => (s.discounted_failures ?? 0) > 0).length} runs were discounted because Desk's SessionStart hook was cancelled (a timeout, usually an overloaded machine) and boot's output never reached the agent; they are marked DISCOUNTED in the notes. A run with only discounted failures reads "unknown"; a run with another failure still reads "fail".\n`)
   lines.push("## Outcome table\n")
   lines.push(outcomeTable(summaries))
   lines.push("\n## Mechanical critique-theme tally (keyword pass; read the verbatim critiques below for the real clustering)\n")

@@ -6,7 +6,7 @@
 //   - shell forms, judged on the words around the path inside the same pipeline segment (the text between `;`, `&`, `|` and line breaks):
 //     a redirect onto it (`> path`, `>> path`, `>| path`, `2> path`), `tee` / `sponge` / `truncate` / `dd of=` naming it, an in-place editor (`sed -i`,
 //     `perl -i`, `ruby -i`, `yq -i`, `--in-place`) naming it, `mv` / `cp` / `install` / `rsync` / `ln` whose LAST operand it is, and `git checkout` or `git restore`
-//     naming it;
+//     naming it, and `git add`, `git stage`, `git update-index --add` or `git commit` naming it;
 //   - script forms, judged on the call: a script that writes a file by API (`writeFile`, `writeFileSync`, `appendFile`, `createWriteStream`,
 //     `copyFile`, `renameSync`, Python `open(..., 'w'|'a'|'x'|'r+')`, `write_text`, `write_bytes`, `shutil.move|copy*`, `os.replace|rename`, Ruby
 //     `File.write` / `IO.write`, PowerShell `Set-Content` / `Add-Content` / `Out-File`), because the path is often held in a variable the script
@@ -37,6 +37,14 @@ const TEE_BEFORE = /\b(?:tee|sponge|truncate)\b[^]*$/u
 const DD_BEFORE = /\bof=["']?$/u
 const IN_PLACE_BEFORE = /\b(?:sed|gsed|perl|ruby|yq|awk)\b[^]*\s(?:-[A-Za-z]*i\S*|--in-place\S*)/u
 const COPY_BEFORE = /\b(?:mv|cp|install|rsync|ln)\b[^]*$/u
+// Staging or committing a card by hand is not a write, but a card is committed only by Desk, so naming a live card in `git add`, `git stage`,
+// `git update-index --add` or `git commit` (`git commit <card>`, `git commit --only <card>`) is denied too (round AG: after `task_update` had committed the
+// card, an agent ran `git add <card>` and `git commit` anyway). There is no exception in the command: Desk's own tools commit cards themselves. A conflicted
+// card may be staged to finish a merge. Pathspec, glob and `-A`, `.` or `-u` forms name no card, so they are left to the desk's pre-commit hook, which
+// refuses the commit whatever staged the card.
+const GIT_PREFIX = "\\bgit(?:\\s+(?:-[cC]\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+"
+const GIT_ADD_BEFORE = new RegExp(`${GIT_PREFIX}(?:add|stage|update-index\\b[^;&|\\n]*--add)\\b`, "u")
+const GIT_COMMIT_BEFORE = new RegExp(`${GIT_PREFIX}commit\\b`, "u")
 const GIT_RESTORE_BEFORE = /\bgit\b[^]*\b(?:checkout|restore)\b/u
 // `git restore --staged <path>` only unstages it (the hook's own message tells an agent to do that); with `--worktree` it rewrites the file too.
 const UNSTAGE_ONLY = /\s(?:--staged|-S)(?=\s)/u
@@ -100,6 +108,9 @@ function shellForm(command, index, length) {
   if (TEE_BEFORE.test(before)) return "tee"
   if (IN_PLACE_BEFORE.test(before)) return "an in-place edit"
   if (GIT_RESTORE_BEFORE.test(before) && (!UNSTAGE_ONLY.test(before) || ALSO_WORKTREE.test(before))) return "git checkout or restore"
+  if (GIT_ADD_BEFORE.test(before)) return "git add of it"
+  // A card word inside an open quote is part of a commit message (`git commit -m "see <card>"`), not a pathspec.
+  if (GIT_COMMIT_BEFORE.test(before) && (before.replace(/["']$/u, "").match(/["']/gu) ?? []).length % 2 === 0) return "git commit of it"
   if (COPY_BEFORE.test(before) && /^["']?\s*$/u.test(after)) return "a move or copy onto it"
   if (powershellTarget(before)) return "a PowerShell write cmdlet"
   return null
@@ -212,7 +223,7 @@ export function shellCardWrites(command, { resolve, slugCards, vars = {}, confli
     const card = resolve(match[0], dirs)
     if (card === null) continue
     const via = shellForm(text, match.index, match[0].length)
-    if (via === "git checkout or restore" && conflicted(card)) continue
+    if ((via === "git checkout or restore" || via === "git add of it" || via === "git commit of it") && conflicted(card)) continue
     if (via !== null) note(card, via)
   }
   let bare = false

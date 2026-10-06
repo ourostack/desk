@@ -12,8 +12,8 @@ test("desk_save refuses a live task card path, and still takes a card's other fi
   try {
     mkdirSync(path.join(root, "t", "s"), { recursive: true })
     writeFileSync(path.join(root, "t", "s", "task.md"), "x")
-    await assert.rejects(desk_save({ deskRoot: root, input: { paths: ["t/s/task.md"], message: "m" }, spawnGit: () => assert.fail("no git call") }), /task card \(t\/s\/task\.md\).*task_update/u)
-    await assert.rejects(desk_save({ deskRoot: root, input: { paths: ["./t/s/TASK.md"], message: "m" } }), /task card/u)
+    await assert.rejects(desk_save({ deskRoot: root, input: { paths: ["t/s/task.md"], message: "m" }, spawnGit: () => assert.fail("no git call") }), /remove t\/s\/task\.md from .paths. and write the task card with task_update/u)
+    await assert.rejects(desk_save({ deskRoot: root, input: { paths: ["./t/s/TASK.md"], message: "m" } }), /write the task card with task_update/u)
     const calls = []
     const result = await desk_save({ deskRoot: root, input: { paths: ["t/s/notes.md"], message: "m" }, spawnGit: (...args) => (calls.push(args), { status: 1, stdout: "", stderr: "" }) })
     assert.equal(result.status, "nothing_to_commit")

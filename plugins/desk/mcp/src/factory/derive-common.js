@@ -2,7 +2,9 @@
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
+import { isTaskSegment } from "./binding.js"
 import { LIMITS, PATTERNS, validPluginSource } from "./schema.js"
+import { shellEffects } from "./shell-git.js"
 
 export function comparePrRefs(a, b) {
   if (a.repo === b.repo) return a.number - b.number
@@ -84,6 +86,7 @@ export function applyLimits({ agents, intervals, models, prs }, unavailable, lim
     keptIntervals = keptIntervals.filter((interval) => keptNs.has(interval.agent))
     addUnavailable(unavailable, "turns", "capped")
     addUnavailable(unavailable, "tool_durations", "capped")
+    addUnavailable(unavailable, "agents", "capped")
   }
 
   const ordered = []
@@ -108,12 +111,27 @@ export function applyLimits({ agents, intervals, models, prs }, unavailable, lim
   }
 
   const keptNs = new Set(keptAgents.map((agent) => agent.n))
+  if (prs.length > limits.prs) addUnavailable(unavailable, "prs", "capped")
   const keptPrs = prs.slice(0, limits.prs).map(({ agent, ...ref }) => (keptNs.has(agent) ? { ...ref, agent } : ref))
   return { agents: keptAgents, intervals: keptIntervals, models: keptModels, prs: keptPrs }
 }
 
 /** A token or request count the schema accepts (a safe non-negative integer), else `null`. */
 export const countOrNull = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
+
+/** A usage count the log carries as a safe non-negative integer, else `null`. An absent value is `null` too, never 0; ask `usageAbsent` to tell absent from malformed. */
+export const usageOrNull = (value) => countOrNull(value)
+
+/** True when the log leaves the usage value out (`undefined` or `null`), so the caller flags `field_absent`; a present but malformed value is `source_unreadable` instead. */
+export const usageAbsent = (value) => value === undefined || value === null
+
+/** When no model was recorded, flags `models`, `tokens` and `requests` as `field_absent`, skipping any of the three that already carries a flag. */
+export function flagEmptyUsage(unavailable, models) {
+  if (models.length > 0) return
+  for (const field of ["models", "tokens", "requests"]) {
+    if (!unavailable.some((entry) => entry.field === field)) addUnavailable(unavailable, field, "field_absent")
+  }
+}
 
 /** The sum of two counts; `null` when either is unknown or the sum is unsafe. */
 export function addNullable(total, value) {
@@ -126,4 +144,134 @@ export function addNullable(total, value) {
 export function withRequestedModel(agent, requested) {
   if (typeof requested === "string" && PATTERNS.modelId.test(requested) && requested !== agent.model) agent.requested_model = requested
   return agent
+}
+
+// `task_update` carries its status at the top level or in `frontmatter.status` (an object, or a JSON string). The frontmatter is read here and dropped.
+function frontmatterOf(input) {
+  let frontmatter = input.frontmatter
+  if (typeof frontmatter === "string") {
+    try {
+      frontmatter = JSON.parse(frontmatter)
+    } catch {
+      return null
+    }
+  }
+  return frontmatter !== null && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : null
+}
+
+const STATUS_ONLY_INPUT_KEYS = new Set(["track", "slug", "person", "frontmatter"])
+
+/** The `status` and `statusOnly` of a `task_update` input (ruling P1): status-only means no input key beyond track, slug, person and frontmatter, and a frontmatter holding a string `status` and nothing else. */
+export function deskCallStatus(input) {
+  const frontmatter = frontmatterOf(input)
+  const nested = frontmatter?.status
+  const status = input.status ?? (typeof nested === "string" ? nested : null)
+  const statusOnly = Object.keys(input).every((key) => STATUS_ONLY_INPUT_KEYS.has(key))
+    && frontmatter !== null && typeof nested === "string" && Object.keys(frontmatter).length === 1
+  return { status, statusOnly }
+}
+
+/** A `task_focus` input as `{ track, slug }`, `{ clear: true }`, or `null` when it names no valid task folder. */
+export function focusTarget(input) {
+  if (input.clear === true) return { clear: true }
+  return isTaskSegment(input.track) && isTaskSegment(input.slug) ? { track: input.track, slug: input.slug } : null
+}
+
+/** The focus a Desk tool call declares, as `{ track, slug }` or `{ clear: true }`, else `null`. `verb` is the tool's own name (`task_focus`, `task_create`, ...). A `task_focus` call declares its target; a `task_create` call declares the card it files only when its `focus` is the boolean `true`. */
+export function declaredFocus(verb, input) {
+  if (verb === "task_focus") return focusTarget(input)
+  if (verb !== "task_create" || input.focus !== true) return null
+  return isTaskSegment(input.track) && isTaskSegment(input.slug) ? { track: input.track, slug: input.slug } : null
+}
+
+/** The string entries of a `desk_save` input's `paths`. */
+export function deskSavePaths(input) {
+  return Array.isArray(input.paths) ? input.paths.filter((entry) => typeof entry === "string") : []
+}
+
+/** What one shell command does that binds a session: `commits` as `{ cwd, paths }` once per directory (the paths its `git add` and `git commit` name, in that directory), and the absolute files it `writes`. The command is tokenized once and dropped. */
+export function shellBinding({ command, cwd, home, dialect }) {
+  const effects = shellEffects({ command, cwd, home, dialect })
+  const operands = [...effects.adds, ...effects.commits]
+  const commits = []
+  for (const { cwd: directory } of effects.commits) {
+    if (commits.some((commit) => commit.cwd === directory)) continue
+    commits.push({ cwd: directory, paths: [...new Set(operands.filter((entry) => entry.cwd === directory).flatMap((entry) => entry.paths))] })
+  }
+  return { commits, writes: effects.writes }
+}
+
+const SIZE_EDGES = [[0, "none"], [20, "xs"], [200, "s"], [1000, "m"], [5000, "l"]]
+
+/** The size class of a character count: `none` 0, `xs` 1 to 20, `s` 21 to 200, `m` 201 to 1,000, `l` 1,001 to 5,000, `xl` above. */
+export function sizeClass(chars) {
+  if (!Number.isSafeInteger(chars) || chars < 0) throw new TypeError("chars must be a non-negative integer")
+  for (const [edge, name] of SIZE_EDGES) if (chars <= edge) return name
+  return "xl"
+}
+
+const isCount = (value) => Number.isSafeInteger(value) && value >= 0
+
+function momentMs(at) {
+  const ms = typeof at === "string" ? Date.parse(at) : Number.NaN
+  if (Number.isNaN(ms)) throw new TypeError("at must be an ISO timestamp string")
+  return ms
+}
+
+/**
+ * Collects human turns for one session without holding any text: callers pass character counts, and a non-integer count is refused, so a string cannot be passed by mistake. `at` is the ISO timestamp string local intervals use. A `window_ms` is a whole, non-negative number of milliseconds.
+ */
+export function createHumanTurns({ limit = LIMITS.humanTurns } = {}) {
+  const turns = []
+  let replyChars = 0
+  let stoppedMs = null
+  let previousMs = null
+  let capped = false
+  let skewed = false
+  return {
+    addReply(chars) {
+      if (!isCount(chars)) throw new TypeError("chars must be a non-negative integer")
+      replyChars = Math.min(replyChars + chars, Number.MAX_SAFE_INTEGER)
+    },
+    agentStopped(at) {
+      stoppedMs = momentMs(at)
+    },
+    prompt(at, chars) {
+      if (!isCount(chars)) throw new TypeError("chars must be a non-negative integer")
+      const ms = momentMs(at)
+      let basis = "first"
+      let since = null
+      // A time earlier than the last prompt is not moved (a moved time is a made-up fact): the turn is dropped and the list is flagged as a lower bound.
+      const skew = previousMs !== null && ms < previousMs
+      if (skew) skewed = true
+      else if (previousMs !== null) {
+        basis = stoppedMs !== null ? "after_stop" : "mid_turn"
+        since = stoppedMs ?? previousMs
+      }
+      // A stop recorded after this prompt (clock skew between the two records) leaves no true wait: a window clamped to 0 would read as a
+      // measured zero, so the turn is dropped and the list flagged, like a prompt dated before the last.
+      const stopSkew = since !== null && since > ms
+      if (stopSkew) skewed = true
+      if (skew || stopSkew) {
+        // dropped
+      } else if (turns.length >= limit) capped = true
+      else {
+        turns.push({
+          at: new Date(ms).toISOString(),
+          basis,
+          window_ms: since === null ? null : Math.floor(ms - since),
+          prompt_class: sizeClass(chars),
+          output_class: sizeClass(replyChars),
+        })
+      }
+      if (!skew) previousMs = ms
+      replyChars = 0
+      stoppedMs = null
+    },
+    finish(unavailable) {
+      if (capped) addUnavailable(unavailable, "human_turns", "capped")
+      if (skewed) addUnavailable(unavailable, "human_turns", "source_unreadable")
+      return turns
+    },
+  }
 }

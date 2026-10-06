@@ -70,6 +70,11 @@ import {
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { shellQuote, shellQuotePath } from "../util/shell-quote.js"
 import { readSmallText } from "../factory/marker.js"
+import { isHeadlessFactorySession } from "../factory/headless-flag.js"
+import { isNoninteractive } from "../factory/session-kind.js"
+import { improvementBootCheck, improvementCountText, improvementLine, improvementNotes } from "../factory/boot-check.js"
+import { AUTHORITY } from "../desk/improvement-authority.js"
+import { improvementPerson } from "../desk/improvement-person.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
@@ -81,6 +86,7 @@ import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, UNMATCHED_TASK_INSTRUCTI
 import { checkStaleDesk } from "./stale-desk.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
+import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -854,17 +860,26 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
 
 const FACTORY_QUESTION = (store, login) => `Desk can contribute measurement data about your finished tasks to \`${store}\`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. \`${store}\` is a public repository, and your GitHub account \`${login}\` appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)`
 
+export { isNoninteractive }
+
+const IMPROVEMENT_BUDGET_MS = 500
+
 /**
- * True when no operator is in the conversation: a headless Claude Code run
- * (`claude -p` sets `CLAUDE_CODE_ENTRYPOINT` to an `sdk-*` value, and
- * `CLAUDE_CODE_SESSION_ATTENDED=0` marks an unattended one) or a CI runner.
- * A host that sets none of these is treated as interactive; the consent
- * instruction is then still worded so it can never precede the real work.
+ * What a session is told about the improvement cards, for an agent that reads it at session start: what a card is,
+ * that the cards are standing work, when to take one, and (the one authority paragraph the improvement tools export)
+ * what it may decide itself. Said only for a session with an operator in it, and the authority paragraph only when
+ * a card is open. An unreadable folder and set-aside files are said whatever the count is.
  */
-export function isNoninteractive(env) {
-  const entry = String(env.CLAUDE_CODE_ENTRYPOINT ?? "")
-  const flagged = (name) => /^(1|true)$/iu.test(String(env[name] ?? ""))
-  return entry.startsWith("sdk") || env.CLAUDE_CODE_SESSION_ATTENDED === "0" || flagged("CI") || flagged("GITHUB_ACTIONS")
+export function improvementInstructions(summary) {
+  if (summary === null || summary === undefined) return []
+  if (summary.status !== "ok") return [improvementLine(summary)]
+  const out = []
+  if (summary.open > 0) {
+    out.push(`Improvement cards: ${improvementCountText(summary)}. An improvement card is one finding of the factory about our own tooling, with its evidence. The cards are standing, pre-authorized work: take the oldest when your foreground work allows it, this is an interactive session and the machine is under its cap, by handing it to a background subagent through improvement_next, which refuses and says why when the session or the machine's cap does not allow it. ${AUTHORITY}`)
+  }
+  const notes = improvementNotes(summary)
+  if (notes.length > 0) out.push(`Improvement cards: ${notes.join("; ")}`)
+  return out
 }
 
 function factoryInstructions(factory, pluginRoot, { noninteractive }) {
@@ -1018,7 +1033,7 @@ function factoryTextLine(factory, pluginRoot) {
 // The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot
 // prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all.
 function buildInstructionItems(ctx) {
-  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
+  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList, improvement } = ctx
   const out = []
   const add = (text, plain = text) => out.push({ text, plain })
   // A question for the operator comes first, before the desk path and the tool names: the agent must not start anything until it is asked.
@@ -1061,8 +1076,13 @@ function buildInstructionItems(ctx) {
   } else {
     add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
   }
-  // An ask-and-stop blocker means the operator has one question to answer first: no consent line on this boot.
-  const consent = needsOperator(ctx) === null ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
+  // The sign-off line comes before the consent block: consent stays the last instruction of the text boot.
+  signoffInstructions(ctx.unsigned, { noninteractive }).forEach((text) => add(text))
+  // An ask-and-stop blocker means the operator has one question to answer first: no card pickup and no consent line on this boot.
+  const asked = needsOperator(ctx) !== null
+  // The improvement lines also come before the consent block.
+  if (!noninteractive && !asked) for (const text of improvementInstructions(improvement)) add(text)
+  const consent = !asked ? factoryInstructions(factory, pluginRoot, { noninteractive }) : []
   consent.forEach((text, index) => add(text, index === 0 ? factoryTextLine(factory, pluginRoot) : null))
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
@@ -1135,11 +1155,13 @@ export async function bootOnce({
   localOnlyFn = recordLocalOnlyOnCards,
   prFn = openPullRequests,
   factoryStatusFn = factoryStatus,
+  improvementFn = improvementBootCheck,
   lastSyncFn = lastSyncedAt,
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
   staleDeskFn = checkStaleDesk,
   nestedCards = NESTED_CARD_FIELDS,
+  unsignedFn = recordUnsigned,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
   const ghAuth = ghAuthArg ?? (ghArg ?? commandRunner("gh", { env }))
@@ -1185,15 +1207,17 @@ export async function bootOnce({
     return { ...emptyResult({ status: "degraded", degraded, pending, root, host }), instructions, migrations: migrationSummary }
   }
 
+  // A headless evaluator session changes nothing in the desk: no card guard, no sync, no stale refresh.
+  const headless = isHeadlessFactorySession(env)
   // The stale-Desk lookup runs alongside everything below; it has its own hard budget and never rejects.
   const staleDesk = Promise.resolve()
-    .then(() => staleDeskFn({ env, pluginRoot, agentHost: host.agent, now }))
+    .then(() => (headless ? null : staleDeskFn({ env, pluginRoot, agentHost: host.agent, now })))
     .catch(() => null)
 
   // The desk's own pre-commit hook (refuses a hand commit that changes a task card; see desk/card-commit-guard.js). Installing is idempotent and quiet;
   // only a failure to install is worth a line.
   try {
-    const guard = cardGuardFn(root.path, { spawnGit })
+    const guard = headless ? { state: "skipped" } : cardGuardFn(root.path, { spawnGit })
     if (guard.state === "failed") degraded.push(`card guard: ${guard.reason}`)
     // A tracked hooks folder is the team's choice, not a fault: one note with the manual remedy, nothing degraded.
     if (guard.state === "tracked") pending.push(`card guard not installed: ${guard.reason}; ${guard.remedy}`)
@@ -1216,7 +1240,7 @@ export async function bootOnce({
   let sync = null
   let syncTimedOut = false
   try {
-    const synced = await withinBudget(syncFn({ root: root.path, env }), Math.min(SYNC_BUDGET_MS, deadline - now()), { timedOut: true })
+    const synced = headless ? { state: "skipped", nothingToSync: "headless" } : await withinBudget(syncFn({ root: root.path, env }), Math.min(SYNC_BUDGET_MS, deadline - now()), { timedOut: true })
     if (synced.timedOut === true) {
       syncTimedOut = true
       pending.push("sync: boot_budget_exceeded")
@@ -1319,6 +1343,29 @@ export async function bootOnce({
     degraded.push(`factory: ${error.message}`)
   }
 
+  // The delivered tasks that await the operator's sign-off; the counts go to status.json.
+  let unsigned = null
+  try {
+    unsigned = await unsignedFn(env, root.path, now())
+  } catch {
+    unsigned = null
+  }
+
+  // The improvement cards the session may take: nothing is read for a session with no operator in it.
+  let improvement = null
+  if (root !== null && !isNoninteractive(env)) {
+    try {
+      // The person the Desk tools resolve, without a network call; a bad DESK_PERSON never stops the boot.
+      const who = await improvementPerson({ deskRoot: root.path, env, now: now() })
+      improvement = who.status !== "ok"
+        ? { status: "unchecked", reason: who.reason }
+        : await withinBudget(improvementFn({ deskRoot: root.path, personPrefix: who.personPrefix, env, now: now() }), Math.min(IMPROVEMENT_BUDGET_MS, deadline - now()), null)
+      if (improvement === null) pending.push("improvement: boot_budget_exceeded")
+    } catch (error) {
+      degraded.push(`improvement: ${error.message}`)
+    }
+  }
+
   let task = null
   if (taskQuery !== null) {
     const resolved = resolveTaskQuery(taskQuery, cards, root.path)
@@ -1333,7 +1380,7 @@ export async function bootOnce({
 
   const staleFinding = await staleDesk
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, improvement }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
@@ -1361,6 +1408,7 @@ export async function bootOnce({
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
+    unsigned_deliveries: unsigned,
   }
 }
 

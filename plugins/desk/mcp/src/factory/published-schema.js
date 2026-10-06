@@ -1,4 +1,4 @@
-// Published facts v1 (`desk.factory.published/1`): the public gate.
+// Published facts (`desk.factory.published/2`; `/1` files are still read): the public gate.
 //
 // A published facts file is the only thing that ever leaves this machine for
 // a factory store, and the stores are public. It says how the work went and
@@ -69,8 +69,15 @@ import {
   ENUMS,
   LIMITS,
   MODEL_SPEC,
+  OUTCOME_SPEC,
+  OUTCOME_STATE_CODES,
+  REFUSAL_REASON_CODES,
+  RETURN_SPEC,
+  OUTCOME_SINCE_CODES,
+  OUTCOME_OPTIONAL as OUTCOME_OPTIONAL_LOCAL,
   PATTERNS,
   PR_SPEC,
+  __SPECS__ as LOCAL_SPECS,
   prFields,
   jobFields,
   addError,
@@ -96,7 +103,10 @@ import {
 } from "./schema.js"
 import { isCredentialLike } from "./credential.js"
 
-export const PUBLISHED_SCHEMA = "desk.factory.published/1"
+export const PUBLISHED_SCHEMA = "desk.factory.published/2"
+
+/** Every published schema value a reader accepts: the legacy `/1` and the current one. */
+export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", PUBLISHED_SCHEMA])
 
 /** An ISO calendar date anywhere in a string. */
 export const DATE_SHAPE = /\d{4}-\d{2}-\d{2}/u
@@ -111,7 +121,7 @@ export const PUBLISHED_LIMITS = Object.freeze({
   maxOffsetMs: 3650 * 24 * 60 * 60 * 1000,
 })
 
-const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/1$/u
+export const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[12]$/u
 
 const DATE_PARTS = /(\d{4})-(\d{2})-(\d{2})/u
 const TIME_PARTS = /(\d{2}):(\d{2})/u
@@ -313,6 +323,70 @@ const TOP = {
   unavailable: arrayField(objectField(UNAVAILABLE), LIMITS.unavailable),
 }
 
+// `outcomes[]`: a job's sign-off state as a published fact. The wait is a coarse class and never a time, so no entry carries a date, an exact wait or a local time key (any of them is `unknown_key`). These lists are `WAIT_CLASSES` and `OUTCOME_STATES` in `outcome.js`; a test compares them, because this module imports nothing from there.
+const WAIT_CLASS_CODES = ["lt_1h", "lt_1d", "lt_7d", "ge_7d"]
+const WAIT = {
+  class: enumField(WAIT_CLASS_CODES),
+  censored: booleanField(),
+}
+const OUTCOME = {
+  job: publicPatternField(PATTERNS.jobId),
+  rev: rangeIntField(0, 9999),
+  state: enumField(OUTCOME_STATE_CODES),
+  verified: OUTCOME_SPEC.verified,
+  reason: nullableEnumField(REFUSAL_REASON_CODES),
+  deliveries: rangeIntField(0, 9999),
+  wait: nullableObjectField(WAIT),
+}
+
+// The optional keys of an outcome entry: the record's start and the returns, never the two milestone times.
+const OUTCOME_OPTIONAL = {
+  since: nullableEnumField(OUTCOME_SINCE_CODES),
+  returns: arrayField(objectField(RETURN_SPEC), LIMITS.returns),
+  returns_truncated: OUTCOME_OPTIONAL_LOCAL.returns_truncated,
+  returns_unreadable: rangeIntField(1, 9999),
+}
+const outcomeFields = (value) => ({ ...OUTCOME, ...Object.fromEntries(Object.entries(OUTCOME_OPTIONAL).filter(([key]) => Object.hasOwn(value, key))) })
+
+// The reasons that say there is no list: a host that records none, or a log with no such field.
+const NO_LIST_REASONS = new Set(["host_does_not_record", "field_absent"])
+
+// `human_turns[]`: one human prompt as an offset on the session clock, a basis, the gap and two size classes. The classes and basis are the local schema's own; the local `at` becomes `at_ms`, so a date or time of day can never be written. The offset is at most `session.duration_ms`, checked in `validatePublished`.
+const HUMAN_TURN = {
+  at_ms: durationField(),
+  basis: LOCAL_SPECS.humanTurn.basis,
+  window_ms: LOCAL_SPECS.humanTurn.window_ms,
+  prompt_class: LOCAL_SPECS.humanTurn.prompt_class,
+  output_class: LOCAL_SPECS.humanTurn.output_class,
+}
+
+// At most `LIMITS.humanTurns` turns; a first turn has a null window and any other a number, and the offsets never go back (the local schema's rules, on `at_ms`).
+const humanTurnsField = () => {
+  const list = arrayField(objectField(HUMAN_TURN), LIMITS.humanTurns)
+  return leaf((value, path, errors, ctx) => {
+    const results = list.check(value, path, errors, ctx)
+    if (results === undefined) return results
+    let previous = null
+    value.forEach((entry, index) => {
+      const own = results[index]
+      if (own?.basis === true && own.window_ms === true && (entry.basis === "first") !== (entry.window_ms === null)) {
+        addError(errors, "inconsistent", joinPath(path, `${index}.window_ms`))
+      }
+      if (own?.at_ms !== true) return
+      if (previous !== null && entry.at_ms < previous) addError(errors, "order", joinPath(path, `${index}.at_ms`))
+      previous = entry.at_ms
+    })
+    return results
+  })
+}
+
+// The optional top-level keys, added only when the file carries them.
+const topFields = (value) => ({
+  ...TOP,
+  ...(Object.hasOwn(value, "outcomes") ? { outcomes: arrayField(objectField(outcomeFields), LIMITS.outcomes) } : {}),
+  ...(Object.hasOwn(value, "human_turns") ? { human_turns: humanTurnsField() } : {}),
+})
+
 // For the structural test: every allowed key carries a real check.
 export const __PUBLISHED_SPECS__ = Object.freeze({
   top: TOP,
@@ -330,6 +404,11 @@ export const __PUBLISHED_SPECS__ = Object.freeze({
   unavailable: UNAVAILABLE,
   intervalTool: intervalFields({ kind: "tool" }),
   intervalOther: intervalFields({ kind: "turn" }),
+  outcome: OUTCOME,
+  wait: WAIT,
+  return: RETURN_SPEC,
+  outcomeOptional: OUTCOME_OPTIONAL,
+  humanTurn: HUMAN_TURN,
 })
 
 /**
@@ -338,7 +417,7 @@ export const __PUBLISHED_SPECS__ = Object.freeze({
  */
 export function validatePublished(value) {
   const errors = []
-  const results = validateObject(value, "", TOP, errors)
+  const results = validateObject(value, "", topFields, errors)
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
   checkSegmentAgents(value, results, errors)
@@ -355,6 +434,15 @@ export function validatePublished(value) {
     })
   }
   if (results.unavailable) noDuplicates(value.unavailable, results.unavailable, ["field", "reason"], (item) => `${item.field}|${item.reason}`, "unavailable")
+  // One outcome per job, named at the job as in the local form.
+  if (results.outcomes) {
+    const seenJobs = new Set()
+    value.outcomes.forEach((entry, index) => {
+      if (results.outcomes[index]?.job !== true) return
+      if (seenJobs.has(entry.job)) addError(errors, "duplicate", `outcomes.${index}.job`)
+      seenJobs.add(entry.job)
+    })
+  }
   const refs = results.refs
   if (refs?.prs) noDuplicates(value.refs.prs, refs.prs, ["repo", "number"], (item) => `${item.repo}#${item.number}`, "refs.prs")
   if (refs?.commits) noDuplicates(value.refs.commits, refs.commits, ["sha"], (item) => item.sha, "refs.commits")
@@ -383,6 +471,23 @@ export function validatePublished(value) {
   // Checked only when the duration itself is sound, so one bad duration is
   // one error.
   checkSessionBounds(value, results, errors, results.session?.duration_ms === true ? value.session.duration_ms : null)
+  // A list of human turns is a `/2` field, and it never sits beside a flag that says the host records none or the field is absent: either the list is the record or the flag is, not both.
+  if (results.human_turns) {
+    if (value.schema === PUBLISHED_SCHEMAS[0]) addError(errors, "inconsistent", "human_turns")
+    if (results.unavailable) {
+      value.unavailable.forEach((entry, index) => {
+        if (results.unavailable[index]?.field === true && results.unavailable[index].reason === true && entry.field === "human_turns" && NO_LIST_REASONS.has(entry.reason)) {
+          addError(errors, "inconsistent", `unavailable.${index}`)
+        }
+      })
+    }
+  }
+  // A human turn never lies past the session's end either.
+  if (results.session?.duration_ms === true && results.human_turns) {
+    value.human_turns.forEach((turn, index) => {
+      if (results.human_turns[index]?.at_ms === true && turn.at_ms > value.session.duration_ms) addError(errors, "range", `human_turns.${index}.at_ms`)
+    })
+  }
   if (results.session?.duration_ms === true && results.intervals) {
     value.intervals.forEach((item, index) => {
       if (results.intervals[index]?.end_ms === true && item.end_ms > value.session.duration_ms) {

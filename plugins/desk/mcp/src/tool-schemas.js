@@ -50,6 +50,12 @@ const CARD_UPDATE = {
 
 const REPOS_REMOVED_REASON = text("Required to remove every repo from a card that names code repos (a task whose work turned out not to touch them): one line on why, recorded on the card as `repos_removed` with each repo\'s name and the time. The same call may not set `status: done`; finish in a separate call. Not needed when the call sets `status: cancelled`.")
 
+const RETURN_REASON = {
+  type: "string",
+  enum: ["agent_error", "changed_ask", "new_information", "external"],
+  description: "Required when this call sends a task backwards (out of `done`, or to a stage below the furthest one it reached): why. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke). Refused on any call that is not a return.",
+}
+
 const TASK_PROGRESS = {
   note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
   next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
@@ -79,6 +85,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     title: text("The task title."),
     status: text("Initial status; defaults to drafting. Must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
+    focus: flag("Pass true to also declare this new task as the one this session is working on (as task_focus does), for work that starts now; leave it out for a parked follow-up. Only if you are the session's main agent."),
     category: text("general | reminder | coordination | infrastructure | another category."),
     cadence: text("Recurring cadence, such as 30m."),
     scheduledAt: text("One-time scheduled time (ISO 8601)."),
@@ -117,8 +124,21 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
+  task_signoff: schema({
+    track: text("The track folder of the delivered task."),
+    slug: text("The task folder name."),
+    outcome: { type: "string", enum: ["accepted", "refused"], description: "The operator's answer: accepted, or refused (the task goes back to processing)." },
+    // Mirrors REFUSAL_REASONS in src/factory/outcome.js (this file stays free of imports).
+    reason: { type: "string", enum: ["not_what_was_asked", "defect", "changed_ask", "incomplete", "other"], description: "Required when refused, and not allowed when accepted: the operator's reason, mapped from what they said. not_what_was_asked, defect, changed_ask, incomplete or other." },
+    return_reason: { ...RETURN_REASON, description: "Required when refused, and not allowed when accepted: your own reading of the cause. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke)." },
+  }, ["track", "slug", "outcome"]),
+  task_focus: schema({
+    track: text("The track folder of the task you are working on; give it with `slug`."),
+    slug: text("The task folder name; give it with `track`."),
+    clear: flag("Pass true, alone, to declare no task: for a side conversation that belongs to none."),
+  }),
   task_move: schema({
     ...TASK_TARGET,
     handle: text("The task's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
@@ -152,7 +172,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     about: {
       type: "string",
       enum: ["setup", "system"],
-      description: "What the friction is about. \"setup\" (default): friction with this desk's own setup; it stays on the desk. \"system\": friction with Desk itself (its skills, tools or the factory); it becomes a kaizen candidate for the curator.",
+      description: "What the friction is about. \"setup\" (default): friction with this desk's own setup; it stays on the desk. \"system\": friction with Desk itself (its skills, tools or the factory); an improvement card opens by itself, with no signoff; read `improvement` in the result.",
     },
     title: text("Required when about is \"system\": the kaizen card's title, on one line."),
     plugin: text("When about is \"system\": the plugin the friction is in; defaults to \"desk\"."),
@@ -164,7 +184,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     },
     signal: text("When about is \"system\": the rollups measure the friction moves, when known."),
     evidence_jobs: list("When about is \"system\": factory job ids that show the friction, when known."),
-    file_card: flag("Curator-only, after its signoff step: file the \"system\" kaizen candidate as a card now instead of leaving it a candidate. Only valid when about is \"system\"."),
+    file_card: flag("Also file the store's kaizen issue for the \"system\" friction now, instead of leaving it to the loop's mirror step. Only valid when about is \"system\"."),
   }, ["body"]),
   lesson_add: schema({
     topic: text("The lesson topic; slugified for the filename."),
@@ -173,6 +193,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   desk_save: schema({
     paths: list("The paths to commit, relative to the desk root."),
     message: text("The commit message."),
+    tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards (already staged by task_move, track_rename or git mv) with the old and new path of every move, plus _meta/organization.json. Task cards are accepted only as moves or deletes. Leaves other staged work staged and ends the message with the Desk-Tidy: true trailer."),
   }, ["paths", "message"]),
   desk_search: schema({
     query: text("The search query."),
@@ -213,4 +234,20 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
     repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },
   }),
+  improvement_open: schema({
+    source: { type: "string", enum: ["andon", "friction_candidate", "reconcile_class", "desk_problem", "store_build", "evaluator", "loop_alarm", "flush_health"], description: "Where the card comes from; the card key is <source>:<id>." },
+    id: text("The case's id for the source: an owner/repo#number for andon and store_build, ourostack/desk#number for desk_problem, 32 hex for friction_candidate, or a code from the source's closed list."),
+    title: text("Never accepted: Desk builds every card title, so a title is refused as title_not_allowed."),
+    evidence: list("Up to 10 pointers: job:<32 hex>, issue:<owner/repo>#<n>, pr:<owner/repo>#<n>, reconcile:<reason>@<count>, fingerprint:<hex>."),
+    plugin: text("The plugin the improvement is in; defaults to \"desk\"."),
+    signal: text("The rollups measure the improvement moves, when known."),
+  }, ["source", "id"]),
+  improvement_next: schema({ session: text("The session's UUID, when known.") }),
+  improvement_update: schema({
+    key: text("The card's key, as improvement_next returned it."),
+    claim_id: text("The claim_id improvement_next returned."),
+    state: { type: "string", enum: ["shipped", "open", "closed_unverified"], description: "shipped (with countermeasure; may be omitted then), open (release the claim) or closed_unverified (with close_reason)." },
+    countermeasure: text("The pull request URL that ships the fix: https://github.com/<owner>/<repo>/pull/<n>."),
+    close_reason: { type: "string", enum: ["wont_fix", "duplicate", "not_reproducible"], description: "Why you close the card; required with state closed_unverified." },
+  }, ["key", "claim_id"]),
 })

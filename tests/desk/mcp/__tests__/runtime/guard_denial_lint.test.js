@@ -234,6 +234,8 @@ test("every file under plugins/desk that emits a denial is accounted for in this
     "mcp/src/desk/card-commit-guard.js": 2, "hooks/protected-checkout.cjs": 2,
     // Carries the reason a guard built to the host in its own shape; it writes none of its own.
     "mcp/src/runtime/copilot-hook-payload.js": 3,
+    // The sign-off witness denies a subagent's task_signoff call (tested in signoff_witness.test.js with the same rule).
+    "mcp/src/runtime/signoff-witness.js": 2,
     // Its `unresolved` is a sync outcome, not a denial.
     "mcp/src/runtime/session-sync.js": 6,
   }

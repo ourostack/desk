@@ -43,6 +43,15 @@ test("parseStoreConfig reads the tracked plugins from the store's factory.json, 
   for (const text of invalid) assert.deepEqual(parseStoreConfig(text), { ok: false, code: "invalid_config" }, text)
 })
 
+test("parseStoreConfig tolerates the capture flag beside andon, as a whole number of 1 or more, and nothing else", () => {
+  assert.deepEqual(parseStoreConfig('{"andon":{"plugins":["desk"]},"capture":1}'), { ok: true, plugins: ["desk"] })
+  assert.deepEqual(parseStoreConfig('{"capture":1,"andon":{"plugins":[]}}'), { ok: true, plugins: [] })
+  assert.deepEqual(parseStoreConfig('{"andon":{"plugins":[]},"capture":2}'), { ok: true, plugins: [] }, "2 or more is tolerated on purpose; the flush requires exactly 1")
+  for (const text of ['{"capture":1}', '{"andon":{"plugins":[]},"capture":"1"}', '{"andon":{"plugins":[]},"capture":0}', '{"andon":{"plugins":[]},"capture":1.5}', '{"andon":{"plugins":[]},"capture":true}', '{"andon":{"plugins":[]},"capture":1,"extra":1}']) {
+    assert.deepEqual(parseStoreConfig(text), { ok: false, code: "invalid_config" }, text)
+  }
+})
+
 test("andon titles name the plugin, version, measure and job class, and parse back only when well formed", () => {
   assert.equal(andonTitle("desk", "3.1.0-alpha.7", "tool_retries", "other"), "Andon: desk 3.1.0-alpha.7 tool_retries other")
   assert.deepEqual(parseAndonTitle("Andon: desk 3.1.0-alpha.7 tool_retries other"), { plugin: "desk", version: "3.1.0-alpha.7", measure: "tool_retries", jobClass: "other" })
@@ -281,4 +290,36 @@ test("syncAndon uses the given author for its own issues", async () => {
   assert.deepEqual((await syncAndon({ client: github.client, records, plugins: ["desk"] })).alarms, [])
   assert.deepEqual((await syncAndon({ client: github.client, records, plugins: ["desk"], author: "other[bot]" })).alarms.map((alarm) => alarm.action), ["closed"])
   assert.equal(BOT, "github-actions[bot]")
+})
+
+// A finished Claude job whose api_retries is partial through api_retries/host_records_partly: the value is a lower bound and keeps its state.
+function claudeJob(version, retries) {
+  const record = job(version, 0)
+  return { ...record, measures: { ...record.measures, api_retries: { value: retries, state: "partial", reasons: ["host_records_partly"] } } }
+}
+
+test("a partial measure still reaches the alarm with its state", () => {
+  const records = [...LOW.map((value) => claudeJob("1.0.0", value)), ...HIGH.map((value) => claudeJob("1.1.0", value))]
+  const alarms = planAndon(records, DESK)
+  assert.equal(alarms.length, 1)
+  const [alarm] = alarms
+  assert.equal(alarm.measure, "api_retries")
+  assert.equal(alarm.state, "partial")
+  assert.deepEqual(alarm.reasons, ["host_records_partly"])
+  assert.match(alarm.body, /The `api_retries` numbers here are a lower bound: the host records them only partly\./u)
+  assert.deepEqual(alarm.comparison.after, { jobs: 6, groups: 6, median: 9 })
+})
+
+test("an alarm over measured values says measured and carries no lower-bound sentence", () => {
+  const [alarm] = planAndon([...jobs("1.0.0", LOW), ...jobs("1.1.0", HIGH)], DESK)
+  assert.equal(alarm.state, "measured")
+  assert.deepEqual(alarm.reasons, [])
+  assert.doesNotMatch(alarm.body, /lower bound/u)
+})
+
+test("one partial job among measured ones makes the alarm partial", () => {
+  const records = [...jobs("1.0.0", LOW), ...jobs("1.1.0", HIGH)]
+  const mixed = records.map((record, index) => index === 7 ? { ...record, measures: { ...record.measures, tool_retries: { value: record.measures.tool_retries.value, state: "partial", reasons: ["host_records_partly"] } } } : record)
+  const [alarm] = planAndon(mixed, DESK)
+  assert.equal(alarm.state, "partial")
 })

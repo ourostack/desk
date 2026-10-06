@@ -119,6 +119,26 @@ test("toPublishedLabels shares no object with its input and never mutates it", (
   assert.deepEqual(input, LABELS)
 })
 
+test("a stretch's catch point publishes as written, and a stretch without one publishes without the key", () => {
+  const { published } = toPublishedLabels(labels(), { deskVisibility: "private" })
+  assert.equal(published.stretches[0].caught, "in_task")
+  assert.equal(Object.hasOwn(published.stretches[1], "caught"), false)
+  const unplaced = labels()
+  delete unplaced.stretches[0].caught
+  assert.equal(Object.hasOwn(toPublishedLabels(unplaced, { deskVisibility: "private" }).published.stretches[0], "caught"), false)
+  const keyed = toPublishedLabels(labels(), { deskVisibility: "public", machineSecret: SECRET })
+  assert.equal(keyed.published.stretches[0].caught, "in_task")
+  assert.deepEqual(Object.keys(keyed.published.stretches[0]).slice(-2), ["evidence", "caught"])
+})
+
+test("a catch point that is not one of the three codes is refused without naming it", () => {
+  for (const value of ["SENTINEL", null, 3]) {
+    const bad = labels()
+    bad.stretches[0].caught = value
+    assert.throws(() => toPublishedLabels(bad, { deskVisibility: "private" }), (error) => error instanceof TypeError && !error.message.includes("SENTINEL"))
+  }
+})
+
 test("toPublishedLabels refuses invalid labels and a missing key without naming a value", () => {
   const bad = labels()
   bad.stretches[0].note = "SENTINEL"

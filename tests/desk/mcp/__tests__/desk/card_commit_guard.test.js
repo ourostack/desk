@@ -361,7 +361,7 @@ test("a merge, cherry-pick or revert in progress passes: resolving a card confli
   }
 })
 
-test("a card whose staged frontmatter does not parse can be repaired by hand; the refusal message names the escape hatch", () => {
+test("a card whose staged frontmatter does not parse can be repaired by hand; the refusal message names task_update and never the override", () => {
   const root = makeDesk()
   try {
     installCardGuard(root)
@@ -372,8 +372,8 @@ test("a card whose staged frontmatter does not parse can be repaired by hand; th
     writeFileSync(cardPath(root), "---\r\ntitle: x\r\nstatus: processing\r\n---\r\nbody\r\n")
     const refused = commitAll(root, "crlf card")
     assert.notEqual(refused.status, 0, "a CRLF card that parses is still refused")
-    assert.match(refused.stderr, /DESK_TOOL_COMMIT=1 git commit/)
-    assert.match(refused.stderr, /task_update cannot parse/)
+    assert.doesNotMatch(refused.stderr, /DESK_TOOL_COMMIT/, "the refusal never tells an agent about the override")
+    assert.match(refused.stderr, /call task_update for (?:it|the card)/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -389,7 +389,8 @@ test("a core.hooksPath that holds tracked files is left alone with a remedy; uni
     assert.equal(sh(root, ["commit", "-q", "-m", "hooks", "--no-verify"]).status, 0)
     const result = installCardGuard(root)
     assert.equal(result.state, "tracked")
-    assert.match(result.remedy, /DESK_TOOL_COMMIT/)
+    assert.doesNotMatch(result.remedy, /DESK_TOOL_COMMIT/)
+    assert.match(result.remedy, /unless Desk itself is committing/)
     assert.equal(readFileSync(path.join(root, ".githooks", "pre-commit"), "utf8"), "#!/bin/sh\nexit 0\n")
     assert.equal(sh(root, ["status", "--porcelain"]).stdout, "")
   } finally {

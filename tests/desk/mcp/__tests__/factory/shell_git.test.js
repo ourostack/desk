@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { DESK_MARKER, gitCommitCwds } from "../../../../../plugins/desk/mcp/src/factory/shell-git.js"
+import { DESK_MARKER, gitCommitCwds, shellEffects } from "../../../../../plugins/desk/mcp/src/factory/shell-git.js"
 
 const BASE = "/base/repo"
 const HOME = "/home/someone"
@@ -215,4 +215,100 @@ test("nothing but directories ever comes back: the commit message and other argu
   const result = find(`git add ${MESSAGE_SENTINEL}.md && git -c user.name="${MESSAGE_SENTINEL}" commit -q -m "${MESSAGE_SENTINEL}" --author="${MESSAGE_SENTINEL} <x@y>"`)
   assert.deepEqual(result, [BASE])
   assert.equal(JSON.stringify(result).includes(MESSAGE_SENTINEL), false)
+})
+
+// ---------------------------------------------------------------------------
+// shellEffects: git-named paths and shell writes.
+// ---------------------------------------------------------------------------
+
+const effects = (command, overrides = {}) => shellEffects({ command, cwd: "/d", home: HOME, ...overrides })
+
+test("git add and git commit report the files they name, resolved against the cwd", () => {
+  assert.deepEqual(effects("git add a/b/task.md && git commit -m x"), {
+    commits: [{ cwd: "/d", paths: [] }],
+    adds: [{ cwd: "/d", paths: ["/d/a/b/task.md"] }],
+    writes: [],
+  })
+  assert.deepEqual(effects("git -C /d commit -m x -- t/s/task.md").commits, [{ cwd: "/d", paths: ["/d/t/s/task.md"] }])
+  assert.deepEqual(effects("cd /d && git commit -q -m x t/s/task.md t/s/notes.md").commits, [
+    { cwd: "/d", paths: ["/d/t/s/task.md", "/d/t/s/notes.md"] },
+  ])
+  assert.deepEqual(effects("git -C sub add x.md", { cwd: "/d" }).adds, [{ cwd: "/d/sub", paths: ["/d/sub/x.md"] }])
+})
+
+test("whole-tree forms and a bare dot name no path", () => {
+  for (const command of ["git add -A", "git add .", "git add --all", "git add -u", "git add --update", "git add -A t/s/task.md"]) {
+    assert.deepEqual(effects(command).adds, [{ cwd: "/d", paths: [] }], command)
+  }
+  for (const command of ["git commit -a -m x", "git commit -am x", "git commit --all -m x", "git commit -qam x"]) {
+    assert.deepEqual(effects(command).commits, [{ cwd: "/d", paths: [] }], command)
+  }
+})
+
+test("option values are not paths, and -- ends the options without being a path", () => {
+  assert.deepEqual(effects("git commit -m 'a b' --author 'N <n@x>' -F msg.txt t/s/task.md").commits[0].paths, ["/d/t/s/task.md"])
+  assert.deepEqual(effects("git commit --message=hello --file=m.txt --amend --no-edit t/s/task.md").commits[0].paths, ["/d/t/s/task.md"])
+  assert.deepEqual(effects("git commit -mfix t/s/task.md").commits[0].paths, ["/d/t/s/task.md"])
+  assert.deepEqual(effects("git commit -m x -- -odd.md t/s/task.md").commits[0].paths, ["/d/-odd.md", "/d/t/s/task.md"])
+  assert.deepEqual(effects("git commit --trailer 'a: b' --date now -c HEAD t/s/task.md").commits[0].paths, ["/d/t/s/task.md"])
+  assert.deepEqual(effects("git add --pathspec-from-file list.txt x.md").adds[0].paths, ["/d/x.md"])
+  assert.deepEqual(effects("git add --chmod=+x x.md x.md").adds[0].paths, ["/d/x.md"])
+  assert.deepEqual(effects("git add -f -- x.md").adds[0].paths, ["/d/x.md"])
+  assert.deepEqual(effects("git commit -m").commits[0].paths, [])
+  assert.deepEqual(effects("git commit -m x ''").commits[0].paths, [])
+})
+
+test("quoted paths with spaces, the desk marker and home resolve; dynamic and unknown-cwd paths are skipped", () => {
+  assert.deepEqual(effects("git add 'my track/a task/task.md' \"x y.md\"").adds[0].paths, ["/d/my track/a task/task.md", "/d/x y.md"])
+  assert.deepEqual(effects("git add $DESK/t/s/task.md ~/n.md $VAR/x.md $(pwd)/y.md").adds[0].paths, [`${DESK_MARKER}/t/s/task.md`, `${HOME}/n.md`])
+  assert.deepEqual(effects("git add rel.md /abs/a.md", { cwd: undefined }).adds, [{ cwd: null, paths: ["/abs/a.md"] }])
+  assert.deepEqual(effects("cd $UNKNOWN && git commit -m x rel.md /abs/a.md").commits, [{ cwd: null, paths: ["/abs/a.md"] }])
+  assert.deepEqual(effects("git --git-dir=/g add rel.md /abs/a.md").adds, [{ cwd: null, paths: ["/abs/a.md"] }])
+  assert.deepEqual(effects("git --work-tree /w commit -m x").commits, [{ cwd: null, paths: [] }])
+  assert.deepEqual(effects("GIT_DIR=/g git add /abs/a.md").adds, [{ cwd: null, paths: ["/abs/a.md"] }])
+  assert.deepEqual(effects("export GIT_WORK_TREE=/w; git commit -m x").commits, [{ cwd: null, paths: [] }])
+})
+
+test("other git subcommands and unreadable git lines report nothing", () => {
+  for (const command of ["git status", "git -C", "git", "git -C x log add", "echo add"]) {
+    const found = effects(command)
+    assert.deepEqual(found.commits, [], command)
+    assert.deepEqual(found.adds, [], command)
+  }
+  assert.deepEqual(effects("git add").adds, [{ cwd: "/d", paths: [] }])
+})
+
+test("> , >> and tee report literal targets only", () => {
+  assert.deepEqual(effects("cat >> /d/t/s/task.md <<'EOF'\nbody\nEOF").writes, ["/d/t/s/task.md"])
+  assert.deepEqual(effects("echo x | tee -a /d/t/s/log.md").writes, ["/d/t/s/log.md"])
+  assert.deepEqual(effects("echo x > out.txt >| other.txt >> out.txt").writes, ["/d/out.txt", "/d/other.txt"])
+  assert.deepEqual(effects("cd sub && echo x > out.txt && echo y | tee -- -dash.txt b.txt").writes, ["/d/sub/out.txt", "/d/sub/-dash.txt", "/d/sub/b.txt"])
+  assert.deepEqual(effects("> only.txt").writes, ["/d/only.txt"])
+  assert.deepEqual(effects("echo x | tee").writes, [])
+  assert.deepEqual(effects("make 2>/dev/null >/dev/null; make >&2 2>&1; echo x > $OUT; echo y > $(mktemp) ; cat > >(sort)").writes, [])
+  assert.deepEqual(effects("echo x > ").writes, [])
+  assert.deepEqual(effects("(cd /s && echo x > a.txt); echo y > b.txt").writes, ["/s/a.txt"])
+  assert.deepEqual(effects("echo x > rel.txt", { cwd: undefined }).writes, [])
+  assert.deepEqual(effects("echo x > $DESK/t/s/task.md").writes, [`${DESK_MARKER}/t/s/task.md`])
+})
+
+test("PowerShell and unreadable input never throw and give no writes for Out-File", () => {
+  assert.deepEqual(effects("'x' | Out-File -FilePath t\\s\\task.md -Append", { dialect: "powershell", cwd: "C:\\d" }).writes, [])
+  assert.deepEqual(effects("Set-Location C:\\d; git add t\\s\\task.md; git commit -m x", { dialect: "powershell", cwd: "C:\\x" }).adds, [
+    { cwd: "C:\\d", paths: ["C:\\d\\t\\s\\task.md"] },
+  ])
+  const empty = { commits: [], adds: [], writes: [] }
+  for (const command of [undefined, null, 42, {}, "", "ls -la", "echo 'unterminated > x", "git commit \"unterminated", "`", "$(", "<<", "git add \\"]) {
+    assert.doesNotThrow(() => effects(command))
+  }
+  for (const command of [undefined, null, 42, "", "ls -la"]) assert.deepEqual(effects(command), empty)
+})
+
+test("gitCommitCwds still lists each directory once, in order", () => {
+  assert.deepEqual(find("git commit -m a t/s/task.md && git commit -m b && git -C /x commit"), [BASE, "/x"])
+})
+
+test("shellEffects returns paths and directories only, never message text", () => {
+  const found = effects("git commit -m 'SENTINEL-secret' --author 'SENTINEL <s@x>' t/s/task.md; echo SENTINEL > out.md")
+  assert.ok(!JSON.stringify(found).includes("SENTINEL"))
 })

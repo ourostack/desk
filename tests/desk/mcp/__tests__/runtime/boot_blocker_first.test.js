@@ -26,8 +26,9 @@ async function deskWithTask(repoLines) {
   return root
 }
 
-function bootNamed(root, states, consent = "held", taskQuery = "flash-valves") {
+function bootNamed(root, states, consent = "held", taskQuery = "flash-valves", extra = {}) {
   return bootOnce({
+    ...extra,
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, taskQuery,
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => (consent === "undecided" ? { store: "ourostack/factory-intake", source: "x", consent, stores: [], warnings: [] } : { store: null, source: "no_remote", consent, stores: [], warnings: [] }),
@@ -85,7 +86,7 @@ test("with an ask-and-stop blocker the boot omits the factory consent instructio
 test("a task whose next step or blocker says it lives only on another machine gets a not-here note: ask, never clone or fetch to look for it", () => {
   const base = { status: "ready", degraded: [], pending: [] }
   const tasks = (task) => ({ ...base, active_tasks: { task_count: 1, tracks: [{ track: "lighthouse-relay", desk: null, tasks: [{ slug: "push-check", handle: "h", status: "processing", ...task }] }] } })
-  const note = "  not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is"
+  const note = "  not here: do not clone or fetch to look for it; ask the operator to push it from that machine or say where it is; unless the operator's own message already says it is pushed, in which case record that with task_update and retry"
   const real = "Push relay-heartbeat-15s and open a pull request. The branch lives only on the other laptop, not on this machine. First confirm which GitHub account and route can deliver it from here, and tell me."
   for (const task of [{ next_step: real }, { next_step: "the branch exists only on the work laptop" }, { next_step: "Wait", blocker: "branch is on the other machine" }, { status: "blocked", blocker: "relay-heartbeat is not on this machine" }]) {
     const lines = formatBootText(tasks(task)).split("\n")
@@ -139,4 +140,20 @@ test("a waiting boot says so in a degraded headline too, and the headline names 
   assert.ok(many.needs_operator.question.length <= 400 && many.needs_operator.question.includes("valve-firmware-0") && /and \d+ more/u.test(many.needs_operator.question), many.needs_operator.question)
   const four = await bootNamed(root, ["a", "b", "c", "d"].map((repo) => state({ repo, local_path: `~/code/${repo}` })))
   assert.ok(four.needs_operator.question.includes("Where is d cloned"), "every repo is in a question that fits")
+})
+
+const OPEN_CARDS = async () => ({ status: "ok", open: 2, oldest_days: 3, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 })
+
+test("with an ask-and-stop blocker the boot does not tell the agent to pick up an improvement card; without one the card line comes before consent, which stays last in both orders", async () => {
+  const root = await deskWithTask(CARD)
+  const stopped = await bootNamed(root, [state({})], "undecided", "flash-valves", { improvementFn: OPEN_CARDS })
+  for (const list of [stopped.instructions, stopped.text_instructions]) assert.ok(!list.some((line) => line.startsWith("Improvement cards")), "no card pickup while the operator has a question to answer")
+  const clear = await bootNamed(root, [state({ present: true })], "undecided", "flash-valves", { improvementFn: OPEN_CARDS })
+  assert.match(clear.text_instructions.at(-1), /^Factory consent is undecided/u)
+  const card = (list) => list.findIndex((line) => line.startsWith("Improvement cards"))
+  const consent = (list) => list.findIndex((line) => line.startsWith("Factory consent is undecided"))
+  for (const list of [clear.instructions, clear.text_instructions]) {
+    assert.ok(card(list) !== -1 && card(list) < consent(list), "the card line comes before the consent line")
+  }
+  assert.ok(clear.instructions.slice(consent(clear.instructions)).every((line) => !line.startsWith("Improvement cards")))
 })

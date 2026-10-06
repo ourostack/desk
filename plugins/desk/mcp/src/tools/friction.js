@@ -10,13 +10,13 @@
 //
 // `about` says what the friction is about: `setup` (the default) is this
 // desk's own setup and stays on the desk; `system` is the shared system
-// (Desk, its skills, the factory) and is recorded on the desk as a kaizen
-// candidate: the entry plus the structured fields a card needs. Nothing
-// leaves the machine then. A card is filed only by the curator, after its
-// signoff step, with `file_card: true`: the desk write target is resolved
-// and its folder created first, then the card is filed in the desk's
-// factory store (`src/factory/kaizen-file.js`, which routes, dedupes and
-// caps it), and a short record of the outcome is appended to the desk.
+// (Desk, its skills, the factory): the entry is written, and then an
+// improvement card opens by itself, with no signoff. The card is its own
+// committed write; the entry names the card's key, which carries the
+// friction fingerprint. Nothing leaves the machine until the loop's mirror
+// step. `file_card: true` files the factory store's kaizen issue
+// immediately (`src/factory/kaizen-file.js`, which routes, dedupes and caps
+// it) and a short record of the outcome is appended to the desk.
 //
 // On a Git desk, stages the file it wrote and commits exactly that file
 // right after, synchronously in the call (M4-6 Part 2); pushing is a later
@@ -26,12 +26,14 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
-import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
-import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
+import { stagingAllowed, stageAndCommitFile, writeCardCommitted, cardCommitMessage } from "./_card-commit.js"
+import { cardKey, openImprovement } from "../desk/improvement-cards.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
-import { FRICTION_CLASSES, fileKaizenCard } from "../factory/kaizen-file.js"
+import { FRICTION_CLASSES, fileKaizenCard, fingerprintOf } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
+import { factoryStateRoot } from "../factory/outbox.js"
 
 const ABOUT = new Set(["setup", "system"])
 
@@ -60,33 +62,6 @@ function trackFrictionIdentity(themeSlug) {
   return `<!-- desk-friction:v2 theme=${themeSlug} -->`
 }
 
-// On a Git desk, friction_add stages the file it writes (new or appended-to)
-// only when it held no unstaged changes before this write, so a dirty or
-// untracked friction file left by another session is never adopted as this
-// call's own work — mirrors track.js/task.js's identically named helper.
-// `spawnGit` is a test-only seam over `spawnSync`.
-function stagingAllowed(filePath, spawnGit) {
-  const dir = path.dirname(filePath)
-  return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
-}
-
-// After staging, commits exactly the one file staged (M4-6 Part 2: every
-// write tool commits its own paths synchronously; push is a later part).
-// A stage failure (e.g. a concurrent call holding .git/index.lock) leaves
-// nothing to commit, and neither it nor a commit failure ever throws away
-// the write or the tool's own result — either comes back as this function's
-// return value, which the caller attaches to its result under `commit` only
-// on failure, so a normal, silent success stays byte-identical to today's
-// response shape.
-function stageAndCommitFriction(filePath, message, spawnGit) {
-  const dir = path.dirname(filePath)
-  const basename = path.basename(filePath)
-  const staged = stagePaths(dir, [basename], spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
-  const committed = commitPaths(dir, [basename], message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
-}
-
 async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) {
   const date = today()
   const identity = trackFrictionIdentity(themeSlug)
@@ -106,6 +81,44 @@ async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) 
   }
 }
 
+const OPENED_CODES = new Set(["opened", "duplicate", "reopened"])
+
+// The friction fingerprint, or null when this machine has no factory state. The check never creates the state.
+async function fingerprintIfReady(env, deskRoot, card) {
+  try {
+    if ((await factoryStateRoot(env, { create: false, deskRoot })) === null) return null
+    return await fingerprintOf(env, { plugin: card.plugin, frictionClass: card.frictionClass, title: card.title })
+  } catch {
+    return null
+  }
+}
+
+// Opens (or finds, or reopens) the improvement card for system friction, as its own committed write after the friction
+// entry. Never throws: the entry is already written, so every failure is a stable code on the result. The library builds
+// the card's title from fixed words; the card holds the key (which carries the fingerprint), the plugin, the signal and
+// the evidence jobs as pointers, and nothing of the note.
+async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, spawnGit, schedulePush }) {
+  if (fingerprint === null) return { improvement: "factory_state_unavailable" }
+  const prefix = path.relative(deskRoot, personPrefix(deskRoot, person))
+  const key = cardKey("friction_candidate", fingerprint)
+  const evidence = Array.isArray(card.evidenceJobs) ? card.evidenceJobs.map((job) => `job:${job}`) : []
+  try {
+    const { result, commit } = await commitCard({
+      deskRoot,
+      personPrefix: prefix,
+      message: (written) => cardCommitMessage("friction", written.file_name ?? "set_aside"),
+      spawnGit,
+      schedulePush,
+      write: () => openImprovement({ deskRoot, personPrefix: prefix, key, source: "friction_candidate", evidence, plugin: card.plugin, signal: card.signal, now }),
+    })
+    const out = { improvement: result.result }
+    if (OPENED_CODES.has(result.result) && commit !== "committed" && commit !== "no_change" && commit !== "no_files") out.improvement_commit = commit
+    return out
+  } catch {
+    return { improvement: "card_write_failed" }
+  }
+}
+
 /**
  * friction_add
  *
@@ -120,7 +133,7 @@ async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) 
  *     friction_class?: string,  // "system": one of FRICTION_CLASSES; default "other"
  *     signal?: string,   // "system": the rollups measure the friction moves, when known
  *     evidence_jobs?: string[],  // "system": factory job ids that show it, when known
- *     file_card?: true,  // "system", curator only, after signoff: file the card now
+ *     file_card?: true,  // "system": also file the store's kaizen issue now (the immediate mirror)
  *   }
  *
  * Side effects: appends to the resolved friction file. Track-local files begin
@@ -136,13 +149,20 @@ async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) 
  * a normal, silent success, when the file was already dirty, or on a
  * non-Git desk.
  *
+ * For system friction the improvement card is opened after the entry is written (the key is the friction fingerprint, so a
+ * retry never opens a second card; a closed card with the key is reopened), as a second, separate committed write; the
+ * result gains `improvement`: "opened" | "duplicate" | "reopened" or the card library's refusal code (for example
+ * `not_generic`), or `factory_state_unavailable` (no machine secret, so no fingerprint) or `card_write_failed`; and
+ * `improvement_commit` when the card was written but not committed. A refused or failed card never loses the entry.
+ * The call behaves the same in a noninteractive session; only picking a card up is refused there.
+ *
  * Returns: { status: "added", path, commit? }; { status: "added", path,
  * kaizen: "candidate", commit? } for system friction; with `file_card`,
  * { status: "filed", path, url, kaizen: "filed" | "duplicate", commit? } or
  * { status: "added", path, kaizen: <code>, commit? } when the card was not
  * filed.
  */
-export async function friction_add({ deskRoot, input, person = null, readiness, env = process.env, fileCard = fileKaizenCard, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function friction_add({ deskRoot, input, person = null, readiness, env = process.env, now, fileCard = fileKaizenCard, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, theme } = values
   const { body } = values
@@ -191,6 +211,7 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
   // whether another session already left this file dirty.
   const stage = stagingAllowed(filePath, spawnGit)
 
+  const fingerprint = card === null ? null : await fingerprintIfReady(env, deskRoot, card)
   let filed = null
   let entry = body
   if (card !== null && fileNow) {
@@ -201,9 +222,11 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
   } else if (card !== null) {
     const measure = card.signal === null ? "not chosen" : `\`${card.signal}\``
     const jobs = Array.isArray(card.evidenceJobs) && card.evidenceJobs.length > 0 ? card.evidenceJobs.join(", ") : "none yet"
-    entry = `${body.trimEnd()}\n\nKaizen candidate for the curator: "${card.title}"; plugin \`${card.plugin}\`, class \`${card.frictionClass}\`, measure ${measure}, evidence jobs ${jobs}.`
+    entry = `${body.trimEnd()}\n\nSystem friction: "${card.title}"; plugin \`${card.plugin}\`, class \`${card.frictionClass}\`, measure ${measure}, evidence jobs ${jobs}.`
   }
 
+  // The card's key carries the fingerprint, so the note names it: the agent that picks the card up finds the note by it.
+  if (fingerprint !== null) entry = `${entry.trimEnd()}\n\nImprovement card key: \`friction_candidate:${fingerprint}\`.`
   const trimmedBody = entry.endsWith("\n") ? entry : `${entry}\n`
   if (await pathExists(filePath)) {
     // Append with a separator so each entry is visually distinct.
@@ -220,7 +243,7 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
   }
 
   const commit = stage
-    ? stageAndCommitFriction(filePath, `friction_add: ${values.plugin ?? "desk-plugin"}`, spawnGit)
+    ? stageAndCommitFile(filePath, `friction_add: ${values.plugin ?? "desk-plugin"}`, spawnGit)
     : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
 
@@ -237,5 +260,6 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
     result = { status: "added", path: written, kaizen: filed.result }
   }
   if (commit) result.commit = commit
+  if (card !== null) Object.assign(result, await openCard({ deskRoot, person, card, fingerprint, now, commitCard, spawnGit, schedulePush }))
   return result
 }

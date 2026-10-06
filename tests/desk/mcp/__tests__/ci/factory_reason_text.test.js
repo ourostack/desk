@@ -1,0 +1,158 @@
+// The CI check that every reason Desk can emit has display text in the factory store (scripts/check-factory-reason-text.cjs).
+import { test } from "node:test"
+import { strict as assert } from "node:assert"
+import { spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createRequire } from "node:module"
+import { tmpdir } from "node:os"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+import { REASON_TEXT, ATTENTION_REASON_TEXT } from "../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { ATTENTION_REASONS } from "../../../../../plugins/desk/mcp/src/factory/pipeline/attention.js"
+import { ENUMS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+
+const require = createRequire(import.meta.url)
+const check = require("../../../../../scripts/check-factory-reason-text.cjs")
+const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
+
+const storeFile = (codes) => `(function () {\n  "use strict";\n  const REASON_TEXT = {\n${codes.map((code) => `    ${code}: "words for ${code}",\n`).join("")}    // a comment\n  };\n  function hasReasonText() {}\n})()\n`
+const all = [...new Set([...Object.keys(REASON_TEXT), ...Object.keys(ATTENTION_REASON_TEXT), ...ATTENTION_REASONS, ...ENUMS.unavailableReason])]
+
+test("the reasons the check reads from Desk are the ones Desk's reports carry, and there are some", async () => {
+  const codes = await check.deskReasonCodes(repoRoot)
+  assert.deepEqual(codes.sort(), [...all].sort())
+  assert.ok(codes.includes("no_turn_records"))
+})
+
+test("the checked set holds every reason source: the report table, the attention reasons and their text, and the published facts enum", async () => {
+  const codes = new Set(await check.deskReasonCodes(repoRoot))
+  for (const reason of [...Object.keys(REASON_TEXT), ...Object.keys(ATTENTION_REASON_TEXT), ...ATTENTION_REASONS, ...ENUMS.unavailableReason]) assert.ok(codes.has(reason), `${reason} is checked`)
+  for (const reason of ["not_recorded", "desk_public", "host_does_not_record", "host_records_partly"]) assert.ok(codes.has(reason), `${reason} is checked`)
+})
+
+test("a store with text for every Desk reason passes", () => {
+  assert.deepEqual(check.compareReasons({ deskReasons: all, storeSource: storeFile(all) }), { state: "checked", missing: [] })
+})
+
+test("a Desk reason the store has no text for is named", () => {
+  const without = all.filter((code) => code !== "no_turn_records")
+  assert.deepEqual(check.compareReasons({ deskReasons: all, storeSource: storeFile(without) }), { state: "checked", missing: ["no_turn_records"] })
+})
+
+test("a store file with no reason table is unreadable, not a pass", () => {
+  assert.deepEqual(check.compareReasons({ deskReasons: all, storeSource: "const OTHER = {}" }), { state: "unreadable" })
+  assert.deepEqual(check.compareReasons({ deskReasons: all, storeSource: "const REASON_TEXT = {\n  };" }), { state: "unreadable" })
+})
+
+const respond = (body, status = 200) => async () => ({ ok: status === 200, status, text: async () => body })
+
+test("run fails and names the reason when the store lacks it", async () => {
+  const result = await check.run({ env: {}, root: repoRoot, fetchImpl: respond(storeFile(all.filter((code) => code !== "no_turn_records"))) })
+  assert.equal(result.code, 1)
+  assert.equal(result.lines.length, 1)
+  assert.match(result.lines[0], /^::error .*`no_turn_records`/u)
+  assert.match(result.summary, /FAILED/u)
+})
+
+test("run passes only when every reason has text", async () => {
+  const result = await check.run({ env: {}, root: repoRoot, fetchImpl: respond(storeFile(all)) })
+  assert.equal(result.code, 0)
+  assert.match(result.lines[0], /all \d+ Desk reasons have display text/u)
+})
+
+test("an unreachable store fails the step and is reported as NOT CHECKED, never as a pass", async () => {
+  let attempts = 0
+  const down = async () => { attempts += 1; throw new Error("getaddrinfo ENOTFOUND") }
+  const result = await check.run({ env: {}, root: repoRoot, fetchImpl: down, attempts: 2 })
+  assert.equal(attempts, 2)
+  assert.equal(result.code, 1)
+  assert.match(result.lines[0], /^::error .*NOT CHECKED.*ENOTFOUND.*not a pass/u)
+  assert.match(result.summary, /NOT CHECKED/u)
+  assert.doesNotMatch(result.summary, /checked\n/u)
+  const refused = await check.run({ env: {}, root: repoRoot, fetchImpl: respond("", 503), attempts: 1 })
+  assert.match(refused.lines[0], /NOT CHECKED.*HTTP 503/u)
+})
+
+test("an unreadable store file fails the run", async () => {
+  const result = await check.run({ env: {}, root: repoRoot, fetchImpl: respond("nothing here") })
+  assert.equal(result.code, 1)
+  assert.match(result.summary, /NOT CHECKED/u)
+})
+
+test("a local copy of the store file can be named instead of fetching", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-reason-text-"))
+  try {
+    const file = path.join(dir, "format.js")
+    writeFileSync(file, storeFile(all))
+    const never = async () => { throw new Error("must not fetch") }
+    const result = await check.run({ env: { FACTORY_REASON_TEXT_FILE: file }, root: repoRoot, fetchImpl: never })
+    assert.equal(result.code, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// The command line itself, as the workflow runs it: the log lines, the job summary file and the exit code.
+function cli(env) {
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-reason-text-cli-"))
+  const summary = path.join(dir, "summary.md")
+  try {
+    const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "check-factory-reason-text.cjs")], { encoding: "utf8", env: { ...process.env, FACTORY_REASON_TEXT_URL: "", FACTORY_REASON_TEXT_FILE: "", GITHUB_STEP_SUMMARY: summary, ...env } })
+    let written = ""
+    try { written = readFileSync(summary, "utf8") } catch { /* no summary written */ }
+    return { ...result, written, dir }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function withStoreFile(codes, body) {
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-reason-text-file-"))
+  try {
+    const file = path.join(dir, "format.js")
+    writeFileSync(file, codes === null ? "nothing" : storeFile(codes))
+    return body(file)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test("the command exits 0 and says so when the store has every reason", () => withStoreFile(all, (file) => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: file })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /all \d+ Desk reasons have display text/u)
+  assert.match(result.written, /Factory store reason text: checked/u)
+}))
+
+test("the command also works outside a workflow, with no summary file to write", () => withStoreFile(all, (file) => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: file, GITHUB_STEP_SUMMARY: "" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.written, "")
+}))
+
+test("the command exits 1 and names the missing reason", () => withStoreFile(all.filter((code) => code !== "no_turn_records"), (file) => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: file })
+  assert.equal(result.status, 1)
+  assert.match(result.stdout, /::error .*`no_turn_records`/u)
+  assert.match(result.written, /FAILED.*no_turn_records/su)
+}))
+
+test("the command exits 1 with a NOT CHECKED error when the store cannot be reached", () => {
+  const result = cli({ FACTORY_REASON_TEXT_URL: "http://127.0.0.1:1/format.js" })
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stdout, /^::error .*NOT CHECKED/u)
+  assert.match(result.written, /NOT CHECKED/u)
+})
+
+test("the command writes no summary file when the workflow gives none, and fails clearly when its own input is unreadable", () => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: path.join(tmpdir(), "desk-reason-text-no-such-file.js"), GITHUB_STEP_SUMMARY: "" })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /::error title=Factory store reason text check failed::/u)
+  assert.equal(result.written, "")
+})
+
+test("a fetch that throws something that is not an Error is still reported", async () => {
+  const result = await check.fetchStoreSource({ url: "http://example.invalid/", fetchImpl: async () => { throw "refused" }, attempts: 1 })
+  assert.deepEqual(result, { error: "refused" })
+  assert.deepEqual(await check.fetchStoreSource({ url: "http://example.invalid/", fetchImpl: respond("x"), attempts: 0 }), { error: "no attempt was made" })
+})

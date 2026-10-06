@@ -43,7 +43,7 @@ test("the plugin registers the card guard, the done-claim gate and its two feede
   assert.ok(commands("preToolUse").includes('node "${PLUGIN_ROOT}/hooks/task-status-guard.cjs" copilot'))
   assert.ok(commands("agentStop").includes('node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot stop'))
   assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot track'])
-  assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot prompt', 'node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"'])
+  assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot prompt', 'node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"', 'node "${PLUGIN_ROOT}/hooks/signoff-witness.cjs" prompt'])
 })
 
 test("the first prompt of a session gets the boot direction as context, in either order with sessionStart, and later prompts get none", () => {

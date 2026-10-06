@@ -41,6 +41,7 @@ import { readFileSync } from "node:fs"
 
 import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX, deskProblemCard } from "./desk-problem-template.js"
+import { recordKnownHit } from "./desk-problem-known.js"
 import { chooseAccount, ghRunner } from "./flush.js"
 import { readConsent, readStatus, withNamedLock, writeStatus } from "./outbox.js"
 import { issuesClient } from "./store-issues.js"
@@ -112,7 +113,7 @@ async function selectAccount(env, { runner, now, deadlineMs }) {
  * concurrent second caller can still slip through.
  */
 export async function fileDeskProblem(env, {
-  mechanism, rawText = "", fixAttempt = "not recorded", host = "unknown", runner = ghRunner({ env }), now = Date.now, deadlineMs = DEFAULT_DEADLINE_MS,
+  mechanism, rawText = "", fixAttempt = "not recorded", host = "unknown", runner = ghRunner({ env }), now = Date.now, deadlineMs = DEFAULT_DEADLINE_MS, recordKnown = recordKnownHit,
 } = {}) {
   const signature = normalizeErrorSignature(rawText)
   const fingerprint = deskProblemFingerprint(mechanism, signature)
@@ -137,7 +138,13 @@ export async function fileDeskProblem(env, {
       const client = issuesClient({ runner, repo: STORE, token, timeoutMs: remaining() })
       const marker = `${FINGERPRINT_PREFIX}${fingerprint} -->`
       const existing = (await client.listIssues({ label: LABEL, state: "all" })).find((issue) => !issue.pull_request && issue.body.includes(marker))
-      if (existing !== undefined) return { result: "known", url: existing.url }
+      if (existing !== undefined) {
+        // A known problem is hit again: count it, with the running Desk version, so a recurrence after the fix is visible.
+        // The count never changes the result; a failed write leaves one stable code on stderr.
+        const recorded = await Promise.resolve().then(() => recordKnown(env, existing.number, { version: deskVersion, now })).catch(() => ({ recorded: false, code: "record_failed" }))
+        if (!recorded.recorded && recorded.code !== "headless_session") process.stderr.write(`desk-problem: known_hit_not_recorded ${recorded.code}\n`)
+        return { result: "known", url: existing.url }
+      }
 
       const at = now()
       const { filed, times } = await recentFilings(env, at)

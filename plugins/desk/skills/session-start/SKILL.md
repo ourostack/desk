@@ -44,6 +44,10 @@ If the desk already exists and still shows V1 evidence (durable desk state such 
 
 **Decide, don't ask.** Fix what you can fix yourself (a card's frontmatter, a repair, a tidy-up) and say so in one line. Bring the operator only a true human gate: an account or credential they must act in, a decision that is theirs, an irreversible action. The factory consent question never comes before the work the operator asked for.
 
+**Declare the task.** When the operator names or picks the task, the main agent calls `task_focus` once; `session-resumption` then skips its call, and a new task is declared by `task_create` with `focus: true`.
+
+**Delivered, awaiting sign-off.** A boot section by that name and one numbered instruction list delivered tasks the operator has not answered; `details.md` says what to do with them, in short: after what the operator asked, raise them once, together.
+
 **Resume.** Hand a chosen task to `session-resumption`; its state machine lives in `task-lifecycle`. To start new work, follow `dual-input`. For the fuller dashboard, invoke `status`.
 
 **More detail, only when it applies** (all in `details.md`): the Desk MCP repair path, a crew workspace, the friction backlog, the workspace MCP link, the factory label clauses, and the routing prompts for `curator` and `pr-feedback-on-own-pr`.

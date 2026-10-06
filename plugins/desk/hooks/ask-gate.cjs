@@ -18,6 +18,8 @@
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 
+const headless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
+
 function defaultSpawnFiler({ mechanism, reason, host, env = process.env }) {
   const { compatibleCommand, launchCommand } = require("./boot-checks.cjs");
   const script = path.join(__dirname, "..", "mcp", "scripts", "file-desk-problem.js");
@@ -48,7 +50,9 @@ async function askGateFailureBlock(error, { host, env = process.env, spawnFiler 
       import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/filer-throttle.js")).href),
     ]);
     const safeReason = argvSafeReason(reason);
-    if (shouldLaunchFiler({ env, mechanism: "ask-gate", signature: safeReason })) {
+    if (headless(env)) {
+      file = "not filed: headless_session";
+    } else if (shouldLaunchFiler({ env, mechanism: "ask-gate", signature: safeReason })) {
       spawnFiler({ mechanism: "ask-gate", reason: safeReason, host, env });
       file = "filing in background";
     } else {

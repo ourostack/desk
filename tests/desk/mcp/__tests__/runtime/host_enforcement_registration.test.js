@@ -12,6 +12,7 @@
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { strict as assert } from "node:assert"
+import { readFileSync } from "node:fs"
 import {
   hookRegistrationDeskProblem,
   verifyHookRegistered,
@@ -192,4 +193,20 @@ test("hookRegistrationDeskProblem still renders the generic missing-registration
   assert.equal(result.registered, false)
   assert.match(result.block, /^Desk problem: host-enforcement — /)
   assert.match(result.block, /\n {2}fix: not auto-repaired -- reinstall Desk to restore it\./)
+})
+
+// The sign-off witness is registered next to the host-enforcement hook: one hook script, three modes. The same registration is also checked,
+// with the hook's behaviour, in signoff_witness.test.js.
+test("the shipped Claude and Copilot registrations carry the sign-off witness in each of its modes", () => {
+  const load = (name) => JSON.parse(readFileSync(new URL(`../../../../../plugins/desk/hooks/${name}`, import.meta.url), "utf8")).hooks
+  const claude = load("hooks.json")
+  const claudeCommands = (event) => claude[event].flatMap((entry) => entry.hooks.map((hook) => hook.command)).filter((command) => command.includes("signoff-witness.cjs"))
+  assert.deepEqual(claudeCommands("UserPromptSubmit"), ['node "${CLAUDE_PLUGIN_ROOT}/hooks/signoff-witness.cjs" prompt'])
+  assert.deepEqual(claudeCommands("Stop"), ['node "${CLAUDE_PLUGIN_ROOT}/hooks/signoff-witness.cjs" stop'])
+  assert.deepEqual(claudeCommands("PreToolUse"), ['node "${CLAUDE_PLUGIN_ROOT}/hooks/signoff-witness.cjs" ticket'])
+  const copilot = load("copilot-hooks.json")
+  const copilotCommands = (event) => copilot[event].map((entry) => entry.bash).filter((command) => command.includes("signoff-witness.cjs"))
+  assert.deepEqual(copilotCommands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/signoff-witness.cjs" prompt'])
+  assert.deepEqual(copilotCommands("agentStop"), ['node "${PLUGIN_ROOT}/hooks/signoff-witness.cjs" stop'])
+  assert.deepEqual(copilotCommands("preToolUse"), [])
 })

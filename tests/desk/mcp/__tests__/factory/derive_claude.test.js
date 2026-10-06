@@ -12,6 +12,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
+import { hostFlagsFor } from "../../../../../plugins/desk/mcp/src/factory/host-flags.js"
 import * as common from "../../../../../plugins/desk/mcp/src/factory/derive-common.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
@@ -22,6 +23,7 @@ import {
   NON_UUID_FILE_STEM,
   FULL_TURN_1_END,
   TRUNCATED_SKEWED_RESULT_AT,
+  padded,
 } from "./fixtures/claude/make.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -85,7 +87,7 @@ test("no sentinel from the fixture's messages, prompts, thinking, tool input, to
 
 test("the deriver writes local facts: the local schema value, no contributor, no commit refs", async () => {
   const { facts } = await deriveFull()
-  assert.equal(facts.schema, "desk.factory.local/1")
+  assert.equal(facts.schema, "desk.factory.local/2")
   assert.equal(Object.hasOwn(facts, "contributor"), false)
   assert.deepEqual(facts.refs.commits, [])
 })
@@ -136,8 +138,9 @@ test("odd but parseable shapes (non-object lines, non-numeric usage, missing inp
   // Back-to-back prompts: the first turn has no activity and ends where it starts.
   const turns = findInterval(facts.intervals, (iv) => iv.kind === "turn")
   assert.equal(turns[0].start, turns[0].end)
-  // A missing usage object counts as 0; "12" and -3 are no counts, so the input and output totals are unknown.
-  assert.deepEqual(facts.models, [{ id: "claude-opus-5-5", requests: 3, tokens: { input: null, output: null, cache_read: 0, cache_write: 4, reasoning: null } }])
+  // A missing usage object is unknown, not 0, so the cache totals are unknown too; "12" and -3 are no counts, so the input and output totals are unknown.
+  assert.deepEqual(facts.models, [{ id: "claude-opus-5-5", requests: 3, tokens: { input: null, output: null, cache_read: null, cache_write: null, reasoning: null } }])
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "field_absent"))
   assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   // Both retryable errors count; neither can form an interval.
   assert.equal(facts.counts.api_retries, 2)
@@ -531,7 +534,7 @@ function shellGitSession() {
 test("only a successful Bash git commit call becomes a shellGitCommits event, with its start, end and directory", async () => {
   const { facts, events } = await deriveLines(shellGitSession())
   const base = `/tmp/${SENTINEL}-cwd`
-  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd, agent: 0 })
+  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd, paths: [], agent: 0 })
   assert.deepEqual(events.shellGitCommits, [
     span("01", "02", base),
     span("03", "04", path.normalize(`/tmp/${SENTINEL}-desk`)),
@@ -605,9 +608,10 @@ test("unavailable always covers permission_waits, ci_runs and commits", async ()
   assert.deepEqual(
     facts.unavailable.filter((entry) => ["permission_waits", "ci_runs", "commits"].includes(entry.field)),
     [
+      // The host table now supplies commits and permission_waits first, so ci_runs follows them; each appears once.
+      { field: "commits", reason: "host_does_not_record" },
       { field: "permission_waits", reason: "host_does_not_record" },
       { field: "ci_runs", reason: "not_collected_in_slice_1" },
-      { field: "commits", reason: "host_does_not_record" },
     ],
   )
 })
@@ -788,9 +792,11 @@ test("applyLimits trims over-cap agents (with their intervals), intervals, model
   assert.deepEqual(unavailable, [
     { field: "turns", reason: "capped" },
     { field: "tool_durations", reason: "capped" },
+    { field: "agents", reason: "capped" },
     { field: "api_retries", reason: "capped" },
     { field: "human_waits", reason: "capped" },
     { field: "models", reason: "capped" },
+    { field: "prs", reason: "capped" },
   ])
 })
 
@@ -975,10 +981,27 @@ const assistant = (id, usage, model = "claude-opus-5-5") => ({ type: "assistant"
 test("a fractional or unsafe token count is unknown with a tokens entry, and the facts stay valid", async () => {
   for (const bad of [1.5, 2 ** 53 + 2, -1]) {
     const { facts } = await deriveInline([assistant("a", { input_tokens: bad, output_tokens: 7 })])
-    assert.deepEqual(facts.models[0].tokens, { input: null, output: 7, cache_read: 0, cache_write: 0, reasoning: null }, String(bad))
+    assert.deepEqual(facts.models[0].tokens, { input: null, output: 7, cache_read: null, cache_write: null, reasoning: null }, String(bad))
     assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
     assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
   }
+})
+
+test("a count that stays unknown across repeats of a message keeps the stronger reason: unreadable beats absent, and two absences stay absent", async () => {
+  const rest = { output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  const reasons = (facts) => facts.unavailable.filter((entry) => entry.field === "tokens").map((entry) => entry.reason).sort()
+  // Unreadable first, then absent: the count is still unreadable, so no "absent" reason is reported.
+  const unreadableThenAbsent = await deriveInline([assistant("a", { input_tokens: 1.5, ...rest }), assistant("a", rest)])
+  assert.equal(unreadableThenAbsent.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(unreadableThenAbsent.facts), ["source_unreadable"])
+  // Absent first, then unreadable: the same result in the other order.
+  const absentThenUnreadable = await deriveInline([assistant("a", rest), assistant("a", { input_tokens: 1.5, ...rest })])
+  assert.equal(absentThenUnreadable.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(absentThenUnreadable.facts), ["source_unreadable"])
+  // Absent both times: the count is absent, and only the "absent" reason is reported.
+  const absentTwice = await deriveInline([assistant("a", rest), assistant("a", rest)])
+  assert.equal(absentTwice.facts.models[0].tokens.input, null)
+  assert.deepEqual(reasons(absentTwice.facts), ["field_absent"])
 })
 
 test("a good repeat of a message recovers an unreadable count, and a malformed repeat never erases a good one", async () => {
@@ -987,13 +1010,13 @@ test("a good repeat of a message recovers an unreadable count, and a malformed r
     assistant("a", { input_tokens: 4, output_tokens: 9 }),
     assistant("b", { input_tokens: 4, output_tokens: 1 }),
   ])
-  assert.deepEqual(facts.models[0].tokens, { input: 8, output: 10, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.deepEqual(facts.models[0].tokens, { input: 8, output: 10, cache_read: null, cache_write: null, reasoning: null })
   assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   assert.equal(facts.models[0].requests, 2)
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
   // A malformed repeat of a message keeps the earlier good value and is flagged; a good repeat recovers an earlier bad one.
   const kept = await deriveInline([assistant("a", { input_tokens: 4, output_tokens: 7 }), assistant("a", { input_tokens: 1.5, output_tokens: 9 })])
-  assert.deepEqual(kept.facts.models[0].tokens, { input: 4, output: 9, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.deepEqual(kept.facts.models[0].tokens, { input: 4, output: 9, cache_read: null, cache_write: null, reasoning: null })
   assert.ok(kept.facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   const recovered = await deriveInline([assistant("a", { input_tokens: 1.5 }), assistant("a", { input_tokens: 6 })])
   assert.equal(recovered.facts.models[0].tokens.input, 6)
@@ -1029,4 +1052,575 @@ test("withRequestedModel sets the key only for a valid id that differs from the 
   assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, "bad model!"), { n: 1, model: "a" })
   assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, undefined), { n: 1, model: "a" })
   assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, 5), { n: 1, model: "a" })
+})
+
+// --- Declared focus: focus calls, spawns, own-commit paths, shell writes, PRs, status ---
+
+function focusSession() {
+  let second = 0
+  const line = (extra) => ({ sessionId: GIT_SESSION_ID, version: "2.1.282", cwd: "/w", timestamp: `2026-09-25T08:00:${String(second++).padStart(2, "0")}.000Z`, ...extra })
+  const call = (id, name, input, extra = {}) => line({ type: "assistant", message: { id: `m-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name, input }] }, ...extra })
+  const result = (id, isError = false, extra = {}) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: `done ${SENTINEL}` }] }, toolUseResult: { stdout: "", stderr: "" }, ...extra })
+  return { line, call, result }
+}
+
+const FOCUS_TOOL = "mcp__plugin_desk_desk__task_focus"
+const UPDATE_TOOL = "mcp__plugin_desk_desk__task_update"
+const SAVE_TOOL = "mcp__plugin_desk_desk__desk_save"
+
+test("a successful task_focus call becomes a focusCall with its time, and a failed one yields nothing", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("f1", FOCUS_TOOL, { track: "desk-plugin", slug: "some-task" }), // 01
+    result("f1"), // 02
+    call("f2", FOCUS_TOOL, { track: "other", slug: "failed" }),
+    result("f2", true),
+    call("f3", FOCUS_TOOL, { clear: true }), // 05
+    result("f3"),
+    call("f4", FOCUS_TOOL, { track: "..", slug: "bad" }),
+    result("f4"),
+    call("f5", FOCUS_TOOL, {}),
+    result("f5"),
+    call("f6", FOCUS_TOOL, { track: 4, slug: "x" }),
+    result("f6"),
+  ])
+  assert.deepEqual(events.focusCalls, [
+    { agent: 0, at: "2026-09-25T08:00:01.000Z", track: "desk-plugin", slug: "some-task" },
+    { agent: 0, at: "2026-09-25T08:00:05.000Z", clear: true },
+  ])
+  assert.deepEqual(events.deskToolCalls, [], "task_focus is not a deskToolCall")
+  assert.equal(JSON.stringify(facts).includes("some-task"), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("a spawn call on a line with no readable time is still parsed, and records no spawn time", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("s1", "Agent", { prompt: `Desk-Task: a/b\n${SENTINEL}` }, { timestamp: "not a time" }),
+    result("s1"),
+  ])
+  assert.deepEqual(events.spawns, [], "no subagent transcript, so no spawn to report")
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("task_create with focus: true is a focusCall as well as a deskToolCall; focus: false, a truthy non-boolean, a failed call and an invalid track or slug declare nothing", async () => {
+  const { line, call, result } = focusSession()
+  const CREATE_TOOL = "mcp__plugin_desk_desk__task_create"
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("c1", CREATE_TOOL, { track: "desk-plugin", slug: "new-task", focus: true, title: SENTINEL }), // 01
+    result("c1"),
+    call("c2", CREATE_TOOL, { track: "desk-plugin", slug: "parked", focus: false }),
+    result("c2"),
+    call("c3", CREATE_TOOL, { track: "desk-plugin", slug: "truthy", focus: "true" }),
+    result("c3"),
+    call("c4", CREATE_TOOL, { track: "desk-plugin", slug: "failed", focus: true }),
+    result("c4", true),
+    call("c5", CREATE_TOOL, { track: "..", slug: "bad", focus: true }),
+    result("c5"),
+    call("c6", CREATE_TOOL, { track: "desk-plugin", focus: true }),
+    result("c6"),
+    call("c7", CREATE_TOOL, { track: "desk-plugin", slug: "plain" }),
+    result("c7"),
+    call("c8", UPDATE_TOOL, { track: "desk-plugin", slug: "updated", focus: true }),
+    result("c8"),
+  ])
+  assert.deepEqual(events.focusCalls, [{ agent: 0, at: "2026-09-25T08:00:01.000Z", track: "desk-plugin", slug: "new-task" }])
+  assert.deepEqual(events.deskToolCalls.map((entry) => [entry.slug, entry.ok]), [["new-task", true], ["parked", true], ["truthy", true], ["failed", false], ["bad", true], [undefined, true], ["plain", true], ["updated", true]])
+  assert.equal(JSON.stringify(events.focusCalls).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("new-task"), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("each deriver records a successful task_signoff call and ignores a failed one (Claude Code)", async () => {
+  const { line, call, result } = focusSession()
+  const SIGNOFF_TOOL = "mcp__plugin_desk_desk__task_signoff"
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("s1", SIGNOFF_TOOL, { track: "desk-plugin", slug: "signed", outcome: "accepted", reason: SENTINEL }), // 01
+    result("s1"),
+    call("s2", SIGNOFF_TOOL, { track: "desk-plugin", slug: "failed", outcome: "refused", reason: SENTINEL }),
+    result("s2", true),
+  ])
+  assert.deepEqual(events.deskToolCalls.map(({ name, slug, ok, status }) => ({ name, slug, ok, status })), [
+    { name: SIGNOFF_TOOL, slug: "signed", ok: true, status: null },
+    { name: SIGNOFF_TOOL, slug: "failed", ok: false, status: null },
+  ])
+  assert.deepEqual(events.focusCalls, [], "a sign-off declares no focus")
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("signed"), false)
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", async () => {
+  const { line, call, result } = focusSession()
+  const inputs = [
+    { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },
+    { track: "a", slug: "b", frontmatter: { status: "done" }, progress: "x" },
+    { track: "a", slug: "b", person: "p", frontmatter: { status: "doing" } },
+    { track: "a", slug: "b", status: "blocked" },
+    { track: "a", slug: "b", frontmatter: { status: "done", title: "t" } },
+    { track: "a", slug: "b", frontmatter: "not json" },
+    { track: "a", slug: "b", frontmatter: "[1]" },
+    { track: "a", slug: "b", frontmatter: 7 },
+    { track: "a", slug: "b", frontmatter: { status: 4 } },
+    { track: "a", slug: "b", frontmatter: {} },
+    { track: "a", slug: "b" },
+  ]
+  const lines = [line({ type: "user", message: { role: "user", content: "go" } })]
+  inputs.forEach((input, index) => lines.push(call(`u${index}`, UPDATE_TOOL, input), result(`u${index}`)))
+  const { events } = await deriveLines(lines)
+  assert.deepEqual(events.deskToolCalls.map(({ status, statusOnly }) => ({ status, statusOnly })), [
+    { status: "done", statusOnly: true },
+    { status: "done", statusOnly: false },
+    { status: "doing", statusOnly: true },
+    { status: "blocked", statusOnly: false },
+    { status: "done", statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+    { status: null, statusOnly: false },
+  ])
+})
+
+test("every subagent appears in spawns with its parent, its spawn call's time and its task; a meta with no toolUseId uses its first timestamp", async () => {
+  const { line, spawn, prompt, assistant } = workerLines()
+  const { events } = await deriveWithSubagents(
+    [
+      line({ type: "user", message: { role: "user", content: "go" } }), // 00
+      spawn("spawn-a", "Desk-Task: track-one/task-one"), // 01
+      spawn("spawn-b", "no line"), // 02
+      line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "spawn-a" }] } }),
+    ],
+    [
+      { stem: "agent-1", meta: { toolUseId: "spawn-a" }, lines: [assistant("s1", "claude-sonnet-5")] },
+      { stem: "agent-2", meta: { toolUseId: "spawn-b" }, lines: [prompt("hello")] },
+      { stem: "agent-3", meta: {}, lines: [{ sessionId: SUB_SESSION_ID, type: "user", timestamp: "2026-09-25T09:00:00.000Z", message: { role: "user", content: "Desk-Task: x/y" } }] },
+      { stem: "agent-4", lines: [{ sessionId: SUB_SESSION_ID, type: "system" }] },
+    ],
+  )
+  assert.deepEqual(events.spawns.map((spawnEvent) => spawnEvent.agent), [1, 2, 3, 4])
+  assert.deepEqual(events.spawns[0], { agent: 1, parent: 0, at: "2026-09-25T08:00:01.000Z", task: { track: "track-one", slug: "task-one" } })
+  assert.equal(events.spawns[1].at, "2026-09-25T08:00:02.000Z")
+  assert.equal(events.spawns[1].task, null)
+  assert.deepEqual(events.spawns[2], { agent: 3, parent: 0, at: "2026-09-25T09:00:00.000Z", task: { track: "x", slug: "y" } })
+  assert.deepEqual(events.spawns[3], { agent: 4, parent: 0, at: null, task: null })
+})
+
+test("an unanswered spawn call still times its subagent", async () => {
+  const { line, spawn, assistant } = workerLines()
+  const { events } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } }), spawn("spawn-a")],
+    [{ stem: "agent-1", meta: { toolUseId: "spawn-a" }, lines: [assistant("s1", "claude-sonnet-5")] }],
+  )
+  assert.equal(events.spawns[0].at, "2026-09-25T08:00:01.000Z")
+})
+
+test("a Bash git add and commit gives shellGitCommits paths, and a Bash redirect gives fileWrites, only when the call succeeded", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("g1", "Bash", { command: "git add t/s/task.md && git commit -qm x" }), // 01
+    result("g1"),
+    call("g2", "Bash", { command: "echo hi > out.txt" }), // 03
+    result("g2"),
+    call("g3", "Bash", { command: "echo no > failed.txt && git add f.md && git commit -m x" }),
+    result("g3", true),
+    call("g4", "Bash", { command: "git commit -m x" }),
+    result("g4"),
+  ])
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: "/w", paths: ["/w/t/s/task.md"] },
+    { cwd: "/w", paths: [] },
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+    { at: "2026-09-25T08:00:03.000Z", path: "/w/out.txt", agent: 0 },
+  ])
+  assert.equal(JSON.stringify(facts).includes("task.md"), false)
+})
+
+test("desk_save paths become fileWrites when the call succeeded, and a failed or pathless call gives none", async () => {
+  const { line, call, result } = focusSession()
+  const { events } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("d1", SAVE_TOOL, { paths: ["notes/a.md", "notes/b.md", 5] }), // 01
+    result("d1"),
+    call("d2", SAVE_TOOL, { paths: ["failed.md"] }),
+    result("d2", true),
+    call("d3", SAVE_TOOL, { content: "x" }),
+    result("d3"),
+  ])
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+    { at: "2026-09-25T08:00:01.000Z", path: "notes/a.md", agent: 0 },
+    { at: "2026-09-25T08:00:01.000Z", path: "notes/b.md", agent: 0 },
+  ])
+})
+
+test("a gh pr create result becomes a prRefs event with created true; a link or other action has created false", async () => {
+  const { line, call } = focusSession()
+  const pr = (id, number, action) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/o/r/pull/${number}`, action } } } })
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("p1", "Bash", { command: "gh pr create" }), // 01
+    pr("p1", 1, "created"), // 02
+    call("p2", "Bash", { command: "gh pr merge 2" }),
+    pr("p2", 2, "merged"),
+    line({ type: "pr-link", prRepository: "o/r", prNumber: 3 }),
+  ])
+  assert.deepEqual(events.prRefs, [
+    { agent: 0, at: "2026-09-25T08:00:02.000Z", repo: "o/r", created: true },
+    { agent: 0, at: "2026-09-25T08:00:04.000Z", repo: "o/r", created: false },
+    { agent: 0, at: "2026-09-25T08:00:05.000Z", repo: "o/r", created: false },
+  ])
+  assert.equal("prRefs" in facts, false)
+})
+
+test("sentinel: the focus, spawn, path, write and PR events never carry prompt, command or content text, and facts stay clean", async () => {
+  const { line, call, result } = focusSession()
+  const { events, facts } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: `go ${SENTINEL}` } }),
+    call("s1", FOCUS_TOOL, { track: "a", slug: "b", note: SENTINEL }),
+    result("s1"),
+    call("s2", "Bash", { command: `echo ${SENTINEL} > out.txt && git add x.md && git commit -m ${SENTINEL}` }),
+    result("s2"),
+    call("s3", SAVE_TOOL, { paths: ["p.md"], content: SENTINEL }),
+    result("s3"),
+    call("s4", undefined, { paths: ["nameless.md"] }),
+    result("s4"),
+  ])
+  for (const key of ["focusCalls", "spawns", "shellGitCommits", "fileWrites", "prRefs"]) assert.equal(JSON.stringify(events[key]).includes(SENTINEL), false, key)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+})
+
+test("two commits in one directory give one shellGitCommits entry with every path they and their adds name, and a second directory its own", async () => {
+  const { line, call, result } = focusSession()
+  const { events } = await deriveLines([
+    line({ type: "user", message: { role: "user", content: "go" } }),
+    call("m1", "Bash", { command: "git add a.md && git commit -qm x && git add b.md a.md && git commit -qm y && git -C /elsewhere commit -qm z" }),
+    result("m1"),
+  ])
+  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+    { cwd: "/w", paths: ["/w/a.md", "/w/b.md"] },
+    { cwd: "/elsewhere", paths: [] },
+  ])
+})
+
+
+// --- Number states: what the host does not record and what the log left out ---
+
+const hasFlag = (facts, field, reason) => facts.unavailable.some((entry) => entry.field === field && entry.reason === reason)
+
+test("a Claude session carries compaction_waits and reasoning_tokens as not recorded by the host", async () => {
+  const { facts } = await deriveFull()
+  assert.ok(hasFlag(facts, "compaction_waits", "host_does_not_record"))
+  assert.ok(hasFlag(facts, "reasoning_tokens", "host_does_not_record"))
+})
+
+test("a Claude session carries prs as recorded only partly", async () => {
+  const { facts } = await deriveFull()
+  assert.ok(hasFlag(facts, "prs", "host_records_partly"))
+})
+
+test("the facts carry every flag the host table returns for Claude Code, api_retries included", async () => {
+  const { facts } = await deriveFull()
+  const flags = hostFlagsFor("claude-code")
+  assert.ok(flags.some((flag) => flag.field === "api_retries" && flag.reason === "host_records_partly"))
+  for (const flag of flags) assert.ok(hasFlag(facts, flag.field, flag.reason), `${flag.field}/${flag.reason}`)
+})
+
+test("an assistant message with no usage object gives null counters and tokens field_absent, not zeros", async () => {
+  const { facts } = await deriveInline([assistant("a", undefined), assistant("b", { input_tokens: 3, output_tokens: 4 })])
+  assert.deepEqual(facts.models[0].tokens, { input: null, output: null, cache_read: null, cache_write: null, reasoning: null })
+  assert.equal(facts.models[0].requests, 2)
+  assert.ok(hasFlag(facts, "tokens", "field_absent"))
+  assert.equal(hasFlag(facts, "tokens", "source_unreadable"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+test("a measured zero stays zero with no tokens flag", async () => {
+  const { facts } = await deriveInline([assistant("a", { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })])
+  assert.deepEqual(facts.models[0].tokens, { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.equal(facts.unavailable.some((entry) => entry.field === "tokens"), false)
+})
+
+test("a good repeat of an absent-usage message recovers the counters with no tokens flag", async () => {
+  const { facts } = await deriveInline([assistant("a", undefined), assistant("a", { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 })])
+  assert.deepEqual(facts.models[0].tokens, { input: 1, output: 2, cache_read: 3, cache_write: 4, reasoning: null })
+  assert.equal(facts.unavailable.some((entry) => entry.field === "tokens"), false)
+})
+
+test("an assistant message with a malformed counter still flags tokens source_unreadable", async () => {
+  const { facts } = await deriveInline([assistant("a", { input_tokens: "7", output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })])
+  assert.equal(facts.models[0].tokens.input, null)
+  assert.ok(hasFlag(facts, "tokens", "source_unreadable"))
+  assert.equal(hasFlag(facts, "tokens", "field_absent"), false)
+})
+
+test("a session with no assistant usage flags models, tokens and requests field_absent", async () => {
+  const { facts } = await deriveInline([{ type: "user", message: { role: "user", content: "hi" } }])
+  assert.deepEqual(facts.models, [])
+  for (const field of ["models", "tokens", "requests"]) assert.ok(hasFlag(facts, field, "field_absent"), field)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+test("an unreadable subagents folder flags agents source_unreadable, and a missing folder does not", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-nosub-"))
+  try {
+    const root = path.join(dir, `${SUB_SESSION_ID}.jsonl`)
+    writeFileSync(root, `${JSON.stringify({ sessionId: SUB_SESSION_ID, version: "2.1.282", timestamp: "2026-09-25T08:00:00.000Z", type: "user", message: { role: "user", content: "go" } })}\n`)
+    const none = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: null })
+    assert.equal(hasFlag(none.facts, "agents", "source_unreadable"), false)
+    writeFileSync(path.join(dir, SUB_SESSION_ID), "not a folder")
+    const broken = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: null })
+    assert.ok(hasFlag(broken.facts, "agents", "source_unreadable"))
+    assert.deepEqual(validateLocalFacts(broken.facts), { ok: true, errors: [] })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a missing subagent meta file flags agents source_unreadable, and a readable one does not", async () => {
+  const { line, assistant: worker } = workerLines()
+  const root = [line({ type: "user", message: { role: "user", content: "go" } }), worker("r1", "claude-opus-5-5")]
+  const child = [worker("s1", "claude-sonnet-5", [{ type: "text", text: "hi" }])]
+  const missing = await deriveWithSubagents(root, [{ stem: "agent-1", lines: child }])
+  assert.ok(hasFlag(missing.facts, "agents", "source_unreadable"))
+  const present = await deriveWithSubagents(root, [{ stem: "agent-1", meta: { agentType: "fork" }, lines: child }])
+  assert.equal(hasFlag(present.facts, "agents", "source_unreadable"), false)
+})
+
+test("more PRs than the cap flags prs capped", async () => {
+  const lines = [{ type: "user", message: { role: "user", content: "go" } }]
+  for (let number = 1; number <= 501; number += 1) lines.push({ type: "pr-link", prRepository: "a/b", prNumber: number })
+  const { facts } = await deriveInline(lines)
+  assert.equal(facts.refs.prs.length, 500)
+  assert.ok(hasFlag(facts, "prs", "capped"))
+  assert.ok(hasFlag(facts, "prs", "host_records_partly"))
+})
+
+test("a sentinel in a prompt, command and file path reaches neither facts nor flags", async () => {
+  const { facts } = await deriveInline([
+    { type: "user", message: { role: "user", content: `go ${SENTINEL}` } },
+    { type: "assistant", message: { id: "a", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "t", name: "Bash", input: { command: `echo ${SENTINEL}`, file_path: `/tmp/${SENTINEL}` } }] } },
+  ])
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts.unavailable).includes(SENTINEL), false)
+})
+
+test("facts written by the Claude deriver validate as /2", async () => {
+  for (const { facts } of [await deriveFull(), await deriveInline([assistant("a", undefined)])]) {
+    assert.equal(facts.schema, "desk.factory.local/2")
+    assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  }
+})
+
+
+// --- Human turns: one content-free entry per human prompt -------------------
+
+const HUMAN = { promptSource: "typed", origin: { kind: "human" }, turnOrigin: "human" }
+const turnLine = (second, extra, content = "go") => ({ type: "user", sessionId: GIT_SESSION_ID, version: "2.1.282", timestamp: `2026-09-25T11:00:${String(second).padStart(2, "0")}.000Z`, message: { role: "user", content }, ...extra })
+const replyLine = (second, text, extra = {}) => ({ type: "assistant", sessionId: GIT_SESSION_ID, version: "2.1.282", timestamp: `2026-09-25T11:00:${String(second).padStart(2, "0")}.000Z`, message: { id: `m-${second}`, model: "claude-opus-5-5", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "text", text }] }, ...extra })
+const turnsOf = async (lines) => (await deriveLines(lines)).facts.human_turns
+const humanTurnsFlags = (facts) => facts.unavailable.filter((entry) => entry.field === "human_turns")
+
+test("a typed prompt is one human turn with its size class", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  assert.deepEqual(facts.human_turns[0], { at: "2026-09-25T10:00:00.000Z", basis: "first", window_ms: null, prompt_class: "xs", output_class: "none" })
+  assert.deepEqual(facts.human_turns[1], { at: "2026-09-25T10:01:00.000Z", basis: "after_stop", window_ms: 20000, prompt_class: "s", output_class: "m" })
+  assert.deepEqual(humanTurnsFlags(facts), [])
+})
+
+test("a tool result line is not a human turn, even when it carries the human marks", async () => {
+  const turns = await turnsOf([
+    turnLine(0, HUMAN),
+    replyLine(1, "ok"),
+    turnLine(2, HUMAN, [{ type: "tool_result", tool_use_id: "x", content: padded(40) }]),
+  ])
+  assert.equal(turns.length, 1)
+})
+
+test("a hook or slash-command meta line is not a human turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(1, { isMeta: true, ...HUMAN }), turnLine(2, { isMeta: true }, [{ type: "text", text: "x" }])])
+  assert.equal(turns.length, 1)
+})
+
+test("a compaction summary is not a human turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(1, { isCompactSummary: true, ...HUMAN })])
+  assert.equal(turns.length, 1)
+})
+
+test("a system notification and a scheduled wake-up are not human turns", async () => {
+  const turns = await turnsOf([
+    turnLine(0, HUMAN),
+    turnLine(1, { promptSource: "system", origin: { kind: "task-notification" }, turnOrigin: "task_notification" }),
+    turnLine(2, { promptSource: "system", origin: { kind: "human" } }),
+    turnLine(3, { isMeta: true, promptSource: "system", turnOrigin: "scheduled", scheduledTaskId: "s-1" }),
+    turnLine(4, { ...HUMAN, scheduledFireId: "f-1" }),
+    turnLine(5, { ...HUMAN, turnOrigin: "scheduled" }),
+    turnLine(6, { origin: { kind: "peer" }, isMeta: true }),
+  ])
+  assert.equal(turns.length, 1)
+})
+
+test("a human line with no turnOrigin is a human turn, and one with another turnOrigin is not", async () => {
+  const turns = await turnsOf([turnLine(0, { origin: { kind: "human" } }), turnLine(5, { origin: { kind: "human" }, turnOrigin: "sdk" })])
+  assert.equal(turns.length, 1)
+})
+
+test("a prompt to a subagent, in the subagent's file, is not a human turn, and a sidechain line in the root file is not one either", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.equal(facts.human_turns.length, 4)
+  assert.equal(facts.agents.length, 2)
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(1, { ...HUMAN, isSidechain: true })])
+  assert.equal(turns.length, 1)
+})
+
+test("an image-only prompt is a human turn of size none", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.deepEqual(facts.human_turns[2], { at: "2026-09-25T10:02:00.000Z", basis: "after_stop", window_ms: 30000, prompt_class: "none", output_class: "s" })
+})
+
+test("the reply size is the root agent's visible text since the previous human turn, and a subagent's text adds nothing", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  // 250 + 100 + 25 visible characters (class m); thinking, tool use and the 6,000-character subagent reply count for nothing.
+  assert.equal(facts.human_turns[1].output_class, "m")
+  const edge = await turnsOf([turnLine(0, HUMAN), replyLine(1, "x".repeat(20)), replyLine(2, "y".repeat(1)), turnLine(3, HUMAN)])
+  assert.equal(edge[1].output_class, "s")
+  const text = await turnsOf([turnLine(0, HUMAN), replyLine(1, "x".repeat(25), { isApiErrorMessage: true }), { ...replyLine(2, "x"), message: { id: "m-2", content: "plain string" } }, { ...replyLine(3, "x"), message: undefined }, { ...replyLine(3, "x"), message: { id: "m-9" } }, turnLine(4, HUMAN)])
+  // The error line adds nothing; the 12-character string reply is xs.
+  assert.equal(text[1].output_class, "xs")
+})
+
+test("text before the first human prompt is not counted in its reply size", async () => {
+  const turns = await turnsOf([replyLine(0, "x".repeat(300)), turnLine(1, HUMAN)])
+  assert.equal(turns[0].output_class, "none")
+})
+
+test("the interrupt marker line and a headless prompt are not human turns", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.equal(facts.human_turns.length, 4)
+  const turns = await turnsOf([
+    turnLine(0, HUMAN),
+    turnLine(1, {}, [{ type: "text", text: "[Request interrupted by user]" }]),
+    turnLine(2, { promptSource: "sdk", turnOrigin: "sdk" }),
+  ])
+  assert.equal(turns.length, 1)
+})
+
+test("two prompts with no stop between give a mid_turn second turn", async () => {
+  const { facts } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.deepEqual(facts.human_turns[3], { at: "2026-09-25T10:02:04.000Z", basis: "mid_turn", window_ms: 4000, prompt_class: "s", output_class: "none" })
+})
+
+test("a prompt typed while the agent was working, written by the queue, is a mid_turn turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), replyLine(5, "partial"), turnLine(9, { ...HUMAN, promptSource: "queued" }), replyLine(12, "done"), turnLine(40, HUMAN)])
+  assert.deepEqual(turns.map((turn) => [turn.basis, turn.window_ms]), [["first", null], ["mid_turn", 9000], ["after_stop", 28000]])
+})
+
+test("a session whose prompt lines carry no origin key writes no list and flags human_turns field_absent", async () => {
+  const { facts } = await deriveLines([turnLine(0, {}), replyLine(1, "ok"), turnLine(5, { promptSource: "typed" })])
+  assert.equal(Object.hasOwn(facts, "human_turns"), false)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "field_absent" }])
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+test("a session with no prompt-like line at all has an empty list, not a flag", async () => {
+  const { facts } = await deriveLines([turnLine(0, { promptSource: "system", origin: { kind: "task-notification" } }), replyLine(1, "ok")])
+  assert.deepEqual(facts.human_turns, [])
+  assert.deepEqual(humanTurnsFlags(facts), [])
+})
+
+test("a session where some prompt lines carry an origin and others that should do not keeps its list and flags host_records_partly", async () => {
+  const { facts } = await deriveLines([turnLine(0, {}), turnLine(3, HUMAN)])
+  assert.equal(facts.human_turns.length, 1)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "host_records_partly" }])
+})
+
+test("the interrupt marker and a headless prompt without an origin do not make a session partial", async () => {
+  const { facts } = await deriveLines([
+    turnLine(0, HUMAN),
+    turnLine(1, {}, [{ type: "text", text: "[Request interrupted by user]" }]),
+    turnLine(2, {}, "[Request interrupted by user for tool use]"),
+    turnLine(3, { promptSource: "sdk", turnOrigin: "sdk" }),
+  ])
+  assert.deepEqual(humanTurnsFlags(facts), [])
+})
+
+test("a suggestion accepted by the human is a human turn", async () => {
+  const turns = await turnsOf([turnLine(0, HUMAN), turnLine(9, { ...HUMAN, promptSource: "suggestion_accepted" })])
+  assert.equal(turns.length, 2)
+})
+
+test("a synthetic model line adds nothing to the reply size", async () => {
+  const synthetic = { ...replyLine(1, "x".repeat(300)), message: { id: "m-1", model: "<synthetic>", content: [{ type: "text", text: "x".repeat(300) }] } }
+  const turns = await turnsOf([turnLine(0, HUMAN), synthetic, turnLine(5, HUMAN)])
+  assert.equal(turns[1].output_class, "none")
+})
+
+test("a damaged subagent file does not flag the root's human turns", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-human-turns-"))
+  try {
+    const root = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
+    writeFileSync(root, `${JSON.stringify(turnLine(0, HUMAN))}\n`)
+    mkdirSync(path.join(dir, GIT_SESSION_ID, "subagents"), { recursive: true })
+    writeFileSync(path.join(dir, GIT_SESSION_ID, "subagents", "agent-1.jsonl"), "not json\n")
+    const { facts } = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: null })
+    assert.deepEqual(humanTurnsFlags(facts), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a human prompt with no readable time flags human_turns source_unreadable", async () => {
+  const { facts } = await deriveLines([turnLine(0, HUMAN), { ...turnLine(5, HUMAN), timestamp: "not-a-time" }])
+  assert.equal(facts.human_turns.length, 1)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a prompt dated before the previous one is dropped and flags human_turns source_unreadable", async () => {
+  const { facts } = await deriveLines([turnLine(10, HUMAN), turnLine(5, HUMAN), turnLine(20, HUMAN)])
+  assert.equal(facts.human_turns.length, 2)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "source_unreadable" }])
+})
+
+test("a log that ends mid-record, or has an unreadable line, flags human_turns", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-human-turns-"))
+  try {
+    const transcript = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
+    const good = JSON.stringify(turnLine(0, HUMAN))
+    writeFileSync(transcript, `${good}\n{"type":"user","timest`)
+    const cut = await deriveClaudeSession({ transcriptPath: transcript, plugins: PLUGINS, endReason: null })
+    assert.deepEqual(humanTurnsFlags(cut.facts), [{ field: "human_turns", reason: "log_truncated" }])
+    writeFileSync(transcript, `${good}\nnot json\n${JSON.stringify(turnLine(9, HUMAN))}\n`)
+    const damaged = await deriveClaudeSession({ transcriptPath: transcript, plugins: PLUGINS, endReason: null })
+    assert.equal(damaged.facts.human_turns.length, 2)
+    assert.deepEqual(humanTurnsFlags(damaged.facts), [{ field: "human_turns", reason: "source_unreadable" }])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("more than the cap of human turns keeps the first and flags human_turns capped", async () => {
+  const lines = []
+  for (let index = 0; index <= 1000; index += 1) {
+    lines.push({ ...turnLine(0, HUMAN), timestamp: new Date(Date.parse("2026-09-25T11:00:00.000Z") + index * 1000).toISOString() })
+  }
+  const { facts } = await deriveLines(lines)
+  assert.equal(facts.human_turns.length, 1000)
+  assert.deepEqual(humanTurnsFlags(facts), [{ field: "human_turns", reason: "capped" }])
+})
+
+test("SENTINEL in a prompt and in a reply reaches no fact", async () => {
+  const { facts, events } = await deriveFull({ transcriptPath: transcriptPath(SESSION_IDS.humanTurns) })
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("-pppp"), false)
+  assert.equal(JSON.stringify(events).includes("-pppp"), false)
+  const raw = await deriveLines([turnLine(0, HUMAN, padded(50)), replyLine(1, padded(50))])
+  assert.equal(JSON.stringify(raw).includes(SENTINEL), false)
 })

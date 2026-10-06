@@ -4,34 +4,40 @@
 
 | Job | Lead time | Active time | Active before card | Flow efficiency |
 | --- | ---: | ---: | ---: | ---: |
-| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 14000 ms (measured) | 14000 ms (measured) | 1000 ms (measured) | 92.86% (inferred) |
-| bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | 12000 ms (measured, censored) | 8000 ms (measured) | 0 ms (measured) | 66.67% (inferred, censored) |
+| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 14000 ms (measured) | 14000 ms (measured) | 1000 ms (measured) | 92.86% (measured, inferred evidence) |
+| bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | 12000 ms (partial: the job was still open when this was measured) | 8000 ms (partial: it was cut to a size limit and the source could not be read; 1 session uncovered) | 0 ms (partial: it was cut to a size limit and the source could not be read; 1 session uncovered) | 66.67% (partial: it was cut to a size limit and the job was still open when this was measured and the source could not be read; 1 session uncovered; inferred evidence) |
 
-Flow efficiency divides active time inside the lead-time window by lead time. Active before card is work before the task card existed; it is outside lead time.
+Flow efficiency divides active time inside the lead-time window by lead time. Active before card is work before the task card existed; it is outside lead time. Each number carries its state: measured, partial with its reason, or not recorded.
 
 Totals and distributions across jobs, including which waste costs the most, are in `rollups/index.md`.
 
 ## Coverage
 
-- Sessions seen: unavailable (not_reported_to_store).
-- Sessions with facts: 4.
-- Bound sessions: 3.
-- Unattributed sessions: 1.
-- Host claude-code: 2 sessions.
-- Host copilot-cli: 2 sessions.
+- Sessions seen: not recorded (the store only receives published facts, so it cannot count sessions that never published any).
+- Sessions with facts: 4 (measured).
+- Bound sessions: 3 (measured).
+- Unattributed sessions: 1 (measured).
+- Host claude-code: 2 sessions (measured).
+- Host copilot-cli: 2 sessions (measured).
 
 ### Unavailable evidence
 
-- ended_at / session_open: 1 of 4 sessions (25.00%).
-- human_waits / host_does_not_record: 1 of 4 sessions (25.00%).
-- job_offsets / source_unreadable: 1 of 4 sessions (25.00%).
-- models / host_does_not_record: 1 of 4 sessions (25.00%).
-- permission_waits / host_does_not_record: 1 of 4 sessions (25.00%).
-- tokens / host_does_not_record: 1 of 4 sessions (25.00%).
-- tool_durations / capped: 1 of 4 sessions (25.00%).
+- API retries: the host records only some of it, so this is a lower bound (2 of 4 sessions, 50.00%).
+- Commits: the host does not record it (2 of 4 sessions, 50.00%).
+- Compaction wait time: the host does not record it (2 of 4 sessions, 50.00%).
+- Session end time: the session was still open (1 of 4 sessions, 25.00%).
+- Human waits: the host does not record it (1 of 4 sessions, 25.00%).
+- Job clock offsets: the source could not be read (1 of 4 sessions, 25.00%).
+- Models: the host's record did not include it (1 of 4 sessions, 25.00%); the host does not record it (1 of 4 sessions, 25.00%).
+- Permission waits: the host does not record it (2 of 4 sessions, 50.00%).
+- Pull requests: the host records only some of it, so this is a lower bound (4 of 4 sessions, 100.00%).
+- Reasoning tokens: the host does not record it (2 of 4 sessions, 50.00%).
+- Model requests: the host's record did not include it (2 of 4 sessions, 50.00%).
+- Tokens: the host's record did not include it (1 of 4 sessions, 25.00%); the host does not record it (1 of 4 sessions, 25.00%).
+- Tool durations: it was cut to a size limit (1 of 4 sessions, 25.00%).
 
 ### Plugin versions
 
-- desk 3.2.0-alpha.47: 1 session.
-- desk 3.2.0-alpha.48: 3 sessions.
-- plain-language 1.0.0-alpha.3: 1 session.
+- desk 3.2.0-alpha.47: 1 session (measured).
+- desk 3.2.0-alpha.48: 3 sessions (measured).
+- plain-language 1.0.0-alpha.3: 1 session (measured).

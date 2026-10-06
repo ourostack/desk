@@ -26,7 +26,8 @@
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
 //   delivered-paths/<store-slug>.json  name -> the { path, blob } it was delivered at
 //   retracting/<store-slug>.json       name -> { path, blob } of a file whose delete has been pushed, or
-//                                      { path, blob, done: true }, a tombstone once the delete is done
+//                                      { path, blob, done: true, at }, a tombstone once the delete is done (`at` is when;
+//                                      `pruneTombstones` removes it after `TOMBSTONE_RETENTION_MS`, and stamps an older one without `at`)
 //   retracted-copies/<store-slug>/<name>.json, retracted-copies/<store-slug>/labels/<job>/<session>.json
 //                                      the local facts and labels of a session whose delete was pushed, kept
 //                                      outside outbox/ so an older Desk's flush never lists them (never deleted)
@@ -87,6 +88,7 @@ import {
   protectLeafFile,
   realpathExistingPrefix,
 } from "./os-protect.js"
+import { freshVisibility } from "./desk-visibility.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { LABELS_SCHEMA, validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
@@ -97,7 +99,6 @@ import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
 const MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const VISIBILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
@@ -718,16 +719,17 @@ export async function pendingFiles(env, store, { publishedBytesFor, includeQuara
 /**
  * Records `name` as delivered with `publishedBlobSha` for `store`. Concurrent deliveries for the same store are serialized so none is lost.
  * `publishedPath`, the path the file has in the store (`facts/<name>` or `labels/<job>/<session>.json`, the keyed one for a desk not known to be private), is kept in
- * `delivered-paths/<store-slug>.json` so a later retraction deletes exactly what was delivered.
+ * `delivered-paths/<store-slug>.json` so a later retraction deletes exactly what was delivered. `localSha`, the blob sha of the local outbox copy that was delivered, is kept beside it
+ * (`local`): it is what lets `pruneDeliveredCopy` know the copy has not changed since.
  */
-export async function markDelivered(env, store, { name, publishedBlobSha, publishedPath = undefined }, { platform = process.platform, runner = undefined } = {}) {
+export async function markDelivered(env, store, { name, publishedBlobSha, publishedPath = undefined, localSha = undefined }, { platform = process.platform, runner = undefined } = {}) {
   requireString(name, "name")
   requirePattern(publishedBlobSha, SHA1, "publishedBlobSha")
   if (publishedPath !== undefined) requireString(publishedPath, "publishedPath")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
   if (publishedPath !== undefined) {
-    await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, [name]: { path: publishedPath, blob: publishedBlobSha } }), { platform, env, runner })
+    await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, [name]: { path: publishedPath, blob: publishedBlobSha, ...(typeof localSha === "string" && SHA1.test(localSha) ? { local: localSha } : {}) } }), { platform, env, runner })
   }
   const file = path.join(root, "delivered", `${slug}.json`)
   return updateJsonLocked(root, file, {}, (current) => ({ ...current, [name]: publishedBlobSha }), { platform, env, runner })
@@ -759,6 +761,51 @@ const retractingFile = (root, slug) => path.join(root, "retracting", `${slug}.js
 const removeNames = (names) => (current) => Object.fromEntries(Object.entries(current).filter(([name]) => !names.includes(name)))
 const ownNames = (names) => [...new Set(names)].filter((name) => typeof name === "string" && (OUTBOX_NAME_PATTERN.test(name) || LABELS_KEY_PATTERN.test(name)))
 
+// The facts-file names in every store's folder `folder` under the state root, as `{ store, name }`. A store folder is named from its store by `storeSlug`; one that does not read back to a valid store is skipped.
+async function namesByStore(root, folder) {
+  const found = []
+  for (const slug of await listDirSafe(path.join(root, folder))) {
+    const store = slug.replace("__", "/")
+    if (!PATTERNS.prRepo.test(store) || storeSlug(store) !== slug) continue
+    for (const name of await listRegularFiles(path.join(root, folder, slug), OUTBOX_NAME_PATTERN)) found.push({ store, name })
+  }
+  return found
+}
+
+/**
+ * `outboxCopies(env, host) -> { store, name }[]`: the facts files in every store's outbox for `host` (`<host>-<session_id>.json`), by store
+ * and name.
+ */
+export async function outboxCopies(env, host) {
+  const root = await factoryStateRoot(env)
+  return (await namesByStore(root, "outbox")).filter(({ name }) => name.startsWith(`${host}-`))
+}
+
+/**
+ * `allOutboxNames(env) -> { copies, quarantined }`, each `{ store, name }[]`: every facts file name this machine keeps for any store and any host,
+ * `copies` from the outbox and the kept copies of retracted sessions, `quarantined` from the quarantine folders. Names only; nothing is read.
+ */
+export async function allOutboxNames(env) {
+  const root = await factoryStateRoot(env)
+  return {
+    copies: [...(await namesByStore(root, RETRACTED_COPIES)), ...(await namesByStore(root, "outbox"))],
+    quarantined: await namesByStore(root, "quarantine"),
+  }
+}
+
+/** `retractionNames(env) -> Set<string>`: the facts file names that any store has a retracting record or tombstone for, or keeps a retracted copy of. */
+export async function retractionNames(env) {
+  const root = await factoryStateRoot(env)
+  const names = new Set()
+  for (const file of (await listDirSafe(path.join(root, "retracting"))).filter((entry) => /^[^.].*\.json$/u.test(entry))) {
+    for (const name of Object.keys(await readJsonFileSafe(path.join(root, "retracting", file), {}, process.platform))) names.add(name)
+  }
+  for (const slug of await listDirSafe(path.join(root, RETRACTED_COPIES))) {
+    for (const name of await listRegularFiles(path.join(root, RETRACTED_COPIES, slug), OUTBOX_NAME_PATTERN)) names.add(name)
+  }
+  return names
+}
+
 /**
  * `markRetracting(env, store, items)`: a session's delete has been pushed. Each `{ name, path, blob }` moves from delivered to retracting: the
  * retracting record is written first and the delivered records are dropped second, so a crash between the two leaves both, which the next flush
@@ -782,14 +829,89 @@ export async function markRetracting(env, store, items, { platform = process.pla
  * and its delivered records are dropped second. The tombstone keeps the session away from `store` until a positive route says it routes there
  * again (`session-route.js`), whatever else is lost. The local outbox and labels files stay.
  */
-export async function finishRetracting(env, store, items, { platform = process.platform, runner = undefined } = {}) {
+export async function finishRetracting(env, store, items, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
   const own = items.filter((item) => ownNames([item.name]).length === 1)
   if (own.length === 0) return
-  const done = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, done: true }]))
+  const at = now()
+  const done = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, done: true, at }]))
   await updateJsonLocked(root, retractingFile(root, slug), {}, (current) => ({ ...current, ...done }), { platform, env, runner })
   await undeliver(env, store, own.map((item) => item.name), { platform, runner })
+}
+
+/** How long a finished retraction's tombstone is kept: well past the 30 days a host keeps a transcript by default, and a marker's 30 days. */
+export const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * Whether any local copy of `session` exists for the store of `slug`: its facts or labels in the outbox or the labels folder, in `retracted-copies/`, or in quarantine.
+ * A finished retraction's tombstone must outlive every one of them: it is what keeps the session away from the store when `status.json` is lost.
+ */
+async function hasLocalCopy(root, slug, session) {
+  const live = liveFolders(root, slug)
+  const kept = keptFolders(root, slug)
+  const held = { facts: path.join(root, "quarantine", slug), labels: path.join(root, "quarantine", slug, "labels") }
+  for (const folders of [live, kept, held]) if ((await copiesOf(folders.facts, folders.labels, session)).length > 0) return true
+  return false
+}
+
+/**
+ * `pruneTombstones(env, { now, retentionMs }) -> number`: removes, in every store's retracting file, each tombstone (`done: true`) whose `at` is
+ * more than `retentionMs` old and whose session has no local copy left for that store (see `hasLocalCopy`; kept copies are never deleted, so a
+ * tombstone normally stays as long as they do), and returns how many it removed. A tombstone with no readable `at` (one written before the time
+ * was kept) is stamped `now` and kept, so it ages from the first sweep that sees it and is never removed on a guess. Only tombstones go: an open
+ * retraction is never touched, and neither is any local copy.
+ */
+export async function pruneTombstones(env, { now = defaultNow, retentionMs = TOMBSTONE_RETENTION_MS, platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const nowText = now()
+  const nowMs = Date.parse(nowText)
+  const isTombstone = (record) => isPlainObject(record) && record.done === true
+  const stamped = (record) => typeof record.at === "string" && PATTERNS.timestamp.test(record.at) && Number.isFinite(Date.parse(record.at))
+  const expired = (record) => stamped(record) && nowMs - Date.parse(record.at) > retentionMs
+  let pruned = 0
+  for (const entry of (await listDirSafe(path.join(root, "retracting"))).filter((name) => /^[^.].*\.json$/u.test(name))) {
+    const file = path.join(root, "retracting", entry)
+    const tombstones = Object.entries(await readJsonFileSafe(file, {}, platform)).filter(([, record]) => isTombstone(record))
+    if (!tombstones.some(([, record]) => !stamped(record) || expired(record))) continue
+    const guarded = new Set()
+    for (const [name, record] of tombstones) if (expired(record) && (await hasLocalCopy(root, entry.slice(0, -".json".length), name.slice(-41, -5)))) guarded.add(name)
+    await updateJsonLocked(root, file, {}, (current) => Object.fromEntries(Object.entries(current).flatMap(([name, record]) => {
+      if (!isTombstone(record)) return [[name, record]]
+      if (!stamped(record)) return [[name, { ...record, at: nowText }]]
+      if (expired(record) && !guarded.has(name)) {
+        pruned += 1
+        return []
+      }
+      return [[name, record]]
+    })), { platform, env, runner })
+  }
+  return pruned
+}
+
+/** How old a delivered facts copy whose transcript is gone must be before it is removed (see `pruneDeliveredCopy`). */
+export const COPY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * `pruneDeliveredCopy(env, store, name) -> boolean`: removes the facts copy `name` from `store`'s outbox, only when it is certain nothing is lost: this
+ * store's delivered record holds it, with a trusted path (so a later retraction can still find the file in the store) and with the blob sha of the
+ * very local copy that was delivered (`local`), and that is the copy on disk now, so no newer, undelivered version is dropped; it is not
+ * quarantined; no retraction or tombstone names it; and the file is a regular one. A delivery recorded by an older Desk has no `local`, so its
+ * copy stays. The caller decides it is old enough and that its transcript is gone. Only the outbox file goes: the delivered record stays, as does
+ * everything in `retracted-copies/`, which is never deleted. True when a file was removed.
+ */
+export async function pruneDeliveredCopy(env, store, name, { platform = process.platform, runner = undefined } = {}) {
+  if (ownNames([name]).length !== 1 || LABELS_KEY_PATTERN.test(name)) return false
+  const delivered = await readDelivered(env, store, { platform })
+  const entry = delivered.paths[name]
+  const trusted = isPlainObject(entry) && typeof entry.path === "string" && entry.blob === delivered.blobs[name] && typeof entry.local === "string"
+  if (!trusted || delivered.quarantined.has(name) || Object.hasOwn(delivered.retracting, name) || Object.hasOwn(delivered.retracted, name)) return false
+  const root = await factoryStateRoot(env, { platform, runner })
+  const file = path.join(root, "outbox", storeSlug(store), name)
+  const stat = await lstatIfPresent(file, NAMING)
+  if (stat === null || !stat.isFile() || gitBlobSha(await fsp.readFile(file)) !== entry.local) return false
+  await fsp.unlink(file)
+  return true
 }
 
 /**
@@ -869,6 +991,17 @@ export async function writeStatus(env, patch, { platform = process.platform, run
   }, { platform, env, runner }, isStatusShape)
 }
 
+/** `updateStatus(env, mutate) -> status`: lock-guarded read, `mutate(current) -> next` and atomic write of `status.json`; `next` must keep a `last_flush` object. Concurrent updates are serialized so none is lost. */
+export async function updateStatus(env, mutate, { platform = process.platform, runner = undefined } = {}) {
+  if (typeof mutate !== "function") fail("mutate", "must be a function")
+  const root = await factoryStateRoot(env, { platform, runner })
+  return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
+    const next = mutate(current)
+    if (!isStatusShape(next)) fail("status", "must be an object with a last_flush object")
+    return next
+  }, { platform, env, runner }, isStatusShape)
+}
+
 /**
  * `recordRoutes(env, routes)`: for each `{ name: { store, deskRoot } }`, keeps `store` as `route`, and `deskRoot` (an absolute path) as
  * `desk_root`, in the derivation receipt of facts file `name`, the other keys unchanged (a receipt is created when there is none).
@@ -887,6 +1020,21 @@ export async function recordRoutes(env, routes, { platform = process.platform, r
   }, { platform, env, runner }, isStatusShape)
 }
 
+/**
+ * `recordDeskUnprotected(env, names)`: marks the derivation receipt of each facts file in `names` (a receipt is created when there is none)
+ * with `desk_unprotected: true`, the other keys unchanged. The flush sets it when it publishes a session whose desk's visibility is not
+ * known private. It never clears: a session that was ever published under a desk that was not known private is withheld once its marker is
+ * gone, whatever its desk says now (`flush.js` `deskRepositories`). Local only, never published.
+ */
+export async function recordDeskUnprotected(env, names, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
+    const derivations = { ...current.derivations }
+    for (const name of names) derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), desk_unprotected: true }
+    return { ...current, derivations }
+  }, { platform, env, runner }, isStatusShape)
+}
+
 function assertVisibilityEntries(patch) {
   for (const [key, entry] of Object.entries(patch)) {
     requirePlainObject(entry, `patch[${JSON.stringify(key)}]`)
@@ -899,13 +1047,7 @@ function assertVisibilityEntries(patch) {
 export async function readVisibilityCache(env, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   const cache = await readJsonFileSafe(path.join(root, "visibility.json"), {}, platform)
-  const nowMs = Date.parse(now())
-  const fresh = {}
-  for (const [key, entry] of Object.entries(cache)) {
-    if (!isPlainObject(entry)) continue
-    if (nowMs - Date.parse(entry.checked_at) <= VISIBILITY_TTL_MS) fresh[key] = entry
-  }
-  return fresh
+  return freshVisibility(cache, Date.parse(now()))
 }
 
 /** Merges validated `patch` entries into `visibility.json` (also holds the desk's own remote, keyed by its normalized form). Concurrent patches are serialized so none is lost. */
@@ -1168,7 +1310,8 @@ export async function rebuildJobsIndex(env, store = undefined, { platform = proc
         throw error
       }
       files += 1
-      const jobs = Array.isArray(facts?.jobs) ? facts.jobs : []
+      // A task a session only signed off carries an outcome and no job binding; the index lists both.
+      const jobs = [...(Array.isArray(facts?.jobs) ? facts.jobs : []), ...(Array.isArray(facts?.outcomes) ? facts.outcomes : [])]
       for (const binding of jobs) {
         const job = binding?.job
         if (typeof job !== "string" || !PATTERNS.jobId.test(job)) continue
@@ -1580,6 +1723,14 @@ export async function clearEvaluationRequest(env, job, reason = null) {
     await writeJsonAtomic(root, path.join(root, "evaluate-requests", "quarantine", `${job}.json`), { reason, at: defaultNow() }, { platform: process.platform, env })
   }
   await fsp.rm(file, { force: true })
+}
+
+/** Moves a request that passed its time limit to `evaluate-requests/expired/<job>.json` (`{ reason: "expired", at }`): a job the evaluator never saw, kept apart from the unread quarantine and counted by the evaluator step. */
+export async function expireEvaluationRequest(env, job) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  const root = await factoryStateRoot(env)
+  await writeJsonAtomic(root, path.join(root, "evaluate-requests", "expired", `${job}.json`), { reason: "expired", at: defaultNow() }, { platform: process.platform, env })
+  await fsp.rm(path.join(root, "evaluate-requests", `${job}.json`), { force: true })
 }
 
 /** Removes the brief and the output for `{ job, store, name }`; a no-op for either one already gone. */

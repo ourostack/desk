@@ -319,6 +319,73 @@ const SCRIPT_DENIES = [
 ]
 for (const [command, label] of SCRIPT_DENIES) test(`denies: ${label}`, () => denied(command))
 
+test("staging or committing a card by hand is denied with the task_update fix first, whatever the git spelling; other git commands pass", () => {
+  for (const command of [
+    `git add ${CARD_REL}`,
+    `git -C ${DESK} add ${CARD_REL}`,
+    `git add -- ${CARD_REL}`,
+    `git stage ${CARD_REL}`,
+    `git update-index --add ${CARD_REL}`,
+    `git update-index --add --cacheinfo 100644,abc,${CARD_REL}`,
+    `git commit ${CARD_REL} -m x`,
+    `git commit --only ${CARD_REL} -m x`,
+    `git commit -m "Update task" -- ${CARD_REL}`,
+    `git commit -m "Update task" -- "${CARD_REL}"`,
+    `git add ${CARD_ABS} && git commit -m "Update task"`,
+    `cd ${DESK} && git add ${CARD_REL} && git commit -m x`,
+    `echo DESK_TOOL_COMMIT=1; git add ${CARD_REL}`,
+    `export DESK_TOOL_COMMIT=1; git add ${CARD_REL}`,
+    `DESK_TOOL_COMMIT=1 git add ${CARD_REL}`,
+    `git add ${CARD_REL} # DESK_TOOL_COMMIT=1`,
+  ]) {
+    const reason = denied(command)
+    assert.match(reason, /^Call .*task_update/, `the fix leads: ${command}`)
+    assert.match(reason, /staging or committing a task card by hand/)
+    assert.match(reason, /run no git for a card/)
+    assert.doesNotMatch(reason, /DESK_TOOL_COMMIT/, "the denial never mentions the override")
+  }
+  for (const command of [
+    `git add README.md`,
+    `git add -A -- greenhouse-ops/watering-schedule-api greenhouse-ops/_archive/watering-schedule-api`,
+    `git add -A`,
+    `git commit -a -m x`,
+    `git commit -m "see ${CARD_REL}" -- README.md`,
+    `git commit -m 'edited ${CARD_REL} by hand' -- README.md`,
+    `git commit -m "add ${CARD_REL}" -- README.md`,
+    `git update-index --refresh ${CARD_REL}`,
+    `git add greenhouse-ops/_archive/old-job/task.md`,
+  ]) allowed(command)
+})
+
+test("git add of a card passes while the card is conflicted in a merge", () => {
+  const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "guard-shell-add-merge-")))
+  try {
+    const sh = (args) => spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e.co", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e.co" } })
+    sh(["init", "-q", "-b", "main"])
+    mkdirSync(path.join(repo, "_meta"))
+    mkdirSync(path.join(repo, "_archive"))
+    mkdirSync(path.join(repo, "garden", "weeding"), { recursive: true })
+    writeFileSync(path.join(repo, "_meta", "k.md"), "x\n")
+    const card = path.join(repo, "garden", "weeding", "task.md")
+    writeFileSync(card, CARD)
+    sh(["add", "-A"])
+    sh(["commit", "-q", "-m", "seed"])
+    sh(["checkout", "-q", "-b", "other"])
+    writeFileSync(card, `${CARD}\nother side\n`)
+    sh(["commit", "-q", "-am", "other"])
+    sh(["checkout", "-q", "main"])
+    writeFileSync(card, `${CARD}\nmain side\n`)
+    sh(["commit", "-q", "-am", "main"])
+    const rel = "garden/weeding/task.md"
+    denied(`git add ${rel}`, { cwd: repo, root: repo })
+    assert.notEqual(sh(["merge", "other"]).status, 0)
+    allowed(`git add ${rel}`, { cwd: repo, root: repo })
+    allowed(`git commit ${rel} -m resolved`, { cwd: repo, root: repo })
+  } finally {
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
 test("git checkout of a card passes only while the card is conflicted in a merge", () => {
   const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "guard-shell-merge-")))
   try {

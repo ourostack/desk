@@ -91,7 +91,7 @@ function elsewhereCard(tasks, repos) {
 }
 
 /**
- * `{ deny: true, reason }` when `command` clones or fetches a repository a task card marks as on another machine, else `{ deny: false }`. The reason leads with the action, then says the way out: record the operator's word in the card.
+ * `{ deny: true, reason }` when `command` clones or fetches a repository a task card marks as on another machine, else `{ deny: false }`. The reason leads with the safe action and its one exception in one sentence (hosts show only that line): ask for the push unless the operator already said it is pushed.
  * `load` supplies the desk's active tasks (`[{ slug, repos, next_step, blocker }]`); it is only called for a command that names a repository to clone or fetch.
  */
 export async function elsewhereCloneDenial({ command, cwd, env, load = loadDeskTasks }) {
@@ -99,11 +99,16 @@ export async function elsewhereCloneDenial({ command, cwd, env, load = loadDeskT
   if (repos.length === 0) return { deny: false }
   const card = elsewhereCard(await load({ cwd, env }), repos)
   if (card === null) return { deny: false }
-  return { deny: true, reason: `Ask the operator to push ${card.branch} from the other machine; do not clone or fetch to look for it. If the operator says it is pushed now, record that with task_update (rewrite the next step so it no longer says the work is on another machine), then retry. The card for task ${card.task.slug} says that work is not on this machine.` }
+  const first = `Ask the operator to push ${card.branch} unless they already said it is pushed; if so, use task_update.`
+  return { deny: true, reason: `${first} Do not clone or fetch to look for it. If the operator's own message in this conversation already says it is pushed, that counts: rewrite the next step with task_update so it no longer says the work is on another machine, then retry, and do not ask again. If no message of theirs says so, ask; never record a push the operator has not stated. The card for task ${card.task.slug} says that work is not on this machine.` }
 }
 
 // The desk the session works in: the desk folder the command's own folder sits in (up to seven levels up), else the one the host binds (`resolveHookDeskRoot`: project folder, saved binding, $DESK, home fallbacks).
-async function loadDeskTasks({ cwd, env }) {
+export async function loadDeskTasks({ cwd, env, ensureDependencies = defaultEnsureDependencies }) {
+  // Task cards list their repositories in a nested `repos:` block that only gray-matter reads. A hook runs from the bare plugin folder, where no node_modules is installed, so (like boot) it restores the runtime pack
+  // first. Without this the dependency-free reader returns no repos and the guard never matches a card (boot acceptance round AA: 4 of 4 `elsewhere-clone` runs cloned freely).
+  // It must run before `active-tasks.js` is first imported, which picks its card reader once, at load.
+  await ensureDependencies(env)
   const [{ resolveHookDeskRoot }, { activeTasks }, { isDeskWorkspace }] = await Promise.all([import("../../scripts/resolve-desk-root.js"), import("../desk/active-tasks.js"), import("../util/paths.js")])
   let root = null
   for (let dir = path.resolve(cwd), depth = 0; root === null && depth < 7; depth += 1, dir = path.dirname(dir)) {
@@ -111,4 +116,9 @@ async function loadDeskTasks({ cwd, env }) {
   }
   root ??= resolveHookDeskRoot({ env, cwd }).root
   return root === null ? [] : activeTasks(root).tracks.flatMap((track) => track.tasks)
+}
+
+async function defaultEnsureDependencies(env) {
+  const { ensureHookDependencies } = await import("./hook-dependencies.js")
+  ensureHookDependencies({ hook: "elsewhere-clone", env })
 }

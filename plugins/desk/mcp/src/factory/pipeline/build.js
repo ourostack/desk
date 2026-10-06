@@ -1,11 +1,11 @@
 import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
-import { jobId } from "../binding.js"
 import { validateLabelsBytes } from "../label-schema.js"
 import { PATTERNS } from "../schema.js"
 import { calculateFormulas } from "./formulas.js"
 import { normalizePublished, stableStringify } from "./normalize.js"
+import { computeOutcomeRollups } from "./outcomes.js"
 import { buildCoverage, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "./report.js"
 import { computeRollups, jobRecord, renderRollupsMarkdown, resolveLabels } from "./rollups.js"
 import { buildTimelines } from "./timeline.js"
@@ -40,6 +40,7 @@ function outputTimeline(timeline) {
     intervals: timeline.intervals,
     transitions: timeline.transitions,
     observations: timeline.observations,
+    outcome: timeline.outcome,
   }
 }
 
@@ -116,6 +117,8 @@ function writeRollups(directory, rollups) {
   writeFileSync(path.join(directory, "muda.json"), `${stableStringify(rollups.muda)}\n`)
   writeFileSync(path.join(directory, "tool-kinds.json"), `${stableStringify(rollups.tool_kinds)}\n`)
   writeFileSync(path.join(directory, "coverage.json"), `${stableStringify(rollups.coverage)}\n`)
+  writeFileSync(path.join(directory, "outcomes.json"), `${stableStringify(rollups.outcomes)}\n`)
+  writeFileSync(path.join(directory, "totals.json"), `${stableStringify(rollups.totals)}\n`)
 }
 
 // Everything the build derives from a store's `facts/` and `labels/`.
@@ -168,7 +171,7 @@ export function build({ storeDir, outDir }) {
   requireDirectory(store, "store")
 
   const { sessions, labels, reports, records } = readStore(store)
-  const rollups = computeRollups({ records, sessions, labels })
+  const rollups = { ...computeRollups({ records, sessions, labels }), outcomes: computeOutcomeRollups({ sessions, reports, records, labels }) }
   const temporary = `${out}.factory-tmp-${process.pid}`
   rmSync(temporary, { recursive: true, force: true })
   mkdirSync(path.join(temporary, "jobs"), { recursive: true })
@@ -188,8 +191,9 @@ export function build({ storeDir, outDir }) {
   return { jobs: reports.length, sessions: sessions.length }
 }
 
-export function jobLink({ store, deskRemote, personPrefix, track, slug }) {
-  if (typeof store !== "string" || !PATTERNS.prRepo.test(store)) throw new TypeError("jobLink: store must be owner/repo")
-  const job = jobId({ deskRemote, personPrefix, track, slug })
+/** The report page of `job`, an ID as the store publishes it. A task card links only a desk known private, whose store job is its plain ID (`local-status.js` `publishedJobId`). */
+export function jobReportUrl({ store, job }) {
+  if (typeof store !== "string" || !PATTERNS.prRepo.test(store)) throw new TypeError("jobReportUrl: store must be owner/repo")
+  if (typeof job !== "string" || !/^[0-9a-f]{32}$/u.test(job)) throw new TypeError("jobReportUrl: job must be 32 lowercase hex")
   return `https://github.com/${store}/blob/reports/jobs/${job}.md`
 }

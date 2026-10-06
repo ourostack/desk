@@ -74,9 +74,10 @@ async function assertTaskLocal(taskPath, file, name) {
 // The factory binder reads this line from every spawn prompt. It names the task relative to the person prefix,
 // and only when that is exactly `<track>/<slug>` and the binder would accept it; anything else omits the rule
 // rather than naming the wrong task.
+// The second rule is only true while the first is there, so they come and go together.
 function deskTaskRule(deskRoot, person, taskPath) {
   const line = `Desk-Task: ${path.relative(personPrefix(deskRoot, person), taskPath).split(path.sep).join("/")}`
-  return parseDeskTaskLine(line) === null ? [] : [line]
+  return parseDeskTaskLine(line) === null ? [] : [line, "Never call task_focus; your work is credited through the Desk-Task line."]
 }
 
 export async function resolveSuperpowersContext(input) {
@@ -133,6 +134,7 @@ export async function resolveSuperpowersContext(input) {
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
     briefRules: [
       ...deskTaskRule(deskRoot, person, taskPath),
+      "Never call task_signoff.",
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
     ],

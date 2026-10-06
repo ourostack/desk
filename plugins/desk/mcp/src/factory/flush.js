@@ -103,6 +103,11 @@
 //   the store refuses returns the session to delivered and is not retried
 //   while it stays away.
 
+// The capture record (`capture-flush.js`, `capture-publish.js`) travels as one more file, `capture/<intake_id>.json`, appended after the batch is
+// taken so it never displaces facts, labels or deletes, and only when the store's `capture.json` holds exactly `{"capture":1}`. A refusal that names it
+// (a `capture_` code other than `capture_check_unavailable`, which is the store's own check failing and is stale like a conflict, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
+// record waits a week. Its bookkeeping is `status.capture[store]` and nothing else.
+
 // Every step's result is one stable `FlushCode`. The account token comes from
 // `gh auth token --user <account>`, lives only in memory and reaches `gh` only
 // through the runner's `token` option, which the real runner passes as
@@ -133,7 +138,7 @@ import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
-import { normalizeRemote } from "./binding.js"
+import { deskTimingKept, deskVisibilityOf, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { readDeskRemote } from "./desk-repo.js"
 import { BINDING_VERSION, deriveFile, sweep as sweepMarkers } from "./derive-run.js"
 import {
@@ -153,6 +158,7 @@ import {
   pendingLabels,
   quarantine,
   readConsent,
+  recordDeskUnprotected,
   recordRoutes,
   readDelivered,
   readJobsIndex,
@@ -169,6 +175,7 @@ import {
   restoreRetractedCopies,
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
+import { CHECK_UNAVAILABLE, captureOnBranch, dropPending, judge, namesRecord, planCapture, saveCheckUnavailable, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
@@ -192,7 +199,8 @@ const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
-const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge"])
+// `capture_check_unavailable` is the store's own capture check failing to read the commits: its failure, not the files' and not the record's.
+const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge", CHECK_UNAVAILABLE])
 const MAX_COMMENTS = 300
 const MAX_BYTES = 24 * 1024 * 1024
 const MAX_OUTPUT = 64 * 1024 * 1024
@@ -208,7 +216,6 @@ const HOSTS = Object.freeze(["claude-code", "copilot-cli", "codex-cli"])
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const RATE_LIMIT = /rate limit/iu
 const OFFLINE = /error connecting to|could not resolve|no such host|dial tcp|connection refused|connection reset|network is unreachable|i\/o timeout|TLS handshake timeout|timed out/iu
-const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
 const TIMEOUT = Symbol("timeout")
 // Everything `pendingFiles` is asked about in the listing pass: bytes no
 // delivered record can match, so every outbox file that is not quarantined
@@ -480,14 +487,12 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 // ---------------------------------------------------------------------------
 
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
-const githubRepoOfRemote = (remote) => (remote === null ? null : GITHUB_REMOTE.exec(normalizeRemote(remote))?.[1] ?? null)
 
-async function deskRepositories(markers, { deadline, now }) {
+async function deskRepositories(markers, { deadline, now, receipts }) {
   const byName = new Map()
   const remotes = new Map()
-  for (const marker of markers) {
-    const root = marker.desk_root
-    if (root === null) continue
+  // The GitHub repository a desk root's remote names, read once per root.
+  const repositoryOf = (root) => {
     if (!remotes.has(root)) {
       let remote
       try {
@@ -497,7 +502,28 @@ async function deskRepositories(markers, { deadline, now }) {
       }
       remotes.set(root, githubRepoOfRemote(remote))
     }
-    byName.set(`${marker.host}-${marker.session_id}.json`, remotes.get(root))
+    return remotes.get(root)
+  }
+  for (const marker of markers) {
+    if (marker.desk_root === null) continue
+    const name = `${marker.host}-${marker.session_id}.json`
+    const current = repositoryOf(marker.desk_root)
+    // The receipt's recorded repository is the session's own desk: when the root now names another repository, or none, the desk is uncertain
+    // and the session is published in its protected form. A receipt that recorded none (an older one) keeps the root's answer.
+    const recorded = receipts[name]?.desk_repo
+    byName.set(name, typeof recorded === "string" && !(typeof current === "string" && current.toLowerCase() === recorded.toLowerCase()) ? null : current)
+  }
+  // A session with no marker (pruned, or rebuilt from its transcript) keeps its desk's protection only when the desk is certainly the one it ran
+  // under: its receipt recorded the desk root and the desk's GitHub repository (`desk_repo`), the root still names that same repository, and
+  // no earlier flush published the session under a desk that was not known private (`desk_unprotected`). Anything else (no root, no recorded
+  // repository, another repository now at that path, a root that no longer resolves) leaves the desk unknown, so the session is withheld.
+  for (const name of Object.keys(receipts)) {
+    if (byName.has(name)) continue
+    const root = deskRootOf(receipts, [name])
+    const recorded = receipts[name]?.desk_repo
+    if (root === undefined || typeof recorded !== "string" || receipts[name]?.desk_unprotected === true) continue
+    const current = repositoryOf(root)
+    if (typeof current === "string" && current.toLowerCase() === recorded.toLowerCase()) byName.set(name, current)
   }
   return byName
 }
@@ -513,12 +539,13 @@ function referencedRepos(facts) {
   return repos
 }
 
-async function resolveVisibility(env, client, account, repos, nowIso) {
+// `force` is the repositories (lower case) asked again whatever the cache holds.
+async function resolveVisibility(env, client, account, repos, nowIso, force = new Set()) {
   const cache = await readVisibilityCache(env, { now: nowIso })
-  const known = new Map(Object.entries(cache).map(([repo, entry]) => [repo.toLowerCase(), entry.visibility]))
+  const known = visibilityMap(cache)
   const patch = {}
   for (const repo of [...new Set(repos.map((name) => name.toLowerCase()))].sort()) {
-    if (known.has(repo)) continue
+    if (known.has(repo) && !force.has(repo)) continue
     await client.session(account)
     let answer = await client.api("GET", `repos/${repo}`)
     // The account's own token can 403 or 404 a repository that is genuinely public: a fine-grained token
@@ -547,7 +574,7 @@ function publishOne(local, name, { transform, known, desk, store, secret }) {
     out = transform(local, {
       visibility: (repo) => known.get(repo.toLowerCase()) ?? "unknown",
       // Every GitHub desk remote was resolved with the references; anything else is unknown.
-      deskVisibility: desk ? known.get(desk.toLowerCase()) : "unknown",
+      deskVisibility: deskVisibilityOf(desk, known),
       // The store was resolved with them too; an unknown store is treated as public.
       storeVisibility: known.get(store.toLowerCase()) ?? "unknown",
       machineSecret: secret,
@@ -577,7 +604,7 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
   const desk = factsNamesOf(local.session).map((name) => desks.get(name)).find((repo) => typeof repo === "string")
   let out
   try {
-    out = toPublishedLabels(local, { deskVisibility: desk === undefined ? "unknown" : known.get(desk.toLowerCase()), machineSecret: secret })
+    out = toPublishedLabels(local, { deskVisibility: deskVisibilityOf(desk, known), machineSecret: secret })
   } catch {
     return { reason: "invalid" }
   }
@@ -653,9 +680,12 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
   return items.slice(0, maxItems)
 }
 
-async function readRejections(env, client, { store, head, through, labelKeys, retractPaths }) {
+async function readRejections(env, client, { store, head, through, labelKeys, retractPaths, capturePath, recordedPr }) {
   const rejected = new Set()
   const refused = new Set()
+  // The first refusal that names the capture record, never a reason to quarantine facts: its pull request is a stale one (the facts go again).
+  let captureRefused = null
+  let checkUnavailable = false
   let stale = 0
   let unmatched = 0
   let highest = through
@@ -681,7 +711,11 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       }
       break
     }
-    if (codes.length === 0) continue
+    const named = codes.filter((candidate) => namesRecord(candidate, { onRecordedPr: pr.number === recordedPr, stale: STALE_INTAKE_CODES }))
+    captureRefused ??= named[0] ?? null
+    if (pr.number === recordedPr && codes.includes(CHECK_UNAVAILABLE)) checkUnavailable = true
+    codes = codes.filter((candidate) => !named.includes(candidate))
+    if (codes.length === 0 && named.length === 0) continue
     // Stale only when every code says so; any data code rejects the files, and quarantine names the first one.
     const code = codes.find((candidate) => !STALE_INTAKE_CODES.has(candidate))
     if (code === undefined) {
@@ -692,6 +726,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
       // A file is named back to its local key by its published path. One with no local key (a session already delivered or gone, or a keyed name no outbox file carries) has nothing to quarantine and is only counted.
       // A refused delete is counted and never quarantined: the delivered file stays publishable if its session routes back.
+      if (String(file?.filename) === capturePath) continue
       const refusedName = retractPaths.get(String(file?.filename))
       if (refusedName !== undefined) {
         refused.add(refusedName)
@@ -706,7 +741,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       rejected.add(name)
     }
   }
-  return { rejected, refused, stale, unmatched, through: highest }
+  return { rejected, refused, stale, unmatched, through: highest, captureRefused, checkUnavailable }
 }
 
 function treeEntries(json) {
@@ -759,7 +794,8 @@ async function treeLookup(client, repo, treeSha, items) {
   const listing = newListing()
   const facts = await factsOnBranch(client, repo, treeSha, listing)
   const labels = await labelsOnBranch(client, repo, treeSha, items.filter((item) => item.labels).map((item) => item.path), listing)
-  const at = (item) => (item.labels ? labels.get(item.path) : facts.get(item.path.slice("facts/".length))) ?? (listing.truncated ? UNKNOWN : undefined)
+  const captures = items.some((item) => item.capture) ? await captureOnBranch((sha) => readTree(client, repo, requireSha(sha), listing), treeSha) : new Map()
+  const at = (item) => (item.capture ? captures.get(item.path) : item.labels ? labels.get(item.path) : facts.get(item.path.slice("facts/".length))) ?? (listing.truncated ? UNKNOWN : undefined)
   at.facts = facts
   return at
 }
@@ -825,7 +861,8 @@ async function openPr(client, { store, head, base, count, retracted }) {
 async function deliver(env, context) {
   const { store, client, now, deadline, transform, maxFiles, maxBytes, progress } = context
   const nowIso = () => new Date(now()).toISOString()
-  const record = (await readConsent(env)).stores[store]
+  const consent = (await readConsent(env)).stores
+  const record = consent[store]
   if (record?.contribute !== true) return { result: "not_opted_in" }
   if (typeof record.account !== "string" || record.account === "") return { result: "no_account" }
   if (!INTAKE_ID.test(record.intake_id ?? "")) stop("unexpected")
@@ -863,7 +900,11 @@ async function deliver(env, context) {
   progress.newerFormat = newer.size
   // The kept copies of retracted sessions, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
-  if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0) return { result: "nothing_pending" }
+  const keptSet = new Set(keptNow)
+  // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
+  const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
+  if (capture.invalid) await saveInvalid(env, store, now())
+  if (!capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
   // route to another store, or a finished retraction's tombstone), `stalled` (a retraction open with no positive route), `unknown` (an
@@ -884,7 +925,10 @@ async function deliver(env, context) {
     const marker = names.map((name) => markerByName.get(name)).find((found) => found !== undefined) ?? null
     const deskRoot = deskRootOf(receipts, names)
     const route = sessionRoute(marker, { siblings: () => markers, deskRoot })
-    places.set(session, sessionPlace(store, route, derivedStoreOf(receipts, names), recordsOf.get(session)))
+    let place = sessionPlace(store, route, derivedStoreOf(receipts, names), recordsOf.get(session))
+    // A session with a kept (retracted) copy fails closed: without a positive route here it stays away, so a lost or unreadable `status.json`, or a pruned tombstone, can never read as "no record, so here" and publish what was withdrawn.
+    if (place === "here" && route.kind !== "store" && keptSet.has(session)) place = "away"
+    places.set(session, place)
     if (route.kind !== "store") continue
     const root = marker?.desk_root ?? deskRoot
     for (const name of names.filter((name) => localNames.includes(name) && (receipts[name]?.route !== route.store || receipts[name]?.desk_root !== root))) routes[name] = { store: route.store, deskRoot: root }
@@ -926,7 +970,7 @@ async function deliver(env, context) {
   const parse = ({ localBytes }) => JSON.parse(localBytes.toString("utf8"))
   const parsed = candidates.filter(({ name }) => here(name)).map((item) => ({ name: item.name, held: item.quarantine, local: parse(item) }))
   const parsedLabels = labelCandidates.filter(({ name }) => here(name)).map((item) => ({ key: item.name, local: parse(item) }))
-  const desks = await deskRepositories(markers, { deadline, now })
+  const desks = await deskRepositories(markers, { deadline, now, receipts })
   // What a file needs resolved: the repositories it references, its desk remote, and the store when it names a plugin.
   const reposOf = ({ name, local }) => [
     ...referencedRepos(local),
@@ -935,6 +979,7 @@ async function deliver(env, context) {
   ]
   const labelsReposOf = ({ local }) => factsNamesOf(local?.session).map((name) => desks.get(name)).filter((repo) => typeof repo === "string")
   const ordinary = parsed.filter(({ held }) => held === null)
+  const askedAfter = nowIso()
   const known = await resolveVisibility(env, client, account, [...ordinary.flatMap(reposOf), ...parsedLabels.flatMap(labelsReposOf)], nowIso)
   // A held file is a retry, never a reason to stop for a repository it cannot resolve: its repositories resolve one file at a time, and a file whose repositories cannot all be resolved keeps its record and waits for a later flush.
   // A file whose repositories are all known already needs no lookup, and no state-root check, so an unchanged held file costs nothing.
@@ -951,13 +996,41 @@ async function deliver(env, context) {
       unresolved.add(item.name)
     }
   }
+  // A session goes out in its plain form only on a private or internal answer asked in this flush: a desk's kept answer that was not asked since
+  // this flush began is asked again, once per desk, whatever its age. A public or unknown answer already withholds and is never asked about. A desk
+  // whose question fails publishes nothing this flush: its sessions stay pending (never published protected and marked), and the count is recorded.
+  const deskRepos = [...new Set([...parsed.map(({ name }) => desks.get(name)), ...parsedLabels.flatMap(labelsReposOf)].filter((repo) => typeof repo === "string").map((repo) => repo.toLowerCase()))]
+  const dated = await readVisibilityCache(env, { now: nowIso })
+  // A desk whose fresh answer failed stays unknown for the rest of this flush, whatever the cache still holds.
+  const distrusted = new Set()
+  for (const repo of deskRepos.filter((repo) => deskTimingKept(known.get(repo)) && !(dated[repo]?.checked_at >= askedAfter))) {
+    try {
+      known.set(repo, (await resolveVisibility(env, client, account, [repo], nowIso, new Set([repo]))).get(repo))
+    } catch (error) {
+      // Out of time is not "could not ask": the flush ends here as `deadline`, and the last recorded count of sessions waiting for an answer stays as it was, so a flush that never got to ask cannot rewrite it.
+      if (error instanceof Stop && error.code === "deadline") throw error
+      // Whatever else stopped the question (offline, a refusal), this desk is not known private now; the flush's own deadline check ends it later.
+      known.set(repo, "unknown")
+      distrusted.add(repo)
+    }
+  }
+  const desksOfSession = (names) => names.map((name) => desks.get(name)).filter((repo) => typeof repo === "string").map((repo) => repo.toLowerCase())
+  const deferredName = (name) => desksOfSession([name]).some((repo) => distrusted.has(repo))
+  const deferredLabels = (local) => desksOfSession(factsNamesOf(local?.session)).some((repo) => distrusted.has(repo))
+  const deferred = new Set(parsed.filter(({ name }) => deferredName(name)).map(({ name }) => name))
+  progress.visibilityUnasked = new Set([...deferred].map(sessionOfName)).size
+  // Held back for a visibility answer is not delivered: finalize must see these names as still waiting (`flushDetailed`).
+  progress.deferred = new Set(deferred)
+  // A session published under a desk not known private is marked, so it is never published under a later, more open reading once its marker is gone.
+  const unprotected = parsed.filter(({ name }) => !deferred.has(name) && receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
+  if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
   const secret = await readMachineSecret(env)
   // Where this Desk would publish the outbox files `names` of away sessions now, as `{ path, sha }` by name: used only to find this machine's
   // files in the store, never sent and never quarantined.
   const republish = async (names) => {
     const facts = [...candidates, ...keptCandidates].filter(({ name, quarantine: held }) => names.has(name) && held === null && !name.startsWith("labels/")).map((item) => ({ name: item.name, local: parse(item) }))
     const labels = [...labelCandidates, ...keptCandidates].filter(({ name }) => names.has(name) && name.startsWith("labels/")).map((item) => ({ key: item.name, local: parse(item) }))
-    for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) known.set(repo, visibility)
+    for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) if (!distrusted.has(repo)) known.set(repo, visibility)
     const found = new Map()
     for (const { name, local } of facts) {
       const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
@@ -975,6 +1048,7 @@ async function deliver(env, context) {
   const publishedFile = new Map()
   const released = []
   for (const { name, held, local } of parsed) {
+    if (deferred.has(name)) continue
     const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (out.file) publishedFile.set(name, out.file)
     if (held !== null) {
@@ -991,6 +1065,10 @@ async function deliver(env, context) {
   const labelsByKey = new Map()
   const publishLabels = async (items) => {
     for (const { key, local } of items) {
+      if (deferredLabels(local)) {
+        progress.deferred.add(key)
+        continue
+      }
       const out = publishLabelsOne(local, key, { known, desks, secret })
       if (out.bytes) labelsByKey.set(key, out)
       else await quarantine(env, store, key, out.reason)
@@ -1005,7 +1083,7 @@ async function deliver(env, context) {
   }
   // Only files with published bytes are listed, and only those of `here` sessions have them. A file without bytes is one whose record is not a regular file (its file stays where it is), a held file that stays held, or a file of a session that is not `here`.
   const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts?.session?.host}-${facts?.session?.id}.json`) ?? null }))
-    .map(({ name }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
+    .map(({ name, localBytes }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)), localSha: gitBlobSha(localBytes) }))
   const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`)?.bytes ?? null }))
     .map(({ name }) => {
       const { path: published, bytes } = labelsByKey.get(name)
@@ -1042,7 +1120,7 @@ async function deliver(env, context) {
   progress.refused = away.filter((item) => item.from === "delivered" && priorRefused.has(item.name)).map((item) => item.name)
   let retract = away.filter((item) => !heldSessions.has(item.session) && !priorRefused.has(item.name))
   // Frozen and refused names never send the flush online; only work that changes the store, or a batch that may still be open, does.
-  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen) return { result: "nothing_pending" }
+  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen && !capture.work) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
   await client.session(account)
@@ -1075,7 +1153,7 @@ async function deliver(env, context) {
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
   // A rejected file is named back to its local key by its published path.
   const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
-  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])) })
+  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])), capturePath: `capture/${record.intake_id}.json`, recordedPr: capture.cap.pr })
   progress.rejectionsThrough = rejections.through
   progress.rejectionsUnmatched = rejections.unmatched
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
@@ -1092,10 +1170,29 @@ async function deliver(env, context) {
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
-  const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract])
+  // The record goes when it is due, or its pull request is still open and must keep carrying it; a refusal naming it is bookkept and it waits a week.
+  let captureItem = null
+  if (rejections.checkUnavailable) await saveCheckUnavailable(env, store)
+  if (rejections.captureRefused !== null) await saveRefused(env, store, rejections.captureRefused, now())
+  else if (capture.work) captureItem = capture.record
+  const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract, ...(captureItem === null ? [] : [captureItem])])
+  if (captureItem !== null) {
+    // The earlier record is "pending" only while its pull request is still open.
+    const hasOpen = capture.carry && (await findOpenPr(client, store, head)) !== undefined
+    let verdict = judge(captureItem, onMain(captureItem), { pending: hasOpen })
+    let send = false
+    if (verdict === "settled") await saveSettled(env, store, captureItem)
+    else if (verdict === "forget") await saveForgotten(env, store)
+    else if (!capture.due && !hasOpen) verdict = "waits"
+    else if (await storeAcceptsCapture(client, store, target.branch)) send = true
+    else await saveNotReady(env, store, now())
+    if (!send) captureItem = null
+  }
+  // This push rebuilds the branch without the record: nothing is pending for it, so a later refusal of that pull request is not the record's.
+  if (captureItem === null && rejections.captureRefused === null && Number.isSafeInteger(capture.cap.pr)) await dropPending(env, store)
   const remaining = []
   for (const item of pending) {
-    if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path })
+    if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path, localSha: item.localSha })
     else remaining.push(item)
   }
   // A delete goes only where the store's default branch holds exactly the blob this machine delivered. Anything else there, or nothing (the delete
@@ -1119,12 +1216,13 @@ async function deliver(env, context) {
     return result
   }
   // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
-  const takenAll = takeBatch([...deletes, ...remaining], { maxFiles, maxBytes })
+  // The record is one more changed path, and the store's gate refuses more than 500: it takes its place inside the limit, and never displaces facts in a batch below it.
+  const takenAll = takeBatch([...deletes, ...remaining], { maxFiles: maxFiles - (captureItem === null ? 0 : 1), maxBytes: maxBytes - (captureItem === null ? 0 : captureItem.bytes.length) })
   const takenDeletes = takenAll.filter((item) => item.retract)
   const taken = takenAll.filter((item) => !item.retract)
   const factsReady = new Set([...onMain.facts.keys(), ...pending.filter((item) => !item.labels && onMain.facts.has(item.file)).map((item) => item.name), ...taken.filter((item) => !item.labels).map((item) => item.name)])
   const publishing = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
-  const batch = [...takenDeletes, ...publishing]
+  const batch = [...takenDeletes, ...publishing, ...(captureItem === null ? [] : [captureItem])]
   if (batch.length === 0) {
     // Nothing to change: an open intake PR of this machine is closed and its branch reset, whatever it carried.
     const open = await findOpenPr(client, store, head)
@@ -1139,8 +1237,9 @@ async function deliver(env, context) {
   }
   await pushBatch(client, { target, branch, base, batch })
   progress.intakePushed = true
-  const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length, retracted: takenDeletes.length })
+  const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length + (captureItem === null ? 0 : 1), retracted: takenDeletes.length })
   progress.intakePrs = [...leftOpen, { number: pr.number, head: head.label }]
+  if (captureItem !== null) await saveSent(env, store, { bytes: captureItem.bytes, fresh: capture.due }, pr.number, now())
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
   await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting"))
   await keepRetractedCopies(env, store, takenDeletes.map((item) => item.session))
@@ -1164,7 +1263,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, intakePushed: null, intakePrs: null }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, visibilityUnasked: null, intakePushed: null, intakePrs: null, deferred: null }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -1181,6 +1280,9 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     const routeUnknown = progress.routeUnknown ?? before?.route_unknown
     const retractionStalled = progress.retractionStalled ?? before?.retraction_stalled
     const newerFormat = progress.newerFormat ?? before?.newer_format
+    // Sessions held back for want of a fresh visibility answer, and since when this has gone on without a flush that could ask.
+    const unasked = progress.visibilityUnasked ?? before?.visibility_unasked
+    const unaskedSince = progress.visibilityUnasked === null ? before?.visibility_unasked_since : progress.visibilityUnasked > 0 ? before?.visibility_unasked_since ?? new Date(now()).toISOString() : undefined
     const refused = progress.refused ?? list(before?.refused_retractions)
     // Only a flush that pushed sets it, and only one that found nothing to change, and no PR left open, clears it.
     const intakePushed = progress.intakePushed ?? before?.intake_pushed === true
@@ -1199,6 +1301,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           ...(Number.isSafeInteger(routeUnknown) && routeUnknown > 0 ? { route_unknown: routeUnknown } : {}),
           ...(Number.isSafeInteger(retractionStalled) && retractionStalled > 0 ? { retraction_stalled: retractionStalled } : {}),
           ...(Number.isSafeInteger(newerFormat) && newerFormat > 0 ? { newer_format: newerFormat } : {}),
+          ...(Number.isSafeInteger(unasked) && unasked > 0 ? { visibility_unasked: unasked, ...(typeof unaskedSince === "string" ? { visibility_unasked_since: unaskedSince } : {}) } : {}),
           ...(refused.length > 0 ? { retractions_refused: refused.length, refused_retractions: refused } : {}),
           ...(intakePushed ? { intake_pushed: true } : {}),
           ...(intakePrs.length > 0 ? { intake_prs: intakePrs } : {}),
@@ -1210,7 +1313,9 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   } finally {
     await releaseLock(lock)
   }
-  const pending = outcome.result === "nothing_pending" ? [] : DELIVERED_OPEN.has(outcome.result) ? progress.pending : null
+  const waiting = outcome.result === "nothing_pending" ? [] : DELIVERED_OPEN.has(outcome.result) ? progress.pending : null
+  // A job held only for a visibility answer has nothing in `pending` (it has no published bytes), yet it is not delivered: it counts as waiting.
+  const pending = waiting === null || progress.deferred === null ? waiting : [...new Set([...waiting, ...progress.deferred])]
   return { ...outcome, pending }
 }
 

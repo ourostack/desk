@@ -1,5 +1,127 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.197 — 2026-10-06
+
+The one-time tidy now commits through `desk_save` instead of a hand `git commit`, so no agent-facing text names the variable that Desk's own commits set to get past the card guard. `desk_save` takes `tidy: true`: it commits the old and new path of every moved task card plus the `_meta/organization.json` record, accepts a task card only as a staged move or delete (an edit is refused and points to `task_update`), leaves other staged work staged, and ends the message with the `Desk-Tidy: true` trailer. The same call commits the undo of a tidy after `git revert --no-commit`. `02-tidy-desk.md` calls the tool for both, the README no longer documents the override, and a test fails if any shipped agent-facing text names it again. The refusal for a task card in `desk_save` now leads with what to call instead.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.196 — 2026-10-06
+
+The task-status guard now also denies a shell command that stages or commits a live task card by hand: `git add`, `git stage`, `git update-index --add` or `git commit` naming `<track>/<task>/task.md`. The denial leads with the fix, "Call task_update ...", and says Desk commits every card itself, so no git follows a card tool. Round AG: after `task_update` had committed the card and said to run no git for it, a Claude agent ran `git add` and `git commit` of the card anyway (a no-op, but a bypass attempt). A conflicted card may still be staged to finish a merge. The command carries no exception: pathspec, glob and `-A`, `.` or `-u` forms name no card and stay with the desk's pre-commit hook, which still refuses a real hand commit of a card.
+
+The tidy migration no longer tells its agent to stage a task card by hand (`task_create` commits the card itself), and neither the pre-commit hook's refusal nor the task-lifecycle skill tells an agent about the variable Desk's own commits set. The hook is now version 5 and rewrites itself on the next boot.
+
+The boot-acceptance harness now reads a clone whose source or folder sits in a shell variable (`REPO_URL="https://..."` then `git clone "$REPO_URL"`), which it used to take for a clone of the fixture's own desk. It counts a repo's name, or its task's name, as present only in wording that states what is here ("is cloned", "is ready", "is here"), never a clone verb by the agent ("I cloned ... into ..."). It reads a request to the operator ("or have it pushed there first") as no push claim, judged on the verb's own clause, and it now looks past a conditional first occurrence of "pushed" to a later one in the same sentence.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.195 — 2026-10-06
+
+Desk now counts each machine's root sessions on disk, host by host (Claude Code, Copilot CLI and Codex), and says what became of them. Every session is in exactly one bucket: derived (facts are made and placed with their store), held (not allowed to go yet, for example no consent or a quarantined copy), frozen (cannot be published now, which includes every orphan that is not current), pending (marked and waiting to be derived), not seen (the capture hook never marked it) and, for Claude Code, outside a desk. The counts reach the local status file as `coverage`, with `coverage_failed` when a pass fails and a local-only `coverage_cache`. A bucket Desk cannot tell is absent, never zero, and a host that is capped or unreadable carries no counts. Counting reads folder listings only; Codex reads at most the first line of each rollout file.
+
+Once a store says it accepts them (a `capture.json` at the root of its default branch whose content is exactly `{"capture":1}`), Desk publishes one content-free count record per machine in the same intake pull request as facts, at `capture/<intake id>.json`. The record holds counts and fixed words only, with a closed key set and one reserved optional `loop` slot that this change never writes. A store whose file is missing or differs is skipped and asked again after a day. A record is replaced at most every 20 hours, is dropped when its coverage is more than three days old, and is retracted by an empty record. A refusal that names the record never quarantines facts, and the record backs off for a week. A store's site ignores a record not updated for 45 days.
+
+Read the share as "of sessions still on disk": a host that deleted old transcripts is invisible, so it is an upper bound. The record is self-reported, and anyone who can open an intake pull request can overwrite a capture file. A Codex entry stays unverified until the store's own derived Codex session exists and the listing was clean. A session whose store cannot be told (a desk with no tellable store, a folder-name collision, or two contributing stores for an unowned session) is withheld from every record, so a private desk's activity never reaches a public count. A store reads the record by the number-states rule: an unverified host's counts are a lower bound, a `null` count was not measured (never 0), and a rollup says how many machines it rests on. While any host cannot be counted (capped or unreadable), no record is sent and the store keeps the one it has. The store's `factory.json` is deliberately untouched, so an older Desk's andon parser keeps working. The docs are in [factory-local-capture.md](docs/factory-local-capture.md) and [factory-store-playbook.md](docs/factory-store-playbook.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.194 — 2026-10-06
+
+The factory now estimates how much human attention each accepted outcome cost, and says plainly that it is an estimate. Facts carry `human_turns`: for each human prompt, its place in the session, whether the agent had stopped, the gap, and a size class of the prompt and of the reply before it. Nothing is stored but the class, so no prompt text, command or path leaves the machine. On Claude Code a human turn needs `origin.kind: "human"`; a session where no prompt carries an origin is flagged `field_absent`, and a mix is flagged `host_records_partly`. Copilot CLI lists are always flagged `host_records_partly`, and Codex records none and is flagged `host_does_not_record`. A prompt dated before the last kept turn is dropped and flagged `source_unreadable`, and a queued prompt counts as `mid_turn`.
+
+A fixed estimator (method version 1) turns each entry into a time: the reading time of the reply plus the typing time of the prompt, never more than the gap the host shows and never less than one second. Each turn is placed on the job whose time segment holds it, or counted as unattributed or unplaced, and every turn stays in the total. Each job report carries an `attention` figure, and `rollups/outcomes.json` gains an `attention` block with the headline (human attention per accepted outcome), human turns per accepted outcome, permission decisions beside it, and the same figures per plugin version. The headline is partial, a lower bound, when sessions in the period flag the field (Codex sessions and every Copilot session do). It is unavailable with no total when no session in the period kept a list (`no_turn_records`), and also when every turn is unreadable. With no verified acceptance it is unavailable (`no_accepted_outcomes`), and its total is still published when a list exists and a turn could be estimated. It shows no value then and is never zero. A turn the estimator cannot read gives `turn_not_estimable`, and sessions in the old `/1` format are outside the period. The reports README explains the estimate and its method version, and the store's limit for `unavailable` entries is now 231.
+
+Moving a task backwards now needs a reason, and Desk records every return so rework is counted honestly. A return is any move out of `done`, or any move to `drafting`, `processing` or `validating` that ranks below the furthest the task has reached since its last return. `task_update` refuses such a move without `return_reason`, one of `agent_error` (you got it wrong), `changed_ask` (the operator changed what they want), `new_information` (something nobody knew) or `external` (something outside the task broke), and refuses `return_reason` on a move that is not a return. Reopening a task from `done` to `processing` needs it too, and the answer carries `return_recorded`. A refusal recorded with `task_signoff` is the same kind of return, made by the tool.
+
+Honesty is the point. When the operator refuses a delivery, Desk compares the agent's reason with the operator's, counts a disagreement and does not punish it. A return whose deciding reason is `changed_ask` does not lower first-pass yield, and an unverified refusal is decided by the agent's reason alone. The task-lifecycle skill says what a return is and gives the four reasons; the task-card-format skill documents the `returns` list the tools write.
+
+Local facts carry each job's returns with the record's start (`since`), and published facts carry the same with no time or name: the agent's reason, where the return was caught (`in_task`, `at_review` or `after_delivery`), whether it counts against first-pass yield, and the operator's refusal reason with its verified flag. The factory docs describe the per-job first-pass yield and rework figures the store build reports.
+
+Desk now treats done as a delivery, not an acceptance. A new `task_signoff` tool records the operator's answer to a delivered task: accepted, or refused with the operator's reason and the agent's own reading of the cause. A refusal sends the task back to `processing` and is recorded as a return, bringing an archived card back first. When a task moves to `done`, `task_update` and `task_archive` answer with `signoff_packet` (three lines: what was asked, what was delivered with its proof, accept or send back?) and `signoff_note`. The agent ends its reply with those lines and records the operator's answer in a later turn, never in the turn that delivered.
+
+Desk marks an answer verified only when it saw a message typed by a human after the delivery, in a later turn, and saw the main agent make the call. That works on Claude Code, through a new sign-off witness hook (`hooks/signoff-witness.cjs`) that records times only: no prompt text, command or path. On Copilot CLI and Codex every answer is recorded as unverified in this version. An unverified answer is kept, counted apart and never counts as accepted, and the tool says why and what to do. A system notification, a scheduled wake-up, hook output, a tool result and a subagent message are never a human prompt.
+
+Each session start lists the delivered tasks still waiting for an answer, with their age, and tells the agent to raise them once, together, after it has done what the operator asked. `status.json` carries the counts as `signoff`; a card the scan cannot read makes every figure `partial` with the reason `cards_unreadable`. `task_create` now refuses a slug that already exists in the archive and says how to bring the task back. `task_update` and `task_create` refuse `signoff`, `flow` and `returns` in `frontmatter`, because the task tools write them.
+
+Local facts carry an `outcomes` entry per job, and published facts carry the same entry with no time or name: the state, whether it was verified, the refusal reason, the delivery count and the wait as one of four classes with a `censored` flag. The foundation, the task-lifecycle, task-card-format, session-start, session-resumption, interaction-style, archive-workflow and Superpowers skills, the plugin README and the factory docs say how to ask for and record a sign-off. The brief a Superpowers mapping produces ends with `Never call task_signoff.`, and a child agent never calls the tool.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.193 — 2026-10-06
+
+The clone guard's denial now carries the already-pushed exception in its first line: "Ask the operator to push <branch> unless they already said it is pushed; if so, use task_update." Hosts show only that first line, and a Copilot agent that saw only "Ask the operator to push ..." asked the operator to confirm a push the operator's own message had already announced. The rest of the reason says that the operator's own message in the conversation counts, that the agent then rewrites the next step with task_update, retries and does not ask again, and that it never records a push the operator has not stated. The boot note under a task whose work is on another machine says the same in one clause.
+
+The boot-acceptance harness now judges a missing clone by one rule instead of a phrase list, and counts a clone that finished before a later step of the same chained command failed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.192 — 2026-10-06
+
+**`reconcile` no longer reports `status_unobserved` because of an open session's old observation.** The reason compares a card's status with the latest status the store observed for its job, and it ordered the store's observations by this machine's newest local facts. A session that was still open had been derived locally long after its published file was written, so its old observation (for example `drafting`) counted as the latest, and a `done` card whose `done` the store had already seen was reported as `card_status_not_in_store`. Observations are now ordered by when each is known to hold: the end of the published file that made it, or a terminal status's card `updated` when later. See [`reconcile.js`](mcp/src/factory/reconcile.js) and the [factory doc](docs/factory-local-capture.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.191 — 2026-10-06
+
+The factory report now shows, for the numbers on its job and rollup pages, whether each one was measured, partial or not recorded, and why. This covers the waste lines on job pages too. A number that was not recorded is shown as "no data" with its reason and is never shown as zero. A partial number keeps its value as a lower bound and names what is missing. Dollar cost is not measured.
+
+The pages also say what each host never records. Claude Code does not record compaction time, reasoning tokens, commits or permission waits, and records API retries only partly. Codex does not record compaction time, commits, permission waits or API retries, and records tool outcomes, requests and tokens only partly. Copilot's default entrypoint is not a recorded fact.
+
+Pull request counts are recorded only partly on every host, so they are shown as partial, a lower bound. Claude API retries are not renamed to hide that gap: they are shown as partial, a lower bound, because the host records them only partly.
+
+Compactions are shown two ways, and the pages keep them apart. The compaction count is how many compactions happened, and every host records it. The compaction wait time is recorded only where the host records it, so it reads as not recorded for Claude Code and Codex.
+
+The derivers now flag what a host does not record or left out: compaction time, commits, reasoning tokens, usage fields that are absent from a log, a damaged log, and subagents that could not be read. A usage field that is absent is recorded as not recorded instead of as 0. A bound session whose job clock was lost makes the job's clock numbers partial. Where a count inside a job's references value is not recorded, it is null, not 0. Old facts are read as not recorded where the host never recorded a field, without changing the stored file. A reason the report cannot put into plain words now stops the render instead of printing.
+
+Published facts move to `desk.factory.published/2`, and the local facts to `desk.factory.local/2`. Readers accept `/1` and `/2` alongside each other, and the flag list is no longer trimmed. The store must accept `/2` before this ships, and a plugin release must wait for that.
+
+Each job gains a token total, split into input, output, cache read, cache write and reasoning. It is partial when the job owns only some of a session's workers, and it is not recorded, never 0, when no session supplies a type.
+
+Rollups now say how many jobs they counted out of how many, and medians use measured values only. The alarm and the kaizen check say when they compare lower bounds. A new `rollups/totals.json` carries fact-level totals per host and overall for the site, each with its state, how many sessions it counted of how many, and its reasons.
+
+Nothing here changes who is credited with which time.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.190 — 2026-10-06
+
+The clone guard and the task-status guard now work when their hooks run from the installed plugin folder. Both read task cards' nested `repos:` blocks, which only gray-matter parses, and a hook never restored the runtime dependencies as boot does. The clone guard saw every card as having no repositories and let a clone of a repository named only in `repos:` through. The task-status guard judged a card with a broken `repos:` block readable, so it denied an edit the operator should have been able to repair by hand, and it could not see `repos` changes. One shared step, `ensureHookDependencies`, now restores the pack before either guard reads a card; it costs nothing for commands that never reach card reading.
+
+A guard still fails open when the restore fails (an unwritable cache folder, no pack for the machine), but it no longer does so silently. It leaves a marker under Desk's state folder, and the new `hook-dependencies` boot check reports the degraded guard as a `Desk problem:` at the next session start and files it in the background, throttled to once an hour. A later successful restore clears the marker.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.189 — 2026-10-06
+
+Desk now lets a session say which task it is working on, so the factory credits each job with the work really done on it. The new `task_focus` tool takes a track and slug (or `clear: true` for a side conversation that belongs to no task) and answers with the card's status and its last five progress entries. It writes nothing, needs no write authority, and keeps the focus in memory only. `task_create` takes `focus: true` to create a task and declare it in one call. If the server is still starting, `task_focus` waits up to 2 seconds for it, then answers or refuses.
+
+The foundation and the session-start, start-task, session-resumption, task-lifecycle and Superpowers skills now tell the main agent to declare the task once, at the moment it picks or switches to one, and to clear the focus when it leaves task work for a side conversation. Subagents never declare: the brief a Superpowers mapping produces ends its Desk-Task line with `Never call task_focus; your work is credited through the Desk-Task line.` While a session has no focus, every task tool result carries a short hint for the main agent. Updating or archiving a card other than the focused one carries a hint too. A hint never blocks a call.
+
+How work is credited changes in these ways:
+- A declared task is credited first. Inference fills only the time nothing declares.
+- Touching a card no longer makes a session part of that task. Creating, updating or committing another card binds nothing, and neither does another session's commit that happens to land during this session's own commit.
+- Work in a code repository counts only for the one card that lists that repository.
+- A very short inferred stretch joins its longer neighbour, and a declared stretch is never merged or dropped.
+- Background subagents stay with the job they were spawned for.
+- A session counts as shared between jobs only when their time really overlaps, and each job's time comes from active intervals, not from the wall-clock length of a segment.
+- A task that was moved or renamed keeps its job.
+- Each session's local receipt now records how it was bound and the measures behind it, and a value that was not recorded is absent, never zero.
+
+Sessions whose capture marker was pruned after 30 days are rebuilt from their transcripts in desks that declare their store, when that is safe. The rest stay frozen, and the sweep records how many it rebuilt, how many it left frozen and why, and how many are pending. Archiving the focused card no longer clears the session's focus: the factory keeps crediting the declared task until the next `task_focus` call, so a later update of another card carries the "focused on" hint. `desk_doctor` now reports an orphan pass that failed, was interrupted, stopped advancing, froze an orphan after two interrupted attempts, or has not run for two days, with one sentence saying what to do, and `factory.js status` prints an `orphan_pass` line.
+
+How private-desk sessions are published changes for sessions whose marker is gone. Such a session now keeps its desk's protection only when its receipt recorded the desk's GitHub repository (new local field `desk_repo`, written from now on) and the desk root still names that same repository, and no flush by this version published it under a desk that was not known private (a session an older Desk delivered carries no such mark, so it stays withheld until it is derived again). Before, a session without a marker was published as if its desk were public, so a private desk's old sessions went out under keyed job IDs without timing. Sessions whose receipts predate the field are withheld, as before, until they are derived again. A private desk's rebuilt sessions then go out under their real job IDs with timing, as a private desk's sessions already do while their marker lives.
+
+`factory.js reconcile` now lists only tasks with real work in the window and places each task by the time its sessions held it. Cards touched only by housekeeping are counted, not listed. `not_bound` replaces `no_marker`, and `mechanical_only` is gone. Two new reasons say what reconcile used to hide: `status_unobserved` when a card's status changed while its session was focused elsewhere, and `focus_disagrees` when a declared stretch shows none of its own work. Each task now carries its story (its sessions in order, with active time and how each was bound), and the counts show how many commits were mentioned from another task's session and how many sessions were bound by declaration or by inference.
+
+The one-time tidy and its revert end their commit message with the trailer `Desk-Tidy: true`, so they count as housekeeping, not as work on the tasks they moved.
+
+A new `factory-work` skill carries the Lean reading and the terrarium checks (a sealed, self-sustaining factory that needs no human hand and never shows zero for "no data") for anyone designing, changing or reviewing the factory, and the Superpowers skill points reviewers at it.
+
+Two more privacy rules close older gaps. A session that still has its marker is published in its protected form when its receipt's recorded desk repository is not the one its desk root names now (another repository at the same path, or none). And a session is published in its plain form only on a private answer asked in that same flush: a cached answer, however young, is asked again once per desk per flush before anything goes out plain. When the question fails, that desk's sessions are not published in that flush; they stay pending, `last_flush` records how many (`visibility_unasked`, with `visibility_unasked_since`), and `desk_doctor` shows the count beside the store's pending count from the first deferral, and reports it with the command to run after 7 days without an answer (at once, as a deferral of unknown age, when the recorded start time cannot be read). A public or unknown cached answer needs no fresh answer, because it already withholds. The stale-pass finding in `desk_doctor` fires only on a machine whose contribution is switched on.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.188 — 2026-10-06
 
 `task_update` no longer drops a field it does not know. A top-level `status` is now accepted as shorthand for `frontmatter.status` (the field an agent reaches for first; the same evidence rule for `done` applies, and a `status` that disagrees with `frontmatter.status` is refused). Any other unknown top-level field is refused before the card is touched, with an error that names it and lists the accepted fields. Before this, `{"status":"done","evidence":{...}}` came back as `updated` with a commit while the card's status stayed where it was.

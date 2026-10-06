@@ -12,7 +12,10 @@ import { spawnSync } from "node:child_process"
 import {
   task_create,
   task_archive,
+  task_update,
 } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
+import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 
 const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
@@ -480,4 +483,160 @@ test("task_archive's evidence is shape-checked per kind, the same as task_update
   )
 
   assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
+})
+
+// ── the delivery record and the sign-off packet ─────────────────────────────
+
+test("task_archive that finishes a task marks it delivered_unsigned and answers with the packet", async () => {
+  const root = await mkTempDeskRoot()
+  const SENTINEL = "SENTINEL-card-body-text"
+  await task_create({ deskRoot: root, input: { track: "t", slug: "finish-me", title: "Write the report", body: `${SENTINEL}\n` } })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "finish-me", evidence: DONE_EVIDENCE } })
+  assert.equal(result.signoff, "delivered_unsigned")
+  assert.deepEqual(result.signoff_packet, ["Asked: Write the report", `Delivered: ${DONE_EVIDENCE.ref}`, "Accept or send back?"])
+  assert.match(result.signoff_note, /^This task is delivered, not accepted\./)
+  assert.ok(!JSON.stringify(result).includes(SENTINEL))
+  const file = path.join(root, "t", "_archive", "finish-me", "task.md")
+  const { data } = await readFront(file)
+  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.equal(data.flow.since, "created")
+  assert.equal(data.flow.rev, 1)
+  assert.equal(data.flow.deliveries, 1)
+  assert.equal(data.flow.delivered_at, data.updated)
+  assert.equal(data.flow.first_delivered_at, data.updated)
+  assert.equal(data.flow.first_validating_at, data.updated)
+  assert.equal(data.evidence.ref, DONE_EVIDENCE.ref)
+})
+
+test("task_archive of a legacy card with no flow marks it adopted and keeps a returns list", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "legacy-finish", title: "Unique title legacy-finish" } })
+  const file = path.join(root, "t", "legacy-finish", "task.md")
+  const card = await readFront(file)
+  delete card.data.flow
+  card.data.returns = ["processing, 2026-10-05T10:00:00Z, agent_error"]
+  await writeMarkdown(file, card.data, card.content)
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "legacy-finish", evidence: DONE_EVIDENCE } })
+  const { data } = await readFront(path.join(root, "t", "_archive", "legacy-finish", "task.md"))
+  assert.equal(data.flow.since, "adopted")
+  assert.equal(data.flow.deliveries, 1)
+  assert.deepEqual(data.returns, ["processing, 2026-10-05T10:00:00Z, agent_error"])
+})
+
+test("task_archive of a task cancelled writes no signoff", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "drop-me", title: "T" } })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "drop-me", outcome: "cancelled" } })
+  assert.equal(result.signoff, undefined)
+  assert.equal(result.signoff_packet, undefined)
+  const { data } = await readFront(path.join(root, "t", "_archive", "drop-me", "task.md"))
+  assert.equal(data.status, "cancelled")
+  assert.equal(data.signoff, undefined)
+  assert.equal(data.flow.deliveries, 0)
+})
+
+test("task_archive of a card already done adds no delivery and keeps its record byte for byte", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "kept-record", title: "T" } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "kept-record", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
+  const before = (await readFront(path.join(root, "t", "kept-record", "task.md"))).data
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "kept-record" } })
+  assert.equal(result.signoff, undefined)
+  const { data } = await readFront(path.join(root, "t", "_archive", "kept-record", "task.md"))
+  assert.deepEqual(data.signoff, before.signoff)
+  assert.deepEqual(data.flow, before.flow)
+})
+
+test("task_archive without evidence writes no signoff", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "no-proof", title: "T" } })
+  await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "no-proof" } }), /needs evidence/)
+  const { data } = await readFront(path.join(root, "t", "no-proof", "task.md"))
+  assert.equal(data.signoff, undefined)
+})
+
+test("task_archive with outcome cancelled on a card already done is not a move out of done: the card stays done and keeps its record", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "done-then-cancel", title: "T" } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "done-then-cancel", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
+  const before = await readFront(path.join(root, "t", "done-then-cancel", "task.md"))
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "done-then-cancel", outcome: "cancelled" } })
+  const { data } = await readFront(path.join(root, "t", "_archive", "done-then-cancel", "task.md"))
+  assert.equal(data.status, "done")
+  assert.deepEqual(data.signoff, before.data.signoff)
+  assert.deepEqual(data.flow, before.data.flow)
+  assert.equal(data.returns, undefined)
+})
+
+test("task_archive that finishes a card paused after review goes through the same record move as task_update", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "paused-finish", title: "T", status: "validating" } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "paused-finish", frontmatter: { status: "paused" } } })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "paused-finish", evidence: DONE_EVIDENCE } })
+  const { data } = await readFront(path.join(root, "t", "_archive", "paused-finish", "task.md"))
+  assert.equal(data.flow.reached, "done")
+  assert.equal(data.flow.deliveries, 1)
+  assert.equal(typeof data.flow.first_validating_at, "string")
+  assert.equal(data.returns, undefined)
+})
+
+// ── archive, bring back, move back: the same reason rule as task_update ─────
+
+async function archivedValidating(root, slug, { withFlow }) {
+  await task_create({ deskRoot: root, input: { track: "t", slug, title: `Unique title ${slug}`, status: "validating" } })
+  const file = path.join(root, "t", slug, "task.md")
+  if (!withFlow) {
+    const card = await readFront(file)
+    delete card.data.flow
+    await writeMarkdown(file, card.data, card.content)
+  }
+}
+const unarchive = (root, slug) => task_move({ deskRoot: root, input: { track: "t", slug, unarchive: true } })
+const back = (root, slug, extra = {}) => task_update({ deskRoot: root, input: { track: "t", slug, frontmatter: { status: "processing" }, ...extra }, finalize: async () => {} })
+
+for (const withFlow of [true, false]) {
+  test(`a validating card (${withFlow ? "with" : "without"} a flow record) cancelled by archive, brought back and moved to processing needs a reason`, async () => {
+    const root = await mkTempDeskRoot()
+    const slug = `cancel-back-${withFlow}`
+    await archivedValidating(root, slug, { withFlow })
+    await task_archive({ deskRoot: root, input: { track: "t", slug, outcome: "cancelled" } })
+    assert.equal((await readFront(path.join(root, "t", "_archive", slug, "task.md"))).data.flow.reached, "validating")
+    await unarchive(root, slug)
+    const file = path.join(root, "t", slug, "task.md")
+    const before = await fs.readFile(file, "utf8")
+    await assert.rejects(back(root, slug), /from cancelled back to processing is a return and needs a reason/)
+    assert.equal(await fs.readFile(file, "utf8"), before)
+    const result = await back(root, slug, { return_reason: "changed_ask" })
+    assert.equal(result.return_recorded, "cancelled to processing, changed_ask, caught at_review")
+    assert.equal((await readFront(file)).data.returns.length, 1)
+  })
+}
+
+test("a validating card delivered by archive, brought back and moved to processing needs a reason and records one return after delivery", async () => {
+  const root = await mkTempDeskRoot()
+  await archivedValidating(root, "deliver-back", { withFlow: true })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "deliver-back", evidence: DONE_EVIDENCE } })
+  await unarchive(root, "deliver-back")
+  const file = path.join(root, "t", "deliver-back", "task.md")
+  const before = await fs.readFile(file, "utf8")
+  await assert.rejects(back(root, "deliver-back"), /from done back to processing is a return and needs a reason/)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+  const result = await back(root, "deliver-back", { return_reason: "new_information" })
+  assert.equal(result.return_recorded, "done to processing, new_information, caught after_delivery")
+  assert.equal((await readFront(file)).data.returns.length, 1)
+})
+
+test("task_archive refuses to cancel a hand-damaged card whose record cannot move, before the folder moves, in words an agent can act on", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "damaged", title: "Damaged" } })
+  const file = path.join(root, "t", "damaged", "task.md")
+  await task_update({ deskRoot: root, input: { track: "t", slug: "damaged", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
+  // A hand edit past the card guard: the status is no longer one of the statuses, and the record says the task reached done.
+  await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(/^status: done$/mu, "status: weird"))
+  await assert.rejects(
+    task_archive({ deskRoot: root, input: { track: "t", slug: "damaged", outcome: "cancelled" } }),
+    /^Error: task_archive: nothing was moved\. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused \(this move sends work back and needs a return reason\)\. Set the card's status with task_update first/u,
+  )
+  assert.ok(await exists(file), "the live folder is where it was")
+  assert.equal(await exists(path.join(root, "t", "_archive", "damaged")), false)
 })

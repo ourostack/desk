@@ -1,4 +1,6 @@
 import { ENUMS } from "../schema.js"
+import { addUnavailable, flagEmptyUsage } from "../derive-common.js"
+import { hostFlagsFor } from "../host-flags.js"
 
 function compareText(left, right) {
   return Number(left > right) - Number(left < right)
@@ -34,8 +36,16 @@ export function stableStringify(value) {
   return JSON.stringify(value)
 }
 
+// An old (`/1`) file has no flags for what its host never recorded. Add them so the absent value is not read as a measured zero.
+function addLegacyFlags(normalized) {
+  // Human turns did not exist at `/1`: an old file is from before the record, and a flag for them would put it in the period.
+  for (const flag of hostFlagsFor(normalized.session.host, normalized.session).filter((entry) => entry.field !== "human_turns")) addUnavailable(normalized.unavailable, flag.field, flag.reason)
+  flagEmptyUsage(normalized.unavailable, normalized.models)
+}
+
 export function normalizePublished(value) {
   const normalized = structuredClone(value)
+  if (String(normalized.schema).endsWith("/1")) addLegacyFlags(normalized)
   normalized.plugins.sort((left, right) => compareValues(compareText(left.name, right.name), compareText(left.version, right.version)))
   normalized.models.sort((left, right) => compareText(left.id, right.id))
   normalized.agents.sort((left, right) => left.n - right.n)
@@ -57,6 +67,7 @@ export function normalizePublished(value) {
     job.transitions.sort((left, right) => compareValues(compareNullableNumber(left.offset_ms, right.offset_ms), enumIndex(ENUMS.jobStatus, left.to) - enumIndex(ENUMS.jobStatus, right.to)))
   })
   normalized.jobs.sort((left, right) => compareText(left.job, right.job))
+  if (Object.hasOwn(normalized, "outcomes")) normalized.outcomes.sort((left, right) => compareText(left.job, right.job))
   normalized.unavailable.sort((left, right) => compareValues(compareText(left.field, right.field), compareText(left.reason, right.reason)))
   return normalized
 }

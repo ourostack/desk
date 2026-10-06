@@ -1,16 +1,39 @@
-// The real readers `bindSession` is given: a task card's frontmatter and the
-// desk's Git history. Both are read-only.
+// The real readers `bindSession` is given: a task card's frontmatter, the
+// desk's Git history, and the name of a code repository. All are read-only.
 //
 // `readTask(track, slug)` reads `<deskRoot>/[<personPrefix>/]<track>/<slug>/
 // task.md`, else `<track>/_archive/<slug>/task.md`, else, for a whole
 // archived track, `_archive/<track>/<slug>/task.md` or
 // `_archive/<track>/_archive/<slug>/task.md`, and returns `{ status,
-// created_at, updated_at }` from its frontmatter (the YAML between the first
-// two `---` lines, searched in the first 40 lines only), or `null` when none
+// created_at, updated_at, repos }` from its frontmatter (the YAML between the first
+// two `---` lines, anywhere within the first 16 KiB), or `null` when none
 // of the four exist. Only top-level `key: value` lines are read, quotes and
 // a trailing ` # comment` stripped. A status outside `ENUMS.jobStatus`, or a
 // time `normalizeTimestamp` refuses (a bare date, say), is `null`, never a
-// guess; an unreadable card gives all three `null`.
+// guess; an unreadable card gives all three `null` and no repos. `repos` is
+// the card's `repos:` list reduced to names (see `parseRepos`): `owner/name`
+// where the card or its GitHub `url` gives one, else the bare name, never a
+// path or any other field. When no card sits at the given `track/slug`, the
+// desk's Git rename history of task cards is asked once per `HEAD` (`git log
+// -M --diff-filter=R -p`, cached) where the task folder went, live or
+// archived, following chains; a pairing that changes the card's `created:`
+// is a deleted card and a new one, never a move. A deleted, never-renamed
+// folder, a failed Git call and a desk that is not its own repository all
+// read as `null`.
+//
+// `repoOfPath(absolutePath)` names the code repository a path outside the
+// desk is in, as lowercase `owner/name`, from the `origin` remote of the
+// nearest folder at or above the path that still exists; `null` when there is
+// none to name and for the desk itself. It is asked once per repository
+// (`createDeskReaders` has the details). Only the name is returned, never the
+// path or the remote.
+//
+// `repoLookup(absolutePath)` is the one reader `bindSession` uses. It answers
+// `{ repo }`, `{ none: true }` (the folder exists and is in no repository, or
+// in one with no origin) or `{ unavailable: true }` (the folder is gone, any
+// other stat error, a Git failure or a timeout), so a caller cannot take
+// evidence that could not be read for a true none. `repoOfPath` is its name
+// or `null`.
 //
 // `deskCommitsBetween(startIso, endIso)` lists the commits this clone made
 // in the window: the reflog entries of `HEAD` and every local branch whose
@@ -69,7 +92,10 @@
 // --diff-filter=A`, chasing through `-M`-equivalent rename detection, so a
 // track rename, a task move and an archive move all keep the same birth
 // path; a reverted rename walks back through both hops to the same
-// original). No card field is read or written for this — it works
+// original). A birth Git found under another path whose card's `created:`
+// differs from the current card's is an unrelated deleted card that Git's
+// similarity paired with this one (cards share a template), so the card's
+// own path is its birth instead. No card field is written for this — it works
 // retroactively, from history alone — and it falls back to the given `{
 // track, slug }`, unchanged, whenever Git cannot settle the question: the
 // card is found neither live nor archived (in a live track, an archived
@@ -117,14 +143,14 @@
 // files.
 
 import { spawnSync } from "node:child_process"
-import { closeSync, openSync, readSync } from "node:fs"
+import { closeSync, existsSync, openSync, readSync, realpathSync, statSync } from "node:fs"
 import * as path from "node:path"
 
-import { checkPersonPrefix, isTaskSegment, relativeSegments, taskOfSegments } from "./binding.js"
+import { checkPersonPrefix, isTaskSegment, normalizeRemote, relativeSegments, taskOfSegments } from "./binding.js"
+import { recordFromLines } from "./outcome.js"
 import { ENUMS, PATTERNS } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
 
-const FRONTMATTER_LINES = 40
 const READ_BYTES = 16 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
 
@@ -137,6 +163,9 @@ const DEFAULT_TIMEOUT_MS = 20_000
 const REPO_CHECK_CACHE = new Map()
 const BIRTH_PATH_CACHE = new Map()
 const REPO_HEAD_CACHE = new Map()
+// A desk root and person alias -> `{ head, renames }`: the task-folder
+// renames found once for that `HEAD` (see `taskRenameLookup`).
+const RENAME_CACHE = new Map()
 
 export function gitEnv() {
   const env = {}
@@ -185,30 +214,94 @@ function readHead(file) {
 
 function unquote(raw) {
   const value = raw.trim()
-  const quoted = /^(["'])(.*)\1$/u.exec(value)
+  const quoted = /^(["'])(.*)\1(?:\s+#.*)?$/u.exec(value)
   if (quoted) return quoted[2]
   return value.replace(/\s+#.*$/u, "").trim()
 }
 
-function frontmatterOf(text) {
-  const lines = text.split(/\r?\n/u).slice(0, FRONTMATTER_LINES)
-  const fields = {}
-  if (lines[0] !== "---") return fields
+function frontmatterLines(text) {
+  const lines = text.split(/\r?\n/u)
+  if (lines[0] !== "---") return []
   const end = lines.indexOf("---", 1)
-  if (end === -1) return fields
-  for (const line of lines.slice(1, end)) {
+  return end === -1 ? [] : lines.slice(1, end)
+}
+
+function frontmatterOf(lines) {
+  const fields = {}
+  for (const line of lines) {
     const match = /^([A-Za-z_][A-Za-z0-9_-]*):(.*)$/u.exec(line)
     if (match && !Object.hasOwn(fields, match[1])) fields[match[1]] = unquote(match[2])
   }
   return fields
 }
 
+const NAME_SEGMENT = /^(?!\.+$)[A-Za-z0-9_.-]+$/u
+const GITHUB_URL = /^(?:https?:\/\/(?:[^/@\s]+@)?|git@)github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/iu
+
+// `owner/name` when the text is two safe segments (no empty, `.` or `..`).
+const ownerName = (text) => {
+  const parts = text.split("/")
+  return parts.length === 2 && parts.every((part) => NAME_SEGMENT.test(part)) ? text : null
+}
+
+// One `repos:` entry (a name string, or the fields of an object entry) as the
+// name it stands for: `owner/name` when `name` is one, else the one parsed
+// from a GitHub `url` (even for a name that is not itself a safe name), else
+// the bare name when it is a safe single segment; null otherwise, and for no
+// name. No other field (`local_path`, `mode`) is ever read out.
+function repoName(entry) {
+  const name = entry.name ?? ""
+  if (name === "") return null
+  const own = ownerName(name)
+  if (own !== null) return own
+  const url = GITHUB_URL.exec(entry.url ?? "")
+  const fromUrl = url === null ? null : ownerName(`${url[1]}/${url[2]}`)
+  if (fromUrl !== null) return fromUrl
+  return NAME_SEGMENT.test(name) ? name : null
+}
+
+function flowRepoEntries(value) {
+  const inner = /^\[(.*)\]/u.exec(value)
+  if (!inner) return []
+  return inner[1].split(",").map((item) => ({ name: unquote(item) }))
+}
+
+function blockRepoEntries(lines) {
+  const entries = []
+  let itemIndent = null
+  for (const line of lines) {
+    if (/^[^\s-]/u.test(line)) break
+    const item = /^(\s*)-\s*(.*)$/u.exec(line)
+    if (item && (itemIndent === null || item[1].length <= itemIndent)) {
+      itemIndent = item[1].length
+      const field = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/u.exec(item[2])
+      entries.push(field ? { [field[1]]: unquote(field[2]) } : { name: unquote(item[2]) })
+      continue
+    }
+    const field = /^\s+([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/u.exec(line)
+    if (field && entries.length > 0 && !Object.hasOwn(entries.at(-1), field[1])) entries.at(-1)[field[1]] = unquote(field[2])
+  }
+  return entries
+}
+
+// The card's `repos:` list, block or flow form, strings or objects, as
+// distinct names in order.
+function parseRepos(lines) {
+  const at = lines.findIndex((line) => /^repos:/u.test(line))
+  if (at === -1) return []
+  const value = lines[at].slice("repos:".length).trim()
+  const entries = value === "" ? blockRepoEntries(lines.slice(at + 1)) : flowRepoEntries(value)
+  return [...new Set(entries.map(repoName).filter((name) => name !== null))]
+}
+
 function cardFields(text) {
-  const fields = frontmatterOf(text)
+  const lines = frontmatterLines(text)
+  const fields = frontmatterOf(lines)
   return {
     status: ENUMS.jobStatus.includes(fields.status) ? fields.status : null,
     created_at: normalizeTimestamp(fields.created),
     updated_at: normalizeTimestamp(fields.updated),
+    repos: parseRepos(lines),
   }
 }
 
@@ -218,18 +311,133 @@ function cardFields(text) {
 // `readTask` and job-identity resolution both look a card up, so they
 // always agree on where it lives; `finishedTasks` (`boot-check.js`) walks
 // the same four shapes on its own, since it must enumerate every track,
-// live and archived, rather than look one up.
-function findCard(base, track, slug) {
-  for (const folder of [
-    path.join(base, track, slug),
-    path.join(base, track, "_archive", slug),
-    path.join(base, "_archive", track, slug),
-    path.join(base, "_archive", track, "_archive", slug),
-  ]) {
-    const text = readHead(path.join(folder, "task.md"))
-    if (text !== null) return { folder, text }
+// live and archived, rather than look one up. When none of the four holds
+// the card, `renamedKey(track, slug)` (a `[track, slug]` or null; see
+// `taskRenameLookup`) says where Git history moved the task folder to, and
+// the same four places are searched under that name.
+function findCard(base, track, slug, renamedKey) {
+  const inFourPlaces = (t, s) => {
+    for (const folder of [
+      path.join(base, t, s),
+      path.join(base, t, "_archive", s),
+      path.join(base, "_archive", t, s),
+      path.join(base, "_archive", t, "_archive", s),
+    ]) {
+      const text = readHead(path.join(folder, "task.md"))
+      if (text !== null) return { folder, text }
+    }
+    return null
   }
-  return null
+  const found = inFourPlaces(track, slug)
+  if (found !== null) return found
+  const moved = renamedKey(track, slug)
+  return moved === null ? null : inFourPlaces(moved[0], moved[1])
+}
+
+// Whether two cards' `created:` values allow them to be one card: false only
+// when both are readable timestamps and differ. Cards share a template, so
+// Git's similarity can pair a deleted card with an unrelated new one; the
+// creation time the task tools write once, and every move keeps, tells them
+// apart. A card without a readable `created:` cannot be told apart and is
+// taken as Git paired it.
+function sameCreation(before, after) {
+  const a = normalizeTimestamp(before)
+  const b = normalizeTimestamp(after)
+  return a === null || b === null || a === b
+}
+
+// The renames of task cards in `git log -M --diff-filter=R -p -U0` output, in
+// log order (newest first): `{ oldPath, path }` for each rename whose
+// `created:` line is unchanged or not comparable (`sameCreation`). A rename
+// whose diff changes a readable `created:` is a deleted card paired with a
+// new one, not a move, and is left out.
+export function parseCardRenames(output) {
+  const renames = []
+  for (const block of output.split(/^diff --git /mu).slice(1)) {
+    const from = /^rename from (.+)$/mu.exec(block)
+    const to = /^rename to (.+)$/mu.exec(block)
+    if (from === null || to === null) continue
+    const removed = /^-created:(.*)$/mu.exec(block)
+    const added = /^\+created:(.*)$/mu.exec(block)
+    if (removed !== null && added !== null && !sameCreation(unquote(removed[1]), unquote(added[1]))) continue
+    renames.push({ oldPath: from[1], path: to[1] })
+  }
+  return renames
+}
+
+// `(track, slug) -> [track, slug] | null`: where the task folder went, by
+// Git's own rename history of task cards (`git log -M --diff-filter=R -p`
+// over `task.md` files, one pass per `HEAD`, cached per desk root and person
+// alias, since the alias decides which renames count), leaving out a pairing
+// that changes the card's creation time (`parseCardRenames`). Follows chains
+// in order, live or archived. null for a never-renamed task, a desk that is
+// not its own repository, and any Git failure. `runFn(options, args)` is
+// `runGit` or a deadline-aware wrapper of it.
+function taskRenameLookup(options, alias, runFn) {
+  const moves = cardMoves(options, alias, runFn)
+  return (track, slug) => {
+    const list = moves()
+    if (list === null) return null
+    const start = `${track}/${slug}`
+    let key = start
+    for (const move of list) {
+      if (move.from === key && !move.merged) key = move.to
+    }
+    return key === start ? null : key.split("/")
+  }
+}
+
+// `(track, slug) -> [track, slug] | null`: the task this one was merged into
+// with `task_move into_task`, by the same Git history (the merge renames its
+// `task.md` to `<keeper>/_iterations/<date>-<slug>/merged-task.md`), after
+// any renames before the merge; null when it was never merged, and for any
+// Git failure. The keeper is named as it was at the merge; `readTask`
+// follows its later renames.
+function taskMergeLookup(options, alias, runFn) {
+  const moves = cardMoves(options, alias, runFn)
+  return (track, slug) => {
+    const list = moves()
+    if (list === null) return null
+    let key = `${track}/${slug}`
+    for (const move of list) {
+      if (move.from !== key) continue
+      if (move.merged) return move.to.split("/")
+      key = move.to
+    }
+    return null
+  }
+}
+
+// The task a merged card's path (`<keeper folder>/_iterations/<name>/merged-task.md`) was merged into, as `track/slug`, or null.
+function mergeKeeperOfPath(filePath, alias) {
+  const keeper = /^(.+)\/_iterations\/[^/]+\/merged-task\.md$/u.exec(filePath)
+  return keeper === null ? null : cardKeyOfPath(`${keeper[1]}/task.md`, alias)
+}
+
+// `() -> [{ from, to, merged }] | null`, oldest first: every move of a task card in Git history, once per `HEAD` (cached per desk root and
+// person alias): a rename (`merged: false`, `to` the card's new `track/slug`) or a merge into another task (`merged: true`, `to` the keeper).
+function cardMoves(options, alias, runFn) {
+  const root = path.resolve(options.deskRoot)
+  const cacheKey = `${root}\u0000${alias ?? ""}`
+  return function renames() {
+    if (!isOwnRepository(options, runFn)) return null
+    const head = runFn(options, ["rev-parse", "HEAD"])
+    if (head === null) return null
+    const cached = RENAME_CACHE.get(cacheKey)
+    if (cached !== undefined && cached.head === head.trim()) return cached.renames
+    const output = runFn(options, ["log", "-M", "--diff-filter=R", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--format=", "--", ":(glob)**/task.md", ":(glob)**/merged-task.md"])
+    if (output === null) return null
+    const found = []
+    for (const entry of parseCardRenames(output).reverse()) {
+      const from = cardKeyOfPath(entry.oldPath, alias)
+      const to = cardKeyOfPath(entry.path, alias)
+      const keeper = to === null ? mergeKeeperOfPath(entry.path, alias) : null
+      if (from !== null && to !== null && from !== to) found.push({ from, to, merged: false })
+      else if (from !== null && keeper !== null) found.push({ from, to: keeper, merged: true })
+    }
+    RENAME_CACHE.set(cacheKey, { head: head.trim(), renames: found })
+    return found
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +840,7 @@ function isOwnRepository(options, runFn = runGit) {
 // Unlike `isOwnRepository`, `runFn` has no default here: `resolveJobIdentity`
 // is this function's only caller, and it always passes its own deadline-aware
 // `run`, so a default would be dead code no path through this module reaches.
-function gitBirthPathSegments(options, relativePath, runFn) {
+function gitBirthPath(options, relativePath, runFn) {
   const output = runFn(options, ["log", "--follow", "--diff-filter=A", "-z", "--format=%x1e%H", "--name-only", "--", relativePath])
   if (output === null) return null
   const records = output.split("\x1e").filter((record) => record !== "")
@@ -640,17 +848,72 @@ function gitBirthPathSegments(options, relativePath, runFn) {
   const headerEnd = records[0].indexOf("\0")
   if (headerEnd === -1) return null
   const paths = records[0].slice(headerEnd + 1).split("\0").map((entry) => entry.replace(/^\n/u, "")).filter((entry) => entry !== "")
-  return paths.length > 0 ? relativeSegments(paths[0]) : null
+  return paths.length > 0 ? { sha: records[0].slice(0, headerEnd).trim(), path: paths[0] } : null
+}
+
+// The `track/slug` a `task.md` path names, in any of the four places a card
+// lives (see `findCard`), or null for any other path or another person's.
+function cardKeyOfPath(filePath, alias) {
+  let segments = relativeSegments(filePath)
+  if (alias !== null) {
+    if (segments[0] !== "desks" || segments[1] !== alias) return null
+    segments = segments.slice(2)
+  }
+  if (segments.at(-1) !== "task.md") return null
+  const folder = segments.slice(0, -1)
+  const archivedTrack = folder[0] === "_archive" ? folder.slice(1) : folder
+  const names = archivedTrack[1] === "_archive" ? [archivedTrack[0], archivedTrack[2]] : archivedTrack
+  return names.length === 2 && archivedTrack.length === (archivedTrack[1] === "_archive" ? 3 : 2) && names.every(isTaskSegment) ? names.join("/") : null
 }
 
 function isWindow(startIso, endIso) {
   return typeof startIso === "string" && typeof endIso === "string" && PATTERNS.timestamp.test(startIso) && PATTERNS.timestamp.test(endIso) && startIso <= endIso
 }
 
+// A normalized remote with a host and a path, such as `https://github.com/owner/name`.
+const HOSTED_REMOTE = /^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+)$/u
+
+// The `owner/name` of a normalized remote: the last two parts of its path, or null when it has no host or they are not two safe names.
+function repoOfRemote(normalized) {
+  const hosted = HOSTED_REMOTE.exec(normalized)
+  return hosted === null ? null : ownerName(hosted[1].split("/").slice(-2).join("/"))
+}
+
+const NONE = Object.freeze({ none: true })
+const UNAVAILABLE = Object.freeze({ unavailable: true })
+
+// What a path is: "directory", "missing" (ENOENT or ENOTDIR: it is gone), "other" (it exists and is not a directory) or "error" (any other
+// stat failure: a permission or I/O error, an unmounted volume).
+function folderKind(target) {
+  try {
+    return statSync(target).isDirectory() ? "directory" : "other"
+  } catch (error) {
+    return error.code === "ENOENT" || error.code === "ENOTDIR" ? "missing" : "error"
+  }
+}
+
+// The real path of a folder, or the folder as given when it cannot be resolved.
+function realFolder(folder) {
+  try {
+    return realpathSync(folder)
+  } catch {
+    return path.resolve(folder)
+  }
+}
+
+// The nearest folder at or above `directory` that holds a `.git` entry (a folder, or a linked worktree's file), or null.
+function repositoryRoot(directory) {
+  for (let current = directory; ; current = path.dirname(current)) {
+    if (existsSync(path.join(current, ".git"))) return current
+    if (path.dirname(current) === current) return null
+  }
+}
+
 /**
  * `createDeskReaders({ deskRoot, personPrefix, git, timeoutMs })` ->
- * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
- * resolveJobIdentity }` for `bindSession`.
+ * `{ readTask, mergedInto, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
+ * resolveJobIdentity, repoOfPath, repoLookup }`; `bindSession` takes all but
+ * `deskCommitsBetween`, which `factory reconcile` still reads.
  */
 export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("createDeskReaders: deskRoot must be an absolute path")
@@ -658,16 +921,36 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   const base = path.join(deskRoot, personPrefix)
   const options = { git, deskRoot, timeoutMs }
 
-  function readTask(track, slug) {
-    if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
-    const found = findCard(base, track, slug)
-    return found === null ? null : cardFields(found.text)
-  }
-
   let ownRepository
   const deskIsOwnRepository = () => {
     if (ownRepository === undefined) ownRepository = isOwnRepository(options)
     return ownRepository
+  }
+
+  const alias = checkPersonPrefix(personPrefix, "createDeskReaders")
+  const renamedKey = taskRenameLookup(options, alias, runGit)
+  const mergedKey = taskMergeLookup(options, alias, runGit)
+  /** `mergedInto(track, slug) -> { track, slug } | null`: the task a merged task now lives in, when it has no card of its own (`taskMergeLookup`). */
+  function mergedInto(track, slug) {
+    if (!isTaskSegment(track) || !isTaskSegment(slug) || readTask(track, slug) !== null) return null
+    const keeper = mergedKey(track, slug)
+    return keeper === null ? null : { track: keeper[0], slug: keeper[1] }
+  }
+
+  function readTask(track, slug) {
+    if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
+    const found = findCard(base, track, slug, renamedKey)
+    return found === null ? null : cardFields(found.text)
+  }
+
+  // The outcome record the card carries, its status and the time it was last updated, or null when no card exists (archived cards are found too).
+  function readOutcome(track, slug) {
+    if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
+    const found = findCard(base, track, slug, renamedKey)
+    if (found === null) return null
+    const lines = frontmatterLines(found.text)
+    const fields = frontmatterOf(lines)
+    return { record: recordFromLines(lines), status: ENUMS.jobStatus.includes(fields.status) ? fields.status : null, evidenceAt: normalizeTimestamp(fields.updated) }
   }
 
   // Keyed by sha alone: this cache lives for exactly one `createDeskReaders`
@@ -751,8 +1034,82 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return isHousekeepingEdit(oldText, newText, substitutions)
   }
 
+  // `repoLookup`: each directory asked about -> its answer, and each repository root -> its answer. Both live for this one set of
+  // readers, so a session's many writes in one repository cost one Git call.
+  const lookupByDirectory = new Map()
+  const lookupByRoot = new Map()
+  const deskFolder = realFolder(deskRoot)
+  let deskOrigin
+  // A folder's `origin`, normalized: `{ origin }` (null when it has no remote), or `{ failed: true }` when Git itself failed.
+  // `git config --get` exits 1 when the key is not set, which is a clean "no origin"; any other exit, a signal or a timeout is a failure.
+  const originOf = (folder) => {
+    const result = spawnSync(git, ["-C", folder, "-c", "core.quotePath=false", "config", "--get", "remote.origin.url"], { encoding: "utf8", env: gitEnv(), timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"] })
+    if (result.error !== undefined || result.signal !== null || (result.status !== 0 && result.status !== 1)) return { failed: true }
+    const remote = result.status === 0 ? result.stdout.trim() : ""
+    return { origin: remote === "" ? null : normalizeRemote(remote) }
+  }
+  const lookupOfRoot = (root) => {
+    const found = originOf(root)
+    if (found.failed) return UNAVAILABLE
+    if (found.origin === null) return NONE
+    if (deskOrigin === undefined) deskOrigin = originOf(deskRoot).origin ?? null
+    // Another checkout of the desk's own remote is the desk, not a code repository.
+    const repo = found.origin === deskOrigin ? null : repoOfRemote(found.origin)
+    return repo === null ? NONE : { repo }
+  }
+  /**
+   * `repoLookup(absolutePath)`: the code repository holding a path, as one of three answers a caller cannot confuse:
+   * `{ repo: "owner/name" }` (lowercase, from the `origin` remote of the nearest folder at or above the path that still exists: a deleted
+   * file is still in its repository; a path that is a folder is looked up as itself, so a nested repository root names its own repository,
+   * and an existing file by its folder; with `{ maybeFile: true }` (a commit's path entry) a missing path is a deleted file, lost only when the
+   * folder it was in is missing too, where without it a missing path is a folder that is gone); `{ none: true }` (the folder exists and Git cleanly reports no repository, or a repository with no
+   * origin or one that is not `host/…/owner/name`, or the desk itself: a path inside the desk root, or a checkout of the desk's own remote;
+   * also a path that is not absolute); and `{ unavailable: true }` (the evidence cannot be read: the folder is gone (ENOENT, ENOTDIR) or
+   * and no repository above it names it, any other stat error such as a permission or I/O failure, a Git failure or a
+   * timeout). Only the name is ever returned, never the path or the remote.
+   */
+  function repoLookup(absolutePath, { maybeFile = false } = {}) {
+    if (typeof absolutePath !== "string" || !path.isAbsolute(absolutePath)) return NONE
+    const start = path.resolve(absolutePath)
+    const cacheKey = maybeFile ? `${start}\0file` : start
+    if (lookupByDirectory.has(cacheKey)) return lookupByDirectory.get(cacheKey)
+    let directory = start
+    let kind = folderKind(directory)
+    let lost = kind !== "directory"
+    // A path that may be a file (a commit's path entry) and is missing is a deleted file, not a lost folder, when the folder it was in exists.
+    if (kind === "missing" && maybeFile) lost = folderKind(path.dirname(start)) !== "directory"
+    // A file that exists is in its folder's repository; nothing is lost.
+    if (kind === "other") {
+      directory = path.dirname(start)
+      kind = folderKind(directory)
+      lost = false
+    }
+    // The filesystem root always exists, so the guard against walking past it is for a stat that fails there.
+    /* node:coverage ignore next */
+    while (kind === "missing" && path.dirname(directory) !== directory) {
+      directory = path.dirname(directory)
+      kind = folderKind(directory)
+    }
+    let answer
+    const inDesk = path.relative(deskFolder, realFolder(directory))
+    if (inDesk === "" || (!inDesk.startsWith("..") && !path.isAbsolute(inDesk))) answer = NONE
+    else if (kind === "error") answer = UNAVAILABLE
+    else {
+      const root = repositoryRoot(directory)
+      if (root !== null) {
+        if (!lookupByRoot.has(root)) lookupByRoot.set(root, lookupOfRoot(root))
+        answer = lookupByRoot.get(root)
+      } else answer = NONE
+      if (lost && answer.repo === undefined) answer = UNAVAILABLE
+    }
+    lookupByDirectory.set(cacheKey, answer)
+    return answer
+  }
+  /** `repoOfPath(absolutePath) -> "owner/name" | null`: `repoLookup`'s name, or `null` for either of its other answers. */
+  const repoOfPath = (absolutePath) => repoLookup(absolutePath).repo ?? null
+
   return {
-    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
+    readTask, mergedInto, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, repoLookup, readOutcome,
     resolveJobIdentity: (track, slug) => resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs }),
   }
 }
@@ -772,14 +1129,11 @@ export function resolveJobIdentity({
   const alias = checkPersonPrefix(personPrefix, "resolveJobIdentity")
   if (!isTaskSegment(track) || !isTaskSegment(slug)) return current
 
-  const found = findCard(path.join(deskRoot, personPrefix), track, slug)
-  if (found === null) return current
-
   const options = { git, deskRoot, timeoutMs, spawn }
   const root = path.resolve(deskRoot)
 
   // Mirrors `readDeskRemote`'s own `run`, in `isOwnRepository`/
-  // `gitBirthPathSegments`'s `runFn(options, args)` shape so it can replace
+  // `gitBirthPath`'s `runFn(options, args)` shape so it can replace
   // their default `runGit` directly: with no deadline this is exactly
   // `runGit(options, args)` (never throws), and with one it caps each call
   // to the time left, throwing `git_deadline` before starting a call the
@@ -794,6 +1148,9 @@ export function resolveJobIdentity({
     if (deadline !== null && clock() >= deadline) throw gitDeadline()
     return output
   }
+
+  const found = findCard(path.join(deskRoot, personPrefix), track, slug, taskRenameLookup(options, alias, run))
+  if (found === null) return current
 
   let ownRepo = REPO_CHECK_CACHE.get(root)
   if (ownRepo === undefined) {
@@ -820,8 +1177,14 @@ export function resolveJobIdentity({
   const cacheKey = `${root}\u0000${relative}`
   if (BIRTH_PATH_CACHE.has(cacheKey)) return BIRTH_PATH_CACHE.get(cacheKey)
 
-  const segments = gitBirthPathSegments(options, relative, run)
-  const parsed = segments === null ? null : taskOfSegments(segments, alias)
+  // `--follow` pairs by similarity, so a birth found under another path must be the same card: its creation time there must not differ
+  // from the card's own (`sameCreation`). A birth that does is an unrelated deleted card; the card is then its own lineage, at its path.
+  let birth = gitBirthPath(options, relative, run)
+  if (birth !== null && birth.path !== relative) {
+    const then = run(options, ["cat-file", "blob", `${birth.sha}:${birth.path}`])
+    if (then !== null && !sameCreation(frontmatterOf(frontmatterLines(found.text)).created, frontmatterOf(frontmatterLines(then)).created)) birth = { path: relative }
+  }
+  const parsed = birth === null ? null : taskOfSegments(relativeSegments(birth.path), alias)
   const result = parsed === null ? current : { track: parsed.track, slug: parsed.slug }
   BIRTH_PATH_CACHE.set(cacheKey, result)
   return result

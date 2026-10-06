@@ -50,6 +50,13 @@ test("the golden local fixture is valid local facts", () => {
   assert.deepEqual(validateLocalFacts(local()), { ok: true, errors: [] })
 })
 
+test("the golden pair carries a human_turns list, and its offsets are the local times on the session clock", () => {
+  const { published } = publish(local())
+  assert.equal(LOCAL_GOLDEN.human_turns.length, 3)
+  assert.deepEqual(published.human_turns.map((turn) => turn.at_ms), LOCAL_GOLDEN.human_turns.map((turn) => Date.parse(turn.at) - Date.parse(LOCAL_GOLDEN.session.started_at)))
+  assert.equal(PUBLISHED_GOLDEN_TEXT.includes('"human_turns":[{"at_ms":5000'), true)
+})
+
 test("the golden local fixture transforms to the golden published fixture byte for byte", () => {
   const { published, dropped } = publish(local())
   assert.equal(serializePublished(published), PUBLISHED_GOLDEN_TEXT)
@@ -326,35 +333,86 @@ test("a date inside a model id or plugin name loses its hyphens so no date shape
 
 test("unavailable keeps the local entries, adds each new one once, and stays within the cap", () => {
   const value = local()
+  delete value.human_turns // a list never sits beside every flag
   value.jobs = [value.jobs[2], { ...value.jobs[2], job: "9f2c4b1a7d3e5f60718293a4b5c6d7e9" }]
   const combos = ENUMS.unavailableField.flatMap((field) => ENUMS.unavailableReason.map((reason) => ({ field, reason })))
-  value.unavailable = [...combos.slice(0, LIMITS.unavailable - 1), combos[0]]
-  const { published } = publish(value)
-  assert.equal(published.unavailable.length, LIMITS.unavailable, "a repeated local entry is kept once; the new one fills the last place")
-  assert.deepEqual(published.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" })
-  assert.equal(validatePublished(published).ok, true)
-
-  value.unavailable = combos.slice(0, LIMITS.unavailable)
+  // Every local field with every reason fits with room for the transform's own entries, so the cap never cuts a valid local file.
+  assert.ok(combos.length < LIMITS.unavailable)
+  value.unavailable = combos
   const full = publish(value).published
-  assert.equal(full.unavailable.length, LIMITS.unavailable)
-  assert.deepEqual(full.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" }, "the transform's own entry displaces the last local one")
-  assert.deepEqual(full.unavailable.slice(0, -1), combos.slice(0, LIMITS.unavailable - 1))
+  assert.deepEqual(full.unavailable.slice(0, combos.length), combos)
+  assert.deepEqual(full.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" })
+  assert.equal(full.unavailable.length, combos.length + 1)
   assert.equal(validatePublished(full).ok, true)
 
-  // The local file already holds the marker, in the place the cap cuts.
-  const cut = local()
-  cut.jobs = []
-  cut.intervals.push({ kind: "turn", agent: 0, start: "2026-09-25T09:29:00.000Z", end: "2026-09-25T09:31:00.000Z" })
-  const others = combos.filter((entry) => !(entry.field === "turns" && entry.reason === "source_unreadable"))
-  cut.unavailable = [...others.slice(0, LIMITS.unavailable - 1), { field: "turns", reason: "source_unreadable" }]
-  const kept = publish(cut).published.unavailable
-  assert.equal(kept.length, LIMITS.unavailable)
-  assert.deepEqual(kept.at(-1), { field: "turns", reason: "source_unreadable" }, "the transform's own marker is kept first")
+  // A repeated local entry is kept once.
+  value.unavailable = [...combos.slice(0, 5), combos[0]]
+  const deduped = publish(value).published.unavailable
+  assert.equal(deduped.length, 6)
+  assert.equal(validatePublished({ ...publish(value).published }).ok, true)
 
   const few = local()
   few.jobs = [few.jobs[2], { ...few.jobs[2], job: "9f2c4b1a7d3e5f60718293a4b5c6d7e9" }]
   const result = publish(few).published.unavailable
   assert.equal(result.filter((entry) => entry.field === "job_offsets").length, 1)
+})
+
+test("a public store hides plugins and flags plugins withheld_public", () => {
+  for (const storeVisibility of ["public", undefined, "unknown"]) {
+    const { published } = publish(withPlugins(), { storeVisibility })
+    const flags = published.unavailable.filter((entry) => entry.field === "plugins")
+    assert.deepEqual(flags, [{ field: "plugins", reason: "withheld_public" }], String(storeVisibility))
+    assert.equal(validatePublished(published).ok, true)
+  }
+})
+
+test("a store with nothing hidden carries no plugins flag, and a flag the local file already held is not repeated", () => {
+  const none = local()
+  none.plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
+  assert.equal(publish(none, { storeVisibility: "public" }).published.unavailable.some((entry) => entry.field === "plugins"), false)
+  const held = withPlugins()
+  held.unavailable = [{ field: "plugins", reason: "withheld_public" }]
+  const flags = publish(held, { storeVisibility: "public" }).published.unavailable.filter((entry) => entry.field === "plugins")
+  assert.deepEqual(flags, [{ field: "plugins", reason: "withheld_public" }])
+})
+
+test("a private store names its plugins and carries no plugins flag", () => {
+  for (const storeVisibility of ["private", "internal"]) {
+    const { published } = publish(withPlugins(), { storeVisibility })
+    assert.equal(published.plugins.length, 5)
+    assert.equal(published.unavailable.some((entry) => entry.field === "plugins"), false, storeVisibility)
+  }
+})
+
+test("published refs.private counts are unchanged", () => {
+  const { published, dropped } = publish(withPlugins(), { storeVisibility: "public" })
+  assert.deepEqual(Object.keys(published.refs.private).sort(), Object.keys(dropped).sort())
+  assert.equal(published.refs.private.plugins, 4)
+  assert.deepEqual(published.refs.private, dropped)
+})
+
+test("publishing a file that carries every field and reason pair keeps all of them", () => {
+  const value = withPlugins()
+  delete value.human_turns // a list never sits beside every flag
+  value.jobs = [value.jobs[2], { ...value.jobs[2], job: "9f2c4b1a7d3e5f60718293a4b5c6d7e9" }]
+  const combos = ENUMS.unavailableField.flatMap((field) => ENUMS.unavailableReason.map((reason) => ({ field, reason })))
+  value.unavailable = combos
+  // The worst case: a public desk and store, so desk_public and plugins withheld are both added.
+  for (const options of [{ deskVisibility: "public", storeVisibility: "public", machineSecret: SECRET }, { deskVisibility: "private", storeVisibility: "public" }]) {
+    const published = publish(value, options).published
+    for (const entry of combos) assert.ok(published.unavailable.some((item) => item.field === entry.field && item.reason === entry.reason), `${entry.field}/${entry.reason}`)
+    assert.ok(published.unavailable.length <= LIMITS.unavailable)
+    assert.equal(new Set(published.unavailable.map((entry) => `${entry.field}|${entry.reason}`)).size, published.unavailable.length)
+    assert.deepEqual(validatePublishedBytes(serializePublished(published)), { ok: true, errors: [] })
+  }
+})
+
+test("a sentinel plugin name never reaches the published unavailable list", () => {
+  const value = local()
+  value.plugins = [{ name: "sentinel-7f3a", version: "1.0.0", source: "private-org/private-repo" }]
+  const { published } = publish(value, { storeVisibility: "public" })
+  assert.doesNotMatch(JSON.stringify(published), /sentinel-7f3a/u)
+  assert.deepEqual(published.unavailable.filter((entry) => entry.field === "plugins"), [{ field: "plugins", reason: "withheld_public" }])
 })
 
 // ---------------------------------------------------------------------------
@@ -572,7 +630,7 @@ const isEpochSized = (n) => (n >= EPOCH_SECONDS[0] && n <= EPOCH_SECONDS[1]) || 
 const REPO_KEYS = new Set(["repo"])
 // Durations and offsets are milliseconds by definition, so a value there may
 // be as large as epoch seconds; it may never reach epoch milliseconds.
-const MS_KEYS = new Set(["duration_ms", "start_ms", "end_ms", "session_offset_ms", "offset_ms"])
+const MS_KEYS = new Set(["duration_ms", "start_ms", "end_ms", "session_offset_ms", "offset_ms", "at_ms", "window_ms"])
 
 function* leaves(value, keys = []) {
   if (value !== null && typeof value === "object") {
@@ -612,13 +670,15 @@ const FAKE_DESK = `/tmp/${SENTINEL}/desk`
 function bindFixture(facts, events) {
   const { jobs } = bindSession({
     events,
+    agents: facts.agents,
+    session: facts.session,
     deskRoot: FAKE_DESK,
     deskRemote: `git@github.com:${SENTINEL}/desk.git`,
     personPrefix: "",
     readTask: (track) => (track.length % 2 === 0
       ? { status: "done", created_at: "2026-09-20T08:00:00.000Z", updated_at: "2026-09-25T08:00:30.000Z" }
       : { status: "processing", created_at: null, updated_at: null }),
-    deskCommitsBetween: () => [],
+    repoLookup: () => ({ none: true }),
     gitCommitTaskPaths: () => ({ exists: false }),
     isCardHousekeeping: () => false,
     resolveJobIdentity: (track, slug) => ({ track, slug }),
@@ -703,9 +763,19 @@ function randomLocal(random) {
       ? { kind, agent: 0, tool: pick(ENUMS.toolKind), outcome: pick(ENUMS.outcome), start: iso(a), end: iso(b) }
       : { kind, agent: 0, start: iso(a), end: iso(b) }
   })
+  const humanTurnsFor = () => {
+    const times = Array.from({ length: int(12) }, () => within()).sort((a, b) => a - b)
+    return times.map((time, index) => ({
+      at: iso(time),
+      basis: index === 0 ? "first" : pick(["after_stop", "mid_turn"]),
+      window_ms: index === 0 ? null : int(86400000),
+      prompt_class: pick(ENUMS.sizeClass),
+      output_class: pick(ENUMS.sizeClass),
+    }))
+  }
   const repos = ["ourostack/desk", "private-org/private-repo", `${SENTINEL}/secret`, "acme/notes-2031-01-01", null]
   return {
-    schema: "desk.factory.local/1",
+    schema: "desk.factory.local/2",
     session: {
       host: pick(ENUMS.host),
       id: `${hex(8)}-${hex(4)}-4${hex(3)}-8${hex(3)}-${hex(12)}`,
@@ -740,6 +810,8 @@ function randomLocal(random) {
         observed: random() < 0.2 ? null : { status: terminal ? "done" : "processing", at: terminal ? iso(within()) : null },
       }
     }),
+    // About half the files carry a recorded list, sorted by time; the rest carry none.
+    ...(random() < 0.5 ? { human_turns: humanTurnsFor() } : {}),
     unavailable: [],
   }
 }
@@ -774,6 +846,8 @@ test("property: 300 seeded random local files publish nothing that identifies a 
     }
     assert.equal(published.session.duration_ms, Date.parse(value.session.derived_through) - Date.parse(value.session.started_at))
     assert.equal(published.intervals.length, value.intervals.length, "in-span intervals are all kept")
+    assert.equal(Object.hasOwn(published, "human_turns"), Object.hasOwn(value, "human_turns"), `sample ${index}`)
+    if (Object.hasOwn(value, "human_turns")) assert.equal(published.human_turns.length, value.human_turns.length, "in-span turns are all kept")
     assert.equal(published.refs.prs.length + dropped.prs, value.refs.prs.length + value.refs.unresolved.prs)
     assert.equal(published.refs.commits.length + dropped.commits, value.refs.commits.length + value.refs.unresolved.commits)
     assert.deepEqual(published.refs.private, dropped)
@@ -863,4 +937,274 @@ test("a credential-shaped plugin name is hidden and counted, in a public and in 
     assert.equal(dropped.plugins, 1)
     assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
   }
+})
+
+// ---------------------------------------------------------------------------
+// outcomes: the sign-off state of each job, with a coarse wait class and no time.
+// ---------------------------------------------------------------------------
+
+const { since: _since, first_validating_at: _first, first_delivered_at: _firstDelivered, returns: _returns, ...BASE_OUTCOME } = LOCAL_GOLDEN.outcomes[0]
+const outcomeEntry = (overrides = {}) => ({ ...BASE_OUTCOME, ...overrides })
+const withOutcomes = (outcomes) => ({ ...local(), outcomes })
+const waitOf = (overrides, options) => publish(withOutcomes([outcomeEntry(overrides)]), options).published.outcomes[0].wait
+const HOUR = 3_600_000
+const iso = (base, ms) => new Date(Date.parse(base) + ms).toISOString()
+const DELIVERED = "2026-09-25T09:00:00.000Z"
+
+test("an accepted outcome publishes the class of the wait from delivery to sign-off", () => {
+  const cases = [[20 * 60_000, "lt_1h"], [HOUR, "lt_1d"], [23 * HOUR, "lt_1d"], [24 * HOUR, "lt_7d"], [6 * 24 * HOUR, "lt_7d"], [7 * 24 * HOUR, "ge_7d"], [0, "lt_1h"]]
+  for (const state of ["accepted", "refused"]) {
+    for (const [ms, expected] of cases) {
+      const wait = waitOf({ state, delivered_at: DELIVERED, signed_at: iso(DELIVERED, ms), observed_at: iso(DELIVERED, ms + HOUR), ...(state === "refused" ? { reason: "defect", verified: false } : {}) })
+      assert.deepEqual(wait, { class: expected, censored: false }, `${state} ${ms}`)
+    }
+  }
+  const { published } = publish(local())
+  assert.deepEqual(published.outcomes[0], { job: LOCAL_GOLDEN.outcomes[0].job, rev: 4, state: "accepted", verified: true, reason: null, deliveries: 1, wait: { class: "lt_1h", censored: false }, since: "created", returns: [RETURN_LOCAL] })
+})
+
+test("an unsigned outcome publishes a censored class from delivery to the time it was observed", () => {
+  const cases = [[10 * 60_000, "lt_1h"], [2 * HOUR, "lt_1d"], [30 * HOUR, "lt_7d"], [9 * 24 * HOUR, "ge_7d"]]
+  for (const [ms, expected] of cases) {
+    const wait = waitOf({ state: "delivered_unsigned", verified: null, delivered_at: DELIVERED, signed_at: null, observed_at: iso(DELIVERED, ms) })
+    assert.deepEqual(wait, { class: expected, censored: true }, String(ms))
+  }
+  assert.equal(waitOf({ state: "delivered_unsigned", verified: null, delivered_at: DELIVERED, signed_at: iso(DELIVERED, HOUR), observed_at: iso(DELIVERED, 2 * HOUR) }).censored, true, "the sign-off time is not read for an unsigned delivery")
+})
+
+test("an outcome with no delivery time publishes a null wait, not a zero", () => {
+  for (const state of ["accepted", "refused", "delivered_unsigned"]) {
+    assert.equal(waitOf({ state, delivered_at: null, signed_at: DELIVERED, observed_at: DELIVERED }), null, state)
+  }
+  for (const state of ["not_delivered", "not_recorded", "reopened"]) {
+    assert.equal(waitOf({ state, verified: null, delivered_at: DELIVERED, signed_at: iso(DELIVERED, HOUR), observed_at: iso(DELIVERED, 2 * HOUR) }), null, `${state} has no wait`)
+  }
+  assert.equal(waitOf({ state: "accepted", delivered_at: DELIVERED, signed_at: null, observed_at: DELIVERED }), null, "a sign-off with no time has no wait")
+  assert.equal(waitOf({ state: "delivered_unsigned", verified: null, delivered_at: DELIVERED, signed_at: null, observed_at: null }), null, "an unsigned delivery with no observation time has no wait")
+})
+
+test("an outcome with a negative wait is published with a null wait", () => {
+  assert.equal(waitOf({ state: "accepted", delivered_at: DELIVERED, signed_at: iso(DELIVERED, -1) }), null)
+  assert.equal(waitOf({ state: "delivered_unsigned", verified: null, delivered_at: DELIVERED, signed_at: null, observed_at: iso(DELIVERED, -HOUR) }), null)
+})
+
+test("no timestamp and no exact wait is published", () => {
+  const { published } = publish(withOutcomes([outcomeEntry(), outcomeEntry({ job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", state: "delivered_unsigned", verified: null, signed_at: null, observed_at: iso(DELIVERED, 5 * HOUR) })]))
+  const text = JSON.stringify(published.outcomes)
+  assert.equal(DATE_SHAPE.test(text), false)
+  assert.equal(/\d{2}:\d{2}/u.test(text), false)
+  for (const entry of published.outcomes) {
+    assert.deepEqual(Object.keys(entry), ["job", "rev", "state", "verified", "reason", "deliveries", "wait"])
+    assert.deepEqual(Object.keys(entry.wait), ["class", "censored"])
+  }
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+})
+
+test("published facts without outcomes stay valid and carry no outcomes key", () => {
+  const value = local()
+  delete value.outcomes
+  const { published } = publish(value)
+  assert.equal(Object.hasOwn(published, "outcomes"), false)
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  assert.equal(Object.hasOwn(publish({ ...value, outcomes: [] }).published, "outcomes"), true, "an empty list is a recorded, empty list")
+})
+
+test("a public desk publishes the keyed job id and the same fields, and an outcome's job equals the jobs entry's job on every desk class", () => {
+  const [bound, outcomeOnly] = [LOCAL_GOLDEN.outcomes[0].job, LOCAL_GOLDEN.outcomes[1].job]
+  assert.ok(LOCAL_GOLDEN.jobs.some((job) => job.job === bound), "the fixture's first outcome is a bound job")
+  const privatePublished = publish(local()).published
+  for (const deskVisibility of ["private", "internal", "public", "unknown"]) {
+    const { published } = publish(local(), { deskVisibility, machineSecret: SECRET })
+    const plain = deskVisibility === "private" || deskVisibility === "internal"
+    const expectedBound = plain ? bound : keyed(bound)
+    assert.ok(published.jobs.some((job) => job.job === expectedBound), `${deskVisibility}: the jobs entry`)
+    assert.ok(published.outcomes.some((entry) => entry.job === expectedBound), `${deskVisibility}: the outcome has the jobs entry's id`)
+    assert.ok(published.outcomes.some((entry) => entry.job === (plain ? outcomeOnly : keyed(outcomeOnly))), `${deskVisibility}: an outcome-only task is keyed the same way`)
+    const ids = published.outcomes.map((entry) => entry.job)
+    assert.deepEqual(ids, [...ids].sort(), `${deskVisibility}: sorted by the published id`)
+    assert.deepEqual(published.outcomes.map(({ job: _job, ...rest }) => rest).sort((a, b) => (a.rev - b.rev) || (a.state < b.state ? -1 : 1)), privatePublished.outcomes.map(({ job: _job, ...rest }) => rest).sort((a, b) => (a.rev - b.rev) || (a.state < b.state ? -1 : 1)), `${deskVisibility}: the same fields`)
+    if (!plain) {
+      const text = JSON.stringify(published.outcomes)
+      for (const entry of LOCAL_GOLDEN.outcomes) assert.equal(text.includes(entry.job), false, `${deskVisibility}: no plain id`)
+      assert.equal(DATE_SHAPE.test(text), false)
+    }
+    assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  }
+})
+
+test("a public desk's outcome-only job, with no jobs entry, is still keyed", () => {
+  const value = local()
+  value.jobs = []
+  const { published } = publish(value, { deskVisibility: "public", machineSecret: SECRET })
+  assert.deepEqual(published.outcomes.map((entry) => entry.job).sort(), LOCAL_GOLDEN.outcomes.map((entry) => keyed(entry.job)).sort())
+  assert.equal(published.unavailable.some((entry) => entry.reason === "desk_public"), false)
+})
+
+test("SENTINEL in a card never reaches published outcomes", async () => {
+  const { outcomesFor } = await import("../../../../../plugins/desk/mcp/src/factory/derive-run.js")
+  const record = {
+    title: SENTINEL,
+    body: SENTINEL,
+    track: SENTINEL,
+    slug: SENTINEL,
+    signoff: { state: "accepted", at: "2026-09-25T09:20:00.000Z", verified: true, reason: null, note: SENTINEL },
+    flow: { since: "created", rev: 3, reached: "done", delivered_at: DELIVERED, deliveries: 1, title: SENTINEL },
+    returns: [],
+  }
+  const readers = { readOutcome: () => ({ record, status: "done", evidenceAt: null }), resolveJobIdentity: (track, slug) => ({ track, slug }) }
+  const outcomes = outcomesFor({
+    jobs: [{ job: "0123456789abcdef0123456789abcdef", track: SENTINEL, slug: SENTINEL }],
+    lifecycleCalls: [],
+    readers,
+    identity: { deskRemote: `git@github.com:${SENTINEL}/desk.git`, personPrefix: SENTINEL },
+    now: "2026-09-25T09:30:00.000Z",
+  })
+  assert.equal(outcomes.length, 1)
+  for (const deskVisibility of ["private", "public"]) {
+    const { published } = publish({ ...local(), outcomes }, { deskVisibility, machineSecret: SECRET })
+    assert.equal(JSON.stringify(published).includes(SENTINEL), false, deskVisibility)
+    assert.equal(published.outcomes[0].state, "accepted")
+  }
+})
+
+// ---------------------------------------------------------------------------
+// outcomes: the record's start and its returns, with no time.
+// ---------------------------------------------------------------------------
+
+const RETURN_LOCAL = { reason: "agent_error", caught: "at_review", counts: true, refusal: null, refusal_verified: null }
+const FULL_ENTRY = { since: "created", first_validating_at: "2026-09-25T08:40:00.000Z", first_delivered_at: "2026-09-25T09:00:00.000Z", returns: [RETURN_LOCAL] }
+
+test("an outcome entry without the new keys publishes without them", () => {
+  const { published } = publish(withOutcomes([outcomeEntry()]))
+  assert.deepEqual(Object.keys(published.outcomes[0]), ["job", "rev", "state", "verified", "reason", "deliveries", "wait"])
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+})
+
+test("returns publish reason, catch point, counts and refusal, and no time", () => {
+  const returns = [
+    RETURN_LOCAL,
+    { reason: "changed_ask", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: true },
+    { reason: "external", caught: "in_task", counts: false, refusal: null, refusal_verified: null },
+  ]
+  const { published } = publish(withOutcomes([outcomeEntry({ ...FULL_ENTRY, returns })]))
+  assert.deepEqual(published.outcomes[0].returns, returns)
+  assert.equal(published.outcomes[0].since, "created")
+  assert.deepEqual(Object.keys(published.outcomes[0]), ["job", "rev", "state", "verified", "reason", "deliveries", "wait", "since", "returns"])
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  assert.notEqual(published.outcomes[0].returns[0], returns[0], "a copy, not the local object")
+})
+
+test("the two milestone times stay local", () => {
+  for (const deskVisibility of ["private", "public"]) {
+    const { published } = publish(withOutcomes([outcomeEntry(FULL_ENTRY)]), { deskVisibility, machineSecret: SECRET })
+    const text = JSON.stringify(published.outcomes)
+    assert.equal(text.includes("first_validating_at"), false)
+    assert.equal(text.includes("first_delivered_at"), false)
+    assert.equal(text.includes("2026-09-25T08:40"), false)
+    assert.equal(DATE_SHAPE.test(text), false)
+    assert.equal(/\d{2}:\d{2}/u.test(text), false)
+  }
+})
+
+test("a truncated or damaged returns list says so in the published entry, and since null publishes null", () => {
+  const { published } = publish(withOutcomes([outcomeEntry({ since: null, returns: [], returns_truncated: true, returns_unreadable: 2 })]))
+  assert.deepEqual(published.outcomes[0], { ...published.outcomes[0], since: null, returns: [], returns_truncated: true, returns_unreadable: 2 })
+  assert.deepEqual(Object.keys(published.outcomes[0]).slice(7), ["since", "returns", "returns_truncated", "returns_unreadable"])
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  const only = publish(withOutcomes([outcomeEntry({ returns_unreadable: 1 })])).published.outcomes[0]
+  assert.deepEqual(Object.keys(only).slice(7), ["returns_unreadable"])
+})
+
+test("a local rev, deliveries or returns_unreadable above 9999 publishes as 9999 and the file validates", () => {
+  const { published } = publish(withOutcomes([outcomeEntry({ rev: 10000, deliveries: 123456, returns_unreadable: 70000 }), outcomeEntry({ job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", rev: 9999, deliveries: 9998, returns_unreadable: 5 })]))
+  const byJob = Object.fromEntries(published.outcomes.map((entry) => [entry.job, entry]))
+  assert.deepEqual([byJob[BASE_OUTCOME.job].rev, byJob[BASE_OUTCOME.job].deliveries, byJob[BASE_OUTCOME.job].returns_unreadable], [9999, 9999, 9999])
+  assert.deepEqual([byJob["5e6f708192a3b4c5d6e7f8091a2b3c4d"].rev, byJob["5e6f708192a3b4c5d6e7f8091a2b3c4d"].deliveries, byJob["5e6f708192a3b4c5d6e7f8091a2b3c4d"].returns_unreadable], [9999, 9998, 5])
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+})
+
+// ---------------------------------------------------------------------------
+// human_turns: offsets on the session clock, classes and a basis, nothing else.
+// ---------------------------------------------------------------------------
+
+const TURN_AT = (offsetMs) => new Date(Date.parse(LOCAL_GOLDEN.session.started_at) + offsetMs).toISOString()
+const localTurn = (offsetMs, rest = {}) => ({ at: TURN_AT(offsetMs), basis: "after_stop", window_ms: 4000, prompt_class: "xs", output_class: "l", ...rest })
+const withTurns = (turns, extra = {}) => ({ ...local(), human_turns: turns, ...extra })
+const humanTurnFlags = (published) => published.unavailable.filter((entry) => entry.field === "human_turns")
+
+test("a human turn publishes its offset on the session clock, as intervals do", () => {
+  const value = local()
+  const sub = value.intervals.find((interval) => interval.kind === "subagent")
+  const turns = [localTurn(0, { basis: "first", window_ms: null, prompt_class: "s", output_class: "none" }), localTurn(Date.parse(sub.start) - Date.parse(value.session.started_at)), localTurn(5400000)]
+  const { published } = publish({ ...value, human_turns: turns })
+  const interval = published.intervals.find((entry) => entry.kind === "subagent")
+  assert.deepEqual(published.human_turns.map((turn) => turn.at_ms), [0, interval.start_ms, 5400000])
+  assert.deepEqual(published.human_turns[0], { at_ms: 0, basis: "first", window_ms: null, prompt_class: "s", output_class: "none" })
+  assert.deepEqual(published.human_turns[1], { at_ms: interval.start_ms, basis: "after_stop", window_ms: 4000, prompt_class: "xs", output_class: "l" })
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  assert.deepEqual(humanTurnFlags(published), [])
+})
+
+test("published facts without human_turns stay valid and carry no human_turns key", () => {
+  const bare = local()
+  delete bare.human_turns
+  const { published } = publish(bare)
+  assert.equal(Object.hasOwn(published, "human_turns"), false)
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  assert.equal(Object.hasOwn(publish(withTurns([])).published, "human_turns"), true, "an empty list is a recorded, empty list")
+  assert.deepEqual(publish(withTurns([])).published.human_turns, [])
+  assert.deepEqual(validatePublished(publish(withTurns([])).published), { ok: true, errors: [] })
+})
+
+test("a turn whose time cannot be placed on the session clock is dropped and the field is flagged", () => {
+  const turns = [
+    localTurn(-1000, { basis: "first", window_ms: null }),
+    localTurn(1000, { basis: "first", window_ms: null }),
+    localTurn(2000),
+    localTurn(5400001),
+  ]
+  const { published } = publish(withTurns(turns))
+  assert.deepEqual(published.human_turns.map((turn) => turn.at_ms), [1000, 2000])
+  assert.deepEqual(humanTurnFlags(published), [{ field: "human_turns", reason: "source_unreadable" }])
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  // a local flag is kept once, beside the transform's own
+  const flagged = publish(withTurns(turns, { unavailable: [...local().unavailable, { field: "human_turns", reason: "capped" }] })).published
+  assert.deepEqual(humanTurnFlags(flagged).map((entry) => entry.reason).sort(), ["capped", "source_unreadable"])
+  // no flag when every turn is placed
+  assert.deepEqual(humanTurnFlags(publish(withTurns([localTurn(2000)])).published), [])
+})
+
+test("a public desk publishes the same list", () => {
+  const turns = [localTurn(0, { basis: "first", window_ms: null }), localTurn(90000), localTurn(91000, { basis: "mid_turn", window_ms: 1000 })]
+  const privateDesk = publish(withTurns(turns)).published
+  for (const deskVisibility of ["public", "unknown", undefined]) {
+    const { published } = publish(withTurns(turns), { deskVisibility, machineSecret: SECRET })
+    assert.equal(published.human_turns.length, 3, String(deskVisibility))
+    assert.deepEqual(published.human_turns, privateDesk.human_turns, String(deskVisibility))
+    assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+    assert.deepEqual(humanTurnFlags(published), [])
+  }
+})
+
+test("the published list holds offsets, classes and a basis and nothing else (SENTINEL)", () => {
+  const turns = [localTurn(0, { basis: "first", window_ms: null }), localTurn(90000), localTurn(91000, { basis: "mid_turn", window_ms: 1000 })]
+  for (const deskVisibility of ["private", "public"]) {
+    const { published } = publish(withTurns(turns), { deskVisibility, machineSecret: SECRET })
+    for (const turn of published.human_turns) assert.deepEqual(Object.keys(turn), ["at_ms", "basis", "window_ms", "prompt_class", "output_class"])
+    const text = JSON.stringify(published.human_turns)
+    assert.equal(text.includes(SENTINEL), false)
+    assert.equal(DATE_SHAPE.test(text), false, "no date")
+    assert.equal(text.includes("2026"), false)
+    assert.equal(text.includes('"at"'), false, "the local time key never leaves")
+  }
+  // a local turn carrying anything but the schema's keys is not valid local facts, so the transform refuses it
+  assert.throws(() => publish(withTurns([{ ...localTurn(0, { basis: "first", window_ms: null }), text: SENTINEL }])), (error) => error instanceof TypeError && !error.message.includes(SENTINEL))
+})
+
+test("a list kept at the limit publishes whole and keeps its capped flag", () => {
+  const turns = Array.from({ length: LIMITS.humanTurns }, (_, index) => localTurn(index * 1000, index === 0 ? { basis: "first", window_ms: null } : {}))
+  const { published } = publish(withTurns(turns, { unavailable: [...local().unavailable, { field: "human_turns", reason: "capped" }] }))
+  assert.equal(published.human_turns.length, LIMITS.humanTurns)
+  assert.ok(humanTurnFlags(published).some((entry) => entry.reason === "capped"))
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
 })

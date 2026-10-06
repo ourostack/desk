@@ -2,11 +2,12 @@
 // leading with the action; every other command passes without the guard reading the desk.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { clonedRepos, elsewhereCloneDenial } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-clone.js"
+import { clonedRepos, elsewhereCloneDenial, loadDeskTasks } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-clone.js"
 import { task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { saysElsewhere, ELSEWHERE_NOTE } from "../../../../../plugins/desk/mcp/src/runtime/elsewhere-note.js"
@@ -47,6 +48,8 @@ put("lighthouse-relay/local-job/task.md", card("local-job", "processing", "acme/
 put("lighthouse-relay/long-branch/task.md", card("long-branch", "processing", "acme/gadgets", "push `feature/a-very-long-branch-name-over-thirty` from my other laptop."))
 put("lighthouse-relay/text-only/task.md", card("text-only", "processing", "acme/unlisted-name", "the work for `acme/sprockets` is only on my old laptop."))
 put("lighthouse-relay/blocker-only/task.md", "---\ntitle: blocker-only\nstatus: blocked\nrepos:\n  - local_path: \"\"\n  - name: acme/blocked-repo\n---\n\n## Blocker\n\nThe branch is not on this machine.\n")
+// The repository only in the card's `repos:` list, as in the boot acceptance `elsewhere-clone` card: nothing in its text names it, so only a reader that parses `repos:` finds it.
+put("lighthouse-relay/listed-only/task.md", card("listed-only", "processing", "ari-fixture/listed-only", "push `listed-branch` from my other laptop, then review the branch here."))
 put("lighthouse-relay/finished/task.md", card("finished", "done", "acme/finished-repo", "push the branch from my other laptop."))
 test.after(() => { for (const dir of [HOME, DESK, OTHER]) rmSync(dir, { recursive: true, force: true }) })
 
@@ -81,10 +84,10 @@ test("clonedRepos reads the repository of a clone or fetch in every URL form, an
 test("round W and X: the clone the Copilot agent ran is denied, leading with the action and the branch to ask for", async () => {
   const result = await verdict("cd ~/code && git clone https://github.com/anthropics/claude-code.git claude-code && git -C claude-code branch -a")
   assert.equal(result.deny, true)
-  assert.match(result.reason, /^Ask the operator to push relay-heartbeat-15s from the other machine; do not clone or fetch to look for it\. /u)
+  assert.match(result.reason, /^Ask the operator to push relay-heartbeat-15s unless they already said it is pushed; if so, use task_update\. Do not clone or fetch to look for it\. /u)
   assert.match(result.reason, /task beacon-relay-push-check/u)
   // The way out comes right after the first sentence: record the operator's word in the card, then retry.
-  assert.match(result.reason, /\. If the operator says it is pushed now, record that with task_update \(rewrite the next step so it no longer says the work is on another machine\), then retry\. /u)
+  assert.match(result.reason, /\. If the operator's own message in this conversation already says it is pushed, that counts: rewrite the next step with task_update so it no longer says the work is on another machine, then retry, and do not ask again\. /u)
   assertActionable(assert, result.reason)
 })
 
@@ -98,7 +101,7 @@ test("the branch is 'the branch' when the card names none or one longer than 30 
   for (const [command, expected] of [["git clone https://github.com/acme/gadgets.git", "the branch"], ["git clone https://github.com/acme/sprockets.git", "the branch"]]) {
     const result = await verdict(command)
     assert.equal(result.deny, true, command)
-    assert.match(result.reason, new RegExp(`^Ask the operator to push ${expected} from`, "u"))
+    assert.match(result.reason, new RegExp(`^Ask the operator to push ${expected} unless they already said it is pushed; if so, use task_update\\. `, "u"))
     assertActionable(assert, result.reason)
     assert.ok(firstSentence(result.reason).length <= 120)
   }
@@ -120,7 +123,7 @@ test("a clone passes when no card marks that repository as elsewhere", async () 
 test("a card whose blocker (not its next step) says the work is elsewhere denies a clone of its repo, and a repo entry with no name is skipped", async () => {
   const result = await verdict("git clone https://github.com/acme/blocked-repo.git")
   assert.equal(result.deny, true)
-  assert.match(result.reason, /^Ask the operator to push the branch from the other machine; do not clone or fetch to look for it\. .*The card for task blocker-only /u)
+  assert.match(result.reason, /^Ask the operator to push the branch unless they already said it is pushed; if so, use task_update\. Do not clone or fetch to look for it\. .*The card for task blocker-only /u)
 })
 
 test("outside the desk folder, the desk the host binds ($DESK) is the one read", async () => {
@@ -153,7 +156,7 @@ test("the hook denies the clone on Claude and Copilot in their own shapes, and p
     assertActionable(assert, claude.hookSpecificOutput.permissionDecisionReason)
     const copilot = await protectedCheckoutHook({ toolName: "bash", toolArgs: JSON.stringify({ command }), cwd: DESK }, "copilot")
     assert.equal(copilot.permissionDecision, "deny")
-    assert.match(copilot.permissionDecisionReason, /^Ask the operator to push relay-heartbeat-15s/u)
+    assert.match(copilot.permissionDecisionReason, /^Ask the operator to push relay-heartbeat-15s unless they already said it is pushed/u)
     assert.deepEqual(await protectedCheckoutHook({ tool_name: "Bash", tool_input: { command: "ls -la" }, cwd: DESK }, "claude"), {})
     assert.deepEqual(await protectedCheckoutHook({ tool_name: "Bash", tool_input: { command: "git clone https://github.com/acme/widgets.git" }, cwd: DESK }, "claude"), {})
   } finally {
@@ -209,4 +212,41 @@ test("the guard fails open: an error reading a card allows the command and the h
   } finally {
     rmSync(broken, { recursive: true, force: true })
   }
+})
+
+// Boot acceptance round AA: the hook runs from the plugin folder, where no node_modules is installed. Reading a card's nested `repos:` list needs gray-matter, so the guard restores the runtime pack first (as boot does).
+// Under the dependency-free reader every card has no repos, and 4 of 4 `elsewhere-clone` runs cloned freely. The unit tests above run beside node_modules and never saw it.
+test("the desk's cards are read only after the runtime dependencies are restored", async () => {
+  const calls = []
+  const tasks = await loadDeskTasks({ cwd: DESK, env, ensureDependencies: async (given) => { calls.push(given) } })
+  assert.deepEqual(calls, [env])
+  assert.ok(tasks.some((task) => task.slug === "beacon-relay-push-check"))
+  await assert.rejects(loadDeskTasks({ cwd: DESK, env, ensureDependencies: async () => { throw new Error("no pack") } }), /no pack/u)
+})
+
+test("the hook run from a bare plugin folder (no node_modules) still denies the clone, and still passes another repository", () => {
+  const bare = realpathSync(mkdtempSync(path.join(tmpdir(), "elsewhere-bare-")))
+  try {
+    const plugin = path.join(bare, "desk")
+    cpSync(path.resolve(import.meta.dirname, "../../../../../plugins/desk"), plugin, { recursive: true, dereference: true, filter: (file) => path.basename(file) !== "node_modules" })
+    const run = (command) => spawnSync(process.execPath, [path.join(plugin, "hooks", "protected-checkout.cjs"), "claude"], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: DESK }),
+      env: { PATH: process.env.PATH, HOME: bare, DESK_RUNTIME_CACHE_DIR: path.join(bare, "cache") },
+      encoding: "utf8",
+    })
+    const denied = run("cd ~/code && git clone https://github.com/ari-fixture/listed-only.git listed-only")
+    assert.equal(denied.status, 0, denied.stderr)
+    assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny")
+    assert.equal(run("git clone https://github.com/acme/widgets.git").stdout.trim(), "{}")
+  } finally {
+    rmSync(bare, { recursive: true, force: true })
+  }
+})
+
+test("the first sentence, the way out for an operator who already said it is pushed, fits within 120 characters even with a 30-character branch", async () => {
+  const load = async () => [{ slug: "long-branch", repos: [{ name: "gadgets" }], next_step: "push `abcdefghijklmnopqrstuvwxyz1234` from my other laptop.", blocker: "" }]
+  const result = await elsewhereCloneDenial({ command: "git clone https://github.com/acme/gadgets.git", cwd: "/nowhere", env: {}, load })
+  assert.equal(result.deny, true)
+  assertActionable(assert, result.reason)
+  assert.match(firstSentence(result.reason), /^Ask the operator to push abcdefghijklmnopqrstuvwxyz1234 unless they already said it is pushed; if so, use task_update\.$/u)
 })

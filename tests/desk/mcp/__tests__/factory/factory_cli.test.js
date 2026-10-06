@@ -86,6 +86,20 @@ test("status returns local factory health without exposing marker paths or secre
   assert.equal(result.markers, 0)
   assert.equal(result.finalize, 0)
   assert.equal(output.includes(env.HOME), false)
+  assert.equal(result.orphan_pass, "orphan pass: no record yet")
+}))
+
+test("status prints one line for the orphan pass: what it did, or the class it failed with", () => scratch(async (env) => {
+  const { writeStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  const run = async () => {
+    let output = ""
+    assert.equal(await main({ argv: ["status"], env, write: (text) => { output += text }, logError: () => assert.fail("status must succeed") }), 0)
+    return JSON.parse(output).orphan_pass
+  }
+  await writeStatus(env, { orphans: { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:05.000Z", examined: 2, unexamined: 1, pending: 0, frozen: { no_facts: 1 }, last_wrap_at: null, sweeps_in_walk: 1 } })
+  assert.equal(await run(), "orphan pass: ran 2026-10-06T00:00:05.000Z, examined 2, unexamined 1, pending 0, frozen 1, last full walk never, 1 sweeps into the walk")
+  await writeStatus(env, { orphans: { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:05.000Z", last_wrap_at: null, sweeps_in_walk: 1, failed: "pass_failed" } })
+  assert.equal(await run(), "orphan pass: failed (pass_failed), last full walk never")
 }))
 
 test("derive refuses an arbitrary marker path without echoing it", () => scratch(async (env) => {
@@ -105,16 +119,22 @@ test("derive and status reject malformed options and out-of-budget quiet waits",
   await assert.rejects(runStatusCommand({ argv: ["extra"], env }), /Usage:/u)
 }))
 
+/** Records `repo` as a private desk in the factory state's visibility cache, so job-link names its plain job ID. */
+async function knownPrivate(env, repo) {
+  await fs.writeFile(path.join(await factoryStateRoot(env), "visibility.json"), JSON.stringify({ [repo]: { visibility: "private", checked_at: new Date().toISOString() } }))
+}
+
 test("build writes the deterministic report tree and job-link returns the accepted URL", () => scratch(async (env) => {
   const store = path.join(env.HOME, "store")
   const out = path.join(store, "_out")
   cpSync(FIXTURE_STORE, store, { recursive: true })
   assert.deepEqual(await runBuildCommand({ argv: ["--store", store, "--out", out] }), { jobs: 2, sessions: 4 })
   assert.equal(JSON.parse(readFileSync(path.join(out, "jobs", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"), "utf8")).job, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-  assert.deepEqual(await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--person-prefix", "", "--track", "factory", "--slug", "store-pipeline"] }), {
+  await knownPrivate(env, "ourostack/desk")
+  assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--person-prefix", "", "--track", "factory", "--slug", "store-pipeline"] }), {
     link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
   })
-  assert.deepEqual(await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--track", "factory", "--slug", "store-pipeline"] }), {
+  assert.deepEqual(await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--track", "factory", "--slug", "store-pipeline"] }), {
     link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
   })
   await assert.rejects(runBuildCommand({ argv: ["--store", store] }), /Usage: factory\.js build/u)
@@ -142,10 +162,11 @@ test("job-link resolves the card's birth path first when --desk is given, so a r
   const currentJob = jobId({ deskRemote: remote, personPrefix: "", track: "track", slug: "new-slug" })
   assert.notEqual(birthJob, currentJob)
 
-  const withoutDesk = await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "track", "--slug", "new-slug"] })
+  await knownPrivate(env, "ourostack/desk")
+  const withoutDesk = await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "track", "--slug", "new-slug"] })
   assert.equal(withoutDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${currentJob}.md`, "without --desk, the given (current) path is hashed as-is")
 
-  const withDesk = await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", desk, "--track", "track", "--slug", "new-slug"] })
+  const withDesk = await runJobLinkCommand({ env, argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", desk, "--track", "track", "--slug", "new-slug"] })
   assert.equal(withDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${birthJob}.md`, "with --desk, the card's birth path is resolved and hashed instead")
 
   await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", "relative", "--track", "track", "--slug", "new-slug"] }), /Usage: factory\.js job-link/u, "--desk must be absolute")

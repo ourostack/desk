@@ -95,17 +95,17 @@ import * as os from "node:os"
 import { createInterface } from "node:readline"
 import * as path from "node:path"
 
+import { hostFlagsFor } from "./host-flags.js"
 import { toolKind } from "./tool-kinds.js"
-import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, sanitizePlugins, withRequestedModel } from "./derive-common.js"
+import { addNullable, addUnavailable, applyLimits, createHumanTurns, dedupePrRefs, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, sanitizePlugins, shellBinding, usageAbsent, usageOrNull, withRequestedModel } from "./derive-common.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
-import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 
 const HOST = "claude-code"
 const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"])
 const SUBAGENT_SPAWN_TOOLS = new Set(["Agent", "Task"])
-const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive)$/u
+const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive|task_focus|desk_save|task_signoff)$/u
 const COMMIT_SHA_PATTERN = /\b[0-9a-f]{40}\b/gu
 const PR_URL_PATTERN = /github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/pull\/\d+/u
 const SYNTHETIC_MODEL = "<synthetic>"
@@ -114,9 +114,9 @@ const SYNTHETIC_MODEL = "<synthetic>"
 // Small, defensive helpers. None of these ever throw on an unexpected shape.
 // ---------------------------------------------------------------------------
 
-// A usage field the log leaves out counts as 0; one it carries that is no safe non-negative integer is unknown (`null`).
-function usageCount(value) {
-  return value === undefined || value === null ? 0 : countOrNull(value)
+// A usage field the log leaves out or carries as no safe non-negative integer is unknown (`null`), never 0. `usageGap` tells the two apart.
+function usageGap(value) {
+  return usageAbsent(value) ? "absent" : "malformed"
 }
 
 // The larger of two counts; an unknown one yields to a readable one, so a malformed repeat of a message never erases a good value.
@@ -193,6 +193,13 @@ function promptText(content) {
   return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n")
 }
 
+// The number of text characters in a message's content: the whole string, or the text blocks (an image adds nothing). The text itself is never returned.
+function textLength(content) {
+  if (typeof content === "string") return content.length
+  if (!Array.isArray(content)) return 0
+  return content.reduce((sum, block) => sum + (block?.type === "text" && typeof block.text === "string" ? block.text.length : 0), 0)
+}
+
 function isToolResultLine(line) {
   return line.type === "user" && toolResultBlocksOf(line).length > 0
 }
@@ -202,13 +209,36 @@ function isToolResultLine(line) {
 // content (text, image, or string); and it isn't made up only of tool
 // results. Only ever called on a line already known to be `type: "user"`
 // (from `handleUserLine`).
-function isHumanPromptLine(line) {
+export function isHumanPromptLine(line) {
   if (line.isMeta || line.isCompactSummary) return false
   if (line.promptSource === "system") return false
   const originKind = line.origin?.kind
   if (originKind !== undefined && originKind !== "human") return false
   const { hasTextOrImage, isAllToolResult } = classifyUserContent(line.message?.content)
   return hasTextOrImage && !isAllToolResult
+}
+
+// A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, the same rules the sign-off witness uses (`humanMark` in `signoff-witness.js`). `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
+function isHumanTurnLine(line) {
+  if (line.isSidechain === true || line.isMeta === true) return false
+  if (Object.hasOwn(line, "scheduledTaskId") || Object.hasOwn(line, "scheduledFireId")) return false
+  if (line.origin?.kind !== "human") return false
+  if (Object.hasOwn(line, "turnOrigin") && line.turnOrigin !== "human") return false
+  return isHumanPromptLine(line)
+}
+
+// The fixed host marker for an interrupted turn: a prefix test, so no text is kept.
+const INTERRUPT_MARKER = "[Request interrupted by user"
+
+function isInterruptMarker(content) {
+  // Only called on a prompt-like line, whose content is a string or an array.
+  const first = typeof content === "string" ? content : content.find((block) => block?.type === "text")?.text
+  return typeof first === "string" && first.startsWith(INTERRUPT_MARKER)
+}
+
+// A prompt-like line that should have said who wrote it and did not: not the interrupt marker, and not a headless prompt (`promptSource: "sdk"`, which no human typed).
+function isUnmarkedPrompt(line) {
+  return !Object.hasOwn(line, "origin") && line.promptSource !== "sdk" && !isInterruptMarker(line.message?.content)
 }
 
 // ---------------------------------------------------------------------------
@@ -239,21 +269,23 @@ async function streamJsonlFile(filePath, onLine) {
   return { parseFailures, truncated: lastLineFailed }
 }
 
+// A session with no `subagents` folder has no workers, which is no gap; a folder that cannot be read is one.
 async function listSubagentFiles(transcriptPath) {
   const sessionDir = path.join(path.dirname(transcriptPath), path.basename(transcriptPath, ".jsonl"), "subagents")
   let entries
   try {
     entries = await readdir(sessionDir)
-  } catch {
-    return []
+  } catch (error) {
+    return { files: [], unreadable: error?.code !== "ENOENT" }
   }
-  return entries
+  const files = entries
     .filter((name) => /^agent-.+\.jsonl$/u.test(name))
     .sort()
     .map((name) => ({
       jsonlPath: path.join(sessionDir, name),
       metaPath: path.join(sessionDir, name.replace(/\.jsonl$/u, ".meta.json")),
     }))
+  return { files, unreadable: false }
 }
 
 async function readSubagentMeta(metaPath) {
@@ -277,14 +309,23 @@ function createAgentProcessor({ agentIndex }) {
   const modelOrder = []
   const pendingCalls = new Map() // tool_use id -> { name, kind, start, isSubagentCall }
   const pendingDeskCalls = new Map()
-  const pendingFileWrites = new Map()
-  const pendingGitCommits = new Map() // tool_use id -> { start, cwds }
+  const pendingFileWrites = new Map() // tool_use id -> [{ at, path }]
+  const pendingFocusCalls = new Map() // tool_use id -> { at, track, slug } | { at, clear }
+  const pendingGitCommits = new Map() // tool_use id -> { start, commits: [{ cwd, paths }] }
   const lastFinishedByKind = new Map() // kind -> { end, outcome, retried }
   const issuedIds = new Set()
   const spawnTaskById = new Map() // spawn tool_use id -> { track, slug } from its prompt
   const spawnSpanById = new Map() // spawn tool_use id -> { start, end } of the spawning call
+  const spawnStartById = new Map() // spawn tool_use id -> time of the spawning call, answered or not
   let firstPromptSeen = false
   let firstPromptTask = null
+  // Human turns are the root agent's only: a subagent's prompt comes from its parent.
+  const humanTurns = agentIndex === 0 ? createHumanTurns() : null
+  let humanSeen = false
+  let promptLikeSeen = false
+  let originSeen = false
+  let unmarkedSeen = false
+  let humanTurnUndated = false
 
   const intervals = []
   const toolCallCounts = new Map()
@@ -294,6 +335,7 @@ function createAgentProcessor({ agentIndex }) {
   const commitShas = new Set()
   const deskToolCalls = []
   const shellGitCommits = []
+  const focusCalls = []
   let toolRetries = 0
   let apiRetries = 0
   let compactions = 0
@@ -327,10 +369,12 @@ function createAgentProcessor({ agentIndex }) {
     if (!pending) return
     pendingCalls.delete(id)
     const deskCall = pendingDeskCalls.get(id)
-    const fileWrite = pendingFileWrites.get(id)
+    const writes = pendingFileWrites.get(id)
+    const focus = pendingFocusCalls.get(id)
     const gitCommit = pendingGitCommits.get(id)
     pendingDeskCalls.delete(id)
     pendingFileWrites.delete(id)
+    pendingFocusCalls.delete(id)
     pendingGitCommits.delete(id)
     if (ts === null) {
       // A result with no readable time: the call can't be measured, so it is
@@ -362,9 +406,10 @@ function createAgentProcessor({ agentIndex }) {
     }
 
     if (deskCall) deskToolCalls.push({ ...deskCall, agent: agentIndex, ok: outcome === "ok" })
-    if (fileWrite && outcome === "ok") fileWrites.push({ ...fileWrite, agent: agentIndex })
+    if (focus && outcome === "ok") focusCalls.push({ agent: agentIndex, ...focus })
+    if (writes && outcome === "ok") for (const write of writes) fileWrites.push({ ...write, agent: agentIndex })
     if (gitCommit && outcome === "ok" && !exitedNonZero(block)) {
-      for (const cwd of gitCommit.cwds) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd, agent: agentIndex })
+      for (const { cwd, paths } of gitCommit.commits) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd, paths, agent: agentIndex })
     }
   }
 
@@ -393,16 +438,19 @@ function createAgentProcessor({ agentIndex }) {
     const model = message.model
     if (id !== undefined && !line.isApiErrorMessage && model !== SYNTHETIC_MODEL) {
       const usage = message.usage ?? {}
-      const fields = {
-        input: usageCount(usage.input_tokens),
-        output: usageCount(usage.output_tokens),
-        cache_read: usageCount(usage.cache_read_input_tokens),
-        cache_write: usageCount(usage.cache_creation_input_tokens),
+      const raw = { input: usage.input_tokens, output: usage.output_tokens, cache_read: usage.cache_read_input_tokens, cache_write: usage.cache_creation_input_tokens }
+      const fields = {}
+      const gaps = {}
+      for (const [key, value] of Object.entries(raw)) {
+        fields[key] = usageOrNull(value)
+        if (fields[key] === null) {
+          gaps[key] = usageGap(value)
+          if (gaps[key] === "malformed") tokensUnreadable = true
+        }
       }
-      if (Object.values(fields).includes(null)) tokensUnreadable = true
       if (!usageById.has(id)) {
         if (isValidModelId(model)) {
-          usageById.set(id, { model, ...fields })
+          usageById.set(id, { model, ...fields, gaps })
           if (!modelCounts.has(model)) modelOrder.push(model)
           modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1)
         } else {
@@ -410,12 +458,16 @@ function createAgentProcessor({ agentIndex }) {
         }
       } else {
         const existing = usageById.get(id)
-        existing.input = maxReadable(existing.input, fields.input)
-        existing.output = maxReadable(existing.output, fields.output)
-        existing.cache_read = maxReadable(existing.cache_read, fields.cache_read)
-        existing.cache_write = maxReadable(existing.cache_write, fields.cache_write)
+        for (const key of Object.keys(raw)) {
+          existing[key] = maxReadable(existing[key], fields[key])
+          if (existing[key] !== null) delete existing.gaps[key]
+          else existing.gaps[key] = gaps[key] === "malformed" || existing.gaps[key] === "malformed" ? "malformed" : "absent"
+        }
       }
     }
+
+    // The reply's size only: the text is measured here and not kept.
+    if (humanTurns !== null && humanSeen && line.isSidechain !== true && !line.isApiErrorMessage && message.model !== SYNTHETIC_MODEL) humanTurns.addReply(textLength(message.content))
 
     const content = Array.isArray(message.content) ? message.content : []
     for (const block of content) {
@@ -428,6 +480,7 @@ function createAgentProcessor({ agentIndex }) {
         // The prompt is matched here and dropped; only a validated pair is kept.
         const task = parseDeskTaskLine(block.input?.prompt)
         if (task !== null) spawnTaskById.set(block.id, task)
+        if (ts !== null) spawnStartById.set(block.id, ts)
       }
       if (ts === null) {
         // A call with no readable start can't be measured: dropped like an
@@ -446,21 +499,29 @@ function createAgentProcessor({ agentIndex }) {
       const input = block.input ?? {}
       if (FILE_WRITE_TOOLS.has(name)) {
         const filePath = name === "NotebookEdit" ? input.notebook_path : input.file_path
-        if (typeof filePath === "string") pendingFileWrites.set(block.id, { at: ts, path: filePath })
+        if (typeof filePath === "string") pendingFileWrites.set(block.id, [{ at: ts, path: filePath }])
       }
       if (name === "Bash" && typeof input.command === "string") {
-        // The command is matched here and dropped; only directories are kept.
-        const cwds = gitCommitCwds({ command: input.command, cwd: line.cwd, home: os.homedir() })
-        if (cwds.length > 0) pendingGitCommits.set(block.id, { start: ts, cwds })
+        // The command is matched here and dropped; only paths and directories are kept.
+        const { commits, writes } = shellBinding({ command: input.command, cwd: line.cwd, home: os.homedir() })
+        if (commits.length > 0) pendingGitCommits.set(block.id, { start: ts, commits })
+        if (writes.length > 0) pendingFileWrites.set(block.id, writes.map((written) => ({ at: ts, path: written })))
       }
-      if (typeof name === "string" && DESK_CALL_PATTERN.test(name)) {
-        pendingDeskCalls.set(block.id, {
+      const deskVerb = typeof name === "string" ? DESK_CALL_PATTERN.exec(name)?.[1] : undefined
+      if (deskVerb === "desk_save") {
+        const saved = deskSavePaths(input)
+        if (saved.length > 0) pendingFileWrites.set(block.id, saved.map((savedPath) => ({ at: ts, path: savedPath })))
+      } else if (deskVerb !== undefined) {
+        const target = declaredFocus(deskVerb, input)
+        if (target !== null) pendingFocusCalls.set(block.id, { at: ts, ...target })
+        // `task_focus` itself is no task tool call; a `task_create` that focuses is both.
+        if (deskVerb !== "task_focus") pendingDeskCalls.set(block.id, {
           at: ts,
           name,
           track: input.track,
           slug: input.slug,
           person: input.person ?? null,
-          status: input.status ?? null,
+          ...deskCallStatus(input),
         })
       }
     }
@@ -475,12 +536,26 @@ function createAgentProcessor({ agentIndex }) {
       if (typeof block.tool_use_id === "string") finalizeToolResult(block, line.toolUseResult, ts)
     }
 
-    if (ts === null) return
+    if (humanTurns !== null && line.isSidechain !== true && isHumanPromptLine(line)) {
+      promptLikeSeen = true
+      if (Object.hasOwn(line, "origin")) originSeen = true
+      else if (isUnmarkedPrompt(line)) unmarkedSeen = true
+    }
+    if (ts === null) {
+      if (humanTurns !== null && isHumanTurnLine(line)) humanTurnUndated = true
+      return
+    }
     if (isHumanPromptLine(line)) {
       if (currentPromptStart !== null) {
         const end = lastActivityTs ?? currentPromptStart
         intervals.push({ kind: "turn", agent: agentIndex, start: currentPromptStart, end })
         if (agentIndex === 0) intervals.push({ kind: "human_wait", agent: agentIndex, start: end, end: ts })
+        // The agent stopped where the wait starts, if it did anything after the last prompt. A prompt the human queued while it worked is written after, but typed during the turn.
+        if (humanTurns !== null && lastActivityTs !== null && line.promptSource !== "queued") humanTurns.agentStopped(end)
+      }
+      if (humanTurns !== null && isHumanTurnLine(line)) {
+        humanTurns.prompt(ts, textLength(line.message?.content))
+        humanSeen = true
       }
       currentPromptStart = ts
       lastActivityTs = null
@@ -541,18 +616,27 @@ function createAgentProcessor({ agentIndex }) {
         commitShas,
         deskToolCalls,
         shellGitCommits,
+        focusCalls,
         issuedIds,
         spawnTaskById,
         spawnSpanById,
+        spawnStartById,
         firstPromptTask,
         hadUnresolvedCall,
         invalidModelSeen,
         tokensUnreadable,
+        tokensAbsent: [...usageById.values()].some((entry) => Object.values(entry.gaps).includes("absent")),
         earliestTimestamp,
         latestTimestamp,
         hadUsableEnvelope,
         firstUsableVersion,
         entrypoint: mapEntrypoint(firstEntrypointRaw),
+        humanTurns,
+        humanTurnUndated,
+        // Prompt-like lines exist but none carries an `origin` key (an older host): who typed them cannot be told.
+        humanTurnsAbsent: promptLikeSeen && !originSeen,
+        // Some prompt lines say who wrote them and some that should do not: the list is a lower bound.
+        humanTurnsPartial: originSeen && unmarkedSeen,
       }
     },
   }
@@ -624,11 +708,13 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   let hadUnresolvedAny = rootResult.hadUnresolvedCall
   let invalidModelSeen = rootResult.invalidModelSeen
 
-  const subagentFiles = await listSubagentFiles(transcriptPath)
+  const { files: subagentFiles, unreadable: subagentsUnreadable } = await listSubagentFiles(transcriptPath)
+  let agentsUnreadable = subagentsUnreadable
   for (let index = 0; index < subagentFiles.length; index += 1) {
     const agentIndex = index + 1
     const { jsonlPath, metaPath } = subagentFiles[index]
     const meta = await readSubagentMeta(metaPath)
+    if (meta === null) agentsUnreadable = true
     const processor = createAgentProcessor({ agentIndex })
     const read = await streamJsonlFile(jsonlPath, (line) => processor.pushLine(line))
     const result = processor.finish()
@@ -666,11 +752,14 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
 
   // Each spawned worker's task: its spawn prompt's line, else its own first prompt's.
   const spawnTasks = []
+  const spawns = []
   for (let index = 1; index < agents.length; index += 1) {
     const owner = spawnOwners[index]
     const task = (owner === -1 ? null : agentResults[owner].spawnTaskById.get(spawnIds[index]) ?? null) ?? agentResults[index].firstPromptTask
     // The spawning call's own span times the brief on its parent's clock.
     const span = owner === -1 ? undefined : agentResults[owner].spawnSpanById.get(spawnIds[index])
+    const at = (owner === -1 ? undefined : agentResults[owner].spawnStartById.get(spawnIds[index])) ?? agentResults[index].earliestTimestamp
+    spawns.push({ agent: index, parent: agents[index].parent, at, task })
     if (task !== null) spawnTasks.push({ agent: index, track: task.track, slug: task.slug, ...(span === undefined ? {} : span) })
   }
 
@@ -702,13 +791,25 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   if ((models.length === 0 && totalParseFailures > 0) || invalidModelSeen) {
     addUnavailable(unavailable, "models", "source_unreadable")
   }
-  if (agentResults.some((result) => result.tokensUnreadable) || models.some(({ tokens }) => [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write].includes(null))) {
-    addUnavailable(unavailable, "tokens", "source_unreadable")
-  }
+  const tokensAbsent = agentResults.some((result) => result.tokensAbsent)
+  const tokensNull = models.some(({ tokens }) => [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write].includes(null))
+  // A null the log's own gaps do not explain (a sum past the safe range) is unreadable too.
+  if (agentResults.some((result) => result.tokensUnreadable) || (tokensNull && !tokensAbsent)) addUnavailable(unavailable, "tokens", "source_unreadable")
+  if (tokensAbsent) addUnavailable(unavailable, "tokens", "field_absent")
+  if (agentsUnreadable) addUnavailable(unavailable, "agents", "source_unreadable")
+  flagEmptyUsage(unavailable, models)
+  for (const { field, reason } of hostFlagsFor(HOST)) addUnavailable(unavailable, field, reason)
   addUnavailable(unavailable, "permission_waits", "host_does_not_record")
   addUnavailable(unavailable, "ci_runs", "not_collected_in_slice_1")
   addUnavailable(unavailable, "commits", "host_does_not_record")
   if (truncatedAny) addUnavailable(unavailable, "turns", "log_truncated")
+  const humanTurnList = rootResult.humanTurns.finish(unavailable)
+  if (rootResult.humanTurnsAbsent) addUnavailable(unavailable, "human_turns", "field_absent")
+  if (rootResult.humanTurnUndated) addUnavailable(unavailable, "human_turns", "source_unreadable")
+  if (rootResult.humanTurnsPartial) addUnavailable(unavailable, "human_turns", "host_records_partly")
+  // A line that could not be read may have been a prompt, so the list is a lower bound.
+  if (rootRead.truncated) addUnavailable(unavailable, "human_turns", "log_truncated")
+  else if (rootRead.parseFailures > 0) addUnavailable(unavailable, "human_turns", "source_unreadable")
   if (hadUnresolvedAny) addUnavailable(unavailable, "tool_durations", safeEndReason === null ? "session_open" : "log_truncated")
 
   const safePlugins = sanitizePlugins(plugins, LIMITS, unavailable)
@@ -744,6 +845,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     },
     refs: { prs: limited.prs, commits: [], unresolved: { prs: 0, commits: 0 } },
     jobs: [],
+    ...(rootResult.humanTurnsAbsent ? {} : { human_turns: humanTurnList }),
     unavailable,
   }
 
@@ -754,6 +856,9 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     shellGitCommits: agentResults.flatMap((result) => result.shellGitCommits),
     nativeCommitShas: [],
     spawnTasks,
+    focusCalls: agentResults.flatMap((result) => result.focusCalls),
+    spawns,
+    prRefs: agentResults.flatMap((result) => result.prRefs).map(({ agent, at, repo, created }) => ({ agent, at, repo, created })),
   }
 
   return { facts, events }

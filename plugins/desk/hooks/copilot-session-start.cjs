@@ -85,6 +85,8 @@ function emit(additionalContext) {
 }
 
 (async () => {
+  // A headless evaluator session gets no startup output and starts nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
+  try { if (require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(process.env)) return; } catch { const v = String(process.env.DESK_FACTORY_HEADLESS ?? ""); if (v !== "" && v !== "0") return; }
   try {
     const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
     const direction = await startupDirection();
