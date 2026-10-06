@@ -3,7 +3,7 @@
 // A merged pull request reaches users through whatever ships its repo. For some changes that is the merge itself; for others
 // it is a release that comes minutes or hours later (ourostack/desk: a release run ships plugins/desk, and a failed release
 // stops it for hours with nothing about the merge showing it). The repository declares which, in `.desk/delivery.json` at its
-// root on the branch the pull request merged into (its base branch, because the rules say how that branch reaches its consumers):
+// root on the branch the pull request merged into (its base branch, because the rules say how that branch reaches its consumers; a base branch with no file falls back to the default branch's):
 //
 //   { "schema_version": 1, "rules": [
 //       { "paths": ["plugins/desk/**"], "delivered_at": { "kind": "github_label", "name": "released" } },
@@ -44,23 +44,33 @@ const MERGE = Object.freeze({ kind: "merge" })
 const GH_TOKEN_BUDGET_MS = 3000
 const ghTokens = new WeakMap()
 
-// istanbul ignore next -- the real `gh`; every test injects its own runner.
-const runGh = (args) =>
-  new Promise((resolve, reject) => {
-    execFile("gh", args, { timeout: GH_TOKEN_BUDGET_MS, maxBuffer: 65536, windowsHide: true }, (error, stdout) => (error === null ? resolve(String(stdout)) : reject(error)))
-  })
+// Asks `gh` (through `exec`, a test seam) and resolves with what it printed; rejects on any error, including the time limit.
+export function makeRunGh(exec = execFile) {
+  return (args) =>
+    new Promise((resolve, reject) => {
+      exec("gh", args, { timeout: GH_TOKEN_BUDGET_MS, maxBuffer: 65536, windowsHide: true }, (error, stdout) => (error === null ? resolve(String(stdout)) : reject(error)))
+    })
+}
+const runGh = makeRunGh()
+// istanbul ignore next -- the real `gh` is chosen only when no fetch was injected; every test injects its own.
+const defaultRunner = (fetchFn) => (fetchFn === undefined ? runGh : undefined)
 
-// The token `gh` holds for github.com, or undefined. Remembered per runner for the life of the process; only a token is remembered.
-async function ghToken(run) {
-  if (ghTokens.has(run)) return ghTokens.get(run)
-  let token
-  try {
-    token = String(await run(["auth", "token", "--hostname", "github.com"])).trim() || undefined
-  } catch {
-    token = undefined
+// The token `gh` holds for github.com, or undefined. The lookup is made once per runner for the life of the process, failure included, and
+// concurrent callers share the one in flight, so a hanging `gh` costs one time limit, not one per call.
+function ghToken(run) {
+  if (!ghTokens.has(run)) {
+    ghTokens.set(
+      run,
+      (async () => {
+        try {
+          return String(await run(["auth", "token", "--hostname", "github.com"])).trim() || undefined
+        } catch {
+          return undefined
+        }
+      })(),
+    )
   }
-  if (token !== undefined) ghTokens.set(run, token)
-  return token
+  return ghTokens.get(run)
 }
 
 async function github({ fetchFn, env, budgetMs, token: fromGh }, route, accept = "application/vnd.github+json") {
@@ -120,8 +130,7 @@ function usableRule(rule) {
  * `fetchFn`, `budgetMs` (per request) and `ghRunner` (asks `gh` for a token) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
  */
 export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner }) {
-  // istanbul ignore next -- the real `gh` is used only when no fetch was injected; every test injects its own.
-  const runner = ghRunner ?? (fetchFn === undefined ? runGh : undefined)
+  const runner = ghRunner ?? defaultRunner(fetchFn)
   const inEnv = [env.GH_TOKEN, env.GITHUB_TOKEN].some((value) => typeof value === "string" && value.trim() !== "")
   const token = inEnv || runner === undefined ? undefined : await ghToken(runner)
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
@@ -136,22 +145,28 @@ export async function prDelivery({ repo, number, env = process.env, fetchFn, bud
   const pr = prAnswer.status === 200 ? parse(prAnswer.body) : null
   if (pr === null || !Array.isArray(pr.labels)) return notVerified(`pull request ${repo}#${number} could not be read from GitHub (${why(prAnswer.status)})`)
 
-  // The rules describe how the branch the pull request merged into reaches its consumers, so they are read from that branch.
-  const base = typeof pr.base?.ref === "string" && pr.base.ref !== "" ? `?ref=${encodeURIComponent(pr.base.ref)}` : ""
-  const policyAnswer = await github(ask, `/repos/${repo}/contents/${POLICY_PATH}${base}`, "application/vnd.github.raw+json")
-  let rules = null
+  // Not merged is never delivered, whatever the rules say.
+  if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false }
+
+  // The rules describe how the branch the pull request merged into reaches its consumers, so they are read from that branch. A base branch
+  // with no rules file (a release branch, a stacked branch, a deleted base) falls back to the default branch's rules.
+  const baseRef = typeof pr.base?.ref === "string" ? pr.base.ref : ""
+  const rulesAt = (ref) => github(ask, `/repos/${repo}/contents/${POLICY_PATH}${ref === "" ? "" : `?ref=${encodeURIComponent(ref)}`}`, "application/vnd.github.raw+json")
+  let policyAnswer = await rulesAt(baseRef)
   if (policyAnswer.status === 404) {
+    // A private or hidden repo also answers 404, so "no rules" is believed only when the repo itself is visible.
     const visible = await github(ask, `/repos/${repo}`)
     if (visible.status !== 200) return notVerified(hiddenReason(repo, visible.status))
-  } else {
+    if (baseRef !== "" && parse(visible.body)?.default_branch !== baseRef) policyAnswer = await rulesAt("")
+  }
+  let rules = null
+  if (policyAnswer.status !== 404) {
     if (policyAnswer.status !== 200) return notVerified(`${repo}'s delivery rules could not be read from GitHub (${why(policyAnswer.status)})`)
     const policy = parse(policyAnswer.body)
     rules = Array.isArray(policy?.rules) ? policy.rules.map(usableRule) : []
     if (rules.length === 0 || rules.includes(null)) return notVerified(`${repo}'s ${POLICY_PATH} is not a usable delivery policy (every rule needs \`paths\` and a \`delivered_at\` of kind merge or github_label)`)
   }
 
-  // Not merged is never delivered, whatever the rules say.
-  if (!pr.merged_at) return { status: "undelivered", unmet: [{ need: "be merged" }], merged: false }
   if (rules === null) return { status: "delivered", basis: `no delivery rule declared in ${repo} (${POLICY_PATH}); merge counts as delivery` }
   if (rules.every((rule) => rule.delivered_at.kind === "merge")) return { status: "delivered", basis: "every rule delivers at merge" }
   const labels = new Set(pr.labels.map((label) => label?.name))
