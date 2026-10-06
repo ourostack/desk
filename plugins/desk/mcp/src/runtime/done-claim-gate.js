@@ -443,20 +443,22 @@ function liveCard(task) {
   }
 }
 
-// A reply that says a delivery was accepted: "the task is accepted", "task soil-sensor was signed off", "you accepted it", "Accepted." A request ("accept or send back?") is no claim.
-const ACCEPTED_WORD = "(?:accepted|signed[ -]off)"
-const ACCEPTANCE_PATTERNS = [
-  new RegExp(`\\b(?:the|this|my|our)\\s+(?:task|job|delivery|work)\\s+(?:is|was|has been)\\s+(?:now\\s+)?${ACCEPTED_WORD}\\b`, "iu"),
-  new RegExp(`\\b(?:task|job)\\s+[\`*"']*[\\w.]*[-_][\\w.-]*[\`*"']*\\s+(?:is|was|has been)\\s+(?:now\\s+)?${ACCEPTED_WORD}\\b`, "iu"),
-  // Tied to the delivery as its object ("you accepted it", "the operator signed off on the task"), so "you accepted the plan" is no claim.
-  new RegExp(`\\b(?:you|the operator|operator|they)\\s+(?:have\\s+|has\\s+)?(?:accepted|signed[ -]off(?:\\s+on)?)\\s+(?:it|them|(?:the|this|that|my|our)\\s+(?:task|job|delivery|work)|(?:task|job)\\s+[\`*"']*[\\w.]*[-_][\\w.-]*[\`*"']*)(?![\\w-])`, "iu"),
-  new RegExp(`^[\\s*_#>"'\`\\-\u2713\u2714\u2705]*${ACCEPTED_WORD}[\\s*_"'\`]*(?:[.!]|$)`, "iu"),
-]
+// Acceptance is judged by word, not by phrasing (poka-yoke over inspection): a list of claim shapes can never be complete ("Status:
+// accepted.", "soil-sensor is accepted.", "Ari accepted it."), while one extra block on a reply that mentions acceptance in passing is
+// cheap. So while a touched card is done with no verified acceptance, any acceptance word anywhere in the reply blocks once, unless the
+// reply also states the honest state. Code spans and quotations are left out: quoting a word claims nothing.
+const ACCEPTANCE_WORD = /\b(?:accept(?:s|ed|ance|ing)?|signed[ -]off|sign-?off\s+(?:is\s+)?complete|approved\s+by)\b/iu
+// The honest state. A bare "delivered" is not enough: "Delivered the fix, and the task is accepted." claims both.
+const HONEST_STATE = /\b(?:delivered,?\s+(?:but\s+)?not\s+(?:yet\s+)?accepted|delivered,?\s+(?:and\s+)?(?:awaiting|pending)\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaiting\s+(?:your\s+|the\s+operator's\s+)?sign-?off|awaits\s+(?:your\s+|the\s+operator's\s+)?sign-?off|not\s+(?:yet\s+)?accepted|unsigned|send\s+(?:it\s+|them\s+)?back)\b/iu
 
-/** The sentences of `text` that say a delivery was accepted or signed off (code, quotations, negated, conditional and request forms left out). */
+/** The sentences of `text` that use an acceptance word (code spans and quotations left out). */
 export function acceptanceClaims(text) {
-  const body = withoutQuotedText(withoutBlockQuotes(text))
-  return sentencesOf(body).filter((sentence, index, all) => standing(sentence, ACCEPTANCE_PATTERNS, all[index - 1] ?? ""))
+  return sentencesOf(withoutQuotedText(withoutBlockQuotes(text))).filter((sentence) => ACCEPTANCE_WORD.test(sentence))
+}
+
+/** Whether `text` states that a delivery is not accepted yet: "delivered, not accepted", "awaiting sign-off", "unsigned", "send back". */
+export function statesUnaccepted(text) {
+  return HONEST_STATE.test(withoutQuotedText(withoutBlockQuotes(text)))
 }
 
 /**
@@ -486,7 +488,7 @@ export function doneClaimStopHook(payload, { env = process.env, stateDir = resol
     const unstated = reply === null ? [] : open.filter((task) => taskLevelClaims(reply, task.slug).length > 0 || (doneClaims(reply).length > 0 && !statesStatus(reply, task.status, task.slug)))
     if (unstated.length === 0) {
       // A delivery is done, not accepted: only the operator's own answer, recorded and verified, is an acceptance.
-      if (reply !== null && unaccepted.length > 0 && acceptanceClaims(reply).length > 0) {
+      if (reply !== null && unaccepted.length > 0 && acceptanceClaims(reply).length > 0 && !statesUnaccepted(reply)) {
         const [task] = unaccepted
         return { decision: "block", reason: `Restate your reply as delivered, not accepted. Task ${task.slug} awaits the operator's sign-off and no verified acceptance is recorded. Ask the operator for it in the sign-off packet (asked, delivered with proof, accept or send back) and wait for their answer.` }
       }

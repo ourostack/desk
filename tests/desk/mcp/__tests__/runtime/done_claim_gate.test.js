@@ -8,6 +8,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   acceptanceClaims,
+  statesUnaccepted,
   clearTouchedTasks,
   doneClaimStopHook,
   doneClaims,
@@ -681,13 +682,18 @@ test("a task_signoff call is tracked: a refusal leaves the task back at processi
   assert.match(result.reason, /is at processing\./u)
 })
 
-test("acceptance claims: the forms that say a delivery was accepted, and the requests, negations and conditions that do not", () => {
-  for (const claim of ["The task is accepted.", "Task watering-schedule-api was signed off.", "You accepted it, so I closed the loop.", "The operator has accepted the delivery.", "Accepted.", "**Signed off!**"]) {
-    assert.equal(acceptanceClaims(claim).length, 1, claim)
+test("acceptance is judged by word, not phrasing: any acceptance word counts unless the reply states the honest state; code and quotations claim nothing", () => {
+  const blocked = (text) => acceptanceClaims(text).length > 0 && !statesUnaccepted(text)
+  // The re-review's phrasings, which a list of claim shapes missed, and the first review's.
+  for (const claim of ["Status: accepted.", "Task soil-sensor: accepted.", "soil-sensor is accepted.", "It has been accepted.", "Ari accepted it.", "Ari accepted the task.", "You accepted soil-sensor.", "Sign-off recorded: accepted.", "Accepted by you, so we're finished.", "The task is accepted.", "Task watering-schedule-api was signed off.", "Delivered the fix, and the task is accepted.", "Accepted.", "**Signed off!**", "Approved by Ari.", "Sign-off complete.", "Acceptance is in.", "Since you accepted the plan earlier, I went ahead."]) {
+    assert.equal(blocked(claim), true, claim)
   }
-  for (const quiet of ["Since you accepted the plan earlier, I went ahead.", "They accepted the invite.", "You signed off on the design.", "You accepted that approach.", "Accept or send back?", "Once you have accepted it, I will close the card.", "The task is not accepted yet.", "If you accept it, say so.", "I will record it as accepted when you answer.", "`Accepted.`", "> The task is accepted."]) {
-    assert.equal(acceptanceClaims(quiet).length, 0, quiet)
+  // The honest state clears it, whatever else the reply says.
+  for (const honest of ["Delivered. Asked: x. Delivered: pr 7. Accept or send back?", "Delivered, not accepted: it awaits your sign-off.", "The task is not accepted yet.", "Delivered and awaiting sign-off; nothing is accepted until you say so.", "It is still unsigned, so I have not called it accepted.", "Delivered, pending the operator's sign-off. Accept it or send it back."]) {
+    assert.equal(statesUnaccepted(honest), true, honest)
+    assert.equal(blocked(honest), false, honest)
   }
+  for (const quiet of ["`Accepted.`", "> The task is accepted.", "Merged and deployed.", "Delivered the fix."]) assert.equal(acceptanceClaims(quiet).length, 0, quiet)
 })
 
 test("a reply that says a delivered task was accepted is blocked while its card has no accepted sign-off; an accepted card, a card with no record, or no claim passes", () => {
@@ -711,6 +717,13 @@ test("a reply that says a delivered task was accepted is blocked while its card 
   const quiet = freshState()
   deliveredIn(quiet, signedCard("delivered_unsigned").root)
   assert.deepEqual(stop(quiet, "Delivered. Asked: x. Delivered: pr 7. Accept or send back?"), {}, "the sign-off ask itself passes")
+  // Another card's acceptance passes only when no touched card is unaccepted.
+  const other = freshState()
+  deliveredIn(other, signedCard("accepted").root)
+  assert.deepEqual(stop(other, "The soil-sensor task was accepted last week."), {}, "every touched card has a verified acceptance")
+  const mixed = freshState()
+  deliveredIn(mixed, signedCard("delivered_unsigned").root)
+  assert.equal(blocks(stop(mixed, "The soil-sensor task was accepted last week.")), true, "a touched card is unaccepted, so any acceptance word blocks")
   assert.equal(existsSync(sessionFile(quiet, "s1")), false, "a stop that does not block clears the turn")
 })
 
