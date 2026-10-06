@@ -3,7 +3,7 @@
 // postToolUse adds `toolResult: { resultType, textResultForLlm }`. agentStop: { sessionId, transcriptPath, stopReason, stop_hook_active }.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -11,6 +11,7 @@ import {
   claudeShapedPayload,
   copilotDeny,
   copilotFinalReply,
+  readTranscriptTail,
   copilotToolCalls,
   finalReplyFromEvents,
   isTaskToolName,
@@ -196,8 +197,23 @@ test("the reader waits briefly for the reply Copilot writes just after the stop 
     assert.equal(await copilotFinalReply(path.join(dir, "absent.jsonl"), { waitMs: 100, stepMs: 50, sleep: async () => {} }), null)
     assert.equal(await copilotFinalReply(undefined), null)
     assert.equal(await copilotFinalReply(""), null)
-    // A transcript too large to read is skipped, as the Claude reader skips one.
-    assert.equal(await copilotFinalReply(file, { maxBytes: 3 }), null)
+    // A transcript over the limit is read from its tail, so a long session is still gated.
+    const counted = []
+    const filler = `${JSON.stringify(event("user.message"))}\n`.repeat(50)
+    writeFileSync(file, `${filler}${transcriptOf(event("user.message"), message("Done. All of it."))}`)
+    assert.equal(await copilotFinalReply(file, { maxBytes: 3, tailBytes: 300, record: (kind) => counted.push(kind) }), "Done. All of it.")
+    assert.deepEqual(counted, [], "a reply found in the tail is not a failure")
+    // A tail with no reply, or an empty one, is counted for desk_doctor and still passes.
+    writeFileSync(file, `${filler}${transcriptOf(event("user.message"))}`)
+    assert.equal(await copilotFinalReply(file, { maxBytes: 3, tailBytes: 300, waitMs: 60, stepMs: 30, record: (kind) => counted.push(kind) }), null)
+    writeFileSync(file, `${filler}${transcriptOf(event("user.message"), message(""))}`)
+    assert.equal(await copilotFinalReply(file, { maxBytes: 3, tailBytes: 300, record: (kind) => counted.push(kind) }), null)
+    assert.deepEqual(counted, ["reply_unread", "reply_unread"])
+    // A small file under the limit never counts, and a tail longer than the file reads all of it.
+    assert.equal(await copilotFinalReply(file, { waitMs: 0, record: () => assert.fail("not oversized") }), null)
+    assert.equal(readTranscriptTail(file, statSync(file).size, 10 ** 6), readFileSync(file, "utf8"))
+    // The real counter is the default: an oversized transcript with no reply counts in the isolated state folder.
+    assert.equal(await copilotFinalReply(file, { maxBytes: 3, tailBytes: 300, waitMs: 0 }), null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

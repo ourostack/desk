@@ -8,12 +8,14 @@
 //   agentStop    { sessionId, timestamp, cwd, transcriptPath, stopReason, stop_hook_active }, for the main agent only. It does not carry the reply, and the session transcript does not hold it yet when the hook starts (it lands within about 200 ms), so `copilotFinalReply` waits briefly for it. `{ decision: "block", reason }` makes Copilot continue with the reason as a follow-up message, and the next stop carries `stop_hook_active: true`.
 // There is no matcher in a Copilot hook entry, so a hook runs for every tool and answers `{}` for the ones it does not judge.
 
-import { readFileSync, statSync } from "node:fs"
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs"
+import { recordGateFailure } from "./gate-health.js"
 
 const SHELL_TOOLS = { bash: "Bash", powershell: "PowerShell" }
 const EDITOR_TOOLS = new Set(["edit", "str_replace_editor", "str_replace_based_edit_tool"])
 const TASK_TOOL = /^(.+)-(task_(?:update|create|move|archive|signoff))$/u
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
+const TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 
@@ -183,25 +185,47 @@ export function finalReplyFromEvents(text) {
   return inspectEvents(text).reply
 }
 
+/** The last `bytes` of a file of `size` bytes, as text. The first line may be cut in half; both transcript readers skip a line they cannot parse. */
+export function readTranscriptTail(file, size, bytes = TRANSCRIPT_TAIL_BYTES) {
+  const length = Math.min(bytes, size)
+  const fd = openSync(file, "r")
+  try {
+    const buffer = Buffer.alloc(length)
+    const read = readSync(fd, buffer, 0, length, size - length)
+    return buffer.toString("utf8", 0, read)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 const sleepFor = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 
 /**
  * The final reply in the transcript file at `transcriptPath`, waiting up to `waitMs` (polling every `stepMs`) for it to be written: Copilot starts the stop hook before the reply reaches the file. Null when there is no readable transcript, no reply or an empty one; never throws.
- * `sleep`, `waitMs`, `stepMs` and `maxBytes` are for tests.
+ * A transcript over `maxBytes` is read from its tail (the last 2 MB), because the payload carries no reply and a long session is the likeliest to end in a delivery. If the tail still holds no reply, the gate counts that for `desk_doctor`.
+ * `sleep`, `waitMs`, `stepMs`, `maxBytes`, `tailBytes` and `record` are for tests.
  */
-export async function copilotFinalReply(transcriptPath, { waitMs = 1500, stepMs = 100, maxBytes = MAX_TRANSCRIPT_BYTES, sleep = sleepFor } = {}) {
+export async function copilotFinalReply(transcriptPath, { waitMs = 1500, stepMs = 100, maxBytes = MAX_TRANSCRIPT_BYTES, tailBytes = TRANSCRIPT_TAIL_BYTES, sleep = sleepFor, record = recordGateFailure } = {}) {
   if (typeof transcriptPath !== "string" || transcriptPath === "") return null
   for (let waited = 0; ; waited += stepMs) {
     let text
+    let oversized
     try {
-      if (statSync(transcriptPath).size > maxBytes) return null
-      text = readFileSync(transcriptPath, "utf8")
+      const { size } = statSync(transcriptPath)
+      oversized = size > maxBytes
+      text = oversized ? readTranscriptTail(transcriptPath, size, tailBytes) : readFileSync(transcriptPath, "utf8")
     } catch {
       return null
     }
     const { settled, reply } = inspectEvents(text)
-    if (settled) return reply
-    if (waited >= waitMs) return null
+    if (settled) {
+      if (reply === null && oversized) record("reply_unread")
+      return reply
+    }
+    if (waited >= waitMs) {
+      if (oversized) record("reply_unread")
+      return null
+    }
     await sleep(stepMs)
   }
 }

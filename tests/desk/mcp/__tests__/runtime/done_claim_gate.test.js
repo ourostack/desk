@@ -909,5 +909,5 @@ test("the gate counts its own quiet failures for desk_doctor", () => {
   mkdirSync(broken, { recursive: true })
   writeFileSync(path.dirname(sessionFile(broken, "s1")), "x")
   recordTouchedTask(post(UPDATE, { track: "greenhouse-ops", slug: "watering-schedule-api" }, updated()), { stateDir: broken, root: null })
-  assert.deepEqual({ ...readGateHealth({ stateDir: broken }), last_at: 0 }, { count: 1, last_at: 0, last_kind: "record_failed" })
+  assert.deepEqual({ ...readGateHealth({ stateDir: broken }), last_at: 0 }, { count: 1, last_at: 0, last_kind: "record_failed", lost_history: false })
 })

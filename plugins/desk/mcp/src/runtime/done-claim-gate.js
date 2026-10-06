@@ -14,12 +14,12 @@
 // Claude Code and Copilot CLI. Copilot's `postToolUse`, `userPromptSubmitted` and `agentStop` hooks carry the same session id, and `agentStop` takes the same `{ decision: "block", reason }` (it makes Copilot continue with the reason as a follow-up message, and the next stop carries `stop_hook_active`); `runtime/copilot-hook-payload.js` maps the payloads, and `copilotStopHook` below reads the reply from the session transcript, which Copilot writes just after the hook starts. Codex has a stop event, but Desk has not verified that it can block a reply or hands over the transcript, and its hooks are not trusted by default, so there the rule stays the agent's to keep (see the hooks section of the plugin README and the task-lifecycle skill).
 
 import { createHash } from "node:crypto"
-import { closeSync, existsSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { recordFromLines, topLevelScalar } from "../factory/outcome.js"
 import { recordGateFailure } from "./gate-health.js"
 import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
-import { claudeShapedPayload, copilotFinalReply } from "./copilot-hook-payload.js"
+import { claudeShapedPayload, copilotFinalReply, readTranscriptTail } from "./copilot-hook-payload.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
@@ -27,7 +27,6 @@ export const DONE_GATE_DIR = "done-gate"
 const TERMINAL = new Set(["done", "cancelled"])
 const STALE_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
-const TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024
 const TASK_TOOL = /(?:^|__)task_(update|create|move|archive|signoff)$/u
 const LOCK_STALE_MS = 5000
 
@@ -418,18 +417,6 @@ export function lastAssistantText(transcript) {
   return parts.length === 0 ? null : parts.join("\n")
 }
 
-/** The last `TRANSCRIPT_TAIL_BYTES` of a file, as text. The first line may be cut in half; the transcript reader skips a line it cannot parse. */
-function readTail(file, size) {
-  const fd = openSync(file, "r")
-  try {
-    const buffer = Buffer.alloc(TRANSCRIPT_TAIL_BYTES)
-    const read = readSync(fd, buffer, 0, TRANSCRIPT_TAIL_BYTES, size - TRANSCRIPT_TAIL_BYTES)
-    return buffer.toString("utf8", 0, read)
-  } finally {
-    closeSync(fd)
-  }
-}
-
 /**
  * The reply being stopped on. Claude Code puts it in the payload as `last_assistant_message`, and that is the source to trust: a live run (round 13) showed the transcript file does not yet hold the final message when the Stop hook runs, so reading it alone saw no reply and let "Done." through. The transcript is the fallback, for a host that sends no such field.
  */
@@ -438,7 +425,7 @@ function finalReply(payload) {
   if (typeof payload.transcript_path !== "string") return null
   const size = statSync(payload.transcript_path).size
   // A long session's transcript is read from its tail: the reply is at the end, and passing on size would let any long turn through.
-  if (size > MAX_TRANSCRIPT_BYTES) return lastAssistantText(readTail(payload.transcript_path, size))
+  if (size > MAX_TRANSCRIPT_BYTES) return lastAssistantText(readTranscriptTail(payload.transcript_path, size))
   return lastAssistantText(readFileSync(payload.transcript_path, "utf8"))
 }
 
