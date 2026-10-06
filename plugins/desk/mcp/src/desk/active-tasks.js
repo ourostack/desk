@@ -176,6 +176,9 @@ function finishedCleanup(deskRoot, env) {
   return out
 }
 
+// Boot names this many finished cards; the rest are counted ("and N more"), never left out of the totals.
+const FINISHED_SHOWN = 20
+
 // null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
 export function readCardData(filePath) {
   let fd
@@ -273,7 +276,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
  * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
  * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
  * where `repos` is `[{ name?, local_path?, mode? }]`, and `steps` (only on a card with a readable `## Steps` table) is `{ total, delivered, ready: [id], blocked: [{ id, reason }] }`, dropped steps not counted, and `cleanup_due_count` (only when some) is how many of its `## Resources` rows are due for cleanup.
- * `cleanup` (only when some rows are due): `{ items, cards, finished: [{ card, due }] }`, over the unfinished cards above and the finished or archived cards this machine's cleanup index lists (./cleanup-index.js); `finished` names the latter.
+ * `cleanup` (only when some rows are due): `{ items, cards, finished: [{ card, due }], more }` (`finished` lists the first 20; `more` counts the rest), over the unfinished cards above and the finished or archived cards this machine's cleanup index lists (./cleanup-index.js); `finished` names the latter.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.
  * `redacted`: `{ names, titles }`, how many names and titles were hidden.
@@ -288,13 +291,14 @@ export function activeTasks(deskRoot, { env = process.env } = {}) {
   }
   tracks.sort((a, b) => byUpdatedDesc(a.tasks[0], b.tasks[0]))
   const live = tracks.flatMap((track) => track.tasks.map((task) => task.cleanup_due_count ?? 0)).filter((count) => count > 0)
-  const finished = finishedCleanup(deskRoot, env)
-  const items = live.reduce((sum, count) => sum + count, 0) + finished.reduce((sum, entry) => sum + entry.due, 0)
+  const everyFinished = finishedCleanup(deskRoot, env)
+  const finished = everyFinished.slice(0, FINISHED_SHOWN)
+  const items = live.reduce((sum, count) => sum + count, 0) + everyFinished.reduce((sum, entry) => sum + entry.due, 0)
   return {
     tracks,
     task_count: tracks.reduce((sum, track) => sum + track.tasks.length, 0),
     track_count: tracks.length,
     redacted: counts,
-    ...(items === 0 ? {} : { cleanup: { items, cards: live.length + finished.length, finished } }),
+    ...(items === 0 ? {} : { cleanup: { items, cards: live.length + everyFinished.length, finished, more: everyFinished.length - finished.length } }),
   }
 }

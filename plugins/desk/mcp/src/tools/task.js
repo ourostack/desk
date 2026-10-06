@@ -45,6 +45,7 @@ import { focusNote } from "./task-focus.js"
 import { applyStep } from "../desk/steps.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
 import { recordCleanupCard } from "../desk/cleanup-index.js"
+import { recordArchivedDisposition } from "./task-archived-resource.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -827,10 +828,12 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     person,
     segments: [track, slug, "task.md"],
   })
-  // A call that only records a resource may reach an archived card, so a cleanup reminder left on a finished card can be closed.
-  if (!(await pathExists(filePath)) && resource !== undefined && Object.keys(values).every((key) => ["track", "slug", "resource"].includes(key))) {
+  // An archived card takes one thing: a disposition on one of its existing resource rows, so a cleanup reminder left on a finished card can be closed (task-archived-resource.js).
+  if (!(await pathExists(filePath)) && resource !== undefined) {
     const archived = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug, "task.md"] })
-    if (await pathExists(archived)) filePath = archived
+    if (await pathExists(archived)) {
+      return recordArchivedDisposition({ deskRoot, file: archived, track, slug, values, resource, readiness, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush, recordCanonicalChanges } })
+    }
   }
   if (!(await pathExists(filePath))) {
     throw new Error(

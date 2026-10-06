@@ -4,6 +4,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as os from "node:os"
+import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { mkdtempSync, mkdirSync, rmSync, existsSync, realpathSync } from "node:fs"
 import { promises as fs } from "node:fs"
@@ -214,7 +215,7 @@ const DONE = { status: "done", evidence: { kind: "non_code", ref: "https://examp
 test("a finished card still reminds, whether it stays in its folder or is archived, until its rows are dealt with", async () => {
   const { root, where } = await unfinished((root) => update(root, DONE))
   const live = activeTasks(root)
-  assert.deepEqual(live.cleanup, { items: 2, cards: 1, finished: [{ card: "t/chain", due: 2 }] })
+  assert.deepEqual(live.cleanup, { items: 2, cards: 1, finished: [{ card: "t/chain", due: 2 }], more: 0 })
   assert.match(formatBootText({ status: "ready", active_tasks: live }), /\nCleanup due: 2 items on 1 card \(see the task lines\)\n- t\/chain \(finished\): 2 due\n/u)
   const archived = await task_archive({ deskRoot: root, input: { track: "t", slug: "chain" } })
   assert.deepEqual(archived.cleanup_due.map((item) => item.identity), [`worktree:${where}`, "branch:o/widgets#feat/idx"])
@@ -222,19 +223,18 @@ test("a finished card still reminds, whether it stays in its folder or is archiv
   assert.deepEqual(activeTasks(root).cleanup.finished, [{ card: "t/chain", due: 2 }])
   // The reminder is closed by recording each row, which reaches the archived card.
   await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
-  console.log(JSON.stringify(activeTasks(root).cleanup), (await fs.readFile(path.join(root, "t", "_archive", "chain", "task.md"), "utf8")).split("\n").filter((l) => l.startsWith("| ")).join("\n"))
   assert.equal(activeTasks(root).cleanup.items, 1)
   await update(root, { resource: { identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "deleted" } })
   assert.equal("cleanup" in activeTasks(root), false)
   assert.equal(JSON.parse(await fs.readFile(cleanupIndexPath(root), "utf8")).cards.length, 0)
   await assert.rejects(update(root, { note: "x" }), /task does not exist/u)
-  await assert.rejects(update(root, { resource: { identity: "branch:o/widgets#feat/other" }, note: "x" }), /task does not exist/u)
+  await assert.rejects(update(root, { resource: { identity: "branch:o/widgets#feat/other" }, note: "x" }), /is archived, so a call can only record a disposition.*also has `note`/u)
 })
 
 test("a live card that is not finished is counted once, from the scan, though it is indexed", async () => {
   const { root } = await unfinished(() => {})
   await update(root, { step: { id: "api", state: "dropped", reason: "no" } })
-  assert.deepEqual(activeTasks(root).cleanup, { items: 1, cards: 1, finished: [] })
+  assert.deepEqual(activeTasks(root).cleanup, { items: 1, cards: 1, finished: [], more: 0 })
 })
 
 test("finishing the card lists every due row, not only the newly due ones", async () => {
@@ -320,4 +320,97 @@ test("a listed finished card with nothing due adds nothing, and a resource call 
   await fs.writeFile(cleanupIndexPath(root), JSON.stringify({ cards: ["t/chain"] }))
   assert.equal("cleanup" in activeTasks(root), false)
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "ghost", resource: { identity: "branch:o/widgets#x" } } }), /task does not exist at t\/ghost/u)
+})
+
+test("an archived card takes only a disposition on an existing row: its frontmatter stays byte for byte and no report or sync is asked for", async () => {
+  const { root } = await unfinished((root) => update(root, DONE))
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "chain" } })
+  const file = path.join(root, "t", "_archive", "chain", "task.md")
+  const front = (raw) => raw.slice(0, raw.indexOf("\n---\n", 4))
+  const before = await text(file)
+  let finalized = 0
+  const call = (resource, more = {}) => task_update({ deskRoot: root, input: { track: "t", slug: "chain", resource, ...more }, finalize: () => { finalized += 1 } })
+  const refused = async (resource, pattern, more) => {
+    await assert.rejects(call(resource, more), pattern)
+    assert.equal(await text(file), before)
+  }
+  await refused({ identity: "branch:o/widgets#feat/new" }, /no `disposition`/u)
+  await refused({ identity: "branch:o/widgets#feat/new", disposition: "removed-and-absent", details: "x" }, /not a row of its Resources table/u)
+  await refused({ identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "x", intended: "y" }, /the resource has `intended`/u)
+  await refused({ identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "x", step: "api" }, /the resource has `step`/u)
+  await refused({ identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "x" }, /also has `next_step`/u, { next_step: "z" })
+  const answer = await call({ identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "deleted" })
+  assert.deepEqual(answer, { status: "updated", path: "t/_archive/chain/task.md", resource: { identity: "branch:o/widgets#feat/idx", owner: "task t/chain", intended: "—", disposition: "removed-and-absent: deleted" } })
+  const after = await text(file)
+  assert.equal(front(after), front(before))
+  assert.deepEqual(after.split("\n").filter((line, index) => line !== before.split("\n")[index]), ["| branch:o/widgets#feat/idx | task t/chain | — | — | — | removed-and-absent: deleted |"])
+  assert.equal(finalized, 0)
+})
+
+test("every indexed card with an open row is kept, unfinished cards are skipped before the cap, and finished cards past the cap are counted", async () => {
+  const root = await mkTempDeskRoot()
+  const row = "| branch:o/r#x | task t/c | — | — | — |  |"
+  const card = (status) => `---\nstatus: ${status}\ntitle: c\n---\n\n## Resources\n\n${HEADER}\n${SEP}\n${row}\n`
+  const names = []
+  for (let index = 0; index < 25; index += 1) {
+    await fs.mkdir(path.join(root, "t", `live-${index}`), { recursive: true })
+    await fs.writeFile(path.join(root, "t", `live-${index}`, "task.md"), card("processing"))
+    names.push(`t/live-${index}`)
+  }
+  for (let index = 0; index < 22; index += 1) {
+    await fs.mkdir(path.join(root, "t", `fin-${index}`), { recursive: true })
+    await fs.writeFile(path.join(root, "t", `fin-${index}`, "task.md"), card("done"))
+    names.push(`t/fin-${index}`)
+  }
+  await fs.mkdir(path.dirname(cleanupIndexPath(root)), { recursive: true })
+  await fs.writeFile(cleanupIndexPath(root), JSON.stringify({ cards: names }))
+  assert.equal(readCleanupIndex(root).length, 47)
+  const { cleanup } = activeTasks(root)
+  assert.equal(cleanup.items, 22)
+  assert.equal(cleanup.cards, 22)
+  assert.equal(cleanup.finished.length, 20)
+  assert.equal(cleanup.more, 2)
+  assert.match(formatBootText({ status: "ready", active_tasks: activeTasks(root) }), /\n- t\/fin-19 \(finished\): 1 due\n- and 2 more finished cards\n/u)
+  await fs.rm(path.join(root, "t", "fin-0"), { recursive: true })
+  assert.match(formatBootText({ status: "ready", active_tasks: activeTasks(root) }), /\n- and 1 more finished card\n/u)
+  // A write keeps every card that still has an open row, however many there are.
+  await task_create({ deskRoot: root, input: { track: "t", slug: "new", title: "N", body: "x\n" } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "new", resource: { identity: "branch:o/r#new" } } })
+  assert.equal(readCleanupIndex(root).length, 47)
+})
+
+test("an archived card without frontmatter or without the row is handled, a state folder that cannot be written does not fail it, and a git desk commits the one cell", async () => {
+  const root = await mkTempDeskRoot()
+  const row = "| branch:o/r#x | task t/c | — | — | — |  |"
+  const archive = async (slug, raw) => {
+    await fs.mkdir(path.join(root, "t", "_archive", slug), { recursive: true })
+    await fs.writeFile(path.join(root, "t", "_archive", slug, "task.md"), raw)
+  }
+  await archive("bare", `## Resources\n\n${HEADER}\n${SEP}\n${row}\n`)
+  await archive("none", "---\nstatus: done\n---\n\nNo table.\n")
+  const call = (slug, extra = {}) => task_update({ deskRoot: root, input: { track: "t", slug, resource: { identity: "branch:o/r#x", disposition: "retained-with-trigger", details: "ari; PR 9" } }, ...extra })
+  await assert.rejects(call("none"), /not a row of its Resources table/u)
+  const blocked = path.join(scratch, "blocked-state-2")
+  await fs.writeFile(blocked, "a file")
+  const answer = await call("bare", { env: { ...process.env, XDG_STATE_HOME: blocked } })
+  assert.equal(answer.resource.disposition, "retained-with-trigger: ari; PR 9")
+  assert.match(await text(path.join(root, "t", "_archive", "bare", "task.md")), /^## Resources[\s\S]*\| retained-with-trigger: ari; PR 9 \|\n$/u)
+  // On a git desk the one card is committed; a failed commit comes back in the answer and nothing is thrown.
+  const git = (...args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  git("init", "-q")
+  git("config", "user.email", "t@example.com")
+  git("config", "user.name", "T")
+  await archive("tracked", `---\nstatus: done\n---\n\n## Resources\n\n${HEADER}\n${SEP}\n${row}\n`)
+  git("add", "-A")
+  git("commit", "-qm", "seed")
+  let pushes = 0
+  const committed = await call("tracked", { schedulePush: () => { pushes += 1 } })
+  assert.equal(committed.commit, undefined)
+  assert.equal(pushes, 1)
+  assert.equal(git("log", "-1", "--format=%s").stdout.trim(), "task_update: t/tracked")
+  const failing = (command, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "no" } : spawnSync(command, args, options))
+  await archive("tracked2", `---\nstatus: done\n---\n\n## Resources\n\n${HEADER}\n${SEP}\n${row}\n`)
+  git("add", "-A")
+  git("commit", "-qm", "seed2")
+  assert.equal((await call("tracked2", { spawnGit: failing })).commit.status, "failed")
 })

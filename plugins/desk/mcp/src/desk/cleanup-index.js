@@ -11,10 +11,6 @@ import { lastStartRootKey, resolveDeskStateDir } from "../runtime/last-start.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 import { openResources } from "./resources.js"
 
-/** How many indexed cards boot reads, and how many the file keeps. */
-export const BOOT_CARDS = 20
-const FILE_CARDS = 50
-
 export const cleanupIndexPath = (deskRoot, env = process.env) => path.join(resolveDeskStateDir({ env }), "cleanup", `${lastStartRootKey(deskRoot)}.json`)
 
 /** The card's file at its live path and under its track's `_archive` (the two-path lookup of tools/task-focus.js), for a folder relative to the desk root. */
@@ -22,11 +18,11 @@ export const cardFiles = (deskRoot, rel) => [path.join(deskRoot, rel, "task.md")
 
 const safe = (rel) => typeof rel === "string" && rel !== "" && !path.isAbsolute(rel) && !rel.split(/[\\/]/u).includes("..")
 
-/** The indexed card folders, newest first, at most `BOOT_CARDS`; an unreadable or odd file reads as empty. */
+/** The indexed card folders, newest first; an unreadable or odd file reads as empty. */
 export function readCleanupIndex(deskRoot, env = process.env) {
   try {
     const { cards } = JSON.parse(readFileSync(cleanupIndexPath(deskRoot, env), "utf8"))
-    return cards.filter(safe).slice(0, BOOT_CARDS)
+    return cards.filter(safe)
   } catch {
     return []
   }
@@ -34,7 +30,7 @@ export function readCleanupIndex(deskRoot, env = process.env) {
 
 const stillOpen = (deskRoot, rel) => cardFiles(deskRoot, rel).some((file) => existsSync(file) && openResources(readFileSync(file, "utf8")).length > 0)
 
-/** Record that the card at `rel` was just written: it goes first when it has an open row, and every card with none left, or gone, is dropped. */
+/** Record that the card at `rel` was just written: it goes first when it has an open row, and only a card with no open row left, or gone, is dropped: a card with an open row is never dropped. */
 export function recordCleanupCard(deskRoot, folder, hasOpen, env) {
   // An archived card is listed by its live folder name, as the lookup in `cardFiles` expects.
   const rel = path.basename(path.dirname(folder)) === "_archive" ? path.join(path.dirname(path.dirname(folder)), path.basename(folder)) : folder
@@ -46,7 +42,7 @@ export function recordCleanupCard(deskRoot, folder, hasOpen, env) {
   } catch {
     // No index yet, or one that cannot be read: start again from this card.
   }
-  const cards = [...(hasOpen ? [rel] : []), ...before.filter((card) => card !== rel && stillOpen(deskRoot, card))].slice(0, FILE_CARDS)
+  const cards = [...(hasOpen ? [rel] : []), ...before.filter((card) => card !== rel && stillOpen(deskRoot, card))]
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.${process.pid}.tmp`
   writeFileSync(temporary, `${JSON.stringify({ schema_version: 1, cards })}\n`, { mode: 0o600 })

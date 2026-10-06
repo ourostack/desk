@@ -334,7 +334,7 @@ function cleanupLines(result) {
   const cleanup = result.active_tasks?.cleanup
   if (cleanup === undefined) return []
   const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`
-  return ["", `Cleanup due: ${plural(cleanup.items, "item")} on ${plural(cleanup.cards, "card")} (see the task lines)`, ...cleanup.finished.map((entry) => `- ${entry.card} (finished): ${entry.due} due`)]
+  return ["", `Cleanup due: ${plural(cleanup.items, "item")} on ${plural(cleanup.cards, "card")} (see the task lines)`, ...cleanup.finished.map((entry) => `- ${entry.card} (finished): ${entry.due} due`), ...(cleanup.more > 0 ? [`- and ${cleanup.more} more finished ${cleanup.more === 1 ? "card" : "cards"}`] : [])]
 }
 
 /**
