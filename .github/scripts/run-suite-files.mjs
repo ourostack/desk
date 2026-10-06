@@ -52,8 +52,10 @@ const killTree = (pid) => {
 const failures = (output) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: # [^\n]*)?\n([\s\S]*?)(?=^\s*(?:# Subtest|ok \d+|not ok \d+|1\.\.))/gm)].map((m) => {
   const body = m[2]
   const error = /^\s*error: ([\s\S]*?)^\s*code:/m.exec(body)?.[1]?.trim() ?? ""
-  const stack = /^\s*stack: \|-\n([\s\S]*?)^\s*\.\.\./m.exec(body)?.[1]?.split("\n").slice(0, 4).map((l) => l.trim()).join(" | ") ?? ""
-  return { name: m[1], error: error.slice(0, 700), stack: stack.slice(0, 500) }
+  const frames = (/^\s*stack: \|-\n([\s\S]*?)^\s*\.\.\./m.exec(body)?.[1] ?? "").split("\n").map((l) => l.trim().replace(/file:\/\/\/[A-Z]:\/a\/desk\/desk\//g, "")).filter(Boolean)
+  // The first frames show where it failed; the first frames in the test files show what the test was doing.
+  const stack = [...frames.slice(0, 3), ...frames.filter((l) => l.includes("__tests__") && !l.includes("_isolated_env")).slice(0, 3)].join(" | ")
+  return { name: m[1], error: error.slice(0, 700), stack: stack.slice(0, 700) }
 })
 
 const runFile = (file) => new Promise((resolve) => {
@@ -82,13 +84,31 @@ const runFile = (file) => new Promise((resolve) => {
   })
 })
 
+// How long Windows PowerShell and Desk's own ACL provider take here, because every protected write starts one.
+const probeAcl = async () => {
+  if (process.platform !== "win32") return null
+  const timed = (fn) => { const t = Date.now(); const value = fn(); return [Date.now() - t, value] }
+  const plain = Array.from({ length: 3 }, () => timed(() => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "1"], { encoding: "utf8" }).status)[0])
+  const { protectWindowsPaths } = await import(pathToFileURL(path.join(mcpRoot, "src", "factory", "windows-acl.js")).href)
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP ?? process.cwd(), "acl-probe-"))
+  const provider = []
+  for (let i = 0; i < 3; i += 1) {
+    const t = Date.now()
+    try { await protectWindowsPaths([{ path: dir, kind: "directory", created: false }]); provider.push(Date.now() - t) } catch (error) { provider.push(`${Date.now() - t}ms ${error.message.slice(0, 200)}`) }
+  }
+  fs.rmSync(dir, { recursive: true, force: true })
+  return { powershellStartMs: plain, desk_acl_provider_ms: provider }
+}
+const aclProbe = args.includes("--probe-acl") ? await probeAcl() : null
+console.log("acl probe:", JSON.stringify(aclProbe))
+
 const results = []
 for (const file of mine) {
   const result = await runFile(file)
   results.push(result)
   console.log(`${result.timedOut ? "TIMEOUT" : result.exitCode === 0 ? "ok     " : "FAIL   "} ${result.file} pass=${result.pass} fail=${result.fail} ${result.ms}ms`)
 }
-fs.writeFileSync(out, JSON.stringify({ shard: `${index}/${total}`, platform: process.platform, results }, null, 1))
+fs.writeFileSync(out, JSON.stringify({ shard: `${index}/${total}`, platform: process.platform, aclProbe, results }, null, 1))
 const bad = results.filter((r) => r.exitCode !== 0)
 const timeouts = results.filter((r) => r.timedOut)
 const sum = (key) => results.reduce((n, r) => n + r[key], 0)

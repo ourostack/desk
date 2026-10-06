@@ -23,7 +23,7 @@ import {
   patchMarkdownFrontmatter,
   pathExists,
 } from "../util/fm.js"
-import { resolveWriteTarget, personPrefix } from "../util/paths.js"
+import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
@@ -49,7 +49,7 @@ export const TRACK_RENAME_FIELDS = ["track", "handle", "to", "allow_dirty"]
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 
 function relPath(root, absPath) {
-  return path.relative(root, absPath)
+  return deskRelativePath(root, absPath)
 }
 
 // A path the tool shows (in a result or an error): relative to the desk, with

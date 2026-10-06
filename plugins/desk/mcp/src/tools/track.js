@@ -11,7 +11,7 @@ import {
   writeMarkdown,
   pathExists,
 } from "../util/fm.js"
-import { resolveWriteTarget } from "../util/paths.js"
+import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { objectInput } from "../util/object-input.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
@@ -38,7 +38,7 @@ export const TRACK_CREATE_FIELDS = ["slug", "title", "scope", "status", "body", 
 export const TRACK_UPDATE_FIELDS = ["slug", "frontmatter", "body_append"]
 
 function relPath(deskRoot, absPath) {
-  return path.relative(deskRoot, absPath)
+  return deskRelativePath(deskRoot, absPath)
 }
 
 // On a Git desk, a track tool stages the track.md it writes (M4-5 fix round

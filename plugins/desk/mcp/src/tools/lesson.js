@@ -13,13 +13,13 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
-import { resolveWriteTarget } from "../util/paths.js"
+import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 
 function relPath(deskRoot, absPath) {
-  return path.relative(deskRoot, absPath)
+  return deskRelativePath(deskRoot, absPath)
 }
 
 // Every field lesson_add reads off `input`, kept next to the handler so a
@@ -104,7 +104,7 @@ function stagingAllowed(filePath, spawnGit) {
 // on failure, so a normal, silent success stays byte-identical to today's
 // response shape.
 function stageAndCommitLesson(root, paths, message, spawnGit) {
-  const relPaths = paths.map((p) => path.relative(root, p))
+  const relPaths = paths.map((p) => deskRelativePath(root, p))
   const staged = stagePaths(root, relPaths, spawnGit)
   if (!staged.ok) return { status: "failed", reason: staged.stderr }
   const committed = commitPaths(root, relPaths, message, spawnGit)

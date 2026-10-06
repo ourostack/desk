@@ -44,6 +44,20 @@ export const HOME_FALLBACK = "home_fallback"
 // The source of a loaded work overlay's home-folder desk ($HOME/ms-desk).
 export const OVERLAY_HOME_FALLBACK = "overlay_home_fallback"
 
+/**
+ * A path under the desk, spelled with `/` on every platform. A desk is a Git repository, its docs are named with `/` in
+ * the index, in the vector packs and snapshots the plugin ships, in tool results and in the card text agents read, so a
+ * Windows `path.relative` result is converted before it is stored, compared or shown. `separator` is a test seam.
+ */
+export function toDeskPath(value, separator = path.sep) {
+  return separator === "/" ? value : value.split(separator).join("/")
+}
+
+/** `absPath` relative to `root`, spelled with `/` (see `toDeskPath`). */
+export function deskRelativePath(root, absPath) {
+  return toDeskPath(path.relative(root, absPath))
+}
+
 export function resolveDeskRoot(explicit, options = {}) {
   return resolveDeskRootWithSource({
     ...options,

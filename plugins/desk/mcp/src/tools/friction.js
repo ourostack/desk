@@ -26,7 +26,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
-import { resolveWriteTarget } from "../util/paths.js"
+import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
@@ -53,7 +53,7 @@ export const FRICTION_ADD_FIELDS = [
 ]
 
 function relPath(deskRoot, absPath) {
-  return path.relative(deskRoot, absPath)
+  return deskRelativePath(deskRoot, absPath)
 }
 
 function trackFrictionIdentity(themeSlug) {

@@ -21,7 +21,7 @@ import {
   patchMarkdownFrontmatter,
   pathExists,
 } from "../util/fm.js"
-import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
+import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
@@ -269,7 +269,7 @@ export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 const asList = (value) => (Array.isArray(value) ? value : [])
 
 function relPath(deskRoot, absPath) {
-  return path.relative(deskRoot, absPath)
+  return deskRelativePath(deskRoot, absPath)
 }
 
 // On a Git desk, a task tool stages the task.md it writes (M4-5 fix round 4)
@@ -325,7 +325,7 @@ function headSha(dir, spawnGit) {
 // (person-scoped) desk root; `paths` are absolute.
 function stageAndCommitMove(root, paths, message, spawnGit) {
   if (!isGitRepository(root, spawnGit)) return undefined
-  const relPaths = paths.map((p) => path.relative(root, p))
+  const relPaths = paths.map((p) => deskRelativePath(root, p))
   const staged = stagePaths(root, relPaths, spawnGit)
   if (!staged.ok) return { status: "failed", reason: staged.stderr }
   const committed = commitPaths(root, relPaths, message, spawnGit)

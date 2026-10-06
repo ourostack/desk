@@ -60,7 +60,7 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --only "$env:ONLY_FILES"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --probe-acl --only "$env:ONLY_FILES"
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
@@ -69,7 +69,7 @@ jobs:
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --only "' + $env:ONLY_FILES + '"'
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '"'
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
