@@ -19,6 +19,10 @@ const COMMAND_RULES = [
   { kind: "credential file read", test: (c) => CREDENTIAL_FILE.test(c) },
   // The shim hands a raw `gh auth token` only to the plugin's own boot script, and redacts it for everyone else, so the documented recipe is not a read (see `ghTokenRead`).
   { kind: "gh auth token outside the shim's allowed parent", test: (c) => ghTokenRead(c) },
+  // Printing, counting, testing or sending the token variable (`echo $GH_TOKEN`, `${#GH_TOKEN}`, a header or a URL). The one use Desk gives is inside a credential helper, which the shell does not expand.
+  { kind: "GitHub token variable read or sent", test: (c) => TOKEN_VARIABLE_REFERENCE.test(c) && !/credential\.helper/.test(c) },
+  // git's and gh's own credential helpers print the stored token to whoever asks.
+  { kind: "git credential read", test: (c) => GIT_CREDENTIAL_READ.test(c) },
 ]
 
 const GH_TOKEN_CALL = /(^|[\s;&|(`"'=])(?:[^\s$(`'"=]*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*auth\s+token\b/g
@@ -44,7 +48,10 @@ export function ghTokenRead(command) {
   return false
 }
 
-const CREDENTIAL_FILE = /(?:\.config\/gh|GH_CONFIG_DIR)[^\s;&|]*\/?hosts\.yml|\bgh\/hosts\.yml|\.copilot\/(?:config|settings)\.json|COPILOT_HOME[^\s;&|]*\/(?:config|settings)\.json|\.claude\/\.credentials\.json/
+const TOKEN_VARIABLE_REFERENCE = /\$\{?[#!]?\s*(?:GH_TOKEN|GITHUB_TOKEN)\b/
+const GIT_CREDENTIAL_READ = /(?:^|[\s;&|(`])git\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*credential(?:-\S+)?(?=\s|$)|git-credential-|\bgh\s+auth\s+git-credential\b/
+
+const CREDENTIAL_FILE = /(?:\.config\/gh|GH_CONFIG_DIR)[^\s;&|]*\/?hosts\.yml|\bgh\/hosts\.yml|\.git-credentials|\.config\/git\/credentials|\.config\/gh\/?(?=[\s;&|]|$)|\.copilot\/(?:config|settings)\.json|COPILOT_HOME[^\s;&|]*\/(?:config|settings)\.json|\.claude\/\.credentials\.json/
 
 /**
  * Every credential read the calls attempted, as `{ kind, text }`: `kind` is the rule that matched and `text` the (token-redacted, shortened) command or path.

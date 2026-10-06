@@ -67,6 +67,23 @@ test("gh auth token inside the documented push recipe is not a credential read: 
   assert.equal(kinds("gh pr list --repo a/b").length, 0)
 })
 
+test("the token variable read, printed, counted, tested or sent counts, and the credential helper does not", () => {
+  for (const command of ["echo $GH_TOKEN", "echo \"Token retrieved (${#GH_TOKEN} chars)\"", "[ -n \"$GITHUB_TOKEN\" ] && echo set", "gh api -H \"Authorization: token $GH_TOKEN\" /user", "curl -H \"Authorization: Bearer ${GITHUB_TOKEN}\" https://api.github.com", "git push https://x-access-token:$GH_TOKEN@github.com/a/b.git"]) {
+    assert.deepEqual(kinds(command), ["GitHub token variable read or sent"], command)
+  }
+  // The transcript's second command: the failure branch prints the variable.
+  assert.ok(kinds("GH_TOKEN=$(gh auth token --user me --hostname github.com 2>&1) && echo \"Token retrieved (${#GH_TOKEN} chars)\" || echo \"Failed: $GH_TOKEN\"").includes("GitHub token variable read or sent"))
+  assert.deepEqual(kinds("GH_TOKEN=$(gh auth token --user me) git -c 'credential.helper=!echo username=me; echo password=$GH_TOKEN' fetch fork"), [])
+  assert.deepEqual(kinds("GH_TOKEN=$(gh auth token --user me) git push"), [])
+})
+
+test("git's and gh's credential helpers and git's credential files count", () => {
+  for (const command of ["git credential fill", "git -C /x credential fill", "git -c a=b credential approve", "echo url=https://github.com | git credential-osxkeychain get", "echo host=github.com | gh auth git-credential get", "cat ~/.git-credentials", "ls ~/.config/gh/", "cat ~/.config/git/credentials", "cd /x; ls ~/.config/gh"]) {
+    assert.equal(kinds(command).length > 0, true, command)
+  }
+  for (const command of ["git status", "git config credential.helper", "git commit -m 'credential helper docs'", "ls ~/.config/ghostty", "git log --oneline"]) assert.deepEqual(kinds(command), [], command)
+})
+
 test("a finding carries the rule and a shortened, token-redacted command, never a token value", () => {
   const token = ["gho", "_", "Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq0Pp9Oo8"].join("")
   const [read] = credentialReads([bash(`printenv | grep -i token; echo ${token} ${"x".repeat(300)}`)])
