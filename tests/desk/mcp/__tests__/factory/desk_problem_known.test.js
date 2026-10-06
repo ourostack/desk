@@ -5,7 +5,7 @@ import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { DROPPED_KEY, KNOWN_KEY, MAX_KNOWN_ISSUES, SINCE_KEY, armKnownHits, compareVersions, knownHitsSince, recordKnownHit } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
+import { DROPPED_KEY, KNOWN_KEY, MAX_KNOWN_ISSUES, SINCE_KEY, armKnownHits, compareVersions, knownHitsSince, recordKnownHit, recordLostHit } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 async function scratch(run) {
@@ -228,7 +228,9 @@ test("a write never turns damage into a clean record: each kind of damage is cou
     await recordKnownHit(env, 5, { version: "1.0.0", now: () => T1 })
     const status = await readStatus(env)
     assert.equal(status[DROPPED_KEY].count >= 1, true, JSON.stringify(damage))
-    assert.deepEqual(knownHitsSince(status, 6, "1.0.0", { since: "2026-12-01T00:00:00Z" }), { state: "unavailable", reason: "not_recorded" }, JSON.stringify(damage))
+    assert.deepEqual(knownHitsSince(status, 6, "1.0.0", { since: new Date(T1).toISOString() }), { state: "unavailable", reason: "not_recorded" }, JSON.stringify(damage))
+    // Whatever the damage lost was recorded no later than the write that found it, so a window that starts after it is measured.
+    assert.deepEqual(knownHitsSince(status, 6, "1.0.0", { since: "2026-12-01T00:00:00Z" }), { state: "measured", hit: false }, JSON.stringify(damage))
   }
 }))
 
@@ -238,8 +240,11 @@ test("the bound remembers that it dropped entries, with a count and the time, an
   for (let n = 2; n <= MAX_KNOWN_ISSUES + 2; n += 1) await recordKnownHit(env, n, { version: "1.0.0", now: () => T1 + n * 1000 })
   const status = await readStatus(env)
   assert.deepEqual(status[DROPPED_KEY], { count: 2, last_dropped_at: new Date(T1 + (MAX_KNOWN_ISSUES + 2) * 1000).toISOString() })
-  assert.deepEqual(knownHitsSince(status, 1, "1.0.0", { since: "2026-12-01T00:00:00Z" }), { state: "unavailable", reason: "not_recorded" })
-  assert.deepEqual(knownHitsSince(status, 4, "1.0.0", { since: "2026-12-01T00:00:00Z" }).state, "measured")
+  const dropAt = new Date(T1 + (MAX_KNOWN_ISSUES + 2) * 1000).toISOString()
+  assert.deepEqual(knownHitsSince(status, 1, "1.0.0", { since: dropAt }), { state: "unavailable", reason: "not_recorded" })
+  assert.deepEqual(knownHitsSince(status, 4, "1.0.0", { since: dropAt }).state, "measured")
+  // A drop before the window cannot hide a hit inside it.
+  assert.deepEqual(knownHitsSince(status, 1, "1.0.0", { since: "2026-12-01T00:00:00Z" }), { state: "measured", hit: false })
 }))
 
 test("an invalid entry removed while recording counts as dropped, and a damaged drop record is rebuilt as dropped, never as zero", () => scratch(async ({ env }) => {
@@ -248,4 +253,28 @@ test("an invalid entry removed while recording counts as dropped, and a damaged 
   assert.deepEqual((await readStatus(env))[DROPPED_KEY], { count: 2, last_dropped_at: "2026-10-01T00:00:00.000Z" })
   await recordKnownHit(env, 9, { version: "1.0.0", now: () => T1 + 5000 })
   assert.deepEqual((await readStatus(env))[DROPPED_KEY], { count: 2, last_dropped_at: "2026-10-01T00:00:00.000Z" })
+}))
+
+test("reproduction r6: a recurrence the filer could not record is a drop, so the answer is not_recorded, never a measured no hit", () => scratch(async ({ env }) => {
+  await armKnownHits(env, { now: () => T1 })
+  const since = new Date(T1 + 1000).toISOString()
+  assert.deepEqual(knownHitsSince(await readStatus(env), 123, "3.2.0", { since }), { state: "measured", hit: false }, "armed and nothing lost")
+  assert.deepEqual(await recordLostHit(env, { now: () => T1 + 5000 }), { recorded: true })
+  const status = await readStatus(env)
+  assert.deepEqual(status[DROPPED_KEY], { count: 1, last_dropped_at: new Date(T1 + 5000).toISOString() })
+  assert.equal(status[SINCE_KEY], new Date(T1).toISOString(), "the start time never moves")
+  assert.deepEqual(knownHitsSince(status, 123, "3.2.0", { since }), { state: "unavailable", reason: "not_recorded" })
+  // Variants: a window that starts after the drop is measured again; a drop count with no time is in every window.
+  assert.deepEqual(knownHitsSince(status, 123, "3.2.0", { since: new Date(T1 + 6000).toISOString() }), { state: "measured", hit: false })
+  assert.deepEqual(knownHitsSince({ ...status, [DROPPED_KEY]: { count: 1, last_dropped_at: null } }, 123, "3.2.0", { since: "2027-01-01T00:00:00Z" }), { state: "unavailable", reason: "not_recorded" })
+  // A recorded hit still answers for its own issue.
+  await recordKnownHit(env, 123, { version: "3.2.0", now: () => T1 + 7000 })
+  assert.deepEqual(knownHitsSince(await readStatus(env), 123, "3.2.0", { since }), { state: "measured", hit: true })
+}))
+
+test("recordLostHit writes nothing in a headless session and reports a status it cannot write", () => scratch(async ({ env }) => {
+  assert.deepEqual(await recordLostHit({ ...env, DESK_FACTORY_HEADLESS: "1" }), { recorded: false, code: "headless_session" })
+  assert.equal((await readStatus(env))[DROPPED_KEY], undefined)
+  assert.deepEqual(await recordLostHit(env), { recorded: true }, "the default clock")
+  assert.deepEqual(await recordLostHit({ HOME: "relative" }, { now: () => T1 }), { recorded: false, code: "status_write_failed" })
 }))

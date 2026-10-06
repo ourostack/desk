@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 import { deskProblemFingerprint, normalizeErrorSignature } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-template.js"
 import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
-import { KNOWN_KEY } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
+import { DROPPED_KEY, KNOWN_KEY, knownHitsSince } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/file-desk-problem.js", import.meta.url))
@@ -256,6 +256,54 @@ test("a listIssues failure is reported as not_filed with that reason, never thro
   const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner })
   assert.equal(result.result, "not_filed")
   assert.equal(result.reason, "http_500")
+}))
+
+test("every attempt that may have lost a recurrence counts a drop, so the verify step reads not_recorded, never a measured no hit", () => scratch(async ({ env }) => {
+  const dropped = async () => (await readStatus(env))[DROPPED_KEY]?.count ?? 0
+  const known = KNOWN_ISSUES(fingerprintOf("desk-sync", "x"))
+  // Filed new, recorded known, held at the cap and a headless session lose nothing.
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "y", runner: fakeGh(ONE_ACCOUNT).runner })).result, "filed")
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ ...ONE_ACCOUNT, issues: known }).runner })).result, "known")
+  assert.equal((await fileDeskProblem({ ...env, DESK_FACTORY_HEADLESS: "1" }, { mechanism: "desk-sync", rawText: "z", runner: fakeGh({ accounts: [], repos: {} }).runner })).result, "not_filed")
+  assert.equal(await dropped(), 0)
+  // No suitable account, a failed listing and a known hit whose write failed each count one.
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ accounts: [], repos: {} }).runner })).reason, "no_suitable_account")
+  assert.equal(await dropped(), 1)
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ ...ONE_ACCOUNT, fail: { list: { code: 1, stdout: "", stderr: "gh: Internal Server Error (HTTP 500)\n" } } }).runner })).reason, "http_500")
+  assert.equal(await dropped(), 2)
+  const original = process.stderr.write
+  process.stderr.write = () => true
+  try {
+    assert.deepEqual(await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ ...ONE_ACCOUNT, issues: known }).runner, recordKnown: async () => ({ recorded: false, code: "status_write_failed" }) }), { result: "known", url: `https://github.com/${STORE}/issues/5` })
+  } finally {
+    process.stderr.write = original
+  }
+  assert.equal(await dropped(), 3)
+  const status = await readStatus(env)
+  assert.deepEqual(knownHitsSince(status, 5, "0.0.1", { since: status.desk_problem_known_since }).state, "measured", "the issue whose hit was recorded still answers")
+  assert.deepEqual(knownHitsSince(status, 6, "0.0.1", { since: status.desk_problem_known_since }), { state: "unavailable", reason: "not_recorded" })
+}))
+
+test("a drop that cannot be recorded either leaves one stable code, and a thrown failure still counts its drop", () => scratch(async ({ env }) => {
+  const lines = []
+  const original = process.stderr.write
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true }
+  try {
+    const none = fakeGh({ accounts: [], repos: {} }).runner
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: none, recordLost: async () => ({ recorded: false, code: "status_write_failed" }) })
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: none, recordLost: () => { throw new Error("boom") } })
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: none, recordLost: async () => ({ recorded: false, code: "headless_session" }) })
+  } finally {
+    process.stderr.write = original
+  }
+  assert.deepEqual(lines, ["desk-problem: lost_hit_not_recorded status_write_failed\n", "desk-problem: lost_hit_not_recorded record_failed\n"])
+  const { runner: base } = fakeGh(ONE_ACCOUNT)
+  const runner = async (args, options) => {
+    if (args[0] === "api" && String(args[7]).startsWith(`repos/${STORE}/issues`)) throw new Error("boom")
+    return base(args, options)
+  }
+  await assert.rejects(fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner }), /boom/u)
+  assert.equal((await readStatus(env))[DROPPED_KEY].count, 1)
 }))
 
 test("an unexpected failure with no gh-shaped code (a bug, not a gh error) is rethrown rather than swallowed as not_filed", () => scratch(async ({ env }) => {

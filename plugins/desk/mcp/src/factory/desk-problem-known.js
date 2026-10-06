@@ -15,7 +15,8 @@
 //
 // Whenever an entry is removed (by the bound, or because it was not a valid record) the record
 // remembers it in `status.json.desk_problem_known_dropped = { count, last_dropped_at }` (two content-free
-// values), so the reader can tell "never hit" from "the answer may have been dropped".
+// values), so the reader can tell "never hit" from "the answer may have been dropped". The filer counts a drop
+// the same way for every Desk problem it could not file or whose hit it could not record (`recordLostHit`).
 //
 // `status.json.desk_problem_known_since` is the time recording started on this machine, set once (by the
 // first recording or by `armKnownHits`) and never moved; a reset or replaced status file has none, so the
@@ -119,6 +120,24 @@ export async function recordKnownHit(env, issueNumber, { version, now = Date.now
 }
 
 /**
+ * `recordLostHit(env, { now }) -> { recorded: true } | { recorded: false, code }`: a Desk problem happened on this machine and the filer
+ * could not tell whether it was a known issue coming back, or could not record that it was (no suitable account, offline, the deadline, a
+ * failed listing, a failed hit write). It counts one drop in `desk_problem_known_dropped`, so `knownHitsSince` reads `not_recorded` for a
+ * window that includes it, never a measured "no hit" (fail closed, ruling 2026-10-06). Never throws. Codes: `headless_session`,
+ * `status_write_failed`.
+ */
+export async function recordLostHit(env, { now = Date.now } = {}) {
+  if (isHeadless(env)) return { recorded: false, code: "headless_session" }
+  const at = new Date(now()).toISOString()
+  try {
+    await updateStatus(env, (current) => ({ ...current, ...stamped(current, at, 1) }))
+    return { recorded: true }
+  } catch {
+    return { recorded: false, code: "status_write_failed" }
+  }
+}
+
+/**
  * `armKnownHits(env, { now }) -> { armed: true } | { armed: false, code }`: stamps `recording_since` if the
  * status has none (the verify step calls it when a Desk-problem card starts being verified); an existing
  * start time is never moved. Never throws. Codes: `headless_session`, `status_write_failed`.
@@ -140,12 +159,14 @@ export async function armKnownHits(env, { now = Date.now } = {}) {
  * required: the answer is `measured` only when recording started on this machine at or before `since`
  * (`recording_since`); a reset or fresh status, or one that started later, is `not_recorded`. Every machine
  * running a Desk at or after a fix runs the recorder, so with recording started an issue with no entry means
- * "no hit recorded here", provided nothing was ever dropped (`DROPPED_KEY`); once something was, the answer
- * could have been lost and it reads `not_recorded`. `hit` is true when the issue was hit at `version` or a
- * later Desk version.
+ * "no hit recorded here", provided nothing was dropped at or after `since` (`DROPPED_KEY`, whose
+ * `last_dropped_at` is the latest drop): a drop in that window could have lost the answer, so it reads
+ * `not_recorded`. A drop before `since` cannot hide a hit after it, and a drop count with no time is read as
+ * in the window. The filer counts a drop for every Desk problem it could not file or whose hit it could not
+ * record (`recordLostHit`). `hit` is true when the issue was hit at `version` or a later Desk version.
  *
- * Accepted gaps, parked: a hit lost to a failed status write is best effort (one stderr code, no record), and
- * a headless evaluator session records nothing by rule; both read as no hit.
+ * Accepted gap: a headless evaluator session records nothing by rule, and reads as no hit. So does a hit
+ * whose drop record could not be written either (one stderr code).
  *
  * Reasons: `not_recorded`, `damaged`, `bad_version`, `bad_issue_number`, `bad_since`.
  */
@@ -164,7 +185,8 @@ export function knownHitsSince(status, issueNumber, version, { since } = {}) {
   if (started === undefined) return unavailable("not_recorded")
   if (!validTime(started)) return unavailable("damaged")
   if (Date.parse(started) > sinceMs) return unavailable("not_recorded")
-  if (map === undefined || !Object.hasOwn(map, issueNumber)) return dropped?.count > 0 ? unavailable("not_recorded") : { state: "measured", hit: false }
+  const droppedInWindow = dropped?.count > 0 && (dropped.last_dropped_at === null || Date.parse(dropped.last_dropped_at) >= sinceMs)
+  if (map === undefined || !Object.hasOwn(map, issueNumber)) return droppedInWindow ? unavailable("not_recorded") : { state: "measured", hit: false }
   const entry = map[issueNumber]
   if (!validEntry(entry)) return unavailable("damaged")
   return { state: "measured", hit: compareVersions(entry.last_version, version) >= 0 }
