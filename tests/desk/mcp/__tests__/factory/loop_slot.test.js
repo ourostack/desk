@@ -6,7 +6,7 @@ import assert from "node:assert/strict"
 
 import { validateCaptureBytes, LOOP_SLOT_COUNTS } from "../../../../../plugins/desk/mcp/src/factory/capture-schema.js"
 import { planCapture } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
-import { assembleLoop, count, loopAlarms, unreadAlarms } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
+import { assembleLoop, loopAlarms, unreadAlarms } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
 import { SLOT_MAX_AGE_HOURS, loopSlotFrom, slotFields, slotValid } from "../../../../../plugins/desk/mcp/src/factory/loop-slot.js"
 import { cardTitle } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 
@@ -59,8 +59,7 @@ test("a record that is not current, not a loop record, or not valid gives no slo
   assert.equal(loopSlotFrom(record({ written_at: new Date(NOW - (SLOT_MAX_AGE_HOURS + 1) * HOUR).toISOString() }), NOW), null)
   assert.equal(loopSlotFrom(record({ written_at: new Date(NOW + HOUR).toISOString() }), NOW), null)
   assert.ok(loopSlotFrom(record({ written_at: new Date(NOW - SLOT_MAX_AGE_HOURS * HOUR).toISOString() }), NOW))
-  const tooBig = record({ improvement: { open: measured(1000001) } })
-  assert.equal(loopSlotFrom(tooBig, NOW), null)
+  const tooBig = record({ improvement: { open: measured(1000001), claimed: measured(1) } })
   assert.equal(slotValid(tooBig), false)
   assert.equal(slotValid(null), false)
   assert.equal(slotValid([]), false)
@@ -106,10 +105,10 @@ test("a slot that passes the rule raises no alarm; one that fails raises capture
   const good = assembled({ cards: [], truncated: false, set_aside_total: 0, unreadable_files: 0 })
   assert.equal(good.signals.slot_invalid, false)
   assert.ok(!loopAlarms(good.loop, good.signals).some((alarm) => alarm.name === "capture_loop_slot"))
-  const bad = { ...good.loop, improvement: { ...good.loop.improvement, open: count(1000001) } }
-  const alarms = loopAlarms(bad, { slot_invalid: true })
+  const bad = assembled({ cards: Array.from({ length: 1000001 }, () => ({ source: "andon", state: "closed_confirmed", last_opened_at: new Date(NOW).toISOString(), closed_at: new Date(NOW - HOUR).toISOString() })), set_aside_total: 0, unreadable_files: 0 })
+  assert.equal(bad.signals.slot_invalid, true)
+  const alarms = loopAlarms(bad.loop, bad.signals)
   assert.deepEqual(alarms.filter((alarm) => alarm.name === "capture_loop_slot"), [{ name: "capture_loop_slot", evidence: {} }])
-  assert.equal(assembled({ cards: Array.from({ length: 0 }), truncated: false, set_aside_total: 0, unreadable_files: 0 }).signals.slot_invalid, false)
   assert.ok(!unreadAlarms(good.loop, good.signals).includes("capture_loop_slot"))
   assert.equal(cardTitle("loop_alarm", "capture_loop_slot"), "The loop health record could not be sent to the store")
 })
@@ -121,4 +120,32 @@ test("the record the measure step builds flattens to a slot the store's rule acc
   assert.equal(slot.oldest_open_age_days, null)
   assert.equal(slot.steps_stale, 0)
   assert.equal(slot.headless, null)
+})
+
+test("a value that fails the rule is null and the rest of the slot still goes", () => {
+  const slot = loopSlotFrom(record({ improvement: { open: measured(1000001), claimed: measured(1) }, evaluator: { headless: { state: "Not A Code" } } }), NOW)
+  assert.equal(slot.improvement_open, null)
+  assert.equal(slot.improvement_claimed, 1)
+  assert.equal(slot.headless, null)
+  assert.equal(slotValid(record({ evaluator: { headless: { state: "Not A Code" } } })), false)
+  assert.equal(slotValid(record()), true)
+})
+
+test("the oldest open age is aged by the record's own age in whole days, so the store's 7-day alarm is never late", () => {
+  const old = record({ written_at: new Date(NOW - 71 * HOUR).toISOString(), improvement: { oldest_open_age_days: measured(5) } })
+  assert.equal(loopSlotFrom(old, NOW).oldest_open_age_days, 7)
+  const fresh = record({ written_at: new Date(NOW - 2 * HOUR).toISOString(), improvement: { oldest_open_age_days: measured(5) } })
+  assert.equal(loopSlotFrom(fresh, NOW).oldest_open_age_days, 5)
+  const none = record({ written_at: new Date(NOW - 71 * HOUR).toISOString(), improvement: { oldest_open_age_days: unavailable("none_open") } })
+  assert.equal(loopSlotFrom(none, NOW).oldest_open_age_days, null)
+  const ahead = record({ written_at: new Date(NOW + 60000).toISOString(), improvement: { oldest_open_age_days: measured(5) } })
+  assert.equal(loopSlotFrom(ahead, NOW).oldest_open_age_days, 5)
+})
+
+test("a slot that fails the rule still lets the capture record go, with the failing key null", () => {
+  const made = plan(status(record({ improvement: { open: measured(1000001), claimed: measured(2) } }))).record
+  const parsed = JSON.parse(made.bytes.toString("utf8"))
+  assert.equal(parsed.loop.improvement_open, null)
+  assert.equal(parsed.loop.improvement_claimed, 2)
+  assert.equal(validateCaptureBytes(made.bytes.toString("utf8")).ok, true)
 })

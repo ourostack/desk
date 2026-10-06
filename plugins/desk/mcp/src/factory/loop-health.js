@@ -128,7 +128,8 @@ function cardSection(read, nowMs) {
   return {
     cards,
     improvement: {
-      open: count(inState("open").length),
+      // Loop alarm cards are the loop's own and are counted in `loop_alarms_open`, so the open count leaves them out, as the ages do.
+      open: count(inState("open").filter((card) => card.source !== "loop_alarm").length),
       claimed: count(inState("claimed").filter(live).length),
       claim_expired: count(inState("claimed").filter((card) => !live(card)).length),
       shipped: count(inState("shipped").length),

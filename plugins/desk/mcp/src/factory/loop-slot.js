@@ -5,13 +5,16 @@
 // never 0. `headless` is the evaluator's state code, `null` when it is not recorded for today. Nothing else is read, so no name, path, title,
 // card text or date can reach the slot, and nothing in it is per person.
 //
-// A record older than `SLOT_MAX_AGE_HOURS` (or dated in the future) says nothing about now, so it gives no slot. A slot that fails `validateLoopSlot`
-// is also no slot: the capture record goes without it and `slotValid` lets the measure step raise `loop_alarm:capture_loop_slot`.
+// A record older than `SLOT_MAX_AGE_HOURS` (or dated in the future) says nothing about now, so it gives no slot. The age of the oldest open card is
+// aged by the record's own age in whole days, because the slot has no date and the store counts from the capture commit. A key whose value fails
+// the store's rule is sent as `null` and the rest of the slot goes; `slotValid` is false for it, so the measure step raises
+// `loop_alarm:capture_loop_slot`.
 
 import { LOOP_SLOT_VERSION, validateLoopSlot } from "./capture-schema.js"
 
 export const SLOT_MAX_AGE_HOURS = 72
 const HOUR_MS = 3600 * 1000
+const DAY_MS = 24 * HOUR_MS
 const FUTURE_ALLOWANCE_MS = 5 * 60 * 1000
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
@@ -53,14 +56,18 @@ export function slotValid(record) {
   return isObject(record) && validateLoopSlot(slotFields(record), "", [])
 }
 
+/** `sound(key, value) -> boolean`: whether `value` alone passes the store's rule for `key`. */
+const sound = (key, value) => validateLoopSlot({ v: LOOP_SLOT_VERSION, [key]: value }, "", [])
+
 /**
- * `loopSlotFrom(record, nowMs) -> slot | null`: the slot for the capture record, or null when there is no current, valid one. The record must be
- * a `desk.factory.loop/1` record written at most `SLOT_MAX_AGE_HOURS` ago.
+ * `loopSlotFrom(record, nowMs) -> slot | null`: the slot for the capture record, or null when there is no current record. The record must be
+ * a `desk.factory.loop/1` record written at most `SLOT_MAX_AGE_HOURS` ago. A key that fails the store's rule is `null`; the other keys are kept.
  */
 export function loopSlotFrom(record, nowMs) {
   if (!isObject(record) || record.schema !== "desk.factory.loop/1") return null
   const at = typeof record.written_at === "string" ? Date.parse(record.written_at) : Number.NaN
   if (!Number.isFinite(at) || nowMs - at > SLOT_MAX_AGE_HOURS * HOUR_MS || at - nowMs > FUTURE_ALLOWANCE_MS) return null
-  const slot = slotFields(record)
-  return validateLoopSlot(slot, "", []) ? slot : null
+  const fields = slotFields(record)
+  if (fields.oldest_open_age_days !== null) fields.oldest_open_age_days += Math.max(0, Math.floor((nowMs - at) / DAY_MS))
+  return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, key === "v" || sound(key, value) ? value : null]))
 }
