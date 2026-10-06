@@ -18,15 +18,15 @@ export const STEP_STATES = ["pending", "in progress", "blocked", "in review", "m
 export const DERIVED_STATES = ["in review", "merged", "delivered"]
 export const STEP_FIELDS = ["id", "state", "depends_on", "repo", "evidence", "reason", "expect", "dependents_ok"]
 const NEEDS_REASON = ["blocked", "dropped"]
-const SETTLED = ["delivered", "dropped"]
+export const SETTLED = ["delivered", "dropped"]
 const HEADING = "## Steps"
 const COLUMNS = ["Step", "Depends on", "Repo", "State", "Evidence"]
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u
 const ID_LIMIT = 40
 const NONE = /^(?:—|-)?$/u
-const SEPARATOR = /^\|?[\s:|-]*-[\s:|-]*$/u
+export const SEPARATOR = /^\|?[\s:|-]*-[\s:|-]*$/u
 
-const splitCells = (line) =>
+export const splitCells = (line) =>
   line.trim().replace(/^\|/u, "").replace(/(?<!\\)\|$/u, "").split(/(?<!\\)\|/u).map((cell) => cell.replace(/\\\|/gu, "|").trim())
 const oneLine = (value) => value.replace(/\s*\r?\n\s*/gu, " ").trim()
 const orNone = (value) => (value === "" || value === null ? "—" : value)

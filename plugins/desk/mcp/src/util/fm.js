@@ -77,11 +77,16 @@ const HELD_OPEN = new Set(["EPERM", "EBUSY", "EACCES"])
 export async function writeMarkdown(filePath, data, content, { atomic = false } = {}) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   if (!atomic) return fs.writeFile(filePath, serializeMarkdown(data, content), "utf8")
-  // Written beside the card and renamed over it (over what a symlinked card points at), so a reader sees the old card or the new one.
-  // The temporary name is unique to this write, and the card keeps its file mode.
+  return writeFileAtomic(filePath, serializeMarkdown(data, content))
+}
+
+/**
+ * Write `text` to an existing file through a temporary file beside it and a rename (over what a symlinked file points at), so a reader sees the old file or
+ * the new one. The temporary name is unique to this write and the file keeps its mode; where something holds the file open the text is written in place.
+ */
+export async function writeFileAtomic(filePath, text) {
   const target = await fs.realpath(filePath)
   const temporary = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`
-  const text = serializeMarkdown(data, content)
   try {
     await fs.writeFile(temporary, text, "utf8")
     await fs.chmod(temporary, (await fs.stat(target)).mode & 0o7777)
