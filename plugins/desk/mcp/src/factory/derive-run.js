@@ -6,6 +6,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { bindSession, isTaskSegment, jobId } from "./binding.js"
+import { recordCoverage } from "./capture-sweep.js"
 import { deriveClaudeSession } from "./derive-claude.js"
 import { addUnavailable } from "./derive-common.js"
 import { deriveCodexSession } from "./derive-codex.js"
@@ -561,7 +562,7 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
 }
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
-  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
+  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0, coverage: null }
   try {
     if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
   } catch {
@@ -576,6 +577,8 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
   }
   // The orphan pass records its own failure (`orphans.failed`) and never throws, so it cannot stop a sweep.
   Object.assign(summary, await rebuildOrphans(env, { quietMs, markers }))
+  // Capture coverage never throws and keeps the previous record when it fails.
+  summary.coverage = await recordCoverage(env, { markers, orphans: summary.orphans, bindingVersion: BINDING_VERSION })
   // `route_unverified` counts the Codex markers held inside `held`; `factory.js status` shows it.
   try {
     await writeStatus(env, { held_markers: { route_unverified: summary.route_unverified } })

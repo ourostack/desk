@@ -155,7 +155,7 @@ When a task reaches `done` or `cancelled`, `task_update` (or `task_archive`) its
 
 ## Store-side validation and reports
 
-`validate-pr` judges exactly what merging the head into the base would land. It builds the merge result with `git merge-tree --write-tree` (Git 2.38 or later; an older or unreadable Git fails with `git_too_old`, and a merge-tree failure other than a conflict with `merge_tree_unavailable`, both without a result), lists changes as the base against that tree, and reads bytes through `git show` and `git ls-tree`. It refuses a head whose merge conflicts (`merge_conflict`) and a head that carries merge commits not already on the base (`unexpected_merge`). A `base...head` diff would read only one merge base, while the merge uses all of them, so a crafted head could otherwise pass while its merge changed something else. It never checks out, imports or executes candidate-controlled files. Contributor changes are limited to at most 500 added or modified data files of two kinds: published facts at `facts/<host>-<session-id>.json` and published labels at `labels/<job>/<session-id>.json`. Each facts file must pass the canonical published-bytes gate, match its filename identity, preserve host/session identity when modified and never reduce `session.duration_ms`. Validation output contains only stable reason codes and safe paths. Any change that is not a published facts or labels file, including any other file under `facts/` or `labels/`, is accepted only for GitHub author associations `OWNER`, `MEMBER` or `COLLABORATOR`, and is marked as maintenance for the store workflow to leave unmerged. Only an author association of `OWNER`, `MEMBER` or `COLLABORATOR` may delete a facts or labels file (a retraction, see below): such a delete at those two path shapes validates with no content to check and is not maintenance, a delete at any other path is maintenance, every other author's delete of a facts or labels file is rejected as `removal` (a delete at any other path is rejected as `path`, or `removal_path` from `validatePr` itself), and a rename is still rejected. A modified facts file's previous bytes are read at the base, and its new bytes in the merge result.
+`validate-pr` judges exactly what merging the head into the base would land. It builds the merge result with `git merge-tree --write-tree` (Git 2.38 or later; an older or unreadable Git fails with `git_too_old`, and a merge-tree failure other than a conflict with `merge_tree_unavailable`, both without a result), lists changes as the base against that tree, and reads bytes through `git show` and `git ls-tree`. It refuses a head whose merge conflicts (`merge_conflict`) and a head that carries merge commits not already on the base (`unexpected_merge`). A `base...head` diff would read only one merge base, while the merge uses all of them, so a crafted head could otherwise pass while its merge changed something else. It never checks out, imports or executes candidate-controlled files. Contributor changes are limited to at most 500 added or modified data files of three kinds: published facts at `facts/<host>-<session-id>.json`, published labels at `labels/<job>/<session-id>.json` and the machine's capture record at `capture/<intake id>.json` (see "Capture coverage"). Each facts file must pass the canonical published-bytes gate, match its filename identity, preserve host/session identity when modified and never reduce `session.duration_ms`. Validation output contains only stable reason codes and safe paths. Any change that is not a published facts or labels file, including any other file under `facts/` or `labels/`, is accepted only for GitHub author associations `OWNER`, `MEMBER` or `COLLABORATOR`, and is marked as maintenance for the store workflow to leave unmerged. Only an author association of `OWNER`, `MEMBER` or `COLLABORATOR` may delete a facts or labels file (a retraction, see below): such a delete at those two path shapes validates with no content to check and is not maintenance, a delete at any other path is maintenance, every other author's delete of a facts or labels file is rejected as `removal` (a delete at any other path is rejected as `path`, or `removal_path` from `validatePr` itself), and a rename is still rejected. A modified facts file's previous bytes are read at the base, and its new bytes in the merge result.
 
 A labels file holds an independent evaluator's waste labels for one job's session, in the exact [labels v1 schema](../mcp/src/factory/label-schema.js) (`desk.factory.labels/1`). It carries the job and version-4 session IDs, the evaluator, a list of stretches, and a list of what the evaluator could not read. Nothing in the file is free text:
 
@@ -257,3 +257,76 @@ On the transition to `done`, `task_update` and `task_archive` write `factory_rep
 The [task tools](../mcp/src/tools/task.js) write `finalize/<job>.json` on `done`, `cancelled` and archive, including repeat archive calls, only when factory state already exists. They use the same job identity as binding; a factory failure emits a fixed diagnostic code without failing the completed task operation. This does not wait for a store, create consent or mark a report delivered.
 
 The [CLI](../mcp/scripts/factory.js) advertises `finalize`, so the end-of-turn hook now starts it for pending requests, and the `factory` boot check is the backstop. Delivery to the live public store, and installed Claude, Copilot and Desktop behavior for delivery, remain unverified until the channel update is installed and the controller runs the live proof.
+
+## Capture coverage
+
+The sweep counts each host's root sessions on disk and says what became of them. It lists folders only and never opens a transcript, except that for Codex it reads at most the first 16 KiB of each rollout file's first line to tell a child session from a root session. A symlink, a hard link and a symlinked folder are never counted. The counts go to the local `status.json`, and once a store says it accepts them, one content-free record per machine goes to that store. Nothing from a transcript is stored, logged or published.
+
+### The buckets
+
+Every session a host kept on disk is in exactly one bucket, and the buckets of a host add up to its `on_disk` count (the sweep checks the sum for every host before it writes anything).
+
+- `derived`: the session has facts and they are placed with their store (delivered, or waiting in the outbox for that store).
+- `held`: facts are not being made or sent for it, because its facts copy is quarantined, its marker names no store, the store has no `contribute: true` consent, or it is an unproven Codex default route.
+- `frozen`: facts exist or could exist, but the session cannot be published now. Its route is unknown, stale or stalled, or it is an orphan that is not current (see below). `frozen_by_reason` counts the reasons as fixed codes, and tolerates reasons it does not know.
+- `pending`: the session has a marker and its store has consent, and its facts are not derived yet.
+- `not_seen`: the capture hook never marked the session (or, on Copilot CLI and Codex, the marker says no desk), so there are no facts for it.
+- `not_in_a_desk`: Claude Code only. An unmarked session in a folder that belongs to none of this machine's known desks. On Copilot CLI and Codex this is `null`, because an unmarked non-desk session cannot be told from a miss there.
+
+A bucket that cannot be told is omitted or `null`, never `0`. A host that is `absent` (no folder), `unreadable` or `capped` (more than the entry budget or the three-second time budget) carries only its `state` and `unverified`, no counts.
+
+Every not-current orphan reads as `frozen`. The orphan pass counts its pending orphans machine-wide, so that count cannot be split by owner and is never used: one owner's record must not move with another owner's sessions. The reason is `orphan_unsplit`, or `orphan_pass_unavailable` when the pass left no usable result. The pass's own frozen reasons for sessions on disk are added to `frozen_by_reason` as they are.
+
+### The local `status.json` keys
+
+- `coverage`: `{ method: 1, ran_at, hosts }`, one entry per host as above, plus `by_owner` (each owner's own buckets, which sum to the host's) and, on Codex, `undetermined` (rollouts whose first line could not be read) and `fallback` when set.
+- `coverage_failed`: set to `state_unreadable`, `count_failed` or `classify_failed` (the stage that failed, no message) when a pass fails. A failed pass keeps the earlier `coverage` in place and writes only this code. A successful pass clears it.
+- `coverage_cache`: local only. Its keys are Codex rollout file names, kept so the next sweep need not reread unchanged files. It is never copied into `coverage`, a record, `last_flush` or any other file.
+
+### Owners and withheld sessions
+
+Each session has an owner, and a store's record counts only its own sessions plus the owner `-`.
+
+- A store name is the owner when a marker, a receipt or a facts copy tells it. Names are compared in lower case.
+- `-` means the session belongs to no store: no desk evidence names it, and at most one store has `contribute: true`.
+- `?` means the owner cannot be told, and a `?` session is in no record at all. This happens when a marker or receipt names a desk root but its store cannot be told (a desk with no tellable store, or a route that is unknown or whose desk folder is gone); when two sessions of one desk folder point to two stores, or one of them to none; when two desks share one Claude Code folder name (a folder-name collision) and their sessions point to different stores; and when an unowned session exists while two or more stores have `contribute: true`, because it could belong to either.
+- Failing closed costs a slightly high-looking share. Failing open could put a private desk's activity in a public record, so every doubt is withheld.
+
+### The published record
+
+When a store accepts capture records, the sweep's coverage is scoped to that store and sent as `capture/<intake id>.json` in the same intake pull request as facts, through the same outbox and flush. The file name's intake id is the machine's existing intake branch name, so it is already public. The record holds counts and fixed words only: no date, path, session id, desk name, store name or host name beyond the three hosts.
+
+The key set is closed. Any other key fails the store's gate with `unknown_key`. The machine-readable list is this block, and a test fails if it differs from the schema ([capture-schema.js](../mcp/src/factory/capture-schema.js)):
+
+```text capture-record-keys
+top: schema basis hosts loop
+host: on_disk derived held frozen pending not_seen not_in_a_desk unverified
+```
+
+- `schema` is `desk.factory.capture/1`, and `basis` is always `still_on_disk`. `basis` is required so the share cannot be shown without its caveat.
+- `hosts` holds zero to three of `claude-code`, `copilot-cli` and `codex-cli`. A host that is not `counted`, or whose in-scope total is 0, is left out. Each count is an integer from 0 to 1,000,000, `not_in_a_desk` may be `null`, and `unverified` is a boolean. The buckets add up to `on_disk`, which is the in-scope total, not the machine's.
+- `loop` is one optional slot, reserved for the closed loop's health record. It is named, validated by `validateLoopSlot` (a flat object of at most 512 bytes whose keys and strings match `^[a-z_]{1,32}$`, numbers are integers up to 1,000,000, and booleans and `null` are allowed) and owned by the closed-loop work, which may replace the rule. This change never writes it. The empty record never carries it.
+- The record is at most 2 KiB, in canonical bytes.
+
+The share is "of sessions still on disk" and an upper bound: a host that deleted its old transcripts is invisible here. A store's record is also self-reported: the store cannot check it, and anyone who can open an intake pull request can overwrite a capture file, so the numbers are a signal, not proof.
+
+### Reading the record with number states
+
+The record is raw input, and a store's reports must read it by the same rule as every other number: a count never stands alone, and a number that was not measured is never shown as 0. A host entry that is present has measured counts, and when its `unverified` is `true` the counts are a lower bound, shown as unverified in words. A `null` `not_in_a_desk` was not measured. A host left out of the record means no session in this store's scope, which is not the same as zero sessions seen on the machine. A store with no record has no data. A rollup over machines says how many machines it rests on (n of N). The record carries no state or reason keys and its closed key set is unchanged, so the store's own reading and wording apply, in the terms of its README.
+
+### Codex is unverified until proven
+
+A record's Codex entry says `unverified: false` only when the in-scope `derived` count is above 0 (a Codex session this store's own facts were derived from), the listing had no `undetermined` rollouts, and no fallback listing was used. Otherwise it says `unverified: true`. An `undetermined` residual is a rollout whose first line was unreadable, too long or invalid, so it could be a root or a child. It is never counted as a session, and any above 0 makes the host unverified. The host's own receipt-based flag is not read for the record, so another store's derived session cannot change a public record.
+
+### A host that is capped or unreadable
+
+While any host is `capped` or `unreadable`, no record is sent to any store and the record already on the store is kept: the record replaces the whole file, so one without that host would overwrite the store's true counts for it and read as "no sessions". The local `status.json` says why (the host's `state`), and the store's rule for stale files (below) makes a machine that stays stuck visible. Nothing says "zero" for a host that could not be counted.
+
+### When a record is sent
+
+- Handshake: the record is sent only when the default branch holds a file `capture.json` at its root whose content is exactly the JSON object `{"capture":1}` (read through the account's own client, from the store, not a fork). Anything else, no file, an error, bad JSON, an extra key or another value, is `store_not_ready`: no record is sent, `status.capture[<store>].skipped` says so, and the store is asked again after a day. `factory.json` is deliberately untouched (a `capture` key there enables nothing), so an older client's andon parser keeps working. A store that is not ready never delays facts.
+- Coverage older than three days (by `ran_at`), unparsable or in the future sends nothing and retracts nothing. A failed pass leaves the earlier coverage in place, so it is used only while it is still fresh.
+- Replacement is throttled to once in 20 hours, and only when the bytes differ from what the default branch holds. The bookkeeping lives in `status.capture[<store>]` and never in a delivered record.
+- Retraction is the empty record, `hosts: {}`. It is sent when a record was sent before and nothing is left in scope (every host `counted` or `absent`). Any contributor may send it. A host that is capped or unreadable blocks a retraction.
+- A refusal that names the record (a `capture_*` code, or `path` for the pull request that carried it) is counted as a stale pull request: facts are sent again and never quarantined because of it. The record backs off a week. A data code beside it still quarantines facts as before.
+- The record's own gate fails (a bug, not a store refusal) only as `capture_invalid`: nothing is sent and it is asked again after a day.

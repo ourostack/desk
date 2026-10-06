@@ -759,19 +759,36 @@ const retractingFile = (root, slug) => path.join(root, "retracting", `${slug}.js
 const removeNames = (names) => (current) => Object.fromEntries(Object.entries(current).filter(([name]) => !names.includes(name)))
 const ownNames = (names) => [...new Set(names)].filter((name) => typeof name === "string" && (OUTBOX_NAME_PATTERN.test(name) || LABELS_KEY_PATTERN.test(name)))
 
+// The facts-file names in every store's folder `folder` under the state root, as `{ store, name }`. A store folder is named from its store by `storeSlug`; one that does not read back to a valid store is skipped.
+async function namesByStore(root, folder) {
+  const found = []
+  for (const slug of await listDirSafe(path.join(root, folder))) {
+    const store = slug.replace("__", "/")
+    if (!PATTERNS.prRepo.test(store) || storeSlug(store) !== slug) continue
+    for (const name of await listRegularFiles(path.join(root, folder, slug), OUTBOX_NAME_PATTERN)) found.push({ store, name })
+  }
+  return found
+}
+
 /**
  * `outboxCopies(env, host) -> { store, name }[]`: the facts files in every store's outbox for `host` (`<host>-<session_id>.json`), by store
- * and name. A store folder is named from its store by `storeSlug`; one that does not read back to a valid store is skipped.
+ * and name.
  */
 export async function outboxCopies(env, host) {
   const root = await factoryStateRoot(env)
-  const copies = []
-  for (const slug of await listDirSafe(path.join(root, "outbox"))) {
-    const store = slug.replace("__", "/")
-    if (!PATTERNS.prRepo.test(store) || storeSlug(store) !== slug) continue
-    for (const name of await listRegularFiles(path.join(root, "outbox", slug), OUTBOX_NAME_PATTERN)) if (name.startsWith(`${host}-`)) copies.push({ store, name })
+  return (await namesByStore(root, "outbox")).filter(({ name }) => name.startsWith(`${host}-`))
+}
+
+/**
+ * `allOutboxNames(env) -> { copies, quarantined }`, each `{ store, name }[]`: every facts file name this machine keeps for any store and any host,
+ * `copies` from the outbox and the kept copies of retracted sessions, `quarantined` from the quarantine folders. Names only; nothing is read.
+ */
+export async function allOutboxNames(env) {
+  const root = await factoryStateRoot(env)
+  return {
+    copies: [...(await namesByStore(root, RETRACTED_COPIES)), ...(await namesByStore(root, "outbox"))],
+    quarantined: await namesByStore(root, "quarantine"),
   }
-  return copies
 }
 
 /** `retractionNames(env) -> Set<string>`: the facts file names that any store has a retracting record or tombstone for, or keeps a retracted copy of. */

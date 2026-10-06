@@ -51,7 +51,7 @@ async function repository(run) {
 
 // Runs validate-pr with real Git, optionally hiding the head's merge commits
 // so the merge-result judgement is exercised on its own.
-function validate(root, base, head, { hideMerges = false } = {}) {
+function validate(root, base, head, { hideMerges = false, association = "NONE" } = {}) {
   const git = (args, options) => {
     if (hideMerges && args[0] === "rev-list") return ""
     try {
@@ -62,7 +62,7 @@ function validate(root, base, head, { hideMerges = false } = {}) {
       throw failure
     }
   }
-  return runValidatePrCommand({ argv: ["--base", base, "--head", head, "--author-association", "NONE"], cwd: root, git })
+  return runValidatePrCommand({ argv: ["--base", base, "--head", head, "--author-association", association], cwd: root, git })
 }
 
 test("a stranger's second pull request with two merge bases cannot revert a workflow fix or delete another contributor's facts (review mb2)", () => repository(async ({ root, git, blob, tree, commit }) => {
@@ -130,4 +130,64 @@ test("a head with two merge bases cannot slip a README change past a stranger's 
     maintenance: false,
     errors: [{ code: "path", path: "changes.0" }],
   })
+}))
+
+const CAPTURE_FILE = "capture/0123456789abcdef.json"
+const CAPTURE_BYTES = `${JSON.stringify({ schema: "desk.factory.capture/1", basis: "still_on_disk", hosts: {} })}\n`
+
+test("a pull request holding facts and a capture record validates as data, not maintenance", () => repository(async ({ root, blob, tree, commit }) => {
+  const readme = blob("readme\n")
+  const f = blob(readFileSync(path.join(FACTS, VICTIM), "utf8"))
+  const c = blob(CAPTURE_BYTES)
+  const base = commit(tree([["100644", "blob", readme, "README.md"]]), [], "base", "2030-01-01T00:00:00Z")
+  const head = commit(tree([
+    ["040000", "tree", tree([["100644", "blob", c, "0123456789abcdef.json"]]), "capture"],
+    ["040000", "tree", tree([["100644", "blob", f, VICTIM]]), "facts"],
+    ["100644", "blob", readme, "README.md"],
+  ]), [base], "intake", "2030-01-02T00:00:00Z")
+  assert.deepEqual(await validate(root, base, head), { ok: true, maintenance: false, errors: [] })
+  assert.deepEqual(await validate(root, base, head, { association: "OWNER" }), { ok: true, maintenance: false, errors: [] })
+  // A replacement is judged on the new bytes alone.
+  const replaced = commit(tree([
+    ["040000", "tree", tree([["100644", "blob", blob(`${CAPTURE_BYTES.trim()}\n`.replace("{}", '{"claude-code":{"on_disk":1,"derived":1,"held":0,"frozen":0,"pending":0,"not_seen":0,"not_in_a_desk":0,"unverified":false}}')), "0123456789abcdef.json"]]), "capture"],
+    ["040000", "tree", tree([["100644", "blob", f, VICTIM]]), "facts"],
+    ["100644", "blob", readme, "README.md"],
+  ]), [head], "replacement", "2030-01-03T00:00:00Z")
+  assert.deepEqual(await validate(root, head, replaced), { ok: true, maintenance: false, errors: [] })
+}))
+
+test("a pull request holding a capture record and a file outside the data paths still needs a maintainer", () => repository(async ({ root, blob, tree, commit }) => {
+  const r1 = blob("readme v1\n")
+  const r2 = blob("readme v2\n")
+  const c = blob(CAPTURE_BYTES)
+  const captureTree = tree([["100644", "blob", c, "0123456789abcdef.json"]])
+  const base = commit(tree([["100644", "blob", r1, "README.md"]]), [], "base", "2030-01-01T00:00:00Z")
+  const head = commit(tree([["040000", "tree", captureTree, "capture"], ["100644", "blob", r2, "README.md"]]), [base], "mixed", "2030-01-02T00:00:00Z")
+  assert.deepEqual(await validate(root, base, head), { ok: false, maintenance: false, errors: [{ code: "path", path: "changes.0" }] })
+  assert.deepEqual(await validate(root, base, head, { association: "OWNER" }), { ok: true, maintenance: true, errors: [] })
+  // An invalid record is refused for everyone, and a bad capture path is not a data path.
+  const bad = commit(tree([["040000", "tree", tree([["100644", "blob", blob("{}\n"), "0123456789abcdef.json"], ["100644", "blob", c, "short.json"]]), "capture"], ["100644", "blob", r1, "README.md"]]), [base], "bad", "2030-01-03T00:00:00Z")
+  const refused = await validate(root, base, bad, { association: "OWNER" })
+  assert.equal(refused.ok, false)
+  assert.equal(refused.errors.some((item) => item.path === CAPTURE_FILE), true)
+}))
+
+test("a stranger's deletion of a capture record is refused and a maintainer's is accepted", () => repository(async ({ root, blob, tree, commit }) => {
+  const readme = blob("readme\n")
+  const captureTree = tree([["100644", "blob", blob(CAPTURE_BYTES), "0123456789abcdef.json"]])
+  const base = commit(tree([["040000", "tree", captureTree, "capture"], ["100644", "blob", readme, "README.md"]]), [], "base", "2030-01-01T00:00:00Z")
+  const head = commit(tree([["100644", "blob", readme, "README.md"]]), [base], "delete", "2030-01-02T00:00:00Z")
+  assert.deepEqual(await validate(root, base, head), { ok: false, maintenance: false, errors: [{ code: "removal", path: CAPTURE_FILE }] })
+  assert.deepEqual(await validate(root, base, head, { association: "OWNER" }), { ok: true, maintenance: false, errors: [] })
+}))
+
+test("a capture path with a short id is maintenance for a maintainer and refused for anyone else", () => repository(async ({ root, blob, tree, commit }) => {
+  const readme = blob("readme\n")
+  const base = commit(tree([["100644", "blob", readme, "README.md"]]), [], "base", "2030-01-01T00:00:00Z")
+  const head = commit(tree([
+    ["040000", "tree", tree([["100644", "blob", blob(CAPTURE_BYTES), "short.json"]]), "capture"],
+    ["100644", "blob", readme, "README.md"],
+  ]), [base], "short", "2030-01-02T00:00:00Z")
+  assert.deepEqual(await validate(root, base, head), { ok: false, maintenance: false, errors: [{ code: "path", path: "changes.0" }] })
+  assert.deepEqual(await validate(root, base, head, { association: "OWNER" }), { ok: true, maintenance: true, errors: [] })
 }))

@@ -22,6 +22,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import {
+  allOutboxNames,
   clearFinalize,
   factoryStateRoot,
   gitBlobSha,
@@ -1461,4 +1462,32 @@ test("withLock propagates an unexpected failure checking a held lock's staleness
   } finally {
     mocked.mock.restore()
   }
+}))
+
+test("allOutboxNames lists every store's facts names across the outbox, the retracted copies and the quarantine, names only", () => scratch(async (env, base) => {
+  const root = await factoryStateRoot(env)
+  const a = "claude-code-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60.json"
+  const b = "copilot-cli-4b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f61.json"
+  const c = "codex-cli-5b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f62.json"
+  const put = (folder, slug, name, text = "{}") => {
+    mkdirSync(path.join(root, folder, slug), { recursive: true })
+    writeFileSync(path.join(root, folder, slug, name), text)
+  }
+  put("outbox", "ourostack__factory", a)
+  put("outbox", "other__store", b)
+  put("outbox", "ourostack__factory", "notes.txt")
+  put("outbox", "not-a-store", c)
+  put("retracted-copies", "ourostack__factory", c)
+  put("quarantine", "other__store", a)
+  // A link is never listed, and a leftover folder is not a store.
+  symlinkSync(path.join(root, "outbox", "other__store", b), path.join(root, "outbox", "other__store", c))
+  const listed = await allOutboxNames(env)
+  const key = ({ store, name }) => `${store} ${name}`
+  assert.deepEqual(listed.copies.map(key).sort(), [`other/store ${b}`, `ourostack/factory ${a}`, `ourostack/factory ${c}`].sort())
+  assert.deepEqual(listed.quarantined.map(key), [`other/store ${a}`])
+  assert.equal(JSON.stringify(listed).includes(base), false)
+}))
+
+test("allOutboxNames returns nothing when no store has a folder yet", () => scratch(async (env) => {
+  assert.deepEqual(await allOutboxNames(env), { copies: [], quarantined: [] })
 }))

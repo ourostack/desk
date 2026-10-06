@@ -8,13 +8,17 @@
 //     in as `facts: [{ path, bytes }]`. A modified labels file also needs its
 //     `previousBytes`: a replacement must come from an evaluator whose plugin
 //     version and rubric are both no lower (else `evaluator_downgrade`).
+//   - the machine's capture record at `capture/<intake id>.json`
+//     (`capture-schema.js`): checked on its own bytes, with no rule against the
+//     bytes it replaces (counts may fall, which is the alarm).
 // A delete is accepted only when the caller says the author is a trusted
 // maintainer (`trustedMaintainer: true`; `scripts/factory.js` derives it from
-// the author association), else it is `removal`. It must be at one of those two
+// the author association), else it is `removal`. It must be at one of those
 // path shapes (any other path is `removal_path`), has no content to validate,
 // and a rename stays refused.
 // Every value arrives as bytes and is only parsed as JSON, never loaded or
 // run, and errors carry only stable codes and safe paths.
+import { CAPTURE_PATH, validateCaptureBytes } from "../capture-schema.js"
 import { checkLabelsAgainstFacts, evaluatorDowngrade, validateLabelsBytes } from "../label-schema.js"
 import { validatePublishedBytes } from "../published-schema.js"
 
@@ -44,6 +48,10 @@ const parsePublished = (bytes) => parseBytes(bytes, validatePublishedBytes)
 
 export function isFactsPath(value) {
   return typeof value === "string" && FACT_PATH.test(value)
+}
+
+export function isCapturePath(value) {
+  return typeof value === "string" && CAPTURE_PATH.test(value)
 }
 
 /** `{ job, session }` from an exact `labels/<job>/<session id>.json` path, else `null`. */
@@ -111,7 +119,8 @@ export function validatePr(input) {
 
     const match = typeof change.path === "string" ? FACT_PATH.exec(change.path) : null
     const labels = labelsPathParts(change.path)
-    if (match === null && labels === null) {
+    const capture = isCapturePath(change.path)
+    if (match === null && labels === null && !capture) {
       errors.push(error(change.status === "removed" ? "removal_path" : "path", `changes.${index}`))
       continue
     }
@@ -122,6 +131,12 @@ export function validatePr(input) {
     }
     if (!STATUSES.has(change.status)) {
       errors.push(error("status", safePath))
+      continue
+    }
+
+    if (capture) {
+      const validation = validateCaptureBytes(change.bytes)
+      for (const item of validation.errors) errors.push(error(item.code, safePath))
       continue
     }
 

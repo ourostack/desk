@@ -440,12 +440,12 @@ test("an unauthenticated retry due only after the deadline is already spent is r
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // For this exact fixture (one plugin, no refs), the flush's own start and the account's gh calls make exactly nine `now()`
+  // For this exact fixture (one plugin, no refs), the flush's own start and the account's gh calls make exactly ten `now()`
   // reads before the retry's own precheck: a real clock racing them is at the mercy of host load, so this
-  // counts invocations instead. The tenth read is the retry's precheck, already past a deadline the first
-  // nine never approached.
+  // counts invocations instead. The eleventh read is the retry's precheck, already past a deadline the first
+  // ten never approached.
   let calls = 0
-  const now = () => { calls += 1; return calls >= 10 ? 2_000_000 : 1_000_000 }
+  const now = () => { calls += 1; return calls >= 11 ? 2_000_000 : 1_000_000 }
   const anonymousLookup = async () => { throw new Error("the retry must never be attempted once the deadline is already spent") }
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup, now, deadlineMs: 500_000 }), { result: "deadline" })
 }))
@@ -456,11 +456,11 @@ test("an unauthenticated retry that never answers is cut off at the deadline", (
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // As above, the tenth `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
+  // As above, the eleventh `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
   // which becomes the real timer the retry races against, so a hung lookup is cut off quickly and
   // deterministically rather than by racing host load against a short wall-clock deadline.
   let calls = 0
-  const now = () => { calls += 1; return calls === 10 ? 1_100_000 : 1_000_000 }
+  const now = () => { calls += 1; return calls === 11 ? 1_100_000 : 1_000_000 }
   const hung = { ...github, anonymousLookup: () => new Promise(() => {}) }
   assert.deepEqual(await flush(env, { store: STORE, runner: hung.runner, anonymousLookup: hung.anonymousLookup, now, deadlineMs: 100_100 }), { result: "deadline" })
 }))

@@ -24,8 +24,9 @@
 // Candidate revisions are inspected through Git as bytes and are never loaded.
 // validate-pr judges the tree that merging the head into the base produces
 // (`git merge-tree`, Git 2.38 or later), not a diff against one merge base.
-// `validate-pr` accepts published facts (`facts/<host>-<session id>.json`) and
-// published labels (`labels/<job>/<session id>.json`) from anyone; anything
+// `validate-pr` accepts published facts (`facts/<host>-<session id>.json`),
+// published labels (`labels/<job>/<session id>.json`) and a machine's capture
+// record (`capture/<intake id>.json`) from anyone; anything
 // else is maintenance. `evaluate` prepares the waste evaluator's briefs for a
 // finished task's sessions and `evaluate-accept` checks what the evaluator
 // wrote; both print paths and codes only, never session content.
@@ -56,7 +57,7 @@ import { build, jobLink, storePublicPlugins, storeRecords } from "../src/factory
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
-import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
+import { factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
 export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
@@ -243,7 +244,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     const result = validatePr({ changes: Array.from({ length: 501 }) })
     return { ...result, maintenance: false }
   }
-  // Anything but a published facts or labels file, including a non-fact file
+  // Anything but a published facts, labels or capture file, including a non-fact file
   // under `facts/` or `labels/`, is maintenance: the store's merge workflow
   // never merges it. A maintainer's deletion of a facts or labels file is a
   // retraction and validates like any other change at those paths; anyone
@@ -252,7 +253,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   const errors = []
   listed.forEach((change, index) => {
     const labels = labelsPathParts(change.path)
-    if (!isFactsPath(change.path) && labels === null) {
+    if (!isFactsPath(change.path) && labels === null && !isCapturePath(change.path)) {
       maintenance = true
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
       return
