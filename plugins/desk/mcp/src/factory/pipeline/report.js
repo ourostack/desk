@@ -73,7 +73,6 @@ const OUTCOME_REASON_TEXT = {
   not_delivered: "the job has no standing delivery yet",
   returns_not_fully_recorded: "some of what was sent back was not recorded",
   awaiting_signoff: "the human has not yet accepted the delivery",
-  signoff_unverified: "the human's acceptance could not be confirmed",
   no_delivered_jobs: "no delivered job has a first-pass result yet",
   no_refusals: "no refusal could be compared with the agent's reason",
   no_labels: "the independent evaluator has not labeled any job",
@@ -94,7 +93,7 @@ export const ATTENTION_REASON_TEXT = Object.freeze({
 })
 // Reasons only the store-wide attention figures carry (`attention-rollup.js`). Their words are in the shared table too, so the reasons in the built files all have text.
 const ATTENTION_ROLLUP_REASON_TEXT = {
-  no_accepted_outcomes: "no job has an accepted, verified outcome yet",
+  no_accepted_outcomes: "no job has an accepted outcome yet",
   no_turn_records: "no session in the store records the human's turns",
   decision_not_estimable: "some permission decisions could not be estimated, so this is a lower bound",
 }
@@ -214,15 +213,11 @@ function waitedText(wait) {
   return wait === null ? "" : `, waited ${SETTLED_WAIT[wait.class]}`
 }
 
-function verifiedText(formula) {
-  return formula.verified === true ? "verified" : "unverified"
-}
-
 // The job page's sign-off line: what the human said about the delivery, how sure the record is, and how long it waited.
 function signoffText(formula) {
   if (formula.class === "unavailable") return formula.reason === "signoff_not_recorded" ? "delivered, sign-off not recorded" : "not recorded"
-  if (formula.value === "accepted") return `accepted (${verifiedText(formula)})${waitedText(formula.wait)}`
-  if (formula.value === "refused") return `refused (${verifiedText(formula)}), reason ${formula.reason}${waitedText(formula.wait)}`
+  if (formula.value === "accepted") return `accepted${waitedText(formula.wait)}`
+  if (formula.value === "refused") return `refused, reason ${formula.reason}${waitedText(formula.wait)}`
   if (formula.value === "delivered_unsigned") {
     if (formula.wait === null) return "delivered, waiting for sign-off"
     return formula.wait.class === "lt_1h" ? "delivered, waiting, under 1 hour so far" : `delivered, waiting ${OPEN_WAIT[formula.wait.class]}`
@@ -251,9 +246,9 @@ function attentionText(formula) {
   return `about ${durationText(formula.value)} over ${plural(formula.turns, "human turn")} (an estimate, method version ${formula.method}; ${state})`
 }
 
-const PARTIAL_YIELD = Object.freeze({ awaiting_signoff: "waiting for sign-off", signoff_unverified: "accepted but unverified" })
+const PARTIAL_YIELD = Object.freeze({ awaiting_signoff: "waiting for sign-off" })
 
-// The job page's first-pass line: 1 when the delivery has no return that counts, 0 when it has. A 1 with the human's answer still missing or unwitnessed is an upper bound.
+// The job page's first-pass line: 1 when the delivery has no return that counts, 0 when it has. A 1 with the human's answer still missing is an upper bound.
 function firstPassText(formula) {
   const only = formula.changed_ask_only ? "; only changed asks came back" : ""
   if (formula.value === 0) return `0, sent back after review (${plural(formula.returns.counting, "return")} counted)${only}`
@@ -281,8 +276,8 @@ function signoffSection(signoff) {
     "## Sign-off",
     "",
     `- Jobs with a sign-off record: ${signoff.jobs}; with no work record: ${signoff.jobs_without_work_record}. Jobs with a work record and no sign-off record: ${signoff.no_record}.`,
-    `- Accepted (verified): ${signoff.accepted}. Accepted but unverified, not counted as accepted: ${signoff.accepted_unverified}.`,
-    `- Delivered, waiting for sign-off: ${signoff.delivered_unsigned}. Refused: ${signoff.refused} (unverified: ${signoff.refused_unverified}). Reopened: ${signoff.reopened}.`,
+    `- Accepted (recorded by the agent on the operator's word): ${signoff.accepted}.`,
+    `- Delivered, waiting for sign-off: ${signoff.delivered_unsigned}. Refused: ${signoff.refused}. Reopened: ${signoff.reopened}.`,
     `- Delivered before sign-off was recorded: ${signoff.not_recorded}. Not delivered yet: ${signoff.not_delivered}.`,
     `- Refusal reasons: ${countsText(signoff.refusal_reasons, reasons)}.`,
     `- Waits that ended in an answer: ${countsText(signoff.waits.signed, SETTLED_WAIT)}.`,
@@ -299,14 +294,11 @@ function yieldSection(result) {
   return ["## First-pass yield", "", ...counted, `- Left out of the count: ${left}.`, ""]
 }
 
-// `n of N`, and an upper bound while the human's answer is still missing or unwitnessed for any counted job.
+// `n of N`, and an upper bound while the human's answer is still missing for any counted job.
 function yieldText(result) {
   if (result.state === "measured") return `- First-pass yield: ${result.n} of ${result.N} delivered jobs passed first time (${percentage(result.value)}).`
-  const pending = [
-    ...(result.awaiting_signoff > 0 ? [`${result.awaiting_signoff} waiting for sign-off`] : []),
-    ...(result.signoff_unverified > 0 ? [`${result.signoff_unverified} accepted but unverified`] : []),
-  ]
-  return `- First-pass yield: at most ${result.n} of ${result.N} delivered jobs passed first time (upper bound ${percentage(result.value)}; ${pending.join(", ")}).`
+  // A yield is partial only while a delivered job awaits its sign-off.
+  return `- First-pass yield: at most ${result.n} of ${result.N} delivered jobs passed first time (upper bound ${percentage(result.value)}; ${result.awaiting_signoff} waiting for sign-off).`
 }
 
 function reworkSection(rework) {
@@ -315,7 +307,7 @@ function reworkSection(rework) {
   const check = rework.reason_check
   const bound = check.state === "unavailable"
     ? `not recorded (${reasonsPhrase(check)})`
-    : `compared ${check.compared}, disagree ${check.disagree}, of which ${check.compared_verified} of the compared refusals were verified. This is a lower bound on disagreement`
+    : `compared ${check.compared}, disagree ${check.disagree}. This is a lower bound on disagreement`
   return [
     "## Rework",
     "",
@@ -653,9 +645,9 @@ export function renderReadme() {
     "",
     "No host records how long a person spent reading a reply or writing a prompt. The estimate adds two parts for each human turn, reading the reply and writing the prompt, each taken from the size class of its character count. It is never more than the gap the host shows, when there is one, and never less than one second. The person may have read while the agent was still writing, and no host records that, so a figure is closer to a floor than to a ceiling.",
     "",
-    "The headline counts every human turn of every session in the period, including turns on jobs that were refused, are unsigned or were never delivered, and the total is divided by the jobs accepted and verified. A turn that falls in no job's time is shown apart as unattributed, and a turn in a session whose jobs publish no time is shown as unplaced; both stay in the headline. The same page also gives human turns per accepted outcome, a plain count over the same jobs.",
+    "The headline counts every human turn of every session in the period, including turns on jobs that were refused, are unsigned or were never delivered, and the total is divided by the jobs accepted (recorded by the agent on the operator's word). A turn that falls in no job's time is shown apart as unattributed, and a turn in a session whose jobs publish no time is shown as unplaced; both stay in the headline. The same page also gives human turns per accepted outcome, a plain count over the same jobs.",
     "",
-    "The headline has three states. It is measured when every session in the period has a complete list of human turns. It is partial, a lower bound, when some session in the period flags the field: Codex records no human turns, Copilot records them only in part because a prompt there cannot be told from a hook's follow-up with certainty, and a Claude Code session whose host wrote no origin on its prompts, a session cut at 1,000 turns and a log cut short flag it too. The reasons are printed. It is unavailable, with no value and no total, when no session in the period kept a list (the reason reads no human-turn records when no session is in the period, and turns not recorded, with the host's own reason, when sessions are, for example when all are Codex). It is also unavailable, with no total, when every turn is unreadable. A turn the estimator cannot read is counted, adds no time and gives the reason that a turn could not be estimated. With no verified accepted outcome the headline is unavailable and reads no accepted outcomes yet; the total so far is still shown, as \"at least\" when it is partial, only when a list exists and a turn could be estimated, and the headline is never zero. Sessions in the old format (`/1`) are outside the period.",
+    "The headline has three states. It is measured when every session in the period has a complete list of human turns. It is partial, a lower bound, when some session in the period flags the field: Codex records no human turns, Copilot records them only in part because a prompt there cannot be told from a hook's follow-up with certainty, and a Claude Code session whose host wrote no origin on its prompts, a session cut at 1,000 turns and a log cut short flag it too. The reasons are printed. It is unavailable, with no value and no total, when no session in the period kept a list (the reason reads no human-turn records when no session is in the period, and turns not recorded, with the host's own reason, when sessions are, for example when all are Codex). It is also unavailable, with no total, when every turn is unreadable. A turn the estimator cannot read is counted, adds no time and gives the reason that a turn could not be estimated. With no accepted outcome the headline is unavailable and reads no accepted outcomes yet; the total so far is still shown, as \"at least\" when it is partial, only when a list exists and a turn could be estimated, and the headline is never zero. Sessions in the old format (`/1`) are outside the period.",
     "",
     "Permission decisions are shown beside the headline, not in it. Only Copilot records them, and each is taken as at most five seconds.",
     "",

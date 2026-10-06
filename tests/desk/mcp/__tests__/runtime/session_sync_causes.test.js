@@ -143,3 +143,34 @@ test("classifyPullFailure tolerates no arguments at all", () => {
   assert.equal(classifyPullFailure({ deadline: true, stderr: "CONFLICT" }), "deadline")
   assert.equal(classifyPullFailure({ timedOut: true }), "deadline")
 })
+
+// Which causes file a Desk problem, and what reason the filed issue carries.
+for (const [name, failure, cause, files] of [
+  ["a conflict", { status: 1, stderr: "CONFLICT (content): Merge conflict in seed.md\n" }, "conflict", true],
+  ["a diverged history", { status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" }, "diverged", true],
+  ["an unknown failure", { status: 1, stderr: "something new and strange\n" }, "other", true],
+  ["an unreachable remote", { status: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com\n" }, "unreachable", false],
+  ["refused credentials", { status: 128, stderr: "fatal: Authentication failed for 'https://github.com/o/r.git/'\n" }, "auth_failed", false],
+  ["a timed out git process", { status: null, error: { code: "ETIMEDOUT" }, stderr: "" }, "deadline", false],
+]) {
+  test(`${name} ${files ? "files" : "does not file"} a Desk problem and still surfaces as ${cause}`, async () => {
+    const { root } = await mkOriginWithClone()
+    let filed = null
+    const result = await syncWorkspace({ root, env, fileProblem: (args) => { filed = args }, spawnGit: failingPull(failure) })
+    assert.equal(result.state, "unresolved")
+    assert.equal(result.cause, cause)
+    assert.match(result.diagnostic, /Desk problem: session-sync/u)
+    if (files) assert.equal(filed.reason, `pull_rebase_failed:${cause}`)
+    else assert.equal(filed, null)
+  })
+}
+
+test("a pull that still fails after quarantine files a reason that names its cause", async () => {
+  const { root } = await mkOriginWithClone()
+  await fs.writeFile(path.join(root, "stray.txt"), "local only\n")
+  let filed = null
+  const result = await syncWorkspace({ root, env, fileProblem: (args) => { filed = args }, spawnGit: failingPull({ status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" }) })
+  assert.equal(result.state, "unresolved")
+  assert.ok(result.quarantinedPaths.length > 0)
+  assert.equal(filed.reason, "pull_rebase_failed_after_quarantine:diverged")
+})

@@ -360,10 +360,10 @@ test("the build writes rollups/outcomes.json and the job file carries the signof
   const open = JSON.parse(readFileSync(path.join(out, "jobs", `${OPEN_JOB}.json`), "utf8"))
   assert.equal(open.formulas.signoff.state, "unavailable")
   assert.equal(open.timeline.outcome, null)
-  assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: accepted \(verified\), waited under 1 day\./u)
+  assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: accepted, waited under 1 day\./u)
   const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
   assert.match(page, /## Sign-off/u)
-  assert.match(page, /Accepted \(verified\): 1\./u)
+  assert.match(page, /Accepted \(recorded by the agent on the operator.s word\): 1\./u)
 }))
 
 test("a store with no outcomes at all builds, and every sign-off count is absent or not recorded, never zero accepted", () => scratch((root) => {
@@ -373,7 +373,7 @@ test("a store with no outcomes at all builds, and every sign-off count is absent
   assert.deepEqual(rollup.signoff, { recorded: false })
   const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
   assert.match(page, /Sign-off: not recorded in any session of this store\./u)
-  assert.doesNotMatch(page, /Accepted \(verified\)/u)
+  assert.doesNotMatch(page, /Accepted \(verified\)|accepted but unverified/u)
   assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: not recorded\./u)
 }))
 

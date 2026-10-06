@@ -1394,7 +1394,7 @@ const REMOTE = "git@github.com:Owner/Desk.git"
 const NOW = "2026-09-26T10:00:00.000Z"
 const idFor = (track, slug, personPrefix = "") => jobId({ deskRemote: REMOTE, personPrefix, track, slug })
 const signoffCall = (track, slug, overrides = {}) => ({ at: START, name: "mcp__plugin_desk_desk__task_signoff", track, slug, person: null, status: null, agent: 0, ok: true, ...overrides })
-const ACCEPTED = sign(deliver({}, { at: "2026-09-25T09:00:00.000Z" }), { status: "done", outcome: "accepted", at: "2026-09-25T09:20:00.000Z" }).record
+const ACCEPTED = sign(deliver({}, { at: "2026-09-25T09:00:00.000Z" }), { status: "done", outcome: "accepted", verified: true, at: "2026-09-25T09:20:00.000Z" }).record
 
 // Fake card readers: `cards` maps `track/slug` to what `readOutcome` answers; `birth` maps it to a birth path.
 function readers(cards, birth = {}) {
@@ -1421,7 +1421,7 @@ test("a bound job's card record becomes its outcome entry", async () => {
     job: idFor("a", "one"),
     rev: ACCEPTED.flow.rev,
     state: "accepted",
-    verified: null,
+    verified: true,
     reason: null,
     deliveries: 1,
     delivered_at: "2026-09-25T09:00:00.000Z",
@@ -1660,14 +1660,12 @@ test("returns are kept for a card whose start cannot be read, and a card with a 
   assert.equal(entry.returns.length, 1)
 })
 
-test("a refusal's counts pass through as the record decides: a legacy witnessed human changed_ask does not count, an unwitnessed or new one does", async () => {
-  const base = `2026-09-25T10:00:00.000Z done processing agent_error after_delivery refused=changed_ask`
-  const verified = await oneEntry({ flow: flowOf(), returns: [`${base} verified`] })
+test("a refusal's counts pass through as the record decides: a human changed_ask does not count, with or without a verified flag", async () => {
+  const refusal = (verified) => formatReturn({ at: "2026-09-25T10:00:00.000Z", from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: "changed_ask", refusal_verified: verified })
+  const verified = await oneEntry({ flow: flowOf(), returns: [refusal(true)] })
   assert.deepEqual(verified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: true }])
-  const unverified = await oneEntry({ flow: flowOf(), returns: [`${base} unverified`] })
-  assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: true, refusal: "changed_ask", refusal_verified: false }])
-  const current = await oneEntry({ flow: flowOf(), returns: [formatReturn({ at: "2026-09-25T10:00:00.000Z", from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: "changed_ask", refusal_verified: null })] })
-  assert.deepEqual(current.returns, [{ reason: "agent_error", caught: "after_delivery", counts: true, refusal: "changed_ask", refusal_verified: null }])
+  const unverified = await oneEntry({ flow: flowOf(), returns: [refusal(false)] })
+  assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: false }])
 })
 
 // Focus on a task, then on a task whose card is gone (which clears), over and over: each stretch of the task stands alone between cleared stretches, so a cap that is exceeded has to drop time.
