@@ -514,7 +514,17 @@ test("native: Windows ACL protection refuses junctions without changing their ta
 
 test("native: Windows ACL protection distinguishes an existing foreign owner from new default group ownership", {
   skip: isWindows ? false : "requires a native Windows host",
-}, async () => {
+}, async (t) => {
+  // Assigning the Administrators group as owner needs the elevated token; a standard user can only own what they own.
+  const elevated = nativeProbe(
+    "$p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent());" +
+      "ConvertTo-Json -Compress -InputObject ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))",
+    {},
+  )
+  if (elevated !== true) {
+    t.skip("a non-elevated user cannot assign the Administrators group as a folder's owner")
+    return
+  }
   const base = await mkBase()
   try {
     const target = path.join(base, "new-directory")

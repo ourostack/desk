@@ -68,10 +68,14 @@ test("native: the factory state root, the machine secret and an outbox file each
 
     for (const target of [markerDir, markerFile]) {
       nativeProbe(
-        "$a=Get-Acl -LiteralPath $request.path;" +
+        // Owner and access sections only, as protectWindowsPaths does: Get-Acl/Set-Acl also carry the audit
+        // section, and writing that needs SeSecurityPrivilege, which a non-elevated user does not hold.
+        "$item=Get-Item -Force -LiteralPath $request.path;" +
+          "$a=if($item.PSIsContainer){$item.GetAccessControl('Access,Owner')}else{[System.IO.File]::GetAccessControl($request.path,'Access,Owner')};" +
           "$sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0');" +
           "$r=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow');" +
-          "$a.AddAccessRule($r);Set-Acl -LiteralPath $request.path -AclObject $a;" +
+          "$a.AddAccessRule($r);" +
+          "if($item.PSIsContainer){$item.SetAccessControl($a)}else{[System.IO.File]::SetAccessControl($request.path,$a)};" +
           "ConvertTo-Json -Compress -InputObject ([pscustomobject]@{changed=$true})",
         { path: target },
       )
