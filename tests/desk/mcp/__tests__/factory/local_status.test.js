@@ -307,7 +307,7 @@ test("an invalid declaration freezes the session: it counts as pending, never ro
 }))
 
 test("the orphan pass reads as one line, and a failed, interrupted or stalled pass is a finding", async () => {
-  const { orphanPassFinding, orphanPassLine, ORPHAN_INTERRUPTED_MS } = await load()
+  const { orphanPassFinding, orphanPassLine, orphansHung, ORPHAN_INTERRUPTED_MS } = await load()
   const now = Date.parse("2026-10-06T12:00:00.000Z")
   const ran = { started_at: "2026-10-06T11:59:00.000Z", ran_at: "2026-10-06T11:59:10.000Z", examined: 25, unexamined: 75, pending: 2, frozen: { no_facts: 3, derive_failed: 1 }, rebuilt: 1, current: 20, cursor: "claude-code-x.json", last_wrap_at: "2026-10-05T00:00:00.000Z", sweeps_in_walk: 4 }
   assert.equal(orphanPassLine(ran, now), "orphan pass: ran 2026-10-06T11:59:10.000Z, examined 25, unexamined 75, pending 2, frozen 4, last full walk 2026-10-05T00:00:00.000Z, 4 sweeps into the walk")
@@ -316,6 +316,18 @@ test("the orphan pass reads as one line, and a failed, interrupted or stalled pa
   assert.equal(orphanPassFinding({ ...ran, examined: 0, unexamined: 3, sweeps_in_walk: 4 }, now), "walk_not_advancing", "nothing examined: three sweeps at most")
   assert.equal(orphanPassFinding({ ...ran, examined: 0, unexamined: 0, sweeps_in_walk: 0 }, now), null)
   assert.equal(orphanPassFinding({ ...ran, examined: "x" }, now), null, "a count that is not a count says nothing")
+  // Orphans frozen by cheap checks take no slot: only the ones that did work set how long a walk takes.
+  assert.equal(orphanPassFinding({ ...ran, examined: 425, worked: 25, unexamined: 75, sweeps_in_walk: 4 }, now), null, "ceil(100 / 25) = 4 sweeps, however many were frozen cheaply")
+  assert.equal(orphanPassFinding({ ...ran, examined: 425, worked: 25, unexamined: 75, sweeps_in_walk: 5 }, now), "walk_not_advancing")
+  assert.equal(orphanPassFinding({ ...ran, ran_at: "2026-10-04T11:59:59.000Z" }, now), "pass_stale", "not run for more than two days")
+  assert.equal(orphanPassFinding({ ...ran, ran_at: "2026-10-04T12:00:01.000Z" }, now), null)
+  assert.equal(orphanPassFinding({ ...ran, ran_at: "not a time" }, now), null, "an unreadable end time is not a stale one")
+  const hung = { ...ran, hung: { "claude-code-a.json": { strikes: 2, version: "1.0.0" }, "claude-code-b.json": { strikes: 1, version: "1.0.0" }, c: "x" } }
+  assert.equal(orphanPassFinding(hung, now), "orphans_hung")
+  assert.equal(orphansHung(hung), 1, "one strike is not hung")
+  assert.equal(orphansHung({ ...ran, hung: "x" }), 0)
+  assert.equal(orphansHung(undefined), 0)
+  assert.match(orphanPassLine(hung, now), /frozen 4 \(1 hung\), last full walk/u)
   const failed = { started_at: ran.started_at, ran_at: ran.ran_at, cursor: null, last_wrap_at: null, sweeps_in_walk: 0, failed: "pass_failed" }
   assert.equal(orphanPassFinding(failed, now), "pass_failed")
   assert.equal(orphanPassLine(failed, now), "orphan pass: failed (pass_failed), last full walk never")
@@ -327,7 +339,10 @@ test("the orphan pass reads as one line, and a failed, interrupted or stalled pa
   assert.equal(orphanPassFinding(old, now), "pass_interrupted")
   assert.equal(orphanPassLine(old, now).startsWith("orphan pass: interrupted, started "), true)
   assert.equal(orphanPassLine({ ...old, started_at: 5 }, now).includes("started unknown"), true)
+  assert.equal(orphanPassFinding({ ...started, started_at: "garbage" }, now), "pass_interrupted", "a start time that does not parse is never running")
+  assert.equal(orphanPassFinding({ cursor: null }, now), "pass_interrupted")
   assert.equal(orphanPassFinding(undefined, now), null)
   assert.equal(orphanPassLine(undefined, now), "orphan pass: no record yet")
+  assert.match(orphanPassLine({ ...ran, frozen: { a: "x", b: 2 } }, now), /frozen 2, /u, "a count that is not a count adds nothing")
   assert.equal(orphanPassLine({ ran_at: ran.ran_at, frozen: 7, examined: -1 }, now), "orphan pass: ran 2026-10-06T11:59:10.000Z, examined unknown, unexamined unknown, pending unknown, frozen 0, last full walk never, unknown sweeps into the walk")
 })

@@ -28,8 +28,10 @@
 // code, or `null`.
 //
 // `orphans` is present only when the orphan pass (`derive-run.js` `rebuildOrphans`) needs attention: `"pass_failed"` (the last pass threw),
-// `"pass_interrupted"` (a record with a start older than `ORPHAN_INTERRUPTED_MS` and no result) or `"walk_not_advancing"` (`sweeps_in_walk` is
-// past `ceil((examined + unexamined) / max(1, examined))`, so the walk should have wrapped). `orphanPassLine(record, now)` is the one-line
+// `"pass_interrupted"` (a record with a start older than `ORPHAN_INTERRUPTED_MS`, or with a start that does not parse, and no result),
+// `"orphans_hung"` (an orphan was interrupted twice and is frozen; `orphans_hung` then counts them), `"pass_stale"` (the last pass ran more than
+// `ORPHAN_STALE_MS` ago) or `"walk_not_advancing"` (`sweeps_in_walk` is past `ceil((worked + unexamined) / max(1, worked))`, `worked` counting only
+// the orphans that took a transcript slot, so the walk should have wrapped). `orphanPassLine(record, now)` is the one-line
 // reading `factory.js status` prints; both read counts, times and fixed codes only.
 //
 // The result carries store names, codes and counts only: never the machine
@@ -81,20 +83,37 @@ function readState(file, fallback) {
 
 /** How long a pass may run before a record with a start and no result reads as interrupted: past the 150 s the start hook allows. */
 export const ORPHAN_INTERRUPTED_MS = 5 * 60 * 1000
+/** How long since the last pass ran before the doctor reports it: the pass runs at every session start. */
+export const ORPHAN_STALE_MS = 2 * 24 * 60 * 60 * 1000
+/** Interrupted passes that freeze an orphan (`derive-run.js` `ORPHAN_HUNG_STRIKES`; the status code stays in `src/factory/`). */
+const HUNG_STRIKES = 2
 
 const finiteCount = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
+
+/** How many orphans the record holds frozen by repeated interruptions (two strikes), or 0. */
+export function orphansHung(record) {
+  if (!isPlainObject(record) || !isPlainObject(record.hung)) return 0
+  return Object.values(record.hung).filter((entry) => isPlainObject(entry) && Number.isSafeInteger(entry.strikes) && entry.strikes >= HUNG_STRIKES).length
+}
 
 /** What is wrong with the orphan pass's record, or `null`: see the header. `now` is milliseconds. */
 export function orphanPassFinding(record, now = Date.now()) {
   if (!isPlainObject(record)) return null
   if (record.failed !== undefined) return "pass_failed"
-  if (record.ran_at === undefined) return now - Date.parse(record.started_at) > ORPHAN_INTERRUPTED_MS ? "pass_interrupted" : null
-  const examined = finiteCount(record.examined)
+  // A start time that does not parse is never "running".
+  if (record.ran_at === undefined) return now - Date.parse(record.started_at) <= ORPHAN_INTERRUPTED_MS ? null : "pass_interrupted"
+  if (orphansHung(record) > 0) return "orphans_hung"
+  if (now - Date.parse(record.ran_at) > ORPHAN_STALE_MS) return "pass_stale"
+  // `worked` is the orphans that took a transcript slot (a record from before it counted `examined`, which includes cheaply frozen ones).
+  const worked = finiteCount(record.worked) ?? finiteCount(record.examined)
   const unexamined = finiteCount(record.unexamined)
   const sweeps = finiteCount(record.sweeps_in_walk)
-  if (examined === null || unexamined === null || sweeps === null) return null
-  return sweeps > Math.ceil((examined + unexamined) / Math.max(1, examined)) ? "walk_not_advancing" : null
+  if (worked === null || unexamined === null || sweeps === null) return null
+  return sweeps > Math.ceil((worked + unexamined) / Math.max(1, worked)) ? "walk_not_advancing" : null
 }
+
+/** One sentence saying what to do about a finding. */
+export const ORPHAN_FINDING_ADVICE = "Run the factory status command and read its orphan_pass line; if the pass keeps failing or stalling, file a Desk problem."
 
 /** One line for the orphan pass's record: counts, times and fixed codes only (a failure is its class, never a message). */
 export function orphanPassLine(record, now = Date.now()) {
@@ -104,7 +123,8 @@ export function orphanPassLine(record, now = Date.now()) {
   if (record.ran_at === undefined) return `orphan pass: ${orphanPassFinding(record, now) === null ? "running" : "interrupted"}, started ${typeof record.started_at === "string" ? record.started_at : "unknown"}, last full walk ${wrap}`
   const frozen = isPlainObject(record.frozen) ? Object.values(record.frozen).reduce((sum, count) => sum + (finiteCount(count) ?? 0), 0) : 0
   const count = (value) => finiteCount(value) ?? "unknown"
-  return `orphan pass: ran ${record.ran_at}, examined ${count(record.examined)}, unexamined ${count(record.unexamined)}, pending ${count(record.pending)}, frozen ${frozen}, last full walk ${wrap}, ${count(record.sweeps_in_walk)} sweeps into the walk`
+  const hung = orphansHung(record)
+  return `orphan pass: ran ${record.ran_at}, examined ${count(record.examined)}, unexamined ${count(record.unexamined)}, pending ${count(record.pending)}, frozen ${frozen}${hung > 0 ? ` (${hung} hung)` : ""}, last full walk ${wrap}, ${count(record.sweeps_in_walk)} sweeps into the walk`
 }
 
 function outboxNames(dir) {
@@ -176,6 +196,7 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const decided = records === UNREADABLE ? [] : Object.keys(records).filter((store) => PATTERNS.prRepo.test(store)).sort()
   const stores = [...new Set([...(routing.store === null ? [] : [routing.store]), ...decided])]
   const orphans = status === UNREADABLE ? null : orphanPassFinding(status.orphans)
+  const hung = status === UNREADABLE ? 0 : orphansHung(status.orphans)
   return {
     store: routing.store,
     source: routing.source,
@@ -183,6 +204,7 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
     stores: stores.map((store) => storeEntry(dir, records, store, lastFlush, place)),
     warnings: [...new Set(routing.warnings.map((warning) => warning.code))].sort(),
     ...(orphans === null ? {} : { orphans }),
+    ...(hung > 0 ? { orphans_hung: hung } : {}),
   }
 }
 

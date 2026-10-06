@@ -15,6 +15,7 @@ import { validMarker } from "./marker.js"
 import { factoryStateRoot, listMarkers, outboxCopies, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
+import { githubRepoOfRemote } from "./desk-visibility.js"
 import { isPlainObject } from "./schema.js"
 import { declared, deskRootOf, markerRoute, proofIndex, provenBy } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
@@ -172,8 +173,9 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (derived.facts.session.id !== marker.session_id) return { result: "invalid", store }
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
+    const deskRemote = readDeskRemote({ deskRoot })
     const { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs } = bindSession({
-      events: derived.events, agents: derived.facts.agents, session: derived.facts.session, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
+      events: derived.events, agents: derived.facts.agents, session: derived.facts.session, deskRoot, deskRemote, personPrefix,
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
@@ -188,8 +190,11 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     // `repo_unresolved` (how many distinct directories outside the desk no longer exist and named no repository: lost evidence; a
     // directory that exists and is in no repository, or in one with no origin, is a true none and is not counted) and
     // `segments_capped_ms` (the time the segment cap dropped, 0 when none), which `factory reconcile` reads because it
-    // cannot see transcripts; they are never written to facts.
-    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, repo_unresolved: repoUnresolved, segments_capped_ms: segmentsCappedMs, ...before } } })
+    // cannot see transcripts; they are never written to facts. `desk_repo` (the desk's GitHub repository, lower case, absent when it has none)
+    // is what the flush compares with the desk root's repository once the marker is pruned, so a session is published under its desk's
+    // protection only when the desk is certainly the same one; a receipt without it is uncertain. `desk_unprotected` (set by the flush) is carried over.
+    const deskRepo = githubRepoOfRemote(deskRemote)?.toLowerCase()
+    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, repo_unresolved: repoUnresolved, segments_capped_ms: segmentsCappedMs, ...(deskRepo === undefined ? {} : { desk_repo: deskRepo }), ...(receipt?.desk_unprotected === true ? { desk_unprotected: true } : {}), ...before } } })
     return { result: "written", store }
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }
@@ -284,6 +289,10 @@ export const ORPHAN_BUDGET_MS = 60000
 export const ORPHAN_PASS_FAILED = "pass_failed"
 /** How many orphans whose derive never finished the record remembers. */
 const HUNG_KEPT = 50
+/** Separate interrupted passes that must find the same orphan mid-derive before it is frozen as `derive_failed`. */
+export const ORPHAN_HUNG_STRIKES = 2
+/** The start hook's hard stop: a record with no result younger than this may be a pass still running, so it is no strike. */
+export const ORPHAN_HARD_STOP_MS = 150000
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -322,9 +331,11 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  * `writeStatus`; `derive` is `deriveMarker`.
  *
  * Before each derive the record is written again with `cursor` and `attempting` set to that orphan, so a process stopped inside the derive (the
- * start hook's hard stop) leaves the walk past it. The next pass finds a record with `attempting` and no `ran_at` and records the orphan in
- * `hung` as `{ <session file>: <this Desk's version> }`: while the Desk is that version the orphan is examined and frozen as `derive_failed`
- * without another derive, so one orphan whose derive never finishes cannot hold up every sweep. A newer Desk tries it once more.
+ * start hook's hard stop) leaves the walk past it. The next pass finds a record with `attempting` and no `ran_at`; when that record is at least
+ * `ORPHAN_HARD_STOP_MS` old (a younger one may be a pass still running) it is one strike, kept in `hung` as
+ * `{ <session file>: { strikes, version } }`. After `ORPHAN_HUNG_STRIKES` strikes under the same Desk version the orphan is examined and frozen as
+ * `derive_failed` without another derive, so one orphan whose derive never finishes cannot hold up every sweep; a newer Desk starts again. An orphan
+ * whose receipt is current, or that is rebuilt, is never frozen by a strike and loses its strikes.
  */
 export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus, derive = deriveMarker } = {}) {
   const startedAt = new Date(now()).toISOString()
@@ -339,9 +350,11 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
   let hung = {}
   try {
     const previous = (await readStatus(env)).orphans
-    hung = isPlainObject(previous?.hung) ? Object.fromEntries(Object.entries(previous.hung).filter(([, value]) => typeof value === "string")) : {}
-    // The orphan a stopped pass was deriving: its record ends there, with no result.
-    if (previous?.ran_at === undefined && typeof previous?.attempting === "string" && typeof version === "string") hung[previous.attempting] = version
+    hung = isPlainObject(previous?.hung) ? Object.fromEntries(Object.entries(previous.hung).filter(([, value]) => isPlainObject(value) && Number.isSafeInteger(value.strikes) && typeof value.version === "string")) : {}
+    // The orphan a stopped pass was deriving: its record ends there, with no result. A start time that does not parse reads as old, never as running.
+    const startedMs = Date.parse(previous?.started_at)
+    const interrupted = previous?.ran_at === undefined && typeof previous?.attempting === "string" && typeof version === "string" && !(now() - startedMs < ORPHAN_HARD_STOP_MS)
+    if (interrupted) hung[previous.attempting] = { strikes: hung[previous.attempting]?.version === version ? hung[previous.attempting].strikes + 1 : 1, version }
     hung = Object.fromEntries(Object.entries(hung).slice(-HUNG_KEPT))
     walk = {
       cursor: typeof previous?.cursor === "string" ? previous.cursor : null,
@@ -351,15 +364,15 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
   } catch {
     // No walk to resume: the pass starts from the first orphan.
   }
-  const hungRecord = Object.keys(hung).length > 0 ? { hung } : {}
+  const hungRecord = () => (Object.keys(hung).length > 0 ? { hung } : {})
   try {
-    await write(env, { orphans: { started_at: startedAt, ...walk, ...hungRecord } })
+    await write(env, { orphans: { started_at: startedAt, ...walk, ...hungRecord() } })
   } catch {
     // The pass still runs; the closing record may still be written.
   }
   const attempt = async (name) => {
     try {
-      await write(env, { orphans: { started_at: startedAt, ...walk, ...hungRecord, cursor: name, attempting: name } })
+      await write(env, { orphans: { started_at: startedAt, ...walk, ...hungRecord(), cursor: name, attempting: name } })
     } catch {
       // The pass still runs; only the protection against a stop inside this derive is lost.
     }
@@ -368,9 +381,9 @@ export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers
   try {
     const pass = await orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, retractions, ownVersion, cursor: walk.cursor, hung, version, attempt, derive })
     const { wrapped, ...counts } = pass
-    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...counts, last_wrap_at: wrapped ? new Date(now()).toISOString() : walk.last_wrap_at, sweeps_in_walk: wrapped ? 0 : walk.sweeps_in_walk + 1, ...hungRecord }
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...counts, last_wrap_at: wrapped ? new Date(now()).toISOString() : walk.last_wrap_at, sweeps_in_walk: wrapped ? 0 : walk.sweeps_in_walk + 1, ...hungRecord() }
   } catch {
-    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...walk, ...hungRecord, failed: ORPHAN_PASS_FAILED }
+    orphans = { started_at: startedAt, ran_at: new Date(now()).toISOString(), ...walk, ...hungRecord(), failed: ORPHAN_PASS_FAILED }
   }
   try {
     await write(env, { orphans })
@@ -427,12 +440,13 @@ async function orphanPass(env, { now, quietMs, markers, cap, budgetMs, clock, re
       outcome = "derive_failed"
     }
     if (taken > before) last = name
+    if ((outcome === "rebuilt" || outcome === "current") && hung[name] !== undefined) delete hung[name]
     if (outcome === "unexamined" && index < tail) tailUnexamined += 1
     if (ORPHAN_REASONS.includes(outcome)) tally.frozen[outcome] += 1
     else tally[outcome] += 1
   }
   // The walk wrapped when every orphan from the cursor to the end of the list was reached.
-  return { cursor: last, wrapped: tailUnexamined === 0, examined: copies.length - tally.unexamined, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
+  return { cursor: last, wrapped: tailUnexamined === 0, examined: copies.length - tally.unexamined, worked: taken, ...tally, oldest_pending_days: oldestMs === null ? null : Math.floor(oldestMs / DAY_MS) }
 }
 
 // One orphan: "rebuilt", "current", "pending" (examined, waiting for a known reason), "unexamined" (no slot left this sweep) or the reason it stays frozen.
@@ -443,8 +457,6 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
     const refusal = rootRefusal(receiptRoot, store)
     if (refusal !== null) return refusal
   }
-  // A derive that never finished under this Desk is not tried again until a newer one.
-  if (hung[name] === version) return "derive_failed"
   if (!room()) return "unexamined"
   const facts = await readLocalFacts(env, store, name)
   if (facts === null || `claude-code-${facts.session.id}.json` !== name) return "no_facts"
@@ -462,6 +474,8 @@ async function rebuildOrphan(env, { store, name, receipts, retracted, retraction
   if (transcript === null) return "no_transcript"
   const receipt = receipts?.[name]
   if (receipt?.store === store && receipt.binding_version >= BINDING_VERSION && sameSource(receipt, await sourceStamp(transcript))) return "current"
+  // A derive that was interrupted twice under this Desk is not tried again until a newer one (a derive that finished is `current` above).
+  if (hung[name]?.version === version && hung[name].strikes >= ORPHAN_HUNG_STRIKES) return "derive_failed"
   let root = receiptRoot
   if (root === undefined) {
     root = await cwdRoot(transcript)

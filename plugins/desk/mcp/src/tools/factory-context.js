@@ -19,7 +19,7 @@ import * as os from "node:os"
 import { loadEndHook, pluginRootFor } from "../factory/end-hook.js"
 import { readSmallText } from "../factory/marker.js"
 import { PATTERNS } from "../factory/schema.js"
-import { factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
+import { ORPHAN_FINDING_ADVICE, factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
 
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
@@ -64,7 +64,7 @@ export function factorySummary(status) {
     const moved = entry.route_changed > 0 ? `, ${entry.route_changed} routed elsewhere` : ""
     lines.push(`  ${entry.store}: ${entry.consent}, ${entry.pending} pending${moved}, ${entry.quarantined} quarantined, ${entry.last_flush === null ? "no flush yet" : `last flush ${entry.last_flush}`}`)
   }
-  if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans} (\`factory.js status\` shows the pass)`)
+  if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
   if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
   return lines.join("\n")
 }

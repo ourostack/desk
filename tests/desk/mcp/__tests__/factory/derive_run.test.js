@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, writeFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { factoryStateRoot, listMarkers, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -737,7 +737,7 @@ test("the orphan pass writes its result to status.json as counts keyed by a clos
   await orphan(ctx, { declare: false })
   const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-06T00:00:00.000Z") })
   assert.deepEqual([result.rebuilt, result.current, result.pending, result.frozen], [0, 0, 0, 1])
-  const expected = { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:00.000Z", cursor: null, last_wrap_at: "2026-10-06T00:00:00.000Z", sweeps_in_walk: 0, examined: 1, rebuilt: 0, current: 0, pending: 0, unexamined: 0, oldest_pending_days: null, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
+  const expected = { started_at: "2026-10-06T00:00:00.000Z", ran_at: "2026-10-06T00:00:00.000Z", cursor: null, last_wrap_at: "2026-10-06T00:00:00.000Z", sweeps_in_walk: 0, examined: 1, worked: 0, rebuilt: 0, current: 0, pending: 0, unexamined: 0, oldest_pending_days: null, frozen: Object.fromEntries(ORPHAN_REASONS.map((reason) => [reason, reason === "route_unknown" ? 1 : 0])) }
   assert.deepEqual((await readStatus(ctx.env)).orphans, expected)
   assert.deepEqual(result.orphans, expected)
   const text = JSON.stringify((await readStatus(ctx.env)).orphans)
@@ -1114,36 +1114,98 @@ test("an orphan whose derive throws is examined and failed, and the next pass st
   assert.equal(result.orphans.cursor, last)
 }))
 
-test("an orphan whose derive never returns is not tried first on every sweep: the next pass records it as failed and derives the others", () => scratch(async (ctx) => {
+// A pass stopped inside `name`'s derive, as the start hook's hard stop would: the record names it and has no result.
+const interruptedAt = async (ctx, name, startedAt, hung) => {
+  const { writeStatus: realWrite } = await import(new URL("../../../../../plugins/desk/mcp/src/factory/outbox.js", import.meta.url))
+  await realWrite(ctx.env, { orphans: { started_at: startedAt, cursor: name, last_wrap_at: null, sweeps_in_walk: 0, attempting: name, ...(hung ? { hung } : {}) } })
+}
+
+const ownVersion = () => "1.0.0"
+
+test("an orphan interrupted mid-derive by two separate passes is frozen as derive_failed and not derived again; one interruption is not enough", () => scratch(async (ctx) => {
   const first = await orphan(ctx)
   const middle = await clone(ctx, first, "1")
   await clone(ctx, first, "2")
   const { rebuildOrphans, deriveMarker } = await runner()
-  const nameOf = (marker) => `claude-code-${marker.session_id}.json`
-  // The first pass is stopped inside the middle orphan's derive, as the start hook's hard stop would: its promise is never settled.
-  const stuck = rebuildOrphans(ctx.env, { derive: (env, marker, options) => (nameOf(marker) === middle ? new Promise(() => {}) : deriveMarker(env, marker, options)) })
-  stuck.catch(() => {})
-  for (let wait = 0; wait < 400 && (await readStatus(ctx.env)).orphans?.attempting !== middle; wait += 1) await new Promise((resolve) => setTimeout(resolve, 25))
-  const interrupted = (await readStatus(ctx.env)).orphans
-  assert.equal(interrupted.attempting, middle, "the record names the orphan being derived")
-  assert.equal(interrupted.cursor, middle, "and the cursor is already past the orphans before it")
-  assert.equal(interrupted.ran_at, undefined)
   const calls = []
   const derive = async (env, marker, options) => {
-    calls.push(nameOf(marker))
+    calls.push(`claude-code-${marker.session_id}.json`)
     return deriveMarker(env, marker, options)
   }
-  const next = await rebuildOrphans(ctx.env, { derive })
-  assert.ok(!calls.includes(middle), "the hung orphan is not derived again")
-  assert.equal(next.orphans.frozen.derive_failed, 1, "it is examined and failed, with a fixed class")
-  assert.equal(next.orphans.examined, 3)
-  assert.equal(next.orphans.attempting, undefined)
-  assert.deepEqual(Object.keys(next.orphans.hung), [middle])
-  // A newer Desk tries it once more.
+  const old = "2026-10-01T00:00:00.000Z"
+  const now = () => Date.parse("2026-10-06T00:00:00.000Z")
+  // One interrupted pass: a strike, not a freeze, and the orphan is derived and rebuilt.
+  await interruptedAt(ctx, middle, old)
+  const one = await rebuildOrphans(ctx.env, { derive, now, ownVersion })
+  assert.ok(calls.includes(middle), "one interruption does not freeze it")
+  assert.equal(one.orphans.frozen.derive_failed, 0)
+  assert.equal(one.orphans.hung, undefined, "and a derive that finished loses its strike")
+  // Two interrupted passes in a row: the second strike freezes it, examined and failed, never derived.
   calls.length = 0
-  const newer = await rebuildOrphans(ctx.env, { derive, ownVersion: () => "999.0.0" })
-  assert.deepEqual(calls, [middle], "a different Desk version derives it again, and only it (the others are current)")
+  await interruptedAt(ctx, middle, old, { [middle]: { strikes: 1, version: "1.0.0" } })
+  await staleReceipt(ctx, middle, (receipt) => receipt)
+  const two = await rebuildOrphans(ctx.env, { derive, now, ownVersion })
+  assert.ok(!calls.includes(middle), "frozen without another derive")
+  assert.equal(two.orphans.frozen.derive_failed, 1)
+  assert.deepEqual(two.orphans.hung, { [middle]: { strikes: 2, version: "1.0.0" } })
+  // A newer Desk starts again.
+  calls.length = 0
+  const newer = await rebuildOrphans(ctx.env, { derive, now, ownVersion: () => "999.0.0" })
+  assert.ok(calls.includes(middle))
   assert.equal(newer.orphans.frozen.derive_failed, 0)
+}))
+
+test("a record without a result younger than the hard stop is a pass still running, not a strike; one whose start does not parse is a strike", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  const { rebuildOrphans } = await runner()
+  const now = () => Date.parse("2026-10-06T00:00:00.000Z")
+  // A derive that waits keeps the orphan unrebuilt, so its strikes stay in the record.
+  const derive = async () => ({ result: "skipped" })
+  const prior = { [first.name]: { strikes: 1, version: "1.0.0" } }
+  await interruptedAt(ctx, first.name, "2026-10-05T23:59:30.000Z", prior)
+  assert.deepEqual((await rebuildOrphans(ctx.env, { now, derive, ownVersion })).orphans.hung, prior, "30 seconds old: maybe still running, no strike")
+  await interruptedAt(ctx, first.name, "garbage", prior)
+  assert.deepEqual((await rebuildOrphans(ctx.env, { now, derive, ownVersion })).orphans.hung, { [first.name]: { strikes: 2, version: "1.0.0" } }, "an unreadable start reads as interrupted")
+}))
+
+test("a failed write of the attempt record does not stop the pass, which still derives the orphan", () => scratch(async (ctx) => {
+  await orphan(ctx)
+  const { rebuildOrphans } = await runner()
+  const { writeStatus: realWrite } = await import(new URL("../../../../../plugins/desk/mcp/src/factory/outbox.js", import.meta.url))
+  const write = async (env, patch) => {
+    if (patch.orphans?.attempting !== undefined) throw new Error("disk full")
+    return realWrite(env, patch)
+  }
+  const result = await rebuildOrphans(ctx.env, { write })
+  assert.equal(result.rebuilt, 1)
+}))
+
+test("an orphan whose derive finished and wrote its receipt is never frozen by earlier strikes", () => scratch(async (ctx) => {
+  const first = await orphan(ctx, { stale: false })
+  const { rebuildOrphans } = await runner()
+  await interruptedAt(ctx, first.name, "2026-10-01T00:00:00.000Z", { [first.name]: { strikes: 5, version: "1.0.0" } })
+  const result = await rebuildOrphans(ctx.env, { now: () => Date.parse("2026-10-06T00:00:00.000Z"), ownVersion })
+  assert.equal(result.orphans.current, 1)
+  assert.equal(result.orphans.frozen.derive_failed, 0)
+  assert.equal(result.orphans.hung, undefined)
+}))
+
+test("a derive records the desk's GitHub repository on the receipt and carries the flush's desk_unprotected mark across a derive again", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: STORE })
+  execFileSync("git", ["init", "-q", ctx.desk])
+  execFileSync("git", ["-C", ctx.desk, "remote", "add", "origin", "https://github.com/Acme/Desk.git"])
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const name = `claude-code-${ID}.json`
+  assert.equal((await readStatus(ctx.env)).derivations[name].desk_repo, "acme/desk")
+  assert.equal((await readStatus(ctx.env)).derivations[name].desk_unprotected, undefined)
+  await staleReceipt(ctx, name, (receipt) => ({ ...receipt, desk_unprotected: true }))
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const receipt = (await readStatus(ctx.env)).derivations[name]
+  assert.equal(receipt.desk_unprotected, true)
+  assert.equal(receipt.desk_repo, "acme/desk")
 }))
 
 test("facts, transcript lookup and the source stat run only for orphans inside the cap", () => scratch(async (ctx) => {
