@@ -719,7 +719,8 @@ function writeFixtureRoot(root, lock) {
   return text;
 }
 
-{
+// The refresh compares each vendored file's executable bit on disk with the upstream tree's mode, and a Windows working tree has no executable bit (every file reads as mode 666), so a refresh on Windows could neither see a mode change nor settle to "nothing changed". Maintainers refresh on macOS or Linux; this end-to-end refresh check runs there.
+if (process.platform !== "win32") {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-source-update-"));
   try {
     const upstreamDir = path.join(tempRoot, "upstream");
