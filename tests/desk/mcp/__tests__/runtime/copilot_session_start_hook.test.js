@@ -42,7 +42,7 @@ test("the plugin registers the card guard, the done-claim gate and its two feede
   const commands = (event) => hooks[event].map((entry) => entry.bash)
   assert.ok(commands("preToolUse").includes('node "${PLUGIN_ROOT}/hooks/task-status-guard.cjs" copilot'))
   assert.ok(commands("agentStop").includes('node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot stop'))
-  assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot track'])
+  assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot track', 'node "${PLUGIN_ROOT}/hooks/brief-task-line.cjs" copilot record'])
   assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot prompt', 'node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"', 'node "${PLUGIN_ROOT}/hooks/signoff-witness.cjs" prompt'])
 })
 

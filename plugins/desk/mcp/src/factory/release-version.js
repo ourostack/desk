@@ -30,8 +30,8 @@
 // is the small API reader: `get` answers the parsed JSON of a `gh api` GET
 // through a runner with the `flush.js` `ghRunner` shape, `(args, { token,
 // input, timeoutMs }) -> { code, stdout, stderr, spawnError?, timedOut? }`
-// (the token reaches `gh` only as `GH_TOKEN`), counts every call, and throws
-// an `Error` with a stable `code` on failure. It keeps no count.
+// (the token reaches `gh` only as `GH_TOKEN`) and throws an `Error` with a
+// stable `code` on failure. It keeps no count: the call bound is per lookup.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.

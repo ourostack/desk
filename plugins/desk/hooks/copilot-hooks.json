@@ -59,6 +59,12 @@
         "bash": "node \"${PLUGIN_ROOT}/hooks/task-status-guard.cjs\" copilot",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/task-status-guard.cjs\" copilot",
         "timeoutSec": 10
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot check",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot check",
+        "timeoutSec": 10
       }
     ],
     "sessionStart": [
@@ -74,6 +80,12 @@
         "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot track",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot track",
+        "timeoutSec": 5
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot record",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/brief-task-line.cjs\" copilot record",
         "timeoutSec": 5
       }
     ],

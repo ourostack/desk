@@ -74,7 +74,7 @@ export function dueStep(status, name, now) {
   return elapsed < 0 || elapsed >= MIN_GAP_HOURS[name] * HOUR_MS
 }
 
-/** `staleSteps(status, now, attemptedNames) -> string[]`: the steps attempted in this run whose last success is over 72 hours old, or that failed 3 times in a row. An unreadable non-null `last_ok_at` counts as stale; a null one has no age. A step not attempted is never reported. */
+/** `staleSteps(status, now, attemptedNames) -> string[]`: the steps attempted in this run whose last success is over 72 hours old (or over 72 hours ahead of the clock), or that failed 3 times in a row. An unreadable non-null `last_ok_at` counts as stale; a null one has no age. A step not attempted is never reported. */
 export function staleSteps(status, now, attemptedNames) {
   const steps = stepsOf(status)
   const nowMs = toTime(now)
@@ -84,6 +84,7 @@ export function staleSteps(status, now, attemptedNames) {
     if (counter(record.failures_in_a_row) >= STALE_FAILURES_IN_A_ROW) return true
     if (record.last_ok_at === null || record.last_ok_at === undefined) return false
     const okAt = timeOrNull(record.last_ok_at)
-    return okAt === null || nowMs - okAt > STALE_AFTER_HOURS * HOUR_MS
+    // A success dated more than the stale window ahead of the clock (a clock that moved back) has no knowable age, so it reads stale rather than fresh for days.
+    return okAt === null || Math.abs(nowMs - okAt) > STALE_AFTER_HOURS * HOUR_MS
   })
 }
