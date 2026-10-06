@@ -59,7 +59,8 @@ test("a saved binding to a missing folder never binds a home-folder desk and rec
   assert.equal(write.isError, true)
   assert.equal(write.payload.code, "root_unavailable")
   git(fixture.root, "clone", fixture.origin, pending)
-  const ready = await session.statusUntil((payload) => payload.state === "ready")
+  // A ready status carries no runtime detail when the runtime status misses its short budget (it then says "unavailable"), so wait for the detail the assertions read.
+  const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.root)
   assert.equal(ready.root.path, pending)
   assert.equal(ready.root.source, "activation-config")
   const landed = await session.call("task_create", { track: "ops", slug: "recovered-binding-check", title: "After recovery" })

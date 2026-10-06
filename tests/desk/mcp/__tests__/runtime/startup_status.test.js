@@ -132,7 +132,8 @@ test("required startup exposes a populated READY status on the first real MCP ca
     new Response(JSON.stringify({ embedding: Array(768).fill(0.1) })))
   await fixture.start()
   // desk_status answers at once; admission reaches ready only once required semantic coverage is proven, and then status is READY.
-  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready")
+  // A ready status carries no runtime detail when the runtime status misses its short budget, so wait for the detail the assertions read.
+  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && payload.readiness?.detail)
   assert.equal(ready.readiness?.detail.controller_state, "READY")
   assert.equal(ready.readiness.state, "ready")
   assert.equal(ready.readiness.detail.convergence.status, "succeeded")
