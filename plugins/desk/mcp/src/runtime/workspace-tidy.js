@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs"
+import { promises as fs, realpathSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
@@ -15,7 +15,17 @@ const MAX_BYTES = 64 * 1024
 const SHA = /^[0-9a-f]{40,64}$/u
 const REF = /^refs\/(?:heads|remotes)\/[^\s~^:?*[\\]+$/u
 const text = (value) => typeof value === "string" && value.length > 0
-const inside = (root, target) => target === root || target.startsWith(`${root}${path.sep}`)
+// Git for Windows reports every path with forward slashes (`C:/Users/me/repo`), while the desk, a receipt written from the owner's own paths and `fs` use backslashes, a different drive-letter case or an 8.3 short name (`RUNNER~1`) for the same folder. A path read from Git is turned into the platform's own spelling first, and two paths are the same folder when they match after that, ignoring case on Windows, or after the file system expands both. Off Windows every spelling is exact, as before.
+export const nativeGitPath = (value, platform = process.platform) => platform === "win32" ? path.win32.normalize(value) : value
+const expandNative = (value) => { try { return realpathSync.native(value) } catch { return value } }
+export const foldPath = (value, platform = process.platform) => platform === "win32" ? path.win32.normalize(value).toLowerCase() : value
+export const samePath = (a, b, platform = process.platform, expand = expandNative) =>
+  foldPath(a, platform) === foldPath(b, platform) || (platform === "win32" && foldPath(expand(a), platform) === foldPath(expand(b), platform))
+export const insidePath = (root, target, platform = process.platform, expand = expandNative) => {
+  const sep = platform === "win32" ? path.win32.sep : path.sep
+  const within = (r, t) => t === r || t.startsWith(`${r}${sep}`)
+  return within(foldPath(root, platform), foldPath(target, platform)) || (platform === "win32" && within(foldPath(expand(root), platform), foldPath(expand(target), platform)))
+}
 const cleanLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ")
 // Workspace tidy's Git calls run in the detached repair, the CLI and the boot check's inspection. Only the boot check answers a host, and its whole-check budget aborts its calls through their signal, so each call may take far longer than a hook's 2 s: under load the 2 s limit killed repairs' ls-remote and rev-parse calls and left worktrees retained.
 export const TIDY_GIT_TIMEOUT_MS = 20_000
@@ -200,7 +210,7 @@ export function parseWorktrees(output, repository) {
       const space = line.indexOf(" ")
       const key = space < 0 ? line : line.slice(0, space)
       const value = space < 0 ? true : line.slice(space + 1)
-      if (key === "worktree") item.path = value
+      if (key === "worktree") item.path = nativeGitPath(value)
       else if (key === "HEAD") item.head = value
       else if (["branch", "locked", "prunable", "detached", "bare"].includes(key)) item[key] = value
     }
@@ -300,7 +310,7 @@ export async function inspectWorkspace({
       if (!listing.ok) throw new Error(`cannot list worktrees: ${repo}`)
       const worktrees = parseWorktrees(listing.stdout, repo)
       // The first entry is the primary checkout, which is never a cleanup target.
-      result.worktrees.push(...worktrees.slice(1).filter((item) => item.path !== root))
+      result.worktrees.push(...worktrees.slice(1).filter((item) => !samePath(item.path, root)))
       if (result.worktrees.length > maxWorktrees) throw new Error("workspace-tidy worktree budget exceeded")
     }
     return result
@@ -370,10 +380,10 @@ async function candidate(item, inventory, options) {
   if (item.locked) throw new Error("locked worktree")
   if (item.prunable || item.bare) throw new Error("missing or bare worktree")
   if (!item.branch || item.detached) throw new Error("detached worktree")
-  if (await fs.realpath(cwd) !== cwd) throw new Error("worktree identity is symlinked")
-  const common = await mustGit(git, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
-  const admin = await mustGit(git, cwd, ["rev-parse", "--absolute-git-dir"])
-  if (admin === common || !inside(path.join(common, "worktrees"), admin)) throw new Error("worktree ownership unverified")
+  if (foldPath(await fs.realpath(cwd)) !== foldPath(cwd)) throw new Error("worktree identity is symlinked")
+  const common = nativeGitPath(await mustGit(git, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]))
+  const admin = nativeGitPath(await mustGit(git, cwd, ["rev-parse", "--absolute-git-dir"]))
+  if (samePath(admin, common) || !insidePath(path.join(common, "worktrees"), admin)) throw new Error("worktree ownership unverified")
   const protectedFlag = await git(cwd, ["config", "--type=bool", "--get", "desk.protected"])
   if (protectedFlag.ok && protectedFlag.stdout === "true") throw new Error("protected checkout")
   if (!protectedFlag.ok && protectedFlag.code !== 1) throw new Error("protected policy unreadable")
@@ -385,7 +395,7 @@ async function candidate(item, inventory, options) {
   try { raw = await smallFile(receiptPath); record = JSON.parse(raw) } catch { throw new Error("exact ownership receipt missing or unreadable") }
   const info = await fs.stat(cwd)
   const card = path.resolve(options.deskRoot, record.task ?? "")
-  if (record.version !== 2 || !text(record.owner) || record.worktree !== cwd || record.repository !== common || record.branch !== item.branch ||
+  if (record.version !== 2 || !text(record.owner) || !samePath(String(record.worktree), cwd) || !samePath(String(record.repository), common) || record.branch !== item.branch ||
       !inventory.cardRecords[card]?.repositories.includes(item.repository)) throw new Error("exact ownership mismatch")
   if (await cardFrontmatter(card) !== inventory.cardRecords[card].body) throw new Error("task ownership changed")
   if (record.disposition !== "remove") throw new Error("intentionally retained worktree")
@@ -425,7 +435,7 @@ async function candidate(item, inventory, options) {
 
 export async function revokeWorkspaceRelease(resource) {
   return withWorkspaceClaim(resource, async (assertHeld) => {
-    const admin = await mustGit(gitDefault, resource.worktree, ["rev-parse", "--absolute-git-dir"])
+    const admin = nativeGitPath(await mustGit(gitDefault, resource.worktree, ["rev-parse", "--absolute-git-dir"]))
     const file = path.join(admin, "desk-closeout.json")
     const record = JSON.parse(await smallFile(file))
     for (const key of ["repository", "worktree", "branch", "owner"]) {
