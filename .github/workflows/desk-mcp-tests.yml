@@ -4,62 +4,12 @@ name: desk MCP tests
 # (plugins/desk/mcp `npm run test:coverage`).
 # Skill-manifest validation lives in validate-skills.yml and does NOT exercise
 # the MCP code, so without this job desk-core changes can merge untested.
-# Path-filtered to MCP, its tests under tests/, offline-evaluation and root validation inputs so related changes run this gate.
+# Every pull request runs it, with no path filter: main requires the "CI gate" job below, and a required check from a
+# workflow that a path filter skipped would never report and would block the pull request forever. Pushes to main are
+# still path-filtered, because nothing requires a check there.
 
 on:
   pull_request:
-    paths:
-      - ".gitattributes"
-      - "evals/offline/**"
-      - "evals/*.json"
-      - "AGENTIC-ENGINEERING-V2.md"
-      - "evals/**"
-      - "skills/**"
-      - "worker/**"
-      - "plugins/**"
-      - "manifest.json"
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - ".github/workflows/**"
-      - "**/package.json"
-      - "**/package-lock.json"
-      - "package.json"
-      - "package-lock.json"
-      - "plugins/desk/mcp/**"
-      - "tests/**"
-      - "plugins/desk/activation/**"
-      - "plugins/desk/.claude-plugin/plugin.json"
-      - "plugins/desk/.codex-plugin/plugin.json"
-      - "plugins/desk/.mcp.json"
-      - "plugins/desk/.mcp.copilot.json"
-      - "plugins/desk/agents/**"
-      - "plugins/desk/hooks/**"
-      - "plugins/desk/plugin.json"
-      - "plugins/desk/skills/**"
-      - "plugins/superpowers/**"
-      - "plugins/plain-language/**"
-      - "upstream-sources.lock.json"
-      - "plugins/desk/mcp/artifacts/runtime-deps/**"
-      - "plugins/desk/artifacts/vector-packs/**"
-      - "plugins/desk/artifacts/snapshots/**"
-      - "plugins/desk/artifacts/tombstones/**"
-      - "plugins/desk/artifacts/publication-policy.json"
-      - "plugins/desk/artifacts/publication-policy.schema.json"
-      - "plugins/desk/README.md"
-      - "plugins/desk/docs/**"
-      - "plugins/desk/mcp/README.md"
-      - "plugins/desk/activation/README.md"
-      - "plugins/desk/mcp/config/performance-budgets.json"
-      - "plugins/desk/mcp/scripts/build-runtime-deps-pack.js"
-      - "plugins/desk/mcp/scripts/verify-runtime-deps-pack.js"
-      - "plugins/desk/mcp/scripts/build-vector-pack.js"
-      - "plugins/desk/mcp/scripts/build-snapshot.js"
-      - "plugins/desk/mcp/scripts/verify-snapshot.js"
-      - "plugins/desk/mcp/scripts/validate-artifacts.js"
-      - "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md"
-      - "scripts/*.cjs"
-      - "scripts/test-desk-docs.cjs"
-      - ".github/workflows/desk-mcp-tests.yml"
   push:
     branches:
       - main
@@ -638,3 +588,32 @@ jobs:
         run: |
           node --version
           node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/launch/bootstrap.test.js
+
+  # The one check main requires from this workflow (.github/rulesets/main-requires-ci.json). It needs every other job
+  # here, so a new job that is not listed fails the guard test instead of slipping past the gate, and it runs even
+  # when a job failed or was skipped: a skipped job counts as passing for a required check, so this one fails unless
+  # every job succeeded. It starts no checkout and holds no token.
+  ci-gate:
+    name: CI gate
+    needs:
+      - desk-mcp-coverage-shards
+      - offline-eval-tests
+      - desk-mcp-tests
+      - desk-runtime-packs
+      - desk-feedback-windows
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every job to have succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          printf '%s\n' "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if printf '%s\n' "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null; then
+            echo "Every job succeeded."
+          else
+            echo "::error::A job did not succeed, so the gate fails."
+            exit 1
+          fi
