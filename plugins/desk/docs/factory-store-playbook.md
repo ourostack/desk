@@ -790,7 +790,7 @@ Desk picks the store for a desk in this order:
 
 3. Otherwise `ourostack/factory`.
 
-A declaration that is present but malformed holds the desk's facts locally instead of falling through to a later source, so a desk meant for a private store never reports to a public one by mistake. Each machine then opts in once, with the account `factory.js account` names (it asks GitHub which signed-in account can open pull requests on the store, and never assumes gh's active account):
+A declaration that is present but malformed holds the desk's facts locally instead of falling through to a later source, so a desk meant for a private store never reports to a public one by mistake. So does a plugin manifest that exists but cannot be read or parsed, since it may be the overlay that declares the private store, and so does a Claude Code plugin registry (`installed_plugins.json`) that is missing or unreadable; `desk_doctor` reports it by code. A session held this way is routed again once the manifest reads: to the store it declares, or, when it declares nothing, to the route recorded beside it by a Desk before 2026-10-06, else it stays held. Each machine then opts in once, with the account `factory.js account` names (it asks GitHub which signed-in account can open pull requests on the store, and never assumes gh's active account):
 
 ```sh
 node <desk plugin root>/mcp/scripts/factory.js account --store <owner>/<repository>

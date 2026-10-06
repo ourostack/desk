@@ -93,13 +93,15 @@ import { freshVisibility } from "./desk-visibility.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { LABELS_SCHEMA, validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
-import { RETRACTED_COPIES } from "./session-route.js"
+import { RETRACTED_COPIES, markerRoute, recordedHeld } from "./session-route.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
 const MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/** How long a marker whose route is held is kept: long enough for the operator to declare the desk's store, which releases it (`held-route.js`). */
+export const HELD_MARKER_TTL_MS = 90 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
@@ -602,7 +604,9 @@ export async function withNamedLock(env, name, body, { platform = process.platfo
 
 /**
  * `listMarkers(env) -> Marker[]`: prunes (deletes) a marker whose
- * `updated_at` cannot be parsed or is more than 30 days old; a marker that
+ * `updated_at` cannot be parsed or is more than 30 days old, or 90 days for
+ * a marker whose route is held (`held-route.js`; a held marker pruned is
+ * counted in `status.json` `held_pruned`); a marker that
  * fails to parse as JSON is dropped the same way rather than blocking every
  * other marker. Only regular files matching the marker name shape are
  * considered; a symlink, a hard link, a leftover temp file or anything else
@@ -615,6 +619,7 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
   const { dir } = directory
   const nowMs = Date.parse(now())
   const kept = []
+  let heldPruned = 0
   for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
     const file = path.join(dir, name)
     const before = await lstatIfPresent(file, NAMING)
@@ -625,19 +630,31 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
       if (error.code === "ENOENT" || error.message === "metadata_unreadable" || error.message === "marker_changed") continue
       if (!(error instanceof SyntaxError)) throw error
     }
-    if (marker === null || nowMs - Date.parse(marker.updated_at) > MARKER_TTL_MS) {
+    const age = marker === null ? Infinity : nowMs - Date.parse(marker.updated_at)
+    const held = marker !== null && age > MARKER_TTL_MS && heldNow(marker)
+    if (marker === null || age > (held ? HELD_MARKER_TTL_MS : MARKER_TTL_MS)) {
       // Recheck the directory and exact leaf before pruning; never follow a replacement.
       await assertMarkerDirectory(directory)
       const current = await lstatIfPresent(file, NAMING)
       if (before !== null && current !== null && current.isFile() && current.nlink === 1 && current.dev === before.dev && current.ino === before.ino) {
-        await fsp.unlink(file).catch(() => {})
+        const removed = await fsp.unlink(file).then(() => true, () => false)
+        if (removed && held) heldPruned += 1
       }
     } else {
       kept.push(marker)
     }
   }
   await assertMarkerDirectory(directory)
+  // A held session pruned uncaptured is counted, so `desk_doctor` says it was lost rather than dropping it silently.
+  if (heldPruned > 0) {
+    await updateStatus(env, (current) => ({ ...current, held_pruned: { count: (Number.isSafeInteger(current.held_pruned?.count) ? current.held_pruned.count : 0) + heldPruned, last_at: now() } }), { platform, runner }).catch(() => {})
+  }
   return kept
+}
+
+// Whether a marker's route is held now (`session-route.js`).
+function heldNow(marker) {
+  return typeof marker.desk_root === "string" && recordedHeld(marker) && markerRoute(marker).store === null
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,18 +1021,20 @@ export async function updateStatus(env, mutate, { platform = process.platform, r
 }
 
 /**
- * `recordRoutes(env, routes)`: for each `{ name: { store, deskRoot } }`, keeps `store` as `route`, and `deskRoot` (an absolute path) as
- * `desk_root`, in the derivation receipt of facts file `name`, the other keys unchanged (a receipt is created when there is none).
+ * `recordRoutes(env, routes)`: for each `{ name: { store, deskRoot } }`, keeps `store` as `route` and as `checked_route`, and `deskRoot` (an
+ * absolute path) as `desk_root`, in the derivation receipt of facts file `name`, the other keys unchanged (a receipt is created when there is none).
  * `route` is the store the session last positively routed to, as the flush saw it. It outlives the marker, which is pruned after 30 days,
  * and the sweep's own `store`, which a route to a store without consent never updates, so a session whose marker is gone keeps the route it
- * last had; `desk_root` lets the flush read the desk's declaration then (`session-route.js`). Both stay local and are never published.
+ * last had; `desk_root` lets the flush read the desk's declaration then (`session-route.js`). `checked_route` is the same store, written only
+ * by a Desk that holds a route recorded beside an unreadable overlay: placement without a marker trusts it alone, never `route`, which an
+ * older Desk also wrote. All stay local and are never published.
  */
 export async function recordRoutes(env, routes, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
     const derivations = { ...current.derivations }
     for (const [name, { store, deskRoot }] of Object.entries(routes)) {
-      derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), route: store, desk_root: deskRoot }
+      derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), route: store, checked_route: store, desk_root: deskRoot }
     }
     return { ...current, derivations }
   }, { platform, env, runner }, isStatusShape)

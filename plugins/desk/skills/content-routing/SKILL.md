@@ -47,6 +47,18 @@ Otherwise ask: *"Is the rule BODY universal enough that an operator who isn't th
 
 If yes, the body belongs in a plugin (route per the decision above) and the rules file keeps only the instance + pointer. **Do not wedge a general-principle body in under an "operator said X" framing.** That semantic mis-tag turns the agent's application gate into *"is this an operator-X context?"* instead of the rule's real trigger — and the rule silently fails to fire when it should. "Obviously generic on first surfacing" is enough to extract; you don't have to wait for a second instance.
 
+## Fold new context into existing docs
+
+Fold new context into existing docs when possible.
+
+## Design what agents use for the agent
+
+Tools for agents are designed by their user: the agent. When building anything agents use (Desk, its skills, hooks, tools and messages), ask "what would I want to use, and what would confuse me?" and decide from that. The human is the conversation partner, not the customer.
+
+## Each rule has one owner
+
+Each layer states only what it adds, and triggered skills keep their procedures.
+
 ## Callable-back artifacts land when drafted
 
 A reusable artifact the operator might ask for in a later session (a command, a query, a config snippet, a paste-ready draft, a decision) goes into the desk when you draft it, not only into the conversation: the relevant task or track, a tips note, the review folder, wherever it will be found. The test: if the operator said tomorrow "get that X we made", could a fresh session with no memory of this one grep it out of the desk? Ephemeral reasoning, one-shot answers and scratch stay in chat. An explicit no-write instruction overrides this.

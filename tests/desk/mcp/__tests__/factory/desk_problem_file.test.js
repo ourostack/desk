@@ -11,8 +11,11 @@ import { fileURLToPath } from "node:url"
 import { deskProblemFingerprint, normalizeErrorSignature } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-template.js"
 import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
-import { KNOWN_KEY } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
+import { DROPPED_KEY, KNOWN_KEY, PENDING_KEY, knownHitsSince } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { LAUNCH_STAMP_DIR, MAX_LAUNCH_STAMPS, endLaunch, launchStampKey, pendingLaunchTimes } from "../../../../../plugins/desk/mcp/src/factory/filer-launch.js"
+import { shouldLaunchFiler } from "../../../../../plugins/desk/mcp/src/runtime/filer-throttle.js"
+import { REPEAT_TIMEOUT_THRESHOLD } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/file-desk-problem.js", import.meta.url))
 
@@ -258,6 +261,54 @@ test("a listIssues failure is reported as not_filed with that reason, never thro
   assert.equal(result.reason, "http_500")
 }))
 
+test("every attempt that may have lost a recurrence counts a drop, so the verify step reads not_recorded, never a measured no hit", () => scratch(async ({ env }) => {
+  const dropped = async () => (await readStatus(env))[DROPPED_KEY]?.count ?? 0
+  const known = KNOWN_ISSUES(fingerprintOf("desk-sync", "x"))
+  // Filed new, recorded known, held at the cap and a headless session lose nothing.
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "y", runner: fakeGh(ONE_ACCOUNT).runner })).result, "filed")
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ ...ONE_ACCOUNT, issues: known }).runner })).result, "known")
+  assert.equal((await fileDeskProblem({ ...env, DESK_FACTORY_HEADLESS: "1" }, { mechanism: "desk-sync", rawText: "z", runner: fakeGh({ accounts: [], repos: {} }).runner })).result, "not_filed")
+  assert.equal(await dropped(), 0)
+  // No suitable account, a failed listing and a known hit whose write failed each count one.
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ accounts: [], repos: {} }).runner })).reason, "no_suitable_account")
+  assert.equal(await dropped(), 1)
+  assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ ...ONE_ACCOUNT, fail: { list: { code: 1, stdout: "", stderr: "gh: Internal Server Error (HTTP 500)\n" } } }).runner })).reason, "http_500")
+  assert.equal(await dropped(), 2)
+  const original = process.stderr.write
+  process.stderr.write = () => true
+  try {
+    assert.deepEqual(await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: fakeGh({ ...ONE_ACCOUNT, issues: known }).runner, recordKnown: async () => ({ recorded: false, code: "status_write_failed" }) }), { result: "known", url: `https://github.com/${STORE}/issues/5` })
+  } finally {
+    process.stderr.write = original
+  }
+  assert.equal(await dropped(), 3)
+  const status = await readStatus(env)
+  assert.deepEqual(knownHitsSince(status, 5, "0.0.1", { since: status.desk_problem_known_since }).state, "measured", "the issue whose hit was recorded still answers")
+  assert.deepEqual(knownHitsSince(status, 6, "0.0.1", { since: status.desk_problem_known_since }), { state: "unavailable", reason: "not_recorded" })
+}))
+
+test("a drop that cannot be recorded either leaves one stable code, and a thrown failure still counts its drop", () => scratch(async ({ env }) => {
+  const lines = []
+  const original = process.stderr.write
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true }
+  try {
+    const none = fakeGh({ accounts: [], repos: {} }).runner
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: none, recordLost: async () => ({ recorded: false, code: "status_write_failed" }) })
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: none, recordLost: () => { throw new Error("boom") } })
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner: none, recordLost: async () => ({ recorded: false, code: "headless_session" }) })
+  } finally {
+    process.stderr.write = original
+  }
+  assert.deepEqual(lines, ["desk-problem: lost_hit_not_recorded status_write_failed\n", "desk-problem: lost_hit_not_recorded record_failed\n"])
+  const { runner: base } = fakeGh(ONE_ACCOUNT)
+  const runner = async (args, options) => {
+    if (args[0] === "api" && String(args[7]).startsWith(`repos/${STORE}/issues`)) throw new Error("boom")
+    return base(args, options)
+  }
+  await assert.rejects(fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner }), /boom/u)
+  assert.equal((await readStatus(env))[DROPPED_KEY].count, 1)
+}))
+
 test("an unexpected failure with no gh-shaped code (a bug, not a gh error) is rethrown rather than swallowed as not_filed", () => scratch(async ({ env }) => {
   const { runner: base } = fakeGh(ONE_ACCOUNT)
   const runner = async (args, options) => {
@@ -402,4 +453,86 @@ test("scripts/file-desk-problem.js exits non-zero on a usage error (no --mechani
   const childEnv = { ...process.env, HOME: env.HOME, XDG_STATE_HOME: env.XDG_STATE_HOME, PATH: "" }
   const result = spawnSync(process.execPath, [SCRIPT], { env: childEnv, encoding: "utf8", cwd: base })
   assert.notEqual(result.status, 0)
+}))
+
+test("review finding 11: the filer records its attempt before the network step and clears it once the outcome is recorded, a throw included", () => scratch(async ({ env }) => {
+  const seen = []
+  const { runner: base } = fakeGh({ accounts: [], repos: {} })
+  const runner = async (args, options) => {
+    seen.push(Object.keys((await readStatus(env))[PENDING_KEY] ?? {}).length)
+    return base(args, options)
+  }
+  await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner })
+  assert.ok(seen.length > 0 && seen.every((count) => count === 1), "pending while the filer works")
+  assert.deepEqual((await readStatus(env))[PENDING_KEY], {})
+  // An attempt that throws (here, reading its own options) is still cleared, and counted as a drop.
+  const throwing = { rawText: "x", runner, get mechanism() { throw new Error("boom") } }
+  await assert.rejects(fileDeskProblem(env, throwing), /boom/u)
+  assert.deepEqual((await readStatus(env))[PENDING_KEY], {})
+}))
+
+// ── Fix round 2, finding 11: a filer that never starts ─────────────────────────────────────────────
+
+test("finding 11: a launch whose filer never starts stays pending and reads as a drop; the filer clears it once it records an outcome", () => scratch(async ({ env }) => {
+  const armed = { last_flush: {}, desk_problem_known_since: "2026-09-01T00:00:00.000Z" }
+  const since = "2026-09-29T00:00:00.000Z"
+  assert.deepEqual(pendingLaunchTimes(env), [], "no stamps folder is no launch")
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "push rejected", now: () => Date.parse("2026-10-01T00:00:00.000Z") }), true)
+  // The spawn failed: nothing ever ran the filer. Verification must not read a measured "no hit".
+  const launches = pendingLaunchTimes(env)
+  assert.deepEqual(launches, [Date.parse("2026-10-01T00:00:00.000Z")])
+  assert.deepEqual(knownHitsSince(armed, 123, "3.2.0", { since, launches }), { state: "unavailable", reason: "not_recorded" })
+  assert.deepEqual(knownHitsSince(armed, 123, "3.2.0", { since: "2026-10-02T00:00:00.000Z", launches }), { state: "measured", hit: false }, "a launch before the window is not in it")
+  // The filer runs (it cannot file here) and records its outcome: the stamp is no longer pending, and the throttle keeps its time.
+  assert.equal(await runFileDeskProblemCli({ argv: ["--mechanism", "desk-sync", "--reason", "push rejected"], env: { ...env, PATH: "" } }), 0)
+  assert.deepEqual(pendingLaunchTimes(env), [])
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "push rejected", now: () => Date.parse("2026-10-01T00:10:00.000Z") }), false)
+  // A launcher with no reason passes `unknown` to the filer and an empty signature to the throttle: both are cleared.
+  assert.equal(shouldLaunchFiler({ env, mechanism: "index-drift", signature: "" }), true)
+  assert.equal(pendingLaunchTimes(env).length, 1)
+  endLaunch(env, { mechanism: "index-drift", signature: "unknown" })
+  assert.deepEqual(pendingLaunchTimes(env), [])
+}))
+
+test("finding 11: a stamp that cannot be read is a pending launch as of its time, and a stamps folder that cannot be listed or is too full reads as a launch now", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async ({ env }) => {
+  const dir = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", LAUNCH_STAMP_DIR)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, "broken.json"), "{ not json")
+  await fs.mkdir(path.join(dir, "folder.json"))
+  await fs.writeFile(path.join(dir, "old.json"), JSON.stringify({ at: 5 }))
+  await fs.writeFile(path.join(dir, "notes.txt"), "ignored")
+  await fs.writeFile(path.join(dir, "big.json"), " ".repeat(2048))
+  await fs.writeFile(path.join(dir, "timeless.json"), JSON.stringify({ pending: true }))
+  const times = pendingLaunchTimes(env)
+  assert.equal(times.length, 4)
+  assert.ok(times.every((at) => Number.isFinite(at) && at > 1e12), "an unreadable stamp counts from its modification time")
+  // A stamp written before launches were marked pending is not pending; clearing a stamp that is not pending, or absent, changes nothing.
+  endLaunch(env, { mechanism: "never", signature: "launched" })
+  const done = path.join(dir, `${launchStampKey("done", "x")}.json`)
+  await fs.writeFile(done, JSON.stringify({ at: 7, pending: false }))
+  endLaunch(env, { mechanism: "done", signature: "x" })
+  assert.deepEqual(JSON.parse(await fs.readFile(done, "utf8")), { at: 7, pending: false })
+  for (const name of ["broken.json", "big.json", "timeless.json"]) await fs.rm(path.join(dir, name))
+  await fs.rm(path.join(dir, "folder.json"), { recursive: true })
+  assert.deepEqual(pendingLaunchTimes(env), [])
+  for (let index = 0; index < MAX_LAUNCH_STAMPS + 1; index += 1) await fs.writeFile(path.join(dir, `${index}.json`), "{}")
+  assert.deepEqual(pendingLaunchTimes(env, { now: () => 42 }), [42])
+  await fs.rm(dir, { recursive: true })
+  await fs.writeFile(dir, "not a folder")
+  assert.deepEqual(pendingLaunchTimes(env, { now: () => 43 }), [43])
+}))
+
+test("review round 2, M4: protected-checkout's stamp is keyed by the command, and the filer clears that same stamp once it records an outcome", () => scratch(async ({ env }) => {
+  const { createRequire } = await import("node:module")
+  const { deadlineDecision } = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/protected-checkout.cjs")
+  const rawInput = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git checkout topic" } })
+  const calls = []
+  for (let count = 0; count < REPEAT_TIMEOUT_THRESHOLD; count += 1) await deadlineDecision({ rawInput, host: "claude", deadlineMs: 9000, env, spawnFiler: (args) => calls.push(args) })
+  assert.equal(calls.length, 1)
+  assert.equal(pendingLaunchTimes(env).length, 1, "the launch is pending until the filer records an outcome")
+  // The filer is given a reason that differs from the stamp's key, as the hook's own spawn passes it, plus the stamp's signature.
+  const { reason, launchSignature } = calls[0]
+  assert.match(reason, /repeated timeout/u)
+  assert.equal(await runFileDeskProblemCli({ argv: ["--mechanism", "protected-checkout", "--reason", reason, "--host", "claude", "--launch-signature", launchSignature], env: { ...env, PATH: "" } }), 0)
+  assert.deepEqual(pendingLaunchTimes(env), [], "the stamp the launch wrote is cleared")
 }))

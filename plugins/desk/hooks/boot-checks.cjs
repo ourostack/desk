@@ -380,14 +380,16 @@ const andonCheck = {
   id: "andon",
   budgetMs: 30,
   async run(ctx) {
-    const [{ isNoninteractive }, { andonBootCheck, andonLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    const [{ isNoninteractive }, { andonBootCheck, andonLine, andonUnknown, andonUnknownLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
     if (isNoninteractive(ctx.env)) return {};
+    // An andon state that is not known is said out loud, never left to read as "no open andon".
+    const unknown = andonUnknown({ env: ctx.env }).map(andonUnknownLine);
     const found = andonBootCheck({ env: ctx.env });
-    if (found.length === 0) return {};
+    if (found.length === 0) return unknown.length === 0 ? {} : { line: unknown.join("; ") };
     const cards = await improvementCards(ctx);
     withinDeadline(ctx);
     const openKeys = cards === null || cards.status !== "ok" ? null : cards.open_keys;
-    return { line: found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true })).join("; ") };
+    return { line: [...unknown, ...found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true }))].join("; ") };
   },
 };
 
