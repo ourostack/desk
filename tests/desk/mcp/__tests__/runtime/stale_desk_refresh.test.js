@@ -328,14 +328,14 @@ async function until(check, ms = 8000) {
 test("boot exits without waiting for a hung refresh; the runner kills the whole group at its own deadline and leaves no orphan", { skip: !posix }, async (t) => {
   const f = await shimmed("hang")
   t.after(() => reapProcessesUnder(f.stateDir))
-  const { stdout, elapsed } = await runHarness(f, 1500)
+  // The deadline is long next to anything a loaded or instrumented runner can spend starting processes, so the checks below happen well inside it. Boot not waiting is proven by order, not by a stopwatch: the boot process has already exited while the refresh it started is still running with no outcome recorded.
+  const { stdout } = await runHarness(f, 8000)
   assert.equal(stdout, "plan:ready\nstart:started\n")
-  assert.ok(elapsed < 1200, `the boot process took ${elapsed} ms; it must not wait for the refresh (deadline 1500 ms)`)
   // The runner, the shim and its sleeping grandchild all run in the state directory while the refresh hangs.
-  assert.equal(await until(() => processesWithCwdUnder(f.stateDir).length >= 3, 3000), true, JSON.stringify(processesWithCwdUnder(f.stateDir)))
-  assert.equal(JSON.parse(readFileSync(path.join(f.stateDir, REFRESH_STAMP_FILE), "utf8")).ok, null)
+  assert.equal(await until(() => processesWithCwdUnder(f.stateDir).length >= 3, 6000), true, JSON.stringify(processesWithCwdUnder(f.stateDir)))
+  assert.equal(JSON.parse(readFileSync(path.join(f.stateDir, REFRESH_STAMP_FILE), "utf8")).ok, null, "the boot process exited before the refresh finished")
   // At the deadline the group is killed, the outcome recorded and the claim released, with nothing left running.
-  const left = await waitForNoProcessesUnder(f.stateDir, 8000)
+  const left = await waitForNoProcessesUnder(f.stateDir, 30000)
   assert.deepEqual(left, [], "orphaned processes after the deadline")
   const stamp = JSON.parse(readFileSync(path.join(f.stateDir, REFRESH_STAMP_FILE), "utf8"))
   assert.deepEqual([stamp.ok, stamp.reason, stamp.host], [false, "timeout", "claude"])

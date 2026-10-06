@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { spawn } from "node:child_process"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+// Run on its own, the default-environment test below claims a session id under this machine's real state folder and fails on every later run.
+import "../_isolated_env.mjs"
 
 import { COPILOT_SESSION_DIR, copilotBootClaimFile, copilotSessionFile, markBootDirected, readCopilotSession, recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { resolveStartupActivationConfigPath, resolveStartupDeskRoot } from "../../../../../plugins/desk/mcp/src/runtime/startup-resolve.js"

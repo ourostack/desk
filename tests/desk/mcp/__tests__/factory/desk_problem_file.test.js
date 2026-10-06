@@ -308,13 +308,20 @@ test("a deadline spent entirely by a successful account selection is caught by f
   // chooseAccount can spend a whole deadline choosing an account and still succeed (its own internal
   // races only stop it when time runs out *during* a gh call, never merely because none is left over
   // afterward). fileDeskProblem's own `if (remaining() <= 0)` right after selection exists for exactly
-  // that gap. A ticking fake clock -- one unit per `now()` call, shared with chooseAccount -- reproduces
-  // it deterministically: tuned so every check *inside* account selection still sees time left, but the
-  // very next tick, taken right after selection succeeds, has none.
-  let tick = -1
-  const now = () => { tick += 1; return tick }
+  // that gap. The fake clock is told who is reading it, not how many reads came before: every read reports time 0, except the
+  // one `fileDeskProblem` makes through its own `remaining()` right after selection succeeds, which finds the deadline spent.
+  // `remaining()` is also read once before selection, to size its budget, so that read is the first and is within time. The
+  // test asserts it reached the second, so a read added anywhere else cannot make it stop testing this check.
+  let remainingReads = 0
+  const now = () => {
+    const caller = (new Error().stack.split("\n")[2] ?? "").trim()
+    if (!caller.startsWith("at remaining ")) return 0
+    remainingReads += 1
+    return remainingReads === 1 ? 0 : 1_000
+  }
   const { runner } = fakeGh(ONE_ACCOUNT)
   const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner, now, deadlineMs: 10 })
+  assert.equal(remainingReads, 2, "the check right after account selection is the one that found the deadline spent")
   assert.equal(result.result, "not_filed")
   assert.equal(result.reason, "deadline")
   assert.match(result.body, /desk-problem-fingerprint/u)
