@@ -1196,6 +1196,18 @@ test("a null token counter makes that type partial and the others stay measured"
   assert.deepEqual(outputGone.total.reasons, ["field_absent"])
 })
 
+test("the total counts a session once for each part it is missing from, never only the larger part's count", () => {
+  const noInput = tokenSession([modelOf("model-alpha", usage(null, 2))])
+  const noOutput = tokenSession([modelOf("model-beta", usage(3, null))], [], sessions[0])
+  const whole = tokenSession([modelOf("model-beta", usage(10, 20))], [], sessions[1])
+  const total = totalsOf(CLOSED, [noInput, noOutput, whole])
+  assert.equal(total.input.uncovered_sessions, 1)
+  assert.equal(total.output.uncovered_sessions, 1)
+  assert.equal(total.total.state, "partial")
+  assert.equal(total.total.value, 35)
+  assert.equal(total.total.uncovered_sessions, 2, "two different sessions are missing a part, so two are uncovered in the total")
+})
+
 test("a host that records tokens partly leaves the type partial with its value", () => {
   const codex = tokenSession([modelOf("model-gamma", usage(30, 40))], [["tokens", "host_records_partly"]])
   const total = totalsOf(CLOSED, [codex])

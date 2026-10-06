@@ -95,8 +95,9 @@
 //     error, or Git failed or timed out. A directory that exists and is in no
 //     repository, or in one with no origin, is a true none and is not
 //     counted. A number, never a path.
-//   - `segmentsCappedMs` is the time the segment cap dropped (`capSegments`
-//     reports it): 0 only when nothing was dropped.
+//   - `segmentsCappedMs` is the time the segment cap took from the task that
+//     held it, dropped or given to another task (`capSegments` reports it):
+//     0 only when the cap changed nothing.
 // These five are local only (`derive-run.js` keeps them in the derivation
 // receipt) and never reach facts.
 //
@@ -115,8 +116,11 @@
 // real ones): `readTask(track, slug)`, `gitCommitTaskPaths(sha)`,
 // `isCardHousekeeping(sha, path)`, `resolveJobIdentity(track, slug)` and
 // `repoLookup(absolutePath)`, which answers `{ repo: "owner/name" }`,
-// `{ none: true }` (a true none) or `{ unavailable: true }`. The
-// desk root is passed in rather than resolved here: `src/util/paths.js` is
+// `{ none: true }` (a true none) or `{ unavailable: true }`, and the optional
+// `mergedInto(track, slug)`, the `{ track, slug }` a task with no card of
+// its own was merged into (`task_move into_task`), so a focus held on it
+// follows into the task that keeps the job (null, or left out: no merge
+// is followed). The desk root is passed in rather than resolved here: `src/util/paths.js` is
 // outside `src/factory`, so the caller resolves it (with
 // `resolveDeskRootWithSource`) and hands it over.
 //
@@ -209,7 +213,8 @@ const CREATE_CALL = /task_create$/u
 const SIGNOFF_CALL = /task_signoff$/u
 // A task tool call commits the card within moments; a minute each way covers Git's whole seconds and a slow push.
 const TOOL_CALL_REACH_MS = 60000
-const OWN_ACTIVITY_SPANS = 500
+// At most this many own-activity spans are kept; `reconcile.js` reads a full list as cut after its last span.
+export const OWN_ACTIVITY_SPANS = 500
 const KIND_BASIS = Object.freeze({ tool: "desk_tool", write: "file_write", commit: "desk_commit", spawn: "spawn_brief" })
 
 /**
@@ -328,14 +333,14 @@ function requireFunction(value, name) {
 
 /**
  * `bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix,
- * readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity,
+ * readTask, mergedInto, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity,
  * repoLookup }) -> { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs }`; the
  * header describes each. `agents` is the facts' `agents[]` (`{ n, parent }`),
  * used for ancestry. `session` is the facts' `session` (`started_at` and
  * `derived_through` are read). `deskRemote` is the desk's `origin` URL, or
  * empty when it has none (the job IDs then use `local:` plus the desk root).
  */
-export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoLookup }) {
+export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, mergedInto = () => null, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoLookup }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
@@ -516,8 +521,10 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
       const at = msOf(call?.at)
       if (call?.clear === true) focusCalls.push({ agent: 0, at, clear: true })
       else if (isTaskSegment(call?.track) && isTaskSegment(call.slug)) {
-        // A focus on a task whose card is gone still ends the stretch before it, and binds nothing.
-        const task = taskOf(call)
+        // A focus on a task later merged into another (`task_move into_task`) follows it into the task that keeps the job, as the held focus
+        // did. A focus on a task whose card is otherwise gone still ends the stretch before it, and binds nothing.
+        const keeper = taskOf(call) === null ? mergedInto(call.track, call.slug) : null
+        const task = keeper === null ? taskOf(call) : taskOf(keeper)
         focusCalls.push(task === null ? { agent: 0, at, clear: true } : { agent: 0, at, key: task.key })
       }
     }

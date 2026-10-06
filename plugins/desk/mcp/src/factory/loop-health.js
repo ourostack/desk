@@ -197,6 +197,15 @@ function headlessSection(stored, today) {
 /** The two reconcile reasons that need the store's own facts. The loop does not clone the store in v0, so it never compares and never reports a count for them. */
 export const STORE_SIDE_REASONS = Object.freeze(["status_unobserved", "store_only"])
 
+// Cards that record why they have no factory report link, as the reconcile step summed them: Counts, each `unavailable` when the
+// summary holds none, so a desk whose cards were never counted never reads as zero cards waiting.
+function linkSection(links) {
+  const known = isObject(links) && isObject(links.by_reason)
+  const byReason = {}
+  if (known) for (const [reason, n] of Object.entries(links.by_reason)) if (/^[a-z_]{1,40}$/u.test(reason)) byReason[reason] = count(n)
+  return { cards: count(known ? links.cards : undefined), archived: count(known ? links.archived : undefined), by_reason: byReason }
+}
+
 function reconcileSection(summary) {
   const last = isObject(summary) ? isoOrNull(summary.at) : null
   const mismatches = {}
@@ -209,7 +218,7 @@ function reconcileSection(summary) {
   }
   // A reason the loop never checks is `unavailable`, never absent: an absent reason reads as "none found".
   const storeSide = Object.fromEntries(STORE_SIDE_REASONS.map((reason) => [reason, unavailable("store_not_compared")]))
-  return { last_ran_at: last, window_days: count(RECONCILE_WINDOW_DAYS), desks: last === null ? unavailable("not_recorded") : !isObject(summary.runs) ? unavailable("runs_damaged") : count(summary.desks), mismatches, store_side: storeSide }
+  return { last_ran_at: last, window_days: count(RECONCILE_WINDOW_DAYS), desks: last === null ? unavailable("not_recorded") : !isObject(summary.runs) ? unavailable("runs_damaged") : count(summary.desks), mismatches, store_side: storeSide, report_link_unavailable: linkSection(last === null ? null : summary.report_link_unavailable) }
 }
 
 /** How often each step is expected to run: its minimum gap, and daily for the steps that run whenever the worker does. */

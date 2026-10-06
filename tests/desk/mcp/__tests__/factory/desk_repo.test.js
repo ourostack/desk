@@ -8,7 +8,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { createDeskReaders, readDeskRemote, resolveJobIdentity } from "../../../../../plugins/desk/mcp/src/factory/desk-repo.js"
+import { createDeskReaders, parseCardRenames, readDeskRemote, resolveJobIdentity } from "../../../../../plugins/desk/mcp/src/factory/desk-repo.js"
 import { bindSession, jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 
 let scratch
@@ -846,6 +846,78 @@ test("resolveJobIdentity finds a renamed card, so it agrees with readTask on whe
   moveIn(repo, "b/mid", "c/new", "2026-09-25T10:00:00Z")
   assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "b", slug: "mid" }), { track: "a", slug: "old" })
   assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "c", slug: "new" }), { track: "a", slug: "old" })
+})
+
+test("a card deleted and an unrelated one created in one commit is never read as a rename: their creation times differ", () => {
+  const repo = renameRepo("rename-false-pair")
+  // Two cards from one template, nearly identical, so Git's similarity pairs the deleted one with the new one.
+  const templated = (created) => card(["status: processing", `created: "${created}"`], "# Task\n\nThe same template body, line for line, as every other card made from it.\n".repeat(3))
+  writeIn(repo, "a/gone/task.md", templated("2026-09-20T10:00:00.000Z"))
+  writeIn(repo, "a/moved/task.md", templated("2026-09-21T10:00:00.000Z"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  removeIn(repo, "a/gone/task.md")
+  writeIn(repo, "b/fresh/task.md", templated("2026-09-25T09:00:00.000Z"))
+  commitIn(repo, "2026-09-25T09:00:00Z", "delete one card, create another")
+  assert.equal(gitIn(repo, ["log", "-1", "-M", "--diff-filter=R", "--name-status", "--format="]).trim().startsWith("R"), true, "Git itself pairs them")
+  assert.equal(createDeskReaders({ deskRoot: repo }).readTask("a", "gone"), null, "the deleted card does not resolve to the new one")
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "b", slug: "fresh" }), { track: "b", slug: "fresh" }, "the new card's birth is its own path")
+  // A real move keeps its creation time even when the move edits the card.
+  mkdirSync(path.join(repo, "c"))
+  gitIn(repo, ["mv", "a/moved", "c/moved"])
+  writeIn(repo, "c/moved/task.md", templated("2026-09-21T10:00:00.000Z").replace("status: processing", "status: done"))
+  commitIn(repo, "2026-09-25T10:00:00Z", "move and finish")
+  assert.equal(createDeskReaders({ deskRoot: repo }).readTask("a", "moved").status, "done")
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "c", slug: "moved" }), { track: "a", slug: "moved" })
+  // A card with no readable creation time cannot be told apart, so Git's pairing stands.
+  writeIn(repo, "d/plain/task.md", card(["status: processing"], "# Plain\n\nA card from before creation times, with a body long enough to pair.\n".repeat(3)))
+  commitIn(repo, "2026-09-25T11:00:00Z", "add plain")
+  gitIn(repo, ["mv", "d/plain", "d/plain-moved"])
+  writeIn(repo, "d/plain-moved/task.md", card(["status: processing", `created: "2026-09-25T11:00:00.000Z"`], "# Plain\n\nA card from before creation times, with a body long enough to pair.\n".repeat(3)))
+  commitIn(repo, "2026-09-25T12:00:00Z", "move and date")
+  assert.equal(createDeskReaders({ deskRoot: repo }).readTask("d", "plain").status, "processing")
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "d", slug: "plain-moved" }), { track: "d", slug: "plain" })
+})
+
+test("when the birth card's old text cannot be read, Git's birth stands", () => {
+  const repo = renameRepo("rename-unreadable-birth")
+  writeIn(repo, "a/first/task.md", card(["status: processing", `created: "2026-09-21T10:00:00.000Z"`], "# Task\n\nA body long enough for Git to pair the two sides of the move.\n".repeat(3)))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/first", "a/second", "2026-09-25T09:00:00Z")
+  let asked = 0
+  const spawn = (command, args, options) => (args.includes("cat-file") ? (asked += 1, { status: 128, stdout: "" }) : spawnSync(command, args, options))
+  assert.deepEqual(resolveJobIdentity({ deskRoot: repo, track: "a", slug: "second", spawn }), { track: "a", slug: "first" })
+  assert.equal(asked, 1)
+})
+
+test("parseCardRenames keeps a rename whose creation time is unchanged or only respelled, and drops one whose time differs", () => {
+  const block = (removed, added) => `diff --git a/a/x/task.md b/b/y/task.md\nsimilarity index 90%\nrename from a/x/task.md\nrename to b/y/task.md\n@@ -2 +2 @@\n-created: ${removed}\n+created: ${added}\n`
+  assert.deepEqual(parseCardRenames(block("2026-09-20T10:00:00Z", "'2026-09-20T10:00:00.000Z'")), [{ oldPath: "a/x/task.md", path: "b/y/task.md" }])
+  assert.deepEqual(parseCardRenames(block("2026-09-20T10:00:00Z", "2026-09-21T10:00:00Z")), [])
+  assert.deepEqual(parseCardRenames(block("2026-09-20", "2026-09-21T10:00:00Z")), [{ oldPath: "a/x/task.md", path: "b/y/task.md" }], "an unreadable time is not comparable")
+  assert.deepEqual(parseCardRenames("diff --git a/a b/a\nindex 1..2\n"), [], "a block that is not a rename")
+})
+
+test("mergedInto follows a task merged with task_move into_task to the task that keeps the job, after renames on either side", () => {
+  const repo = renameRepo("merged-into")
+  writeIn(repo, "a/dup/task.md", card(["status: processing", `created: "2026-09-20T10:00:00.000Z"`], "# Duplicate\n\nThe duplicate's own body, long enough for Git to pair it after the merge.\n".repeat(3)))
+  writeIn(repo, "a/keeper/task.md", taskCard("merged-into-keeper"))
+  commitIn(repo, "2026-09-25T08:00:00Z", "add")
+  moveIn(repo, "a/dup", "a/dup-renamed", "2026-09-25T08:30:00Z")
+  // What task_move into_task commits: the folder under the keeper's iterations, the card renamed to merged-task.md with merged_into set.
+  mkdirSync(path.join(repo, "a", "keeper", "_iterations"), { recursive: true })
+  gitIn(repo, ["mv", "a/dup-renamed", "a/keeper/_iterations/2026-09-20-dup-renamed"])
+  gitIn(repo, ["mv", "a/keeper/_iterations/2026-09-20-dup-renamed/task.md", "a/keeper/_iterations/2026-09-20-dup-renamed/merged-task.md"])
+  writeIn(repo, "a/keeper/_iterations/2026-09-20-dup-renamed/merged-task.md", card(["status: processing", `created: "2026-09-20T10:00:00.000Z"`, "merged_into: keeper"], "# Duplicate\n\nThe duplicate's own body, long enough for Git to pair it after the merge.\n".repeat(3)))
+  commitIn(repo, "2026-09-25T09:00:00Z", "merge dup into keeper")
+  moveIn(repo, "a/keeper", "b/keeper", "2026-09-25T10:00:00Z")
+  const readers = createDeskReaders({ deskRoot: repo })
+  assert.deepEqual(readers.mergedInto("a", "dup"), { track: "a", slug: "keeper" }, "named as it was at the merge")
+  assert.equal(readers.readTask("a", "keeper").status, "processing", "and readTask follows the keeper's later rename")
+  assert.deepEqual(readers.mergedInto("a", "dup-renamed"), { track: "a", slug: "keeper" })
+  assert.equal(readers.mergedInto("b", "keeper"), null, "a task with its own card was not merged")
+  assert.equal(readers.mergedInto("a", "never"), null, "nor was a task Git never saw")
+  assert.equal(readers.mergedInto("not a segment", "dup"), null)
+  assert.equal(createDeskReaders({ deskRoot: path.join(scratch, "no-such-desk") }).mergedInto("a", "dup"), null, "a Git failure follows nothing")
 })
 
 test("a deleted, never-renamed folder returns null", () => {

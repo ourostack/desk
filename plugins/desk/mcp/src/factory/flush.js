@@ -105,7 +105,7 @@
 
 // The capture record (`capture-flush.js`, `capture-publish.js`) travels as one more file, `capture/<intake_id>.json`, appended after the batch is
 // taken so it never displaces facts, labels or deletes, and only when the store's `capture.json` holds exactly `{"capture":1}`. A refusal that names it
-// (a `capture_` code, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
+// (a `capture_` code other than `capture_check_unavailable`, which is the store's own check failing and is stale like a conflict, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
 // record waits a week. Its bookkeeping is `status.capture[store]` and nothing else.
 
 // Every step's result is one stable `FlushCode`. The account token comes from
@@ -175,7 +175,7 @@ import {
   restoreRetractedCopies,
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
-import { captureOnBranch, dropPending, judge, namesRecord, planCapture, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
+import { CHECK_UNAVAILABLE, captureOnBranch, dropPending, judge, namesRecord, planCapture, saveCheckUnavailable, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
@@ -199,7 +199,8 @@ const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
-const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge"])
+// `capture_check_unavailable` is the store's own capture check failing to read the commits: its failure, not the files' and not the record's.
+const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge", CHECK_UNAVAILABLE])
 const MAX_COMMENTS = 300
 const MAX_BYTES = 24 * 1024 * 1024
 const MAX_OUTPUT = 64 * 1024 * 1024
@@ -684,6 +685,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
   const refused = new Set()
   // The first refusal that names the capture record, never a reason to quarantine facts: its pull request is a stale one (the facts go again).
   let captureRefused = null
+  let checkUnavailable = false
   let stale = 0
   let unmatched = 0
   let highest = through
@@ -711,6 +713,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
     }
     const named = codes.filter((candidate) => namesRecord(candidate, { onRecordedPr: pr.number === recordedPr, stale: STALE_INTAKE_CODES }))
     captureRefused ??= named[0] ?? null
+    if (pr.number === recordedPr && codes.includes(CHECK_UNAVAILABLE)) checkUnavailable = true
     codes = codes.filter((candidate) => !named.includes(candidate))
     if (codes.length === 0 && named.length === 0) continue
     // Stale only when every code says so; any data code rejects the files, and quarantine names the first one.
@@ -738,7 +741,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       rejected.add(name)
     }
   }
-  return { rejected, refused, stale, unmatched, through: highest, captureRefused }
+  return { rejected, refused, stale, unmatched, through: highest, captureRefused, checkUnavailable }
 }
 
 function treeEntries(json) {
@@ -897,6 +900,7 @@ async function deliver(env, context) {
   progress.newerFormat = newer.size
   // The kept copies of retracted sessions, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
+  const keptSet = new Set(keptNow)
   // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
   if (capture.invalid) await saveInvalid(env, store, now())
@@ -921,7 +925,10 @@ async function deliver(env, context) {
     const marker = names.map((name) => markerByName.get(name)).find((found) => found !== undefined) ?? null
     const deskRoot = deskRootOf(receipts, names)
     const route = sessionRoute(marker, { siblings: () => markers, deskRoot })
-    places.set(session, sessionPlace(store, route, derivedStoreOf(receipts, names), recordsOf.get(session)))
+    let place = sessionPlace(store, route, derivedStoreOf(receipts, names), recordsOf.get(session))
+    // A session with a kept (retracted) copy fails closed: without a positive route here it stays away, so a lost or unreadable `status.json`, or a pruned tombstone, can never read as "no record, so here" and publish what was withdrawn.
+    if (place === "here" && route.kind !== "store" && keptSet.has(session)) place = "away"
+    places.set(session, place)
     if (route.kind !== "store") continue
     const root = marker?.desk_root ?? deskRoot
     for (const name of names.filter((name) => localNames.includes(name) && (receipts[name]?.route !== route.store || receipts[name]?.desk_root !== root))) routes[name] = { store: route.store, deskRoot: root }
@@ -999,8 +1006,10 @@ async function deliver(env, context) {
   for (const repo of deskRepos.filter((repo) => deskTimingKept(known.get(repo)) && !(dated[repo]?.checked_at >= askedAfter))) {
     try {
       known.set(repo, (await resolveVisibility(env, client, account, [repo], nowIso, new Set([repo]))).get(repo))
-    } catch {
-      // Whatever stopped the question (offline, a deadline, a refusal), this desk is not known private now; the flush's own deadline check ends it later.
+    } catch (error) {
+      // Out of time is not "could not ask": the flush ends here as `deadline`, and the last recorded count of sessions waiting for an answer stays as it was, so a flush that never got to ask cannot rewrite it.
+      if (error instanceof Stop && error.code === "deadline") throw error
+      // Whatever else stopped the question (offline, a refusal), this desk is not known private now; the flush's own deadline check ends it later.
       known.set(repo, "unknown")
       distrusted.add(repo)
     }
@@ -1010,6 +1019,8 @@ async function deliver(env, context) {
   const deferredLabels = (local) => desksOfSession(factsNamesOf(local?.session)).some((repo) => distrusted.has(repo))
   const deferred = new Set(parsed.filter(({ name }) => deferredName(name)).map(({ name }) => name))
   progress.visibilityUnasked = new Set([...deferred].map(sessionOfName)).size
+  // Held back for a visibility answer is not delivered: finalize must see these names as still waiting (`flushDetailed`).
+  progress.deferred = new Set(deferred)
   // A session published under a desk not known private is marked, so it is never published under a later, more open reading once its marker is gone.
   const unprotected = parsed.filter(({ name }) => !deferred.has(name) && receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
   if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
@@ -1054,7 +1065,10 @@ async function deliver(env, context) {
   const labelsByKey = new Map()
   const publishLabels = async (items) => {
     for (const { key, local } of items) {
-      if (deferredLabels(local)) continue
+      if (deferredLabels(local)) {
+        progress.deferred.add(key)
+        continue
+      }
       const out = publishLabelsOne(local, key, { known, desks, secret })
       if (out.bytes) labelsByKey.set(key, out)
       else await quarantine(env, store, key, out.reason)
@@ -1069,7 +1083,7 @@ async function deliver(env, context) {
   }
   // Only files with published bytes are listed, and only those of `here` sessions have them. A file without bytes is one whose record is not a regular file (its file stays where it is), a held file that stays held, or a file of a session that is not `here`.
   const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts?.session?.host}-${facts?.session?.id}.json`) ?? null }))
-    .map(({ name }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
+    .map(({ name, localBytes }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)), localSha: gitBlobSha(localBytes) }))
   const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`)?.bytes ?? null }))
     .map(({ name }) => {
       const { path: published, bytes } = labelsByKey.get(name)
@@ -1158,6 +1172,7 @@ async function deliver(env, context) {
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
   // The record goes when it is due, or its pull request is still open and must keep carrying it; a refusal naming it is bookkept and it waits a week.
   let captureItem = null
+  if (rejections.checkUnavailable) await saveCheckUnavailable(env, store)
   if (rejections.captureRefused !== null) await saveRefused(env, store, rejections.captureRefused, now())
   else if (capture.work) captureItem = capture.record
   const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract, ...(captureItem === null ? [] : [captureItem])])
@@ -1177,7 +1192,7 @@ async function deliver(env, context) {
   if (captureItem === null && rejections.captureRefused === null && Number.isSafeInteger(capture.cap.pr)) await dropPending(env, store)
   const remaining = []
   for (const item of pending) {
-    if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path })
+    if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path, localSha: item.localSha })
     else remaining.push(item)
   }
   // A delete goes only where the store's default branch holds exactly the blob this machine delivered. Anything else there, or nothing (the delete
@@ -1248,7 +1263,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, visibilityUnasked: null, intakePushed: null, intakePrs: null }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0, refused: null, heldElsewhere: null, routeUnknown: null, retractionStalled: null, newerFormat: null, visibilityUnasked: null, intakePushed: null, intakePrs: null, deferred: null }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -1298,7 +1313,9 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   } finally {
     await releaseLock(lock)
   }
-  const pending = outcome.result === "nothing_pending" ? [] : DELIVERED_OPEN.has(outcome.result) ? progress.pending : null
+  const waiting = outcome.result === "nothing_pending" ? [] : DELIVERED_OPEN.has(outcome.result) ? progress.pending : null
+  // A job held only for a visibility answer has nothing in `pending` (it has no published bytes), yet it is not delivered: it counts as waiting.
+  const pending = waiting === null || progress.deferred === null ? waiting : [...new Set([...waiting, ...progress.deferred])]
   return { ...outcome, pending }
 }
 

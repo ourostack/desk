@@ -17,13 +17,12 @@
 //     `not_in_a_desk` may also be `null` (a host whose folders name no working
 //     directory), and `unverified` is a boolean. The buckets must add up to
 //     `on_disk` (else `inconsistent`; a `null` counts as zero).
-//   - `loop` is one optional slot, reserved for the closed loop's health
-//     record. Until that record is defined it is a plain object of at most 512
-//     canonical bytes whose keys and values are content-free: keys and strings
-//     match `^[a-z_]{1,32}$`, numbers are safe integers up to 1,000,000, and
-//     booleans and `null` are allowed. It never nests. A record without it is
-//     valid; the empty retraction record has none. The rule is `validateLoopSlot`,
-//     exported so its owner can replace it.
+//     A host the machine could not count (its listing was capped or unreadable) is exactly `{ "not_counted": true }`: it is never a zero and
+//     never left out, so the store can tell "could not count" from "no sessions". Any other key beside `not_counted`, or any other value, is an error.
+//   - `loop` is one optional slot, the closed loop's health record, `loop_slot_v1` of the store: `v` is 1, then only the keys in
+//     `LOOP_SLOT_COUNTS` (each a whole number from 0 to 1,000,000 or `null`) and `headless` (a code matching `^[a-z_]{1,32}$` or `null`), at most
+//     512 canonical bytes, never nested. A record without it is valid; the empty retraction record has none. The rule is `validateLoopSlot`,
+//     and it must stay as strict as the store's, or a record Desk accepts waits a week for the store's refusal.
 // The empty record, `hosts: {}`, is a retraction: any contributor may send it.
 //
 // Errors are `{ code, path }` with stable codes and a path built only from
@@ -56,6 +55,16 @@ const BUCKETS = ["derived", "held", "frozen", "pending", "not_seen"]
 const count = () => rangeIntField(0, MAX_COUNT)
 const nullableCount = () => customField((value, path, errors) => (value === null ? true : count().check(value, path, errors)))
 
+// A host this machine could not count (its listing was capped or unreadable) is exactly `{ "not_counted": true }`: never a zero, never a missing host.
+export const NOT_COUNTED = "not_counted"
+const NOT_COUNTED_SPEC = {
+  [NOT_COUNTED]: customField((value, path, errors) => {
+    if (value === true) return true
+    addError(errors, "enum", path)
+    return false
+  }),
+}
+
 const HOST_SPEC = {
   on_disk: count(),
   derived: count(),
@@ -67,10 +76,28 @@ const HOST_SPEC = {
   unverified: booleanField(),
 }
 
+/** The loop slot's version, the one the store's `loop_slot_v1` accepts. */
+export const LOOP_SLOT_VERSION = 1
+
+/** The keys of `loop_slot_v1` besides `v`: whole counts or `null`, except `headless`, a plain code or `null`. */
+export const LOOP_SLOT_COUNTS = Object.freeze([
+  "improvement_open",
+  "improvement_claimed",
+  "improvement_shipped",
+  "improvement_verifying",
+  "oldest_open_age_days",
+  "closed_confirmed_month",
+  "closed_unverified_month",
+  "loop_alarms_open",
+  "steps_stale",
+])
+const LOOP_SLOT_CODE = "headless"
+
 /**
- * The loop slot's rule, in the shape of every leaf check: reports into `errors`
- * at `path` and returns whether the slot is sound. Replace the body when the
- * closed loop's health record is defined; keep the name and the slot.
+ * The loop slot's rule, which is the store's `loop_slot_v1` (`check-capture.sh`), in the shape of every leaf check: reports into `errors`
+ * at `path` and returns whether the slot is sound. `v` is required and is 1; a key the store does not know is `unknown_key`; a count is a
+ * whole number from 0 to 1,000,000 or `null` (never a boolean or a string); `headless` is a plain code or `null`; at most 512 canonical
+ * bytes. A record Desk accepts is therefore one the store accepts, so it never waits a week for a refusal Desk could have seen.
  */
 export function validateLoopSlot(value, path, errors) {
   if (!isPlainObject(value)) {
@@ -82,25 +109,23 @@ export function validateLoopSlot(value, path, errors) {
     return false
   }
   let sound = true
+  if (value.v !== LOOP_SLOT_VERSION) {
+    addError(errors, "enum", joinPath(path, "v"))
+    sound = false
+  }
   for (const [key, entry] of Object.entries(value)) {
+    if (key === "v") continue
     const entryPath = joinPath(path, LOOP_TEXT.test(key) ? key : "?")
-    if (!LOOP_TEXT.test(key)) {
-      addError(errors, "pattern", entryPath)
-      sound = false
-    }
-    if (entry === null || typeof entry === "boolean") continue
-    if (typeof entry === "string") {
-      if (!LOOP_TEXT.test(entry)) {
+    if (key === LOOP_SLOT_CODE) {
+      if (entry !== null && !(typeof entry === "string" && LOOP_TEXT.test(entry))) {
         addError(errors, "pattern", entryPath)
         sound = false
       }
-    } else if (typeof entry === "number") {
-      if (!Number.isSafeInteger(entry) || entry < 0 || entry > MAX_COUNT) {
-        addError(errors, "range", entryPath)
-        sound = false
-      }
-    } else {
-      addError(errors, "type", entryPath)
+    } else if (!LOOP_SLOT_COUNTS.includes(key)) {
+      addError(errors, "unknown_key", entryPath)
+      sound = false
+    } else if (entry !== null && !(Number.isSafeInteger(entry) && entry >= 0 && entry <= MAX_COUNT)) {
+      addError(errors, "range", entryPath)
       sound = false
     }
   }
@@ -124,7 +149,9 @@ function hostsField() {
     if (Object.keys(value).some((key) => !ENUMS.host.includes(key))) addError(errors, "unknown_key", path)
     for (const host of ENUMS.host) {
       if (!Object.hasOwn(value, host)) continue
-      objectField(HOST_SPEC, (entry, entryPath, results, entryErrors) => checkSum(entry, entryPath, results, entryErrors)).check(value[host], joinPath(path, host), errors, ctx)
+      const entry = value[host]
+      if (isPlainObject(entry) && Object.hasOwn(entry, NOT_COUNTED)) objectField(NOT_COUNTED_SPEC).check(entry, joinPath(path, host), errors, ctx)
+      else objectField(HOST_SPEC, (counts, entryPath, results, entryErrors) => checkSum(counts, entryPath, results, entryErrors)).check(entry, joinPath(path, host), errors, ctx)
     }
     return true
   })
@@ -139,6 +166,8 @@ const TOP = {
 /** The record's closed key lists, for the documentation check: the top-level keys (with the optional loop slot last) and each host entry's keys. */
 export const CAPTURE_TOP_KEYS = Object.freeze([...Object.keys(TOP), CAPTURE_LOOP_KEY])
 export const CAPTURE_HOST_KEYS = Object.freeze(Object.keys(HOST_SPEC))
+/** The keys of the entry for a host that could not be counted. */
+export const CAPTURE_UNCOUNTED_KEYS = Object.freeze(Object.keys(NOT_COUNTED_SPEC))
 
 /** `validateCapture(value) -> { ok, errors }`. */
 export function validateCapture(value) {

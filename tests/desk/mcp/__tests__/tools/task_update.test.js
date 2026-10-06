@@ -904,6 +904,7 @@ test("reopening a done task needs a reason and removes its signoff", async () =>
   assert.match(data.returns[0], / done processing new_information after_delivery$/u)
   assert.equal(data.flow.reached, "processing")
   assert.equal(data.flow.deliveries, 1, "the delivery count stays")
+  assert.equal(data.evidence, undefined, "the proof of a delivery sent back no longer says the task is done")
 })
 
 test("the side-state route still needs a reason", async () => {

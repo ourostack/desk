@@ -14,10 +14,12 @@
 // the card's `repos:` list reduced to names (see `parseRepos`): `owner/name`
 // where the card or its GitHub `url` gives one, else the bare name, never a
 // path or any other field. When no card sits at the given `track/slug`, the
-// desk's Git rename history is asked once per `HEAD` (`git log --name-status
-// -M --diff-filter=R`, cached) where the task folder went, live or archived,
-// following chains; a deleted, never-renamed folder, a failed Git call and a
-// desk that is not its own repository all read as `null`.
+// desk's Git rename history of task cards is asked once per `HEAD` (`git log
+// -M --diff-filter=R -p`, cached) where the task folder went, live or
+// archived, following chains; a pairing that changes the card's `created:`
+// is a deleted card and a new one, never a move. A deleted, never-renamed
+// folder, a failed Git call and a desk that is not its own repository all
+// read as `null`.
 //
 // `repoOfPath(absolutePath)` names the code repository a path outside the
 // desk is in, as lowercase `owner/name`, from the `origin` remote of the
@@ -90,7 +92,10 @@
 // --diff-filter=A`, chasing through `-M`-equivalent rename detection, so a
 // track rename, a task move and an archive move all keep the same birth
 // path; a reverted rename walks back through both hops to the same
-// original). No card field is read or written for this — it works
+// original). A birth Git found under another path whose card's `created:`
+// differs from the current card's is an unrelated deleted card that Git's
+// similarity paired with this one (cards share a template), so the card's
+// own path is its birth instead. No card field is written for this — it works
 // retroactively, from history alone — and it falls back to the given `{
 // track, slug }`, unchanged, whenever Git cannot settle the question: the
 // card is found neither live nor archived (in a live track, an archived
@@ -329,42 +334,109 @@ function findCard(base, track, slug, renamedKey) {
   return moved === null ? null : inFourPlaces(moved[0], moved[1])
 }
 
+// Whether two cards' `created:` values allow them to be one card: false only
+// when both are readable timestamps and differ. Cards share a template, so
+// Git's similarity can pair a deleted card with an unrelated new one; the
+// creation time the task tools write once, and every move keeps, tells them
+// apart. A card without a readable `created:` cannot be told apart and is
+// taken as Git paired it.
+function sameCreation(before, after) {
+  const a = normalizeTimestamp(before)
+  const b = normalizeTimestamp(after)
+  return a === null || b === null || a === b
+}
+
+// The renames of task cards in `git log -M --diff-filter=R -p -U0` output, in
+// log order (newest first): `{ oldPath, path }` for each rename whose
+// `created:` line is unchanged or not comparable (`sameCreation`). A rename
+// whose diff changes a readable `created:` is a deleted card paired with a
+// new one, not a move, and is left out.
+export function parseCardRenames(output) {
+  const renames = []
+  for (const block of output.split(/^diff --git /mu).slice(1)) {
+    const from = /^rename from (.+)$/mu.exec(block)
+    const to = /^rename to (.+)$/mu.exec(block)
+    if (from === null || to === null) continue
+    const removed = /^-created:(.*)$/mu.exec(block)
+    const added = /^\+created:(.*)$/mu.exec(block)
+    if (removed !== null && added !== null && !sameCreation(unquote(removed[1]), unquote(added[1]))) continue
+    renames.push({ oldPath: from[1], path: to[1] })
+  }
+  return renames
+}
+
 // `(track, slug) -> [track, slug] | null`: where the task folder went, by
-// Git's own rename history (`git log --name-status -M --diff-filter=R`, one
-// pass per `HEAD`, cached per desk root and person alias, since the alias
-// decides which renames count). Follows chains in order, live or archived.
-// null for a never-renamed task, a desk that is not its own repository, and
-// any Git failure. `runFn(options, args)` is `runGit` or a deadline-aware
-// wrapper of it.
+// Git's own rename history of task cards (`git log -M --diff-filter=R -p`
+// over `task.md` files, one pass per `HEAD`, cached per desk root and person
+// alias, since the alias decides which renames count), leaving out a pairing
+// that changes the card's creation time (`parseCardRenames`). Follows chains
+// in order, live or archived. null for a never-renamed task, a desk that is
+// not its own repository, and any Git failure. `runFn(options, args)` is
+// `runGit` or a deadline-aware wrapper of it.
 function taskRenameLookup(options, alias, runFn) {
+  const moves = cardMoves(options, alias, runFn)
+  return (track, slug) => {
+    const list = moves()
+    if (list === null) return null
+    const start = `${track}/${slug}`
+    let key = start
+    for (const move of list) {
+      if (move.from === key && !move.merged) key = move.to
+    }
+    return key === start ? null : key.split("/")
+  }
+}
+
+// `(track, slug) -> [track, slug] | null`: the task this one was merged into
+// with `task_move into_task`, by the same Git history (the merge renames its
+// `task.md` to `<keeper>/_iterations/<date>-<slug>/merged-task.md`), after
+// any renames before the merge; null when it was never merged, and for any
+// Git failure. The keeper is named as it was at the merge; `readTask`
+// follows its later renames.
+function taskMergeLookup(options, alias, runFn) {
+  const moves = cardMoves(options, alias, runFn)
+  return (track, slug) => {
+    const list = moves()
+    if (list === null) return null
+    let key = `${track}/${slug}`
+    for (const move of list) {
+      if (move.from !== key) continue
+      if (move.merged) return move.to.split("/")
+      key = move.to
+    }
+    return null
+  }
+}
+
+// The task a merged card's path (`<keeper folder>/_iterations/<name>/merged-task.md`) was merged into, as `track/slug`, or null.
+function mergeKeeperOfPath(filePath, alias) {
+  const keeper = /^(.+)\/_iterations\/[^/]+\/merged-task\.md$/u.exec(filePath)
+  return keeper === null ? null : cardKeyOfPath(`${keeper[1]}/task.md`, alias)
+}
+
+// `() -> [{ from, to, merged }] | null`, oldest first: every move of a task card in Git history, once per `HEAD` (cached per desk root and
+// person alias): a rename (`merged: false`, `to` the card's new `track/slug`) or a merge into another task (`merged: true`, `to` the keeper).
+function cardMoves(options, alias, runFn) {
   const root = path.resolve(options.deskRoot)
   const cacheKey = `${root}\u0000${alias ?? ""}`
-  function renames() {
+  return function renames() {
     if (!isOwnRepository(options, runFn)) return null
     const head = runFn(options, ["rev-parse", "HEAD"])
     if (head === null) return null
     const cached = RENAME_CACHE.get(cacheKey)
     if (cached !== undefined && cached.head === head.trim()) return cached.renames
-    const output = runFn(options, ["log", "--name-status", "-M", "--diff-filter=R", "-z", "--format="])
+    const output = runFn(options, ["log", "-M", "--diff-filter=R", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--format=", "--", ":(glob)**/task.md", ":(glob)**/merged-task.md"])
     if (output === null) return null
     const found = []
-    for (const entry of parseNameStatus(output).reverse()) {
+    for (const entry of parseCardRenames(output).reverse()) {
       const from = cardKeyOfPath(entry.oldPath, alias)
       const to = cardKeyOfPath(entry.path, alias)
-      if (from !== null && to !== null && from !== to) found.push({ from, to })
+      const keeper = to === null ? mergeKeeperOfPath(entry.path, alias) : null
+      if (from !== null && to !== null && from !== to) found.push({ from, to, merged: false })
+      else if (from !== null && keeper !== null) found.push({ from, to: keeper, merged: true })
     }
     RENAME_CACHE.set(cacheKey, { head: head.trim(), renames: found })
     return found
-  }
-  return (track, slug) => {
-    const list = renames()
-    if (list === null) return null
-    const start = `${track}/${slug}`
-    let key = start
-    for (const rename of list) {
-      if (rename.from === key) key = rename.to
-    }
-    return key === start ? null : key.split("/")
   }
 }
 
@@ -768,7 +840,7 @@ function isOwnRepository(options, runFn = runGit) {
 // Unlike `isOwnRepository`, `runFn` has no default here: `resolveJobIdentity`
 // is this function's only caller, and it always passes its own deadline-aware
 // `run`, so a default would be dead code no path through this module reaches.
-function gitBirthPathSegments(options, relativePath, runFn) {
+function gitBirthPath(options, relativePath, runFn) {
   const output = runFn(options, ["log", "--follow", "--diff-filter=A", "-z", "--format=%x1e%H", "--name-only", "--", relativePath])
   if (output === null) return null
   const records = output.split("\x1e").filter((record) => record !== "")
@@ -776,7 +848,7 @@ function gitBirthPathSegments(options, relativePath, runFn) {
   const headerEnd = records[0].indexOf("\0")
   if (headerEnd === -1) return null
   const paths = records[0].slice(headerEnd + 1).split("\0").map((entry) => entry.replace(/^\n/u, "")).filter((entry) => entry !== "")
-  return paths.length > 0 ? relativeSegments(paths[0]) : null
+  return paths.length > 0 ? { sha: records[0].slice(0, headerEnd).trim(), path: paths[0] } : null
 }
 
 // The `track/slug` a `task.md` path names, in any of the four places a card
@@ -839,7 +911,7 @@ function repositoryRoot(directory) {
 
 /**
  * `createDeskReaders({ deskRoot, personPrefix, git, timeoutMs })` ->
- * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
+ * `{ readTask, mergedInto, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
  * resolveJobIdentity, repoOfPath, repoLookup }`; `bindSession` takes all but
  * `deskCommitsBetween`, which `factory reconcile` still reads.
  */
@@ -857,6 +929,13 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
 
   const alias = checkPersonPrefix(personPrefix, "createDeskReaders")
   const renamedKey = taskRenameLookup(options, alias, runGit)
+  const mergedKey = taskMergeLookup(options, alias, runGit)
+  /** `mergedInto(track, slug) -> { track, slug } | null`: the task a merged task now lives in, when it has no card of its own (`taskMergeLookup`). */
+  function mergedInto(track, slug) {
+    if (!isTaskSegment(track) || !isTaskSegment(slug) || readTask(track, slug) !== null) return null
+    const keeper = mergedKey(track, slug)
+    return keeper === null ? null : { track: keeper[0], slug: keeper[1] }
+  }
 
   function readTask(track, slug) {
     if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
@@ -1030,7 +1109,7 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   const repoOfPath = (absolutePath) => repoLookup(absolutePath).repo ?? null
 
   return {
-    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, repoLookup, readOutcome,
+    readTask, mergedInto, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, repoOfPath, repoLookup, readOutcome,
     resolveJobIdentity: (track, slug) => resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs }),
   }
 }
@@ -1054,7 +1133,7 @@ export function resolveJobIdentity({
   const root = path.resolve(deskRoot)
 
   // Mirrors `readDeskRemote`'s own `run`, in `isOwnRepository`/
-  // `gitBirthPathSegments`'s `runFn(options, args)` shape so it can replace
+  // `gitBirthPath`'s `runFn(options, args)` shape so it can replace
   // their default `runGit` directly: with no deadline this is exactly
   // `runGit(options, args)` (never throws), and with one it caps each call
   // to the time left, throwing `git_deadline` before starting a call the
@@ -1098,8 +1177,14 @@ export function resolveJobIdentity({
   const cacheKey = `${root}\u0000${relative}`
   if (BIRTH_PATH_CACHE.has(cacheKey)) return BIRTH_PATH_CACHE.get(cacheKey)
 
-  const segments = gitBirthPathSegments(options, relative, run)
-  const parsed = segments === null ? null : taskOfSegments(segments, alias)
+  // `--follow` pairs by similarity, so a birth found under another path must be the same card: its creation time there must not differ
+  // from the card's own (`sameCreation`). A birth that does is an unrelated deleted card; the card is then its own lineage, at its path.
+  let birth = gitBirthPath(options, relative, run)
+  if (birth !== null && birth.path !== relative) {
+    const then = run(options, ["cat-file", "blob", `${birth.sha}:${birth.path}`])
+    if (then !== null && !sameCreation(frontmatterOf(frontmatterLines(found.text)).created, frontmatterOf(frontmatterLines(then)).created)) birth = { path: relative }
+  }
+  const parsed = birth === null ? null : taskOfSegments(relativeSegments(birth.path), alias)
   const result = parsed === null ? current : { track: parsed.track, slug: parsed.slug }
   BIRTH_PATH_CACHE.set(cacheKey, result)
   return result

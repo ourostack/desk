@@ -12,8 +12,6 @@ export const OWNER_WITHHELD = "?"
 export const ORPHAN_PASS_UNAVAILABLE = "orphan_pass_unavailable"
 
 const HOSTS = ["claude-code", "copilot-cli", "codex-cli"]
-// The orphan pass counts these without a session on disk, so they are never part of `on_disk`.
-const NOT_ON_DISK = new Set(["no_facts", "no_transcript"])
 const own = (object, key) => object != null && Object.hasOwn(object, key)
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0
 const isText = (value) => typeof value === "string" && value.length > 0
@@ -23,7 +21,7 @@ const zeroBuckets = (withNotInADesk) => Object.fromEntries(BUCKETS.filter((bucke
 /** Why a not-current orphan is frozen when the orphan pass has a usable result: it only counts pending orphans machine-wide, so it cannot be split by owner. */
 export const ORPHAN_UNSPLIT = "orphan_unsplit"
 
-/** Whether the orphan pass's result is usable (an object without a `failed` key). Only its `frozen` reasons are read, never its machine-wide `pending`. */
+/** Whether the orphan pass's result is usable (an object without a `failed` key). Nothing else of it is read: not its `pending`, and not its window's `frozen` reasons. */
 const orphanUsable = (orphans) => orphans !== null && typeof orphans === "object" && !("failed" in orphans)
 
 /**
@@ -137,12 +135,7 @@ export function classifySessions({ hosts, markers, receipts, copies, quarantined
       if (desk === undefined) place("not_in_a_desk", owner)
       else place("not_seen", desk.stores.size === 1 && !desk.untold ? [...desk.stores][0] : OWNER_WITHHELD)
     }
-    // Only the orphan pass's own reasons for sessions that are on disk, added to the local reasons as they are (unknown reasons too).
-    if (usable) {
-      for (const [reason, count] of Object.entries(orphans.frozen ?? {})) {
-        if (!NOT_ON_DISK.has(reason) && isCount(count) && host === "claude-code") reasons.set(reason, (reasons.get(reason) ?? 0) + count)
-      }
-    }
+    // `frozen_by_reason` has one source, this loop: every frozen session is counted once, under one reason. The orphan pass's own reasons are a tally of its last window (a cap and a cursor), not of the whole disk, so adding them counted the same orphan twice and could exceed `frozen`; they stay in `status.orphans`.
     result[host] = { state, on_disk: sessions.length, ...total, not_in_a_desk: withNotInADesk ? total.not_in_a_desk : null, unverified, ...(isCount(undetermined) ? { undetermined } : {}), ...(hosts[host].fallback === true ? { fallback: true } : {}), frozen_by_reason: Object.fromEntries(reasons), by_owner: Object.fromEntries(byOwner) }
   }
   return result

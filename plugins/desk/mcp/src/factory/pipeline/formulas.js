@@ -173,28 +173,32 @@ function tokenTotalFor(type, sessions, split) {
   }))
   const entries = [...checked.values()]
   const splitEntries = new Set(sessions.filter((session) => split.has(session)).map((session) => checked.get(session)))
-  if (entries.length === 0) return unavailable("job_offsets_unavailable")
+  if (entries.length === 0) return { result: unavailable("job_offsets_unavailable"), uncovered: new Set() }
   const whole = entries.filter((entry) => !splitEntries.has(entry))
   const own = fieldCoverage(whole, fields, partialFields)
   const reasons = [...new Set([...own.reasons, ...(splitEntries.size > 0 ? ["worker_split"] : [])])].sort(compareText)
   const coverage = { ...fieldCoverage(entries, fields, partialFields, splitEntries), none: own.none, reasons }
   const lacking = (entry) => fieldCoverage([entry], fields, partialFields).none
-  return covered(coverage, () => measured(whole.filter((entry) => !lacking(entry)).reduce((total, entry) => total + entry.counts, 0)))
+  // Which sessions this type leaves uncovered, so the total can count each once (`tokenSum`).
+  const uncovered = new Set(sessions.filter((session) => fieldCoverage([checked.get(session)], fields, partialFields, splitEntries).uncovered > 0))
+  return { result: covered(coverage, () => measured(whole.filter((entry) => !lacking(entry)).reduce((total, entry) => total + entry.counts, 0))), uncovered }
 }
 
+// Input plus output. A session either part leaves uncovered is uncovered in the total, counted once: the union of the two parts' sessions,
+// never the larger of their counts, which would understate it when the parts lack different sessions.
 function tokenSum(input, output) {
-  const parts = [input, output]
+  const parts = [input.result, output.result]
   const gone = parts.filter((part) => part.class === "unavailable")
   if (gone.length > 0) return missingValue({ reasons: [...new Set(gone.flatMap(reasonsOf))].sort(compareText) })
   const partial = parts.filter((part) => part.partial === true)
-  const result = measured(input.value + output.value)
+  const result = measured(input.result.value + output.result.value)
   if (partial.length === 0) return result
-  return { ...result, partial: true, uncovered_sessions: Math.max(...partial.map((part) => part.uncovered_sessions)), partial_reasons: [...new Set(partial.flatMap((part) => part.partial_reasons))].sort(compareText) }
+  return { ...result, partial: true, uncovered_sessions: new Set([...input.uncovered, ...output.uncovered]).size, partial_reasons: [...new Set(partial.flatMap((part) => part.partial_reasons))].sort(compareText) }
 }
 
 function tokenTotals(sessions, split) {
   const types = Object.fromEntries(TOKEN_TYPES.map((type) => [type, tokenTotalFor(type, sessions, split)]))
-  return { total: tokenSum(types.input, types.output), ...types }
+  return { total: tokenSum(types.input, types.output), ...Object.fromEntries(Object.entries(types).map(([type, { result }]) => [type, result])) }
 }
 
 function currentStatus(timeline) {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, writeFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
-import { factoryStateRoot, listMarkers, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, gitBlobSha, listMarkers, markDelivered, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { LIMITS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { deliver, formatReturn, sign } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
@@ -245,7 +245,7 @@ test("a status-only update alone binds no job", () => scratch(async (ctx) => {
   assert.equal(receipt.own_activity.length, 1, "the call is still the session's own activity")
 }))
 
-test("the receipt has binding_version: 5, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
+test("the receipt has binding_version: 6, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
   const marker = await session(ctx)
   await writeCard(ctx, "track/task")
@@ -262,8 +262,8 @@ test("the receipt has binding_version: 5, bound_by, own_activity (at most 500) a
   const status = await readStatus(ctx.env)
   const receipt = status.derivations[name]
   const [job] = Object.keys(await readJobsIndex(ctx.env))
-  assert.equal(BINDING_VERSION, 5)
-  assert.equal(receipt.binding_version, 5)
+  assert.equal(BINDING_VERSION, 6)
+  assert.equal(receipt.binding_version, 6)
   assert.deepEqual(receipt.bound_by, { [job]: "focus" })
   assert.deepEqual(receipt.focus_disagrees, [job])
   // The update at two minutes in, widened by a minute each way, in milliseconds from the session's start.
@@ -441,7 +441,7 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
 
 test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
-  assert.equal(BINDING_VERSION, 5)
+  assert.equal(BINDING_VERSION, 6)
   const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
@@ -675,7 +675,7 @@ async function orphan(ctx, { declare = true, receiptRoot = true, cwd = ctx.desk,
   if (stale || !receiptRoot) {
     await staleReceipt(ctx, name, (receipt) => {
       if (!receiptRoot) delete receipt.desk_root
-      if (!stale) receipt.binding_version = 5
+      if (!stale) receipt.binding_version = 6
       return receipt
     })
   }
@@ -842,6 +842,57 @@ test("an orphan with no transcript stays frozen as no_transcript, with or withou
   assert.deepEqual(await reasons(ctx), { no_transcript: 1 })
   await fs.rm(path.join(ctx.base, ".claude"), { recursive: true })
   assert.deepEqual(await rebuilt(ctx), [0, 1])
+}))
+
+const copyFile = async (ctx, name) => path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
+const exists = (file) => fs.lstat(file).then(() => true, () => false)
+
+test("a delivered orphan whose transcript is gone and whose record is over 90 days old loses its outbox copy, and is still frozen as no_transcript", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx, { transcript: false })
+  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: "a".repeat(40), publishedPath: "facts/x.json", localSha: gitBlobSha(await fs.readFile(await copyFile(ctx, name))) })
+  const { rebuildOrphans } = await runner()
+  // Inside the window, nothing goes.
+  assert.equal((await rebuildOrphans(ctx.env, { now: () => Date.parse(END) + 89 * DAY })).orphans.copies_pruned, undefined)
+  assert.equal(await exists(await copyFile(ctx, name)), true)
+  const swept = await rebuildOrphans(ctx.env, { now: () => Date.parse(END) + 91 * DAY })
+  assert.equal(swept.orphans.copies_pruned, 1)
+  assert.deepEqual([swept.orphans.frozen.no_transcript, swept.orphans.rebuilt], [1, 0])
+  assert.equal(await exists(await copyFile(ctx, name)), false)
+}))
+
+test("an orphan copy that was never delivered, or whose pruning fails, stays and is counted as no_transcript only", () => scratch(async (ctx) => {
+  const { name } = await orphan(ctx, { transcript: false })
+  const { rebuildOrphans } = await runner()
+  const late = () => Date.parse(END) + 200 * DAY
+  const undelivered = await rebuildOrphans(ctx.env, { now: late })
+  assert.equal(undelivered.orphans.copies_pruned, undefined)
+  assert.equal(await exists(await copyFile(ctx, name)), true, "undelivered: the copy is the only record")
+  await markDelivered(ctx.env, STORE, { name, publishedBlobSha: "a".repeat(40), publishedPath: "facts/x.json", localSha: gitBlobSha(await fs.readFile(await copyFile(ctx, name))) })
+  const failed = await rebuildOrphans(ctx.env, { now: late, pruneCopy: async () => { throw new Error("disk") } })
+  assert.equal(failed.orphans.copies_pruned, undefined)
+  assert.equal(failed.orphans.copies_prune_failed, 1, "a failed prune is counted, not swallowed")
+  assert.equal(failed.orphans.frozen.no_transcript, 1, "a failed prune is no derive failure")
+  assert.equal(await exists(await copyFile(ctx, name)), true)
+}))
+
+test("the sweep prunes tombstones past their window and reports how many, or a fixed code when it could not", () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const file = path.join(await factoryStateRoot(ctx.env), "retracting", "ourostack__factory.json")
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const tomb = (at) => ({ path: "facts/x.json", blob: "a".repeat(40), done: true, at })
+  await fs.writeFile(file, JSON.stringify({ [`claude-code-${ID}.json`]: tomb("2020-01-01T00:00:00.000Z"), [`claude-code-${ID.slice(0, -1)}1.json`]: tomb(new Date().toISOString()) }))
+  await sweep(ctx.env)
+  const retention = (await readStatus(ctx.env)).retention
+  assert.equal(retention.tombstones_pruned, 1)
+  assert.match(retention.ran_at, /^\d{4}-/u)
+  assert.deepEqual(Object.keys(JSON.parse(await fs.readFile(file, "utf8"))), [`claude-code-${ID.slice(0, -1)}1.json`])
+  // The retracting folder is not a folder: the pruning fails, the sweep goes on and says so.
+  await fs.rm(path.dirname(file), { recursive: true })
+  await fs.writeFile(path.dirname(file), "not a folder")
+  await sweep(ctx.env)
+  assert.equal((await readStatus(ctx.env)).retention.failed, "prune_failed")
+  assert.equal((await readStatus(ctx.env)).retention.tombstones_pruned, undefined)
 }))
 
 test("an orphan whose outbox copy is unreadable stays frozen as no_facts, and one whose transcript names no cwd as no_desk_root", () => scratch(async (ctx) => {
@@ -1254,24 +1305,40 @@ test("the oldest of several waiting orphans sets oldest_pending_days", () => scr
   assert.deepEqual([result.pending, result.orphans.oldest_pending_days], [2, 2])
 }))
 
-test("a pile of current orphans over the cap is unexamined, not pending, and a later sweep works through it", () => scratch(async (ctx) => {
+// Four orphans whose transcripts are gone: each stays frozen as `no_transcript` and takes a slot every sweep, so the cap and the walk can be seen at work.
+async function lostOrphans(ctx) {
+  const first = await orphan(ctx, { stale: false })
+  for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)
+  for (const id of [ID, ...["1", "2", "3"].map((digit) => `${ID.slice(0, -1)}${digit}`)]) await fs.rm(path.join(path.dirname(first.marker.log_path), `${id}.jsonl`), { force: true })
+  await fs.rm(first.marker.log_path, { force: true })
+  return first
+}
+
+test("a pile of current orphans takes no slot: a long list of them never makes the work behind it wait", () => scratch(async (ctx) => {
   const first = await orphan(ctx, { stale: false })
   for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)
   const { rebuildOrphans } = await runner()
   assert.equal((await rebuildOrphans(ctx.env, { cap: 10 })).rebuilt, 3, "the copies get receipts of their own, so all four are current after this")
-  const one = await rebuildOrphans(ctx.env, { cap: 2 })
-  assert.deepEqual([one.pending, one.orphans.unexamined, one.orphans.examined, one.orphans.current], [0, 2, 2, 2])
+  // A cap of one still reaches all four, because a current orphan gives its slot back.
+  const one = await rebuildOrphans(ctx.env, { cap: 1 })
+  assert.deepEqual([one.pending, one.orphans.unexamined, one.orphans.examined, one.orphans.current, one.orphans.worked], [0, 0, 4, 4, 4])
   assert.equal((await readStatus(ctx.env)).orphans.oldest_pending_days, null, "no age: nothing is waiting")
-  const two = await rebuildOrphans(ctx.env, { cap: 2 })
-  assert.deepEqual([two.orphans.unexamined, two.orphans.examined], [2, 2])
-  assert.notEqual(two.orphans.cursor, one.orphans.cursor, "the cursor moved")
-  const three = await rebuildOrphans(ctx.env, { cap: 10 })
-  assert.deepEqual([three.pending, three.orphans.unexamined, three.orphans.examined, three.orphans.current], [0, 0, 4, 4])
+  assert.equal(one.orphans.last_wrap_at !== null, true, "every orphan was reached: the walk wrapped")
+}))
+
+test("a cap of slots goes to orphans with work to do, however many current ones come first", () => scratch(async (ctx) => {
+  const first = await orphan(ctx, { stale: false })
+  for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)
+  const { rebuildOrphans } = await runner()
+  await rebuildOrphans(ctx.env, { cap: 10 })
+  // The last orphan in name order goes stale; the three current ones before it take no slot, so a cap of one reaches it in one sweep.
+  await staleReceipt(ctx, `claude-code-${ID.slice(0, -1)}3.json`, (receipt) => { receipt.binding_version = 1; return receipt })
+  const swept = await rebuildOrphans(ctx.env, { cap: 1 })
+  assert.deepEqual([swept.rebuilt, swept.orphans.current, swept.orphans.unexamined], [1, 3, 0])
 }))
 
 test("the record shows the walk: when the cursor last wrapped and how many sweeps this walk has taken", () => scratch(async (ctx) => {
-  const first = await orphan(ctx, { stale: false })
-  for (const digit of ["1", "2", "3"]) await clone(ctx, first, digit)
+  await lostOrphans(ctx)
   const { rebuildOrphans } = await runner()
   const at = (day) => () => Date.parse(`2026-10-0${day}T00:00:00.000Z`)
   const walk = async (cap, day) => {
@@ -1286,8 +1353,7 @@ test("the record shows the walk: when the cursor last wrapped and how many sweep
 }))
 
 test("before the first wrap the wrap time is not yet, never a zero or a start of the epoch", () => scratch(async (ctx) => {
-  const first = await orphan(ctx, { stale: false })
-  await clone(ctx, first, "1")
+  await lostOrphans(ctx)
   const { rebuildOrphans } = await runner()
   const one = (await rebuildOrphans(ctx.env, { cap: 1 })).orphans
   assert.deepEqual([one.last_wrap_at, one.sweeps_in_walk], [null, 1])
@@ -1619,7 +1685,7 @@ test("the receipt still records segments_capped_ms as before", () => scratch(asy
   await deriveMarker(ctx.env, marker)
   const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
   assert.equal(Number.isInteger(receipt.segments_capped_ms) && receipt.segments_capped_ms > 0, true)
-  assert.equal(receipt.binding_version, 5)
+  assert.equal(receipt.binding_version, 6)
 }))
 
 // Capture coverage (capture-sweep.js): the sweep makes one call after the orphan pass and reports it in its summary.

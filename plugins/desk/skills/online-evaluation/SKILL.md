@@ -27,7 +27,7 @@ Reuse criteria and a horizon recorded with the commitment. Do not add another ap
 
 Flow and consumption come from the factory, never from a hand-kept record:
 
-- The job's report, linked from the task card's `factory_report:` field once the task is `done` and its store has consent. It answers four questions: what happened, what mattered, what was waste and what we could not see. The link resolves once the store has merged the job's facts; until then, flow is pending, not zero.
+- The job's report, linked from the task card's `factory_report:` field once the task is `done`, its store has consent and the desk is known to be private. A public desk's card has no link and records why in `factory_report_unavailable`; read its report from the store's `reports` branch instead. It answers four questions: what happened, what mattered, what was waste and what we could not see. The link resolves once the store has merged the job's facts; until then, flow is pending, not zero.
 - The waste labels an independent `desk:observer` wrote with `desk:factory-evaluator` for the finished job, once the store has them. Until they arrive, the report's waste section lists candidate signals only; treat those as inferred, not as classified waste.
 - For a job still open, or detail the public report leaves out by design, the local status from `node mcp/scripts/factory.js status` run from the installed Desk plugin root. It stays on this machine and is never uploaded or pasted into a repository.
 

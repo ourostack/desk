@@ -78,21 +78,29 @@ test("the list is cut at the limit and the field is flagged capped", () => {
 })
 
 test("a negative window is never written, and a window is always a whole number", () => {
-  const stopped = createHumanTurns()
-  stopped.prompt(iso(0), 1)
-  stopped.agentStopped(iso(5000))
-  stopped.prompt(iso(2000), 1)
   const mid = createHumanTurns()
   mid.prompt(iso(5000), 1)
   mid.prompt(iso(5000), 1)
   const fractional = createHumanTurns()
   fractional.prompt("2026-10-05T10:00:00.000Z", 1)
   fractional.prompt("2026-10-05T10:00:01.999Z", 1)
-  for (const acc of [stopped, mid, fractional]) {
+  for (const acc of [mid, fractional]) {
     const [, second] = acc.finish([])
     assert.ok(Number.isInteger(second.window_ms) && second.window_ms >= 0, String(second.window_ms))
   }
-  assert.equal(stopped.finish([])[1].window_ms, 0)
+})
+
+test("a stop recorded after the next prompt (clock skew) gives no made-up zero: the turn is dropped and the list flagged", () => {
+  const stopped = createHumanTurns()
+  stopped.prompt(iso(0), 1)
+  stopped.agentStopped(iso(5000))
+  stopped.prompt(iso(2000), 1)
+  stopped.agentStopped(iso(6000))
+  stopped.prompt(iso(9000), 1)
+  const unavailable = []
+  const turns = stopped.finish(unavailable)
+  assert.deepEqual(turns.map((turn) => [turn.basis, turn.window_ms]), [["first", null], ["after_stop", 3000]], "the skewed turn is gone; the next one still measures from its own stop")
+  assert.deepEqual(unavailable, [{ field: "human_turns", reason: "source_unreadable" }])
 })
 
 test("the accumulator refuses a string, a fraction or a negative number for a size, and a bad time", () => {

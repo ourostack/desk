@@ -281,12 +281,12 @@ test("the orphan record is passed as given, and a failed or absent record freeze
   const given = { ran_at: "x", rebuilt: 0, current: 0, pending: 1, frozen: { route_unknown: 2, brand_new_reason: 1, no_facts: 4, no_transcript: 1 }, cursor: "somewhere", oldest_pending_ms: 5 }
   const claude = (await coverageNow(ctx.env, { ...options, orphans: given })).coverage.hosts["claude-code"]
   assert.deepEqual([claude.pending, claude.frozen], [0, 3])
-  assert.deepEqual(claude.frozen_by_reason, { orphan_unsplit: 3, route_unknown: 2, brand_new_reason: 1 })
+  assert.deepEqual(claude.frozen_by_reason, { orphan_unsplit: 3 })
   const failed = (await coverageNow(ctx.env, { ...options, orphans: { ran_at: "x", failed: "pass_failed" } })).coverage.hosts["claude-code"]
   assert.deepEqual([failed.pending, failed.frozen, failed.frozen_by_reason], [0, 3, { orphan_pass_unavailable: 3 }])
   // With no `orphans` option the record is read from status.json, as the sweep wrote it.
   await writeStatus(ctx.env, { orphans: given })
-  assert.deepEqual((await coverageNow(ctx.env, options)).coverage.hosts["claude-code"].frozen_by_reason, { orphan_unsplit: 3, route_unknown: 2, brand_new_reason: 1 })
+  assert.deepEqual((await coverageNow(ctx.env, options)).coverage.hosts["claude-code"].frozen_by_reason, { orphan_unsplit: 3 })
   await writeStatus(ctx.env, { orphans: undefined })
   assert.deepEqual((await coverageNow(ctx.env, options)).coverage.hosts["claude-code"].frozen_by_reason, { orphan_pass_unavailable: 3 })
 }))

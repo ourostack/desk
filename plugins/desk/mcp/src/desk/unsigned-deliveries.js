@@ -59,14 +59,15 @@ function readHead(file) {
   }
 }
 
-// The frontmatter lines, or null when there is none. A head that was cut before the closing `---` is read as far as it goes only when it already holds the `signoff:` key; otherwise the card may carry one further down and is unreadable.
+// The frontmatter lines, or null when there is none. A head that was cut before the closing `---` is read as far as it goes only when it already holds both the `signoff:` and `status:` keys; otherwise the card may carry either further down and is unreadable.
 function frontmatterLines(text, cut) {
   const lines = text.split(/\r?\n/u)
   if (lines[0] !== "---") return null
   const end = lines.indexOf("---", 1)
   if (end !== -1) return lines.slice(1, end)
   const rest = lines.slice(1)
-  return cut && !rest.some((line) => line.startsWith("signoff:")) ? null : rest
+  const holds = (key) => rest.some((line) => line.startsWith(`${key}:`))
+  return cut && !(holds("signoff") && holds("status")) ? null : rest
 }
 
 // One line of at most 80 characters: control characters become spaces, runs of space collapse.
@@ -181,14 +182,16 @@ const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`
 /**
  * `status.json.signoff` for a scan: counts and one age, each `{ state, value }`, and a time. Nothing that names a task. When the
  * archive cap cut the scan every figure is a lower bound and its state is `partial`. The oldest age is `unavailable` when there is
- * none to report: `none_unsigned` when nothing is unsigned, `age_unknown` when none of the unsigned has a readable delivery time.
+ * none to report: `none_unsigned` when every card was read and nothing is unsigned, `archive_cap` or `cards_unreadable` when nothing unsigned
+ * was found but the scan was cut or some cards could not be read, and `age_unknown` when none of the unsigned has a readable delivery time.
  */
 export function signoffStatus(found, now) {
   const unreadable = (found.unreadable ?? 0) > 0
   const reason = found.at_least ? { reason: "archive_cap" } : unreadable ? { reason: "cards_unreadable" } : {}
   const state = found.at_least || unreadable ? "partial" : "measured"
   const figure = (value) => ({ state, value, ...reason })
-  const oldest = found.oldest_age_days === null ? { state: "unavailable", reason: found.count > 0 ? "age_unknown" : unreadable && !found.at_least ? "cards_unreadable" : "none_unsigned" } : figure(found.oldest_age_days)
+  // "None unsigned" holds only when every card was read; with none found in a cut or partly unreadable scan, the cut's own reason says why.
+  const oldest = found.oldest_age_days === null ? { state: "unavailable", reason: found.count > 0 ? "age_unknown" : reason.reason ?? "none_unsigned" } : figure(found.oldest_age_days)
   return { checked_at: new Date(now).toISOString(), unsigned: figure(found.count), overdue: figure(found.overdue), oldest_unsigned_age_days: oldest, not_recorded: figure(found.not_recorded) }
 }
 
