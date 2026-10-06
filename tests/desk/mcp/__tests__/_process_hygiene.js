@@ -68,17 +68,15 @@ export function removeFixtureAfter(t, root) {
       rmSync(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 40 : 5, retryDelay: process.platform === "win32" ? 250 : 100 })
     } catch (error) {
       if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code)) throw error
-      // Windows keeps a folder as "delete pending" while any process still has a handle on it, even after every file in it is gone (the runner's scanner does this). A folder that is gone or empty is cleaned up for every purpose this fixture has, so only a folder that still holds files is a failure.
+      // Windows refuses to remove a folder that a process still has as its working folder or open, even once every file in it is gone: the runner's scanner and a Git child that has not yet released a repository do this. Remove what can be removed one entry at a time; a fixture that is left holding only empty folders (or is gone) is cleaned up for every purpose it has, and only a leftover file is a failure.
       let left
       try { left = readdirSync(root) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
-      if (left.length === 0) return
-      const why = []
-      for (const name of left.slice(0, 3)) {
-        try { rmSync(path.join(root, name), { recursive: true, force: true }) } catch (inner) { why.push(`${inner.code} ${inner.path ?? name}: ${inner.message}`) }
-      }
-      let rest = ""
-      try { rest = readdirSync(root, { recursive: true }).slice(0, 40).join(", ") } catch { /* diagnostic only */ }
-      throw new Error(`${error.message}; still in the folder: ${left.join(", ")}; removing the first ones says: ${why.join(" | ")}; remaining entries: ${rest}`)
+      for (const name of left) { try { rmSync(path.join(root, name), { recursive: true, force: true }) } catch { /* judged below */ } }
+      let remaining
+      try { remaining = readdirSync(root, { recursive: true, withFileTypes: true }) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
+      const files = remaining.filter((entry) => !entry.isDirectory()).map((entry) => path.join(entry.parentPath ?? entry.path, entry.name))
+      if (files.length === 0) return
+      throw new Error(`${error.message}; files still in the folder: ${files.slice(0, 20).join(", ")}`)
     }
   })
 }
