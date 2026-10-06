@@ -1168,6 +1168,23 @@ test("a record without a result younger than the hard stop is a pass still runni
   assert.deepEqual((await rebuildOrphans(ctx.env, { now, derive, ownVersion })).orphans.hung, { [first.name]: { strikes: 2, version: "1.0.0" } }, "an unreadable start reads as interrupted")
 }))
 
+test("a transcript with another hard link is not trusted: the orphan has no transcript", () => scratch(async (ctx) => {
+  const first = await orphan(ctx)
+  await fs.link(first.marker.log_path, path.join(path.dirname(first.marker.log_path), "second-name.jsonl"))
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env)
+  assert.equal(result.rebuilt, 0)
+  assert.deepEqual(await reasons(ctx), { no_transcript: 1 })
+}))
+
+test("a derive that answers held (the desk no longer yields a store) freezes the orphan as route_unknown", () => scratch(async (ctx) => {
+  await orphan(ctx)
+  const { rebuildOrphans } = await runner()
+  const result = await rebuildOrphans(ctx.env, { derive: async () => ({ result: "held", store: null }) })
+  assert.equal(result.rebuilt, 0)
+  assert.deepEqual(await reasons(ctx), { route_unknown: 1 })
+}))
+
 test("a failed write of the attempt record does not stop the pass, which still derives the orphan", () => scratch(async (ctx) => {
   await orphan(ctx)
   const { rebuildOrphans } = await runner()

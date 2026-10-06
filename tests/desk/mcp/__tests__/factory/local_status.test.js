@@ -366,3 +366,12 @@ test("sessions held back for want of a visibility answer are a finding only afte
   assert.deepEqual(visibilityUnasked(undefined, ["a/old"], now), [])
   assert.match(UNASKED_ADVICE("a/old"), /`node mcp\/scripts\/factory\.js flush --store a\/old`/u)
 })
+
+test("the orphan pass readers take the clock and the Desk version as defaults", async () => {
+  const { orphanPassFinding, orphanPassLine } = await load()
+  const record = { started_at: new Date().toISOString(), cursor: null, last_wrap_at: null, sweeps_in_walk: 0 }
+  assert.equal(orphanPassFinding(record), null, "a pass that began just now is running")
+  assert.equal(orphanPassFinding({ ...record, started_at: "2020-01-01T00:00:00.000Z" }), "pass_interrupted")
+  assert.equal(orphanPassLine(record), `orphan pass: running, started ${record.started_at}, last full walk never`)
+  assert.equal(orphanPassLine({ ...record, ran_at: record.started_at, examined: 1, unexamined: 0, pending: 0, frozen: {}, sweeps_in_walk: 0 }).startsWith("orphan pass: ran "), true)
+})

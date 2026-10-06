@@ -481,7 +481,7 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
 
-async function deskRepositories(markers, { deadline, now, receipts = {} }) {
+async function deskRepositories(markers, { deadline, now, receipts }) {
   const byName = new Map()
   const remotes = new Map()
   // The GitHub repository a desk root's remote names, read once per root.

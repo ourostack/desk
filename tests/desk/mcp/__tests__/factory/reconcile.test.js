@@ -422,6 +422,15 @@ test("with --store and a visibility answer that is expired or absent, the store 
   check("expired")
 }))
 
+test("a session copied into two stores' outboxes tells its story once", () => scratch(async (context) => {
+  const { desk, env } = context
+  await standardDesk(desk, [["t", "w"]], { remote: REMOTE })
+  await addSession(context, 1, "t", "w", { remote: REMOTE, boundBy: "focus" })
+  await addSession(context, 1, "t", "w", { remote: REMOTE, boundBy: "focus", store: "example-org/other-store", marker: false, receipt: null })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.equal(result.tasks[0].story.length, 1)
+}))
+
 test("a store job the desk does not know is store_only with no track or slug, placed by this machine's local facts", () => scratch(async (context) => {
   const { desk, env, base } = context
   const remote = "https://github.com/acme/desk.git"

@@ -440,12 +440,12 @@ test("an unauthenticated retry due only after the deadline is already spent is r
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // For this exact fixture (one plugin, no refs), the account's own gh calls make exactly eight `now()`
+  // For this exact fixture (one plugin, no refs), the flush's own start and the account's gh calls make exactly nine `now()`
   // reads before the retry's own precheck: a real clock racing them is at the mercy of host load, so this
-  // counts invocations instead. The ninth read is the retry's precheck, already past a deadline the first
-  // eight never approached.
+  // counts invocations instead. The tenth read is the retry's precheck, already past a deadline the first
+  // nine never approached.
   let calls = 0
-  const now = () => { calls += 1; return calls >= 9 ? 2_000_000 : 1_000_000 }
+  const now = () => { calls += 1; return calls >= 10 ? 2_000_000 : 1_000_000 }
   const anonymousLookup = async () => { throw new Error("the retry must never be attempted once the deadline is already spent") }
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup, now, deadlineMs: 500_000 }), { result: "deadline" })
 }))
@@ -456,11 +456,11 @@ test("an unauthenticated retry that never answers is cut off at the deadline", (
   const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
   await put(env, localFacts(1, { plugins }))
   const github = fakeGitHub({ visibility: { "ourostack/desk": 404 } })
-  // As above, the ninth `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
+  // As above, the tenth `now()` read is the retry's own precheck; it reports the deadline a mere 100ms off,
   // which becomes the real timer the retry races against, so a hung lookup is cut off quickly and
   // deterministically rather than by racing host load against a short wall-clock deadline.
   let calls = 0
-  const now = () => { calls += 1; return calls === 9 ? 1_100_000 : 1_000_000 }
+  const now = () => { calls += 1; return calls === 10 ? 1_100_000 : 1_000_000 }
   const hung = { ...github, anonymousLookup: () => new Promise(() => {}) }
   assert.deepEqual(await flush(env, { store: STORE, runner: hung.runner, anonymousLookup: hung.anonymousLookup, now, deadlineMs: 100_100 }), { result: "deadline" })
 }))
@@ -785,6 +785,20 @@ test("when the fresh question cannot be answered the desk's sessions wait: nothi
   const after = (await readStatus(failed.env)).last_flush[STORE]
   assert.equal(after.visibility_unasked, undefined)
   assert.equal(after.visibility_unasked_since, undefined)
+}))
+
+test("a flush that stops before it can tell keeps the deferral count the last flush recorded, with or without its start time", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const github = fakeGitHub()
+  await writeStatus(env, { last_flush: { [STORE]: { at: "2026-09-27T00:00:00.000Z", result: "nothing_pending", visibility_unasked: 3 } } })
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  const kept = (await readStatus(env)).last_flush[STORE]
+  assert.equal(kept.visibility_unasked, 3)
+  assert.equal(kept.visibility_unasked_since, undefined, "no start was ever recorded, none is invented")
+  await writeStatus(env, { last_flush: { [STORE]: { at: "2026-09-27T00:00:00.000Z", result: "nothing_pending", visibility_unasked: 3, visibility_unasked_since: "2026-09-20T00:00:00.000Z" } } })
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  assert.equal((await readStatus(env)).last_flush[STORE].visibility_unasked_since, "2026-09-20T00:00:00.000Z")
 }))
 
 // ---------------------------------------------------------------------------
