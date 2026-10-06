@@ -1,4 +1,4 @@
-// The store-wide human attention figures: the headline (estimated attention over accepted, verified outcomes), the raw turn count over the same denominator, where the estimate was placed, how many sessions are in the period, and the permission decisions beside it. Pure functions of published sessions.
+// The store-wide human attention figures: the headline (estimated attention over accepted outcomes), the raw turn count over the same denominator, where the estimate was placed, how many sessions are in the period, and the permission decisions beside it. Pure functions of published sessions.
 //
 // The period is the sessions whose facts carry `human_turns` or flag it. A session from before the record (no list, no flag) is outside it and never makes a figure partial. A session in the period that flags the field makes the figures partial, with the reason the host gave. Every figure carries `state` and `reasons`, and `value` is absent when it is unavailable: a zero never stands for no data.
 
@@ -45,7 +45,7 @@ function knownOf(group) {
 }
 const whyOf = (group, reasons) => (group.touched === 0 ? ["no_turn_records"] : reasons)
 
-// The headline over `accepted` verified acceptances. A numerator that is only a lower bound keeps its reasons even when there is nothing to divide it by.
+// The headline over `accepted` acceptances. A numerator that is only a lower bound keeps its reasons even when there is nothing to divide it by.
 function headlineOf(group, accepted) {
   const { timed } = knownOf(group)
   const noAccepted = accepted === 0 ? ["no_accepted_outcomes"] : []
@@ -107,7 +107,7 @@ function permissionOf(sessions) {
  * With no list recorded in the period (or in a group), `human_turns`, `est_ms` and the headline's `numerator_ms` are left out, and the reasons say why: a zero would read as no attention where nothing was recorded.
  *
  * A job's attributed attention goes to the group of the job (`groupOfJob`, the job rollups' version key, `mixed` included; `groupKeys` lists the groups that have a job, so each has a figure even with no turn); attention on no job or on a session with unplaced jobs goes to the group of the session's own version. A session's reasons apply to every group it gives attention to or has a job in, so a group never reads whole beside a session that could not say.
- * `accepted` and `acceptedByGroup` count verified acceptances only; the caller takes both from the sign-off count, so the headline and the sign-off cannot disagree.
+ * `accepted` and `acceptedByGroup` count every acceptance (recorded by the agent on the operator's word); the caller takes both from the sign-off count, so the headline and the sign-off cannot disagree.
  */
 export function attentionRollups({ sessions, groupOfJob, groupKeys, acceptedByGroup, accepted }) {
   const total = blank()

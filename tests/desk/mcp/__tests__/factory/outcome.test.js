@@ -1022,13 +1022,14 @@ test("refuse on a refusal with no flow record starts an adopted flow that counts
   assert.equal(next.flow.rev, 1)
 })
 
-test("the human's refusal reason decides only when the refusal was witnessed", () => {
+test("the human's refusal reason decides whatever the verified flag says, or when it is absent", () => {
   const refused = (extra) => entry({ from: "done", caught: "after_delivery", refusal_verified: true, ...extra })
   assert.equal(returnCounts(refused({ reason: "agent_error", refusal: "changed_ask" }), V1), false)
-  assert.equal(returnCounts(refused({ reason: "agent_error", refusal: "changed_ask", refusal_verified: false }), V1), true)
-  assert.equal(returnCounts(refused({ reason: "agent_error", refusal: "changed_ask", refusal_verified: null }), V1), true)
-  assert.equal(returnCounts(refused({ reason: "changed_ask", refusal: "defect", refusal_verified: false }), V1), false)
-  assert.equal(returnCounts(refused({ reason: "changed_ask", refusal: "defect" }), V1), true)
+  for (const refusal_verified of [true, false, null, undefined]) {
+    assert.equal(returnCounts(refused({ reason: "agent_error", refusal: "changed_ask", refusal_verified }), V1), false)
+    assert.equal(returnCounts(refused({ reason: "changed_ask", refusal: "defect", refusal_verified }), V1), true)
+  }
+  assert.equal(returnCounts(refused({ reason: "agent_error", refusal: null, refusal_verified: null }), V1), true)
   const line = `${T2} done processing agent_error after_delivery refused=changed_ask unverified`
-  assert.equal(outcomeSnapshot(readRecord({ ...fullData(), returns: [line] }), { status: "processing", now: T3 }).returns[0].counts, true)
+  assert.equal(outcomeSnapshot(readRecord({ ...fullData(), returns: [line] }), { status: "processing", now: T3 }).returns[0].counts, false)
 })
