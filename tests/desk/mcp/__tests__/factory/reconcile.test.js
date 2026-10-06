@@ -17,6 +17,7 @@ import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/r
 import { reconcile } from "../../../../../plugins/desk/mcp/src/factory/reconcile.js"
 import { main, runReconcileCommand, SUPPORTED_COMMANDS } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { SENTINEL, STORE, scratch } from "./_session_helpers.js"
+import { NO_SHEBANG_SCRIPTS } from "../_platform.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const SINCE = "2026-09-25T00:00:00.000Z"
@@ -487,7 +488,7 @@ test("Git missing or failing is a warning, never a throw; so is a desk that is n
   assert.ok(notRepo.warnings.includes("git_log_failed"))
 }))
 
-test("a git that dies partway, or prints nonsense, gives what parsed and no throw", () => scratch(async (context) => {
+test("a git that dies partway, or prints nonsense, gives what parsed and no throw", { skip: NO_SHEBANG_SCRIPTS }, () => scratch(async (context) => {
   const { desk, env, base } = context
   await standardDesk(desk, [["t", "a"]])
   const odd = path.join(base, "odd-git")

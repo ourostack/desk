@@ -49,6 +49,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeRealPath } from "../_fake_real_root.js"
 import { osEnv } from "../_os_env.js"
+import { isWindows } from "../_platform.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
 
@@ -151,7 +152,7 @@ test("factoryStateRoot creates an owner-only directory chain ending in ouroboros
   let cursor = env.XDG_STATE_HOME
   for (const segment of ["ouroboros-skills", "desk", "factory"]) {
     cursor = path.join(cursor, segment)
-    assert.equal((await fs.stat(cursor)).mode & 0o777, 0o700)
+    if (!isWindows) assert.equal((await fs.stat(cursor)).mode & 0o777, 0o700)
   }
 }))
 
@@ -186,7 +187,7 @@ test("factoryStateRoot is idempotent and repairs a mode that drifted", () => scr
   const root = await factoryStateRoot(env)
   await fs.chmod(root, 0o755)
   assert.equal(await factoryStateRoot(env), root)
-  assert.equal((await fs.stat(root)).mode & 0o777, 0o700)
+  if (!isWindows) assert.equal((await fs.stat(root)).mode & 0o777, 0o700)
 }))
 
 test("factoryStateRoot refuses a state root inside a Git checkout", () => scratch(async (env) => {
@@ -239,7 +240,7 @@ test("factoryStateRoot refuses a temp-directory desk root paired with a state ho
   const deskRoot = mkdtempSync(path.join(os.tmpdir(), "desk-outbox-consistency-"))
   const outsideTemp = fakeRealPath("desk-outbox-consistency-state-")
   await assert.rejects(
-    () => factoryStateRoot({ HOME: outsideTemp }, { deskRoot }),
+    () => factoryStateRoot(osEnv({ HOME: outsideTemp }), { deskRoot }),
     /refused a temp-directory desk root paired with a factory state home outside the OS temp directory/u,
   )
   assert.equal(existsSync(outsideTemp), false, "the refused call created nothing")
@@ -382,7 +383,9 @@ test("factoryStateRoot protects its own three segments with one batched Windows 
   assert.equal(calls[0][0].path, path.join(env.XDG_STATE_HOME, "ouroboros-skills"))
 }))
 
-test("factoryStateRoot refuses on win32 before creating anything when the Windows ACL provider is unavailable", () => scratch(async (env) => {
+test("factoryStateRoot refuses on win32 before creating anything when the Windows ACL provider is unavailable", () => scratch(async (scratchEnv) => {
+  // Deliberately without SystemRoot, which the refusal names (a Windows host always has it).
+  const { SystemRoot, ...env } = scratchEnv
   await assert.rejects(
     () => factoryStateRoot(env, { platform: "win32", runner: () => assert.fail("must not run without an available provider") }),
     /desk_factory: Windows ACL protection needs %SystemRoot%/u,
@@ -521,7 +524,7 @@ test("setConsent writes are atomic: two writes leave no temp files and the final
   const leftovers = readdirSync(root).filter((name) => name.startsWith(".tmp-"))
   assert.deepEqual(leftovers, [])
   assert.equal((await readConsent(env)).stores[STORE].contribute, false)
-  assert.equal((await fs.stat(path.join(root, "consent.json"))).mode & 0o777, 0o600)
+  if (!isWindows) assert.equal((await fs.stat(path.join(root, "consent.json"))).mode & 0o777, 0o600)
 }))
 
 test("setConsent serializes 16 concurrent decisions for different stores so all 16 survive", () => scratch(async (env) => {
@@ -641,7 +644,7 @@ test("writeLocalFacts writes valid facts to the outbox, owner-only, canonical by
   const file = path.join(await factoryStateRoot(env), "outbox", "ourostack__factory", result.name)
   const bytes = await fs.readFile(file)
   assert.equal(bytes.toString("utf8"), `${JSON.stringify(facts)}\n`)
-  assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+  if (!isWindows) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
 }))
 
 test("storeSlug rejects a store that is not owner/repo", () => scratch(async (env) => {
@@ -932,7 +935,7 @@ test("readMachineSecret creates 32 owner-only bytes once and returns the same by
   const second = await readMachineSecret(env)
   assert.deepEqual(first, second)
   const file = path.join(await factoryStateRoot(env), "machine-secret")
-  assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+  if (!isWindows) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
 }))
 
 test("16 concurrent first callers all return the identical machine secret", () => scratch(async (env) => {

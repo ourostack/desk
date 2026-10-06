@@ -534,8 +534,8 @@ test("only a successful Bash git commit call becomes a shellGitCommits event, wi
   const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd, agent: 0 })
   assert.deepEqual(events.shellGitCommits, [
     span("01", "02", base),
-    span("03", "04", `/tmp/${SENTINEL}-desk`),
-    span("05", "06", `/tmp/${SENTINEL}-other`),
+    span("03", "04", path.normalize(`/tmp/${SENTINEL}-desk`)),
+    span("05", "06", path.normalize(`/tmp/${SENTINEL}-other`)),
     span("09", "10", null),
     span("23", "24", base),
     span("25", "26", base),

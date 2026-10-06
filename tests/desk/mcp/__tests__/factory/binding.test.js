@@ -514,7 +514,7 @@ test("remote normalization reaches the job: scp-style and credentialed https giv
   const https = bind(events, { deskRemote: "https://user:tok@github.com/owner/desk/" }).jobs[0].job
   assert.equal(scp, https)
   for (const deskRemote of [null, ""]) {
-    assert.equal(bind(events, { deskRemote }).jobs[0].job, expectedId(`local:${DESK}`, "", TRACK, SLUG))
+    assert.equal(bind(events, { deskRemote }).jobs[0].job, expectedId(`local:${path.resolve(DESK)}`, "", TRACK, SLUG))
   }
   // Through a symlink or its real path, an unpublished desk has one job ID: the real path's.
   const scratch = mkdtempSync(path.join(os.tmpdir(), "desk-binding-local-"))

@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import hook from "../../../../../plugins/desk/hooks/factory-end.cjs"
 import { resolveHookDeskRoot } from "../../../../../plugins/desk/mcp/scripts/resolve-desk-root.js"
 import { factoryStateRoot, listMarkers, readMarker, requestFinalize, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -168,10 +168,10 @@ test("I4 the hook terminates and reaps its exact worker even when that worker bl
   await fs.writeFile(preload, `import fs from "node:fs"; if (process.argv.includes("--factory-worker")) { fs.writeFileSync(${JSON.stringify(receipt)}, String(process.pid)); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000); }\n`)
   const start = performance.now()
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url)), "claude"], {
-    env: { ...ctx.env, NODE_OPTIONS: `--import=${preload}` }, encoding: "utf8", timeout: 2500,
+    env: { ...ctx.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }, encoding: "utf8", timeout: 2500,
     input: JSON.stringify({ session_id: ID, cwd: ctx.desk, transcript_path: marker.log_path, hook_event_name: "Stop" }),
   })
-  assert.equal(result.status, 0)
+  assert.equal(result.status, 0, result.stderr)
   assert.equal(result.stdout, "")
   assert.equal(result.stderr, "")
   const pid = Number(await fs.readFile(receipt, "utf8"))

@@ -83,7 +83,8 @@ test("finalize waits for the current session log to go quiet before deriving it"
   await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
   const live = await session(ctx)
   await writeMarker(ctx.env, { ...live, updated_at: new Date().toISOString() })
-  await requestFinalize(ctx.env, { job: JOB, deskRoot: ctx.desk }, { now: () => new Date(Date.now() - 1000).toISOString() })
+  // A minute before the marker: on Windows each protected write starts PowerShell, so the marker above can be seconds old already.
+  await requestFinalize(ctx.env, { job: JOB, deskRoot: ctx.desk }, { now: () => new Date(Date.now() - 60_000).toISOString() })
   await fs.appendFile(live.log_path, "")
   await fs.utimes(live.log_path, new Date(), new Date())
   const { deriveFile } = await import("../../../../../plugins/desk/mcp/src/factory/derive-run.js")

@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process"
 import { cpSync, existsSync, mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import {
   SUPPORTED_COMMANDS,
@@ -682,9 +682,10 @@ test("main reports an unknown subcommand as an empty string when argv is empty",
 // ---------------------------------------------------------------------------
 
 test("isMainModule is true only when argv[1]'s file URL matches import.meta.url", () => {
-  assert.equal(isMainModule("file:///a/b.js", "/a/b.js"), true)
-  assert.equal(isMainModule("file:///a/b.js", "/a/other.js"), false)
-  assert.equal(isMainModule("file:///a/b.js", undefined), false)
+  const module = path.resolve("/a/b.js")
+  assert.equal(isMainModule(pathToFileURL(module).href, module), true)
+  assert.equal(isMainModule(pathToFileURL(module).href, path.resolve("/a/other.js")), false)
+  assert.equal(isMainModule(pathToFileURL(module).href, undefined), false)
 })
 
 // ---------------------------------------------------------------------------
@@ -940,8 +941,9 @@ test("andon reads the store's jobs and syncs its alarms through gh with GH_TOKEN
 test("runIfMain runs the command and sets the exit code only for this module's own path", async () => {
   const before = process.exitCode
   try {
-    assert.equal(await runIfMain("file:///a/b.js", "/a/other.js", async () => assert.fail("must not run")), false)
-    assert.equal(await runIfMain("file:///a/b.js", "/a/b.js", async () => 3), true)
+    const module = path.resolve("/a/b.js")
+    assert.equal(await runIfMain(pathToFileURL(module).href, path.resolve("/a/other.js"), async () => assert.fail("must not run")), false)
+    assert.equal(await runIfMain(pathToFileURL(module).href, module, async () => 3), true)
     assert.equal(process.exitCode, 3)
   } finally {
     process.exitCode = before

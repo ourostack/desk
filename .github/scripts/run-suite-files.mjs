@@ -1,6 +1,6 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 420000] [--only <file regex>]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1200000] [--only <file regex>]
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
@@ -10,7 +10,7 @@ const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
 const [index, total] = arg("--shard", "1/1").split("/").map(Number)
 const out = arg("--out", "suite-results.json")
-const timeoutMs = Number(arg("--timeout-ms", "420000"))
+const timeoutMs = Number(arg("--timeout-ms", "1200000"))
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
 const testsRoot = path.join(repoRoot, "tests", "desk", "mcp", "__tests__")
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -55,7 +55,7 @@ const failures = (output) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: 
   const frames = (/^\s*stack: \|-\n([\s\S]*?)^\s*\.\.\./m.exec(body)?.[1] ?? "").split("\n").map((l) => l.trim().replace(/file:\/\/\/[A-Z]:\/a\/desk\/desk\//g, "")).filter(Boolean)
   // The first frames show where it failed; the first frames in the test files show what the test was doing.
   const stack = [...frames.slice(0, 3), ...frames.filter((l) => l.includes("__tests__") && !l.includes("_isolated_env")).slice(0, 3)].join(" | ")
-  return { name: m[1], error: error.slice(0, 700), stack: stack.slice(0, 700) }
+  return { name: m[1], error: error.slice(0, 3000), stack: stack.slice(0, 700) }
 })
 
 const runFile = (file) => new Promise((resolve) => {

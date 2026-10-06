@@ -511,14 +511,15 @@ test("a session id that is not a UUID is refused before any path is built", asyn
 
 test("the Copilot home defaults to COPILOT_HOME, then to ~/.copilot", async () => {
   const home = makeHome({ sessions: [SESSIONS.noUsage], store: null })
-  const saved = { COPILOT_HOME: process.env.COPILOT_HOME, HOME: process.env.HOME }
+  const saved = { COPILOT_HOME: process.env.COPILOT_HOME, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
   try {
     process.env.COPILOT_HOME = home
     assert.equal((await derive(undefined, SESSIONS.noUsage)).facts.session.id, SESSIONS.noUsage)
     delete process.env.COPILOT_HOME
-    // `os.homedir()` follows HOME, so the default resolves inside a temp folder, never the real one.
+    // `os.homedir()` follows HOME (USERPROFILE on Windows), so the default resolves inside a temp folder, never the real one.
     const fakeHome = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-user-"))
     process.env.HOME = fakeHome
+    process.env.USERPROFILE = fakeHome
     mkdirSync(path.join(fakeHome, ".copilot", "session-state", SESSIONS.noUsage), { recursive: true })
     cpSync(path.join(FIXTURES, SESSIONS.noUsage, "events.jsonl"), path.join(fakeHome, ".copilot", "session-state", SESSIONS.noUsage, "events.jsonl"))
     assert.equal((await derive(undefined, SESSIONS.noUsage)).facts.session.id, SESSIONS.noUsage)
@@ -905,17 +906,21 @@ test("normalizeRow keeps a missing counter null and refuses rows that are not da
 })
 
 test("with no COPILOT_HOME the factory reader looks under the user's home directory", () => {
-  const saved = process.env.HOME
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
   const fakeHome = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-user-"))
   try {
-    // `os.homedir()` follows HOME, so this never looks at the real `~/.copilot`.
+    // `os.homedir()` follows HOME (USERPROFILE on Windows), so this never looks at the real `~/.copilot`.
     process.env.HOME = fakeHome
+    process.env.USERPROFILE = fakeHome
     assert.deepEqual(readSessionRows({ sessionId: OTHER_SESSION, env: {} }), { status: "missing", rows: [] })
     mkdirSync(path.join(fakeHome, ".copilot"))
     buildSessionStore(path.join(fakeHome, ".copilot", "session-store.db"))
     assert.equal(readSessionRows({ sessionId: OTHER_SESSION, env: {} }).status, "ok")
   } finally {
-    process.env.HOME = saved
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
     rmSync(fakeHome, { recursive: true, force: true })
   }
 })
@@ -975,9 +980,9 @@ test("only a successful bash or powershell git commit call becomes a shellGitCom
   const { facts, events } = await deriveText(lines)
   assert.deepEqual(events.shellGitCommits, [
     { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, agent: 0 },
-    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, agent: 0 },
+    { start: at(3), end: at(4), cwd: path.normalize(`/tmp/${SENTINEL}/desk`), agent: 0 },
     { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, agent: 0 },
-    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed`, agent: 0 },
+    { start: at(14), end: at(15), cwd: path.normalize(`/tmp/${SENTINEL}/resumed`), agent: 0 },
     { start: at(17), end: at(18), cwd: null, agent: 0 },
     { start: at(22), end: at(23), cwd: null, agent: 0 },
   ])
@@ -997,7 +1002,7 @@ test("a session.start with no readable context leaves the directory unknown", as
     ev("tool.execution_complete", 4, { toolCallId: "g2", success: true }),
   ]
   const { events } = await deriveText(lines)
-  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, agent: 0 }, { start: at(3), end: at(4), cwd: "/abs", agent: 0 }])
+  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, agent: 0 }, { start: at(3), end: at(4), cwd: path.normalize("/abs"), agent: 0 }])
 })
 
 test("nativeCommitShas carries this session's session_refs commits, which bind directly", async () => {

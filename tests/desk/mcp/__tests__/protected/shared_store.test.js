@@ -20,6 +20,7 @@ import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/factor
 import { mkFakeRealRoot } from "../_fake_real_root.js"
 import { cleanup, mkFeedbackFixture as mkStoreFixture } from "../feedback/_helpers.js"
 import { osEnv } from "../_os_env.js"
+import { isWindows } from "../_platform.js"
 
 // These cases are about POSIX store layout, refusals, journalling and message
 // parity — not about macOS extended-ACL mechanics, which no assertion here
@@ -147,8 +148,8 @@ test("the primitive creates owner-only directories and an owner-only database", 
     assert.equal(opened, 1)
 
     const { storeDir, dbPath } = await resolveProtectedStore({ ...binding, ...SECOND })
-    assert.equal((await fs.stat(storeDir)).mode & 0o777, 0o700)
-    assert.equal((await fs.stat(dbPath)).mode & 0o777, 0o600)
+    if (!isWindows) assert.equal((await fs.stat(storeDir)).mode & 0o777, 0o700)
+    if (!isWindows) assert.equal((await fs.stat(dbPath)).mode & 0o777, 0o600)
     assert.equal(await fs.readdir(storeDir).then((names) => names.join(",")), "second-store.sqlite")
   } finally {
     await cleanup(fixture.base)

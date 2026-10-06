@@ -143,7 +143,7 @@ test("Unicode slugs reach lesson and track-friction file paths", async () => {
     deskRoot: root,
     input: { topic: "日本語の教訓", body: "Lesson body." },
   })
-  assert.equal(lesson.path, path.join("_meta", "tips", "日本語の教訓.md"))
+  assert.equal(lesson.path, "_meta/tips/日本語の教訓.md")
   assert.match(await fs.readFile(path.join(root, lesson.path), "utf8"), /Lesson body/)
 
   const friction = await friction_add({
@@ -222,7 +222,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: root,
     input: { topic: "cafe\u0301", body: "Updated lesson." },
   })
-  assert.equal(lesson.path, path.join("_meta", "tips", `${lessonSlug}.md`))
+  assert.equal(lesson.path, `_meta/tips/${lessonSlug}.md`)
   assert.match(await fs.readFile(lessonPath, "utf8"), /Updated lesson/)
 
   const collisionRoot = await mkTempDeskRoot()

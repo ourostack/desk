@@ -1018,7 +1018,7 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
       JSON.parse(result.mutation.result.content[0].text),
       {
         status: "created",
-        path: path.join("diagnostic-probe", "must-not-write", "task.md"),
+        path: "diagnostic-probe/must-not-write/task.md",
       },
       "healthy runtime mode must execute valid mutations rather than returning diagnostic errors",
     )

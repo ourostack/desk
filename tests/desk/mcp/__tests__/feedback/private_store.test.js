@@ -13,12 +13,13 @@ import * as path from "node:path"
 import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { mkFeedbackFixture, useStateHome, useHome, cleanup } from "./_helpers.js"
 import { osEnv } from "../_os_env.js"
+import { NO_POSIX_MODES } from "../_platform.js"
 
 async function modeOf(target) {
   return (await fs.stat(target)).mode & 0o777
 }
 
-test("private store lives outside the desk workspace under owner-only modes", async () => {
+test("private store lives outside the desk workspace under owner-only modes", { skip: NO_POSIX_MODES }, async () => {
   const fixture = await mkFeedbackFixture()
   const restore = useStateHome(fixture.stateHome)
   try {
@@ -49,7 +50,7 @@ test("private store lives outside the desk workspace under owner-only modes", as
   }
 })
 
-test("private store tightens a loosened directory before reuse", async () => {
+test("private store tightens a loosened directory before reuse", { skip: NO_POSIX_MODES }, async () => {
   const fixture = await mkFeedbackFixture()
   const restore = useStateHome(fixture.stateHome)
   try {
@@ -163,7 +164,7 @@ test("private store refuses to write inside a Git checkout", async () => {
   }
 })
 
-test("private store surfaces an unreadable path as an explicit error", async () => {
+test("private store surfaces an unreadable path as an explicit error", { skip: NO_POSIX_MODES }, async () => {
   const fixture = await mkFeedbackFixture()
   const restore = useStateHome(fixture.stateHome)
   try {
@@ -237,7 +238,8 @@ test("private store refuses Windows storage without the native ACL provider", as
           deskRoot: fixture.deskRoot,
           person: "rowan",
           platform: "win32",
-          env: osEnv({ XDG_STATE_HOME: fixture.stateHome }),
+          // Deliberately without SystemRoot, which the refusal names.
+          env: { XDG_STATE_HOME: fixture.stateHome },
         }),
       /Windows ACL protection.*SystemRoot/u,
     )
@@ -379,7 +381,7 @@ test("private store rejects a hard-linked DB that could expose a second copy", a
   }
 })
 
-test("private store handles a racing directory creator without skipping protection", async (t) => {
+test("private store handles a racing directory creator without skipping protection", { skip: NO_POSIX_MODES }, async (t) => {
   const fixture = await mkFeedbackFixture()
   const restore = useStateHome(fixture.stateHome)
   const mkdir = fs.mkdir.bind(fs)

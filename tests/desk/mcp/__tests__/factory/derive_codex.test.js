@@ -500,7 +500,7 @@ test("shell outcomes, retries, commits, MCP names, patches and PRs", () => withH
   assert.deepEqual(events.shellGitCommits.map(({ cwd }) => cwd), ["/work/other", "/work/repo", "/work/lsh"])
   assert.equal(facts.counts.tool_retries, 4, "a later same-kind call after a failed one is one retry per failure: c3, c6, r7 and d3")
   assert.deepEqual(facts.counts.tool_failures, { shell: 3, edit: 1, desk: 1 }, "c2, c5 and r6; the failed patch; the failed desk call")
-  assert.deepEqual(events.fileWrites.map(({ path: file }) => file), ["/work/repo/rel/new.md", "/abs/moved.md", "/work/repo/a.md", "/abs/shell.md"])
+  assert.deepEqual(events.fileWrites.map(({ path: file }) => file), [path.resolve("/work/repo/rel/new.md"), "/abs/moved.md", path.resolve("/work/repo/a.md"), "/abs/shell.md"])
   assert.deepEqual(events.deskToolCalls, [
     { at: at(33), name: "mcp__desk__task_create", track: "trk", slug: "one", person: "pat", status: "drafting", agent: 0, ok: true },
     { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, agent: 0, ok: false },

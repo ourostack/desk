@@ -10,6 +10,7 @@ import { factoryStateRoot, readMarker, setConsent, writeMarker } from "../../../
 import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
+import { isWindows } from "../_platform.js"
 
 const hook = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/factory-end.cjs")
 
@@ -170,11 +171,14 @@ test("Copilot: a corrupt, unreadable or wrongly shaped Agency index blocks a pla
   }
   await json(index, { entries: {} })
   assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk", "empty index")
-  await fs.chmod(index, 0)
-  try {
-    assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null, "unreadable")
-  } finally {
-    await fs.chmod(index, 0o600)
+  // NTFS has no mode bits: chmod cannot make a file unreadable, so this case runs where modes exist.
+  if (!isWindows) {
+    await fs.chmod(index, 0)
+    try {
+      assert.equal(registrySource("copilot-cli", "desk", "3.2.0", { env: ctx.env }), null, "unreadable")
+    } finally {
+      await fs.chmod(index, 0o600)
+    }
   }
 }))
 

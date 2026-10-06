@@ -8,6 +8,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { assertActionable, firstSentence } from "./_guard_text.js"
 import { judgeCall, judgeProcessKill, MESSAGES, processKillGuardHook } from "../../../../../plugins/desk/mcp/src/runtime/process-kill-guard.js"
+import { NO_POSIX_PATHS } from "../_platform.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "process-kill-guard.cjs")
@@ -70,7 +71,7 @@ test("the safe shapes are allowed", async () => {
   }
 })
 
-test("a path pattern that names a regular file is allowed, a directory is not", async (t) => {
+test("a path pattern that names a regular file is allowed, a directory is not", { skip: NO_POSIX_PATHS }, async (t) => {
   const { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "kill-guard-")))
