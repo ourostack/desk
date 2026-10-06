@@ -1,1 +1,0 @@
-The loop health record's claimed, shipped and verifying improvement counts now leave out the loop's own alarm cards, as the open count and the ages already do. The alarm cards are counted once, in the open loop alarms figure, so the store's panel no longer counts them twice.
