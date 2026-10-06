@@ -118,9 +118,11 @@ function usableRule(rule) {
  * `{ status: "not_verified", reason }` when GitHub could not answer, `{ status: "not_found" }` for a pull request GitHub does not know.
  * `fetchFn`, `budgetMs` (per request) and `ghRunner` (asks `gh` for a token) are test seams; a caller that injects `fetchFn` without `ghRunner` never runs `gh`.
  */
-export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner = /* istanbul ignore next */ fetchFn === undefined ? runGh : undefined }) {
+export async function prDelivery({ repo, number, env = process.env, fetchFn, budgetMs = REQUEST_BUDGET_MS, ghRunner }) {
+  // istanbul ignore next -- the real `gh` is used only when no fetch was injected; every test injects its own.
+  const runner = ghRunner ?? (fetchFn === undefined ? runGh : undefined)
   const inEnv = [env.GH_TOKEN, env.GITHUB_TOKEN].some((value) => typeof value === "string" && value.trim() !== "")
-  const token = inEnv || ghRunner === undefined ? undefined : await ghToken(ghRunner)
+  const token = inEnv || runner === undefined ? undefined : await ghToken(runner)
   // istanbul ignore next -- outside a node:test run the real fetch is used; every test hands its own.
   const ask = { fetchFn: fetchFn ?? globalThis.fetch, env, budgetMs, token }
   const policyAnswer = await github(ask, `/repos/${repo}/contents/${POLICY_PATH}`, "application/vnd.github.raw+json")
