@@ -9,6 +9,7 @@ const { pathToFileURL } = require("node:url");
 // Loaded only when a worker starts: the Stop hook runs after every turn.
 const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
 const ownRoot = path.resolve(__dirname, "..");
+const headless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
 const runtime = (file) => import(pathToFileURL(path.join(ownRoot, "mcp", file)).href);
 const MAX_INPUT = 1024 * 1024;
 
@@ -283,6 +284,8 @@ function childThread(payload, log) {
 
 async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot, launch: start = launch, supportsFinalize } = {}) {
   try {
+    // A headless evaluator session is never captured: no marker, no derive.
+    if (headless(env)) return "headless";
     const [{ absolutePath, readSmallText, validMarker }, { ENUMS, PATTERNS, isPlainObject }] = await Promise.all([
       runtime("src/factory/marker.js"), runtime("src/factory/schema.js"),
     ]);
@@ -342,6 +345,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
 module.exports = { readInput, runHook, launch, metadata, claudeSources, copilotSources, agencySources, ABSENT, CONFLICT };
 
 async function runBoundedHook(host, input) {
+  if (headless(process.env)) return;
   const deadline = Date.now() + 1500;
   const payload = await readInput(input);
   if (payload === null || Date.now() >= deadline) return;

@@ -26,8 +26,9 @@ async function deskWithTask(repoLines) {
   return root
 }
 
-function bootNamed(root, states, consent = "held", taskQuery = "flash-valves") {
+function bootNamed(root, states, consent = "held", taskQuery = "flash-valves", extra = {}) {
   return bootOnce({
+    ...extra,
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, taskQuery,
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => (consent === "undecided" ? { store: "ourostack/factory-intake", source: "x", consent, stores: [], warnings: [] } : { store: null, source: "no_remote", consent, stores: [], warnings: [] }),
@@ -139,4 +140,20 @@ test("a waiting boot says so in a degraded headline too, and the headline names 
   assert.ok(many.needs_operator.question.length <= 400 && many.needs_operator.question.includes("valve-firmware-0") && /and \d+ more/u.test(many.needs_operator.question), many.needs_operator.question)
   const four = await bootNamed(root, ["a", "b", "c", "d"].map((repo) => state({ repo, local_path: `~/code/${repo}` })))
   assert.ok(four.needs_operator.question.includes("Where is d cloned"), "every repo is in a question that fits")
+})
+
+const OPEN_CARDS = async () => ({ status: "ok", open: 2, oldest_days: 3, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 })
+
+test("with an ask-and-stop blocker the boot does not tell the agent to pick up an improvement card; without one the card line comes before consent, which stays last in both orders", async () => {
+  const root = await deskWithTask(CARD)
+  const stopped = await bootNamed(root, [state({})], "undecided", "flash-valves", { improvementFn: OPEN_CARDS })
+  for (const list of [stopped.instructions, stopped.text_instructions]) assert.ok(!list.some((line) => line.startsWith("Improvement cards")), "no card pickup while the operator has a question to answer")
+  const clear = await bootNamed(root, [state({ present: true })], "undecided", "flash-valves", { improvementFn: OPEN_CARDS })
+  assert.match(clear.text_instructions.at(-1), /^Factory consent is undecided/u)
+  const card = (list) => list.findIndex((line) => line.startsWith("Improvement cards"))
+  const consent = (list) => list.findIndex((line) => line.startsWith("Factory consent is undecided"))
+  for (const list of [clear.instructions, clear.text_instructions]) {
+    assert.ok(card(list) !== -1 && card(list) < consent(list), "the card line comes before the consent line")
+  }
+  assert.ok(clear.instructions.slice(consent(clear.instructions)).every((line) => !line.startsWith("Improvement cards")))
 })

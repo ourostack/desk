@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.197 — 2026-10-06
+
+The one-time tidy now commits through `desk_save` instead of a hand `git commit`, so no agent-facing text names the variable that Desk's own commits set to get past the card guard. `desk_save` takes `tidy: true`: it commits the old and new path of every moved task card plus the `_meta/organization.json` record, accepts a task card only as a staged move or delete (an edit is refused and points to `task_update`), leaves other staged work staged, and ends the message with the `Desk-Tidy: true` trailer. The same call commits the undo of a tidy after `git revert --no-commit`. `02-tidy-desk.md` calls the tool for both, the README no longer documents the override, and a test fails if any shipped agent-facing text names it again. The refusal for a task card in `desk_save` now leads with what to call instead.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.196 — 2026-10-06
 
 The task-status guard now also denies a shell command that stages or commits a live task card by hand: `git add`, `git stage`, `git update-index --add` or `git commit` naming `<track>/<task>/task.md`. The denial leads with the fix, "Call task_update ...", and says Desk commits every card itself, so no git follows a card tool. Round AG: after `task_update` had committed the card and said to run no git for it, a Claude agent ran `git add` and `git commit` of the card anyway (a no-op, but a bypass attempt). A conflicted card may still be staged to finish a merge. The command carries no exception: pathspec, glob and `-A`, `.` or `-u` forms name no card and stay with the desk's pre-commit hook, which still refuses a real hand commit of a card.

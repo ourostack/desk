@@ -12,6 +12,7 @@ import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js
 import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
 import { setConsent, writeLocalFacts, writeMarker, writeStatus, readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, json, scratch } from "../factory/_session_helpers.js"
+import { factoryStateDir } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
 
 const contextUrl = new URL("../../../../../plugins/desk/mcp/src/tools/factory-context.js", import.meta.url)
 async function load() {
@@ -80,6 +81,7 @@ test("desk_status reports the factory for the bound desk, routed by the overlay 
       consent: "yes",
       stores: [{ store: OTHER, consent: "yes", pending: 0, route_changed: 0, quarantined: 0, last_flush: "nothing_pending" }],
       warnings: [],
+      loop: null,
     })
   }
 }))
@@ -117,7 +119,7 @@ test("desk_doctor names skipped plugin manifests by code only", () => scratch(as
   await fs.writeFile(path.join(host.overlay, "plugin.json"), "{ broken")
   const body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.deepEqual(body.factory.warnings, ["manifest_unparseable"])
-  assert.match(body.summary, /\n  plugin manifests skipped: manifest_unparseable\n/u)
+  assert.match(body.summary, /\n  plugin manifests skipped: manifest_unparseable\n(  sign-off:[^\n]*\n)?Loop\n  no loop record yet/u)
   assert.equal(body.summary.includes(base), false)
 }))
 
@@ -236,4 +238,82 @@ test("desk_status carries the sign-off counts for the bound desk and no task nam
   assert.equal(status.signoff.unsigned.value, 1)
   assert.equal(JSON.stringify(status.signoff).includes("PRIVATE"), false)
   assert.equal(factoryStatus({ env, deskRoot: null }).signoff, undefined)
+}))
+
+const LOOP = {
+  schema: "desk.factory.loop/1",
+  written_at: "2026-10-05T12:00:00.000Z",
+  desk_version: "3.2.0-alpha.9",
+  improvement: {
+    open: { state: "measured", value: 3, reasons: [] }, claimed: { state: "measured", value: 1, reasons: [] }, claim_expired: { state: "measured", value: 0, reasons: [] }, shipped: { state: "measured", value: 2, reasons: [] }, verifying: { state: "measured", value: 1, reasons: [] },
+    oldest_open_age_days: { state: "measured", value: 8, reasons: [] }, oldest_in_verification_age_days: { state: "unavailable", value: null, reasons: ["none_in_verification"] },
+  },
+  alarms: { andon_open: { state: "measured", value: 1, reasons: [] }, store_build_failing: { state: "unavailable", value: null, reasons: ["stale"] }, desk_problems_open: { state: "measured", value: 0, reasons: [] }, loop_alarms_open: { state: "measured", value: 2, reasons: [] } },
+  evaluator: { waiting: { state: "measured", value: 4, reasons: [] }, gave_up: { state: "measured", value: 1, reasons: [] }, headless: { state: "no_credentials" } },
+  steps: { mirror: { stale: true }, verify: { stale: true }, route: { stale: false }, bogus: { stale: true } },
+}
+
+test("the doctor's summary has a Loop block from the stored record: counts, unavailable numbers named, and the stale steps", async () => {
+  const { factorySummary } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
+  const status = { store: STORE, source: "desk", consent: "yes", stores: [], warnings: [], loop: LOOP }
+  const text = factorySummary(status)
+  const block = text.slice(text.indexOf("Loop"))
+  assert.match(block, /^Loop\n/u)
+  assert.match(block, /3 open, 1 claimed, 0 claim expired, 2 shipped, 1 verifying/u)
+  assert.match(block, /oldest open 8 days; oldest in verification unavailable \(none in verification\)/u)
+  assert.match(block, /andon 1, store build failing unavailable \(stale\), desk problems 0, loop alarm cards 2/u)
+  assert.match(block, /headless evaluator no_credentials, 4 waiting, 1 gave up/u)
+  assert.match(block, /stale steps: mirror, verify/u)
+  assert.doesNotMatch(block, /bogus/u)
+  assert.match(block, /record written 2026-10-05T12:00:00.000Z by Desk 3.2.0-alpha.9/u)
+  const quiet = factorySummary({ ...status, loop: { ...LOOP, steps: {}, evaluator: { headless: {} }, improvement: {}, alarms: {} } })
+  assert.match(quiet, /stale steps: none/u)
+  assert.match(quiet, /headless evaluator unavailable, unavailable waiting, unavailable gave up/u)
+  assert.match(quiet, /unavailable open, unavailable claimed/u)
+  const old = factorySummary({ ...status, loop: LOOP }, { now: Date.parse("2026-10-08T12:00:01.000Z") })
+  assert.match(old, /record written 2026-10-05T12:00:00.000Z by Desk 3.2.0-alpha.9 \(older than 72 hours: this machine is quiet\)/u)
+  const edge = factorySummary({ ...status, loop: LOOP }, { now: Date.parse("2026-10-08T12:00:00.000Z") })
+  assert.doesNotMatch(edge, /quiet/u)
+  const sparse = factorySummary({ ...status, loop: { schema: "desk.factory.loop/1" } })
+  assert.match(sparse, /stale steps: none/u)
+})
+
+test("the doctor's summary says there is no loop record and never prints zeros for it", async () => {
+  const { factorySummary } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
+  for (const loop of [null, undefined]) {
+    const text = factorySummary({ store: STORE, source: "desk", consent: "yes", stores: [], warnings: [], loop })
+    assert.match(text, /Loop\n  no loop record yet/u)
+    assert.doesNotMatch(text.slice(text.indexOf("Loop")), /\b0\b/u)
+  }
+})
+
+test("with the loop switched off, the factory status and the doctor's summary say disabled over an old completed record", () => scratch(async ({ base, desk, env }) => {
+  const { factoryStatus, factorySummary } = await load()
+  const host = await plugins(base, env)
+  const completed = { ...LOOP, worker: { last_result: "completed", last_ran_at: "2026-10-05T11:00:00.000Z" } }
+  await writeStatus(host.env, { loop: { health: completed } })
+  assert.deepEqual(factoryStatus({ env: host.env, deskRoot: desk }).loop.worker, { last_result: "completed", last_ran_at: "2026-10-05T11:00:00.000Z" })
+  const off = { ...host.env, DESK_FACTORY_LOOP: "off" }
+  const status = factoryStatus({ env: off, deskRoot: desk })
+  assert.deepEqual(status.loop.worker, { last_result: "disabled", last_ran_at: "2026-10-05T11:00:00.000Z" })
+  assert.deepEqual({ ...status.loop, worker: undefined }, { ...completed, worker: undefined }, "nothing else changes")
+  assert.match(factorySummary(status), /\n  loop worker: last result disabled \(switched off on this machine\)/u)
+  assert.match(factorySummary(factoryStatus({ env: host.env, deskRoot: desk })), /\n  loop worker: last result completed$/u)
+  assert.match(factorySummary({ ...status, loop: { ...status.loop, worker: { last_result: "Bad Code/x" } } }), /loop worker: last result unavailable/u)
+  await fs.writeFile(path.join(factoryStateDir(host.env), "status.json"), "{ broken")
+  assert.equal(factoryStatus({ env: off, deskRoot: desk }).loop, null, "no record stays no record")
+}))
+
+test("the factory status carries the stored loop record, and null when the record is absent or not a loop record", () => scratch(async ({ base, desk, env }) => {
+  const { factoryStatus } = await load()
+  const host = await plugins(base, env)
+  assert.equal(factoryStatus({ env: host.env, deskRoot: desk }).loop, null)
+  await writeStatus(host.env, { loop: { health: LOOP } })
+  assert.deepEqual(factoryStatus({ env: host.env, deskRoot: desk }).loop, LOOP)
+  await writeStatus(host.env, { loop: { health: { schema: "other" } } })
+  assert.equal(factoryStatus({ env: host.env, deskRoot: desk }).loop, null)
+  await writeStatus(host.env, { loop: "damaged" })
+  assert.equal(factoryStatus({ env: host.env, deskRoot: desk }).loop, null)
+  await fs.writeFile(path.join(factoryStateDir(host.env), "status.json"), "{ broken")
+  assert.equal(factoryStatus({ env: host.env, deskRoot: desk }).loop, null)
 }))

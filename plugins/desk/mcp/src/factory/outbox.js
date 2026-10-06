@@ -914,6 +914,17 @@ export async function writeStatus(env, patch, { platform = process.platform, run
   }, { platform, env, runner }, isStatusShape)
 }
 
+/** `updateStatus(env, mutate) -> status`: lock-guarded read, `mutate(current) -> next` and atomic write of `status.json`; `next` must keep a `last_flush` object. Concurrent updates are serialized so none is lost. */
+export async function updateStatus(env, mutate, { platform = process.platform, runner = undefined } = {}) {
+  if (typeof mutate !== "function") fail("mutate", "must be a function")
+  const root = await factoryStateRoot(env, { platform, runner })
+  return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
+    const next = mutate(current)
+    if (!isStatusShape(next)) fail("status", "must be an object with a last_flush object")
+    return next
+  }, { platform, env, runner }, isStatusShape)
+}
+
 /**
  * `recordRoutes(env, routes)`: for each `{ name: { store, deskRoot } }`, keeps `store` as `route`, and `deskRoot` (an absolute path) as
  * `desk_root`, in the derivation receipt of facts file `name`, the other keys unchanged (a receipt is created when there is none).
@@ -1635,6 +1646,14 @@ export async function clearEvaluationRequest(env, job, reason = null) {
     await writeJsonAtomic(root, path.join(root, "evaluate-requests", "quarantine", `${job}.json`), { reason, at: defaultNow() }, { platform: process.platform, env })
   }
   await fsp.rm(file, { force: true })
+}
+
+/** Moves a request that passed its time limit to `evaluate-requests/expired/<job>.json` (`{ reason: "expired", at }`): a job the evaluator never saw, kept apart from the unread quarantine and counted by the evaluator step. */
+export async function expireEvaluationRequest(env, job) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  const root = await factoryStateRoot(env)
+  await writeJsonAtomic(root, path.join(root, "evaluate-requests", "expired", `${job}.json`), { reason: "expired", at: defaultNow() }, { platform: process.platform, env })
+  await fsp.rm(path.join(root, "evaluate-requests", `${job}.json`), { force: true })
 }
 
 /** Removes the brief and the output for `{ job, store, name }`; a no-op for either one already gone. */

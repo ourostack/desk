@@ -39,6 +39,10 @@ const EXPECTED_TOOLS = [
   // Health/status
   "desk_status",
   "desk_doctor",
+  // Improvement cards
+  "improvement_open",
+  "improvement_next",
+  "improvement_update",
 ]
 
 // A folder with the desk layout: home-folder guesses bind only these.
