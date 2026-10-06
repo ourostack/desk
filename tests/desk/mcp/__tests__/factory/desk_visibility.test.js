@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { VISIBILITY_TTL_MS, deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, visibilityMap } from "../../../../../plugins/desk/mcp/src/factory/desk-visibility.js"
+import { VISIBILITY_SKEW_MS, VISIBILITY_TTL_MS, deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, visibilityMap } from "../../../../../plugins/desk/mcp/src/factory/desk-visibility.js"
 
 test("only an https GitHub remote names a repository, however it is spelled", () => {
   assert.equal(githubRepoOfRemote("https://github.com/Acme/Desk.git"), "acme/desk")
@@ -23,6 +23,14 @@ test("a cached answer is fresh for seven days, and an entry that is not an entry
   }, now)
   assert.deepEqual(Object.keys(fresh), ["a/new"])
   assert.equal(VISIBILITY_TTL_MS, 7 * 24 * 3600 * 1000)
+})
+
+test("a cached answer stamped in the future by a fast clock is stale, past a five-minute skew", () => {
+  const now = Date.parse("2026-09-25T12:00:00.000Z")
+  const at = (offset) => ({ visibility: "private", checked_at: new Date(now + offset).toISOString() })
+  const fresh = freshVisibility({ "a/now": at(0), "a/skew": at(VISIBILITY_SKEW_MS), "a/ahead": at(VISIBILITY_SKEW_MS + 1), "a/year": at(365 * 24 * 3600 * 1000) }, now)
+  assert.deepEqual(Object.keys(fresh), ["a/now", "a/skew"])
+  assert.equal(VISIBILITY_SKEW_MS, 5 * 60 * 1000)
 })
 
 test("a desk's visibility is its repository's cached answer, unknown when there is none; only private and internal keep timing", () => {
