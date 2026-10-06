@@ -15,7 +15,7 @@
 // in one rename. Refuses, naming the reason, whenever a job ID cannot be derived
 // exactly as the factory does. Then serves the folder on 127.0.0.1 only (a page
 // opened from a file path cannot fetch its data), prints the URL and serves
-// until Ctrl-C. Crew desks (`desks/<alias>`) are not mapped.
+// until Ctrl-C (an agent runs it in the background). Crew desks (`desks/<alias>`) are not mapped.
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import * as os from "node:os"
@@ -107,11 +107,18 @@ export function serve(dir) {
   const known = new Set([...SITE_FILES, "local-names.json"])
   const server = createServer((req, res) => {
     const name = req.url === "/" ? "index.html" : req.url.slice(1)
-    if (req.method !== "GET" || !known.has(name)) {
-      res.writeHead(404).end("not found")
-      return
+    // Only the loopback names answer, so a page that rebinds a DNS name to this port cannot read the names.
+    const port = server.address().port
+    let body = null
+    if (req.method === "GET" && known.has(name) && [`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) {
+      try {
+        body = readFileSync(path.join(dir, name))
+      } catch {
+        body = null
+      }
     }
-    res.writeHead(200, { "content-type": TYPES[name.split(".").pop()], "cache-control": "no-store" }).end(readFileSync(path.join(dir, name)))
+    if (body === null) res.writeHead(404).end("not found")
+    else res.writeHead(200, { "content-type": TYPES[name.split(".").pop()], "cache-control": "no-store" }).end(body)
   })
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, url: `http://127.0.0.1:${server.address().port}/` })))
 }
@@ -128,6 +135,9 @@ export async function main({ env, fetchFile = fetchText, log }) {
   const files = await Promise.all(SITE_FILES.map(async (name) => [name, await fetchFile(SITE + name)]))
   files.push(["local-names.json", `${JSON.stringify({ version: 1, jobs })}\n`])
   mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 })
+  for (const leftover of readdirSync(path.dirname(dir))) {
+    if (leftover.startsWith(`${path.basename(dir)}.tmp-`)) rmSync(path.join(path.dirname(dir), leftover), { recursive: true, force: true })
+  }
   const temporary = mkdtempSync(`${dir}.tmp-`)
   try {
     for (const [name, text] of files) writeFileSync(path.join(temporary, name), text, { mode: 0o600 })
@@ -145,6 +155,7 @@ export async function runIfMain(importMetaUrl, argv1, run = main) {
   if (typeof argv1 !== "string" || importMetaUrl !== pathToFileURL(argv1).href) return false
   try {
     process.stdout.write(`${(await run({ env: process.env, log: (line) => process.stdout.write(`${line}\n`) })).url}\n`)
+    process.stdout.write("Serving until Ctrl-C: an agent should run this command in the background and read the URL above.\n")
   } catch (error) {
     process.stderr.write(`${error.message}\n`)
     process.exitCode = 1

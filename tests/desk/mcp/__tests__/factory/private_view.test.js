@@ -2,6 +2,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
+import * as http from "node:http"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -103,9 +104,27 @@ test("main copies the site, serves it on loopback and writes the names privately
     assert.equal((await fetch(`${url}../secret`)).status, 404)
     assert.equal((await fetch(`${url}task.md`)).status, 404)
     assert.equal((await fetch(url, { method: "POST" })).status, 404)
+    // A request whose Host is not this loopback address and port is refused, even for a known file.
+    const port = server.address().port
+    const ask = (host) => new Promise((resolve) => http.get({ host: "127.0.0.1", port, path: "/local-names.json", headers: { host } }, (res) => { res.resume(); resolve(res.statusCode) }))
+    assert.equal(await ask(`localhost:${port}`), 200)
+    assert.equal(await ask(`evil.example:${port}`), 404)
+    assert.equal(await ask("127.0.0.1"), 404)
+    // A file that vanished answers 404 rather than crashing the server.
+    rmSync(path.join(viewDir(env), "data.json"))
+    assert.equal((await fetch(`${url}data.json`)).status, 404)
   } finally {
     server.close()
   }
+}))
+
+test("leftover temporary folders of the target are removed, and nothing else", () => scratch(async ({ env }) => {
+  await readMachineSecret(env)
+  const parent = path.dirname(viewDir(env))
+  mkdirSync(path.join(parent, "factory.tmp-old"), { recursive: true })
+  mkdirSync(path.join(parent, "keep-me"))
+  await run({ env, fetchFile: fakeFetch() })
+  assert.deepEqual(readdirSync(parent).sort(), ["factory", "keep-me"])
 }))
 
 test("a fetch failure writes nothing and leaves the previous folder untouched", () => scratch(async ({ env }) => {
@@ -228,7 +247,7 @@ test("runIfMain runs only as the entry point, printing the URL or the failure", 
     process.stderr.write = stderr
     process.exitCode = code
   }
-  assert.deepEqual(out, ["note\n", "http://127.0.0.1:1/\n", "nope\n"])
+  assert.deepEqual(out, ["note\n", "http://127.0.0.1:1/\n", "Serving until Ctrl-C: an agent should run this command in the background and read the URL above.\n", "nope\n"])
 })
 
 test("run as a process, an unbound desk exits 1 with the reason", () => scratch(({ home }) => {
