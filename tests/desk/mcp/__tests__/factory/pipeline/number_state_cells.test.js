@@ -46,7 +46,9 @@ function sessionOf(host, index, unavailable, offset = 0) {
       commits: [{ repo: "ourostack/desk", sha: String(index + 1).repeat(40) }],
       private: { prs: 1, commits: 1 },
     },
-    jobs: [{ job: JOB, basis: ["desk_tool"], session_offset_ms: offset, transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: 14000 }], observed: { status: "done", offset_ms: 14500 } }],
+    // Human attention reads the turn list and the job's segments. The segment has no `agents` beside it, so every other formula ignores it.
+    human_turns: [{ at_ms: 1000, basis: "first", window_ms: null, prompt_class: "s", output_class: "none" }],
+    jobs: [{ job: JOB, basis: ["desk_tool"], session_offset_ms: offset, segments: [{ start_ms: 0, end_ms: 20000 }], transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: 14000 }], observed: { status: "done", offset_ms: 14500 } }],
     unavailable: unavailable.map(([field, reason]) => ({ field, reason })),
   }
 }
@@ -238,7 +240,8 @@ test("each host's constant flags make every formula they feed not measured, in /
       const session = sessionOf(host, 0, form === "2" ? hostPairs(host) : [])
       if (form === "1") session.schema = "desk.factory.published/1"
       const formulas = formulasOf([session])
-      for (const flag of hostFlagsFor(host, session.session)) {
+      // Human turns did not exist at /1, so reading an old file adds no flag for them.
+      for (const flag of hostFlagsFor(host, session.session).filter((entry) => form === "2" || entry.field !== "human_turns")) {
         for (const effect of ["unavailable", "partial"]) {
           for (const id of FEEDS[flag.field][effect]) {
             const result = resultOf(formulas, id)

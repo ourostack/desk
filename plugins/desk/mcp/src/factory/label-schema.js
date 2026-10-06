@@ -35,6 +35,9 @@
 //   - `class` is `value`, `support` or `muda`. `waste` is one of the eight
 //     classic wastes for `muda` and `null` otherwise (else `inconsistent`).
 //     `mura` (unevenness) and `muri` (overburden) are flags on the stretch.
+//   - `caught` is optional: where the defect was caught (`in_task`,
+//     `at_review` or `after_delivery`). Desk writes it on `defects` stretches
+//     from the job's record; the evaluator never does.
 //   - `evidence` is a non-empty list (else `empty`) of distinct (else
 //     `duplicate`) `[start_ms, end_ms]` ranges with `start_ms <= end_ms`.
 //     They are time ranges, not list positions, so labels stay valid when a
@@ -99,6 +102,9 @@ export const LABEL_WASTES = Object.freeze([
 /** The closed set of `unavailable` codes; see the header for their meaning. */
 export const LABEL_UNAVAILABLE = Object.freeze(["session_log_missing", "facts_missing"])
 
+/** Where a defect was caught, placed by Desk (`catch-point.js`), never written by the evaluator. */
+export const LABEL_CAUGHT = Object.freeze(["in_task", "at_review", "after_delivery"])
+
 export const LABEL_LIMITS = Object.freeze({
   stretches: 10000,
   evidence: 1000,
@@ -134,6 +140,9 @@ const EVALUATOR = {
   rubric: patternField(RUBRIC),
 }
 
+// `caught` is optional: a stretch carries it only when Desk placed it, so it is added to the stretch's spec only when present.
+const CAUGHT = { caught: enumField(LABEL_CAUGHT) }
+
 const STRETCH = {
   start_ms: durationField(),
   end_ms: durationField(),
@@ -168,7 +177,7 @@ const TOP = {
   job: publicPatternField(PATTERNS.jobId),
   session: publicPatternField(SESSION_ID_V4),
   evaluator: objectField(EVALUATOR),
-  stretches: arrayField(objectField(STRETCH, stretchCheck), LABEL_LIMITS.stretches),
+  stretches: arrayField(objectField((value) => (Object.hasOwn(value, "caught") ? { ...STRETCH, ...CAUGHT } : STRETCH), stretchCheck), LABEL_LIMITS.stretches),
   unavailable: arrayField(enumField(LABEL_UNAVAILABLE), LABEL_UNAVAILABLE.length),
 }
 
@@ -176,7 +185,7 @@ const TOP = {
 export const __LABEL_SPECS__ = Object.freeze({
   top: TOP,
   evaluator: EVALUATOR,
-  stretch: STRETCH,
+  stretch: { ...STRETCH, ...CAUGHT },
 })
 
 // A stretch whose own start and end are sound and in order.

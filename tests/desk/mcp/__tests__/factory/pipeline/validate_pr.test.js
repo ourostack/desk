@@ -453,3 +453,29 @@ test("validatePr accepts the mapped facts and labels paths of a Codex (v7) sessi
   assert.equal(isLabelsPath(mapped.path), true)
   assert.equal(mapped.published.session, published.session.id)
 })
+
+test("validatePr accepts a facts file with outcomes and rejects an unknown wait class, state or reason with a path and no value", () => {
+  const add = (outcome) => Buffer.from(`${JSON.stringify({ ...structuredClone(GOLDEN), outcomes: [{ ...GOLDEN.outcomes[0], ...outcome }] })}\n`)
+  const run = (outcome) => validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: add(outcome) }] })
+  assert.deepEqual(run({}), { ok: true, errors: [] })
+  assert.deepEqual(run({ wait: { class: "ge_7d", censored: true } }), { ok: true, errors: [] })
+  assert.deepEqual(run({ wait: null }), { ok: true, errors: [] })
+  for (const [outcome, code] of [
+    [{ wait: { class: `${SENTINEL}-class`, censored: false } }, "enum"],
+    [{ state: `${SENTINEL}-state` }, "enum"],
+    [{ reason: SENTINEL }, "enum"],
+    [{ delivered_at: "2026-09-25T09:00:00.000Z" }, "unknown_key"],
+  ]) {
+    assert.deepEqual(run(outcome), { ok: false, errors: [{ code, path: VALID_PATH }] })
+  }
+})
+
+test("validatePr accepts a facts file with human_turns and rejects a key beyond the five, a date or a wrong order with a path and no value", () => {
+  const turn = { at_ms: 5000, basis: "first", window_ms: null, prompt_class: "s", output_class: "none" }
+  const run = (turns) => validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: Buffer.from(`${JSON.stringify({ ...structuredClone(GOLDEN), human_turns: turns })}\n`) }] })
+  assert.deepEqual(run([turn]), { ok: true, errors: [] })
+  assert.deepEqual(run([]), { ok: true, errors: [] })
+  assert.deepEqual(run([{ ...turn, at: "2026-09-25T08:00:05.000Z" }]), { ok: false, errors: [{ code: "unknown_key", path: VALID_PATH }] })
+  assert.deepEqual(run([{ ...turn, text: SENTINEL }]), { ok: false, errors: [{ code: "unknown_key", path: VALID_PATH }] })
+  assert.deepEqual(run([turn, { ...turn, at_ms: 1, basis: "mid_turn", window_ms: 1 }]), { ok: false, errors: [{ code: "order", path: VALID_PATH }] })
+})

@@ -1,5 +1,6 @@
 import { ENUMS } from "../schema.js"
 import { normalizePublished } from "./normalize.js"
+import { collectOutcomes } from "./outcomes.js"
 
 function compareText(left, right) {
   return Number(left > right) - Number(left < right)
@@ -114,7 +115,7 @@ export function overlappingBindings(session, binding) {
   return session.jobs.filter((other) => other !== binding && bindingsOverlap(binding, other))
 }
 
-export function buildJobTimeline(job, inputSessions) {
+export function buildJobTimeline(job, inputSessions, outcomes = collectOutcomes(inputSessions)) {
   const sessions = inputSessions
     .map(normalizePublished)
     .flatMap((session) => session.jobs.filter((binding) => binding.job === job).map((binding) => ({ session, binding })))
@@ -175,6 +176,7 @@ export function buildJobTimeline(job, inputSessions) {
     intervals,
     transitions,
     observations,
+    outcome: outcomes.get(job) ?? null,
     source_sessions: sessions.map(({ session }) => session),
   }
 }
@@ -184,5 +186,6 @@ export function buildTimelines(sessions) {
   for (const session of sessions) {
     for (const binding of session.jobs) jobs.add(binding.job)
   }
-  return [...jobs].sort(compareText).map((job) => buildJobTimeline(job, sessions))
+  const outcomes = collectOutcomes(sessions)
+  return [...jobs].sort(compareText).map((job) => buildJobTimeline(job, sessions, outcomes))
 }

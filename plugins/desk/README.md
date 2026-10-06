@@ -151,6 +151,9 @@ Run `node -e 'import("<desk plugin>/mcp/src/desk/card-commit-guard.js").then(m=>
 | done-claim gate | `Stop` | `agentStop` (reply read from the session transcript) | not wired |
 | ask gate | `PreToolUse`, only when `CLAUDE_CODE_SESSION_ATTENDED=0` | not possible: Copilot hooks carry no attended-or-not signal | not wired |
 | host enforcement (ask-user, plan mode, Artifacts) | `PreToolUse` | registered, denies nothing: Copilot's tool names for those surfaces are unconfirmed | registered, inactive until Codex trusts the hook |
+| sign-off witness | `UserPromptSubmit` runs `prompt`, `Stop` runs `stop`, `PreToolUse` on `task_signoff` runs `ticket` | `userPromptSubmitted` runs `prompt`, `agentStop` runs `stop`; no per-tool entry | not wired |
+
+The sign-off witness is one script, `hooks/signoff-witness.cjs`, with three modes. `prompt` records when a prompt reached the session, in a small file under Desk's state folder named by a digest of the session id. `stop` records when the main agent stopped (a subagent's stop is ignored). `ticket` runs before a `task_signoff` call on Claude Code only: it denies a call from a subagent, otherwise records whether the last turn-starting line of the transcript was typed by a human and writes a short-lived ticket that the server reads and deletes. The server decides from these records whether the operator's answer is verified. On Copilot CLI no hook can tell the main agent from a subagent in this version, so every Copilot answer is recorded as unverified; on Codex nothing is wired and every answer is unverified. The records hold times only: no prompt text, command, file content or path. Each mode answers `{}` and fails quietly, apart from the one denial.
 
 Codex supports `PreToolUse` and `SessionEnd` hooks, but an untrusted hook is silently skipped and there is no automatable trust grant, so Desk adds no further Codex hook until that changes.
 

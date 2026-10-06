@@ -24,6 +24,7 @@ test("hostFlagsFor returns each host's constant flags and nothing for an unknown
     "tool_outcomes/host_records_partly",
     "requests/host_records_partly",
     "tokens/host_records_partly",
+    "human_turns/host_does_not_record",
   ])
   assert.deepEqual(hostFlagsFor("nonesuch", { entrypoint: "cli" }), [])
   assert.deepEqual(hostFlagsFor(undefined), [])
@@ -35,10 +36,11 @@ test("hostFlagsFor returns each host's constant flags and nothing for an unknown
 test("hostFlagsFor adds the entrypoint flag for Copilot cli sessions only", () => {
   assert.deepEqual(hostFlagsFor("copilot-cli", { entrypoint: "cli" }), [
     { field: "prs", reason: "host_records_partly" },
+    { field: "human_turns", reason: "host_records_partly" },
     { field: "entrypoint", reason: "host_does_not_record" },
   ])
-  assert.deepEqual(hostFlagsFor("copilot-cli", { entrypoint: "desktop" }), [{ field: "prs", reason: "host_records_partly" }])
-  assert.deepEqual(hostFlagsFor("copilot-cli"), [{ field: "prs", reason: "host_records_partly" }])
+  assert.deepEqual(hostFlagsFor("copilot-cli", { entrypoint: "desktop" }), [{ field: "prs", reason: "host_records_partly" }, { field: "human_turns", reason: "host_records_partly" }])
+  assert.deepEqual(hostFlagsFor("copilot-cli"), [{ field: "prs", reason: "host_records_partly" }, { field: "human_turns", reason: "host_records_partly" }])
   assert.equal(hostFlagsFor("claude-code", { entrypoint: "cli" }).some((flag) => flag.field === "entrypoint"), false)
   assert.equal(hostFlagsFor("codex-cli", { entrypoint: "cli" }).some((flag) => flag.field === "entrypoint"), false)
 })

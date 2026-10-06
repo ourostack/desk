@@ -39,7 +39,7 @@ function folderName(field, value) {
 }
 
 // The card at its live path, else under `_archive`. A missing person folder reads as a missing card.
-async function findCard({ deskRoot, person, track, slug }) {
+export async function findCard({ deskRoot, person, track, slug }) {
   for (const segments of [[track, slug, "task.md"], [track, "_archive", slug, "task.md"]]) {
     let file
     try {

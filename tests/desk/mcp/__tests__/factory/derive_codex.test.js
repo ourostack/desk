@@ -855,6 +855,25 @@ test("task_create with focus: true is a focusCall as well as a deskToolCall; foc
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 }))
 
+test("each deriver records a successful task_signoff call and ignores a failed one (Codex)", () => withHome(async (home) => {
+  const lines = [
+    meta(),
+    call(1, "s1", "task_signoff", { track: "desk-plugin", slug: "signed", outcome: "accepted", reason: SENTINEL }, "mcp__desk__"),
+    output(2, "s1", "ok"),
+    call(3, "s2", "task_signoff", { track: "desk-plugin", slug: "failed", outcome: "refused", reason: SENTINEL }, "mcp__desk__"),
+    output(4, "s2", "Process exited with code 1"),
+  ]
+  const { facts, events } = await deriveRoot(home, lines)
+  assert.deepEqual(events.deskToolCalls.map(({ name, slug, ok, status }) => ({ name, slug, ok, status })), [
+    { name: "mcp__desk__task_signoff", slug: "signed", ok: true, status: null },
+    { name: "mcp__desk__task_signoff", slug: "failed", ok: false, status: null },
+  ])
+  assert.deepEqual(events.focusCalls, [])
+  assert.equal(JSON.stringify(events).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes("signed"), false)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
 test("task_update status comes from top-level status, frontmatter.status as an object, or frontmatter as a JSON string, and statusOnly follows ruling P1", () => withHome(async (home) => {
   const inputs = [
     { track: "a", slug: "b", frontmatter: "{\"status\": \"done\"}" },
@@ -976,7 +995,7 @@ const flagsOf = (facts, field) => facts.unavailable.filter((entry) => entry.fiel
 
 test("a Codex session carries compaction_waits as not recorded and prs, requests, tokens and tool_outcomes as recorded partly", async () => {
   const { facts } = await deriveFixtureRoot()
-  assert.deepEqual(hostFlagsFor("codex-cli", { entrypoint: facts.session.entrypoint }).map((flag) => flag.reason).sort(), ["host_does_not_record", "host_does_not_record", "host_does_not_record", "host_does_not_record", "host_records_partly", "host_records_partly", "host_records_partly", "host_records_partly"])
+  assert.deepEqual(hostFlagsFor("codex-cli", { entrypoint: facts.session.entrypoint }).map((flag) => flag.reason).sort(), ["host_does_not_record", "host_does_not_record", "host_does_not_record", "host_does_not_record", "host_does_not_record", "host_records_partly", "host_records_partly", "host_records_partly", "host_records_partly"])
   for (const flag of hostFlagsFor("codex-cli", { entrypoint: facts.session.entrypoint })) assert.ok(unavailable(facts, flag.field, flag.reason), `${flag.field}/${flag.reason}`)
   assert.ok(unavailable(facts, "compaction_waits", "host_does_not_record"))
   for (const field of ["prs", "tool_outcomes", "requests", "tokens"]) assert.ok(unavailable(facts, field, "host_records_partly"), field)
@@ -1095,4 +1114,24 @@ test("an overflow on one model is still unreadable when another model has an abs
 test("samples with no known model leave tokens unreadable as well as models", () => withHome(async (home) => {
   const { facts } = await deriveRoot(home, [meta(), tokens(2, { input_tokens: 10, output_tokens: 5 })])
   assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+}))
+
+// --- Human turns: a Codex rollout cannot tell a human prompt from injected context ---
+
+test("a Codex session writes no human_turns list and flags the field host_does_not_record", () => withHome(async (home) => {
+  const { facts } = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), user(2, "hello"), user(30, "and another")])
+  assert.equal(Object.hasOwn(facts, "human_turns"), false)
+  assert.equal(unavailable(facts, "human_turns", "host_does_not_record"), true)
+  assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "human_turns"), [{ field: "human_turns", reason: "host_does_not_record" }])
+  assert.equal(validateLocalFacts(facts).ok, true)
+  assert.ok(hostFlagsFor("codex-cli", {}).some((flag) => flag.field === "human_turns" && flag.reason === "host_does_not_record"))
+}))
+
+test("a user-role message in a rollout does not create a human turn", () => withHome(async (home) => {
+  const lines = [meta(), turnContext(1, ROOT_MODEL), user(2, SENTINEL), user(10, [{ type: "input_text", text: SENTINEL }]), user(20, "")]
+  const { facts } = await deriveRoot(home, lines)
+  assert.equal(Object.hasOwn(facts, "human_turns"), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  const without = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL)])
+  assert.deepEqual(facts.unavailable, without.facts.unavailable)
 }))

@@ -4,7 +4,9 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, writeFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { factoryStateRoot, listMarkers, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { LIMITS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { deliver, formatReturn, sign } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
 import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
 
@@ -233,7 +235,11 @@ test("a status-only update alone binds no job", () => scratch(async (ctx) => {
   await appendCalls(marker, [["mcp__desk__task_update", { track: "track", slug: "task", frontmatter: { status: "done" } }]])
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
-  assert.deepEqual(await readJobsIndex(ctx.env), {})
+  // The call binds no job, but the task it touched carries its outcome, so the index lists it for a later change to re-derive the session.
+  const facts = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `claude-code-${ID}.json`), "utf8"))
+  assert.deepEqual(facts.jobs, [])
+  assert.deepEqual(Object.keys(await readJobsIndex(ctx.env)), facts.outcomes.map((outcome) => outcome.job))
+  assert.equal(facts.outcomes.length, 1)
   const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
   assert.deepEqual([receipt.bound_by, receipt.focus_disagrees, receipt.repo_unresolved, receipt.segments_capped_ms], [{}, [], 0, 0])
   assert.equal(receipt.own_activity.length, 1, "the call is still the session's own activity")
@@ -1303,6 +1309,278 @@ test("orphans recorded by a newer Desk advance the cursor, so enough of them can
   assert.equal(two.rebuilt, 1, "the next sweep went on past them to the good orphan")
   assert.equal(typeof good, "string")
 }))
+
+// --- outcomes ---------------------------------------------------------------------
+
+const REMOTE = "git@github.com:Owner/Desk.git"
+const NOW = "2026-09-26T10:00:00.000Z"
+const idFor = (track, slug, personPrefix = "") => jobId({ deskRemote: REMOTE, personPrefix, track, slug })
+const signoffCall = (track, slug, overrides = {}) => ({ at: START, name: "mcp__plugin_desk_desk__task_signoff", track, slug, person: null, status: null, agent: 0, ok: true, ...overrides })
+const ACCEPTED = sign(deliver({}, { at: "2026-09-25T09:00:00.000Z" }), { status: "done", outcome: "accepted", verified: true, at: "2026-09-25T09:20:00.000Z" }).record
+
+// Fake card readers: `cards` maps `track/slug` to what `readOutcome` answers; `birth` maps it to a birth path.
+function readers(cards, birth = {}) {
+  const seen = []
+  return {
+    seen,
+    readOutcome: (track, slug) => {
+      seen.push(`${track}/${slug}`)
+      const found = cards[`${track}/${slug}`]
+      if (found instanceof Error) throw found
+      return found ?? null
+    },
+    resolveJobIdentity: (track, slug) => birth[`${track}/${slug}`] ?? { track, slug },
+  }
+}
+const identity = { deskRemote: REMOTE, personPrefix: "" }
+const ENTRY_KEYS = ["job", "rev", "state", "verified", "reason", "deliveries", "delivered_at", "signed_at", "observed_at"]
+
+test("a bound job's card record becomes its outcome entry", async () => {
+  const { outcomesFor } = await runner()
+  const bound = [{ job: idFor("a", "one"), track: "a", slug: "one" }]
+  const list = outcomesFor({ jobs: bound, lifecycleCalls: [], readers: readers({ "a/one": { record: ACCEPTED, status: "done", evidenceAt: "2026-09-25T09:30:00.000Z" } }), identity, now: NOW })
+  assert.deepEqual(list, [{
+    job: idFor("a", "one"),
+    rev: ACCEPTED.flow.rev,
+    state: "accepted",
+    verified: true,
+    reason: null,
+    deliveries: 1,
+    delivered_at: "2026-09-25T09:00:00.000Z",
+    signed_at: "2026-09-25T09:20:00.000Z",
+    observed_at: NOW,
+    since: "adopted",
+    first_validating_at: "2026-09-25T09:00:00.000Z",
+    first_delivered_at: "2026-09-25T09:00:00.000Z",
+    returns: [],
+  }])
+  assert.deepEqual(Object.keys(list[0]), [...ENTRY_KEYS, "since", "first_validating_at", "first_delivered_at", "returns"], "exactly these keys: the snapshot's other keys are dropped")
+  assert.deepEqual(validateLocalFacts({ ...JSON.parse(JSON.stringify(await goldenFacts())), outcomes: list }), { ok: true, errors: [] })
+})
+
+async function goldenFacts() {
+  return JSON.parse(await fs.readFile(new URL("./fixtures/local-golden.json", import.meta.url), "utf8"))
+}
+
+test("a task signed in a session that did no work on it gets an outcome entry and no job binding", async () => {
+  const { outcomesFor } = await runner()
+  const card = { record: ACCEPTED, status: "done", evidenceAt: null }
+  const reader = readers({ "a/signed": card })
+  // The job is the birth path's, as binding computes it, not the path the call named.
+  const list = outcomesFor({ jobs: [], lifecycleCalls: [signoffCall("a", "signed")], readers: { ...reader, resolveJobIdentity: () => ({ track: "born", slug: "first" }) }, identity, now: NOW })
+  assert.deepEqual(list.map((entry) => entry.job), [idFor("born", "first")])
+  assert.equal(list[0].state, "accepted")
+  assert.deepEqual(reader.seen, ["a/signed"], "the card is read where the call named it")
+})
+
+test("the lifecycle calls that count are the successful ones that name a task, and each task is listed once, with the bound job's entry", async () => {
+  const { outcomesFor } = await runner()
+  const card = { record: ACCEPTED, status: "done", evidenceAt: null }
+  const reader = readers({ "a/x": card, "a/y": card, "a/z": card, "a/w": card, "a/v": card })
+  const name = (verb) => `mcp__plugin_desk_desk__${verb}`
+  const list = outcomesFor({
+    jobs: [{ job: idFor("a", "x"), track: "a", slug: "x" }],
+    lifecycleCalls: [
+      signoffCall("a", "x"), signoffCall("a", "x"),
+      signoffCall("a", "y", { name: name("task_update") }),
+      signoffCall("a", "z", { name: name("task_create") }),
+      signoffCall("a", "w", { name: name("task_archive") }),
+      signoffCall("a", "v", { ok: false }),
+      signoffCall("a", "v", { name: name("task_focus") }),
+      signoffCall("a", "v", { name: name("desk_save") }),
+      signoffCall("a", "v", { name: undefined }),
+      signoffCall("..", "v"),
+      signoffCall("a", undefined),
+      null,
+    ],
+    readers: reader,
+    identity,
+    now: NOW,
+  })
+  assert.deepEqual(list.map((entry) => entry.job), ["x", "y", "z", "w"].map((slug) => idFor("a", slug)).sort())
+  assert.deepEqual(reader.seen.filter((seen) => seen === "a/x").length, 1, "a task is read once however many calls name it")
+  assert.equal(reader.seen.includes("a/v"), false)
+})
+
+test("a legacy done card gives state not_recorded, and a card that was never delivered gives not_delivered", async () => {
+  const { outcomesFor } = await runner()
+  const empty = { signoff: null, flow: null, returns: [], returns_damaged: 0 }
+  const list = outcomesFor({
+    jobs: [{ job: idFor("a", "old"), track: "a", slug: "old" }, { job: idFor("a", "new"), track: "a", slug: "new" }],
+    lifecycleCalls: [],
+    readers: readers({ "a/old": { record: empty, status: "done", evidenceAt: "2026-09-24T08:00:00.000Z" }, "a/new": { record: empty, status: "processing", evidenceAt: null } }),
+    identity,
+    now: NOW,
+  })
+  const byJob = Object.fromEntries(list.map((entry) => [entry.job, entry]))
+  assert.deepEqual(byJob[idFor("a", "old")], { job: idFor("a", "old"), rev: 0, state: "not_recorded", verified: null, reason: null, deliveries: 0, delivered_at: "2026-09-24T08:00:00.000Z", signed_at: null, observed_at: NOW })
+  assert.deepEqual(byJob[idFor("a", "new")], { job: idFor("a", "new"), rev: 0, state: "not_delivered", verified: null, reason: null, deliveries: 0, delivered_at: null, signed_at: null, observed_at: NOW })
+})
+
+test("a card whose status cannot be read gives no entry, since no state can be told from it", async () => {
+  const { outcomesFor } = await runner()
+  const record = { signoff: null, flow: null, returns: [], returns_damaged: 0 }
+  const list = outcomesFor({ jobs: [{ job: idFor("a", "odd"), track: "a", slug: "odd" }], lifecycleCalls: [], readers: readers({ "a/odd": { record, status: null, evidenceAt: null } }), identity, now: NOW })
+  assert.deepEqual(list, [])
+})
+
+test("a card that cannot be found, or a reader or identity that fails, gives no entry and never stops the others", async () => {
+  const { outcomesFor } = await runner()
+  const card = { record: ACCEPTED, status: "done", evidenceAt: null }
+  const reader = readers({ "a/ok": card, "a/broken": new Error("unreadable") })
+  const list = outcomesFor({ jobs: [], lifecycleCalls: [signoffCall("a", "missing"), signoffCall("a", "broken"), signoffCall("a", "ok")], readers: reader, identity, now: NOW })
+  assert.deepEqual(list.map((entry) => entry.job), [idFor("a", "ok")])
+  // A desk with no remote cannot name a job: the entry is left out rather than the derivation failing.
+  assert.deepEqual(outcomesFor({ jobs: [], lifecycleCalls: [signoffCall("a", "ok")], readers: reader, identity: { deskRemote: null, personPrefix: "" }, now: NOW }), [])
+})
+
+test("the three times are canonical UTC instants or null, observed_at is the time passed in, and a damaged returns list still gives an entry", async () => {
+  const { outcomesFor } = await runner()
+  const record = {
+    signoff: { state: "accepted", at: "2026-09-25T11:20:00+02:00", verified: false, reason: null },
+    flow: { since: "created", rev: 7, reached: "done", first_validating_at: null, first_delivered_at: null, delivered_at: "2026-09-25T09:00:00Z", deliveries: 2 },
+    returns: ["not a readable return line"],
+    returns_damaged: 1,
+  }
+  const found = { record, status: "done", evidenceAt: null }
+  const one = [{ job: idFor("a", "one"), track: "a", slug: "one" }]
+  const [entry] = outcomesFor({ jobs: one, lifecycleCalls: [], readers: readers({ "a/one": found }), identity, now: Date.parse(NOW) })
+  assert.deepEqual(entry, { job: idFor("a", "one"), rev: 7, state: "accepted", verified: false, reason: null, deliveries: 2, delivered_at: "2026-09-25T09:00:00.000Z", signed_at: "2026-09-25T09:20:00.000Z", observed_at: NOW, since: "created", returns: [], returns_unreadable: 2 })
+  assert.equal(outcomesFor({ jobs: one, lifecycleCalls: [], readers: readers({ "a/one": found }), identity, now: "not a time" })[0].observed_at, null)
+  const odd = { ...found, record: { ...record, signoff: { ...record.signoff, at: "yesterday" } } }
+  assert.equal(outcomesFor({ jobs: one, lifecycleCalls: [], readers: readers({ "a/one": odd }), identity, now: NOW })[0].signed_at, null)
+})
+
+test("the list is sorted by job and holds at most LIMITS.outcomes entries", async () => {
+  const { outcomesFor } = await runner()
+  const card = { record: ACCEPTED, status: "done", evidenceAt: null }
+  const slugs = Array.from({ length: LIMITS.outcomes + 5 }, (_, index) => `task-${index}`)
+  const cards = Object.fromEntries(slugs.map((slug) => [`a/${slug}`, card]))
+  const list = outcomesFor({ jobs: [], lifecycleCalls: slugs.map((slug) => signoffCall("a", slug)), readers: readers(cards), identity, now: NOW })
+  assert.equal(list.length, LIMITS.outcomes)
+  assert.deepEqual(list.map((entry) => entry.job), [...list.map((entry) => entry.job)].sort())
+})
+
+// A card in block form, as the task tools write it.
+const CARD_TEXT = (title, status = "done") => [
+  "---", `title: ${title}`, `status: ${status}`, `created: ${START}`, "updated: 2026-09-26T08:30:00.000Z",
+  "signoff:", "  state: accepted", "  at: 2026-09-26T08:20:00.000Z", "  verified: true",
+  "flow:", "  since: created", "  rev: 3", "  reached: done", "  delivered_at: 2026-09-26T08:10:00.000Z", "  deliveries: 1",
+  "---", `body ${title}`, "",
+].join("\n")
+const SEGMENT = "PRIVATE-segment-must-never-persist"
+
+async function writeOutcomeCard(ctx, folder, title) {
+  const card = path.join(ctx.desk, folder, "task.md")
+  await fs.mkdir(path.dirname(card), { recursive: true })
+  await fs.writeFile(card, CARD_TEXT(title))
+}
+
+test("a session derived with a sign-off call writes the task's outcome with the same job ID binding gives, lists it in the jobs index, and carries no card text", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await writeOutcomeCard(ctx, `${SEGMENT}/worked`, SENTINEL)
+  await writeOutcomeCard(ctx, `${SEGMENT}/_archive/signed-only`, SENTINEL)
+  await appendCalls(marker, [
+    ["mcp__desk__task_update", { track: SEGMENT, slug: "worked", frontmatter: { status: "done" }, title: SENTINEL }],
+    ["Write", { file_path: path.join(ctx.desk, SEGMENT, "worked", "notes.md"), content: SENTINEL }],
+    ["Write", { file_path: path.join(ctx.desk, SEGMENT, "worked", "more.md"), content: SENTINEL }],
+    ["Write", { file_path: path.join(ctx.desk, SEGMENT, "worked", "again.md"), content: SENTINEL }],
+    ["mcp__desk__task_signoff", { track: SEGMENT, slug: "signed-only", outcome: "accepted", reason: SENTINEL }],
+    ["mcp__desk__task_signoff", { track: SEGMENT, slug: "failed", outcome: "accepted" }],
+  ])
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.equal((await deriveMarker(ctx.env, marker, { now: () => Date.parse(NOW) })).result, "written")
+  const bytes = await fs.readFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `claude-code-${ID}.json`), "utf8")
+  const facts = JSON.parse(bytes)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  assert.equal(facts.jobs.length, 1, "the sign-off bound nothing")
+  assert.equal(facts.outcomes.length, 2)
+  assert.deepEqual(facts.outcomes.map((entry) => entry.job), [...facts.outcomes.map((entry) => entry.job)].sort())
+  const worked = facts.outcomes.find((entry) => entry.job === facts.jobs[0].job)
+  assert.ok(worked, "an outcome's job is the bound job's ID for the same task")
+  assert.deepEqual(worked, { job: facts.jobs[0].job, rev: 3, state: "accepted", verified: true, reason: null, deliveries: 1, delivered_at: "2026-09-26T08:10:00.000Z", signed_at: "2026-09-26T08:20:00.000Z", observed_at: NOW, since: "created", returns: [] })
+  assert.equal(facts.outcomes.every((entry) => Object.keys(entry).join() === [...ENTRY_KEYS, "since", "returns"].join()), true)
+  const index = await readJobsIndex(ctx.env)
+  for (const entry of facts.outcomes) assert.deepEqual(index[entry.job], [`claude-code-${ID}.json`])
+  for (const secret of [SENTINEL, SEGMENT, "signed-only", "worked", "body", "title"]) assert.equal(bytes.includes(secret), false, secret)
+  assert.equal(JSON.stringify(await readStatus(ctx.env)).includes(SEGMENT), false)
+}))
+
+// --- outcomes: the record's start and its returns ---------------------------------
+
+const returnLine = (index, reason = "agent_error") => formatReturn({ at: new Date(Date.parse("2026-09-25T08:00:00.000Z") + index * 60_000).toISOString(), from: "validating", to: "processing", reason, caught: "at_review", refusal: null, refusal_verified: null })
+const flowOf = (changes = {}) => ({ since: "created", rev: 3, reached: "done", first_validating_at: "2026-09-25T08:30:00Z", first_delivered_at: "2026-09-25T09:00:00Z", delivered_at: "2026-09-25T09:00:00Z", deliveries: 1, ...changes })
+const oneEntry = async (record, now = NOW) => {
+  const { outcomesFor } = await runner()
+  return outcomesFor({ jobs: [{ job: idFor("a", "one"), track: "a", slug: "one" }], lifecycleCalls: [], readers: readers({ "a/one": { record, status: "done", evidenceAt: null } }), identity, now })[0]
+}
+
+test("since reads adopted for a card that gained its record late and created otherwise, and the milestone times are canonical", async () => {
+  const adopted = await oneEntry({ flow: flowOf({ since: "adopted" }), returns: [] })
+  assert.equal(adopted.since, "adopted")
+  const created = await oneEntry({ flow: flowOf(), returns: [] })
+  assert.equal(created.since, "created")
+  assert.equal(created.first_validating_at, "2026-09-25T08:30:00.000Z")
+  assert.equal(created.first_delivered_at, "2026-09-25T09:00:00.000Z")
+  assert.deepEqual(Object.keys(created), [...ENTRY_KEYS, "since", "first_validating_at", "first_delivered_at", "returns"])
+  const odd = await oneEntry({ flow: flowOf({ first_validating_at: "2026-09-25T08:30:00+02:00", first_delivered_at: null }), returns: [] })
+  assert.equal(odd.first_validating_at, "2026-09-25T06:30:00.000Z")
+  assert.equal(Object.hasOwn(odd, "first_delivered_at"), false, "an unknown time is left out, not written as null")
+})
+
+test("an entry for a card with no record has none of the new keys", async () => {
+  const entry = await oneEntry({})
+  assert.deepEqual(Object.keys(entry), ENTRY_KEYS)
+})
+
+test("returns carry reason, catch point, counts and refusal and no time", async () => {
+  const entry = await oneEntry({ flow: flowOf(), returns: [returnLine(0), returnLine(1, "changed_ask")] })
+  assert.deepEqual(entry.returns, [
+    { reason: "agent_error", caught: "at_review", counts: true, refusal: null, refusal_verified: null },
+    { reason: "changed_ask", caught: "at_review", counts: false, refusal: null, refusal_verified: null },
+  ])
+  assert.equal(JSON.stringify(entry.returns).includes("2026"), false)
+  assert.equal(Object.hasOwn(entry, "returns_truncated"), false)
+  assert.equal(Object.hasOwn(entry, "returns_unreadable"), false)
+  assert.deepEqual(validateLocalFacts({ ...(await goldenFacts()), outcomes: [entry] }), { ok: true, errors: [] })
+})
+
+test("more than 32 returns keep the newest 32, keep since and say so", async () => {
+  const lines = Array.from({ length: 40 }, (_, index) => returnLine(index, index < 8 ? "external" : "agent_error"))
+  const entry = await oneEntry({ flow: flowOf({ since: "adopted" }), returns: lines })
+  assert.equal(entry.returns.length, 32)
+  assert.equal(entry.returns.some((item) => item.reason === "external"), false, "the oldest eight were dropped")
+  assert.equal(entry.returns_truncated, true)
+  assert.equal(entry.since, "adopted")
+  assert.deepEqual(validateLocalFacts({ ...(await goldenFacts()), outcomes: [entry] }), { ok: true, errors: [] })
+  const exact = await oneEntry({ flow: flowOf(), returns: lines.slice(0, 32) })
+  assert.equal(Object.hasOwn(exact, "returns_truncated"), false, "32 is not truncated")
+})
+
+test("damaged return lines are counted in returns_unreadable and never leak their text", async () => {
+  const entry = await oneEntry({ flow: flowOf(), returns: [returnLine(0), `${SENTINEL} not a return line`], returns_damaged: 1 })
+  assert.equal(entry.returns.length, 1)
+  assert.equal(entry.returns_unreadable, 2)
+  assert.equal(JSON.stringify(entry).includes(SENTINEL), false)
+  const noFlow = await oneEntry({ returns: [`${SENTINEL} line`] })
+  assert.equal(Object.hasOwn(noFlow, "returns"), false, "a card with no record has no returns recorded")
+  assert.equal(JSON.stringify(noFlow).includes(SENTINEL), false)
+})
+
+test("returns are kept for a card whose start cannot be read, and a card with a record and no returns reads as none", async () => {
+  const entry = await oneEntry({ flow: flowOf({ since: "someday" }), returns: [returnLine(0)] })
+  assert.equal(Object.hasOwn(entry, "since"), false)
+  assert.equal(entry.returns.length, 1)
+})
+
+test("a refusal's counts pass through as the record decides: a witnessed human changed_ask does not count, an unwitnessed one does", async () => {
+  const refusal = (verified) => formatReturn({ at: "2026-09-25T10:00:00.000Z", from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: "changed_ask", refusal_verified: verified })
+  const verified = await oneEntry({ flow: flowOf(), returns: [refusal(true)] })
+  assert.deepEqual(verified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: true }])
+  const unverified = await oneEntry({ flow: flowOf(), returns: [refusal(false)] })
+  assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: true, refusal: "changed_ask", refusal_verified: false }])
+})
 
 // Focus on a task, then on a task whose card is gone (which clears), over and over: each stretch of the task stands alone between cleared stretches, so a cap that is exceeded has to drop time.
 async function standaloneSession(ctx, stretches) {

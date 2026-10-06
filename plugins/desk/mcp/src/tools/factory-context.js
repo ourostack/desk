@@ -20,6 +20,7 @@ import { loadEndHook, pluginRootFor } from "../factory/end-hook.js"
 import { readSmallText } from "../factory/marker.js"
 import { PATTERNS } from "../factory/schema.js"
 import { ORPHAN_FINDING_ADVICE, UNASKED_ADVICE, factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
+import { signoffStatus, unsignedDeliveries } from "../desk/unsigned-deliveries.js"
 
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
@@ -38,10 +39,17 @@ export function factoryPluginScan(env) {
   }
 }
 
+// The sign-off counts of the desk (never a task name). The scan reads every unreadable thing as absent, so it does not throw.
+function signoffCounts(deskRoot) {
+  const now = Date.now()
+  return signoffStatus(unsignedDeliveries(deskRoot, { now }), now)
+}
+
 /** `factoryLocalStatus` for `deskRoot` (or no desk) with this host's plugin set. */
 export function factoryStatus({ env, deskRoot }) {
   const { dirs, incomplete } = factoryPluginScan(env)
-  return factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete })
+  const status = factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete })
+  return deskRoot === null || deskRoot === undefined ? status : { ...status, signoff: signoffCounts(deskRoot) }
 }
 
 /** `factoryReportLink` with this host's plugin set: the task card's `factory_report`, or `null` without consent. */
@@ -68,5 +76,19 @@ export function factorySummary(status) {
   for (const { store, sessions, age } of status.visibility_unasked ?? []) lines.push(`  ${store}: ${sessions} sessions wait because their desk's visibility could not be asked for ${age === "unknown" ? "an unknown time" : "over 7 days"}. ${UNASKED_ADVICE(store)}`)
   if (status.orphans !== undefined) lines.push(`  orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
   if (status.warnings.length > 0) lines.push(`  plugin manifests skipped: ${status.warnings.join(", ")}`)
+  if (status.signoff) lines.push(signoffLine(status.signoff))
   return lines.join("\n")
+}
+
+// "sign-off: 3 delivered tasks await sign-off, oldest 9 days; 2 delivered before sign-off was recorded". A lower bound says "at least".
+function signoffLine({ unsigned, oldest_unsigned_age_days: oldest, not_recorded: notRecorded }) {
+  if (unsigned.state === "unavailable") return `  sign-off: not checked (${unsigned.reason})`
+  const least = (figure) => (figure.state === "partial" ? "at least " : "")
+  const days = (n) => `${n} ${n === 1 ? "day" : "days"}`
+  const count = unsigned.value
+  const earlier = notRecorded.state === "unavailable" || notRecorded.value === 0 ? "" : `; ${least(notRecorded)}${notRecorded.value} delivered before sign-off was recorded`
+  if (count === 0) return `  sign-off: no delivered tasks await sign-off${earlier}`
+  const head = `${least(unsigned)}${count} delivered ${count === 1 ? "task awaits" : "tasks await"} sign-off`
+  const age = oldest.state === "unavailable" ? "age unknown" : `${least(oldest)}${days(oldest.value)}`
+  return `  sign-off: ${head}, oldest ${age}${earlier}`
 }

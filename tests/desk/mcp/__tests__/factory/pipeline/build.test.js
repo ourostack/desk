@@ -6,6 +6,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { build, jobLink, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
+import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -54,7 +55,7 @@ test("build turns the golden rollup store's facts and labels into every golden o
   assert.deepEqual(Object.keys(actual), Object.keys(expected))
   for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
   assert.deepEqual(Object.keys(actual).filter((relative) => relative.startsWith("rollups/")), [
-    "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json", "rollups/totals.json",
+    "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/outcomes.json", "rollups/tool-kinds.json", "rollups/totals.json",
   ])
 }))
 
@@ -194,7 +195,7 @@ test("a store with no facts directory, or only dotfiles in it, publishes an empt
   const out = path.join(root, "out")
   assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 0, sessions: 0 })
   const empty = bytesByPath(out)
-  assert.deepEqual(Object.keys(empty), ["README.md", "index.md", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json", "rollups/totals.json"])
+  assert.deepEqual(Object.keys(empty), ["README.md", "index.md", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/outcomes.json", "rollups/tool-kinds.json", "rollups/totals.json"])
   assert.match(empty["index.md"].toString("utf8"), /No job has published facts yet\./u)
   assert.match(empty["rollups/index.md"].toString("utf8"), /No job has published facts yet\./u)
   assert.equal(JSON.parse(empty["rollups/coverage.json"]).jobs, 0)
@@ -325,6 +326,109 @@ test("a store mixing legacy and per-worker files builds and legacy numbers are u
   assert.equal(second.formulas.active_time_ms.value, 6000)
 }))
 
+const CLOSED_JOB = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const OPEN_JOB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+const FIRST_FACTS = "claude-code-11111111-1111-4111-8111-111111111111.json"
+
+function withOutcomes(store, outcomes) {
+  const factPath = path.join(store, "facts", FIRST_FACTS)
+  const fact = JSON.parse(readFileSync(factPath, "utf8"))
+  fact.outcomes = outcomes
+  writeFileSync(factPath, serializePublished(fact))
+}
+
+test("the build writes rollups/outcomes.json and the job file carries the signoff formula with a state", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(STORE, store, { recursive: true })
+  withOutcomes(store, [
+    { job: CLOSED_JOB, rev: 4, state: "accepted", verified: true, reason: null, deliveries: 1, wait: { class: "lt_1d", censored: false } },
+    { job: "cccccccccccccccccccccccccccccccc", rev: 1, state: "delivered_unsigned", verified: null, reason: null, deliveries: 1, wait: { class: "lt_7d", censored: true } },
+  ])
+  const out = path.join(root, "out")
+  build({ storeDir: store, outDir: out })
+  const rollup = JSON.parse(readFileSync(path.join(out, "rollups", "outcomes.json"), "utf8"))
+  assert.equal(rollup.schema, "desk.factory.rollups/1")
+  assert.equal(rollup.signoff.recorded, true)
+  assert.equal(rollup.signoff.jobs, 2)
+  assert.equal(rollup.signoff.accepted, 1)
+  assert.equal(rollup.signoff.delivered_unsigned, 1)
+  assert.equal(rollup.signoff.jobs_without_work_record, 1)
+  assert.equal(rollup.signoff.no_record, 1)
+  assert.deepEqual(rollup.signoff.waits.unsigned, { lt_1h: 0, lt_1d: 0, lt_7d: 1, ge_7d: 0 })
+  assert.equal(rollup.first_pass_yield.state, "unavailable")
+  assert.deepEqual(rollup.first_pass_yield.reasons, ["no_delivered_jobs"])
+  assert.equal(rollup.rework.state, "unavailable")
+  const job = JSON.parse(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.json`), "utf8"))
+  assert.deepEqual(job.formulas.signoff, { class: "declared", value: "accepted", verified: true, reason: null, wait: { class: "lt_1d", censored: false }, state: "measured", reasons: [] })
+  assert.equal(job.timeline.outcome.rev, 4)
+  const open = JSON.parse(readFileSync(path.join(out, "jobs", `${OPEN_JOB}.json`), "utf8"))
+  assert.equal(open.formulas.signoff.state, "unavailable")
+  assert.equal(open.timeline.outcome, null)
+  assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: accepted \(verified\), waited under 1 day\./u)
+  const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
+  assert.match(page, /## Sign-off/u)
+  assert.match(page, /Accepted \(verified\): 1\./u)
+}))
+
+test("a store with no outcomes at all builds, and every sign-off count is absent or not recorded, never zero accepted", () => scratch((root) => {
+  const out = path.join(root, "out")
+  build({ storeDir: STORE, outDir: out })
+  const rollup = JSON.parse(readFileSync(path.join(out, "rollups", "outcomes.json"), "utf8"))
+  assert.deepEqual(rollup.signoff, { recorded: false })
+  const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
+  assert.match(page, /Sign-off: not recorded in any session of this store\./u)
+  assert.doesNotMatch(page, /Accepted \(verified\)/u)
+  assert.match(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8"), /- Sign-off: not recorded\./u)
+}))
+
+test("outcome output carries no planted free text, and an outcome entry with free text stops the build without echoing it", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(STORE, store, { recursive: true })
+  const entry = { job: CLOSED_JOB, rev: 1, state: "refused", verified: true, reason: "defect", deliveries: 1, wait: { class: "lt_1h", censored: false } }
+  withOutcomes(store, [entry])
+  const out = path.join(root, "out")
+  build({ storeDir: store, outDir: out })
+  for (const relative of ["rollups/outcomes.json", "rollups/index.md", `jobs/${CLOSED_JOB}.json`, `jobs/${CLOSED_JOB}.md`]) {
+    const text = readFileSync(path.join(out, relative), "utf8")
+    assert.equal(text.includes(SENTINEL), false, relative)
+    assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}|\d{2}:\d{2}|\/(?:Users|home|tmp|var)\//u, relative)
+  }
+  for (const planted of [{ ...entry, reason: SENTINEL }, { ...entry, [SENTINEL]: true }, { ...entry, job: SENTINEL }, { ...entry, wait: { class: SENTINEL, censored: false } }]) {
+    const factPath = path.join(store, "facts", FIRST_FACTS)
+    const fact = JSON.parse(readFileSync(factPath, "utf8"))
+    fact.outcomes = [planted]
+    writeFileSync(factPath, JSON.stringify(fact))
+    assert.throws(() => build({ storeDir: store, outDir: out }), (error) => error.code === "invalid_published_facts" && !error.message.includes(SENTINEL))
+  }
+}))
+
+test("the build publishes first-pass yield with what it counted and what it left out, and the page says so", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(STORE, store, { recursive: true })
+  const returns = [{ reason: "agent_error", caught: "after_delivery", counts: true, refusal: "defect", refusal_verified: true }]
+  withOutcomes(store, [
+    { job: CLOSED_JOB, rev: 4, state: "refused", verified: true, reason: "defect", deliveries: 1, wait: { class: "lt_1d", censored: false }, since: "created", returns },
+    { job: OPEN_JOB, rev: 2, state: "delivered_unsigned", verified: null, reason: null, deliveries: 1, wait: { class: "lt_1h", censored: true }, since: "created", returns: [] },
+    { job: "cccccccccccccccccccccccccccccccc", rev: 1, state: "accepted", verified: true, reason: null, deliveries: 1, wait: null, since: "adopted" },
+  ])
+  const out = path.join(root, "out")
+  build({ storeDir: store, outDir: out })
+  const rollup = JSON.parse(readFileSync(path.join(out, "rollups", "outcomes.json"), "utf8"))
+  assert.deepEqual(Object.keys(rollup), ["attention", "first_pass_yield", "groupings", "rework", "schema", "signoff"])
+  assert.deepEqual(rollup.first_pass_yield, {
+    state: "partial", value: 0.5, reasons: ["awaiting_signoff"], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 1, signoff_unverified: 0, changed_ask_only: 0,
+    excluded: [{ reason: "history_not_recorded", jobs: 1 }],
+  })
+  assert.equal(rollup.rework.state, "partial")
+  assert.deepEqual(rollup.rework.reason_check, { state: "partial", compared: 1, disagree: 0, compared_verified: 1, reasons: ["history_not_recorded"] })
+  const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
+  assert.match(page, /at most 1 of 2 delivered jobs passed first time \(upper bound 50\.00%/u)
+  assert.match(page, /Left out of the count: 1 job \(the task card does not record what was sent back\)\./u)
+  const job = JSON.parse(readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.json`), "utf8"))
+  assert.equal(job.formulas.first_pass_yield.value, 0)
+  assert.deepEqual(job.formulas.rework.value, { in_task: 0, at_review: 0, after_delivery: 1 })
+}))
+
 test("built pages and the README say what each host cannot record, with no raw reason identifier", () => scratch((root) => {
   const out = path.join(root, "out")
   build({ storeDir: ROLLUP_STORE, outDir: out })
@@ -340,4 +444,89 @@ test("built pages and the README say what each host cannot record, with no raw r
       assert.match(line, /public commits: (?:\d+ \((?:measured|partial: [^)]*)\)|not recorded \([^)]*\))/u, relative)
     }
   }
+}))
+
+// --- the attention headline in the built files (task E8) -----------------------
+
+const COPILOT_FACTS = "copilot-cli-22222222-2222-4222-8222-222222222222.json"
+const turnOf = (at_ms) => ({ at_ms, basis: "after_stop", window_ms: 3000, prompt_class: "xs", output_class: "none" })
+
+// Rewrites one facts file as `/2` with a list of human turns and, optionally, a flag on the field.
+function withTurns(store, file, turns, flags = []) {
+  const factPath = path.join(store, "facts", file)
+  const fact = JSON.parse(readFileSync(factPath, "utf8"))
+  fact.schema = "desk.factory.published/2"
+  fact.human_turns = turns
+  fact.unavailable = [...fact.unavailable, ...flags.map((reason) => ({ field: "human_turns", reason }))]
+  writeFileSync(factPath, serializePublished(fact))
+}
+
+const outcomeFile = (out) => JSON.parse(readFileSync(path.join(out, "rollups", "outcomes.json"), "utf8"))
+
+test("the build publishes the attention headline, its companions and the plugin version groups, and the page prints them", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(STORE, store, { recursive: true })
+  // The old-format Copilot sessions of the store are from before the record: they are outside the period and leave the headline measured.
+  withOutcomes(store, [{ job: CLOSED_JOB, rev: 4, state: "accepted", verified: true, reason: null, deliveries: 1, wait: null }])
+  withTurns(store, FIRST_FACTS, [turnOf(1000), turnOf(2000)])
+  const out = path.join(root, "out")
+  build({ storeDir: store, outDir: out })
+  const { attention, groupings } = outcomeFile(out)
+  assert.deepEqual(attention.headline, { state: "measured", value: 6000, reasons: [], n: 1, N: 1, numerator_ms: 6000, accepted_outcomes: 1 })
+  assert.equal(attention.human_turns, 2)
+  assert.deepEqual(attention.sessions, { in_period: 1, complete: 1 })
+  assert.equal(attention.est_ms.attributed + attention.est_ms.unattributed + attention.est_ms.unplaced, 6000)
+  assert.equal(attention.method.version, 1)
+  // The groups use exactly the plugin version keys the job rollups use.
+  const measures = JSON.parse(readFileSync(path.join(out, "rollups", "measures.json"), "utf8"))
+  assert.deepEqual(Object.keys(groupings.plugin_version).sort(), Object.keys(measures.groupings.plugin_version).sort())
+  const sum = (pick) => Object.values(groupings.plugin_version).reduce((total, group) => total + (pick(group) ?? 0), 0)
+  assert.equal(sum((group) => group.attention.headline.numerator_ms), attention.headline.numerator_ms)
+  assert.equal(sum((group) => group.signoff.accepted), 1)
+  const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
+  assert.match(page, /- Human attention per accepted outcome: about 6 seconds \(an estimate, method version 1; measured\)\./u)
+  const job = readFileSync(path.join(out, "jobs", `${CLOSED_JOB}.md`), "utf8")
+  assert.match(job, /- Human attention: /u)
+}))
+
+test("a Copilot session in the period makes the built headline partial, and the page says why in words", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(STORE, store, { recursive: true })
+  withOutcomes(store, [{ job: CLOSED_JOB, rev: 4, state: "accepted", verified: true, reason: null, deliveries: 1, wait: null }])
+  withTurns(store, FIRST_FACTS, [turnOf(1000)])
+  withTurns(store, COPILOT_FACTS, [turnOf(1000)], ["host_records_partly"])
+  const out = path.join(root, "out")
+  build({ storeDir: store, outDir: out })
+  const { attention } = outcomeFile(out)
+  assert.equal(attention.headline.state, "partial")
+  assert.deepEqual(attention.headline.reasons, ["host_records_partly", "turns_not_recorded"])
+  // The other, old-format Copilot sessions are outside the period.
+  assert.deepEqual(attention.sessions, { in_period: 2, complete: 1 })
+  const page = readFileSync(path.join(out, "rollups", "index.md"), "utf8")
+  assert.match(page, /partial, so a lower bound: .*a host records the human's turns only in part/u)
+  assert.doesNotMatch(page, /host_records_partly|turns_not_recorded/u)
+}))
+
+test("a store with no accepted outcome says so, and the attention file carries only counts and codes", () => scratch((root) => {
+  const out = path.join(root, "out")
+  build({ storeDir: STORE, outDir: out })
+  const { attention, groupings } = outcomeFile(out)
+  assert.deepEqual(attention.headline, { state: "unavailable", reasons: ["no_accepted_outcomes", "no_turn_records"], n: 0, N: 0, accepted_outcomes: 0 })
+  // Every session of the store is from an old-format file, so none is in the period, and nothing is published as a zero.
+  assert.deepEqual(attention.sessions, { in_period: 0, complete: 0 })
+  assert.equal(Object.hasOwn(attention, "human_turns"), false)
+  assert.equal(Object.hasOwn(attention.headline, "numerator_ms"), false)
+  assert.match(readFileSync(path.join(out, "rollups", "index.md"), "utf8"), /- Human attention per accepted outcome: no accepted outcomes yet, and no human attention is recorded in the period/u)
+  const strings = []
+  const visit = (value, key) => {
+    if (typeof value === "string") strings.push([key, value])
+    else if (Array.isArray(value)) value.forEach((entry) => visit(entry, key))
+    else if (value !== null && typeof value === "object") for (const [name, child] of Object.entries(value)) visit(child, name)
+  }
+  visit({ attention, groupings })
+  for (const [key, value] of strings) {
+    if (key === "reasons" || key === "reason") assert.ok(Object.hasOwn(REASON_TEXT, value), `${value} has words`)
+    else assert.ok(["state"].includes(key) && ["measured", "partial", "unavailable"].includes(value), `${key} holds only a state or a reason`)
+  }
+  assert.ok(!JSON.stringify({ attention, groupings }).includes(SENTINEL))
 }))

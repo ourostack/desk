@@ -614,11 +614,68 @@ export function manySubagentsText(sessionId, count) {
 }
 
 // ---------------------------------------------------------------------------
+// The human-turns session: sized prompts and replies, and every message that is not a human turn.
+// ---------------------------------------------------------------------------
+
+export const HUMAN_TURNS_SESSION = "9d425161-7f8e-4091-a2a3-1e2f30415263"
+
+/** A text of exactly `length` characters that carries SENTINEL (`length` is at least the SENTINEL's own). */
+export function sizedText(length) {
+  return S + "x".repeat(Math.max(0, length - S.length))
+}
+
+/**
+ * Three human prompts (first, after a stop, in the middle of a turn) and a fourth after a stop that is empty; a permission decision, subagent messages and
+ * scheduled, autopilot and agent messages between them, none of which is a human turn.
+ */
+function humanTurnsSession() {
+  const id = HUMAN_TURNS_SESSION
+  const ev = eventWriter(4000)
+  const sub = { agentId: `${S}-agent-h` }
+  const message = (seconds, length, data = {}, extra = {}) => ev("user.message", seconds, { content: sizedText(length), ...data }, extra)
+  const reply = (seconds, length, extra = {}) => ev("assistant.message", seconds, { messageId: `msg-${seconds}`, content: sizedText(length), reasoningText: `thinking ${S}`, toolRequests: [] }, extra)
+  const lines = [
+    sessionStart(ev, 0, id),
+    message(2, 20, { interactionId: `${S}-h1` }),
+    ev("assistant.turn_start", 3, { turnId: "0", interactionId: `${S}-h1` }),
+    reply(4, 300),
+    // A subagent's reply and its message are not the root's.
+    reply(4.2, 6000, sub),
+    message(4.4, 3000, {}, sub),
+    toolStart(ev, 4.6, "h1", "view", { path: `/tmp/${S}/x` }),
+    ev("permission.requested", 4.7, { requestId: "h-r1", permissionRequest: { kind: "read", path: S } }),
+    ev("permission.completed", 9.7, { requestId: "h-r1", toolCallId: "h1", decisionSource: "human_response", result: { kind: "approved" } }),
+    toolComplete(ev, 10, "h1"),
+    ev("assistant.turn_end", 11, { turnId: "0" }),
+    message(12, 500, { source: `agent-${S}` }),
+    message(13, 500, { source: "schedule-1", isAutopilotContinuation: false }),
+    message(14, 500, { source: "autopilot", isAutopilotContinuation: true }),
+    message(15, 500, { isAutopilotContinuation: true }),
+    // After a stop: 30 s after the turn ended at 11, 300 characters of reply.
+    message(41, 150, { interactionId: `${S}-h2` }),
+    ev("assistant.turn_start", 42, { turnId: "1", interactionId: `${S}-h2` }),
+    reply(43, 25),
+    ev("assistant.turn_end", 44, { turnId: "1" }),
+    // The agent starts again before the next prompt, so that prompt arrives mid-turn.
+    ev("assistant.turn_start", 45, { turnId: "2", interactionId: `${S}-h2` }),
+    message(47, 1500),
+    ev("assistant.turn_end", 50, { turnId: "2" }),
+    // An empty prompt 60 s after the stop at 50.
+    ev("user.message", 110, { content: "" }),
+    ev("assistant.turn_start", 111, { turnId: "3", interactionId: `${S}-h3` }),
+    ev("assistant.turn_end", 112, { turnId: "3" }),
+  ]
+  return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`
+}
+
+export const EXTRA_FIXTURE_TEXT = Object.freeze({ [HUMAN_TURNS_SESSION]: humanTurnsSession })
+
+// ---------------------------------------------------------------------------
 // Regenerate the checked-in fixtures.
 // ---------------------------------------------------------------------------
 
 export function writeFixtures(root = path.dirname(fileURLToPath(import.meta.url))) {
-  for (const [sessionId, build] of Object.entries(FIXTURE_TEXT)) {
+  for (const [sessionId, build] of Object.entries({ ...FIXTURE_TEXT, ...EXTRA_FIXTURE_TEXT })) {
     const dir = path.join(root, sessionId)
     mkdirSync(dir, { recursive: true })
     writeFileSync(path.join(dir, "events.jsonl"), build())

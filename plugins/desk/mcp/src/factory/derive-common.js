@@ -200,3 +200,74 @@ export function shellBinding({ command, cwd, home, dialect }) {
   }
   return { commits, writes: effects.writes }
 }
+
+const SIZE_EDGES = [[0, "none"], [20, "xs"], [200, "s"], [1000, "m"], [5000, "l"]]
+
+/** The size class of a character count: `none` 0, `xs` 1 to 20, `s` 21 to 200, `m` 201 to 1,000, `l` 1,001 to 5,000, `xl` above. */
+export function sizeClass(chars) {
+  if (!Number.isSafeInteger(chars) || chars < 0) throw new TypeError("chars must be a non-negative integer")
+  for (const [edge, name] of SIZE_EDGES) if (chars <= edge) return name
+  return "xl"
+}
+
+const isCount = (value) => Number.isSafeInteger(value) && value >= 0
+
+function momentMs(at) {
+  const ms = typeof at === "string" ? Date.parse(at) : Number.NaN
+  if (Number.isNaN(ms)) throw new TypeError("at must be an ISO timestamp string")
+  return ms
+}
+
+/**
+ * Collects human turns for one session without holding any text: callers pass character counts, and a non-integer count is refused, so a string cannot be passed by mistake. `at` is the ISO timestamp string local intervals use. A `window_ms` is a whole, non-negative number of milliseconds.
+ */
+export function createHumanTurns({ limit = LIMITS.humanTurns } = {}) {
+  const turns = []
+  let replyChars = 0
+  let stoppedMs = null
+  let previousMs = null
+  let capped = false
+  let skewed = false
+  return {
+    addReply(chars) {
+      if (!isCount(chars)) throw new TypeError("chars must be a non-negative integer")
+      replyChars = Math.min(replyChars + chars, Number.MAX_SAFE_INTEGER)
+    },
+    agentStopped(at) {
+      stoppedMs = momentMs(at)
+    },
+    prompt(at, chars) {
+      if (!isCount(chars)) throw new TypeError("chars must be a non-negative integer")
+      const ms = momentMs(at)
+      let basis = "first"
+      let since = null
+      // A time earlier than the last prompt is not moved (a moved time is a made-up fact): the turn is dropped and the list is flagged as a lower bound.
+      const skew = previousMs !== null && ms < previousMs
+      if (skew) skewed = true
+      else if (previousMs !== null) {
+        basis = stoppedMs !== null ? "after_stop" : "mid_turn"
+        since = stoppedMs ?? previousMs
+      }
+      if (skew) {
+        // dropped
+      } else if (turns.length >= limit) capped = true
+      else {
+        turns.push({
+          at: new Date(ms).toISOString(),
+          basis,
+          window_ms: since === null ? null : Math.max(0, Math.floor(ms - since)),
+          prompt_class: sizeClass(chars),
+          output_class: sizeClass(replyChars),
+        })
+      }
+      if (!skew) previousMs = ms
+      replyChars = 0
+      stoppedMs = null
+    },
+    finish(unavailable) {
+      if (capped) addUnavailable(unavailable, "human_turns", "capped")
+      if (skewed) addUnavailable(unavailable, "human_turns", "source_unreadable")
+      return turns
+    },
+  }
+}

@@ -88,6 +88,7 @@ const SAFE_BARE_SCALAR = /^[A-Za-z][A-Za-z0-9_/-]*$/u
 const YAML_RESERVED_WORD = /^(?:true|false|null|~|yes|no|on|off)$/iu
 
 function encodeScalar(value) {
+  if (value === null || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return String(value)
   const text = String(value)
   if (SAFE_BARE_SCALAR.test(text) && !YAML_RESERVED_WORD.test(text)) return text
   return `"${text.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n")}"`
@@ -107,6 +108,7 @@ function isPlainObject(value) {
 // `/^\s/u.test(line)` guard skips back over them on the next iteration
 // instead of misreading one as another top-level field.
 function encodeFieldLines(key, value) {
+  if (Array.isArray(value)) return value.length === 0 ? [`${key}: []`] : [`${key}:`, ...value.map((item) => `  - ${encodeScalar(item)}`)]
   if (!isPlainObject(value)) return [`${key}: ${encodeScalar(value)}`]
   const lines = [`${key}:`]
   for (const [subKey, subValue] of Object.entries(value)) {

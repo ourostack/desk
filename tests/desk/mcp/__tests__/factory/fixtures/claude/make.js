@@ -43,6 +43,7 @@ export const SESSION_IDS = Object.freeze({
   unreadable: "5d2e3f40-ac1b-4e2f-903b-3c4d5e6f7182",
   noEnvelope: "6e3f4051-bd2c-4f30-a14c-4d5e6f718293",
   oddShapes: "8a516273-df4e-4152-936e-6f7182930a1b",
+  humanTurns: "9b627384-e05f-4263-a47f-708293a1b2c3",
 })
 
 // A transcript whose file name is not a session UUID (its lines are fine).
@@ -743,6 +744,48 @@ export function buildLargeSessionLines({ sessionId, messageCount, blobSize }) {
   return { sessionId, generate }
 }
 
+// A text of exactly `length` characters that carries SENTINEL.
+export function padded(length) {
+  return `${SENTINEL}-${"p".repeat(length - SENTINEL.length - 1)}`
+}
+
+// ---------------------------------------------------------------------------
+// "humanTurns": four human prompts among every kind of line that is not one.
+// Prompts at 10:00:00 (15 chars), 10:01:00 (120), 10:02:00 (image only) and
+// 10:02:04 (30). Replies: 250 + 100 + 25 chars before the second prompt, 40
+// before the third, none before the fourth. A subagent file holds a prompt
+// and a 6,000-character reply that must add nothing.
+// ---------------------------------------------------------------------------
+
+function buildHumanTurnsSession() {
+  const sessionId = SESSION_IDS.humanTurns
+  const envelope = (timestamp, extra) => ({ sessionId, timestamp, version: "2.1.282", entrypoint: "cli", cwd: `/tmp/${SENTINEL}-cwd`, ...extra })
+  const human = { promptSource: "typed", origin: { kind: "human" }, turnOrigin: "human" }
+  const reply = (at, id, blocks) => envelope(at, { type: "assistant", message: { id, model: "claude-opus-5-5", usage: usage(1, 1, 0, 0), content: blocks } })
+  const lines = [
+    envelope("2026-09-25T10:00:00.000Z", { type: "user", ...human, message: { role: "user", content: padded(15) } }),
+    reply("2026-09-25T10:00:05.000Z", "h-msg-1", [{ type: "thinking", thinking: padded(900) }, textBlock(padded(250)), { type: "tool_use", id: "h-bash-1", name: "Bash", input: { command: `ls ${SENTINEL}` } }]),
+    envelope("2026-09-25T10:00:10.000Z", { type: "user", ...human, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "h-bash-1", is_error: false, content: padded(80) }] } }),
+    reply("2026-09-25T10:00:11.000Z", "h-msg-2", [textBlock(padded(100))]),
+    envelope("2026-09-25T10:00:12.000Z", { type: "user", isMeta: true, message: { role: "user", content: [textBlock(padded(30))] } }),
+    envelope("2026-09-25T10:00:13.000Z", { type: "user", isCompactSummary: true, message: { role: "user", content: padded(30) } }),
+    envelope("2026-09-25T10:00:14.000Z", { type: "user", promptSource: "system", origin: { kind: "task-notification" }, turnOrigin: "task_notification", message: { role: "user", content: padded(30) } }),
+    envelope("2026-09-25T10:00:15.000Z", { type: "user", isMeta: true, promptSource: "system", turnOrigin: "scheduled", scheduledTaskId: "sched-1", message: { role: "user", content: padded(30) } }),
+    envelope("2026-09-25T10:00:16.000Z", { type: "user", message: { role: "user", content: [textBlock("[Request interrupted by user]")] } }),
+    envelope("2026-09-25T10:00:17.000Z", { type: "user", promptSource: "sdk", turnOrigin: "sdk", message: { role: "user", content: padded(30) } }),
+    reply("2026-09-25T10:00:40.000Z", "h-msg-3", [textBlock(padded(25))]),
+    envelope("2026-09-25T10:01:00.000Z", { type: "user", ...human, message: { role: "user", content: padded(120) } }),
+    reply("2026-09-25T10:01:30.000Z", "h-msg-4", [textBlock(padded(40))]),
+    envelope("2026-09-25T10:02:00.000Z", { type: "user", ...human, message: { role: "user", content: [imageBlock()] } }),
+    envelope("2026-09-25T10:02:04.000Z", { type: "user", ...human, message: { role: "user", content: [textBlock(padded(30))] } }),
+  ]
+  const subagentLines = [
+    envelope("2026-09-25T10:00:06.000Z", { type: "user", isSidechain: true, ...human, message: { role: "user", content: padded(500) } }),
+    envelope("2026-09-25T10:00:07.000Z", { type: "assistant", isSidechain: true, message: { id: "h-sub-1", model: "claude-opus-5-5", usage: usage(1, 1, 0, 0), content: [textBlock(padded(6000))] } }),
+  ]
+  return { sessionId, lines, subagents: [{ fileStem: "agent-human-1", lines: subagentLines, meta: { agentType: "general-purpose" } }] }
+}
+
 function writeSubagents(sessionDir, subagents) {
   if (subagents.length === 0) return
   const subagentsDir = path.join(sessionDir, "subagents")
@@ -764,6 +807,7 @@ export function generate({ outDir = here } = {}) {
   const noEnvelope = buildNoEnvelopeSession()
   const nonUuid = buildNonUuidSession()
   const oddShapes = buildOddShapesSession()
+  const humanTurns = buildHumanTurnsSession()
 
   rmSync(path.join(outDir, full.sessionId), { recursive: true, force: true })
   writeFileSync(path.join(outDir, `${full.sessionId}.jsonl`), toJsonl(full.lines))
@@ -777,7 +821,11 @@ export function generate({ outDir = here } = {}) {
   writeFileSync(path.join(outDir, `${oddShapes.sessionId}.jsonl`), oddShapes.raw)
   writeSubagents(path.join(outDir, oddShapes.sessionId), oddShapes.subagents)
 
-  return { full, truncated, unreadable, noEnvelope, nonUuid, oddShapes }
+  rmSync(path.join(outDir, humanTurns.sessionId), { recursive: true, force: true })
+  writeFileSync(path.join(outDir, `${humanTurns.sessionId}.jsonl`), toJsonl(humanTurns.lines))
+  writeSubagents(path.join(outDir, humanTurns.sessionId), humanTurns.subagents)
+
+  return { full, truncated, unreadable, noEnvelope, nonUuid, oddShapes, humanTurns }
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)

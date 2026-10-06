@@ -1779,3 +1779,76 @@ test("a relative local_path resolves against the desk root in repoStates and res
   await resolvePushAccounts({ root: deskRoot, cards, runner, spawnGit, homeDir: "/home/x" })
   assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), "/home/x/h"])
 })
+
+const DELIVERED_CARD = (title, deliveredAt) => [
+  "schema_version: 1", `title: ${title}`, "status: done", "created: '2026-01-01T00:00:00Z'", "updated: '2026-01-02T00:00:00Z'", "track: example-track", "repos: []",
+  "signoff:", "  state: delivered_unsigned", "  at: null", "  verified: null", "  reason: null",
+  "flow:", "  since: created", "  rev: 1", "  reached: done", `  delivered_at: '${deliveredAt}'`, "  deliveries: 1",
+  "evidence:", "  kind: pr", "  ref: https://example.test/pr/7", `  recorded_at: '${deliveredAt}'`,
+].join("\n")
+
+test("bootOnce: delivered tasks that await sign-off are listed, the one instruction follows the work, and the counts reach status.json", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "shipped", DELIVERED_CARD("Shipped thing", new Date(Date.now() - 9 * 86_400_000).toISOString()))
+  await writeCard(root, "track-a", "legacy", VALID_CARD.replace("status: processing", "status: done"))
+  const result = await healthyBoot(root, { taskQuery: "shipped" })
+  assert.equal(result.unsigned_deliveries.count, 1)
+  assert.equal(result.unsigned_deliveries.not_recorded, 1)
+  assert.equal(result.unsigned_deliveries.tasks[0].title, "Shipped thing")
+  const line = result.instructions.find((entry) => /await sign-off|awaits sign-off/u.test(entry))
+  assert.match(line, /^1 delivered task awaits sign-off, the oldest for 9 days\. Finish what the operator asked first\./u)
+  assert.ok(result.instructions.indexOf(line) > result.instructions.findIndex((entry) => entry.includes("desk:session-resumption")), "the sign-off instruction never comes before the named task")
+  const printed = formatBootText(result)
+  assert.match(printed, /Delivered, awaiting sign-off:\n- track-a\/shipped, 9 days, pr https:\/\/example\.test\/pr\/7, overdue\n/u)
+  const { readStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  const { signoff } = await readStatus({ DESK: root })
+  assert.deepEqual(signoff.unsigned, { state: "measured", value: 1 })
+  assert.deepEqual(signoff.overdue, { state: "measured", value: 1 })
+  assert.deepEqual(signoff.not_recorded, { state: "measured", value: 1 })
+  assert.equal(JSON.stringify(signoff).includes("shipped"), false)
+})
+
+test("bootOnce: with consent undecided and one unsigned delivery, the sign-off line comes before consent, and consent stays the last instruction", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "shipped", DELIVERED_CARD("Shipped thing", new Date(Date.now() - 86_400_000).toISOString()))
+  const result = await healthyBoot(root, { factoryStatusFn: UNDECIDED })
+  const list = result.text_instructions
+  const signoff = list.findIndex((line) => /awaits sign-off/u.test(line))
+  assert.ok(signoff !== -1 && signoff < list.length - 1, "the sign-off instruction is present and not last")
+  assert.match(list.at(-1), /^Factory consent is undecided/u)
+  assert.ok(result.instructions.findIndex((line) => /awaits sign-off/u.test(line)) < result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided")))
+})
+
+test("bootOnce: a noninteractive session lists the tasks but is given no sign-off instruction; a desk with nothing unsigned has no section", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "shipped", DELIVERED_CARD("Shipped thing", new Date(Date.now() - 86_400_000).toISOString()))
+  const quiet = await healthyBoot(root, { env: { DESK: root, CLAUDE_CODE_ENTRYPOINT: "sdk-cli" } })
+  assert.equal(quiet.unsigned_deliveries.count, 1)
+  assert.ok(!quiet.instructions.some((entry) => /sign-off/u.test(entry)))
+  const empty = await mkDeskWorkspace()
+  const none = await healthyBoot(empty)
+  assert.equal(none.unsigned_deliveries.count, 0)
+  assert.ok(!none.instructions.some((entry) => /sign-off/u.test(entry)))
+  assert.doesNotMatch(formatBootText(none), /awaiting sign-off/u)
+})
+
+test("bootOnce: a failed sign-off scan degrades nothing and shows no section", async () => {
+  const root = await mkDeskWorkspace()
+  const result = await healthyBoot(root, { unsignedFn: () => { throw new Error("no") } })
+  assert.equal(result.unsigned_deliveries, null)
+  assert.doesNotMatch(formatBootText(result), /awaiting sign-off/u)
+})
+
+test("bootOnce: a card that cannot be read is counted in the boot result, shown in the text, and makes the status figures lower bounds", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "shipped", DELIVERED_CARD("Shipped thing", new Date(Date.now() - 86_400_000).toISOString()))
+  await fs.mkdir(path.join(root, "track-a", "broken"), { recursive: true })
+  await fs.writeFile(path.join(root, "track-a", "broken", "task.md"), "no frontmatter here\n")
+  const result = await healthyBoot(root)
+  assert.equal(result.unsigned_deliveries.unreadable, 1)
+  assert.match(formatBootText(result), /1 task card could not be read, so this list may be short\./u)
+  const { readStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  const { signoff } = await readStatus({ DESK: root })
+  assert.deepEqual(signoff.unsigned, { state: "partial", value: 1, reason: "cards_unreadable" })
+  assert.equal(JSON.stringify(signoff).includes("broken"), false)
+})

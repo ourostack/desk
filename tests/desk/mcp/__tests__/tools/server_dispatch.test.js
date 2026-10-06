@@ -22,6 +22,7 @@ const SURFACE_BEFORE_FEEDBACK_RETIREMENT = [
   "task_archive",
   "task_move",
   "task_focus",
+  "task_signoff",
   "track_create",
   "track_update",
   "track_rename",

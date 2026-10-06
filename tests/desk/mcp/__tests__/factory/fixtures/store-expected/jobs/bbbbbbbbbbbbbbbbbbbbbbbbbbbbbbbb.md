@@ -18,6 +18,8 @@
 - Public pull requests: ourostack/desk#8 (partial: the host records only some of it, so this is a lower bound; 2 sessions uncovered); public commits: 1 (partial: the host does not record it; 1 session uncovered); private pull requests counted: 0 (partial: the host records only some of it, so this is a lower bound; 2 sessions uncovered); private commits counted: 1 (partial: the host does not record it; 1 session uncovered).
 - Tokens: total 600 (partial: the host's record did not include it; 1 session uncovered), input 200 (partial: the host's record did not include it; 1 session uncovered), output 400 (partial: the host's record did not include it; 1 session uncovered), cache read 600 (partial: the host's record did not include it; 1 session uncovered), cache write 80 (partial: the host's record did not include it; 1 session uncovered), reasoning 20 (partial: the host's record did not include it and the host does not record it; 1 session uncovered).
 - Status transitions: processing at 2500 ms (measured).
+- Sign-off: not recorded.
+- Human attention: not recorded (no session of the job recorded the human's turns).
 
 ## What mattered
 
@@ -47,6 +49,7 @@ Not classified yet: no session of this job has labels from the independent evalu
 - Model requests: the host's record did not include it (1 session).
 - Tokens: the host's record did not include it (1 session).
 - Tool durations: it was cut to a size limit (1 session).
-- First-pass yield: not recorded (it is not collected yet).
+- First-pass yield: not recorded (no outcome record is available).
+- Rework: not recorded (no outcome record is available).
 
 How to read these numbers: measured means every session that should supply a number did; partial means the number is a lower bound or covers only some sessions, and the reason follows; not recorded means there is no number, which is never zero. API retry counts are the errors the host surfaced: Claude surfaces only some of them, so its count is a lower bound, and Codex does not record them. Human wait is the gaps between prompts inside a session. Tool failure and retry definitions differ by host: Codex reads an output layout it does not recognise as ok, and Copilot adds denied. The number of compactions is recorded on every host; compaction wait time is recorded only where the host records it. Cost in money is not measured in v0.

@@ -5,7 +5,7 @@ import { readFileSync, realpathSync, statSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
-import { bindSession } from "./binding.js"
+import { bindSession, isTaskSegment, jobId } from "./binding.js"
 import { deriveClaudeSession } from "./derive-claude.js"
 import { addUnavailable } from "./derive-common.js"
 import { deriveCodexSession } from "./derive-codex.js"
@@ -13,11 +13,13 @@ import { deriveCopilotSession } from "./derive-copilot.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
+import { outcomeSnapshot } from "./outcome.js"
 import { factoryStateRoot, listMarkers, outboxCopies, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
 import { githubRepoOfRemote } from "./desk-visibility.js"
-import { isPlainObject } from "./schema.js"
+import { LIMITS, isPlainObject } from "./schema.js"
+import { normalizeTimestamp } from "./time.js"
 import { declared, deskRootOf, markerRoute, proofIndex, provenBy } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
@@ -29,6 +31,62 @@ async function sourceStamp(file) {
 
 /** Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. */
 export const BINDING_VERSION = 5
+
+// The Desk task tool calls that can change a card's outcome record: the session's facts carry the record of every task one of them named.
+const LIFECYCLE_CALL = /task_(?:signoff|update|create|archive)$/u
+
+// One entry of `facts.outcomes`, from a card's snapshot. A time the card holds in another written form is made the canonical instant, or `null`, so one hand-edited card cannot make the whole session's facts invalid. The snapshot's other keys are dropped here.
+function outcomeEntry(job, found, now) {
+  const snapshot = outcomeSnapshot(found.record, { status: found.status, now, evidenceAt: found.evidenceAt })
+  const { rev, state, verified, reason, deliveries, observed_at: observedAt } = snapshot
+  const entry = { job, rev, state, verified, reason, deliveries, delivered_at: normalizeTimestamp(snapshot.delivered_at), signed_at: normalizeTimestamp(snapshot.signed_at), observed_at: observedAt }
+  // The record's start, the two milestone times and the returns are written only when the card holds them; a card with no record has none of these, and an empty returns list on a card with a record means no returns.
+  if (snapshot.since !== null) entry.since = snapshot.since
+  for (const key of ["first_validating_at", "first_delivered_at"]) {
+    const time = normalizeTimestamp(snapshot[key])
+    if (time !== null) entry[key] = time
+  }
+  if (snapshot.since !== null || snapshot.returns.length > 0) {
+    // The newest `LIMITS.returns` are kept, the oldest dropped first, and the entry says when any were.
+    entry.returns = snapshot.returns.slice(-LIMITS.returns)
+    if (snapshot.returns.length > LIMITS.returns) entry.returns_truncated = true
+  }
+  if (snapshot.returns_unreadable > 0) entry.returns_unreadable = snapshot.returns_unreadable
+  return entry
+}
+
+/**
+ * `outcomesFor({ jobs, lifecycleCalls, readers, identity, now }) -> entry[]`: the outcome record of each task the session touched, sorted by job, one entry per job and at most `LIMITS.outcomes`. The tasks are the bound jobs (`jobs`: `{ job, track, slug }` as `bindSession` returns them as `tasks`) and every task a successful `task_signoff`, `task_update`, `task_create` or `task_archive` call named (`lifecycleCalls`: the deriver's `deskToolCalls`). A call's job ID is computed as binding computes it: the birth path from `readers.resolveJobIdentity`, hashed with `identity` (`{ deskRemote, personPrefix }`). A task whose card cannot be read, or whose job ID cannot be made, gets no entry and never stops the others. `observed_at` is `now` (epoch milliseconds or an ISO string), never the clock.
+ */
+export function outcomesFor({ jobs, lifecycleCalls, readers, identity, now }) {
+  const entries = new Map()
+  const add = (job, track, slug) => {
+    if (entries.has(job)) return
+    try {
+      const found = readers.readOutcome(track, slug)
+      // A card whose status cannot be read has no state to report: no entry, never a default.
+      if (found !== null && found.status !== null) entries.set(job, outcomeEntry(job, found, now))
+    } catch {
+      // A card that cannot be read leaves the session's other outcomes as they are.
+    }
+  }
+  for (const { job, track, slug } of jobs) add(job, track, slug)
+  const named = new Set()
+  for (const call of lifecycleCalls) {
+    if (call?.ok !== true || typeof call.name !== "string" || !LIFECYCLE_CALL.test(call.name) || !isTaskSegment(call.track) || !isTaskSegment(call.slug)) continue
+    if (named.has(`${call.track}/${call.slug}`)) continue
+    named.add(`${call.track}/${call.slug}`)
+    let job
+    try {
+      const birth = readers.resolveJobIdentity(call.track, call.slug)
+      job = jobId({ ...identity, track: birth.track, slug: birth.slug })
+    } catch {
+      continue
+    }
+    add(job, call.track, call.slug)
+  }
+  return [...entries.values()].sort((a, b) => (a.job < b.job ? -1 : 1)).slice(0, LIMITS.outcomes)
+}
 
 const sameSource = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ino === b.ino && a.dev === b.dev
 
@@ -175,18 +233,19 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
     const deskRemote = readDeskRemote({ deskRoot })
-    const { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs } = bindSession({
+    const { jobs, boundBy, disagrees, ownActivity, repoUnresolved, segmentsCappedMs, tasks, remote } = bindSession({
       events: derived.events, agents: derived.facts.agents, session: derived.facts.session, deskRoot, deskRemote, personPrefix,
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
+    derived.facts.outcomes = outcomesFor({ jobs: tasks, lifecycleCalls: derived.events.deskToolCalls, readers: createDeskReaders({ deskRoot, personPrefix }), identity: { deskRemote: remote, personPrefix }, now: now() })
     if (segmentsCappedMs > 0) addUnavailable(derived.facts.unavailable, "job_segments", "capped")
     // The decision that guards the write is made again right before it: the derivation above is long.
     const late = admit === null ? null : await admit()
     if (late !== null) return { result: "refused", store, reason: late }
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
-    await setJobsForFile(env, written.name, jobs.map((j) => j.job))
+    await setJobsForFile(env, written.name, [...new Set([...jobs, ...derived.facts.outcomes].map((j) => j.job))])
     // `desk_root` stays local: the flush reads the desk's declaration from it once the marker is pruned (`session-route.js`).
     // So do `bound_by` (job ID -> "focus" | "inferred"), `own_activity` (spans in ms from the session's start), `focus_disagrees` (job IDs)
     // `repo_unresolved` (how many distinct directories outside the desk no longer exist and named no repository: lost evidence; a
