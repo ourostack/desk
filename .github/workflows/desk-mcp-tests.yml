@@ -188,6 +188,37 @@ jobs:
           home="$(mktemp -d "$RUNNER_TEMP/offline-eval-home.XXXXXX")"
           HOME="$home" node --test --test-shard="$SHARD/4" evals/offline/__tests__/*.test.mjs
 
+  # The release's own build and checks, as a dry run on this pull request merged into main: it folds the pending changelog
+  # fragments, commits the result to a throwaway HEAD and runs every check the release workflow runs on that commit
+  # (scripts/build-and-check-release.sh, shared with desk-release.yml), then discards it. A pull request the release would
+  # reject, or whose release tests run nothing, fails here instead of on main after the merge.
+  release-dry-run:
+    name: Release dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Install dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      - name: Build and check the release without keeping it
+        run: scripts/build-and-check-release.sh --dry-run
+
   desk-mcp-tests:
     name: desk MCP test suite
     needs: desk-mcp-coverage-shards
@@ -598,6 +629,7 @@ jobs:
     needs:
       - desk-mcp-coverage-shards
       - offline-eval-tests
+      - release-dry-run
       - desk-mcp-tests
       - desk-runtime-packs
       - desk-feedback-windows

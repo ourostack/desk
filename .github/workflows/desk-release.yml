@@ -73,37 +73,21 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
-      # Builds the release on the checked-out main and runs every check that reads a version surface, the changelog or a
-      # fragment. The list follows the release-sensitive checks in validate-skills.yml.
+      # Builds the release on the checked-out main and runs every check on the release commit. The steps live in
+      # scripts/build-and-check-release.sh, which pull request CI also runs as a dry run (desk-mcp-tests.yml), so a
+      # release that would fail fails its pull request first.
       - name: Build and check the release
         id: release
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           base="$(git rev-parse HEAD)"
-          node scripts/release-desk.cjs --date "$(date -u +%F)" > "$RUNNER_TEMP/release.json"
-          if [ "$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").released')" != "true" ]; then
-            echo "No changelog fragment is pending; nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "released=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          RELEASE_OUTPUT="$GITHUB_OUTPUT" RELEASE_RUN_URL="$RUN_URL" scripts/build-and-check-release.sh
+          if grep -qx 'released=true' "$GITHUB_OUTPUT"; then
+            mkdir -p "$RUNNER_TEMP/desk-release"
+            git bundle create "$RUNNER_TEMP/desk-release/release.bundle" refs/heads/main "^$base"
+          else
+            echo "No changelog fragment is pending; nothing to release." >> "$GITHUB_STEP_SUMMARY"
           fi
-          summary="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/release.json"); `Desk ${r.to} from ${r.fragments.length} changelog fragment(s): ${r.fragments.map((f) => f.split("/").pop()).join(", ")}`')"
-          version="$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").to')"
-          git add --all -- .claude-plugin plugins/desk tests/desk
-          git commit --quiet --message "Release Desk $version" --message "$summary. Released by $RUN_URL."
-          sha="$(git rev-parse HEAD)"
-          # The checks run on the commit that will be pushed: some list tracked files, which must not include the fragments
-          # the release deleted.
-          test -z "$(git status --porcelain)"
-          node scripts/check-release-integrity.cjs
-          for check in validate-skills test-desk-docs test-desk-host-manifests test-desk-generated-artifacts test-desk-contracts; do
-            node "scripts/$check.cjs"
-          done
-          (cd plugins/desk/mcp && node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test "../../../tests/desk/mcp/__tests__/release/**/*.test.js" "../../../tests/desk/mcp/__tests__/activation/**/*.test.js" "../../../tests/desk/mcp/__tests__/artifacts/**/*.test.js" "../../../tests/desk/mcp/__tests__/docs/**/*.test.js" "../../../tests/desk/mcp/__tests__/scripts/**/*.test.js")
-          mkdir -p "$RUNNER_TEMP/desk-release"
-          git bundle create "$RUNNER_TEMP/desk-release/release.bundle" refs/heads/main "^$base"
-          { echo "released=true"; echo "summary=$summary"; echo "sha=$sha"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
 
       - name: Hand the checked release commit to the push job
         if: steps.release.outputs.released == 'true'

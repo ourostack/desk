@@ -84,6 +84,7 @@ import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
+import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
@@ -857,6 +858,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     task: null,
     factory: null,
     stale_desk: null,
+    release_alert: null,
   }
 }
 
@@ -1174,6 +1176,7 @@ export async function bootOnce({
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
   staleDeskFn = checkStaleDesk,
+  releaseAlertFn = checkReleaseAlert,
   nestedCards = NESTED_CARD_FIELDS,
   unsignedFn = recordUnsigned,
   signoffListedFn = noteSignoffListed,
@@ -1295,6 +1298,10 @@ export async function bootOnce({
   } catch (error) {
     degraded.push(`card_validation: ${error.message}`)
   }
+  // The release-alert lookup runs alongside the rest of boot, with its own hard budget; it never rejects.
+  const releaseAlert = Promise.resolve()
+    .then(() => (headless ? null : releaseAlertFn({ env, cards, now })))
+    .catch(() => null)
   if (!nestedCards) {
     const why = runtimeResolverFailure()
     pending.push(`card repos: not validated, gray-matter is not installed (the dependency-free reader cannot parse repos lists)${why === null ? "" : `; restoring the runtime dependencies failed: ${redactCredentialLikeText(why)}`}`)
@@ -1396,6 +1403,7 @@ export async function bootOnce({
   }
 
   const staleFinding = await staleDesk
+  const releaseFinding = await releaseAlert
   const status = healthWord(degraded)
   const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement }
   const instructions = buildInstructions(instructionContext)
@@ -1422,6 +1430,7 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    release_alert: releaseFinding,
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),
