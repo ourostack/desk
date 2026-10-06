@@ -22,8 +22,8 @@ import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 const DONE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
-const MAIN_FOCUSED = (name) => `If you are the session's main agent: focused on ${name}; call task_focus if you have switched tasks.`
-const MAIN_NONE = "If you are the session's main agent: no task in focus; call task_focus with the task you are working on."
+const MAIN_FOCUSED = (name) => `If you are the session's main agent: focused on ${name}; call task_focus if you have switched tasks, or with clear: true for none.`
+const MAIN_NONE = "If you are the session's main agent: no task in focus; call task_focus with the task you are working on, or with clear: true for none."
 
 async function card(root, track, slug, extra = {}) {
   await task_create({ deskRoot: root, input: { track, slug, title: "T", status: "processing", ...extra } })
@@ -244,28 +244,30 @@ test("focusNote is silent without a holder or a different-card target", () => {
   assert.equal(focusNote(statusContext), undefined)
 })
 
-test("archiving the focused card clears the focus; archiving another does not", async () => {
+test("archiving the focused card keeps the focus, so a later update of another card shows the hint", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
   await card(root, "tr", "beta-work")
+  await card(root, "tr", "gamma-work")
   const { focus, statusContext } = ctx()
   await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" }, statusContext })
   await task_archive({ deskRoot: root, statusContext, input: { track: "tr", slug: "beta-work", outcome: "cancelled" } })
   assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" })
   const done = await task_archive({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work", outcome: "cancelled" } })
-  assert.equal(done.focus_note, undefined)
-  assert.equal(focus.get(), null)
-  assert.equal(focus.declared(), true, "archiving the focused card does not bring the no-focus hint back")
+  assert.equal(done.focus_note, undefined, "the card acted on is the focused one")
+  assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" }, "the factory keeps crediting the declared task, so the held focus agrees")
+  const update = await task_update({ deskRoot: root, statusContext, input: { track: "tr", slug: "gamma-work", note: "n" } })
+  assert.equal(update.focus_note, MAIN_FOCUSED("tr/alpha-work"))
 })
 
-test("already_archived of the focused card clears the focus too", async () => {
+test("already_archived of the focused card keeps the focus too", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
   const { focus, statusContext } = ctx()
   await task_archive({ deskRoot: root, input: { track: "tr", slug: "alpha-work", outcome: "cancelled" } })
   await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" }, statusContext })
   assert.equal((await task_archive({ deskRoot: root, statusContext, input: { track: "tr", slug: "alpha-work" } })).status, "already_archived")
-  assert.equal(focus.get(), null)
+  assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" })
 })
 
 test("moving the focused card carries the focus; moving another leaves it", async () => {

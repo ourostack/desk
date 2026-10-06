@@ -792,15 +792,10 @@ async function archivedTaskStatus(archivedFile) {
   }
 }
 
-// An archive of the focused card ends the focus (the task is finished); an archive of any other card carries the hint
-// for a session that is still focused elsewhere, or the no-focus hint.
+// An archive never changes the held focus: the factory credits a declared task until the next `task_focus` call, so the held focus
+// stays what the transcript says, and a later update of another card gets the "focused on" hint. An archive of any other card
+// carries the hint for a session that is focused elsewhere, or the no-focus hint.
 function withArchiveFocus(statusContext, target, result) {
-  const focus = statusContext.focus
-  const current = focus?.get() ?? null
-  if (current !== null && current.track === target.track && current.slug === target.slug) {
-    focus.set(null)
-    return result
-  }
   const note = focusNote(statusContext, target)
   return note === undefined ? result : { ...result, focus_note: note }
 }

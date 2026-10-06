@@ -23,8 +23,8 @@ export const PROGRESS_ENTRY_CHARS = 300
 
 const ACCEPTED = "pass `track` and `slug` to focus a task, or `clear: true` to declare no task (not both, and nothing else)"
 
-export const NO_FOCUS_HINT = "If you are the session's main agent: no task in focus; call task_focus with the task you are working on."
-export const focusedHint = ({ track, slug }) => `If you are the session's main agent: focused on ${track}/${slug}; call task_focus if you have switched tasks.`
+export const NO_FOCUS_HINT = "If you are the session's main agent: no task in focus; call task_focus with the task you are working on, or with clear: true for none."
+export const focusedHint = ({ track, slug }) => `If you are the session's main agent: focused on ${track}/${slug}; call task_focus if you have switched tasks, or with clear: true for none.`
 
 const sameTask = (a, b) => a.track === b.track && a.slug === b.slug
 
