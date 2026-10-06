@@ -1,4 +1,4 @@
-import { promises as fs, realpathSync } from "node:fs"
+import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
@@ -6,6 +6,8 @@ import { isCredentialLike } from "../desk/naming.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { readProcessStart } from "../readiness/process-start.js"
 import { withWorkspaceClaim } from "./workspace-claim.js"
+import { nativeGitPath, foldPath, samePath, insidePath } from "./native-path.js"
+export { nativeGitPath, foldPath, samePath, insidePath }
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dispositionRecord } from "./workspace-evidence.js"
 import { TERMINAL_STATES } from "../desk/lifecycle.js"
@@ -15,17 +17,6 @@ const MAX_BYTES = 64 * 1024
 const SHA = /^[0-9a-f]{40,64}$/u
 const REF = /^refs\/(?:heads|remotes)\/[^\s~^:?*[\\]+$/u
 const text = (value) => typeof value === "string" && value.length > 0
-// Git for Windows reports every path with forward slashes (`C:/Users/me/repo`), while the desk, a receipt written from the owner's own paths and `fs` use backslashes, a different drive-letter case or an 8.3 short name (`RUNNER~1`) for the same folder. A path read from Git is turned into the platform's own spelling first, and two paths are the same folder when they match after that, ignoring case on Windows, or after the file system expands both. Off Windows every spelling is exact, as before.
-export const nativeGitPath = (value, platform = process.platform) => platform === "win32" ? path.win32.normalize(value) : value
-const expandNative = (value) => { try { return realpathSync.native(value) } catch { return value } }
-export const foldPath = (value, platform = process.platform) => platform === "win32" ? path.win32.normalize(value).toLowerCase() : value
-export const samePath = (a, b, platform = process.platform, expand = expandNative) =>
-  foldPath(a, platform) === foldPath(b, platform) || (platform === "win32" && foldPath(expand(a), platform) === foldPath(expand(b), platform))
-export const insidePath = (root, target, platform = process.platform, expand = expandNative) => {
-  const sep = platform === "win32" ? path.win32.sep : path.sep
-  const within = (r, t) => t === r || t.startsWith(`${r}${sep}`)
-  return within(foldPath(root, platform), foldPath(target, platform)) || (platform === "win32" && within(foldPath(expand(root), platform), foldPath(expand(target), platform)))
-}
 const cleanLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ")
 // Workspace tidy's Git calls run in the detached repair, the CLI and the boot check's inspection. Only the boot check answers a host, and its whole-check budget aborts its calls through their signal, so each call may take far longer than a hook's 2 s: under load the 2 s limit killed repairs' ls-remote and rev-parse calls and left worktrees retained.
 export const TIDY_GIT_TIMEOUT_MS = 20_000
@@ -439,7 +430,7 @@ export async function revokeWorkspaceRelease(resource) {
     const file = path.join(admin, "desk-closeout.json")
     const record = JSON.parse(await smallFile(file))
     for (const key of ["repository", "worktree", "branch", "owner"]) {
-      if (record[key] !== resource[key]) throw new Error("release revocation ownership mismatch")
+      if (!(["repository", "worktree"].includes(key) ? samePath(String(record[key]), String(resource[key])) : record[key] === resource[key])) throw new Error("release revocation ownership mismatch")
     }
     await assertHeld()
     await fs.unlink(file)

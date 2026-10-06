@@ -426,7 +426,7 @@ test("tilde paths, remote-only repos and duplicate common directories stay scope
   assert.equal(result.complete, true)
   assert.equal(result.worktrees.length, 1)
   assert.deepEqual(result.repositories, [f.desk, f.repo, w.directory])
-  assert.deepEqual(tidy.parseWorktrees("worktree /a\0HEAD abc\0unknown future\0\0", "/repo"), [{ repository: "/repo", path: "/a", head: "abc" }])
+  assert.deepEqual(tidy.parseWorktrees("worktree /a\0HEAD abc\0unknown future\0\0", "/repo"), [{ repository: "/repo", path: tidy.nativeGitPath("/a"), head: "abc" }])
 })
 
 test("malformed release and delivery proof never authorizes deletion", async () => {
@@ -1067,6 +1067,7 @@ test("Windows paths from Git match the same folder spelled natively, in another 
   const { nativeGitPath, foldPath, samePath, insidePath } = tidy
   assert.equal(nativeGitPath("C:/Users/me/repo", "win32"), "C:\\Users\\me\\repo")
   assert.equal(nativeGitPath("/home/me/repo", "linux"), "/home/me/repo")
+  assert.equal(nativeGitPath(undefined, "win32"), undefined)
   assert.equal(foldPath("C:/Users/Me", "win32"), "c:\\users\\me")
   assert.equal(foldPath("/Home/Me", "linux"), "/Home/Me")
   const expand = (value) => (value.toLowerCase().includes("runner~1") ? value.replace(/runner~1/iu, "runneradmin") : value)
