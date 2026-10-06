@@ -1421,7 +1421,7 @@ test("a bound job's card record becomes its outcome entry", async () => {
     job: idFor("a", "one"),
     rev: ACCEPTED.flow.rev,
     state: "accepted",
-    verified: true,
+    verified: null,
     reason: null,
     deliveries: 1,
     delivered_at: "2026-09-25T09:00:00.000Z",
@@ -1660,12 +1660,14 @@ test("returns are kept for a card whose start cannot be read, and a card with a 
   assert.equal(entry.returns.length, 1)
 })
 
-test("a refusal's counts pass through as the record decides: a human changed_ask does not count, with or without a verified flag", async () => {
-  const refusal = (verified) => formatReturn({ at: "2026-09-25T10:00:00.000Z", from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: "changed_ask", refusal_verified: verified })
-  const verified = await oneEntry({ flow: flowOf(), returns: [refusal(true)] })
+test("a refusal's counts pass through as the record decides: a human changed_ask does not count, with or without a legacy verified token", async () => {
+  const base = "2026-09-25T10:00:00.000Z done processing agent_error after_delivery refused=changed_ask"
+  const verified = await oneEntry({ flow: flowOf(), returns: [`${base} verified`] })
   assert.deepEqual(verified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: true }])
-  const unverified = await oneEntry({ flow: flowOf(), returns: [refusal(false)] })
+  const unverified = await oneEntry({ flow: flowOf(), returns: [`${base} unverified`] })
   assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: false }])
+  const current = await oneEntry({ flow: flowOf(), returns: [base] })
+  assert.deepEqual(current.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: null }])
 })
 
 // Focus on a task, then on a task whose card is gone (which clears), over and over: each stretch of the task stands alone between cleared stretches, so a cap that is exceeded has to drop time.
