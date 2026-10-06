@@ -34,7 +34,7 @@ function compareReasons({ deskReasons, storeSource }) {
 }
 
 /** Every reason Desk can emit with display text of its own: the table the pipeline's reports and rollups read. */
-async function deskReasonCodes(root = repoRoot) {
+async function deskReasonCodes(root) {
   const report = await import(pathToFileURL(path.join(root, "plugins", "desk", "mcp", "src", "factory", "pipeline", "report.js")).href);
   return Object.keys(report.REASON_TEXT);
 }
@@ -83,13 +83,14 @@ async function run({ env = process.env, root = repoRoot, fetchImpl, attempts, ti
 
 module.exports = { compareReasons, deskReasonCodes, fetchStoreSource, run, storeReasonCodes };
 
+/* istanbul ignore else -- the module is imported only by tests, which call run() directly */
 if (require.main === module) {
   run().then(({ code, lines, summary }) => {
     for (const line of lines) console.log(line);
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
     process.exitCode = code;
   }).catch((error) => {
-    console.error(`::error title=Factory store reason text check failed::${error instanceof Error ? error.stack : String(error)}`);
+    console.error(`::error title=Factory store reason text check failed::${error.stack}`);
     process.exitCode = 1;
   });
 }

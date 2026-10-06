@@ -1,7 +1,8 @@
 // The CI check that every reason Desk can emit has display text in the factory store (scripts/check-factory-reason-text.cjs).
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -81,4 +82,69 @@ test("a local copy of the store file can be named instead of fetching", async ()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// The command line itself, as the workflow runs it: the log lines, the job summary file and the exit code.
+function cli(env) {
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-reason-text-cli-"))
+  const summary = path.join(dir, "summary.md")
+  try {
+    const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "check-factory-reason-text.cjs")], { encoding: "utf8", env: { ...process.env, FACTORY_REASON_TEXT_URL: "", FACTORY_REASON_TEXT_FILE: "", GITHUB_STEP_SUMMARY: summary, ...env } })
+    let written = ""
+    try { written = readFileSync(summary, "utf8") } catch { /* no summary written */ }
+    return { ...result, written, dir }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function withStoreFile(codes, body) {
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-reason-text-file-"))
+  try {
+    const file = path.join(dir, "format.js")
+    writeFileSync(file, codes === null ? "nothing" : storeFile(codes))
+    return body(file)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test("the command exits 0 and says so when the store has every reason", () => withStoreFile(all, (file) => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: file })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /all \d+ Desk reasons have display text/u)
+  assert.match(result.written, /Factory store reason text: checked/u)
+}))
+
+test("the command also works outside a workflow, with no summary file to write", () => withStoreFile(all, (file) => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: file, GITHUB_STEP_SUMMARY: "" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.written, "")
+}))
+
+test("the command exits 1 and names the missing reason", () => withStoreFile(all.filter((code) => code !== "no_turn_records"), (file) => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: file })
+  assert.equal(result.status, 1)
+  assert.match(result.stdout, /::error .*`no_turn_records`/u)
+  assert.match(result.written, /FAILED.*no_turn_records/su)
+}))
+
+test("the command exits 0 with a NOT CHECKED warning when the store cannot be reached", () => {
+  const result = cli({ FACTORY_REASON_TEXT_URL: "http://127.0.0.1:1/format.js" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^::warning .*NOT CHECKED/u)
+  assert.match(result.written, /NOT CHECKED/u)
+})
+
+test("the command writes no summary file when the workflow gives none, and fails clearly when its own input is unreadable", () => {
+  const result = cli({ FACTORY_REASON_TEXT_FILE: path.join(tmpdir(), "desk-reason-text-no-such-file.js"), GITHUB_STEP_SUMMARY: "" })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /::error title=Factory store reason text check failed::/u)
+  assert.equal(result.written, "")
+})
+
+test("a fetch that throws something that is not an Error is still reported", async () => {
+  const result = await check.fetchStoreSource({ url: "http://example.invalid/", fetchImpl: async () => { throw "refused" }, attempts: 1 })
+  assert.deepEqual(result, { error: "refused" })
+  assert.deepEqual(await check.fetchStoreSource({ url: "http://example.invalid/", fetchImpl: respond("x"), attempts: 0 }), { error: "no attempt was made" })
 })
