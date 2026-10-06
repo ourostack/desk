@@ -145,7 +145,8 @@ test("the prompt hook sets prompt_at and the stop hook sets stop_at, each keepin
   assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 100, stop_at: 200 })
   recordPrompt({ session_id: "s1" }, { stateDir, now: () => 300 })
   assert.deepEqual(JSON.parse(readFileSync(witnessFile(stateDir, "s1"), "utf8")), { prompt_at: 300, stop_at: 200 })
-  assert.equal(statSync(witnessFile(stateDir, "s1")).mode & 0o777, 0o600)
+  // Windows has no permission bits: every file reads back 0o666, so the owner-only mode is a POSIX check.
+  if (process.platform !== "win32") assert.equal(statSync(witnessFile(stateDir, "s1")).mode & 0o777, 0o600)
 })
 
 test("a stop recorded before any prompt leaves prompt_at empty", () => {
@@ -263,7 +264,8 @@ test("the ticket holds the human line's own time, not the hook's clock, and time
   issueTicket(signoffCall(stateDir, callTranscript(human(T0))), { ...FAST, stateDir, now: () => T0 + 9000 })
   const ticket = JSON.parse(readFileSync(ticketFile(stateDir, TASK), "utf8"))
   assert.deepEqual(ticket, { issued_at: T0 + 9000, prompt_at: T0, stop_at: T0 - 5000, main_agent: true, human_origin: true })
-  assert.equal(statSync(ticketFile(stateDir, TASK)).mode & 0o777, 0o600)
+  // Windows has no permission bits: every file reads back 0o666, so the owner-only mode is a POSIX check.
+  if (process.platform !== "win32") assert.equal(statSync(ticketFile(stateDir, TASK)).mode & 0o777, 0o600)
 })
 
 test("a sign-off in the turn that delivered the work is unverified as same_turn_as_delivery (full flow)", () => {

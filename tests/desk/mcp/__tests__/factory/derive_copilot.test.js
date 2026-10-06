@@ -34,6 +34,10 @@ import {
   writeLargeEvents,
 } from "./fixtures/copilot/make.js"
 
+// A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
+const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
+const spellCommit = ({ cwd, paths }) => ({ cwd: posixSpelling(cwd), paths: paths.map(posixSpelling) })
+
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "copilot")
 const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.22", source: "ourostack/desk" }]
 
@@ -996,7 +1000,7 @@ test("only a successful bash or powershell git commit call becomes a shellGitCom
     done("g15", 32, { success: undefined }),
   )
   const { facts, events } = await deriveText(lines)
-  assert.deepEqual(events.shellGitCommits, [
+  assert.deepEqual(events.shellGitCommits.map((commit) => ({ ...commit, cwd: commit.cwd?.startsWith("C:\\") ? commit.cwd : posixSpelling(commit.cwd) })), [
     { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, paths: [], agent: 0 },
     { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, paths: [], agent: 0 },
     { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, paths: [], agent: 0 },
@@ -1020,7 +1024,7 @@ test("a session.start with no readable context leaves the directory unknown", as
     ev("tool.execution_complete", 4, { toolCallId: "g2", success: true }),
   ]
   const { events } = await deriveText(lines)
-  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, paths: [], agent: 0 }, { start: at(3), end: at(4), cwd: "/abs", paths: [], agent: 0 }])
+  assert.deepEqual(events.shellGitCommits.map((commit) => ({ ...commit, cwd: posixSpelling(commit.cwd) })), [{ start: at(1), end: at(2), cwd: null, paths: [], agent: 0 }, { start: at(3), end: at(4), cwd: "/abs", paths: [], agent: 0 }])
 })
 
 test("nativeCommitShas carries this session's session_refs commits, which bind directly", async () => {
@@ -1303,7 +1307,7 @@ test("a bash git add and commit gives shellGitCommits paths, a redirect gives fi
     ...run("g4", 7, "bash", "git commit -m x"),
     ...run("g5", 9, "powershell", "Set-Content -Path a.txt x"),
   ])
-  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+  assert.deepEqual(events.shellGitCommits.map(spellCommit), [
     { cwd: `/tmp/${SENTINEL}`, paths: [`/tmp/${SENTINEL}/t/s/task.md`] },
     { cwd: `/tmp/${SENTINEL}`, paths: [] },
   ])

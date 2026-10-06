@@ -8,6 +8,7 @@ import { promises as fs, readdirSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
+import { osEnv } from "../_os_env.js"
 import { improvement_open, improvement_next, improvement_update, AUTHORITY, NEXT_REFUSALS, AGENT_CLOSE_REASONS } from "../../../../../plugins/desk/mcp/src/tools/improvement.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "../../../../../plugins/desk/mcp/src/tool-names.js"
@@ -25,7 +26,7 @@ function scan(root, folder) {
   const walk = (rel) => {
     let entries = []
     try { entries = readdirSync(path.join(root, rel), { withFileTypes: true }) } catch { return }
-    for (const entry of entries) entry.isDirectory() ? walk(path.join(rel, entry.name)) : out.push(path.join(rel, entry.name))
+    for (const entry of entries) entry.isDirectory() ? walk(path.posix.join(rel, entry.name)) : out.push(path.posix.join(rel, entry.name))
   }
   walk(folder)
   return out
@@ -52,7 +53,7 @@ async function where() {
   const state = await mkTempRoot("desk-impr-state-")
   const pushes = []
   const git = fakeGit()
-  const env = { HOME: state, XDG_STATE_HOME: path.join(state, "state") }
+  const env = osEnv({ HOME: state, XDG_STATE_HOME: path.join(state, "state") })
   const seams = { spawnGit: git.spawn, schedulePush: (arg) => pushes.push(arg) }
   return { deskRoot, env, pushes, git, seams, state, folder: path.join(deskRoot, "_meta", "improvement") }
 }

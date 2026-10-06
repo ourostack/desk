@@ -221,7 +221,11 @@ test("nothing but directories ever comes back: the commit message and other argu
 // shellEffects: git-named paths and shell writes.
 // ---------------------------------------------------------------------------
 
-const effects = (command, overrides = {}) => shellEffects({ command, cwd: "/d", home: HOME, ...overrides })
+const spellEntry = (entry) => (typeof entry === "string" ? posixSpelling(entry) : { ...entry, cwd: posixSpelling(entry.cwd), paths: entry.paths.map(posixSpelling) })
+const effects = (command, overrides = {}) => {
+  const found = shellEffects({ command, cwd: "/d", home: HOME, ...overrides })
+  return { commits: found.commits.map(spellEntry), adds: found.adds.map(spellEntry), writes: found.writes.map(spellEntry) }
+}
 
 test("git add and git commit report the files they name, resolved against the cwd", () => {
   assert.deepEqual(effects("git add a/b/task.md && git commit -m x"), {

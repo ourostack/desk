@@ -158,7 +158,7 @@ test("Unicode slugs reach lesson and track-friction file paths", async () => {
     deskRoot: root,
     input: { topic: "COM¹", body: "Windows-safe lesson." },
   })
-  assert.equal(reservedLesson.path, path.join("_meta", "tips", "_com¹.md"))
+  assert.equal(reservedLesson.path, "_meta/tips/_com¹.md")
 })
 
 test("reserved-name escaping stays distinct for both write orders", async () => {
@@ -245,7 +245,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: occupiedRoot,
     input: { topic: "caf", body: "Distinct ASCII lesson." },
   })
-  assert.equal(occupied.path, path.join("_meta", "tips", "__caf.md"))
+  assert.equal(occupied.path, "_meta/tips/__caf.md")
   const occupiedAgain = await lesson_add({
     deskRoot: occupiedRoot,
     input: { topic: "caf", body: "Second ASCII update." },
@@ -262,7 +262,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: reservedRoot,
     input: { topic: "CON", body: "Updated reserved lesson." },
   })
-  assert.equal(reserved.path, path.join("_meta", "tips", "__con.md"))
+  assert.equal(reserved.path, "_meta/tips/__con.md")
   await assert.rejects(() => fs.access(reservedLegacyPath), { code: "ENOENT" })
   assert.match(await fs.readFile(path.join(reservedRoot, reserved.path), "utf8"), /Original reserved lesson/)
   assert.equal(await fs.readFile(occupiedReservedPath, "utf8"), "# Different topic\n\nMust survive.\n")

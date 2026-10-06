@@ -34,6 +34,10 @@ import {
   rolloutRelPath,
 } from "./fixtures/codex/make.js"
 
+// A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
+const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
+const spellCommit = ({ cwd, paths }) => ({ cwd: posixSpelling(cwd), paths: paths.map(posixSpelling) })
+
 const here = path.dirname(fileURLToPath(import.meta.url))
 const fixtureHome = path.join(here, "fixtures", "codex")
 const fixtureRollout = (threadId, startIso) => path.join(fixtureHome, rolloutRelPath(startIso, threadId))
@@ -946,7 +950,7 @@ test("a shell git add and commit gives shellGitCommits paths, a redirect gives f
     output(14, "d3", "saved"),
   ]
   const { events, facts } = await deriveRoot(home, lines)
-  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+  assert.deepEqual(events.shellGitCommits.map(spellCommit), [
     { cwd: "/w", paths: ["/w/t/s/task.md"] },
     { cwd: "/w", paths: [] },
   ])

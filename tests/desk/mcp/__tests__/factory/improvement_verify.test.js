@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, promises as fs, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { osEnv } from "../_os_env.js"
 
 import { cardFile, cardKey, claimNext, MEASURE_IDS, openImprovement, readCards, RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -31,7 +32,7 @@ async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-verify-step-")))
   const deskRoot = path.join(base, "desk")
   mkdirSync(path.join(deskRoot, "_meta"), { recursive: true })
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   try {
     return await run({ env, deskRoot, personPrefix: "", base })
   } finally {

@@ -38,6 +38,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { setRuntimeResolver, setRuntimeResolverFailure } from "../../../../../plugins/desk/mcp/src/desk/runtime-resolver.js"
 import { REDACTED_SEGMENT } from "../../../../../plugins/desk/mcp/src/util/redact.js"
+import { osEnv } from "../_os_env.js"
 
 // Every collaborator that reaches outside the process (migration Detect
 // blocks, `git fetch`, `gh pr list`) is faked unless a test says otherwise;
@@ -1485,7 +1486,7 @@ test("openPullRequests: past the deadline nothing is asked", async () => {
 function healthyBoot(root, extra = {}) {
   const { gh, jq } = okPrereqRunners()
   return bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+    env: osEnv({ DESK: root }), cwd: root, homeDir: root, gh, jq,
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
     ...extra,
@@ -1803,7 +1804,7 @@ test("bootOnce: delivered tasks that await sign-off are listed, the one instruct
   const printed = formatBootText(result)
   assert.match(printed, /Delivered, awaiting sign-off:\n- track-a\/shipped, 9 days, pr https:\/\/example\.test\/pr\/7, overdue\n/u)
   const { readStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
-  const { signoff } = await readStatus({ DESK: root })
+  const { signoff } = await readStatus(osEnv({ DESK: root }))
   assert.deepEqual(signoff.unsigned, { state: "measured", value: 1 })
   assert.deepEqual(signoff.overdue, { state: "measured", value: 1 })
   assert.deepEqual(signoff.not_recorded, { state: "measured", value: 1 })
@@ -1850,7 +1851,7 @@ test("bootOnce: a card that cannot be read is counted in the boot result, shown 
   assert.equal(result.unsigned_deliveries.unreadable, 1)
   assert.match(formatBootText(result), /1 task card could not be read, so this list may be short\./u)
   const { readStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
-  const { signoff } = await readStatus({ DESK: root })
+  const { signoff } = await readStatus(osEnv({ DESK: root }))
   assert.deepEqual(signoff.unsigned, { state: "partial", value: 1, reason: "cards_unreadable" })
   assert.equal(JSON.stringify(signoff).includes("broken"), false)
 })

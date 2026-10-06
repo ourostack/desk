@@ -7,6 +7,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { osEnv } from "../_os_env.js"
 
 import { degradedHooks, ensureHookDependencies } from "../../../../../plugins/desk/mcp/src/runtime/hook-dependencies.js"
 
@@ -90,7 +91,7 @@ test("the boot check says nothing when no guard is degraded, and files one Desk 
   }
 })
 
-// The end-to-end case the coordinator named: an unwritable runtime cache (DESK_RUNTIME_CACHE_DIR=/dev/null/x) from a bare plugin folder. The guard still fails open, and the next boot reports it.
+// The end-to-end case the coordinator named: an unwritable runtime cache (DESK_RUNTIME_CACHE_DIR under a regular file) from a bare plugin folder. The guard still fails open, and the next boot reports it.
 test("a bare-folder clone guard with an unwritable runtime cache fails open, leaves a marker, and the next boot reports the degraded guard", async () => {
   const bare = scratch()
   const desk = path.join(bare, "desk")
@@ -99,7 +100,9 @@ test("a bare-folder clone guard with an unwritable runtime cache fails open, lea
     writeFileSync(path.join(desk, "track", "fork", "task.md"), "---\ntitle: fork\nstatus: processing\nrepos:\n  - name: ari-fixture/listed-only\n    mode: remote\n---\n\n**Next step:** push `b` from my other laptop.\n")
     const copy = path.join(bare, "plugin")
     cpSync(plugin, copy, { recursive: true, dereference: true, filter: (file) => path.basename(file) !== "node_modules" })
-    const env = { PATH: process.env.PATH, HOME: bare, DESK_RUNTIME_CACHE_DIR: "/dev/null/x" }
+    // A folder cannot be made under a regular file on any platform; `/dev/null/x` would be a creatable path on Windows.
+    writeFileSync(path.join(bare, "cache-is-a-file"), "x")
+    const env = osEnv({ PATH: process.env.PATH, HOME: bare, DESK_RUNTIME_CACHE_DIR: path.join(bare, "cache-is-a-file", "x") })
     const result = spawnSync(process.execPath, [path.join(copy, "hooks", "protected-checkout.cjs"), "claude"], {
       input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git clone https://github.com/ari-fixture/listed-only.git" }, cwd: desk }), encoding: "utf8", env,
     })
@@ -107,7 +110,7 @@ test("a bare-folder clone guard with an unwritable runtime cache fails open, lea
     assert.equal(result.stdout.trim(), "{}")
     assert.deepEqual(markers(bare), ["elsewhere-clone.json"])
     assert.equal(JSON.parse(readFileSync(path.join(bare, ".local", "state", "ouroboros-skills", "desk", "hook-degraded", "elsewhere-clone.json"), "utf8")).hook, "elsewhere-clone")
-    const line = await runBootChecks({ host: "claude", env: { HOME: bare }, checks: [hookDependenciesCheck], launchRepair: async () => {} })
+    const line = await runBootChecks({ host: "claude", env: osEnv({ HOME: bare }), checks: [hookDependenciesCheck], launchRepair: async () => {} })
     assert.match(line, /Desk problem: hook-dependencies — the elsewhere-clone guard could not restore its/u)
     assert.ok(existsSync(copy))
   } finally {

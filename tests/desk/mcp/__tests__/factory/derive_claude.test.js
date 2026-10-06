@@ -26,6 +26,10 @@ import {
   padded,
 } from "./fixtures/claude/make.js"
 
+// A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
+const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
+const spellCommit = ({ cwd, paths }) => ({ cwd: posixSpelling(cwd), paths: paths.map(posixSpelling) })
+
 const here = path.dirname(fileURLToPath(import.meta.url))
 const fixturesDir = path.join(here, "fixtures", "claude")
 const transcriptPath = (sessionId) => path.join(fixturesDir, `${sessionId}.jsonl`)
@@ -1234,7 +1238,7 @@ test("a Bash git add and commit gives shellGitCommits paths, and a Bash redirect
     call("g4", "Bash", { command: "git commit -m x" }),
     result("g4"),
   ])
-  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+  assert.deepEqual(events.shellGitCommits.map(spellCommit), [
     { cwd: "/w", paths: ["/w/t/s/task.md"] },
     { cwd: "/w", paths: [] },
   ])
@@ -1304,7 +1308,7 @@ test("two commits in one directory give one shellGitCommits entry with every pat
     call("m1", "Bash", { command: "git add a.md && git commit -qm x && git add b.md a.md && git commit -qm y && git -C /elsewhere commit -qm z" }),
     result("m1"),
   ])
-  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+  assert.deepEqual(events.shellGitCommits.map(spellCommit), [
     { cwd: "/w", paths: ["/w/a.md", "/w/b.md"] },
     { cwd: "/elsewhere", paths: [] },
   ])
@@ -1368,7 +1372,7 @@ test("a session with no assistant usage flags models, tokens and requests field_
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 })
 
-test("an unreadable subagents folder flags agents source_unreadable, and a missing folder does not", async () => {
+test("an unreadable subagents folder flags agents source_unreadable, and a missing folder does not", { skip: process.platform === "win32" && "Windows reports a file read as a folder (readdir) as ENOENT, the same code as a missing folder, so a file in place of the folder cannot be told apart from a missing one" }, async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-nosub-"))
   try {
     const root = path.join(dir, `${SUB_SESSION_ID}.jsonl`)
