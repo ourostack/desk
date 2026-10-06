@@ -8,7 +8,7 @@ const trusted = (expected) => (file) => file === expected
 test("Git inspection finds Git in a standard Windows location and never searches PATH", () => {
   const ignored = "/candidate-only"
   assert.equal(resolveInspectionGit({ platform: "win32", env: { ProgramFiles: "C:\\Trusted", "ProgramFiles(x86)": "C:\\Alternate", PATH: ignored }, accessible: trusted("C:\\Alternate\\Git\\cmd\\git.exe") }), "C:\\Alternate\\Git\\cmd\\git.exe")
-  assert.throws(() => resolveInspectionGit({ platform: "win32", env: { ProgramFiles: "/missing-trusted-location" }, accessible: () => false }), /trusted Git is unavailable/u)
+  assert.throws(() => resolveInspectionGit({ platform: "win32", env: { ProgramFiles: "/missing-trusted-location" } }), /trusted Git is unavailable/u)
   assert.throws(() => resolveInspectionGit({ platform: "win32", env: {}, accessible: () => false }), /trusted Git is unavailable/u)
   assert.throws(() => resolveInspectionGit({ platform: "linux", accessible: () => false }), /trusted Git is unavailable/u)
 })
