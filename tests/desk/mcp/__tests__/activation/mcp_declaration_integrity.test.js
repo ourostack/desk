@@ -5,15 +5,18 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { createRequire } from "node:module"
+import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   MAX_FUNCTION_NAME_LENGTH,
   RESERVED_MCP_SERVER_NAMES,
   SERVER_NAME_PATTERN,
+  checkHardCodedServerNames,
   checkHostDeclarationParity,
   checkServerName,
   collectMcpDeclarations,
+  hardCodedServerNames,
   launcherEntryFiles,
   validateMcpDeclarations,
 } from "../../../../../plugins/desk/mcp/src/activation/mcp-declarations.js"
@@ -180,4 +183,34 @@ test("collectMcpDeclarations reads plugin manifests with inline servers, string 
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+// ---- #144 review nits: the Codex adapter's own server names, and tool lists keyed by plugin ----
+
+test("the server names the Codex adapter spells out in code are declared by a manifest", () => {
+  const source = "plugins/desk/mcp/src/activation/adapters/codex.js"
+  const names = hardCodedServerNames(readFileSync(path.join(repoRoot, source), "utf8"))
+  assert.ok(names.includes("desk"), `the adapter's hard-coded names were not found: ${names.join(", ")}`)
+  const declared = [...new Set(collectMcpDeclarations({ repoRoot }).flatMap((entry) => entry.names))]
+  assert.deepEqual(checkHardCodedServerNames({ source, names, declared }), [])
+})
+
+test("hardCodedServerNames reads TOML tables and path arrays, and a name no declaration holds is reported with its source", () => {
+  assert.deepEqual(hardCodedServerNames('[plugins."x".mcp_servers.alpha]\n[mcp_servers.beta]\nconst p = ["mcp_servers", "gamma"]\nmcp_servers = []'), ["alpha", "beta", "gamma"])
+  assert.deepEqual(hardCodedServerNames("nothing here"), [])
+  const errors = checkHardCodedServerNames({ source: "adapter.js", names: ["desk", "gone"], declared: ["desk", "desk-web"] })
+  assert.equal(errors.length, 1)
+  assert.match(errors[0], /^adapter\.js hard-codes the MCP server "gone".*declared: desk, desk-web/u)
+})
+
+test("a tool list is read by <plugin>/<server> before the bare server name, so two plugins can share a server name", () => {
+  const declarations = [
+    { source: "a/.mcp.json", plugin: "a", host: "claude", names: ["relay"] },
+    { source: "b/.mcp.json", plugin: "b", host: "claude", names: ["relay"] },
+  ]
+  const long = "t".repeat(60)
+  const errors = validateMcpDeclarations({ declarations, toolNames: { "a/relay": ["x"], "b/relay": [long] } })
+  assert.equal(errors.length, 2, errors.join("\n"))
+  assert.ok(errors.every((error) => error.startsWith("b/.mcp.json: ")), "only plugin b's long tool trips the limit")
+  assert.deepEqual(validateMcpDeclarations({ declarations, toolNames: { relay: ["x"] } }), [])
 })

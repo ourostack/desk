@@ -291,7 +291,11 @@ export function withoutQuotedText(text) {
     .replace(/(?<=\S\s)["“][^"”\n]*["”]/gu, " ")
 }
 
-function standing(sentence, patterns, previous) {
+// A courtesy opener is no condition: "If it helps, the task is done." states the claim. A real condition ("If it passes review, ...") keeps its "if".
+export const COURTESY = /\b(?:if|in case)\s+(?:it|that|this)\s+(?:helps|is\s+(?:helpful|useful))\b[,;:]?/giu
+
+function standing(original, patterns, previous) {
+  const sentence = original.replace(COURTESY, " ").trim()
   return patterns.some((pattern) => {
     const match = pattern.exec(sentence)
     if (match === null) return false
@@ -370,6 +374,10 @@ const TASK_LEVEL_PATTERNS = [
   new RegExp(`\\b(?:effectively|essentially|basically|actually|really|now|already)\\s+${DONE_WORD}\\b`, "iu"),
 ]
 const TASK_LEVEL_WORK_EXEMPT = TASK_LEVEL_PATTERNS.slice(4)
+// "Ran the tests, then it's done.": after a step the reply reports as taken, a "then it's done" closes the whole job, so the work-subject exemption does not cover it.
+// A plan is no claim: "I'll run the tests, then it's done." (future, modal or "once I" before the clause) is exempt.
+const PLAN_BEFORE = "(?:\\bI['\u2019]ll|\\bI will|\\bwe['\u2019]ll|\\bwe will|\\bI['\u2019]m going to|\\bI am going to|\\bgoing to|\\bwill|\\bonce I|\\bafter I|\\bas soon as I)\\b"
+export const THEN_IT_IS_DONE = new RegExp(`(?<!${PLAN_BEFORE}[^.;!?]*)\\bthen\\s+it(?:\\s+is|['\u2019]s)\\s+(?:now\\s+|all\\s+)?${DONE_WORD}\\b`, "iu")
 
 /**
  * The sentences of `text` that claim the task itself is done: "Task x is done", "the task is complete", "Status: done", "validating (complete)", "validating -> done", "no, done", "it is finished", "effectively done".
@@ -381,7 +389,7 @@ export function taskLevelClaims(text, slug) {
   return sentencesOf(body).flatMap((sentence) => sentence.split(";")).filter((part, index, all) => {
     if (otherTaskSlug(part, slug) !== null && !(typeof slug === "string" && new RegExp(`(?<![\\w-])${escapeRegExp(slug)}(?![\\w-])`, "iu").test(part))) return false
     const rest = STATUS_CLAUSES.reduce((remaining, clause) => remaining.replace(clause, " "), part)
-    const patterns = [...TASK_CLAIM_PATTERNS, ...TASK_LEVEL_PATTERNS.filter((pattern) => !TASK_LEVEL_WORK_EXEMPT.includes(pattern) || !WORK_SUBJECT.test(rest))]
+    const patterns = [...TASK_CLAIM_PATTERNS, ...TASK_LEVEL_PATTERNS.filter((pattern) => !TASK_LEVEL_WORK_EXEMPT.includes(pattern) || !WORK_SUBJECT.test(rest) || THEN_IT_IS_DONE.test(rest))]
     return standing(rest, patterns, all[index - 1] ?? "")
   })
 }

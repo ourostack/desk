@@ -119,13 +119,32 @@ export function collectMcpDeclarations({ repoRoot }) {
   return entries.sort((a, b) => a.source.localeCompare(b.source, "en"))
 }
 
-/** Every problem in the collected declarations. `toolNames` maps each server name to the tool names it exposes. */
+/**
+ * The server names a source file spells out in code instead of reading from a declaration: TOML tables such as `[mcp_servers.desk]` and
+ * `.mcp_servers.desk]`, and path arrays such as `["mcp_servers", "desk"]`. The Codex adapter writes its config tables this way, so a rename
+ * in `.mcp.json` would leave it configuring a server that no longer exists.
+ */
+export function hardCodedServerNames(source) {
+  const names = new Set()
+  for (const match of String(source).matchAll(/\bmcp_servers\.([A-Za-z0-9_-]+)|["']mcp_servers["']\s*,\s*["']([A-Za-z0-9_-]+)["']/gu)) names.add(match[1] ?? match[2])
+  return [...names].sort()
+}
+
+/** The problems with hard-coded server names: each must be a server some declaration under `plugins/*` declares. */
+export function checkHardCodedServerNames({ source, names, declared }) {
+  return names.filter((name) => !declared.includes(name)).map((name) => `${source} hard-codes the MCP server "${name}", which no declaration under plugins/* declares (declared: ${declared.join(", ")})`)
+}
+
+/**
+ * Every problem in the collected declarations. `toolNames` maps each server to the tool names it exposes, by `<plugin>/<server>` when two plugins
+ * declare the same server name with different tools, and by the bare server name otherwise.
+ */
 export function validateMcpDeclarations({ declarations, toolNames }) {
   const errors = []
   for (const entry of declarations) {
     if (entry.missing !== undefined) errors.push(`${entry.source}: mcpServers points at ${entry.missing}, which does not exist`)
     for (const name of entry.names) {
-      const tools = toolNames[name]
+      const tools = toolNames[`${entry.plugin}/${name}`] ?? toolNames[name]
       for (const problem of checkServerName(name, tools ?? [], { claudePlugin: entry.plugin })) {
         errors.push(`${entry.source}: ${problem}`)
       }

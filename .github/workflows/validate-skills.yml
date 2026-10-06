@@ -52,6 +52,9 @@ jobs:
       - name: Validate Desk content contracts
         run: node scripts/test-desk-contracts.cjs
 
+      - name: Validate V2 onboarding paths
+        run: node scripts/test-v2-onboarding-paths.cjs
+
       - name: Validate upstream source steward
         run: node scripts/test-upstream-sources.cjs
 

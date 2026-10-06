@@ -523,6 +523,25 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true, powershell: true })
   }
 
+  // Git matters only in program position: the `FileName` value, or the first word of a `CommandLine` value. A literal program that is neither Git nor a
+  // wrapper that runs its arguments (`notepad C:\git\notes.txt`, `C:\tools\git-lfs.exe`) runs no Git. No such value, or one not written out, stays unknown.
+  function launchesProgramThatCouldBeGit(text) {
+    const values = [...text.matchAll(/\b(?:CommandLine|FileName)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s;}]+))/giu)].map((match) => match[1] ?? match[2] ?? match[3])
+    if (values.length === 0) values.push(text)
+    return values.some((value) => {
+      const program = /^\s*(?:"([^"]*)"|'([^']*)'|(\S*))/u.exec(value)
+      const word = program[1] ?? program[2] ?? program[3]
+      // A path cut at a space (`C:\Program Files\Git\bin\git.exe`) or a word not written out could still be Git.
+      if (/[$(`]/u.test(word) || word.includes(UNKNOWN) || word === "" || (/[\\/]/u.test(word) && !/\.(?:exe|com|bat|cmd|ps1)$/iu.test(word))) return true
+      return /^(?:git|cmd|powershell|pwsh|bash|sh|zsh|wsl|env|start|call|cscript|wscript|node|python3?|ruby|perl|xargs|sudo|nohup|conhost|wt|cmdkey)(?:\.exe)?$/iu.test(word.split(/[\\/]/u).at(-1))
+    })
+  }
+
+  // A launcher that is not the program itself (WMI process creation, a Process object's start settings) and whose own text names Git: denied where it could reach a protected checkout, like a computed program.
+  async function launchesGit(text) {
+    if (namesGit(text) && launchesProgramThatCouldBeGit(text) && !await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw unresolved("the program this command starts", PROGRAM_FIX)
+  }
+
   // Code built from text at run time. Text with an unknown part is inspected only when the part Desk can read names
   // Git or runs code; otherwise it is unreadable code, which is allowed (replay ruling, 2026-09-27).
   async function evaluated(script) {
@@ -533,6 +552,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   // One pipeline element without Git. `input` is the element before it, for a shell reading its script from stdin.
   async function run(words, redirects, input) {
     await budget.step()
+    // The statement as written, before its groups are replaced by the values they stand for.
+    const written = tokensText(words)
     // `$x = $x` reads the value $x had before this statement, so the targets are made unknown only after it is kept.
     const before = { ...variables }
     for (const match of tokensText(words).matchAll(ASSIGNED)) set(match[1] ?? match[2] ?? match[3] ?? match[4], UNKNOWN)
@@ -544,6 +565,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     const assigned = call ? null : assignment(words)
     if (assigned) {
       if (!assigned.lead.every((word) => word.parts)) await groups(assigned.lead)
+      // `$p.StartInfo.FileName = 'git'` names the program a Process object starts.
+      if (/\bFileName\b/iu.test(assigned.targets)) await launchesGit(tokensText(assigned.value))
       const value = await assignedValue(assigned.value, before)
       const simple = SIMPLE_TARGET.exec(assigned.targets)
       if (simple && !assigned.compound) set(simple[1] ?? simple[2], value)
@@ -604,6 +627,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       status = true
       return
     }
+    // WMI and CIM process creation (`Invoke-CimMethod -ClassName Win32_Process -MethodName Create ...`) starts whatever its arguments name.
+    if (["invoke-cimmethod", "invoke-wmimethod", "icim"].includes(name)) await launchesGit(written)
     if (functions.has(name)) {
       await loop(() => sequence(functions.get(name)))
       status = null

@@ -239,8 +239,12 @@ export const PASS_THROUGH = [...BASE_PASS_THROUGH, ...CLAUDE_PASS_THROUGH]
 // The Copilot child gets none of the Anthropic or AWS credentials: its only credential is `extraEnv` (see copilot.mjs `resolveCopilotAuth`).
 export const COPILOT_PASS_THROUGH = BASE_PASS_THROUGH
 
-/** Writes the run's private global git config: no credential helper, and fetches and pushes to GitHub URLs rewritten to a dead local path, so a clone or fetch fails at once instead of downloading a real repository. */
-export function writeGitConfig(homeDir) {
+/**
+ * Writes the run's private global git config: no credential helper, and fetches and pushes to GitHub URLs rewritten to a dead local path, so a clone or fetch fails at once instead of downloading a real repository.
+ * `standIns` (`[{ from, to }]`) are the exception a scenario provides on purpose: reads of the URL prefix `from` go to the local folder `to`, so a clone of that one repository can succeed offline.
+ * Git applies the longest matching `insteadOf`, so a stand-in's own prefix beats the catch-all above. Pushes are never redirected to a stand-in: they still hit the dead path.
+ */
+export function writeGitConfig(homeDir, { standIns = [] } = {}) {
   const dead = "file:///nonexistent/offline-remotes/"
   // GitHub's spellings first, then every network scheme as a catch-all, so another host, `www.github.com` and a URL with embedded credentials are rewritten too.
   // `file://` and plain paths (the fixture's own origin) match none of these. Left open: an scp-style `user@host:path` on a host other than github.com.
@@ -249,6 +253,7 @@ export function writeGitConfig(homeDir) {
     "[user]", "\tname = Desk Operator", "\temail = operator@example.com",
     "[commit]", "\tgpgsign = false",
     `[url "${dead}"]`, ...prefixes.flatMap((p) => [`\tinsteadOf = ${p}`, `\tpushInsteadOf = ${p}`]),
+    ...standIns.flatMap(({ from, to }) => [`[url "${to}"]`, `\tinsteadOf = ${from}`]),
   ].join("\n") + "\n"
   const file = path.join(homeDir, ".gitconfig")
   writeFileSync(file, body)
