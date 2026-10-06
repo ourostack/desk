@@ -201,6 +201,43 @@ jobs:
           retention-days: 1
           overwrite: true
 
+  # The offline evaluation's own unit tests (evals/offline/__tests__, 907 tests, pure Node, no agent runs). They took about five
+  # minutes in one process, so Node splits the files across four runners. No coverage gate applies: they are not Desk MCP code.
+  offline-eval-tests:
+    name: offline eval tests (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Install dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      # A throwaway HOME keeps the tests off the runner's real one.
+      - name: Run the offline eval unit tests
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          home="$(mktemp -d "$RUNNER_TEMP/offline-eval-home.XXXXXX")"
+          HOME="$home" node --test --test-shard="$SHARD/4" evals/offline/__tests__/*.test.mjs
+
   desk-mcp-tests:
     name: desk MCP test suite
     needs: desk-mcp-coverage-shards
