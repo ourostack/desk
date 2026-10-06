@@ -13,6 +13,8 @@ import { FINGERPRINT_PREFIX } from "../../../../../plugins/desk/mcp/src/factory/
 import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
 import { DROPPED_KEY, KNOWN_KEY, PENDING_KEY, knownHitsSince } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { LAUNCH_STAMP_DIR, MAX_LAUNCH_STAMPS, endLaunch, launchStampKey, pendingLaunchTimes } from "../../../../../plugins/desk/mcp/src/factory/filer-launch.js"
+import { shouldLaunchFiler } from "../../../../../plugins/desk/mcp/src/runtime/filer-throttle.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/file-desk-problem.js", import.meta.url))
 
@@ -466,4 +468,55 @@ test("review finding 11: the filer records its attempt before the network step a
   const throwing = { rawText: "x", runner, get mechanism() { throw new Error("boom") } }
   await assert.rejects(fileDeskProblem(env, throwing), /boom/u)
   assert.deepEqual((await readStatus(env))[PENDING_KEY], {})
+}))
+
+// ── Fix round 2, finding 11: a filer that never starts ─────────────────────────────────────────────
+
+test("finding 11: a launch whose filer never starts stays pending and reads as a drop; the filer clears it once it records an outcome", () => scratch(async ({ env }) => {
+  const armed = { last_flush: {}, desk_problem_known_since: "2026-09-01T00:00:00.000Z" }
+  const since = "2026-09-29T00:00:00.000Z"
+  assert.deepEqual(pendingLaunchTimes(env), [], "no stamps folder is no launch")
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "push rejected", now: () => Date.parse("2026-10-01T00:00:00.000Z") }), true)
+  // The spawn failed: nothing ever ran the filer. Verification must not read a measured "no hit".
+  const launches = pendingLaunchTimes(env)
+  assert.deepEqual(launches, [Date.parse("2026-10-01T00:00:00.000Z")])
+  assert.deepEqual(knownHitsSince(armed, 123, "3.2.0", { since, launches }), { state: "unavailable", reason: "not_recorded" })
+  assert.deepEqual(knownHitsSince(armed, 123, "3.2.0", { since: "2026-10-02T00:00:00.000Z", launches }), { state: "measured", hit: false }, "a launch before the window is not in it")
+  // The filer runs (it cannot file here) and records its outcome: the stamp is no longer pending, and the throttle keeps its time.
+  assert.equal(await runFileDeskProblemCli({ argv: ["--mechanism", "desk-sync", "--reason", "push rejected"], env: { ...env, PATH: "" } }), 0)
+  assert.deepEqual(pendingLaunchTimes(env), [])
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "push rejected", now: () => Date.parse("2026-10-01T00:10:00.000Z") }), false)
+  // A launcher with no reason passes `unknown` to the filer and an empty signature to the throttle: both are cleared.
+  assert.equal(shouldLaunchFiler({ env, mechanism: "index-drift", signature: "" }), true)
+  assert.equal(pendingLaunchTimes(env).length, 1)
+  endLaunch(env, { mechanism: "index-drift", signature: "unknown" })
+  assert.deepEqual(pendingLaunchTimes(env), [])
+}))
+
+test("finding 11: a stamp that cannot be read is a pending launch as of its time, and a stamps folder that cannot be listed or is too full reads as a launch now", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async ({ env }) => {
+  const dir = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", LAUNCH_STAMP_DIR)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, "broken.json"), "{ not json")
+  await fs.mkdir(path.join(dir, "folder.json"))
+  await fs.writeFile(path.join(dir, "old.json"), JSON.stringify({ at: 5 }))
+  await fs.writeFile(path.join(dir, "notes.txt"), "ignored")
+  await fs.writeFile(path.join(dir, "big.json"), " ".repeat(2048))
+  await fs.writeFile(path.join(dir, "timeless.json"), JSON.stringify({ pending: true }))
+  const times = pendingLaunchTimes(env)
+  assert.equal(times.length, 4)
+  assert.ok(times.every((at) => Number.isFinite(at) && at > 1e12), "an unreadable stamp counts from its modification time")
+  // A stamp written before launches were marked pending is not pending; clearing a stamp that is not pending, or absent, changes nothing.
+  endLaunch(env, { mechanism: "never", signature: "launched" })
+  const done = path.join(dir, `${launchStampKey("done", "x")}.json`)
+  await fs.writeFile(done, JSON.stringify({ at: 7, pending: false }))
+  endLaunch(env, { mechanism: "done", signature: "x" })
+  assert.deepEqual(JSON.parse(await fs.readFile(done, "utf8")), { at: 7, pending: false })
+  for (const name of ["broken.json", "big.json", "timeless.json"]) await fs.rm(path.join(dir, name))
+  await fs.rm(path.join(dir, "folder.json"), { recursive: true })
+  assert.deepEqual(pendingLaunchTimes(env), [])
+  for (let index = 0; index < MAX_LAUNCH_STAMPS + 1; index += 1) await fs.writeFile(path.join(dir, `${index}.json`), "{}")
+  assert.deepEqual(pendingLaunchTimes(env, { now: () => 42 }), [42])
+  await fs.rm(dir, { recursive: true })
+  await fs.writeFile(dir, "not a folder")
+  assert.deepEqual(pendingLaunchTimes(env, { now: () => 43 }), [43])
 }))

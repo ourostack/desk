@@ -164,8 +164,7 @@ export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync, s
  * - the first one that now declares something decides: its store as `overlay`, or `invalid_declaration`;
  * - when all of them now declare nothing, the recorded store stands if the hook recorded one (a Desk before 2026-10-06 skipped a broken
  *   manifest and went on to the next overlay or the default). A hook from 2026-10-06 on records no store once a manifest is broken, so
- *   what the later plugins declared is not known, and the route stays held until the next complete plugin scan on that host settles it
- *   (`held-route.js`).
+ *   what the later plugins declared is not known, and the route stays held: only a declaration releases it (`held-route.js`).
  *
  * A warning may name a plugin folder instead of a manifest: one the host listed that is missing, is not a folder or cannot be read. It is
  * read again as the hook reads a folder, and holds while it is still missing or any manifest in it is unreadable.

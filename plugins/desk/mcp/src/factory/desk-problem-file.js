@@ -42,6 +42,7 @@ import { readFileSync } from "node:fs"
 import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX, deskProblemCard } from "./desk-problem-template.js"
 import { beginFiling, endFiling, recordKnownHit, recordLostHit } from "./desk-problem-known.js"
+import { endLaunch } from "./filer-launch.js"
 import { chooseAccount, ghRunner } from "./flush.js"
 import { readConsent, readStatus, withNamedLock, writeStatus } from "./outbox.js"
 import { issuesClient } from "./store-issues.js"
@@ -207,11 +208,12 @@ export async function runFileDeskProblemCli({ argv = process.argv.slice(2), env 
   }
   const mechanism = options.get("mechanism")
   if (typeof mechanism !== "string" || mechanism === "") throw new Error("file-desk-problem.js: --mechanism <name> is required")
-  await fileDeskProblem(env, {
-    mechanism,
-    rawText: options.get("reason") ?? "",
-    fixAttempt: options.get("fix-attempt") ?? "not recorded",
-    host: options.get("host") ?? "unknown",
-  })
+  const reason = options.get("reason") ?? ""
+  try {
+    await fileDeskProblem(env, { mechanism, rawText: reason, fixAttempt: options.get("fix-attempt") ?? "not recorded", host: options.get("host") ?? "unknown" })
+  } finally {
+    // The outcome (or the drop for a failed attempt) is recorded: the launcher's stamp is no longer a pending launch (`filer-launch.js`).
+    endLaunch(env, { mechanism, signature: reason })
+  }
   return 0
 }

@@ -62,8 +62,6 @@ const ABSENT = Symbol("absent");
 const CONFLICT = Symbol("conflict");
 // How long the Stop hook may spend finding install sources before it names none.
 const SOURCE_BUDGET_MS = 400;
-// The time the hook spends settling other sessions' held routes, after its own work.
-const SETTLE_BUDGET_MS = 250;
 
 // The one GitHub repository a plugin was installed from, as `owner/repo`, or null when that is unknown or ambiguous.
 // Every lookup below fails closed: anything it cannot read, reach or tell apart gives null, and a null source is never named in a public store.
@@ -257,6 +255,7 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
       }
       if (!installed?.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
       if (Object.keys(installed.plugins).length > 64) hold("too_many_plugins");
+      const deskInstalls = [];
       const marketplaceOf = sources ? claudeSources(configDir, readSmallText, PATTERNS, sourceLate) : unknown;
       for (const [key, records] of Object.entries(installed.plugins).slice(0, 64)) {
         const source = () => marketplaceOf(key);
@@ -267,14 +266,17 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
           if (!record || typeof record !== "object") { hold("registry_unreadable"); continue; }
           add(key.split("@")[0], record.version, source);
           if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { hold("registry_unreadable"); continue; }
+          if (key.split("@")[0] === "desk") deskInstalls.push(record.installPath);
           if (dirs.includes(record.installPath)) continue;
           if (dirs.length === 64) hold("too_many_plugins");
           else dirs.push(record.installPath);
         }
       }
       // A Desk the registry does not list was loaded another way (`claude --plugin-dir`), and so may any overlay beside it: the registry
-      // does not name the plugin set, so the route is held.
-      if (!late() && !dirs.some((dir) => samePath(dir, pluginRoot))) hold("desk_not_in_registry");
+      // does not name the plugin set, so the route is held. A Desk record in the same cache folder as the running one is another version of
+      // it (Desk updated while this session ran, which keeps the old version's folder): that Desk is listed.
+      const sibling = (install) => samePath(path.dirname(install), path.dirname(pluginRoot));
+      if (!late() && !dirs.some((dir) => samePath(dir, pluginRoot)) && !deskInstalls.some(sibling)) hold("desk_not_in_registry");
     } catch (error) {
       // Missing metadata is represented by no plugin facts, never invented. A registry that is missing or unreadable could have named an
       // overlay that declares a private store, so the scan is incomplete and the route is held (fail closed, ruling 2026-10-06).
@@ -358,9 +360,6 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     } else if (supportsFinalize ?? cli.SUPPORTED_COMMANDS.includes("finalize")) {
       for (const job of await outbox.listFinalizeJobs(env)) await start(script, ["finalize", "--job", job], env, resolveOnce);
     }
-    // A complete plugin scan settles the held routes of this host's ended sessions whose cause has cleared (`held-route.js`), last, so it
-    // never delays this session's own marker or derive.
-    if (!incomplete) await (await runtime("src/factory/held-route.js")).settleHeldMarkers(env, { host, dirs, deadline: performance.now() + SETTLE_BUDGET_MS });
     return "written";
   } catch {
     // Hooks cannot veto lifecycle events. The retained marker is the retry path.

@@ -100,7 +100,7 @@ import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
 const MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000
-/** How long a marker whose route is held is kept: long enough for the hold's cause to clear and a later hook to settle it (`held-route.js`). */
+/** How long a marker whose route is held is kept: long enough for the operator to declare the desk's store, which releases it (`held-route.js`). */
 export const HELD_MARKER_TTL_MS = 90 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000

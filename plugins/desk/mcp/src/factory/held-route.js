@@ -1,13 +1,12 @@
-// Held routes settle. A session hook that could not read the plugin set (a manifest or plugin folder it could not read, a registry that is
-// missing or does not list Desk, too many plugins) records a held route: no store, so the session is never derived or published. Every
-// reader reads the warned manifests again (`store-route.js` `recheckRoute`), and a manifest that now declares a store settles the route.
-// What is left is a hold whose cause cleared without a declaration: every warned manifest now reads and declares nothing, or the scan was
-// incomplete and named no manifest. Those are settled here, by the next complete plugin scan on the same host (`settleHeldMarkers`, run by
-// the end hook after it has written its own marker): the session is routed as a session there would be routed now, its marker rewritten
-// with that route and the time it was settled. A default route needs the plugins the session's own scan listed, so a session whose scan
-// read no plugin list at all (a missing registry) settles only on a declaration (the desk's `_meta/factory.json` or an overlay). A hold whose warned manifest is still unreadable or gone stays held: that plugin may be the
-// overlay that declares a private store, and only it can say. A held marker is kept past the usual 30 days (`outbox.js` `listMarkers`), and
-// counted with its reason by the sweep for `desk_doctor` and the boot line (`routeHolds`), so a hold is never silent.
+// Held routes. A session hook that could not read the plugin set (a manifest or plugin folder it could not read, a registry that is missing
+// or does not list Desk, too many plugins, a scan cut short) records a held route: no store, so the session is never derived or published.
+// A hold is released only by something that positively declares a store for that session: every reader routes a desk that declares its
+// store in `_meta/factory.json` to it, and reads the warned manifests again (`store-route.js` `recheckRoute`), so a manifest the session
+// itself loaded that now declares a store routes it there. Nothing infers the default store for a held session: another session's plugin
+// scan says nothing about the plugins this one ran with (a `claude --plugin-dir` overlay, another config folder, an overlay uninstalled
+// since), so a hold whose cause cleared without a declaration waits. A held marker is kept for 90 days (`outbox.js` `listMarkers`),
+// counted with its reason by the sweep for `desk_doctor` and the boot line (`routeHolds`), and reported once pruned (`held_pruned`), so a
+// hold is never silent.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
@@ -15,43 +14,7 @@ import { lstatSync, statSync } from "node:fs"
 import * as path from "node:path"
 
 import { MAX_MARKER_BYTES, readSmallText } from "./marker.js"
-import { listMarkers, writeMarker } from "./outbox.js"
 import { markerRoute, recordedHeld } from "./session-route.js"
-import { rereadWarnings, resolveStore } from "./store-route.js"
-
-/** The most markers one hook run settles: the hook has a short deadline, and the next one goes on. */
-export const SETTLE_LIMIT = 16
-
-const HOST = Object.freeze({ claude: "claude-code", copilot: "copilot-cli" })
-const read = (file) => readSmallText(file)
-
-// Whether the hook recorded this marker's route as held (no store) or beside a manifest it could not read, from the marker as written.
-const writtenHeld = (routing) => routing !== undefined && (routing.store === null || routing.warnings.length > 0)
-
-/**
- * `settleHeldMarkers(env, { host, dirs, now, deadline }) -> string[]`: routes again every ended marker of `host` ("claude" or "copilot")
- * whose recorded route is still held and whose cause has cleared, with `dirs` (the plugin folders of a complete scan on that host now). A
- * marker is settled only to a positive route with no warnings. Returns the settled marker names. Never throws.
- */
-export async function settleHeldMarkers(env, { host, dirs, now = () => new Date().toISOString(), deadline = Infinity }) {
-  const settled = []
-  try {
-    for (const marker of await listMarkers(env)) {
-      if (settled.length >= SETTLE_LIMIT || performance.now() > deadline) break
-      if (marker.host !== HOST[host] || marker.ended_at === null || !writtenHeld(marker.routing) || markerRoute(marker).store !== null) continue
-      // A warned manifest still unreadable or gone keeps the hold.
-      if (marker.routing.warnings.length > 0 && rereadWarnings(marker.routing.warnings, read) === null) continue
-      const routing = resolveStore({ deskRoot: marker.desk_root, pluginDirs: dirs, read })
-      // A default route needs the plugin list the session's own scan read (`session-route.js`): a scan that read nothing never proves it.
-      if (routing.store === null || routing.warnings.length > 0 || (routing.source === "default" && marker.plugins.length === 0)) continue
-      await writeMarker(env, { ...marker, routing, updated_at: now() })
-      settled.push(`${marker.host}-${marker.session_id}.json`)
-    }
-  } catch {
-    // The next hook run settles what this one could not.
-  }
-  return settled
-}
 
 /**
  * `routeHolds(markers) -> { count, reasons }`: the markers whose route is held now (`session-route.js`), with each distinct reason: `{ code,
@@ -93,13 +56,13 @@ export const HOLD_REMEDIES = Object.freeze({
   too_many_plugins: "remove plugins until at most 64 are installed, or declare the store in the desk's `_meta/factory.json`",
   scan_deadline: "nothing; the next session reads the plugin list again",
   plugin_scan_incomplete: REMEDY_SCAN,
-  awaiting_settle: "nothing; the next session that ends on this host settles it",
+  needs_declaration: "the plugin reads now but declares no store, and the plugins this session ran with cannot be read again; declare the store in the desk's `_meta/factory.json` to release it, or it is pruned after 90 days",
 })
 
 /**
  * Why `file` (a recorded warning's manifest or plugin folder, or `null` for a hold that named none) holds a route now, as a `HOLD_REMEDIES`
  * key, read from the file as it is now: a link, a hard link, a file too large, a file or folder that is missing, or one that cannot be read
- * or parsed; `awaiting_settle` when it now reads (the next complete scan settles the hold).
+ * or parsed; `needs_declaration` when it now reads (only a declaration releases the hold).
  */
 export function holdReason(file, { code = "manifest_unreadable" } = {}) {
   if (file === null) return "plugin_scan_incomplete"
@@ -113,7 +76,7 @@ export function holdReason(file, { code = "manifest_unreadable" } = {}) {
   if (!manifest && !info.isFile()) {
     // A plugin folder, or a link to one: held only while it does not resolve to a folder that reads.
     try {
-      return statSync(file).isDirectory() ? "awaiting_settle" : "plugin_unreadable"
+      return statSync(file).isDirectory() ? "needs_declaration" : "plugin_unreadable"
     } catch {
       return "plugin_missing"
     }
@@ -123,7 +86,7 @@ export function holdReason(file, { code = "manifest_unreadable" } = {}) {
   if (info.size > MAX_MARKER_BYTES) return "manifest_too_large"
   try {
     JSON.parse(readSmallText(file))
-    return "awaiting_settle"
+    return "needs_declaration"
   } catch {
     return code === "manifest_unparseable" ? "manifest_unparseable" : "manifest_unreadable"
   }

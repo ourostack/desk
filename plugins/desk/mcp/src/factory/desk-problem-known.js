@@ -199,7 +199,9 @@ export async function armKnownHits(env, { now = Date.now } = {}) {
 }
 
 /**
- * `knownHitsSince(status, issueNumber, version, { since }) -> { state: "measured", hit: boolean } | { state: "unavailable", reason }`.
+ * `knownHitsSince(status, issueNumber, version, { since, launches }) -> { state: "measured", hit: boolean } | { state: "unavailable", reason }`.
+ * `launches` are the times of filer launches whose filer has not recorded an outcome (`filer-launch.js` `pendingLaunchTimes`); one at or
+ * after `since` reads like a drop.
  * Pure, and the answer is for this machine only. `since` (an ISO string, a Date or epoch milliseconds) is
  * required: the answer is `measured` only when recording started on this machine at or before `since`
  * (`recording_since`); a reset or fresh status, or one that started later, is `not_recorded`. Every machine
@@ -215,7 +217,7 @@ export async function armKnownHits(env, { now = Date.now } = {}) {
  *
  * Reasons: `not_recorded`, `damaged`, `bad_version`, `bad_issue_number`, `bad_since`.
  */
-export function knownHitsSince(status, issueNumber, version, { since } = {}) {
+export function knownHitsSince(status, issueNumber, version, { since, launches = [] } = {}) {
   const unavailable = (reason) => ({ state: "unavailable", reason })
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) return unavailable("bad_issue_number")
   if (parseVersion(version) === null) return unavailable("bad_version")
@@ -234,7 +236,9 @@ export function knownHitsSince(status, issueNumber, version, { since } = {}) {
   if (pending !== undefined && !isRecord(pending)) return unavailable("damaged")
   // A filing that started in the window and never recorded its outcome (killed, or still running) may have lost a hit.
   const pendingInWindow = pending !== undefined && Object.values(pending).some((at) => !validTime(at) || Date.parse(at) >= sinceMs)
-  const droppedInWindow = pendingInWindow || (dropped?.count > 0 && (dropped.last_dropped_at === null || Date.parse(dropped.last_dropped_at) >= sinceMs))
+  // So may a filer launched in the window that never recorded an outcome, or never started (`filer-launch.js` `pendingLaunchTimes`).
+  const launchedInWindow = launches.some((at) => !(at < sinceMs))
+  const droppedInWindow = pendingInWindow || launchedInWindow || (dropped?.count > 0 && (dropped.last_dropped_at === null || Date.parse(dropped.last_dropped_at) >= sinceMs))
   if (map === undefined || !Object.hasOwn(map, issueNumber)) return droppedInWindow ? unavailable("not_recorded") : { state: "measured", hit: false }
   const entry = map[issueNumber]
   if (!validEntry(entry)) return unavailable("damaged")

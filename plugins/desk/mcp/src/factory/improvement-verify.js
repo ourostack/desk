@@ -48,6 +48,7 @@ import { cardCommitMessage, writeCardCommitted as writeCardCommittedDefault } fr
 import { ghRunner } from "./flush.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { armKnownHits, knownHitsSince } from "./desk-problem-known.js"
+import { pendingLaunchTimes } from "./filer-launch.js"
 import { storeFor } from "./kaizen-file.js"
 import { conditionOf } from "./loop-conditions.js"
 import { recordStep } from "./loop-status.js"
@@ -366,7 +367,7 @@ export async function runVerifyStep(env, {
   const deskProblem = async (card) => {
     const number = Number(card.key.slice(card.source.length + 1).split("#")[1])
     const since = new Date(nowMs - DESK_PROBLEM_QUIET_DAYS * DAY_MS)
-    const hits = knownHitsSince(status, number, card.shipped_version, { since })
+    const hits = knownHitsSince(status, number, card.shipped_version, { since, launches: pendingLaunchTimes(env) })
     if (hits.state === "measured" && hits.hit) return reopen(card, "still_recurring")
     const condition = conditionOf(status, card.key)
     if (condition.state !== "measured" || !isFresh(condition.observed_at, nowMs)) return stamp(card, "waiting")
