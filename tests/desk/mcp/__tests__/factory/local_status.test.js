@@ -184,18 +184,23 @@ test("the desk's declaration picks the store, and every other decided store is l
   ])
 }))
 
-test("an overlay declaration beside Desk routes the desk, with manifest warnings as codes only", () => scratch(async ({ base, desk, env }) => {
+test("an overlay declaration beside Desk routes the desk, and a broken manifest ahead of it holds the route, named by code only", () => scratch(async ({ base, desk, env }) => {
   const { factoryLocalStatus } = await load()
   const broken = path.join(base, "plugins", "broken")
   const overlay = path.join(base, "plugins", "overlay")
   await fs.mkdir(broken, { recursive: true })
   await fs.writeFile(path.join(broken, "plugin.json"), "{ not json")
   await json(path.join(overlay, "plugin.json"), { name: "overlay", desk: { factory: { store: OTHER } } })
-  const status = factoryLocalStatus({ env, deskRoot: desk, pluginDirs: [broken, overlay] })
+  const status = factoryLocalStatus({ env, deskRoot: desk, pluginDirs: [overlay, broken] })
   assert.equal(status.store, OTHER)
   assert.equal(status.source, "overlay")
-  assert.deepEqual(status.warnings, ["manifest_unparseable"])
-  assert.doesNotMatch(JSON.stringify(status), new RegExp(base.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"))
+  assert.deepEqual(status.warnings, [])
+  // A broken manifest ahead of the overlay could itself declare a store, so it holds the route and is named by its code.
+  const held = factoryLocalStatus({ env, deskRoot: desk, pluginDirs: [broken, overlay] })
+  assert.equal(held.store, null)
+  assert.equal(held.source, "invalid_declaration")
+  assert.deepEqual(held.warnings, ["manifest_unparseable"])
+  assert.doesNotMatch(JSON.stringify(held), new RegExp(base.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"))
 }))
 
 test("an invalid declaration or an incomplete plugin scan holds routing and names no store", () => scratch(async ({ desk, env }) => {

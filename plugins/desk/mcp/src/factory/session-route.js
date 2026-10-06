@@ -1,7 +1,10 @@
 // The current route of a session, read the same way by the sweep, the flush, the local status and reconcile.
 //
 // `markerRoute(marker)` is the one rule for a marker's route: the desk's current route (`resolveStore` from the marker's desk root), or,
-// when that is the default route, the route the marker's hook recorded after checking the plugin overlays, if it recorded one.
+// when that is the default route, the route the marker's hook recorded after checking the plugin overlays, if it recorded one. A recorded
+// route with warnings (a plugin manifest the hook could not read) is read again (`recheckRoute`): it is held until every manifest it names
+// reads, so a marker recorded while an overlay was unreadable never routes to the default store, and is corrected once the overlay reads.
+// A default route recorded with warnings never proves a Codex default route either.
 // `proofIndex(markers)` and `provenBy(marker, index)` (together `routeProven(marker, siblings)`) are the one R3 proof of a Codex default
 // route: a Claude Code or Copilot CLI marker for the same desk, within `ROUTE_PROOF_WINDOW_MS` (30 days), that routed by default after
 // checking the overlays. The sweep memoizes the index once per sweep; the others build it as they need it.
@@ -43,7 +46,8 @@ import { realpathSync, statSync } from "node:fs"
 import * as path from "node:path"
 
 import { PATTERNS } from "./schema.js"
-import { resolveStore } from "./store-route.js"
+import { readSmallText } from "./marker.js"
+import { recheckRoute, resolveStore } from "./store-route.js"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 /** A marker older than this is pruned by `listMarkers`; it says nothing about the route. */
@@ -78,12 +82,12 @@ function realDesk(root) {
 /** See the header: the route `marker` gives now, as `{ store, source, warnings }`. `marker.desk_root` is an absolute path. */
 export function markerRoute(marker) {
   const current = resolveStore({ deskRoot: marker.desk_root })
-  return current.source === "default" && marker.routing ? marker.routing : current
+  return current.source === "default" && marker.routing ? recheckRoute(marker.routing, (file) => readSmallText(file)) : current
 }
 
 /** See the header: the markers that can prove a Codex default route, as `{ desk, at }`. */
 export function proofIndex(markers) {
-  return markers.filter((other) => other.host !== "codex-cli" && typeof other.desk_root === "string" && other.routing?.source === "default")
+  return markers.filter((other) => other.host !== "codex-cli" && typeof other.desk_root === "string" && other.routing?.source === "default" && other.routing.warnings.length === 0)
     .map((other) => ({ desk: realDesk(other.desk_root), at: markerTime(other) }))
 }
 

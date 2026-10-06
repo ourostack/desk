@@ -338,9 +338,12 @@ test("concurrent derivation serializes one session instead of overwriting freshe
 
 test("routing snapshot survives plugin cleanup, desk declaration wins, and warnings never enter facts", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
-  const marker = { ...await session(ctx), routing: { source: "overlay", store: "example/other", warnings: [{ code: "manifest_unreadable", manifest: path.join(ctx.base, "missing/plugin.json") }] } }
+  const clean = { ...await session(ctx), routing: { source: "overlay", store: "example/other", warnings: [] } }
   await setConsent(ctx.env, { store: STORE, contribute: true })
-  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "not_opted_in", store: "example/other" })
+  assert.deepEqual(await deriveMarker(ctx.env, clean), { result: "not_opted_in", store: "example/other" })
+  // A route recorded while a manifest could not be read is held while that manifest is gone: it might have declared another store.
+  const marker = { ...clean, routing: { ...clean.routing, warnings: [{ code: "manifest_unreadable", manifest: path.join(ctx.base, "missing/plugin.json") }] } }
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
   assert.equal((await readStatus(ctx.env)).routing_warnings.length, 1)
   await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: STORE })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
