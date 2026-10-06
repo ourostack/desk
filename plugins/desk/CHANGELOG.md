@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.188 — 2026-10-06
+
+`task_update` no longer drops a field it does not know. A top-level `status` is now accepted as shorthand for `frontmatter.status` (the field an agent reaches for first; the same evidence rule for `done` applies, and a `status` that disagrees with `frontmatter.status` is refused). Any other unknown top-level field is refused before the card is touched, with an error that names it and lists the accepted fields. Before this, `{"status":"done","evidence":{...}}` came back as `updated` with a commit while the card's status stayed where it was.
+
+The done-claim gate now blocks two replies it used to let through: "Ran the tests, then it's done." (a "then it's done" after a step the reply reports closes the whole job, even when the sentence names tests or code) and "If it helps, the task is done." (a courtesy opener is no condition; a real condition such as "If it passes review, ..." still is not a claim).
+
+The PowerShell guard now denies, where a command could reach a protected checkout, WMI process creation that names git (`Invoke-CimMethod`, `Invoke-WmiMethod`, `icim`) and a Process object whose `FileName` is set to git. Both were listed as known gaps. The other known gaps stay: obfuscated strings run through `iex` and encoded scripts are unreadable code, which the guard passes by ruling as Bash does, and `merge`, `commit` and `cherry-pick` are allowed in an unresolved checkout by ruling.
+
+The factory derive worker, when it hits its six-minute ceiling, now says so on stderr and exits 124 instead of exiting 0, so a hang is told apart from a finished run.
+
+The MCP declaration test now also checks that the server names the Codex adapter spells out in code (`mcp_servers.desk`) are declared, and reads a server's tool list by `<plugin>/<server>` before the bare server name. The README for `mcp/` names Claude Code's 64-character function-name form beside Copilot's.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.187 — 2026-10-05
 
 Browser access is now part of what first-run onboarding and `SETUP.md` verify, not an optional extra. Step 6 of `SETUP.md` and `first-run-bootstrap` both check that the `desk-web` tools are listed and `browser_navigate` reaches `https://example.com`, say that the first call can wait up to two minutes while Playwright MCP installs, and separate a `status: degraded` answer (Node, npm or the registry) from a plain Playwright error (no Chrome or Edge). After one retry a failed check is recorded as not verified and onboarding continues.
