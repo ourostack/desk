@@ -6,13 +6,15 @@ import * as http from "node:http"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { factoryStateRoot, readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { keyedJobId } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { runJobLinkCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { SITE, SITE_FILES, main, runIfMain, taskNames, viewDir } from "../../../../../plugins/desk/mcp/scripts/private-view.js"
+import { osEnv } from "../_os_env.js"
+import { NO_FILE_SYMLINKS, NO_POSIX_MODES, isWindows } from "../_platform.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/private-view.js", import.meta.url))
 
@@ -34,7 +36,7 @@ async function scratch(run) {
   mkdirSync(path.join(root, "track-a/.dot"), { recursive: true })
   card(root, "track-b/plain", "---\ntitle: Plain\n---\n")
   card(root, "track-a/blank", "---\ntitle: \"\"\n---\n")
-  const env = { HOME: home, DESK: root }
+  const env = osEnv({ HOME: home, DESK: root })
   try {
     return await run({ env, root, home })
   } finally {
@@ -93,8 +95,10 @@ test("main copies the site, serves it on loopback and writes the names privately
     assert.deepEqual(lines, ["private-view: crew desks (desks/) are not mapped"])
     for (const name of SITE_FILES) assert.equal(readFileSync(path.join(dir, name), "utf8"), `copy of ${SITE}${name}`)
     assert.equal(Object.keys(JSON.parse(readFileSync(path.join(dir, "local-names.json"), "utf8")).jobs).length, 5)
-    assert.equal(statSync(dir).mode & 0o777, 0o700)
-    for (const name of [...SITE_FILES, "local-names.json"]) assert.equal(statSync(path.join(dir, name)).mode & 0o777, 0o600)
+    if (!isWindows) {
+      assert.equal(statSync(dir).mode & 0o777, 0o700)
+      for (const name of [...SITE_FILES, "local-names.json"]) assert.equal(statSync(path.join(dir, name)).mode & 0o777, 0o600)
+    }
     assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/$/u)
     assert.equal(server.address().address, "127.0.0.1")
     const page = await fetch(url)
@@ -146,7 +150,7 @@ test("a write failure removes the temporary folder and keeps the previous one", 
   assert.deepEqual(readdirSync(path.dirname(dir)), ["factory"])
 }))
 
-test("a rerun replaces a folder with loose modes and a symlinked names file", () => scratch(async ({ env, home }) => {
+test("a rerun replaces a folder with loose modes and a symlinked names file", { skip: NO_FILE_SYMLINKS || NO_POSIX_MODES }, () => scratch(async ({ env, home }) => {
   await readMachineSecret(env)
   await run({ env, fetchFile: fakeFetch() })
   const dir = viewDir(env)
@@ -165,7 +169,7 @@ test("a symlinked target is refused", () => scratch(async ({ env, home }) => {
   const dir = viewDir(env)
   mkdirSync(path.dirname(dir), { recursive: true })
   mkdirSync(path.join(home, "elsewhere"))
-  symlinkSync(path.join(home, "elsewhere"), dir)
+  symlinkSync(path.join(home, "elsewhere"), dir, isWindows ? "junction" : "dir")
   await assert.rejects(main({ env, fetchFile: fakeFetch() }), /symbolic link/u)
   assert.deepEqual(readdirSync(path.join(home, "elsewhere")), [])
 }))
@@ -179,12 +183,12 @@ test("an output folder inside a Git work tree or the factory state folder is ref
   const state = path.join(home, "other-state")
   const aliased = { ...env, XDG_STATE_HOME: state }
   await readMachineSecret(aliased)
-  symlinkSync(path.join(state, "ouroboros-skills", "desk"), path.join(state, "desk-private-view"))
+  symlinkSync(path.join(state, "ouroboros-skills", "desk"), path.join(state, "desk-private-view"), isWindows ? "junction" : "dir")
   await assert.rejects(main({ env: aliased, fetchFile: fakeFetch() }), /factory's state folder/u)
 }))
 
 test("viewDir honors XDG_STATE_HOME and falls back to the home folder", () => {
-  assert.equal(viewDir({ XDG_STATE_HOME: "/x/state" }), "/x/state/desk-private-view/factory")
+  assert.equal(viewDir({ XDG_STATE_HOME: "/x/state" }), path.join("/x/state", "desk-private-view", "factory"))
   assert.equal(viewDir({}), path.join(os.homedir(), ".local", "state", "desk-private-view", "factory"))
 })
 
@@ -229,7 +233,8 @@ test("main uses the global fetch with a timeout and fails on a bad response", ()
 }))
 
 test("runIfMain runs only as the entry point, printing the URL or the failure", async () => {
-  const url = "file:///x/private-view.js"
+  const entry = path.resolve("/x/private-view.js")
+  const url = pathToFileURL(entry).href
   assert.equal(await runIfMain(url, undefined, async () => ({})), false)
   assert.equal(await runIfMain(url, "/elsewhere.js", async () => ({})), false)
   const code = process.exitCode
@@ -239,8 +244,8 @@ test("runIfMain runs only as the entry point, printing the URL or the failure", 
   process.stdout.write = (text) => { out.push(text); return true }
   process.stderr.write = (text) => { out.push(text); return true }
   try {
-    assert.equal(await runIfMain(url, "/x/private-view.js", async ({ log }) => { log("note"); return { url: "http://127.0.0.1:1/" } }), true)
-    assert.equal(await runIfMain(url, "/x/private-view.js", async () => { throw new Error("nope") }), true)
+    assert.equal(await runIfMain(url, entry, async ({ log }) => { log("note"); return { url: "http://127.0.0.1:1/" } }), true)
+    assert.equal(await runIfMain(url, entry, async () => { throw new Error("nope") }), true)
     assert.equal(process.exitCode, 1)
   } finally {
     process.stdout.write = stdout
@@ -253,7 +258,7 @@ test("runIfMain runs only as the entry point, printing the URL or the failure", 
 test("run as a process, an unbound desk exits 1 with the reason", () => scratch(({ home }) => {
   const result = (() => {
     try {
-      return execFileSync(process.execPath, [SCRIPT], { env: { HOME: home, PATH: process.env.PATH }, cwd: home, stdio: "pipe" })
+      return execFileSync(process.execPath, [SCRIPT], { env: osEnv({ HOME: home, PATH: process.env.PATH }), cwd: home, stdio: "pipe" })
     } catch (error) {
       return error
     }

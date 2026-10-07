@@ -345,7 +345,8 @@ test("a runner that never resolves still returns not_filed: deadline within the 
   assert.equal(result.result, "not_filed")
   assert.equal(result.reason, "deadline")
   assert.match(result.body, /desk-problem-fingerprint/u)
-  assert.ok(Date.now() - startedAt < 2000, "must resolve near its own bound, never hang")
+  // The 20 ms bound is the attempt's own; the allowance covers the work around it (on Windows each protected write starts PowerShell).
+  assert.ok(Date.now() - startedAt < 15000, "must resolve near its own bound, never hang")
 }))
 
 test("a deadline that is already spent by the time the account is chosen is also reported as not_filed: deadline", () => scratch(async ({ env }) => {

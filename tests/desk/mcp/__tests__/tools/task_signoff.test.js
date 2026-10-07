@@ -270,7 +270,7 @@ test("an acceptance of an archived task leaves it archived", async () => {
   initGit(root)
   const file = await delivered(root, "kept-on-shelf", { archive: true })
   const result = await sign(root, "kept-on-shelf", { outcome: "accepted" })
-  assert.equal(result.path, path.join("t", "_archive", "kept-on-shelf", "task.md"))
+  assert.equal(result.path, "t/_archive/kept-on-shelf/task.md")
   const { data } = await readFront(file)
   assert.equal(data.signoff.state, "accepted")
   assert.equal(data.status, "done")

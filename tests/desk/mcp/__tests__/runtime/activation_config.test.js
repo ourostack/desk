@@ -943,7 +943,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
   }
 })
 
@@ -980,7 +980,7 @@ test("entrypoint stdio startup lets host/session root override activation config
       "conflicting DESK root must not receive writes when host/session root is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
   }
 })
 
@@ -1020,7 +1020,7 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")
     assert.equal(sourceMirrorCount(activationCache), 1, "repeated startup should reuse the same source mirror for unchanged MCP source")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5 })
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
   }
 })
 
