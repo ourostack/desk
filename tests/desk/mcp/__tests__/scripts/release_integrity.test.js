@@ -128,6 +128,29 @@ test("a diff past the explicit limit says so instead of a bare ENOBUFS", () => {
   })
 })
 
+test("a tracked node_modules path is a problem, with or without a base, but a tracked vendor/ is not", () => {
+  withRepo((root) => {
+    mkdirSync(path.join(root, "node_modules"), { recursive: true })
+    writeFileSync(path.join(root, "node_modules", "x"), "x\n")
+    writeFileSync(path.join(root, ".gitignore"), "node_modules/\n")
+    git(root, "add", ".gitignore")
+    git(root, "add", "-f", "node_modules/x")
+    mkdirSync(path.join(root, "plugins", "alpha", "node_modules", "deep"), { recursive: true })
+    writeFileSync(path.join(root, "plugins", "alpha", "node_modules", "deep", "y"), "y\n")
+    git(root, "add", "-f", "plugins/alpha/node_modules/deep/y")
+    mkdirSync(path.join(root, "evals", "vendor"), { recursive: true })
+    writeFileSync(path.join(root, "evals", "vendor", "ok"), "ok\n")
+    git(root, "add", "evals/vendor/ok")
+    git(root, "commit", "-q", "-m", "force-added dependencies")
+    for (const base of [null, "base"]) {
+      const problems = checker.checkReleaseIntegrity({ repoRoot: root, base })
+      const found = problems.find((problem) => /node_modules/u.test(problem))
+      assert.match(found, /^2 tracked path\(s\) are inside node_modules\/ \(.*node_modules\/x.*\); remove them from the commit.*gitignored/u)
+      assert.doesNotMatch(found, /vendor/u)
+    }
+  })
+})
+
 test("a test-only change needs no release", () => {
   withRepo((root) => {
     mkdirSync(path.join(root, "plugins", "alpha", "__tests__"), { recursive: true })
