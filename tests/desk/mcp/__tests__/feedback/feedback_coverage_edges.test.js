@@ -91,7 +91,7 @@ test("with no explicit plugin root the preview version follows DESK_PLUGIN_ROOT"
   process.env.DESK_PLUGIN_ROOT = pluginRoot
   try {
     const captured = await withPrivateStore(
-      { deskRoot: fixture.deskRoot, person: "rowan", env: { XDG_STATE_HOME: fixture.stateHome } },
+      { deskRoot: fixture.deskRoot, person: "rowan", env: osEnv({ XDG_STATE_HOME: fixture.stateHome }) },
       (store) => store.capture({ text: "a note under an env-selected plugin", taskRef: null }),
     )
     assert.equal(captured.preview_version, "9.8.7-alpha.6")
@@ -107,7 +107,7 @@ test("a note is kept with preview version unknown when the Desk version cannot b
   const pluginRoot = path.join(fixture.base, "unreadable-desk-plugin")
   await fs.mkdir(pluginRoot, { recursive: true })
   const captured = await withPrivateStore(
-    { deskRoot: fixture.deskRoot, person: "rowan", pluginRoot, env: { XDG_STATE_HOME: fixture.stateHome } },
+    { deskRoot: fixture.deskRoot, person: "rowan", pluginRoot, env: osEnv({ XDG_STATE_HOME: fixture.stateHome }) },
     (store) => store.capture({ text: "a note when plugin.json is missing", taskRef: null }),
   )
   assert.equal(captured.preview_version, "unknown")
