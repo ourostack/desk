@@ -147,7 +147,16 @@ test("a tracked node_modules path is a problem, with or without a base, but a tr
       const found = problems.find((problem) => /node_modules/u.test(problem))
       assert.match(found, /^2 tracked path\(s\) are inside node_modules\/ \(.*node_modules\/x.*\); remove them from the commit.*gitignored/u)
       assert.doesNotMatch(found, /vendor/u)
+      assert.doesNotMatch(found, /more/u)
     }
+    // Past three paths the message names three and counts the rest.
+    for (const name of ["a", "b", "c"]) {
+      writeFileSync(path.join(root, "node_modules", name), `${name}\n`)
+      git(root, "add", "-f", `node_modules/${name}`)
+    }
+    git(root, "commit", "-q", "-m", "more dependencies")
+    const many = checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }).find((problem) => /node_modules/u.test(problem))
+    assert.match(many, /^5 tracked path\(s\) are inside node_modules\/ \(.* and 2 more\)/u)
   })
 })
 
