@@ -30,6 +30,7 @@ import * as path from "node:path"
 import { appendRepairLog, lastStartPath, resolveDeskStateDir } from "./last-start.js"
 import { isStateBranchName, runGit } from "./state-branch.js"
 import { resolveStartupStateBranch } from "./startup-resolve.js"
+import { recordFetchOk } from "./sync-worker.js"
 
 const RECORD_BYTES = 16 * 1024
 const HEAD_BYTES = 4096
@@ -141,8 +142,10 @@ export async function fastForwardStateBranch({ env = process.env, root, git = ru
     const remote = await git({ cwd: toplevel, args: ["config", "--get", `branch.${branch}.remote`] })
     const upstream = await git({ cwd: toplevel, args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"] })
     if (!remote.ok || !upstream.ok || remote.stdout === "" || remote.stdout === ".") return { result: "skipped", reason: "no_upstream" }
+    const fetchStartedAt = new Date().toISOString()
     const fetched = await git({ cwd: toplevel, args: ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", remote.stdout], env: { ...env, GIT_TERMINAL_PROMPT: "0" } })
     if (!fetched.ok) return { result: "skipped", reason: "fetch_failed" }
+    recordFetchOk({ root, env, at: fetchStartedAt })
     const after = await inspect(git, toplevel, gitDir, branch)
     if (after.skip) return { result: "skipped", reason: after.skip }
     if (after.sha !== before.sha) return { result: "skipped", reason: "head_moved" }

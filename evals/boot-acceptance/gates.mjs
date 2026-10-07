@@ -1,7 +1,7 @@
 // Which Desk gates fired in a boot-acceptance run, on either host.
 //
 // A run's transcript shows what the model did; it does not show whether Desk's own hooks fired and what they said. Claude Code puts hook activity
-// in its stream-json (`system` hook events, a synthetic `Stop hook feedback:` user message, `PreToolUse:<Tool> hook error:` tool results). Copilot's
+// in its stream-json (`system` hook events; the SessionStart ones are what the report reads). Copilot's
 // `--output-format json` stream carries none of it: the hook events live in the session's own `events.jsonl` under `<COPILOT_HOME>/session-state/<id>/`,
 // which the run's temp HOME takes with it. This module saves a reduced, redacted copy of that file next to the transcript (`reduceCopilotEvents`) and
 // counts the gates from it (`copilotGates`), and counts the Claude gates from the stream (`claudeGates`). `gateReport` picks by host.
@@ -105,12 +105,9 @@ const hasText = (value) => typeof value === "string" && value.trim() !== ""
  * - `first_prompt_pointer`: whether the pointer reached the model with the very first user message. Copilot runs every `userPromptSubmitted` hook (Desk registers two) before it logs a
  *   user message, so a prompt is the group of those hook runs that precede one message. `prompts` counts such groups; `injected_on_first_prompt` is whether any hook in the first group returned the pointer;
  *   `reached_model` is whether the text is in that first message's `transformedContent` (what the model was given, tested before the saved copy is cut); `injected_count` counts the prompts that got one.
- * - `pre_tool_use_denials`: `preToolUse` hook ends whose output denies the call (`permissionDecision: "deny"`, or Copilot's own `{ <tool call id>: "Denied by preToolUse hook: ..." }`). `agent_stop_blocks`: `agentStop` hook ends that block the stop.
  * - `hook_order`: the hook types in the order they began, with repeats collapsed, up to the first twelve.
  */
 export function copilotGates(events) {
-  // Copilot logs a denial as `{ "<tool call id>": "Denied by preToolUse hook: <reason>" }`; the flat `permissionDecision` pair is what a hook prints.
-  const isDenial = (output) => typeof output === "object" && output !== null && (output.permissionDecision === "deny" || Object.values(output).some((value) => typeof value === "string" && value.startsWith("Denied by preToolUse hook")))
   const hookStarts = events.filter((e) => e.type === "hook.start")
   const hookEnds = events.filter((e) => e.type === "hook.end")
   const endOf = (start) => hookEnds.find((end) => end.data?.hookInvocationId === start.data?.hookInvocationId)
@@ -140,7 +137,6 @@ export function copilotGates(events) {
   const order = []
   for (const start of hookStarts) if (order.at(-1) !== start.data?.hookType) order.push(start.data?.hookType)
 
-  const decisions = (type, test) => hookStarts.filter((start) => start.data?.hookType === type && test(outputOf(start))).length
   return {
     events_saved: true,
     session_start: {
@@ -155,8 +151,6 @@ export function copilotGates(events) {
       reached_model: firstMessage !== undefined && (firstMessage.data?.pointer_present === true || POINTER.test(String(firstMessage.data?.transformedContent ?? ""))),
       injected_count: prompts.filter((p) => pointerIn(p.hooks)).length,
     },
-    pre_tool_use_denials: decisions("preToolUse", isDenial),
-    agent_stop_blocks: decisions("agentStop", (output) => output.decision === "block"),
     hook_failures: hookEnds.filter((end) => end.data?.success === false).length,
     hook_order: order.slice(0, 12),
   }
@@ -169,19 +163,11 @@ export const copilotGatesUnavailable = { events_saved: false, note: "the session
 // `{"subtype":"hook_response","outcome":"cancelled","exit_code":1,"output":""}`). Desk's hook is therefore known by what it hands the agent: the foundation skill, or the "could not read it" fallback.
 const DESK_START_CONTEXT = /name: using-desk\b|desk worker boot/u
 
-const DENIAL = /^PreToolUse:\w+ hook error\b/mu
-
-const blockText = (block) => (Array.isArray(block.content) ? block.content.map((part) => part?.text ?? "").join("\n") : String(block.content ?? ""))
-
 /**
  * What Claude Code's hooks did in one run, from its stream-json events (both turns, scenario first).
- * `stop_hook_feedback` counts the synthetic `Stop hook feedback:` messages (a Desk Stop hook that blocked the reply). `pre_tool_use_denials` counts tool
- * results worded `PreToolUse:<Tool> hook error:` (a Desk PreToolUse hook that denied the call; the permission layer's own refusals are not counted).
  * `session_start`: the hooks that ran at the start, whether any returned context, and how many Claude Code cancelled (a hook that outran its timeout, as on an overloaded machine: its context never reached the agent).
  */
 export function claudeGates(events) {
-  let stopFeedback = 0
-  let denials = 0
   let startHooks = 0
   let startContext = 0
   let startCancelled = 0
@@ -193,17 +179,10 @@ export function claudeGates(events) {
       else if (event.outcome !== "error" && DESK_START_CONTEXT.test(String(event.output ?? ""))) deskDelivered = true
       if (/additionalContext/u.test(String(event.output ?? ""))) startContext += 1
     }
-    if (!Array.isArray(event.message?.content) || (event.type !== "user" && event.type !== "assistant")) continue
-    for (const block of event.message.content) {
-      if (event.type === "user" && block.type === "text" && String(block.text ?? "").startsWith("Stop hook feedback:")) stopFeedback += 1
-      if (block.type === "tool_result" && block.is_error === true && DENIAL.test(blockText(block))) denials += 1
-    }
   }
   return {
     events_saved: true,
     session_start: { fired: startHooks, injected: startContext > 0, cancelled: startCancelled, desk_delivered: deskDelivered },
-    stop_hook_feedback: stopFeedback,
-    pre_tool_use_denials: denials,
   }
 }
 

@@ -442,7 +442,7 @@ export function compactCopilotTranscript(text) {
  */
 export const COPILOT_NOT_APPLICABLE = [
   "dollar cost: Copilot reports premium requests, not USD (summary.premium_requests holds the figure); there is no per-run budget cap",
-  "hook-denied notes: a refusal reaches the checks as Claude's `PreToolUse:<Tool> hook error:` text (normalized from Copilot's `Denied by preToolUse hook`), so a refusal reads the same on both hosts",
+  "refused-call notes: a refusal the host makes reaches the checks as Claude's `PreToolUse:<Tool> hook error:` text (normalized from Copilot's `Denied by preToolUse hook`), so a refusal reads the same on both hosts",
 ]
 
 /** The not-applicable list a run on `host` reports (empty on Claude Code). */
