@@ -99,6 +99,35 @@ test("a changed plugin must carry a higher version; unchanged plugins need nothi
   })
 })
 
+// Regression: node's default 1 MiB maxBuffer made `git diff --name-only` fail with ENOBUFS on a pull request that lists
+// more file names than that (a committed node_modules), a failure unrelated to versions.
+test("a change that lists more than 1 MiB of file names is judged on versions, not failed on output size", () => {
+  withRepo((root) => {
+    const stream = []
+    for (let index = 0; index < 14000; index += 1) {
+      const name = `plugins/alpha/__tests__/${"d".repeat(70)}/file-${index}.test.js`
+      stream.push(`M 100644 inline ${name}\ndata 2\nx\n`)
+    }
+    const input = `commit refs/heads/main\ncommitter t <t@t> 1 +0000\ndata 4\nbig\nfrom refs/heads/main^0\n${stream.join("")}\n`
+    execFileSync("git", ["fast-import", "--quiet", "--force"], { cwd: root, input, maxBuffer: 1 << 28 })
+    git(root, "reset", "-q", "--hard", "main")
+    const listed = execFileSync("git", ["diff", "--name-only", "base...HEAD", "--", "plugins/alpha"], { cwd: root, encoding: "utf8", maxBuffer: 1 << 28 })
+    assert.ok(listed.length > 1024 * 1024, `the diff must exceed node's default maxBuffer, got ${listed.length}`)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+  })
+})
+
+test("a diff past the explicit limit says so instead of a bare ENOBUFS", () => {
+  withRepo((root) => {
+    writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+    commit(root)
+    assert.throws(
+      () => checker.checkReleaseIntegrity({ repoRoot: root, base: "base", git: checker.defaultGit(root, 8) }),
+      /printed more than 8 bytes.*implausibly large/u,
+    )
+  })
+})
+
 test("a test-only change needs no release", () => {
   withRepo((root) => {
     mkdirSync(path.join(root, "plugins", "alpha", "__tests__"), { recursive: true })

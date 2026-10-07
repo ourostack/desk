@@ -51,8 +51,22 @@ function compareVersions(left, right) {
   return 0;
 }
 
-function defaultGit(repoRoot) {
-  return (args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+// Node's default `maxBuffer` is 1 MiB, and a pull request that adds a large tree (a committed node_modules, say) lists
+// more file names than that, so `git diff --name-only` died with ENOBUFS, a failure about output size and not about
+// versions. 512 MiB is far beyond any real diff; if even that is exceeded, say so instead of a bare ENOBUFS.
+const GIT_MAX_BUFFER = 512 * 1024 * 1024;
+
+function defaultGit(repoRoot, maxBuffer = GIT_MAX_BUFFER) {
+  return (args) => {
+    try {
+      return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer });
+    } catch (error) {
+      if (error?.code === "ENOBUFS") {
+        throw new Error(`git ${args.join(" ")} printed more than ${maxBuffer} bytes, which is more than this release check will read; the pull request changes an implausibly large number of files`, { cause: error });
+      }
+      throw error;
+    }
+  };
 }
 
 function readJsonAt({ git, ref, file, repoRoot }) {
@@ -163,4 +177,4 @@ if (require.main === module) {
   process.exitCode = runCli();
 }
 
-module.exports = { checkReleaseIntegrity, compareVersions, parseVersion, resolveBase, runCli };
+module.exports = { checkReleaseIntegrity, defaultGit, compareVersions, parseVersion, resolveBase, runCli };
