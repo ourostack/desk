@@ -517,6 +517,8 @@ export function calculateFormulas(timeline) {
   // The card's own figure feeds the window-based numbers (active in lead, contributors, flow); only the published lead time is floored.
   const cardLead = leadTime(timeline, status)
   const lead = floorLead(cardLead, timeline)
+  // A raised lead time has no window the card's clock can measure over, so what reads that window says so instead of answering over the wrong one.
+  const windowLead = lead === cardLead ? cardLead : unavailable("card_dates_shorter_than_work")
 
   const activeIntervals = timeline.intervals.filter((interval) => ACTIVE_KINDS.has(interval.kind))
   const activeUnion = union(activeIntervals)
@@ -560,7 +562,7 @@ export function calculateFormulas(timeline) {
   const queue = timed(() => covered(coverageOf("queue_before_start_ms", clockSources, new Set(), new Set()), () => measured(Math.max(0, Math.min(...timedSessions.map((session) => session.offset_ms))), { basis: "first_captured_session" })))
 
   let flowEfficiency
-  if (cardLead.class === "unavailable") flowEfficiency = unavailable(cardLead.reason)
+  if (windowLead.class === "unavailable") flowEfficiency = unavailable(windowLead.reason)
   else if (cardLead.value === 0) flowEfficiency = unavailable("zero_lead_time")
   else if (activeInLead.class === "unavailable") flowEfficiency = activeInLead
   else flowEfficiency = withCoverage(inferred(activeInLead.value / cardLead.value, { censored: cardLead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency"))
@@ -603,7 +605,7 @@ export function calculateFormulas(timeline) {
     concurrent_agents: concurrentAgents,
     waits,
     longest_wait: longest,
-    lead_contributors: leadContributors({ lead: cardLead, timingUnavailable, activeInLead, queue, waits, waitUnions }),
+    lead_contributors: leadContributors({ lead: windowLead, timingUnavailable, activeInLead, queue, waits, waitUnions }),
     flow_efficiency: flowEfficiency,
     tool_calls_by_kind: withCoverage(measured(sumMap(counted, "tool_calls")), countCoverage("tool_calls_by_kind")),
     references: referencesResult(references, parts, { privatePrs, privateCommits }),
