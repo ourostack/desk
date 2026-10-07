@@ -3,7 +3,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, utimesSync, writeFileSync } from "node:fs"
+import { promises as fs, statSync, utimesSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -162,6 +162,21 @@ test("desk_status drops a failed pull that a later fetch or push has superseded"
   const later = new Date(Date.now() + 60_000)
   utimesSync(fetchHead, later, later)
   assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false, "a later fetch cleared it")
+})
+
+test("desk_status keeps a failed pull when a later fetch also failed: a failed fetch still touches FETCH_HEAD", async () => {
+  const { origin, root } = await mkDeskWithOrigin()
+  git(root, ["remote", "set-url", "origin", path.join(origin, "gone")])
+  await syncWorkspace({ root, env, fileProblem: () => ({ file: "none" }) })
+  // The session-start fast-forward check, or an agent's own retry, fails the same way after the recorded failure.
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const failed = spawnSync("git", ["-C", root, "fetch", "--quiet", "origin"], { encoding: "utf8" })
+  assert.notEqual(failed.status, 0)
+  const fetchHead = path.join(git(root, ["rev-parse", "--absolute-git-dir"]).trim(), "FETCH_HEAD")
+  assert.equal(statSync(fetchHead).size, 0, "a failed fetch leaves an empty FETCH_HEAD")
+  assert.equal(statSync(fetchHead).mtimeMs >= Date.parse(readSyncStatus({ root, env }).last_pull.at), true, "newer than the recorded failure")
+  const { sync } = await desk_status({ deskRoot: root, env })
+  assert.equal(sync.last_pull.state, "unresolved", "nothing has succeeded since the failed pull")
 })
 
 test("the sync fix quotes a desk path with a space", () => {

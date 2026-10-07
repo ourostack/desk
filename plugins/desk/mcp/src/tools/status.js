@@ -32,11 +32,13 @@ export const DESK_STATUS_FIELDS = ["detail"]
  * itself (`runtime/sync-worker.js`) and the SessionEnd safety net
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
-// When the desk's last fetch finished (FETCH_HEAD's modified time), or null: a later fetch proves the remote was reachable.
+// When the desk's last successful fetch finished (FETCH_HEAD's modified time), or null: a later fetch proves the remote was reachable.
+// A failed fetch or pull also rewrites FETCH_HEAD, but leaves it empty, so an empty file proves nothing.
 function lastFetchMs(deskRoot) {
   try {
     const gitDir = execFileSync("git", ["-C", deskRoot, "rev-parse", "--absolute-git-dir"], { encoding: "utf8", timeout: 5000 }).trim()
-    return statSync(path.join(gitDir, "FETCH_HEAD")).mtimeMs
+    const fetchHead = statSync(path.join(gitDir, "FETCH_HEAD"))
+    return fetchHead.size > 0 ? fetchHead.mtimeMs : null
   } catch {
     return null
   }
