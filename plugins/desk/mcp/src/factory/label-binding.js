@@ -15,7 +15,7 @@ import { factoryStateRoot, quarantine, readDelivered, readLocalFacts, undeliver 
 import { ENUMS } from "./schema.js"
 
 /** The quarantine reason of a label withdrawn because its session no longer binds its job. */
-export const UNBOUND_REASON = "job_unbound"
+const UNBOUND_REASON = "job_unbound"
 
 const KEY = /^labels\/([0-9a-f]{32})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/u
 const slugOf = (store) => store.replace("/", "__")

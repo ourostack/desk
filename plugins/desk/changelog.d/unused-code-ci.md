@@ -2,7 +2,7 @@ Pull requests now fail when they leave unused code behind. A new required check,
 
 ### Deleted, with the code left without purpose
 
-- 72 exports that nothing outside their own file imported are now private to that file, so the next reader can see they have no outside callers. Their values and behaviour are unchanged.
+- 73 exports that nothing outside their own file imported are now private to that file, so the next reader can see they have no outside callers. Their values and behaviour are unchanged.
 - The unused `readinessStates` function, the `diagnosticTools` list and a re-export of `ELSEWHERE_NOTE` that nothing imported are gone.
 - The `runtimeSupportMatrixPath` and `generateRuntimeSupportMatrix` aliases are gone; their caller uses the canonical names `deriveRuntimeSupportMatrixPath` and `buildRuntimeSupportMatrix`.
 
