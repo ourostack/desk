@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.224 — 2026-10-07
+
+The coverage gate no longer instruments the migration Detect scripts that the session-start hook runs as child processes. Instrumentation slowed those children with the number of files a pull request changes, so on a large change a Detect run could pass its fixed 2 second startup budget and add a "could not be checked in time" line that broke the session-start output tests. The gate, including its offline-evaluation registration, now skips only a process run with `--detect` under `DESK_PLUGIN_ROOT`, as the migration driver runs it, through one shared predicate. The gate strips `DESK_PLUGIN_ROOT` from the environment it gives the tests, and a test pins the driver and Detect-block side of the contract. Their own tests still measure them. Production never loads the gate's registration, so the startup budget is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.223 — 2026-10-07
 
 Desk's sync status file can no longer lose a freshly recorded failed pull to a push that finishes at the same moment. The boot's pull record and the push worker (and the session-end unpushed check) each read the status file, merged their own fields and renamed a new copy over it, so two of them running together could each drop the other's fields, and `desk_status` then said sync was healthy after a failed pull. Each write now holds a short-lived lock file beside the status file while it reads, merges and renames. The lock never stalls Desk: a writer waits at most 1.5 seconds, takes over a lock older than 5 seconds (its owner died) and, if the lock is still held after the wait, writes anyway rather than hang a boot or a tool call. No field Desk records or publishes changed.
