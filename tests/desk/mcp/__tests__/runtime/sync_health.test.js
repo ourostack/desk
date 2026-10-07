@@ -3,15 +3,16 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs"
+import { tmpdir as osTmpdir } from "node:os"
 import * as path from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { healthWord, pullStillFailing, syncDegradation } from "../../../../../plugins/desk/mcp/src/runtime/health.js"
 import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
 import { fastForwardStateBranch } from "../../../../../plugins/desk/mcp/src/runtime/desk-health.js"
 import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
-import { readFetchOkAt, readSyncStatus, recordFetchOk, syncStatusPath, recordPullOutcome, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { readFetchOkAt, readSyncStatus, recordFetchOk, syncStatusPath, recordPullOutcome, runPushWorker, updateSyncStatus } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 
 const env = process.env
@@ -225,4 +226,73 @@ test("desk_status keeps a failed pull after a multi-remote fetch with one dead r
 test("the sync fix quotes a desk path with a space", () => {
   const compact = compactStatus({ ...ready, root: { path: "/my desk" }, sync: { last_pull: lastPull } })
   assert.match(compact.fix, /git -C '\/my desk' pull --rebase --autostash/u)
+})
+
+// ---- The status file's read-merge-write is locked: two writers never drop each other's fields. ----
+
+const SYNC_WORKER_URL = new URL("../../../../../plugins/desk/mcp/src/runtime/sync-worker.js", import.meta.url).href
+
+function runWriters(root, stateHome, writers, rounds) {
+  const script = `
+    import { recordPullOutcome, updateSyncStatus } from ${JSON.stringify(SYNC_WORKER_URL)}
+    const [kind, root, rounds] = [process.argv[1], process.argv[2], Number(process.argv[3])]
+    for (let i = 0; i < rounds; i += 1) {
+      if (kind === "pull") recordPullOutcome({ root, env: process.env, result: { state: "unresolved", reason: "r" + i, cause: "unreachable" } })
+      else updateSyncStatus(root, process.env, { blocked: i % 2 === 0, reason: "push" + i, last_push_at: "push-" + i })
+    }`
+  const childEnv = { ...env, XDG_STATE_HOME: stateHome, LOCALAPPDATA: stateHome, NODE_TEST_CONTEXT: "" }
+  return Promise.all(writers.map((kind) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script, kind, root, String(rounds)], { env: childEnv, stdio: ["ignore", "ignore", "pipe"] })
+    let stderr = ""
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`writer ${kind} exited ${code}: ${stderr}`))))
+  })))
+}
+
+test("a pull writer and a push writer racing across processes keep each other's fields", async () => {
+  const stateHome = await mkTempRoot("desk-status-race-state-")
+  const root = await mkTempRoot("desk-status-race-root-")
+  const rounds = 150
+  await runWriters(root, stateHome, ["pull", "push"], rounds)
+  const raced = { ...env, XDG_STATE_HOME: stateHome, LOCALAPPDATA: stateHome }
+  const recorded = readSyncStatus({ root, env: raced })
+  assert.equal(recorded.last_pull.reason, `r${rounds - 1}`, "the last failed pull survived every push-side write")
+  assert.equal(recorded.last_push_at, `push-${rounds - 1}`, "the last push survived every pull-side write")
+  assert.equal(typeof recorded.last_success_at, "undefined", "a failed pull records no success time")
+})
+
+test("a held lock delays a status write by its budget only, then the write still lands", () => {
+  const root = "/nonexistent/status-lock-root"
+  const file = path.join(mkdtempSync(path.join(osTmpdir(), "desk-status-lock-")), "x.status.json")
+  updateSyncStatus(root, env, { a: 1 }, file)
+  // Hold the lock as another writer would; a second writer must wait out its budget, then still write.
+  writeFileSync(`${file}.lock`, "")
+  const started = Date.now()
+  updateSyncStatus(root, env, { b: 2 }, file, { waitMs: 60 })
+  assert.equal(Date.now() - started < 3000, true, "a held lock delays a writer by its budget only")
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { a: 1, b: 2 })
+  assert.equal(existsSync(`${file}.lock`), true, "a writer that never held the lock leaves the holder's lock alone")
+})
+
+test("a lock whose holder died is taken over and removed", () => {
+  const root = "/nonexistent/status-lock-root"
+  const file = path.join(mkdtempSync(path.join(osTmpdir(), "desk-status-stale-")), "x.status.json")
+  writeFileSync(`${file}.lock`, "")
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.lock`, old, old)
+  updateSyncStatus(root, env, { c: 3 }, file, { waitMs: 5000 })
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { c: 3 })
+  assert.equal(existsSync(`${file}.lock`), false, "the lock is released")
+})
+
+test("a stale lock that cannot be removed does not hang the writer", () => {
+  const root = "/nonexistent/status-lock-root"
+  const dir = mkdtempSync(path.join(osTmpdir(), "desk-status-stuck-"))
+  const file = path.join(dir, "x.status.json")
+  // A directory in the lock's place: it exists, is old, and unlink refuses it.
+  mkdirSync(`${file}.lock`)
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.lock`, old, old)
+  updateSyncStatus(root, env, { d: 4 }, file, { waitMs: 30 })
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { d: 4 })
 })
