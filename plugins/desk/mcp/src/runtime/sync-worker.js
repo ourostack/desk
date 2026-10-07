@@ -315,6 +315,19 @@ export function recordPullOutcome({ root, env, result }) {
   }
 }
 
+/**
+ * Records that Desk's own fetch of the desk's remote just succeeded (`fastForwardStateBranch`), as `last_fetch_ok_at`:
+ * `desk_status` counts it as proof the remote was reachable again, so it supersedes an earlier failed pull. It is
+ * Desk's own record, not Git's `FETCH_HEAD`, which a failed fetch rewrites too. Best effort, never throws.
+ */
+export function recordFetchOk({ root, env }) {
+  try {
+    updateSyncStatus(root, env, { last_fetch_ok_at: new Date().toISOString() })
+  } catch {
+    // The record is a convenience for the next reader, never a reason to fail a fetch.
+  }
+}
+
 /** `desk_status`'s own read of the worker's last recorded outcome, or `null` when nothing has run yet. Never throws. */
 export function readSyncStatus({ root, env }) {
   return readJsonIfPresent(syncStatusPath({ root, env }))

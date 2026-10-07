@@ -27,7 +27,7 @@ const LAST_PULL_TTL_MS = 24 * 60 * 60 * 1000
 
 /**
  * Whether a recorded failed pull still counts. It stops counting once something proves the remote reachable again
- * (a push or a fetch that finished after the failure) and in any case after 24 hours, because `desk_status` does not
+ * (a push, or Desk's own fetch, that finished after the failure; both are recorded by Desk, never read from Git's `FETCH_HEAD`, which a failed fetch rewrites too) and in any case after 24 hours, because `desk_status` does not
  * re-run the pull: the record is a note from the last boot, not a live probe. `lastPull.at` is when it failed;
  * `lastPushAt` and `fetchedAt` are ISO text or epoch milliseconds, either may be null.
  */

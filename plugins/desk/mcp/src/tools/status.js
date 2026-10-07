@@ -1,5 +1,5 @@
-import { existsSync, statSync } from "node:fs"
-import { execFileSync, spawnSync } from "node:child_process"
+import { existsSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
@@ -32,23 +32,11 @@ export const DESK_STATUS_FIELDS = ["detail"]
  * itself (`runtime/sync-worker.js`) and the SessionEnd safety net
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
-// When the desk's last successful fetch finished (FETCH_HEAD's modified time), or null: a later fetch proves the remote was reachable.
-// A failed fetch or pull also rewrites FETCH_HEAD, but leaves it empty, so an empty file proves nothing.
-function lastFetchMs(deskRoot) {
-  try {
-    const gitDir = execFileSync("git", ["-C", deskRoot, "rev-parse", "--absolute-git-dir"], { encoding: "utf8", timeout: 5000 }).trim()
-    const fetchHead = statSync(path.join(gitDir, "FETCH_HEAD"))
-    return fetchHead.size > 0 ? fetchHead.mtimeMs : null
-  } catch {
-    return null
-  }
-}
-
 function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
   if (!hasRemoteConfigured(deskRoot, spawnGit)) return "no remote configured"
   const recorded = readSyncStatus({ root: deskRoot, env })
   // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
-  const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: lastFetchMs(deskRoot) })
+  const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: recorded?.last_fetch_ok_at ?? null })
     ? { last_pull: recorded.last_pull }
     : {}
   if (recorded?.blocked) {
