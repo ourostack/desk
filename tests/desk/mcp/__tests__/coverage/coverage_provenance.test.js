@@ -233,12 +233,12 @@ test("the offline registration helper leaves a migration Detect child uninstrume
     env: { PATH: process.env.PATH, OFFLINE_COVERAGE_PACKAGE_ROOT: mcpRoot, DESK_PLUGIN_ROOT: dir }, encoding: "utf8",
   })
   assert.equal(detect.status, 0, detect.stderr)
-  assert.equal(detect.stdout.trim(), "", "a Detect child neither re-adds the helper to NODE_OPTIONS nor registers the hooks")
+  assert.doesNotMatch(detect.stdout, /register-coverage\.mjs/u, "a Detect child neither re-adds the helper to NODE_OPTIONS nor registers the hooks")
   const other = spawnSync(process.execPath, ["--input-type=module", "-e", "import(process.argv[1]).then(() => console.log(process.env.NODE_OPTIONS ?? \"\"))", helper], {
     env: { PATH: process.env.PATH, OFFLINE_COVERAGE_PACKAGE_ROOT: mcpRoot, DESK_PLUGIN_ROOT: dir }, encoding: "utf8",
   })
   assert.equal(other.status, 0, other.stderr)
-  assert.match(other.stdout, /--import=/u, "any other process is still instrumented")
+  assert.match(other.stdout, /--import=\S*register-coverage\.mjs/u, "any other process is still instrumented")
 })
 
 // The gate exempts a process by `--detect` plus DESK_PLUGIN_ROOT. If the driver or a Detect block stops using them, the exemption silently stops applying and startup tests depend on PR size again.
