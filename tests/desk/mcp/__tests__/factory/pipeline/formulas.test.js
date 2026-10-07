@@ -223,7 +223,8 @@ test("a done transition before the job clock starts clamps lead time to zero", (
   const one = structuredClone(sessions[0])
   one.jobs[0].transitions = [{ to: "done", offset_ms: -1 }]
   const formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
-  assert.deepEqual(formulas.lead_time_ms, S({ class: "measured", value: 0, censored: false, basis: "first_done_transition" }, "measured"))
+  // The card says the job closed before it began, but the sessions recorded 9000 ms of work: the lead time is at least that span.
+  assert.deepEqual(formulas.lead_time_ms, S({ class: "inferred", value: 9000, censored: false, basis: "recorded_segment_span", partial: true, partial_reasons: ["card_dates_shorter_than_work"] }, "partial", ["card_dates_shorter_than_work"]))
   assert.deepEqual(formulas.flow_efficiency, S({ class: "unavailable", value: null, reason: "zero_lead_time" }, "unavailable", ["zero_lead_time"]))
 })
 
@@ -392,7 +393,7 @@ test("the latest terminal transition decides status, so a reopened job reports i
   ]
   formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
   assert.deepEqual(formulas.status, S({ class: "measured", value: "done" }, "measured"))
-  assert.deepEqual(formulas.lead_time_ms, S({ class: "measured", value: 300, censored: false, basis: "first_done_transition" }, "measured"))
+  assert.deepEqual(formulas.lead_time_ms, S({ class: "inferred", value: 9000, censored: false, basis: "recorded_segment_span", partial: true, partial_reasons: ["card_dates_shorter_than_work"] }, "partial", ["card_dates_shorter_than_work"]))
   assert.deepEqual(formulas.flow_efficiency, S({ class: "inferred", value: 300 / 300, censored: false, method: "active_in_lead_ms/lead_time_ms" }, "measured"))
 
   // Consecutive terminal transitions after the last reopen: the first done of that stretch ends lead time.
@@ -404,7 +405,7 @@ test("the latest terminal transition decides status, so a reopened job reports i
     { to: "done", offset_ms: 9000 },
   ]
   formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
-  assert.deepEqual(formulas.lead_time_ms, S({ class: "measured", value: 4000, censored: false, basis: "first_done_transition" }, "measured"))
+  assert.deepEqual(formulas.lead_time_ms, S({ class: "inferred", value: 9000, censored: false, basis: "recorded_segment_span", partial: true, partial_reasons: ["card_dates_shorter_than_work"] }, "partial", ["card_dates_shorter_than_work"]))
   assert.deepEqual(formulas.flow_efficiency, S({ class: "inferred", value: 4000 / 4000, censored: false, method: "active_in_lead_ms/lead_time_ms" }, "measured"))
 
   reopened.jobs[0].transitions = [
@@ -1336,4 +1337,58 @@ test("attention is a measured inferred figure when the job's sessions record tur
   assert.ok(formulas.attention.turns > 0)
   assert.equal(formulas.attention.value, formulas.attention.turns * 3000)
   assert.deepEqual(withState(formulas.attention), formulas.attention)
+})
+
+// A lead time never reads shorter than the work the job's own sessions recorded (the floor).
+const FLOOR = "card_dates_shorter_than_work"
+const segmented = (offset, transitions, observed) => {
+  const one = structuredClone(sessions[0])
+  one.jobs[0].agents = [0, 1]
+  one.jobs[0].segments = [{ start_ms: 0, end_ms: 16000 }]
+  one.jobs[0].session_offset_ms = offset
+  one.jobs[0].transitions = transitions
+  one.jobs[0].observed = observed
+  return one
+}
+
+test("a declared lead time shorter than the job's own segments is raised to their span, as a lower bound with its reason", () => {
+  // An adopted card: created and closed at the same instant, while its one session ran 16 seconds.
+  const one = segmented(-1000, [], { status: "done", offset_ms: 0 })
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
+  assert.deepEqual(formulas.lead_time_ms, S({ class: "inferred", value: 16000, censored: false, basis: "recorded_segment_span", partial: true, partial_reasons: [FLOOR] }, "partial", [FLOOR]))
+  // The numbers that read the card's own window are left as they were.
+  assert.deepEqual(formulas.flow_efficiency, S({ class: "unavailable", value: null, reason: "zero_lead_time" }, "unavailable", ["zero_lead_time"]))
+  assert.deepEqual(formulas.lead_contributors, S({ class: "unavailable", value: null, reason: "zero_lead_time" }, "unavailable", ["zero_lead_time"]))
+})
+
+test("a measured done transition shorter than the segments is raised too, and an open job keeps its censored reason", () => {
+  const closed = calculateFormulas(buildJobTimeline(CLOSED, [segmented(-1000, [{ to: "done", offset_ms: 5000 }], null)]))
+  assert.deepEqual(closed.lead_time_ms, S({ class: "inferred", value: 16000, censored: false, basis: "recorded_segment_span", partial: true, partial_reasons: [FLOOR] }, "partial", [FLOOR]))
+  const open = calculateFormulas(buildJobTimeline(CLOSED, [segmented(-1000, [{ to: "processing", offset_ms: 0 }], null)]))
+  assert.deepEqual(open.lead_time_ms, S({ class: "inferred", value: 16000, censored: true, basis: "recorded_segment_span", partial: true, partial_reasons: [FLOOR] }, "partial", [FLOOR, "censored"]))
+})
+
+test("a declared lead time at least as long as the segment span is not changed", () => {
+  const same = calculateFormulas(buildJobTimeline(CLOSED, [segmented(-1000, [], { status: "done", offset_ms: 16000 })]))
+  assert.deepEqual(same.lead_time_ms, S({ class: "declared", value: 16000, censored: false, basis: "terminal_observation" }, "measured"))
+  const longer = calculateFormulas(buildJobTimeline(CLOSED, [segmented(-1000, [], { status: "done", offset_ms: 30000 })]))
+  assert.deepEqual(longer.lead_time_ms, S({ class: "declared", value: 30000, censored: false, basis: "terminal_observation" }, "measured"))
+})
+
+test("a session whose offset is unknown, or a job with no recorded work, never moves the lead time", () => {
+  const timed = segmented(-1000, [], { status: "done", offset_ms: 20000 })
+  const lost = segmented(null, [], null)
+  lost.session.id = "99999999-9999-4999-8999-999999999999"
+  assert.deepEqual(calculateFormulas(buildJobTimeline(CLOSED, [timed, lost])).lead_time_ms, S({ class: "declared", value: 20000, censored: false, basis: "terminal_observation" }, "measured"))
+  const bare = structuredClone(sessions[0])
+  bare.intervals = []
+  bare.jobs[0].transitions = []
+  bare.jobs[0].observed = { status: "done", offset_ms: 0 }
+  assert.deepEqual(calculateFormulas(buildJobTimeline(CLOSED, [bare])).lead_time_ms, S({ class: "declared", value: 0, censored: false, basis: "terminal_observation" }, "measured"))
+})
+
+test("a span that cannot be read keeps the declared figure as it is", () => {
+  const timeline = buildJobTimeline(CLOSED, [segmented(-1000, [], { status: "done", offset_ms: 0 })])
+  timeline.intervals[0].start_ms = Number.NaN
+  assert.deepEqual(calculateFormulas(timeline).lead_time_ms, S({ class: "declared", value: 0, censored: false, basis: "terminal_observation" }, "measured"))
 })

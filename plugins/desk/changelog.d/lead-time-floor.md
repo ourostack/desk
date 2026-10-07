@@ -1,0 +1,1 @@
+Factory: a job's lead time is never shorter than the span of its own recorded segments. When the task card's dates give less (an adopted card created and closed at nearly the same moment, or a job that kept working after its first done), the lead time is raised to that span and published as partial with the reason `card_dates_shorter_than_work`.
