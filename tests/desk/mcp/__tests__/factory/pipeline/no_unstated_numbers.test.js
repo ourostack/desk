@@ -74,21 +74,19 @@ const STRUCTURAL = Object.freeze([
   ["session/intervals/[]/worker", "a worker number, an identifier"],
   ["session/stretches/[]/start_ms", "where a labeled stretch starts on the job clock, copied from the labels; an unlabeled span has no stretch"],
   ["session/stretches/[]/end_ms", "where a labeled stretch ends on the job clock, copied from the labels; an unlabeled span has no stretch"],
+  ["session/intervals/[]/binned", "how many uncited intervals a binned entry merges, in a file that says intervals_binned"],
+  ["session/bin_resolution_ms", "the bin a binned file's intervals were merged at, a constant of the binning published with the file"],
   ["session/stretches/[]/evidence/[]", "an index into the file's own interval list, naming the interval a stretch cites"],
   ["job/timeline/prs/[]/worker", "the worker number that opened the pull request, an identifier; absent when the facts do not name one"],
   ["job/timeline/lead_window/start_ms", "where the lead window starts on the job clock; the window carries the lead time's own state and reasons"],
   ["job/timeline/lead_window/end_ms", "where the lead window ends on the job clock; the window carries the lead time's own state and reasons"],
   ["job/timeline/bursts/[]/start_ms", "where a work burst starts on the job clock, read from recorded intervals; no recorded work is no burst"],
   ["job/timeline/bursts/[]/end_ms", "where a work burst ends on the job clock, read from recorded intervals; no recorded work is no burst"],
-  ["job/timeline/bursts/[]/working_ms", "the union of the burst's recorded work intervals, which exist because the burst does"],
+  ["job/timeline/bursts/[]/idle_ms", "the burst's span less its working time, read from recorded intervals; the job file's bursts_state says how whole they are"],
+  ["job/timeline/bursts/[]/working_ms", "the burst's working time (its recorded work less labeled waits), which exists because the burst does"],
   ["job/timeline/bursts/[]/agents", "a count of the workers with recorded work in the burst, read from its intervals"],
   ["job/timeline/bursts/[]/tool_calls", "a count of the recorded tool intervals in the burst"],
   ["job/timeline/bursts/[]/tool_failures", "a count of the recorded tool intervals in the burst whose outcome was not ok"],
-  ["job/timeline/bursts/[]/operator_turns", "a count of the job's recorded human turns placed in the burst; the job's attention result states whether turns were recorded"],
-  ["job/timeline/bursts/[]/prs", "a count of the job's timed pull requests placed in the burst; an untimed one is listed under prs with no time"],
-  ["job/timeline/bursts/[]/value_ms", "labeled value time inside the burst; the stack-up and task rows state whether the job's labels are whole"],
-  ["job/timeline/bursts/[]/defect_ms", "labeled defect time inside the burst; the stack-up and task rows state whether the job's labels are whole"],
-  ["job/timeline/bursts/[]/defect_stretches", "a count of the labeled defect stretches inside the burst; the task row states whether the labels are whole"],
   ["job/timeline/gaps/[]/start_ms", "where a gap between bursts starts on the job clock, inside the lead window"],
   ["job/timeline/gaps/[]/end_ms", "where a gap between bursts ends on the job clock, inside the lead window"],
   ["rollups/stackup.json/burst_idle_gap_ms", "the idle gap that ends a work burst, a constant of the method published so the bursts can be reproduced"],
@@ -360,11 +358,24 @@ async function derivedStore() {
 
 const legacy = fixtureOut("store")
 const rollupLegacy = fixtureOut("rollup-store")
+// The two stores again with a swimlane budget no file meets, so every swimlane file is binned and its binning numbers are walked.
+const binnedOut = (store) => {
+  const out = path.join(tempRoot("out"), "out")
+  build({ storeDir: path.join(FIXTURES, store), outDir: out, detailBudgetBytes: 1 })
+  return out
+}
+const binned = binnedOut("store")
+const rollupBinned = binnedOut("rollup-store")
 const fresh = await derivedStore()
+const freshBinned = path.join(tempRoot("out"), "out")
+build({ storeDir: fresh.store, outDir: freshBinned, detailBudgetBytes: 1 })
 const STORES = Object.freeze([
   ["the /1 store", legacy],
   ["the /1 rollup store", rollupLegacy],
+  ["the /1 store, binned", binned],
+  ["the /1 rollup store, binned", rollupBinned],
   ["the freshly derived /2 store", fresh.out],
+  ["the freshly derived /2 store, binned", freshBinned],
 ])
 
 const walked = STORES.flatMap(([label, out]) => outputJson(out).map((file) => ({ label, file, seen: walk(file) })))
@@ -424,6 +435,14 @@ test("every numeric leaf is inside a number object, inside a stat or totals leaf
   const stale = STRUCTURAL.filter((_, index) => !used.has(index)).map(([pattern]) => pattern)
   assert.deepEqual(stale, [], "an allow-list entry no number matches")
   for (const [pattern, why] of STRUCTURAL) assert.ok(why.length > 20, `${pattern} names why it is structural`)
+})
+
+test("a burst count published as a bare number, even a zero, is a stray leaf", () => {
+  for (const key of ["operator_turns", "prs", "value_ms", "defect_ms", "defect_stretches"]) {
+    const { bare } = walk({ kind: "job", value: { timeline: { bursts: [{ [key]: 0 }] } } })
+    assert.equal(bare.length, 1, key)
+    assert.equal(STRUCTURAL.findIndex(([pattern]) => matches(pattern, bare[0])), -1, `${key} is not on the allow-list`)
+  }
 })
 
 test("the walk has teeth: a bare number, a stateless number object and a stat that counts more than it has are all found", () => {

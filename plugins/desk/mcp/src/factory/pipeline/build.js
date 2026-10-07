@@ -37,7 +37,7 @@ function replaceDirectory(source, destination) {
 
 // The job's timeline as `jobs/<job>.json` publishes it. The Lean walk adds, every time on the job clock: the job's workers
 // (`agents`), human turns and pull requests (`timelineAdditions`), the lead window, the work bursts and the gaps between them
-// (`jobWalk`), and `detail_files`, the per-session swimlane files (`jobs/<job>/<session id>.json`) that hold the stretches.
+// (`jobWalk`) with `bursts_state`, how whole the intervals they are read from are, and `detail_files`, the per-session swimlane files (`jobs/<job>/<session id>.json`) that hold the stretches.
 function outputTimeline(timeline, additions, walk, detailFiles) {
   const window = walk.window
   return {
@@ -52,14 +52,16 @@ function outputTimeline(timeline, additions, walk, detailFiles) {
     prs: additions.prs,
     lead_window: Object.hasOwn(window, "start_ms") ? { start_ms: window.start_ms, end_ms: window.end_ms, state: window.lead.state, reasons: window.lead.reasons } : { state: "unavailable", reasons: window.reasons },
     bursts: walk.bursts,
+    bursts_state: walk.bursts_state,
     gaps: walk.gaps,
     detail_files: detailFiles,
   }
 }
 
 /**
- * The size a per-session swimlane file is held to: the store's site loads one when a swimlane opens. A test holds a session at the
- * labels' stretch cap (10,000 stretches over 20,000 intervals, about 3.7 MB) inside it; the largest real file when it was set was 1.5 MB.
+ * The size a per-session swimlane file is held to: the store's site loads one when a swimlane opens. A file that would be larger has its
+ * uncited intervals binned until it fits (`sessionDetail`); tests hold a session at the facts' interval cap (100,000 intervals) and at the
+ * labels' stretch cap inside it. `build` takes another budget only so tests can make a small store bin.
  */
 export const DETAIL_FILE_BUDGET_BYTES = 4 * 1024 * 1024
 
@@ -145,10 +147,10 @@ function writeRollups(directory, rollups) {
 
 // Writes each placed session's swimlane file under `jobs/<job>/` and returns their paths relative to the output root, in the
 // timeline's session order. A session ID that two hosts share is written once, for the first.
-function writeSessionDetails(jobsDir, timeline, labels) {
+function writeSessionDetails(jobsDir, timeline, labels, budgetBytes) {
   const written = []
   timeline.sessions.forEach((session, index) => {
-    const detail = sessionDetail(timeline, index, labels)
+    const detail = sessionDetail(timeline, index, labels, budgetBytes)
     const relative = `jobs/${timeline.job}/${session.id}.json`
     if (detail === null || written.includes(relative)) return
     mkdirSync(path.join(jobsDir, timeline.job), { recursive: true })
@@ -206,7 +208,7 @@ export function storePublicPlugins(storeDir) {
   return [...names].sort(compareText)
 }
 
-export function build({ storeDir, outDir }) {
+export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET_BYTES }) {
   if (typeof storeDir !== "string" || typeof outDir !== "string") throw new TypeError("build: storeDir and outDir must be paths")
   const store = path.resolve(storeDir)
   const out = path.resolve(outDir)
@@ -223,7 +225,7 @@ export function build({ storeDir, outDir }) {
     outcomes: computeOutcomeRollups({ sessions, reports, records, labels }),
     stackup: stackupRollup(walks.map(({ walk }) => walk)),
     tasks: tasksRollup(walks.map(({ walk }) => walk)),
-    causes: causesRollup({ records, timelines: reports.map((report) => report.timeline), labels }),
+    causes: causesRollup({ records, walks: walks.map(({ walk }) => walk), labels }),
   }
   const temporary = `${out}.factory-tmp-${process.pid}`
   rmSync(temporary, { recursive: true, force: true })
@@ -232,7 +234,7 @@ export function build({ storeDir, outDir }) {
     writeFileSync(path.join(temporary, "README.md"), renderReadme())
     writeFileSync(path.join(temporary, "index.md"), renderIndexMarkdown(reports, buildCoverage(sessions)))
     reports.forEach(({ timeline, formulas }, reportIndex) => {
-      const detailFiles = writeSessionDetails(path.join(temporary, "jobs"), timeline, labels)
+      const detailFiles = writeSessionDetails(path.join(temporary, "jobs"), timeline, labels, detailBudgetBytes)
       const { additions, walk } = walks[reportIndex]
       writeFileSync(path.join(temporary, "jobs", `${timeline.job}.json`), `${stableStringify({ job: timeline.job, timeline: outputTimeline(timeline, additions, walk, detailFiles), formulas })}\n`)
       writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas, labels: labels.byJobSession }))

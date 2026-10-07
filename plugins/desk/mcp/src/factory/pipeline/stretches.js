@@ -21,13 +21,16 @@
 //   - Honest correction: a stretch where any worker of the job is doing work
 //     is not waiting. The part of a `waiting` stretch during which a worker
 //     of the job (the binding's workers, the controller cut to the job's
-//     segments) has a `turn`, `tool` or `subagent` interval is split off as
-//     its own stretch with `class: "unlabeled"`, `waste: null` and
+//     segments) has a `turn` or `tool` interval is split off as its own
+//     stretch with `class: "unlabeled"`, `waste: null` and
 //     `reason: "agents_working"`; the rest stays `waiting`. The workers the
 //     stretch's own evidence shows waiting (the workers of its cause-naming
 //     intervals) are left out of that test: the tool call a worker is
 //     blocked on, and the turn around it, are the wait itself, not other
-//     work. The split reads one session's own workers: a concurrent session
+//     work. So are their ancestors' intervals that hold a cause-naming
+//     interval (a parent's turn around the subagent it waits on), and a
+//     parent's `subagent` interval never counts: the subagent's own
+//     intervals carry its work. The split reads one session's own workers: a concurrent session
 //     of the same job does not split another session's wait (the stack-up
 //     counts such moments once, by precedence). Existing totals keep reading
 //     the labels as written; the corrected figures have their own keys.
@@ -41,7 +44,8 @@
 
 import { ownerOf } from "./attention.js"
 import { jobOwnsPullRequest } from "./formulas.js"
-import { ACTIVE_KINDS, boundIntervals, union } from "./timeline.js"
+import { stableStringify } from "./normalize.js"
+import { boundIntervals, union } from "./timeline.js"
 
 /** What a `waiting` stretch waited on, in tie-break order. */
 export const WAITED_ON = Object.freeze(["next_prompt", "api_retry", "tool_failure", "long_tool_call", "unknown"])
@@ -52,6 +56,9 @@ export const LONG_TOOL_CALL_MS = 5 * 60 * 1000
 /** The class and reason of the part of a waiting stretch split off because a worker of the job was working. */
 export const UNLABELED_CLASS = "unlabeled"
 export const AGENTS_WORKING = "agents_working"
+
+/** The finest bin a swimlane file's intervals are merged at when the file would pass its size budget; it doubles until the file fits. */
+const FIRST_BIN_MS = 1000
 
 /** How many stretch references each cause in `rollups/causes.json` lists, largest first. */
 export const CAUSE_REFERENCES = 10
@@ -162,6 +169,20 @@ function splitBySpans(start, end, spans) {
   return { inside, outside }
 }
 
+// What counts as a worker doing work in the split: its own turns and tool calls. A parent's `subagent` interval only stands for the
+// subagent's work, which the subagent's own intervals carry.
+const WORK_KINDS = new Set(["turn", "tool"])
+
+// Whether worker `ancestor` is a parent, grandparent or further up of worker `worker` (`parentOf` maps a worker to its parent).
+function ancestorOf(parentOf, ancestor, worker) {
+  const seen = new Set()
+  for (let at = parentOf.get(worker); at !== null && at !== undefined && !seen.has(at); at = parentOf.get(at)) {
+    if (at === ancestor) return true
+    seen.add(at)
+  }
+  return false
+}
+
 // Keeps the stretch's original label on a part, for counting stretches and flags once each (not enumerable, so it is never written out).
 function piece(stretch, fields, source) {
   const part = { ...stretch, ...fields }
@@ -175,16 +196,21 @@ function piece(stretch, fields, source) {
  * Every other stretch is returned as it is. Each returned part keeps the label it came from as a non-enumerable `source`.
  */
 export function correctStretches(stretches, session, binding) {
-  const bound = boundIntervals(session, binding).filter((interval) => ACTIVE_KINDS.has(interval.kind))
+  const bound = boundIntervals(session, binding).filter((interval) => WORK_KINDS.has(interval.kind))
+  const parentOf = new Map(session.agents.map((agent) => [agent.n, agent.parent]))
   return stretches.flatMap((stretch) => {
     if (stretch.class !== "muda" || stretch.waste !== "waiting") return [piece(stretch, {}, stretch)]
     const evidence = evidenceIntervals(session, stretch.evidence)
     const cause = waitedOn(evidence)
     // The workers the evidence shows waiting do not count as working against their own wait. The turn that holds a long or failing
-    // tool call spans the whole wait, so counting it would split away every `long_tool_call` and `tool_failure` stretch. Only the
-    // other workers of the job, such as a subagent running while the main agent waits, make part of a wait agent work.
-    const waiting = new Set(evidence.filter((interval) => waitCauseOf(interval) !== null).map((interval) => interval.agent))
-    const work = union(bound.filter((interval) => !waiting.has(interval.agent) && interval.start_ms < stretch.end_ms && interval.end_ms > stretch.start_ms))
+    // tool call spans the whole wait, so counting it would split away every `long_tool_call` and `tool_failure` stretch. Their
+    // ancestors' turns around a cause-naming interval are the same wait one level up (a parent's turn holds the subagent it waits
+    // on), so they do not count either. Only the other workers' own turns and tool calls, such as a sibling subagent running while
+    // one waits, make part of a wait agent work.
+    const causes = evidence.filter((interval) => waitCauseOf(interval) !== null)
+    const waiting = new Set(causes.map((interval) => interval.agent))
+    const enclosing = (interval) => causes.some((cause) => ancestorOf(parentOf, interval.agent, cause.agent) && interval.start_ms <= cause.start_ms && interval.end_ms >= cause.end_ms)
+    const work = union(bound.filter((interval) => !waiting.has(interval.agent) && !enclosing(interval) && interval.start_ms < stretch.end_ms && interval.end_ms > stretch.start_ms))
     const { inside, outside } = splitBySpans(stretch.start_ms, stretch.end_ms, work)
     return [
       ...outside.map(([start, end]) => piece(stretch, { start_ms: start, end_ms: end, waited_on: cause }, stretch)),
@@ -237,8 +263,12 @@ export function jobStretches(timeline, labels) {
  *   - `stretches`: the corrected stretches (`correctStretches`), each with `evidence` as indices into `intervals`, `waited_on` on waiting
  *     stretches and `reason: "agents_working"` on the parts split off them. `labeled` says whether the session has used labels at all.
  *   - `labels_from_shared_session`: whether these labels may count another job's time (`resolveLabels`' `sharedLabels`).
+ *   - When the file would be larger than `budgetBytes`, its intervals are binned: each run of a worker's intervals of one kind whose gaps
+ *     are under the bin is merged into one entry `{ kind, worker, start_ms, end_ms, binned: <count> }` (no tool or outcome), the bin
+ *     starting at `FIRST_BIN_MS` and doubling until the file fits or every run is merged. An interval a stretch cites is never merged, so
+ *     evidence still names it exactly. A binned file says `intervals_binned: true` and `bin_resolution_ms`.
  */
-export function sessionDetail(timeline, index, labels) {
+export function sessionDetail(timeline, index, labels, budgetBytes = Infinity) {
   const session = timeline.source_sessions[index]
   const placedSession = timeline.sessions[index]
   const offset = placedSession.offset_ms
@@ -256,11 +286,13 @@ export function sessionDetail(timeline, index, labels) {
     return item
   })
   const known = new Set(lane.map(intervalKey))
+  const cited = new Set()
   const corrected = entry === undefined ? [] : entry.corrected
   for (const stretch of corrected) {
     for (const interval of evidenceIntervals(session, stretch.evidence)) {
       const item = laneInterval(interval, offset)
       const itemKey = intervalKey(item)
+      cited.add(itemKey)
       if (known.has(itemKey)) continue
       known.add(itemKey)
       lane.push({ ...item, evidence_only: true })
@@ -268,9 +300,69 @@ export function sessionDetail(timeline, index, labels) {
   }
   // An evidence-only interval is never the same as a lane interval, so the order is total.
   lane.sort((left, right) => compareFields(left, right, LANE_ORDER))
-  // Two identical lane intervals are one for evidence: either index names the same interval.
-  const position = new Map(lane.map((item, at) => [intervalKey(item), at]))
-  const stretches = corrected.map((stretch) => {
+  const document = (intervals) => {
+    // Two identical lane intervals are one for evidence: either index names the same interval.
+    const position = new Map(intervals.map((item, at) => [intervalKey(item), at]))
+    return {
+      job: timeline.job,
+      host,
+      session: id,
+      offset_ms: offset,
+      end_ms: placedSession.end_ms,
+      labeled: entry !== undefined,
+      labels_from_shared_session: labels.sharedLabels?.has(key) === true,
+      intervals,
+      stretches: detailStretches(corrected, { session, offset, entry, position }),
+    }
+  }
+  const whole = document(lane)
+  if (sizeOf(whole) <= budgetBytes) return whole
+  let resolution = FIRST_BIN_MS
+  let binned = binLane(lane, cited, resolution)
+  const span = placedSession.end_ms - offset
+  while (sizeOf(document(binned)) > budgetBytes && resolution <= span) {
+    resolution *= 2
+    binned = binLane(lane, cited, resolution)
+  }
+  return { ...document(binned), intervals_binned: true, bin_resolution_ms: resolution }
+}
+
+// The bytes a document takes as a file.
+const sizeOf = (value) => Buffer.byteLength(`${stableStringify(value)}\n`)
+
+// The lane with each run of a worker's same-kind intervals whose gaps are under `resolution` merged into one `binned` entry; an interval
+// in `cited` stays as it is and ends a run.
+function binLane(lane, cited, resolution) {
+  const groups = new Map()
+  const out = []
+  for (const item of lane) {
+    if (cited.has(intervalKey(item))) {
+      out.push(item)
+      continue
+    }
+    const group = `${item.kind}/${item.worker}`
+    const run = groups.get(group)
+    if (run !== undefined && item.start_ms - run.end_ms < resolution) {
+      run.end_ms = Math.max(run.end_ms, item.end_ms)
+      run.items.push(item)
+      continue
+    }
+    const next = { start_ms: item.start_ms, end_ms: item.end_ms, items: [item] }
+    groups.set(group, next)
+    out.push(next)
+  }
+  return out
+    .map((entry) => {
+      if (!Object.hasOwn(entry, "items")) return entry
+      if (entry.items.length === 1) return entry.items[0]
+      return { kind: entry.items[0].kind, worker: entry.items[0].worker, start_ms: entry.start_ms, end_ms: entry.end_ms, binned: entry.items.length }
+    })
+    .sort((left, right) => compareFields(left, right, LANE_ORDER))
+}
+
+// The corrected stretches as a swimlane file lists them, evidence as indices into its intervals.
+function detailStretches(corrected, { session, offset, entry, position }) {
+  return corrected.map((stretch) => {
     const placed = {
       start_ms: offset + stretch.start_ms,
       end_ms: offset + stretch.end_ms,
@@ -287,17 +379,6 @@ export function sessionDetail(timeline, index, labels) {
     if (Object.hasOwn(stretch, "caught")) placed.caught = stretch.caught
     return placed
   })
-  return {
-    job: timeline.job,
-    host,
-    session: id,
-    offset_ms: offset,
-    end_ms: placedSession.end_ms,
-    labeled: entry !== undefined,
-    labels_from_shared_session: labels.sharedLabels?.has(key) === true,
-    intervals: lane,
-    stretches,
-  }
 }
 
 // Each pull request once: the earliest timed mention when any session times it, else the first by host and session. Timed entries come

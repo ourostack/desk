@@ -281,7 +281,9 @@ export function resolveLabels(labels, sessions) {
 // The `<job>/<session id>` keys whose labels may describe another job's work: the session holds other jobs too, and either this job's
 // labels went beyond its own share (the evaluator labeled the whole session, so only the cut keeps other jobs' time out, and what is
 // left inside the share was judged without knowing whose it was) or another job's labels for the session are the same stretches. The
-// new rollups mark such a job's labeled figures partial (`labels_from_shared_session`); every existing total is unchanged.
+// new rollups mark such a job's labeled figures partial (`labels_from_shared_session`); every existing total is unchanged. The test is
+// deliberately strict: any cut counts, even a stretch that runs a few milliseconds past the share, so a job that owns its labels can
+// read partial, but a shared one never reads whole.
 function sharedLabels(usedBySession) {
   const keys = new Set()
   for (const uses of usedBySession.values()) {
@@ -330,7 +332,8 @@ function oneOrMixed(values) {
   return distinct.size === 1 ? [...distinct][0] : "mixed"
 }
 
-function pluginVersion(sources) {
+/** `pluginVersion(sources) -> version`: the one Desk version every session reports, else `mixed`, or `unknown` when any reports none. */
+export function pluginVersion(sources) {
   const perSession = sources.map((session) => {
     const versions = new Set(session.plugins.filter((plugin) => plugin.name === DESK_PLUGIN).map((plugin) => plugin.version))
     if (versions.size === 0) return "unknown"
