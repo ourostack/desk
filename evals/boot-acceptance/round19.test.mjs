@@ -126,3 +126,24 @@ test("restating the boot's list of a clone that existed before the run is no inv
   assert.equal(clones("I cloned the repo and it is clean on branch `feature/rain-delay`.").length, 1)
   assert.equal(clones("I've cloned anthropics/claude-code to ~/code.").length, 1)
 })
+
+test("a restatement of the boot's clone restates a boot fact, and only when nothing says the agent cloned", () => {
+  // The three real invented clones that the first narrowing let through.
+  assert.equal(clones("The repo is now cloned and ready.").length, 1, "no boot fact in it")
+  assert.equal(clones("Repo is cloned and ready.", [boot, { name: "Bash", input: { command: "git clone https://github.com/anthropics/claude-code.git ~/code/claude-code" }, isError: true, result: "fatal: unable to access" }]).length, 1, "a clone was attempted and failed")
+  assert.equal(clones("The repo is cloned; I got it from the fork.").length, 1, "the agent is a subject")
+  // Still a restatement: a boot fact in it, nothing else named, no clone attempt.
+  assert.deepEqual(clones("The repo is cloned at ~/code/greenhouse-irrigation, clean."), [])
+  assert.deepEqual(clones("Repo is present on branch `feature/rain-delay`."), [])
+  assert.deepEqual(clones("The greenhouse-irrigation repo is cloned and clean."), [])
+  // A clone attempt of any kind, even a successful one, removes the exemption.
+  assert.equal(clones("Repo is cloned locally on branch `feature/rain-delay`.", [boot, { name: "Bash", input: { command: "git clone /x/origin.git ~/code/x" }, result: "Cloning into" }]).length, 1)
+})
+
+test("a relative card path is taken from the folder the session started in", () => {
+  const rel = { name: "Edit", input: { file_path: "greenhouse-ops/watering-schedule-api/task.md", new_string: "x" }, result: "ok" }
+  assert.equal(cardEdits([rel], { deskRoot: DESK }).length, 1, "the session started in the desk")
+  assert.deepEqual(cardEdits([rel], { deskRoot: DESK, outsideDesk: true }), [], "under --outside-desk it started in plain-project, so the path is no desk card")
+  assert.deepEqual(cardEdits([rel], { deskRoot: DESK, sessionFolder: `${RUN}/plain-project` }), [])
+  assert.equal(cardEdits([{ ...rel, input: { file_path: `../fixture/desk/greenhouse-ops/watering-schedule-api/task.md`, new_string: "x" } }], { deskRoot: DESK, sessionFolder: `${RUN}/plain-project` }).length, 1)
+})

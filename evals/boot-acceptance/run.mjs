@@ -218,6 +218,12 @@ export function loadRunContext(runDir, host = "claude") {
   const read = (name) => (existsSync(path.join(runDir, name)) ? readFileSync(path.join(runDir, name), "utf8") : null)
   const ctx = buildContext(parseTranscript(read("transcript.jsonl") ?? "", host))
   ctx.host = host
+  // A saved run whose summary says it opened in a plain folder started there, not in the desk (rescoring reads it back).
+  try {
+    if (JSON.parse(read("summary.json") ?? "{}").outside_desk === true) ctx.outsideDesk = true
+  } catch {
+    // No usable summary: the desk is the working folder.
+  }
   const critiqueText = read("critique-transcript.jsonl")
   if (critiqueText !== null) {
     const critiqueCtx = buildContext(parseTranscript(critiqueText, host))
@@ -359,6 +365,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   ctx.deskRoot = deskRoot
   ctx.homeDir = homeDir
   ctx.runTmp = runTmp
+  ctx.sessionFolder = sessionFolder
   // With the harness's own plugin copy, the source checkout's path must never appear in a tool call. A `--plugin-dir` run names its own folder, which is then the plugin under test, so there is no source to hide.
   ctx.sourcePaths = args.pluginDir ? [] : sourcePaths(worktreeRoot)
   const wallMs = Date.now() - startedAt
