@@ -19,6 +19,7 @@ import {
   findAgentCli,
   hostSupported,
   probeSignIn,
+  resolveLaunch,
   runHeadless,
 } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
 
@@ -146,11 +147,11 @@ test("findAgentCli prefers DESK_AGENT_CLI, then PATH, then the fixed locations, 
   assert.equal(findAgentCli({ env: { PATH: `/u/bin${path.delimiter}${path.delimiter}` }, exists }), null)
 })
 
-test("findAgentCli looks for claude.exe on Windows, where a program started without a shell must be named in full", () => {
+test("findAgentCli looks for claude.exe, then claude.cmd, on Windows, where a program started without a shell must be named in full", () => {
   const seen = []
   const exists = (candidate) => { seen.push(candidate); return false }
   findAgentCli({ env: { PATH: "/u/bin", HOME: "/home/me" }, exists, platform: "win32" })
-  assert.deepEqual(seen.map((candidate) => path.basename(candidate)), ["claude.exe", "claude.exe", "claude.exe"])
+  assert.deepEqual(seen.map((candidate) => path.win32.basename(candidate)), ["claude.exe", "claude.cmd", "claude.exe", "claude.exe", "claude.cmd", "claude.cmd"])
   seen.length = 0
   findAgentCli({ env: { PATH: "/u/bin", HOME: "/home/me" }, exists, platform: "linux" })
   assert.deepEqual(seen.map((candidate) => path.basename(candidate)), ["claude", "claude", "claude"])
@@ -634,4 +635,139 @@ test("non-string environment values are not passed to the child", async () => {
   const spawn = fakeSpawn(status(okRun))
   await runHeadless(baseOpts({ env: { PATH: "/bin", HOME: 5, LANG: undefined }, spawn }))
   assert.deepEqual(spawn.calls[0].opts.env, { PATH: "/bin", DESK_FACTORY_HEADLESS: "1" })
+})
+
+// Windows behavior, exercised on any host through the platform, home-folder and file-reading seams.
+const j = (...parts) => path.win32.join(...parts)
+const NPM = j("/npm")
+const SHIM = j(NPM, "claude.cmd")
+const PKG = j(NPM, "node_modules", "@anthropic-ai", "claude-code")
+const manifestReader = (files) => (file) => {
+  if (!(file in files)) {
+    throw Object.assign(new Error("missing"), { code: "ENOENT" })
+  }
+  return files[file]
+}
+const pkgWith = (bin) => ({ [j(PKG, "package.json")]: JSON.stringify(bin === undefined ? {} : { bin }) })
+
+test("findAgentCli on Windows searches the user profile when HOME is unset, and the operating system's home as a last resort", () => {
+  const winEnv = { PATH: "", USERPROFILE: "C:\\Users\\me" }
+  const profileExe = j("C:\\Users\\me", ".local", "bin", "claude.exe")
+  assert.equal(findAgentCli({ env: winEnv, platform: "win32", exists: (p) => p === profileExe }), profileExe)
+  const configured = j("C:\\cfg", "local", "claude.exe")
+  assert.equal(findAgentCli({ env: { ...winEnv, CLAUDE_CONFIG_DIR: "C:\\cfg" }, platform: "win32", exists: (p) => p === configured }), configured)
+  const osHome = j("/os/home", ".claude", "local", "claude.exe")
+  assert.equal(findAgentCli({ env: { PATH: "" }, platform: "win32", homedir: () => "/os/home", exists: (p) => p === osHome }), osHome)
+  assert.equal(findAgentCli({ env: { PATH: "", HOME: "/h", USERPROFILE: "/u" }, platform: "win32", homedir: () => "/os/home", exists: (p) => p === j("/h", ".local", "bin", "claude.exe") }), j("/h", ".local", "bin", "claude.exe"), "HOME wins when it is set")
+  assert.equal(findAgentCli({ env: { PATH: "", USERPROFILE: "" }, platform: "win32", homedir: () => "", exists: () => true }), null, "no home at all searches only PATH")
+})
+
+test("findAgentCli off Windows still reads only HOME", () => {
+  const exists = () => true
+  assert.equal(findAgentCli({ env: { PATH: "", USERPROFILE: "/u" }, platform: "linux", homedir: () => "/os/home", exists }), null)
+})
+
+test("findAgentCli on Windows finds an npm claude.cmd whose program it can start, and skips one it cannot", () => {
+  const readFile = manifestReader(pkgWith("cli.js"))
+  const env = { PATH: NPM }
+  assert.equal(findAgentCli({ env, platform: "win32", readFile, exists: (p) => p === SHIM }), SHIM)
+  assert.equal(findAgentCli({ env, platform: "win32", readFile: manifestReader({}), exists: (p) => p === SHIM }), null, "a shim whose package is missing is not offered")
+  const exe = j(NPM, "claude.exe")
+  assert.equal(findAgentCli({ env, platform: "win32", readFile, exists: (p) => p === SHIM || p === exe }), exe, "claude.exe wins over claude.cmd in the same folder")
+  assert.equal(findAgentCli({ env: { DESK_AGENT_CLI: SHIM, PATH: "" }, platform: "win32", readFile, exists: (p) => p === SHIM }), SHIM, "an explicit shim is accepted when it resolves")
+  assert.equal(findAgentCli({ env: { DESK_AGENT_CLI: SHIM, PATH: "" }, platform: "win32", readFile: manifestReader({}), exists: (p) => p === SHIM }), null)
+  assert.equal(findAgentCli({ env, platform: "linux", readFile, exists: (p) => p === SHIM }), null, "off Windows no .cmd is looked for")
+})
+
+test("resolveLaunch starts .js, .mjs and .cjs bins through Node, takes only the claude key of a bin object, and refuses a bin outside the package", () => {
+  const node = "/node/bin/node"
+  for (const name of ["cli.js", "cli.mjs", "cli.cjs"]) {
+    assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith(name)) }), { cmd: node, prefix: [j(PKG, name)] }, name)
+  }
+  assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith({ other: "other.js" })) }), null, "a bin object without a claude key")
+  for (const bin of ["../../x", "../x.js", "bin/../../x.exe", "..", "."]) {
+    assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith(bin)) }), null, bin)
+  }
+  // Windows spelling is read as Windows on any host: backslashes and drive letters cannot climb out either.
+  for (const bin of ["..\\..\\x.exe", "bin\\..\\..\\x.js", "C:\\x.exe", "C:x.exe", "\\\\server\\share\\x.exe"]) {
+    assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith(bin)) }), null, bin)
+  }
+  assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith("bin\\..\\cli.js")) }), { cmd: node, prefix: [j(PKG, "cli.js")] }, "a backslash path that stays inside is fine")
+  assert.deepEqual(resolveLaunch({ cli: "C:\\npm\\claude.cmd", platform: "win32", execPath: node, readFile: manifestReader({ "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\package.json": JSON.stringify({ bin: "cli.js" }) }) }), { cmd: node, prefix: ["C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"] }, "a drive-letter shim")
+  assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith("bin/../cli.js")) }), { cmd: node, prefix: [j(PKG, "cli.js")] }, "a path that stays inside is fine")
+})
+
+test("resolveLaunch never runs a .cmd: it starts the program the npm package names, directly", () => {
+  const node = "/node/bin/node"
+  assert.deepEqual(resolveLaunch({ cli: "/bin/claude", platform: "win32" }), { cmd: "/bin/claude", prefix: [] })
+  assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "linux" }), { cmd: SHIM, prefix: [] }, "off Windows the path is used as given")
+  assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith("cli.js")) }), { cmd: node, prefix: [j(PKG, "cli.js")] })
+  assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith({ claude: "bin/claude.exe" })) }), { cmd: j(PKG, "bin", "claude.exe"), prefix: [] })
+  assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", readFile: manifestReader({}) }), null, "no package")
+  assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", readFile: () => "not json" }), null, "unreadable manifest")
+  assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", readFile: manifestReader(pkgWith(undefined)) }), null, "no bin field")
+  assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", readFile: manifestReader(pkgWith("")) }), null, "empty bin")
+  assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", readFile: manifestReader(pkgWith("bin/other.CMD")) }), null, "a bin that is itself a shim is refused")
+  assert.equal(resolveLaunch({ cli: j(NPM, "claude.BAT"), platform: "win32", readFile: manifestReader({}) }), null, ".bat is treated like .cmd")
+})
+
+test("resolveLaunch's default platform is this process's", () => {
+  assert.deepEqual(resolveLaunch({ cli: "/bin/claude" }), { cmd: "/bin/claude", prefix: [] })
+})
+
+test("resolveLaunch's default readers use the real file system and this process's Node", { skip: process.platform !== "win32" ? "resolveLaunch reads a folder in Windows spelling, so only Windows can point it at a real one" : false }, () => {
+  assert.deepEqual(resolveLaunch({ cli: "/bin/claude" }), { cmd: "/bin/claude", prefix: [] })
+  const root = mkdtempSync(path.join(os.tmpdir(), "desk-launch-"))
+  try {
+    mkdirSync(path.join(root, "node_modules", "@anthropic-ai", "claude-code"), { recursive: true })
+    writeFileSync(path.join(root, "node_modules", "@anthropic-ai", "claude-code", "package.json"), JSON.stringify({ bin: { claude: "cli.js" } }))
+    const out = resolveLaunch({ cli: path.join(root, "claude.cmd"), platform: "win32" })
+    assert.equal(out.cmd, process.execPath)
+    assert.deepEqual(out.prefix, [path.join(root, "node_modules", "@anthropic-ai", "claude-code", "cli.js")])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("on Windows the run and the sign-in probe start an npm claude.cmd's program, never the .cmd, and carry no shell", async () => {
+  const node = "/node/bin/node"
+  const seams = { platform: "win32", execPath: node, readFile: manifestReader(pkgWith("cli.js")) }
+  const target = j(PKG, "cli.js")
+  const probe = fakeSpawn(status(SUB))
+  assert.equal((await probeSignIn({ cli: SHIM, env: { PATH: "" }, spawn: probe, ...seams })).state, "subscription")
+  assert.equal(probe.calls[0].cmd, node)
+  assert.deepEqual(probe.calls[0].args, [target, "auth", "status"])
+  assert.equal("shell" in probe.calls[0].opts, false)
+  const spawn = fakeSpawn(status(okRun))
+  const out = await runHeadless(baseOpts({ cli: SHIM, spawn, ...seams }))
+  assert.equal(out.state, "ran")
+  assert.equal(spawn.calls[0].cmd, node)
+  assert.equal(spawn.calls[0].args[0], target)
+  assert.equal(spawn.calls[0].args[1], "-p")
+  assert.equal("shell" in spawn.calls[0].opts, false)
+})
+
+test("on Windows a .cmd whose program cannot be found starts nothing", async () => {
+  const seams = { platform: "win32", readFile: manifestReader({}) }
+  const spawn = fakeSpawn(status(SUB))
+  assert.equal((await probeSignIn({ cli: SHIM, env: { PATH: "" }, spawn, ...seams })).state, "sign_in_unknown")
+  assert.equal((await runHeadless(baseOpts({ cli: SHIM, spawn, ...seams }))).state, "no_agent_cli")
+  assert.equal(spawn.calls.length, 0)
+})
+
+test("runHeadless finds the CLI through the Windows seams: user profile, and an npm claude.cmd", async () => {
+  const node = "/node/bin/node"
+  const spawn = fakeSpawn(status(okRun))
+  const out = await runHeadless(baseOpts({
+    cli: undefined,
+    env: { PATH: NPM },
+    platform: "win32",
+    homedir: () => "/os/home",
+    execPath: node,
+    readFile: manifestReader(pkgWith("cli.js")),
+    exists: (p) => p === SHIM,
+    spawn,
+  }))
+  assert.equal(out.state, "ran")
+  assert.equal(spawn.calls[0].cmd, node)
 })

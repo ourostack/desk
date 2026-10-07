@@ -17,6 +17,7 @@ import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { main as factoryStartMain, DEADLINE_MS as factoryDeadlineMs } from "../../../../../plugins/desk/hooks/factory-start.cjs"
 
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
@@ -357,7 +358,7 @@ test("the andon check names each contributing store's open andon issues in one l
 }))
 
 test("factory-start.cjs runs sweep and flush for consented stores, prints nothing and exits 0", () => scratch(async ({ env }) => {
-  const start = require(START)
+  const start = { main: factoryStartMain, DEADLINE_MS: factoryDeadlineMs }
   assert.equal(start.DEADLINE_MS, 120000)
   assert.deepEqual(await start.main({ env }), { stores: {} })
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
@@ -380,10 +381,13 @@ test("factory-start.cjs runs sweep and flush for consented stores, prints nothin
 async function preloadFor(dir, { lines = null, calls }) {
   const file = path.join(dir, `preload-${Math.random().toString(16).slice(2)}.cjs`)
   await fs.writeFile(file, `
-const fs = require("node:fs");
-const boot = require(${JSON.stringify(BOOT)});
-boot.checks.splice(0, boot.checks.length, ...${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })));
-boot.startFactory = async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; };
+// NODE_OPTIONS reaches every Node process the hook starts, including each migration's Detect, which has a two-second budget; only the hook itself needs the fixture checks.
+if (/(copilot-session-start\\.cjs|resolve-desk-root\\.js)$/u.test(process.argv[1] ?? "")) {
+  const fs = require("node:fs");
+  const boot = require(${JSON.stringify(BOOT)});
+  boot.checks.splice(0, boot.checks.length, ...${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })));
+  boot.startFactory = async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; };
+}
 `)
   return file
 }

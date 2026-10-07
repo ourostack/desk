@@ -38,8 +38,8 @@
 
 export const PLUGIN_REPOS = { desk: { repo: "ourostack/desk", file: "plugins/desk/plugin.json" } }
 
-export const MAX_CANDIDATES = 20
-export const MAX_CALLS = 25
+const MAX_CANDIDATES = 20
+const MAX_CALLS = 25
 const DEFAULT_TIMEOUT_MS = 60000
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const PR_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/([1-9]\d{0,8})$/u

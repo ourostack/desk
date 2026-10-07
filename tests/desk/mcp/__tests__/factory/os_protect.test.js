@@ -1,5 +1,4 @@
-// The shared path-protection primitives behind both `src/protected/store.js`
-// and `src/factory/outbox.js`. Every test runs against a throwaway temp
+// The shared path-protection primitives behind `src/factory/outbox.js`. Every test runs against a throwaway temp
 // directory and always cleans up.
 
 import { test } from "node:test"
@@ -166,6 +165,20 @@ test("clearExtendedAcl refuses when the native provider fails or an ACL survives
     } finally {
       mocked.mock.restore()
     }
+  }
+})
+
+test("clearExtendedAcl accepts a path whose listing shows no ACL entry", (t) => {
+  const calls = []
+  const mocked = t.mock.method(childProcess, "execFileSync", (command) => {
+    calls.push(command)
+    return command === "/bin/ls" ? "drwx------  2 owner  staff  64 Jan  1 00:00 /x\n" : ""
+  })
+  try {
+    assert.doesNotThrow(() => clearExtendedAcl("/x", "darwin", NAMING))
+    assert.deepEqual(calls, ["/bin/chmod", "/bin/ls"])
+  } finally {
+    mocked.mock.restore()
   }
 })
 

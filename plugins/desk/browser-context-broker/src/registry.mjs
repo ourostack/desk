@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 
 import { BrokerError } from './claims.mjs';
 
-export const EMPTY_REGISTRY = Object.freeze({
+const EMPTY_REGISTRY = Object.freeze({
   version: 1,
   contexts: {},
   leases: {},

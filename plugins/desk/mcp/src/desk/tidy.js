@@ -64,7 +64,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { loadFrontmatterParser, organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
-import { crewWorkspace, parseCrewRoster, readCrewRoster } from "./crew-roster.js"
+import { crewWorkspace, readCrewRoster } from "./crew-roster.js"
 import { hasUnstagedWork } from "../util/git-stage.js"
 import { installCardGuard } from "./card-commit-guard.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
@@ -171,14 +171,6 @@ function resolveRoot({ env, cwd, homeDir }) {
 
 function hasText(value) {
   return typeof value === "string" && value.trim() !== ""
-}
-
-/**
- * `[{ alias, identity }]` rows of `_meta/desks.md`'s crew roster that name an
- * alias; [] when the text has no crew roster (see `crew-roster.js`).
- */
-export function parseDeskRegistry(raw) {
-  return (parseCrewRoster(raw) ?? []).filter((row) => row.alias !== "")
 }
 
 /** The identity cache file in Desk's state folder (`$XDG_STATE_HOME`, else `~/.local/state`). */

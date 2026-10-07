@@ -94,7 +94,7 @@ function unavailableGroups(sessions) {
 // uncovered once, and the coverage says how many were cut for that reason.
 // `shared` holds the sessions whose workers also belong to another job, so
 // their time is counted for each of those jobs; it is reported the same way.
-export function fieldCoverage(sessions, fields, partialFields, split = new Set(), shared = new Set()) {
+function fieldCoverage(sessions, fields, partialFields, split = new Set(), shared = new Set()) {
   const reasons = new Set()
   const flagReasons = new Set()
   let uncovered = 0

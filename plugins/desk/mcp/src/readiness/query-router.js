@@ -9,7 +9,7 @@ import { stableStringify } from "./identity.js"
 import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
 
-export function semanticScopeError() {
+function semanticScopeError() {
   return semanticCapabilityError("semantic_unavailable", "Semantic serving is not current for the active generation.")
 }
 

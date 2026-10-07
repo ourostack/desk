@@ -7,7 +7,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.met
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
 async function loadDiagnostics() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "diagnostics.js")))
+  return import("../../../../../plugins/desk/mcp/src/runtime/diagnostics.js")
 }
 
 const currentTarget = {

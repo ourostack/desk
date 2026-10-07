@@ -27,7 +27,7 @@ import { TOOL_NAMES } from "../tool-names.js"
 
 const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
 const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
-export const RECLAIM_REPAIR = "reclaim_controller"
+const RECLAIM_REPAIR = "reclaim_controller"
 // Every field desk_doctor reads off `input`: both are read by the
 // `deskDoctor` function below, not by tools/doctor.js's `doctorRuntime`
 // (the module server.js registers for this tool name) — `deskDoctor` is the

@@ -172,7 +172,7 @@ export function deskCallStatus(input) {
 }
 
 /** A `task_focus` input as `{ track, slug }`, `{ clear: true }`, or `null` when it names no valid task folder. */
-export function focusTarget(input) {
+function focusTarget(input) {
   if (input.clear === true) return { clear: true }
   return isTaskSegment(input.track) && isTaskSegment(input.slug) ? { track: input.track, slug: input.slug } : null
 }

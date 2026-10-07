@@ -32,7 +32,7 @@ const requiredHosts = [
 ]
 
 async function loadSupportMatrix() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "support-matrix.js")))
+  return import("../../../../../plugins/desk/mcp/src/activation/support-matrix.js")
 }
 
 function loadJson(relativePath) {

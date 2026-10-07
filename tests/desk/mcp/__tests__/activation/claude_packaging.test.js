@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { validateClaudePackagingContract } from "../../../../../plugins/desk/mcp/src/activation/claude-packaging.js"
+import { validateClaudePackagingContract } from "./_contracts/claude-packaging.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),

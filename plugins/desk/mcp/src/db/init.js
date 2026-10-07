@@ -16,7 +16,7 @@ import { ensureCardGuard } from "../desk/card-commit-guard.js"
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /** Read the schema.sql file as a string. Exposed for tests + diagnostics. */
-export function readSchemaSql() {
+function readSchemaSql() {
   return readFileSync(path.join(__dirname, "schema.sql"), "utf-8")
 }
 

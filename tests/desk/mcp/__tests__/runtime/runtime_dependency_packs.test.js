@@ -80,7 +80,7 @@ const requiredRuntimeFilesByPackage = new Map([
 ])
 
 async function loadRuntimeDeps() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "runtime-deps.js")))
+  return import("../../../../../plugins/desk/mcp/src/runtime/runtime-deps.js")
 }
 
 function loadJson(file) {

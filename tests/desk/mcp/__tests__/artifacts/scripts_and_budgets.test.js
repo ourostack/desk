@@ -895,6 +895,8 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
       assertWithinBudget({ startedAt: 10, budgetMs: 5, label: "unit budget", now: () => 12 }),
       2,
     )
+    // Without a clock argument the real clock is read: a start in the future has no elapsed time.
+    assert.equal(assertWithinBudget({ startedAt: Date.now() + 60000, budgetMs: 5, label: "wall clock" }), 0)
     assert.throws(
       () => assertWithinBudget({ startedAt: 10, budgetMs: 5, label: "unit budget", now: () => 20 }),
       (error) => error.code === "performance_budget_exceeded" &&

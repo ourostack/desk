@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { validateOuroborosStdioPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/ouroboros-stdio-packaging.js"
+import { validateOuroborosStdioPackagingContract } from "./_contracts/ouroboros-stdio-packaging.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),

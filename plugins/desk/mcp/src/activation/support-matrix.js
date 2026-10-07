@@ -6,7 +6,7 @@ import {
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-export const SUPPORT_MATRIX_SCHEMA_VERSION = 1
+const SUPPORT_MATRIX_SCHEMA_VERSION = 1
 
 const REQUIRED_EVIDENCE_COLUMNS = [
   "host_id",
@@ -128,7 +128,7 @@ function validateEvidenceRows(evidence, issues) {
   }
 }
 
-export function generateSupportMatrixArtifact() {
+function generateSupportMatrixArtifact() {
   const manifest = readJson(defaultManifestPath)
   const evidence = parseHostCapabilityEvidence({
     content: readText(defaultEvidencePath),

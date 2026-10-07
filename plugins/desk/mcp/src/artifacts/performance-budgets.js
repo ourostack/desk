@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-export const DEFAULT_PERFORMANCE_BUDGETS = Object.freeze({
+const DEFAULT_PERFORMANCE_BUDGETS = Object.freeze({
   schema_version: 1,
   startup: Object.freeze({
     ensure_index_ms: 250,

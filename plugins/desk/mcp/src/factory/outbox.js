@@ -4,14 +4,13 @@
 // facts waiting to be published, delivered and quarantined records, the
 // visibility cache, finalize requests, the jobs index and a machine secret.
 //
-// Every guard here is the same implementation `src/protected/store.js` uses,
-// shared rather than duplicated: the directory-chain and leaf-file POSIX
+// Every guard here is shared rather than duplicated: the directory-chain and leaf-file POSIX
 // guards (refuse a Git checkout at any ancestor and any owned subfolder,
 // refuse a symlink, refuse a hard link, clear a macOS extended ACL) live in
 // `./os-protect.js`; Windows owner-only protection is `./windows-acl.js`'s
 // `protectWindowsPaths` (a verified NTFS DACL rewrite, batched once per
 // operation rather than once per path) — the same routine
-// `src/protected/store.js` and `src/readiness/journal.js` call, moved under
+// `src/readiness/journal.js` calls, moved under
 // `src/factory/` (the one place every caller, including this one, can
 // import from: `src/factory/**` may only import `node:` built-ins and other
 // `src/factory/` files) with a one-line re-export left at its original path
@@ -163,8 +162,7 @@ const writtenByNewerDesk = (value, ownVersion) => {
 }
 const newerLabels = (value, ownVersion = ownDeskVersion) => isNewerFormat(value, LABELS_SCHEMA, validateLabels) || writtenByNewerDesk(value, ownVersion)
 
-// `store.js` uses one `naming` per caller (`desk_feedback`); this is the
-// factory outbox's, also passed as `protectWindowsPaths`'s `label`.
+// The factory outbox's `naming`, also passed as `protectWindowsPaths`'s `label`.
 const NAMING = { label: "desk_factory", subject: "factory state" }
 
 // Shape checks for `readJsonFileSafe`: valid JSON of the wrong shape is
@@ -300,9 +298,8 @@ export async function factoryStateRoot(env = process.env, { platform = process.p
  * Creates or re-verifies every directory between `root` and `dir` (a
  * subfolder this module owns, such as `outbox/<slug>` or `markers`):
  * symlink refusal, mode repair, macOS extended-ACL clearing and a Git-
- * checkout refusal at every one of them — `store.js` checks every segment
- * it owns the same way. `batch`, when given, collects `{path, kind, created}`
- * for the caller's own single Windows-protection call instead of protecting
+ * checkout refusal at every one of them. `batch`, when given, collects
+ * `{path, kind, created}` for the caller's own single Windows-protection call instead of protecting
  * each directory separately.
  */
 async function ensureDirChain(dir, root, platform, batch = null) {

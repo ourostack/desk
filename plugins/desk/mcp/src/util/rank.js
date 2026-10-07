@@ -24,16 +24,16 @@
 // All exports are pure functions (no DB, no I/O) so the per-tool dispatch
 // can call them in tight loops without overhead.
 
-export const BASE_WEIGHTS = Object.freeze({
+const BASE_WEIGHTS = Object.freeze({
   semantic: 0.55,
   bm25: 0.25,
   recency: 0.12,
   state: 0.08,
 })
 
-export const PIN_WEIGHT = 0.30
+const PIN_WEIGHT = 0.30
 
-export const STATE_BIAS = Object.freeze({
+const STATE_BIAS = Object.freeze({
   drafting: 1.0,
   processing: 1.0,
   collaborating: 1.0,
@@ -136,16 +136,12 @@ export function combineScore(parts) {
   if (!semanticAvailable) {
     activeWeights.semantic = 0
     const remaining = activeWeights.bm25 + activeWeights.recency + activeWeights.state
-    if (remaining > 0) {
-      // Preserve ratios: scale each remaining weight so they sum back to the
-      // original base weight total (0.55 + 0.25 + 0.12 + 0.08 = 1.0).
-      const baseTotal = BASE_WEIGHTS.semantic + BASE_WEIGHTS.bm25 +
-        BASE_WEIGHTS.recency + BASE_WEIGHTS.state
-      const factor = baseTotal / remaining
-      activeWeights.bm25 *= factor
-      activeWeights.recency *= factor
-      activeWeights.state *= factor
-    }
+    // Preserve ratios: scale each remaining weight so they sum back to the
+    // original base weight total (0.55 + 0.25 + 0.12 + 0.08 = 1.0).
+    const factor = (BASE_WEIGHTS.semantic + BASE_WEIGHTS.bm25 + BASE_WEIGHTS.recency + BASE_WEIGHTS.state) / remaining
+    activeWeights.bm25 *= factor
+    activeWeights.recency *= factor
+    activeWeights.state *= factor
   }
 
   let score =

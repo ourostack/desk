@@ -27,7 +27,7 @@ import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 // declared schema in tool-schemas.js.
 export const DESK_SAVE_FIELDS = ["paths", "message", "tidy"]
 
-export const TIDY_TRAILER = "Desk-Tidy: true"
+const TIDY_TRAILER = "Desk-Tidy: true"
 
 function pathsInput(value) {
   let parsed = value

@@ -1,27 +1,20 @@
-// The shared path-protection primitives behind both of this machine's
-// private state roots: `src/protected/store.js` (the SQLite-backed feedback
-// store) and `factory/outbox.js` (the flat JSON-file
-// factory outbox). There is exactly one implementation of "owner-only,
-// never inside a Git checkout, never through a symlink or a hard link, no
-// surviving macOS extended ACL" on this machine; `store.js` delegates its
-// directory-chain and leaf-file guards to the functions here instead of
-// keeping its own copy.
+// The shared path-protection primitives behind this machine's private state
+// root, `factory/outbox.js` (the flat JSON-file factory outbox). There is
+// exactly one implementation of "owner-only, never inside a Git checkout,
+// never through a symlink or a hard link, no surviving macOS extended ACL"
+// on this machine.
 //
-// Every function takes a `naming` object (`{ label, subject }`) exactly as
-// `store.js` already did, so a caller's error text is unchanged by moving
-// the implementation here: `label` prefixes the message and `subject` names
-// the thing inside it, both module-internal constants of the caller, never
-// tool input.
+// Every function takes a `naming` object (`{ label, subject }`): `label`
+// prefixes an error message and `subject` names the thing inside it, both
+// module-internal constants of the caller, never tool input.
 //
 // Filesystem calls go through `fs.promises` and `node:child_process`'s
 // default import, called as `fsp.mkdir(...)` / `childProcess.execFileSync(
 // ...)` (property access), not a named import bound to a local identifier:
-// `store.js`'s existing tests mock exactly these properties
-// (`t.mock.method(fs, "mkdir", ...)`, `t.mock.method(childProcess,
-// "execFileSync", ...)`) to simulate a racing creator, a creation failure
-// and a failed or ACL-retaining native provider, and a named-import binding
-// does not reliably observe that kind of mutation. Property access keeps
-// this module a genuine drop-in for what was inline in `store.js`.
+// the tests mock exactly these properties (`t.mock.method(fs, "mkdir", ...)`,
+// `t.mock.method(childProcess, "execFileSync", ...)`) to simulate a racing
+// creator, a creation failure and a failed or ACL-retaining native provider,
+// and a named-import binding does not reliably observe that kind of mutation.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files; this module needs `node:child_process`, `node:fs` and `node:path`

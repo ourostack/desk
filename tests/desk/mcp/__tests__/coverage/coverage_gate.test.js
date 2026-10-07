@@ -21,11 +21,11 @@ const repoRoot = path.resolve(
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
 async function loadGate() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "coverage", "gate.js")))
+  return import("../../../../../plugins/desk/mcp/src/coverage/gate.js")
 }
 
 async function loadRunner() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "coverage", "runner.js")))
+  return import("../../../../../plugins/desk/mcp/src/coverage/runner.js")
 }
 
 function makeTempDir() {

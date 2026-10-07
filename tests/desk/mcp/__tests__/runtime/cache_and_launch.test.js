@@ -19,8 +19,8 @@ const runtimeArtifactNames = new Set([
   "source-mirror",
 ]);
 
-const bootstrapModule = await import(pathToFileURL(path.join(mcpRoot, "src/runtime/bootstrap.js")).href);
-const runtimeDepsModule = await import(pathToFileURL(path.join(mcpRoot, "src/runtime/runtime-deps.js")).href);
+const bootstrapModule = await import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js");
+const runtimeDepsModule = await import("../../../../../plugins/desk/mcp/src/runtime/runtime-deps.js");
 const {
   buildRuntimeDependencyPack,
   buildRuntimeSupportMatrix,

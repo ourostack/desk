@@ -60,10 +60,6 @@ export function labelsPathParts(value) {
   return match === null ? null : { job: match[1], session: match[2] }
 }
 
-export function isLabelsPath(value) {
-  return labelsPathParts(value) !== null
-}
-
 /** Every path a session's published facts file may have, one per host. */
 export function factsPathsForSession(sessionId) {
   return FACT_HOSTS.map((host) => `facts/${host}-${sessionId}.json`)

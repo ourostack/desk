@@ -131,7 +131,7 @@ export const PUBLISHED_LIMITS = Object.freeze({
   maxOffsetMs: 3650 * 24 * 60 * 60 * 1000,
 })
 
-export const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[123]$/u
+const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[123]$/u
 
 const DATE_PARTS = /(\d{4})-(\d{2})-(\d{2})/u
 const TIME_PARTS = /(\d{2}):(\d{2})/u

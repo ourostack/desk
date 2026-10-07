@@ -21,7 +21,6 @@
 
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { pathToFileURL } = require("node:url");
 
 // The worker's budget is 20 minutes (mcp/src/factory/loop-worker.js); its own process ends itself a minute later.
 const HARD_STOP_MS = 22 * 60 * 1000;
@@ -32,7 +31,7 @@ const isEnabled = (env) => require("../mcp/src/factory/loop-switch.cjs").isLoopE
 
 const resolveRoot = (env) => require("./boot-checks.cjs").boundRoot({ env, host: "claude", shared: {} });
 async function resolvePerson({ deskRoot, env }) {
-  const { improvementPerson } = await import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", "desk", "improvement-person.js")).href);
+  const { improvementPerson } = await import("../mcp/src/desk/improvement-person.js");
   return improvementPerson({ deskRoot, env, now: Date.now() });
 }
 

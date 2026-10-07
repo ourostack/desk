@@ -1,11 +1,8 @@
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
-import { FRONT_DOOR_TOOLS, startFrontDoor } from "./front-door.js"
+import { startFrontDoor } from "./front-door.js"
 
 // Tools that answer in diagnostic mode; every other tool is listed but gated.
 const diagnosticToolNames = ["desk_status", "desk_doctor"]
-
-// Kept for callers that read the diagnostic tool list: it is the front door's list, the same in every mode.
-export const diagnosticTools = FRONT_DOOR_TOOLS
 
 // Diagnostic mode serves a fixed diagnostic: the paths that end here run before the handshake and cannot admit Desk in this process (no compatible Node, a failed re-exec, a startup exception, an overlay that owns onboarding).
 export function startDiagnosticServer({
@@ -24,7 +21,7 @@ export function startDiagnosticServer({
 }
 
 /** The tool result a fixed diagnostic gives: desk_status and desk_doctor answer with it, every other tool is refused with its code and fix. */
-export function diagnosticToolResult({ diagnostic, toolName, input }) {
+function diagnosticToolResult({ diagnostic, toolName, input }) {
   if (toolName === "desk_doctor") {
     let format
     try {
