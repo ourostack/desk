@@ -14,13 +14,21 @@ import {
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { setTimeout as sleep } from "node:timers/promises"
 import { openSession } from "../launch/_mcp_session.js"
-import { spawnSync } from "node:child_process"
-function diag(root) {
-  const ps = spawnSync("ps", ["-eo", "pid,ppid,etimes,args"], { encoding: "utf8" }).stdout.split("\n").filter((l) => l.includes(root) || /controller|index\.js|node/u.test(l)).join("\n")
-  const ls = spawnSync("find", [root, "-newermt", "-30 seconds", "-printf", "%p %TT\\n"], { encoding: "utf8" }).stdout.split("\n").slice(0, 60).join("\n")
-  const ls2 = spawnSync("find", [root, "-maxdepth", "6"], { encoding: "utf8" }).stdout.split("\n").slice(0, 80).join("\n")
-  console.error(`DIAG-PS\n${ps}\nDIAG-NEW\n${ls}\nDIAG-TREE\n${ls2}`)
+
+// The server writes its readiness journal in the moments after it answers and exits, so a first removal can meet a file created after it listed the folder.
+// Node's own retries only repeat the final rmdir and never see that file, so the whole removal is run again until the folder is gone.
+async function removeFixture(root) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (error.code !== "ENOTEMPTY" || attempt >= 50) throw error
+      await sleep(100)
+    }
+  }
 }
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
@@ -950,7 +958,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -974,7 +982,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -998,7 +1006,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -1022,7 +1030,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -1046,7 +1054,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -1070,7 +1078,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -1094,7 +1102,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -1118,7 +1126,55 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep8", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    await removeFixture(fixture.root)
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep9", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    await removeFixture(fixture.root)
   }
 })
 
@@ -1155,7 +1211,7 @@ test("entrypoint stdio startup lets host/session root override activation config
       "conflicting DESK root must not receive writes when host/session root is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
@@ -1195,7 +1251,7 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")
     assert.equal(sourceMirrorCount(activationCache), 1, "repeated startup should reuse the same source mirror for unchanged MCP source")
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+    await removeFixture(fixture.root)
   }
 })
 
