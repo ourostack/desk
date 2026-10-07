@@ -241,6 +241,39 @@ test("the offline registration helper leaves a migration Detect child uninstrume
   assert.match(other.stdout, /--import=\S*register-coverage\.mjs/u, "any other process is still instrumented")
 })
 
+// The test above sees only the NODE_OPTIONS re-add. This one watches the two `register` calls, with fake loaders in a copy of the helper's folder layout, so dropping the guard from either call fails here.
+test("the offline registration helper registers neither hook for a migration Detect child, and both for every other process", t => {
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-offline-register-guard-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const marker = path.join(dir, "registered.txt")
+  const put = (relative, body) => {
+    const file = path.join(dir, relative)
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, body)
+    return file
+  }
+  const repoRoot = path.join(mcpRoot, "../../..")
+  const helperDir = "evals/offline/__tests__/helpers"
+  const copy = relative => put(relative, readFileSync(path.join(repoRoot, relative), "utf8"))
+  const helper = copy(`${helperDir}/register-coverage.mjs`)
+  copy("plugins/desk/mcp/src/coverage/detect-child.js")
+  const recorder = name => `import { appendFileSync } from "node:fs"\nexport function initialize() { appendFileSync(${JSON.stringify(marker)}, "${name}\\n") }\n`
+  put(`${helperDir}/coverage-format.mjs`, recorder("format"))
+  put("pkg/package.json", JSON.stringify({ name: "fake-package-root", type: "module" }))
+  put("pkg/node_modules/@istanbuljs/esm-loader-hook/package.json", JSON.stringify({ name: "@istanbuljs/esm-loader-hook", type: "module", exports: "./index.js" }))
+  put("pkg/node_modules/@istanbuljs/esm-loader-hook/index.js", recorder("instrumentation"))
+  const registered = (argv) => {
+    rmSync(marker, { force: true })
+    const run = spawnSync(process.execPath, ["--import", pathToFileURL(helper).href, put("script.mjs", ""), ...argv], {
+      env: { PATH: process.env.PATH, OFFLINE_COVERAGE_PACKAGE_ROOT: path.join(dir, "pkg"), DESK_PLUGIN_ROOT: dir }, encoding: "utf8",
+    })
+    assert.equal(run.status, 0, run.stderr)
+    return existsSync(marker) ? readFileSync(marker, "utf8").split("\n").filter(Boolean).sort() : []
+  }
+  assert.deepEqual(registered(["--detect"]), [], "a Detect child registers no hook")
+  assert.deepEqual(registered([]), ["format", "instrumentation"], "any other process registers both")
+})
+
 // The gate exempts a process by `--detect` plus DESK_PLUGIN_ROOT. If the driver or a Detect block stops using them, the exemption silently stops applying and startup tests depend on PR size again.
 test("every migration Detect block that runs node passes --detect under $DESK_PLUGIN_ROOT, and the driver sets DESK_PLUGIN_ROOT for it", async t => {
   const migrations = path.join(mcpRoot, "..", "migrations")
