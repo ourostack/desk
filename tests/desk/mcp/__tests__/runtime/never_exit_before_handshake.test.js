@@ -5,7 +5,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, writeFileSync } from "node:fs"
+import fs, { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -212,7 +213,7 @@ test("the entrypoint catch serves diagnostic mode instead of exiting when startu
   assert.match(writes.join(""), /startup exception: not an Error/u)
 })
 
-test("the default startup-exception starter serves the diagnostic on stdio with the package version", async () => {
+test("the default startup-exception starter serves the diagnostic on stdio with the Desk plugin release", async () => {
   const input = new PassThrough()
   const output = new PassThrough()
   const chunks = []
@@ -224,7 +225,7 @@ test("the default startup-exception starter serves the diagnostic on stdio with 
   ].map((message) => JSON.stringify(message)).join("\n") + "\n")
   await running
   const [init, status] = Buffer.concat(chunks).toString("utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
-  assert.equal(init.result.serverInfo.version, entrypoint.resolveMcpServerVersion({ mcpRoot }))
+  assert.equal(init.result.serverInfo.version, JSON.parse(readFileSync(path.join(mcpRoot, "..", "plugin.json"), "utf8")).version)
   assert.equal(toolPayload(status).state, "degraded:startup_exception")
   assert.equal(toolPayload(status).observed.message, "boom")
 })
@@ -240,6 +241,15 @@ test("the Node floor comes from engines.node and falls back to 20.0.0", () => {
   assert.deepEqual(read(JSON.stringify({})), [20, 0, 0])
   assert.deepEqual(read("{not json"), [20, 0, 0])
   assert.deepEqual(entrypoint.resolveNodeFloor({ mcpRoot }), [20, 0, 0])
+  const engines = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8")).engines.node
+  const [major, minor = 0, patch = 0] = /^>=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/u.exec(engines).slice(1).map(Number)
+  assert.deepEqual(entrypoint.resolveNodeFloor({ mcpRoot }), [major, minor, patch], "the floor is mcp/package.json's engines.node, not the default")
+  // Distinguishable from the default: engines.node lives in mcp/package.json, never in the plugin.json beside mcp/.
+  const plugin = fs.mkdtempSync(path.join(os.tmpdir(), "desk-floor-"))
+  fs.mkdirSync(path.join(plugin, "mcp"))
+  fs.writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ engines: { node: ">=22.4.1" } }))
+  fs.writeFileSync(path.join(plugin, "plugin.json"), JSON.stringify({ version: "1.0.0" }))
+  assert.deepEqual(entrypoint.resolveNodeFloor({ mcpRoot: path.join(plugin, "mcp") }), [22, 4, 1])
   assert.deepEqual(entrypoint.resolveNodeFloor(), [20, 0, 0])
   assert.equal(entrypoint.nodeMeetsFloor("16.20.2", [20, 0, 0]), false)
   assert.equal(entrypoint.nodeMeetsFloor("19.9.9", [20, 0, 0]), false)

@@ -30,6 +30,7 @@ import {
   inspectRuntimeDependencyPack,
 } from "./src/runtime/bootstrap.js"
 import { startDiagnosticServer } from "./src/runtime/diagnostic-server.js"
+import { deskVersion } from "./src/package-metadata.js"
 import { runInWorker } from "./src/runtime/admission-worker.js"
 import { importInChunks } from "./src/runtime/chunked-import.js"
 import { createDeskSession, LAUNCHER_READ_ONLY_CODES } from "./src/runtime/desk-session.js"
@@ -58,14 +59,13 @@ export {
   resolveStartupStateBranch,
 }
 
-const MCP_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$/u
 // Used only when package.json's engines.node cannot be read as a plain ">=" floor.
 const DEFAULT_NODE_FLOOR = [20, 0, 0]
 
 // The lowest Node that Desk supports, from engines.node in package.json (">=X[.Y[.Z]]").
 export function resolveNodeFloor({ mcpRoot, readFile = readFileSync } = {}) {
   try {
-    const range = JSON.parse(readFile(path.join(mcpRoot, "..", "plugin.json"), "utf8")).engines.node
+    const range = JSON.parse(readFile(path.join(mcpRoot, "package.json"), "utf8")).engines.node
     const match = /^>=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/u.exec(range.trim())
     if (match !== null) {
       return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)]
@@ -122,20 +122,8 @@ export function resolveRuntimeInspector({ runtimeImporter, runtimeInspector }) {
     : null
 }
 
-export function resolveMcpServerVersion({
-  mcpRoot,
-  readFile = readFileSync,
-} = {}) {
-  try {
-    const version = JSON.parse(
-      readFile(path.join(mcpRoot, "..", "plugin.json"), "utf8"),
-    ).version
-    return hasText(version) && MCP_VERSION_PATTERN.test(version)
-      ? version
-      : "0.0.0"
-  } catch {
-    return "0.0.0"
-  }
+export function resolveMcpServerVersion({ env = process.env } = {}) {
+  return deskVersion(env) ?? "0.0.0"
 }
 
 // Desk answers the MCP handshake before it does anything that can fail or take time.
@@ -174,7 +162,7 @@ export async function main({
   // The tools find the installed plugin (its hooks and the plugins beside it) through DESK_PLUGIN_ROOT. Claude's launcher sets it; Copilot's and Codex's configs pass no environment, and the server's code runs from a source mirror with no `hooks/` beside it, so every host gets this entrypoint's own plugin folder here.
   if (!hasText(env.DESK_PLUGIN_ROOT)) env.DESK_PLUGIN_ROOT = path.resolve(mcpRoot, "..")
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
-  const serverVersion = resolveMcpServerVersion({ mcpRoot })
+  const serverVersion = resolveMcpServerVersion({ env })
   const startRuntimeDiagnostic = (options) => diagnosticServerStarter({
     ...options,
     serverVersion,
@@ -633,13 +621,12 @@ export function runIfEntrypoint({
 // Serve the startup-exception diagnostic on stdio (tests pass their own streams).
 export function startStartupExceptionDiagnostic({
   error,
-  mcpRoot = path.dirname(fileURLToPath(import.meta.url)),
   input,
   output,
 }) {
   return startDiagnosticServer({
     diagnostic: createStartupExceptionDiagnostic({ error }),
-    serverVersion: resolveMcpServerVersion({ mcpRoot }),
+    serverVersion: resolveMcpServerVersion(),
     input,
     output,
   })

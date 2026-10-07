@@ -79,3 +79,23 @@ test("an explicit plugin root supplies the preview version the entry records", a
   // admitted plugin artifact decides the recorded preview version.
   assert.equal(captured.preview_version, "9.9.9-fixture")
 })
+
+test("with no explicit plugin root the preview version follows DESK_PLUGIN_ROOT", async (t) => {
+  const fixture = await mkFeedbackFixture()
+  t.after(() => cleanup(fixture.base))
+  const pluginRoot = path.join(fixture.base, "env-desk-plugin")
+  await fs.mkdir(pluginRoot, { recursive: true })
+  await fs.writeFile(path.join(pluginRoot, "plugin.json"), `${JSON.stringify({ name: "desk", version: "9.8.7-alpha.6" })}\n`, "utf8")
+  const saved = process.env.DESK_PLUGIN_ROOT
+  process.env.DESK_PLUGIN_ROOT = pluginRoot
+  try {
+    const captured = await withPrivateStore(
+      { deskRoot: fixture.deskRoot, person: "rowan", env: { XDG_STATE_HOME: fixture.stateHome } },
+      (store) => store.capture({ text: "a note under an env-selected plugin", taskRef: null }),
+    )
+    assert.equal(captured.preview_version, "9.8.7-alpha.6")
+  } finally {
+    if (saved === undefined) delete process.env.DESK_PLUGIN_ROOT
+    else process.env.DESK_PLUGIN_ROOT = saved
+  }
+})

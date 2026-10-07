@@ -5,6 +5,10 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { resolveMcpServerVersion } from "../../../../../plugins/desk/mcp/index.js"
+import { ownVersion } from "../../../../../plugins/desk/mcp/src/factory/local-status.js"
+import { previewRuntimeSnapshot } from "../../../../../plugins/desk/mcp/src/runtime/preview-snapshot.js"
+import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import { createMcpServer } from "../../../../../plugins/desk/mcp/src/server.js"
 import { deskVersion } from "../../../../../plugins/desk/mcp/src/package-metadata.js"
 
@@ -39,6 +43,24 @@ test("the in-process MCP server announces the release, or 0.0.0 when plugin.json
   process.env.DESK_PLUGIN_ROOT = mkdtempSync(path.join(tmpdir(), "desk-version-"))
   try {
     assert.equal(createMcpServer()._serverInfo.version, "0.0.0")
+  } finally {
+    if (saved === undefined) delete process.env.DESK_PLUGIN_ROOT
+    else process.env.DESK_PLUGIN_ROOT = saved
+  }
+})
+
+test("DESK_PLUGIN_ROOT pointing elsewhere moves every in-process reader of the Desk version together", async () => {
+  const other = mkdtempSync(path.join(tmpdir(), "desk-version-"))
+  writeFileSync(path.join(other, "plugin.json"), JSON.stringify({ version: "9.8.7-alpha.6" }))
+  const saved = process.env.DESK_PLUGIN_ROOT
+  process.env.DESK_PLUGIN_ROOT = other
+  try {
+    const desk = mkdtempSync(path.join(tmpdir(), "desk-version-root-"))
+    const status = await desk_status({ deskRoot: desk, env: process.env })
+    assert.deepEqual(
+      [deskVersion(), resolveMcpServerVersion(), ownVersion(), previewRuntimeSnapshot("ready").desk_version, createMcpServer()._serverInfo.version, status.runtime.plugin.version],
+      Array(6).fill("9.8.7-alpha.6"),
+    )
   } finally {
     if (saved === undefined) delete process.env.DESK_PLUGIN_ROOT
     else process.env.DESK_PLUGIN_ROOT = saved

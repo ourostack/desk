@@ -114,6 +114,25 @@ test("a 'known' result records the hit with the running Desk version; a second h
   assert.deepEqual((await readStatus(env))[KNOWN_KEY][5], { count: 2, last_at: "2026-10-02T00:00:00.000Z", last_version: RUNNING })
 }))
 
+test("the Desk version a problem is recorded under follows DESK_PLUGIN_ROOT, like every other Desk version", () => scratch(async ({ env }) => {
+  const other = mkdtempSync(path.join(os.tmpdir(), "desk-problem-version-"))
+  await fs.writeFile(path.join(other, "plugin.json"), JSON.stringify({ version: "9.8.7-alpha.6" }))
+  const saved = process.env.DESK_PLUGIN_ROOT
+  process.env.DESK_PLUGIN_ROOT = other
+  try {
+    const { runner } = fakeGh({ ...ONE_ACCOUNT, issues: KNOWN_ISSUES(fingerprintOf("desk-sync", "x")) })
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "x", runner, now: clock("2026-10-01T00:00:00Z") })
+    assert.equal((await readStatus(env))[KNOWN_KEY][5].last_version, "9.8.7-alpha.6")
+    await fs.writeFile(path.join(other, "plugin.json"), "not json")
+    const filed = fakeGh(ONE_ACCOUNT)
+    await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "y", runner: filed.runner })
+    assert.match(JSON.stringify(filed.calls), /Desk version: `unknown`/u)
+  } finally {
+    if (saved === undefined) delete process.env.DESK_PLUGIN_ROOT
+    else process.env.DESK_PLUGIN_ROOT = saved
+  }
+}))
+
 test("a 'filed' result records no known hit", () => scratch(async ({ env }) => {
   const { runner } = fakeGh(ONE_ACCOUNT)
   assert.equal((await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "y", runner })).result, "filed")
