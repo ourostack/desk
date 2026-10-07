@@ -17,7 +17,10 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { setTimeout as sleep } from "node:timers/promises"
 import { openSession } from "../launch/_mcp_session.js"
 
-// The server writes its readiness journal in the moments after it answers and exits, so a first removal can meet a file created after it listed the folder.
+// The writer is the readiness controller child the server forks (readiness/controller-process.js: `child.unref()`, stdio "ipc"). It is a separate process, so it is still alive when `session.close()` returns:
+// it sees the IPC channel close, runs its own close (readiness/controller-child.js) and writes the final journal entry, within its 1 s close deadline (`proc.exit(1)` after 1000 ms).
+// That is by design and bounded, not a leak: the child always exits within a second of the server. It was inferred from the code and from the journal files landing about 60 ms after `task.md` in the failing run, not from a trace of the writing process.
+// So a first removal can meet a file created after it listed the folder.
 // Node's own retries only repeat the final rmdir and never see that file, so the whole removal is run again until the folder is gone.
 async function removeFixture(root) {
   for (let attempt = 1; ; attempt += 1) {

@@ -147,7 +147,7 @@ function fail(label, message) {
  * One environment variable by name, ignoring case. Windows names variables without regard to case, but a plain object
  * copy of `process.env` does not, and Git Bash hands a child `SYSTEMROOT` where the Windows shell hands `SystemRoot`.
  */
-export function windowsEnvironmentValue(env, name) {
+function windowsEnvironmentValue(env, name) {
   if (typeof env[name] === "string") return env[name]
   const wanted = name.toLowerCase()
   const found = Object.keys(env).find((key) => key.toLowerCase() === wanted && typeof env[key] === "string")
@@ -417,9 +417,4 @@ function rememberVerified(result, known) {
   const identity = identityOf(result.path)
   if (identity === null) known.delete(result.path)
   else known.set(result.path, { identity, result })
-}
-
-/** Forget what this process has verified (a test seam). */
-export function forgetVerifiedWindowsPaths() {
-  verifiedPaths.clear()
 }

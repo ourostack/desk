@@ -6,7 +6,7 @@ Workspace tidy now removes merged worktrees on Windows. Git reports paths with f
 
 The index links planning, doing and feedback docs to their task and honors pinned iterations on Windows. A failed move or archive no longer leaves an empty folder. Archiving a task with a symlinked card works with short temp paths. The workspace watcher no longer crashes the controller when the desk path uses an 8.3 short name.
 
-The card pre-commit refusal keeps its first sentence within the length limit, and guard denials name the checkout in one spelling.
+The card pre-commit refusal keeps its first sentence within the length limit.
 
 Desk no longer starts a separate PowerShell for each of several identical folder-protection requests made at the same moment on Windows. They share one run, which is faster and avoids concurrent rewrites of one folder's permissions.
 

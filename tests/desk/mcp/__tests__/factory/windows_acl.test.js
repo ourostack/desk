@@ -21,8 +21,6 @@ import { spawnSync } from "node:child_process"
 import {
   assertWindowsAclAvailable,
   protectWindowsPaths,
-  forgetVerifiedWindowsPaths,
-  windowsEnvironmentValue,
 } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 import { nativeProbe, writePosixNodeProvider } from "./_private_state_helpers.js"
 
@@ -94,8 +92,7 @@ test("assertWindowsAclAvailable finds SystemRoot under any capitalization, as a 
     for (const name of ["SYSTEMROOT", "systemroot", "SystemRoot"]) {
       assert.equal(assertWindowsAclAvailable({ env: { [name]: base } }), providerPath, name)
     }
-    assert.equal(windowsEnvironmentValue({ Path: "x" }, "PATH"), "x")
-    assert.equal(windowsEnvironmentValue({ PATH: 1 }, "Path"), undefined)
+    assert.throws(() => assertWindowsAclAvailable({ env: { SystemRoot: 5, SYSTEMROOT: undefined } }), /%SystemRoot% to locate/u, "a value that is not text is not a SystemRoot")
   } finally {
     await fs.rm(base, { recursive: true, force: true })
   }
@@ -103,7 +100,6 @@ test("assertWindowsAclAvailable finds SystemRoot under any capitalization, as a 
 
 test("a verified path is not protected again until its identity or change time moves, and a path created in this call always is", async () => {
   const base = await mkBase()
-  forgetVerifiedWindowsPaths()
   try {
     const dir = path.join(base, "state")
     await fs.mkdir(dir)
@@ -138,14 +134,12 @@ test("a verified path is not protected again until its identity or change time m
     await protectWindowsPaths([entry], { env, runner: gone, memoize: true })
     assert.equal(gone.calls.length, 1, "a path that no longer exists is never answered from memory")
   } finally {
-    forgetVerifiedWindowsPaths()
-    await fs.rm(base, { recursive: true, force: true })
+      await fs.rm(base, { recursive: true, force: true })
   }
 })
 
 test("a verified file is remembered like a verified folder", async () => {
   const base = await mkBase()
-  forgetVerifiedWindowsPaths()
   try {
     const file = path.join(base, "status.json")
     await fs.writeFile(file, "{}")
@@ -158,14 +152,12 @@ test("a verified file is remembered like a verified folder", async () => {
     await protectWindowsPaths([entry], { env, runner, memoize: true })
     assert.equal(runner.calls.length, 1)
   } finally {
-    forgetVerifiedWindowsPaths()
-    await fs.rm(base, { recursive: true, force: true })
+      await fs.rm(base, { recursive: true, force: true })
   }
 })
 
 test("identical protection requests made at the same time share one run, and a failed run is not remembered", async () => {
   const base = await mkBase()
-  forgetVerifiedWindowsPaths()
   try {
     const dir = path.join(base, "state")
     await fs.mkdir(dir)
@@ -182,15 +174,17 @@ test("identical protection requests made at the same time share one run, and a f
     const both = await Promise.all([1, 2, 3].map(() => protectWindowsPaths([entry], { env, runner: slow, memoize: true })))
     assert.equal(calls, 1, "three concurrent requests started one run")
     assert.deepEqual(both[1], both[0])
-    forgetVerifiedWindowsPaths()
+    // A second folder, because the first is now remembered as verified.
+    const other = path.join(base, "other")
+    await fs.mkdir(other)
+    const otherEntry = { path: other, kind: "directory", created: false }
     const failing = async () => ({ code: 1, stdout: "", stderr: "boom", timedOut: false })
-    await assert.rejects(protectWindowsPaths([entry], { env, runner: failing, memoize: true }))
-    const after = runnerReturning(okResult)
-    await protectWindowsPaths([entry], { env, runner: after, memoize: true })
+    await assert.rejects(protectWindowsPaths([otherEntry], { env, runner: failing, memoize: true }))
+    const after = runnerReturning({ status: "ok", results: [{ ...okResult.results[0], path: other }] })
+    await protectWindowsPaths([otherEntry], { env, runner: after, memoize: true })
     assert.equal(after.calls.length, 1, "a later request runs again after a failed one")
   } finally {
-    forgetVerifiedWindowsPaths()
-    await fs.rm(base, { recursive: true, force: true })
+      await fs.rm(base, { recursive: true, force: true })
   }
 })
 

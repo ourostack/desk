@@ -105,6 +105,8 @@ jobs:
           name: windows-${{ matrix.mode }}-shard-${{ matrix.shard }}
           path: results.json
           if-no-files-found: warn
+          # A rerun of only the failed shards uploads under a name an earlier attempt already holds.
+          overwrite: true
 
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
   # standard-user shards uploaded (not the shards' job conclusions), so a shard that never ran, was cancelled or reported a failed test
@@ -124,7 +126,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          sparse-checkout: .github/scripts
+          # The verdict compares the shards' files with the suite's test files, so it needs the tests folder's names too.
+          sparse-checkout: |
+            .github/scripts
+            tests/desk/mcp/__tests__
 
       - name: Download every standard-user shard's results
         uses: actions/download-artifact@v4
@@ -133,4 +138,6 @@ jobs:
           path: shard-results
 
       - name: Fail unless every shard reported and every file passed
-        run: node .github/scripts/windows-suite-verdict.mjs shard-results 6
+        run: node .github/scripts/windows-suite-verdict.mjs shard-results 6 tests/desk/mcp/__tests__ "$ONLY_FILES"
+        env:
+          ONLY_FILES: ${{ inputs.only }}

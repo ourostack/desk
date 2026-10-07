@@ -9,6 +9,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { osEnv } from "../_os_env.js"
+import { NO_FILE_SYMLINKS } from "../_platform.js"
 
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
@@ -354,11 +355,16 @@ test("a lock is taken over only when its process is gone, or when it is older th
   await fs.writeFile(lock, JSON.stringify({ pid: DEAD, token: "x" }))
   assert.deepEqual(await step(env, seams({ processAlive: gone })), { ok: true, result: "no_jobs_waiting" }, "a lock whose process is gone is taken over at once")
   await assert.rejects(fs.stat(lock))
-  // A dangling symbolic link stands in for a lock whose age cannot be read. On Windows a link needs a privilege a standard user lacks, and opening
-  // a dangling one behaves differently, so only this last case is left out there.
-  if (process.platform === "win32") return
+}))
+
+// A dangling symbolic link stands in for a lock whose age cannot be read.
+test("a lock whose age cannot be read is respected", { skip: NO_FILE_SYMLINKS }, () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const root = await factoryStateRoot(env)
+  await fs.mkdir(path.join(root, "locks"), { recursive: true })
+  const lock = path.join(root, "locks", "evaluator-step.running")
   await fs.symlink(path.join(root, "nowhere"), lock)
-  assert.deepEqual(await step(env, seams({ processAlive: gone })), { ok: true, result: "busy" }, "a lock whose age cannot be read is respected")
+  assert.deepEqual(await step(env, seams({ processAlive: (pid) => pid !== DEAD })), { ok: true, result: "busy" }, "a lock whose age cannot be read is respected")
 }))
 
 test("the default liveness probe sees this process as alive, a finished one as gone, and a process it may not signal as alive", { skip: process.platform === "win32" }, () => scratch(async (env) => {

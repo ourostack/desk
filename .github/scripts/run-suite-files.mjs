@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { suiteFiles } from "./suite-files.mjs"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -18,15 +19,10 @@ const isolatedEnv = path.join(repoRoot, "tests", "desk", "mcp", "__tests__", "_i
 const testsRoot = path.resolve(arg("--tests-root", path.join(repoRoot, "tests", "desk", "mcp", "__tests__")))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
-const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-  const full = path.join(dir, entry.name)
-  return entry.isDirectory() ? walk(full) : entry.name.endsWith(".test.js") ? [full] : []
-})
-const files = walk(testsRoot).sort()
-// Round-robin keeps a slow directory's files spread over the shards.
+// The same file list the verdict job checks against (suite-files.mjs). Round-robin keeps a slow directory's files spread over the shards.
 // --only <regex> narrows the run to matching files (relative to the tests folder, forward slashes) for quick investigation runs.
 const only = String(arg("--only", "") ?? "")
-const wanted = only === "" ? files : files.filter((f) => new RegExp(only, "u").test(path.relative(testsRoot, f).split(path.sep).join("/")))
+const wanted = suiteFiles(testsRoot, only).map((file) => path.join(testsRoot, ...file.split("/")))
 const mine = wanted.filter((_, i) => i % total === index - 1)
 
 // What is still running under the test process when it hit its time limit, so a hang names the stuck command.

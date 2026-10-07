@@ -1236,10 +1236,15 @@ test("on Windows, a lock file whose deletion is still pending is waited for, and
     if (String(args[0]).endsWith(".lock")) throw failure
     return original.apply(fs, args)
   })
+  // The wait is bounded by time (about 5 s), so a clock that jumps 3 s per reading reaches the bound after a few tries.
+  const realNow = Date.now
+  let clock = realNow()
+  const jumping = t.mock.method(Date, "now", () => (clock += 3000))
   try {
     await assert.rejects(() => setConsent(env, { store: STORE, contribute: false }, options), (error) => error === failure)
-    assert.ok(lasting.mock.callCount() > 100)
+    assert.ok(lasting.mock.callCount() >= 2)
   } finally {
+    jumping.mock.restore()
     lasting.mock.restore()
   }
 }))

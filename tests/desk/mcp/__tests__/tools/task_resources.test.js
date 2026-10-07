@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, realpathSync } from "node:f
 import { promises as fs } from "node:fs"
 import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { applyResource, canonicalIdentity, dueResources, openResources, readResources, shellQuote } from "../../../../../plugins/desk/mcp/src/desk/resources.js"
-import { cleanupIndexPath, readCleanupIndex } from "../../../../../plugins/desk/mcp/src/desk/cleanup-index.js"
+import { cleanupIndexPath, readCleanupIndex, recordCleanupCard } from "../../../../../plugins/desk/mcp/src/desk/cleanup-index.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -275,6 +275,15 @@ test("the cleanup index is per desk root and per machine: only listed cards are 
   await fs.writeFile(file, "garbage")
   await update(root, { resource: { identity: "branch:o/widgets#feat/more2" } })
   assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+})
+
+test("recording a card keeps the desk spelling with `/` on every platform: an archived card is listed by its live folder, and a backslash spelling is never rewritten as the same card", () => {
+  const root = mkdtempSync(path.join(scratch, "cleanup-spelling-"))
+  recordCleanupCard(root, "t/_archive/chain", true)
+  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  // A folder spelled with `\` is not the `/` card: a posix split would have to treat it as one name, so it is listed as written, never merged into or replaced by `t/chain`.
+  recordCleanupCard(root, "t\\_archive\\other", true)
+  assert.deepEqual(readCleanupIndex(root), ["t\\_archive\\other"])
 })
 
 test("a state folder that cannot be written never fails the card write", async () => {

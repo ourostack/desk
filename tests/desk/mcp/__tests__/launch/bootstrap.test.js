@@ -403,8 +403,13 @@ test("the install command installs the Node major Desk ships a runtime pack for,
     assert.doesNotMatch(command, /&&|nvm use/u)
   }
 
-  // The macOS and Linux half is skipped on Windows for the reason given at posixBranchOnly.
-  if (posixBranchOnly) return
+})
+
+// The macOS and Linux half is skipped on Windows for the reason given at posixBranchOnly.
+test("the install command on macOS and Linux prefers an existing nvm, then Homebrew, then a fresh nvm", { skip: posixBranchOnly }, async () => {
+  const root = await mkTempRoot("desk-bootstrap-fix-")
+  const brewBin = path.join(root, "brew-bin")
+  fakeNode(path.join(brewBin, "brew"), "0.0.0", "0")
   // macOS and Linux: an existing nvm first, then Homebrew, then a fresh nvm.
   const nvmDir = path.join(root, "nvm dir")
   mkdirSync(nvmDir)
