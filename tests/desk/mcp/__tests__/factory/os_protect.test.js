@@ -175,11 +175,119 @@ test("clearExtendedAcl accepts a path whose listing shows no ACL entry", (t) => 
     return command === "/bin/ls" ? "drwx------  2 owner  staff  64 Jan  1 00:00 /x\n" : ""
   })
   try {
-    assert.doesNotThrow(() => clearExtendedAcl("/x", "darwin", NAMING))
-    assert.deepEqual(calls, ["/bin/chmod", "/bin/ls"])
+    assert.equal(clearExtendedAcl("/x", "darwin", NAMING), true)
+    assert.deepEqual(calls, ["/bin/ls"], "a path with no ACL entry is listed once and never touched")
   } finally {
     mocked.mock.restore()
   }
+})
+
+test("clearExtendedAcl clears a listed ACL entry and lists again to prove it is gone", (t) => {
+  const calls = []
+  let listed = 0
+  const mocked = t.mock.method(childProcess, "execFileSync", (command) => {
+    calls.push(command)
+    if (command !== "/bin/ls") return ""
+    listed += 1
+    return listed === 1 ? "drwx------  2 owner  staff  64 Jan  1 00:00 /x\n 0: group:everyone allow read\n" : "drwx------  2 owner  staff  64 Jan  1 00:00 /x\n"
+  })
+  try {
+    assert.equal(clearExtendedAcl("/x", "darwin", NAMING), false)
+    assert.deepEqual(calls, ["/bin/ls", "/bin/chmod", "/bin/ls"])
+  } finally {
+    mocked.mock.restore()
+  }
+})
+
+test("a directory and a file proved ACL-free are not listed again until their identity or change time moves (darwin)", { skip: NO_POSIX_MODES }, async (t) => {
+  await scratch(async (base) => {
+    const dir = path.join(base, "owned")
+    const file = path.join(dir, "leaf.json")
+    await ensureOwnerOnlyDirectory(dir, "linux", NAMING)
+    await fs.writeFile(file, "{}", { mode: 0o600 })
+    const calls = []
+    let withAcl = false
+    const mocked = t.mock.method(childProcess, "execFileSync", (command, args) => {
+      calls.push([command, args[args.length - 1]])
+      if (command !== "/bin/ls") return ""
+      return withAcl ? "x\n 0: group:everyone allow read\n" : "x\n"
+    })
+    try {
+      await ensureOwnerOnlyDirectory(dir, "darwin", NAMING)
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.equal(calls.length, 2, "the first use lists each path once")
+      await ensureOwnerOnlyDirectory(dir, "darwin", NAMING)
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.equal(calls.length, 2, "the second use is answered from what was proved")
+
+      // Anything that touches the path moves its change time, so it is listed again.
+      await fs.chmod(file, 0o640)
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.equal(calls.length, 3, "a drifted mode is listed again and repaired")
+      assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.equal(calls.length, 4, "the repair moved the change time, so the next call lists once more")
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.equal(calls.length, 4)
+
+      // A rename-over is a different file, so it is checked on its own, and an ACL that appears is cleared and never remembered.
+      const replacement = path.join(dir, "replacement.json")
+      await fs.writeFile(replacement, "{}", { mode: 0o600 })
+      await fs.rename(replacement, file)
+      withAcl = true
+      mocked.mock.mockImplementation((command, args) => {
+        calls.push([command, args[args.length - 1]])
+        if (command === "/bin/chmod") withAcl = false
+        return command === "/bin/ls" && withAcl ? "x\n 0: group:everyone allow read\n" : "x\n"
+      })
+      const before = calls.length
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.deepEqual(calls.slice(before).map(([command]) => command), ["/bin/ls", "/bin/chmod", "/bin/ls"])
+    } finally {
+      mocked.mock.restore()
+    }
+  })
+})
+
+test("native macOS: a real ACL added to a file this process proved clean is listed and cleared again, and an untouched file is not listed again", nativeMac, async (t) => {
+  await scratch(async (base) => {
+    const file = path.join(base, "leaf.json")
+    await fs.writeFile(file, "{}", { mode: 0o600 })
+    // Nothing is stubbed: the real ls and chmod run, and the real execFileSync is only counted.
+    const real = childProcess.execFileSync.bind(childProcess)
+    const calls = []
+    const counted = t.mock.method(childProcess, "execFileSync", (command, ...rest) => {
+      calls.push(command)
+      return real(command, ...rest)
+    })
+    try {
+      await protectLeafFile(file, "darwin", NAMING)
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.deepEqual(calls, ["/bin/ls"], "listed once, then answered from what was proved")
+      real("/bin/chmod", ["+a", "everyone allow read", file], { timeout: 5000 })
+      assert.match(real("/bin/ls", ["-ldeq", file], { encoding: "utf8" }), /everyone allow/u)
+      calls.length = 0
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.deepEqual(calls, ["/bin/ls", "/bin/chmod", "/bin/ls"], "an ACL added since is found and cleared")
+      assert.doesNotMatch(real("/bin/ls", ["-ldeq", file], { encoding: "utf8" }), /^\s*\d+:/mu)
+    } finally {
+      counted.mock.restore()
+    }
+  })
+})
+
+test("a retained ACL is refused on every call and never remembered as proved (darwin)", { skip: NO_POSIX_MODES }, async (t) => {
+  await scratch(async (base) => {
+    const file = path.join(base, "leaf.json")
+    await fs.writeFile(file, "{}", { mode: 0o600 })
+    const mocked = t.mock.method(childProcess, "execFileSync", (command) => (command === "/bin/ls" ? "x\n 0: group:everyone allow read\n" : ""))
+    try {
+      await assert.rejects(() => protectLeafFile(file, "darwin", NAMING), /retains an extended ACL/u)
+      await assert.rejects(() => protectLeafFile(file, "darwin", NAMING), /retains an extended ACL/u)
+    } finally {
+      mocked.mock.restore()
+    }
+  })
 })
 
 test("ensureOwnerOnlyDirectory creates, then re-verifies, an owner-only 0700 directory", { skip: NO_POSIX_MODES }, async () => {

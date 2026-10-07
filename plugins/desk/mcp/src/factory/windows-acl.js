@@ -34,9 +34,11 @@ const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.
 const DEFAULT_LABEL = "desk_feedback"
 const MAX_PATHS = 64
 const DEFAULT_TIMEOUT_MS = 20_000
+const DEFAULT_IDLE_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
 const ENTRY_FIELDS = new Set(["path", "kind", "created"])
 const KINDS = new Set(["directory", "file"])
+const TRANSIENT_READBACK = /Windows ACL protection failed: (inherited access rules still apply|expected exactly one access rule)/u
 const SID_PATTERN = /^S-1-[\d-]+$/u
 
 // The whole program, fixed at build time. Paths never appear in it — they
@@ -48,10 +50,9 @@ $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
-try {
-  $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
-  $self = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-  $administrators = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+$self = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$administrators = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+function Protect-Request($request) {
   $results = @()
   foreach ($entry in $request.paths) {
     $target = $entry.path
@@ -124,18 +125,31 @@ try {
       rule_count = $rules.Count
     }
   }
-  [Console]::Out.Write((ConvertTo-Json -Compress -Depth 4 -InputObject ([pscustomobject]@{
-    status = 'ok'
-    results = @($results)
-  })))
-} catch {
-  [Console]::Out.Write((ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{
-    status = 'error'
-    message = $_.Exception.Message
-  })))
-  exit 1
+  return ,$results
+}
+# One request per line in, one response per line out, until the parent closes stdin. The process stays up between requests so
+# the few hundred milliseconds it takes to start are paid once, not once per protected path. A request that throws answers
+# with an error and leaves the next request unaffected: every request re-reads and re-proves its own paths from scratch.
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line) { break }
+  try {
+    $request = $line | ConvertFrom-Json
+    $results = Protect-Request $request
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 4 -InputObject ([pscustomobject]@{
+      status = 'ok'
+      results = @($results)
+    })))
+  } catch {
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{
+      status = 'error'
+      message = $_.Exception.Message
+    })))
+  }
 }
 `
+
+
 
 const ENCODED_PROGRAM = Buffer.from(ACL_PROGRAM, "utf16le").toString("base64")
 
@@ -218,59 +232,124 @@ function validateBatch(paths, label) {
   })
 }
 
-function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label }) {
-  return new Promise((resolve, reject) => {
-    // Windows PowerShell cannot safely autoload PowerShell Core modules inherited from the host.
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"),
-    )
-    env.PSModulePath = path.join(path.dirname(executable), "Modules")
-    const child = nodeSpawn(executable, args, {
-      env,
-      shell: false,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    let stdout = ""
-    let stderr = ""
-    let outputBytes = 0
-    let settled = false
-    const finish = (error, value) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (error) {
-        child.kill("SIGKILL")
-        reject(error)
-        return
-      }
-      resolve(value)
-    }
-    const timer = setTimeout(() => {
-      finish(new Error(`${label}: Windows ACL provider timed out after ${timeoutMs}ms`))
-    }, timeoutMs)
-    const collect = (stream, append) => {
-      stream.setEncoding("utf8")
-      stream.on("data", (chunk) => {
-        outputBytes += Buffer.byteLength(chunk, "utf8")
-        append(chunk)
-        if (outputBytes > maxOutputBytes) {
-          finish(new Error(`${label}: Windows ACL provider produced too much output`))
-        }
-      })
-    }
-    collect(child.stdout, (chunk) => {
-      stdout += chunk
-    })
-    collect(child.stderr, (chunk) => {
-      stderr += chunk
-    })
-    const abort = (error) => finish(error)
-    child.on("error", abort)
-    child.stdin.on("error", abort)
-    child.on("close", (code) => finish(null, { code, stdout, stderr }))
-    child.stdin.end(payload)
+// One long-lived PowerShell per (provider, program) in this process, answering one request line at a time. Starting Windows
+// PowerShell costs 130 to 550 ms (and under a loaded machine, seconds); a factory flush protects thousands of paths, so a
+// process per call was the dominant cost of every private write. The session keeps the same guarantees as a process per call:
+// requests run strictly one at a time, each is bounded by `timeoutMs` and `maxOutputBytes`, and anything unexpected (a
+// timeout, too much output, an exit, a spawn error) kills the process and rejects, so the next request starts a fresh one and
+// never reads a stale or half-written answer. It is unref'd, so it never keeps this process alive, and it exits by itself
+// when this process ends (its stdin closes, so its read loop ends) or after `idleMs` without a request.
+const sessions = new Map()
+const MAX_STDERR_CHARS = 4096
+
+function createSession(executable, args, idleMs) {
+  // Windows PowerShell cannot safely autoload PowerShell Core modules inherited from the host.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "psmodulepath"),
+  )
+  env.PSModulePath = path.join(path.dirname(executable), "Modules")
+  const child = nodeSpawn(executable, args, {
+    env,
+    shell: false,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
   })
+  child.unref()
+  for (const stream of [child.stdin, child.stdout, child.stderr]) stream.unref()
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  const session = { child, pending: null, queue: Promise.resolve(), idleTimer: null, dead: false, stderr: "" }
+  const retire = (error) => {
+    if (session.dead) return
+    session.dead = true
+    clearTimeout(session.idleTimer)
+    sessions.delete(sessionKey(executable, args))
+    child.kill("SIGKILL")
+    const waiting = session.pending
+    session.pending = null
+    if (waiting) waiting.settle(error)
+  }
+  session.retire = retire
+  session.idleMs = idleMs
+  child.stdout.on("data", (chunk) => {
+    const waiting = session.pending
+    // Output nobody asked for (a banner, a late answer to a request already abandoned) is not an answer.
+    if (!waiting) return retire(new Error("unexpected output"))
+    waiting.outputBytes += Buffer.byteLength(chunk, "utf8")
+    waiting.stdout += chunk
+    if (waiting.outputBytes + waiting.stderrBytes > waiting.maxOutputBytes) {
+      return retire(new Error(`${waiting.label}: Windows ACL provider produced too much output`))
+    }
+    const newline = waiting.stdout.indexOf("\n")
+    if (newline === -1) return
+    session.pending = null
+    // One line is one answer. Anything after it means the framing is broken, so the answer is not trusted either.
+    if (waiting.stdout.slice(newline + 1).trim() !== "") {
+      session.pending = waiting
+      return retire(new Error(`${waiting.label}: Windows ACL provider returned unreadable output`))
+    }
+    waiting.settle(null, { code: 0, stdout: waiting.stdout.slice(0, newline), stderr: session.stderr })
+  })
+  child.stderr.on("data", (chunk) => {
+    session.stderr = (session.stderr + chunk).slice(-MAX_STDERR_CHARS)
+    const waiting = session.pending
+    if (!waiting) return
+    waiting.stderrBytes += Buffer.byteLength(chunk, "utf8")
+    if (waiting.outputBytes + waiting.stderrBytes > waiting.maxOutputBytes) {
+      retire(new Error(`${waiting.label}: Windows ACL provider produced too much output`))
+    }
+  })
+  child.on("error", retire)
+  child.stdin.on("error", retire)
+  child.on("close", (code) => {
+    const diagnostic = session.stderr.trim().slice(0, 500) || "no diagnostic output"
+    const label = session.pending?.label ?? DEFAULT_LABEL
+    retire(new Error(`${label}: Windows ACL provider exited with code ${code}: ${diagnostic}`))
+  })
+  return session
+}
+
+const sessionKey = (executable, args) => `${executable}\0${args.join("\0")}`
+
+const timedOutError = (label, timeoutMs) => new Error(`${label}: Windows ACL provider timed out after ${timeoutMs}ms`)
+
+function ask(session, { payload, timeoutMs, maxOutputBytes, label, due }) {
+  return new Promise((resolve, reject) => {
+    clearTimeout(session.idleTimer)
+    session.stderr = ""
+    const timer = setTimeout(() => session.retire(timedOutError(label, timeoutMs)), due - Date.now())
+    session.pending = {
+      stdout: "",
+      outputBytes: 0,
+      stderrBytes: 0,
+      maxOutputBytes,
+      label,
+      settle: (error, value) => {
+        clearTimeout(timer)
+        if (error) return reject(error)
+        session.idleTimer = setTimeout(() => session.retire(new Error("idle")), session.idleMs)
+        session.idleTimer.unref()
+        resolve(value)
+      },
+    }
+    session.child.stdin.write(`${payload}\n`)
+  })
+}
+
+function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due = Date.now() + timeoutMs }) {
+  const key = sessionKey(executable, args)
+  let session = sessions.get(key)
+  if (session === undefined) {
+    session = createSession(executable, args, idleMs)
+    sessions.set(key, session)
+  }
+  const current = session
+  // Requests to one session run one after another: the process answers lines in order, so two in flight would pair the wrong answers.
+  // The deadline started when the caller asked, not when the request reached the front of the queue, so a hung provider costs every
+  // waiting caller the one limit, never one limit per caller ahead of it. A request whose time ran out while it waited is never sent.
+  const turn = current.queue.then(() => (due - Date.now() <= 0 ? Promise.reject(timedOutError(label, timeoutMs)) : current.dead ? defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due }) : ask(current, { payload, timeoutMs, maxOutputBytes, label, due })))
+  current.queue = turn.then(() => undefined, () => undefined)
+  return turn
 }
 
 function readResponse({ code, stdout, stderr }, label) {
@@ -353,6 +432,7 @@ export async function protectWindowsPaths(
     runner = defaultRunner,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
+    idleMs = DEFAULT_IDLE_MS,
     label = DEFAULT_LABEL,
     memoize = runner === defaultRunner,
   } = {},
@@ -367,23 +447,33 @@ export async function protectWindowsPaths(
   const stale = memoized ? requested.filter((entry) => entry.created || !isStillVerified(entry, verifiedPaths)) : requested
   if (stale.length === 0) return requested.map((entry) => verifiedPaths.get(entry.path).result)
   if (stale.length !== requested.length) {
-    const done = await protectWindowsPaths(stale, { env, runner, timeoutMs, maxOutputBytes, label, memoize })
+    const done = await protectWindowsPaths(stale, { env, runner, timeoutMs, maxOutputBytes, idleMs, label, memoize })
     return requested.map((entry) => done.find((item) => item.path === entry.path) ?? verifiedPaths.get(entry.path).result)
   }
   // Sixteen callers protecting the same folders at once would start sixteen PowerShell processes that each rewrite the same ACLs, and
   // concurrent rewrites of one folder can read each other's half-applied state. Identical requests in flight share one run.
   const key = memoized ? requested.map((entry) => `${entry.kind}:${entry.created}:${entry.path}`).join("\n") : null
   if (key !== null && inFlight.has(key)) return inFlight.get(key)
-  const run = (async () => {
+  const attempt = async () => {
     const completed = await runner({
       executable,
       args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_PROGRAM],
       payload: JSON.stringify({ paths: requested }),
       timeoutMs,
       maxOutputBytes,
+      idleMs,
       label,
     })
-    const verified = verify(requested, readResponse(completed, label), label)
+    return verify(requested, readResponse(completed, label), label)
+  }
+  const run = (async () => {
+    // Another process rewriting the same folder's access list (a second Desk server on one state root, a hook) can make this
+    // call read back a half-applied list: inherited rules not yet cut off, or a rule not yet removed. Protection is idempotent,
+    // so one more pass on exactly those two refusals settles it; a second refusal, or any other one, is final.
+    const verified = await attempt().catch((error) => {
+      if (!TRANSIENT_READBACK.test(error.message)) throw error
+      return attempt()
+    })
     if (memoized) for (const result of verified) rememberVerified(result, verifiedPaths)
     return verified
   })()

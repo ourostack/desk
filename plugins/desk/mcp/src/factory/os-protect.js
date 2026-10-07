@@ -91,16 +91,37 @@ export async function realpathExistingPrefix(target) {
   }
 }
 
-/** macOS ACL grants can survive `chmod 0700`/`0600`; a no-op on every other platform. */
+// macOS: a path this process already found free of extended ACLs is not looked at again while its identity is unchanged.
+// `chmod`, an ACL edit, a rename-over and a replacement all move the change time or the inode, so a path that was loosened
+// since is checked again. A directory this process writes into moves its own change time, so it is checked on its next
+// use; its unchanged ancestors and an unchanged file are not. The key is taken from the `lstat` made before the check,
+// and only a clean pass is recorded, so a change that raced the check can only make the next call check again.
+const aclFreePaths = new Map()
+// The change time is the signal: `chmod`, an ACL edit and a rename-over each move it, and a mode change always moves it too, so the mode needs no part in the key.
+const identityKey = (stat) => `${stat.dev}:${stat.ino}:${stat.ctimeMs}`
+
+/**
+ * macOS ACL grants can survive `chmod 0700`/`0600`; a no-op on every other platform. Listing the ACL first and clearing it
+ * only when one is there leaves the same end state as clearing every time, for one process instead of two. Returns
+ * whether the path was already free of extended ACLs, so nothing about it was changed here.
+ */
 export function clearExtendedAcl(target, platform, naming) {
-  if (platform !== "darwin") return
+  if (platform !== "darwin") return true
   const { label, subject } = naming
   const options = { encoding: "utf8", timeout: 5000, maxBuffer: 65536 }
+  const hasAcl = () => /^\s*\d+:/mu.test(childProcess.execFileSync("/bin/ls", ["-ldeq", target], options))
+  if (!hasAcl()) return true
   childProcess.execFileSync("/bin/chmod", ["-N", target], options)
-  const listing = childProcess.execFileSync("/bin/ls", ["-ldeq", target], options)
-  if (/^\s*\d+:/mu.test(listing)) {
+  if (hasAcl()) {
     throw new Error(`${label}: private ${subject} path retains an extended ACL: ${target}`)
   }
+  return false
+}
+
+/** `clearExtendedAcl`, skipped when `stat` is the identity this process last proved ACL-free for `target`. */
+function clearExtendedAclOnce(target, stat, platform, naming) {
+  if (platform !== "darwin" || aclFreePaths.get(target) === identityKey(stat)) return
+  if (clearExtendedAcl(target, platform, naming)) aclFreePaths.set(target, identityKey(stat))
 }
 
 /**
@@ -129,7 +150,7 @@ export async function ensureOwnerOnlyDirectory(dir, platform, naming) {
     throw new Error(`${label}: private ${subject} path component is not a directory: ${dir}`)
   }
   if (platform !== "win32") {
-    clearExtendedAcl(dir, platform, naming)
+    clearExtendedAclOnce(dir, existing, platform, naming)
     if ((existing.mode & 0o777) !== OWNER_DIR_MODE) {
       await fsp.chmod(dir, OWNER_DIR_MODE)
     }
@@ -155,7 +176,7 @@ export async function protectLeafFile(file, platform, naming) {
     throw new Error(`${label}: private ${subject} is hard-linked and will not be used: ${file}`)
   }
   if (platform !== "win32") {
-    clearExtendedAcl(file, platform, naming)
+    clearExtendedAclOnce(file, stat, platform, naming)
     if ((stat.mode & 0o777) !== OWNER_FILE_MODE) {
       await fsp.chmod(file, OWNER_FILE_MODE)
     }
