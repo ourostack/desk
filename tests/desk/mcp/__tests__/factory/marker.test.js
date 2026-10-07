@@ -5,6 +5,7 @@ import * as path from "node:path"
 import { absolutePath, MAX_MARKER_BYTES, readSmallText, validMarker, validRouting } from "../../../../../plugins/desk/mcp/src/factory/marker.js"
 import { factoryStateRoot, listFinalizeJobs, readMarker, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { scratch, session, SENTINEL, STORE, END } from "./_session_helpers.js"
+import { different } from "../_file_identity.js"
 
 test("marker validation rejects unknown fields, path traversal, free-text metadata and malformed optional context", () => scratch(async (ctx) => {
   const marker = await session(ctx)
@@ -84,7 +85,10 @@ for (const race of ["directory", "hardlink", "growth", "replacement", "volume"])
       if (race === "replacement") { fs.renameSync(file, path.join(base, "old")); fs.writeFileSync(file, "1234") }
       return open(...args)
     })
-    if (race === "volume") t.mock.method(fs, "fstatSync", (fd) => ({ ...fstat(fd), isFile: () => true, dev: fstat(fd).dev + 1 }))
+    if (race === "volume") t.mock.method(fs, "fstatSync", (fd, ...rest) => {
+      const real = fstat(fd, ...rest)
+      return { ...real, isFile: () => true, dev: different(real.dev) }
+    })
     assert.throws(() => readSmallText(file, 4), /metadata_unreadable/u)
   }))
 }

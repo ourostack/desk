@@ -191,6 +191,7 @@ import { serializePublished, toPublished, toPublishedLabels } from "./publish.js
 import { validatePublishedBytes } from "./published-schema.js"
 import { isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
 import { PATTERNS, isPlainObject } from "./schema.js"
+import { EXACT, sameFile } from "../util/file-identity.js"
 import { derivedStoreOf, deskRootOf, isFolder, sessionPlace, sessionRoute } from "./session-route.js"
 
 /** Every result `flush` can return. */
@@ -349,11 +350,11 @@ async function acquireLock(root) {
     } catch (error) {
       if (error.code !== "EEXIST") throw error
       // Staleness comes from the file's own time, never its content.
-      const stat = await fsp.stat(file).catch(() => null)
-      if (stat !== null && Date.now() - stat.mtimeMs <= LOCK_STALE_MS) return null
+      const stat = await fsp.stat(file, EXACT).catch(() => null)
+      if (stat !== null && Date.now() - Number(stat.mtimeMs) <= LOCK_STALE_MS) return null
       // Another flush may have replaced the stale lock since it was read: remove only the same file.
-      const again = await fsp.stat(file).catch(() => null)
-      if (stat !== null && (again === null || again.ino !== stat.ino || again.mtimeMs !== stat.mtimeMs)) return null
+      const again = await fsp.stat(file, EXACT).catch(() => null)
+      if (stat !== null && (again === null || !sameFile(again, stat) || again.mtimeNs !== stat.mtimeNs)) return null
       await fsp.unlink(file).catch(() => {})
     }
   }

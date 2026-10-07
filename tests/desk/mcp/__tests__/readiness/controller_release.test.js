@@ -13,6 +13,7 @@ import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plu
 import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { killAndWait } from "../_kill_and_wait.js"
+import { otherFile } from "../_file_identity.js"
 
 const posixOnly = process.platform === "win32" ? "unix socket files" : false
 const serverModule = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/readiness/controller-server.js", import.meta.url))
@@ -104,7 +105,7 @@ test("a rendezvous that is no longer this controller's is left alone", { skip: p
   // Ours again, but the socket file is another one now: only the record goes.
   writeFileSync(ownerFile, JSON.stringify(record))
   writeFileSync(path.join(stateDir, "journal-placeholder"), "")
-  assert.equal(releaseRendezvous({ stateDir, endpoint, owner, socket: { ...socket, ino: socket.ino + 1 } }), true)
+  assert.equal(releaseRendezvous({ stateDir, endpoint, owner, socket: otherFile(socket) }), true)
   assert.equal(existsSync(ownerFile), false)
   assert.ok(existsSync(endpoint), "a socket file the controller did not publish stays")
   assert.ok(existsSync(stateDir), "a folder with other state stays")

@@ -13,6 +13,7 @@ import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/
 import { mkTempRoot } from "../_temp_roots.js"
 import { connectOrStartController, startControllerRuntime } from "../../../../../plugins/desk/mcp/src/server.js"
 import { controllerSocketIdentity } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
+import { different } from "../_file_identity.js"
 
 const policy = { lexical: "required", semantic: "unsupported" }
 const posixOnly = process.platform === "win32" ? "POSIX sockets and stop signals" : false
@@ -328,7 +329,7 @@ test("socket and named-pipe reclaim guards fail closed without sending credentia
   for (const stat of [
     { isSocket: () => false, uid: current.uid, dev: current.dev, ino: current.ino },
     { isSocket: () => true, uid: current.uid + 1, dev: current.dev, ino: current.ino },
-    { isSocket: () => true, uid: current.uid, dev: current.dev + 1, ino: current.ino },
+    { isSocket: () => true, uid: current.uid, dev: different(current.dev), ino: current.ino },
   ]) assert.deepEqual(await verifyOwnedChild({ ...context, child, stat: () => stat }), { ok: false, reason: "endpoint_changed" })
   assert.deepEqual(await verifyOwnedChild({ ...context, child, platform: "win32" }), { ok: true })
   const probe = { identity: context.identity, record: context.record, endpoint: context.endpoint, ownerVerified: true }
@@ -360,11 +361,9 @@ test("supervisor cleanup preserves replacement files and reports non-ENOENT fail
   writeFileSync(endpoint, "fixture")
   const stat = lstatSync(endpoint)
   const supervisor = { endpoint, socket: { dev: stat.dev, ino: stat.ino } }
-  // Windows file IDs can exceed 2^53, where adding 1 changes nothing; halving always gives a different number.
-  const other = (value) => (value > 1 ? Math.floor(value / 2) : value + 1)
   releaseSupervisor({})
-  releaseSupervisor({ ...supervisor, socket: { dev: other(stat.dev), ino: stat.ino } })
-  releaseSupervisor({ ...supervisor, socket: { dev: stat.dev, ino: other(stat.ino) } })
+  releaseSupervisor({ ...supervisor, socket: { dev: different(stat.dev), ino: stat.ino } })
+  releaseSupervisor({ ...supervisor, socket: { dev: stat.dev, ino: different(stat.ino) } })
   assert.equal(existsSync(endpoint), true)
   const logs = []
   releaseSupervisor(supervisor, {

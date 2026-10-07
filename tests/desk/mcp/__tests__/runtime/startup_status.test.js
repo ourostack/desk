@@ -15,12 +15,13 @@ function deferred() {
   return { promise, resolve }
 }
 
-async function session(t, { semantic = "background", handler } = {}) {
+async function session(t, { semantic = "background", handler, statusDelayMs = 0 } = {}) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-live-status-"))
   const firstStatus = deferred()
   const probeEntered = deferred()
   const probeRelease = deferred()
   const state = { controller: null, convergence: null, initial: null, context: null, desk: null }
+  let delayed = false
   const read = async () => {
     const response = await state.desk.call("desk_status", { detail: true })
     assert.equal(response.isError, false, JSON.stringify(response.payload))
@@ -47,6 +48,11 @@ async function session(t, { semantic = "background", handler } = {}) {
           async callTool(request) {
             const result = await callTool(request)
             if (request.name === "desk_status") firstStatus.resolve()
+            // A loaded machine delivers a runtime status late: the first one is read now and arrives statusDelayMs later.
+            if (request.name === "desk_status" && statusDelayMs > 0 && !delayed) {
+              delayed = true
+              await new Promise((resolve) => setTimeout(resolve, statusDelayMs))
+            }
             return result
           },
           async connectOrStartController(options) {
@@ -132,14 +138,34 @@ test("required startup exposes a populated READY status on the first real MCP ca
     new Response(JSON.stringify({ embedding: Array(768).fill(0.1) })))
   await fixture.start()
   // desk_status answers at once; admission reaches ready only once required semantic coverage is proven, and then status is READY.
-  // A ready status carries no runtime detail when the runtime status misses its short budget, so wait for the detail the assertions read.
-  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && payload.readiness?.detail)
+  // READY is only promised by a detail computed after readiness (see isCurrentDetail): a ready status can carry no detail, or a cached one, when the runtime status misses its short budget.
+  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && isCurrentDetail(payload))
   assert.equal(ready.readiness?.detail.controller_state, "READY")
   assert.equal(ready.readiness.state, "ready")
   assert.equal(ready.readiness.detail.convergence.status, "succeeded")
   assert.equal(ready.query_embedding.available, true)
   assert.equal(ready.startup_fallback.mode, "not_checked")
   assert.equal(fixture.state.context.startup, undefined)
+})
+
+// desk_status stamps `state` with admission as of the answer, but its `readiness.detail` is a separate runtime computation that can be older: when a computation misses the call's budget, the call serves the last detail it has and says so with `status_detail` ("cached: ...") and `status_detail_from`. A ready status therefore promises READY only when its detail carries no such marker.
+const isCurrentDetail = (payload) => payload.readiness?.detail !== undefined && payload.status_detail === undefined && payload.status_detail_from === undefined
+
+test("a ready status served with a cached detail from before readiness says so; the unmarked detail is READY", async (t) => {
+  // The runtime status is read now and arrives 200 ms later, past the call's budget, while the probe holds convergence for 600 ms.
+  const fixture = await session(t, { semantic: "required", statusDelayMs: 200 })
+  t.mock.method(globalThis, "fetch", async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    return new Response(JSON.stringify({ embedding: Array(768).fill(0.1) }))
+  })
+  await fixture.start()
+  const cached = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && payload.readiness?.detail !== undefined)
+  if (cached.readiness.detail.controller_state !== "READY") {
+    assert.match(cached.status_detail, /^cached: /u, "a detail older than readiness is marked cached")
+    assert.equal(typeof cached.status_detail_from, "string")
+  }
+  const current = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && isCurrentDetail(payload))
+  assert.equal(current.readiness.detail.controller_state, "READY")
 })
 
 test("failed background convergence is observable with a bounded diagnostic and clears on recovery", async (t) => {

@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url"
 import { dispositionRecord, mergeTidyEvidence } from "../../../../../plugins/desk/mcp/src/runtime/workspace-evidence.js"
 import { withWorkspaceClaim } from "../../../../../plugins/desk/mcp/src/runtime/workspace-claim.js"
 import { acknowledgeRepair, readReport, reportPath, runBootChecks, runRepair } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { different } from "../_file_identity.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js", import.meta.url)
 const tidy = await import(moduleUrl).catch((error) => {
@@ -105,7 +106,7 @@ const refusals = [
   ["ownership", async (f, w) => { w.record.branch = "refs/heads/unrelated"; await w.save() }],
   ["ownership", async (f, w) => { w.record.repository = f.desk; await w.save() }],
   ["ownership", async (f, w) => { w.record.task = "../outside/task.md"; await w.save() }],
-  ["identity", async (f, w) => { w.record.identity.ino += 1; await w.save() }],
+  ["identity", async (f, w) => { w.record.identity.ino = different(w.record.identity.ino); await w.save() }],
   ["retained", async (f, w) => { w.record.disposition = "retained-with-trigger"; await w.save() }],
   ["writer", async (f, w) => { w.record.release.processes = [{ pid: process.pid, start: await readProcessStart(process.pid) }]; await w.save() }],
   ["writer", async (f, w) => { w.record.release.complete = false; await w.save() }],
@@ -323,7 +324,7 @@ test("one malformed, inaccessible or oversized card is skipped by name; every ot
     const handle = await open(file, ...args)
     if (file === f.card) {
       const stat = handle.stat.bind(handle)
-      handle.stat = async () => ({ ...await stat(), ino: -1 })
+      handle.stat = async (...args) => { const real = await stat(...args); return { ...real, ino: different(real.ino) } }
     }
     return handle
   })
@@ -335,6 +336,31 @@ test("one malformed, inaccessible or oversized card is skipped by name; every ot
   })
   assert.deepEqual((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues, ["1 task card skipped: track/task/task.md (unreadable card)"])
   unreadable.mock.restore()
+})
+
+test("a swapped task card is noticed when file ids are above 2^53, where two ids are one Number", async (t) => {
+  const f = await fixture()
+  await worktree(f)
+  const WINDOWS_ID = 10414574139658612n
+  assert.equal(Number(WINDOWS_ID), Number(WINDOWS_ID + 1n), "the premise: as Numbers these two ids are equal")
+  const lstat = fs.lstat.bind(fs)
+  t.mock.method(fs, "lstat", async (file, ...args) => {
+    const real = await lstat(file, ...args)
+    return file === f.card ? { ...real, isFile: () => true, nlink: 1n, dev: 1n, ino: WINDOWS_ID } : real
+  })
+  const open = fs.open.bind(fs)
+  let reopened = WINDOWS_ID + 1n
+  t.mock.method(fs, "open", async (file, ...args) => {
+    const handle = await open(file, ...args)
+    if (file === f.card) {
+      const stat = handle.stat.bind(handle)
+      handle.stat = async (...statArgs) => ({ ...await stat(...statArgs), dev: 1n, ino: reopened })
+    }
+    return handle
+  })
+  assert.match((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues[0], /skipped: .*identity changed/)
+  reopened = WINDOWS_ID
+  assert.deepEqual((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues, [], "the same id is the same file")
 })
 
 test("a task card over 64 KiB is read by its front matter alone, so a large body never stops the tidy", async () => {
@@ -523,8 +549,8 @@ test("filesystem identity and inaccessible Git operation state refuse cleanup", 
   assert.match((await tidy.repairWorkspace({ deskRoot: f.desk })).left[0].reason, /symlinked/)
   mock.mock.restore()
   const lstat = fs.lstat.bind(fs)
-  const fail = t.mock.method(fs, "lstat", (file) => file === path.join(w.admin, "index.lock")
-    ? Promise.reject(Object.assign(new Error("operation state unreadable"), { code: "EACCES" })) : lstat(file))
+  const fail = t.mock.method(fs, "lstat", (file, ...args) => file === path.join(w.admin, "index.lock")
+    ? Promise.reject(Object.assign(new Error("operation state unreadable"), { code: "EACCES" })) : lstat(file, ...args))
   assert.match((await tidy.repairWorkspace({ deskRoot: f.desk })).left[0].reason, /unreadable/)
   fail.mock.restore()
 })

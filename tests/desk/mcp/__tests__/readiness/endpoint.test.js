@@ -7,6 +7,7 @@ import * as path from "node:path"
 import * as endpoints from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
+import { otherFile } from "../_file_identity.js"
 
 function filesystem(entries = {}) {
   const dirs = new Map(Object.entries({
@@ -200,7 +201,7 @@ for (const kind of ["file", "unidentified socket", "owned socket"]) {
     const stat = lstatSync(endpoint)
     writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({
       identity: controllerIdentity, endpoint,
-      socket: { dev: stat.dev, ino: kind === "unidentified socket" ? stat.ino + 1 : stat.ino },
+      socket: kind === "unidentified socket" ? otherFile(stat) : { dev: stat.dev, ino: stat.ino },
       owner: { pid: child.pid, token: "old-token" },
     }))
     const connecting = connectOrStartController({ root, stateHome, ephemeral: true })

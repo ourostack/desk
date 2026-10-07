@@ -3,6 +3,7 @@ import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import { foldPath, nativeGitPath, samePath } from "./native-path.js"
 import { readProcessStart } from "../readiness/process-start.js"
+import { EXACT, sameFile } from "../util/file-identity.js"
 
 // Both names are locked: a branch can be reacquired at a different path, and a
 // worktree path can be reused with another branch. Locks outlive worktree admin.
@@ -22,8 +23,8 @@ export async function withWorkspaceClaim({ repository: givenRepository, worktree
   const claims = []
   const assertHeld = async () => {
     for (const claim of claims) {
-      const info = await fs.lstat(claim.file)
-      if (!info.isFile() || info.nlink !== 1 || info.dev !== claim.dev || info.ino !== claim.ino ||
+      const info = await fs.lstat(claim.file, EXACT)
+      if (!info.isFile() || info.nlink !== 1n || !sameFile(info, claim) ||
           await fs.readFile(claim.file, "utf8") !== record) throw new Error("exact resource claim changed; cleanup refused")
     }
   }
@@ -37,7 +38,7 @@ export async function withWorkspaceClaim({ repository: givenRepository, worktree
       }
       try {
         await handle.writeFile(record)
-        const { dev, ino } = await handle.stat()
+        const { dev, ino } = await handle.stat(EXACT)
         claims.push({ file, dev, ino })
       } finally { await handle.close() }
     }

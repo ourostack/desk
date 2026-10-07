@@ -7,6 +7,7 @@ import * as net from "node:net"
 import * as path from "node:path"
 import { onUnmountedVolume, processIsAlive, pruneReadinessLeftovers, socketAccepts } from "../../../../../plugins/desk/mcp/src/readiness/leftovers.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { otherFile } from "../_file_identity.js"
 
 const id = (digit) => digit.repeat(64)
 
@@ -58,7 +59,7 @@ test("a stale socket the dead owner published is removed with its folder; a repl
   await new Promise((resolve) => server.close(resolve))
   renameSync(keep, endpoint)
   const gone = path.join(base, "gone")
-  controllerDir(stateHome, id("b"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint, socket: { dev, ino: ino + 1 } } })
+  controllerDir(stateHome, id("b"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint, socket: otherFile({ dev, ino }) } })
   controllerDir(stateHome, id("d"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint, socket: null } })
   controllerDir(stateHome, id("c"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint: path.join(base, "missing.sock"), socket: { dev, ino } } })
   assert.equal((await pruneReadinessLeftovers({ stateHome, isAlive: () => false })).pruned.length, 3)

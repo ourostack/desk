@@ -11,6 +11,7 @@ export { nativeGitPath, foldPath, samePath, insidePath }
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dispositionRecord } from "./workspace-evidence.js"
 import { TERMINAL_STATES } from "../desk/lifecycle.js"
+import { EXACT, matchesRecordedFile, sameFile } from "../util/file-identity.js"
 
 const RECENT_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_BYTES = 64 * 1024
@@ -42,12 +43,12 @@ class CardSkip extends Error {}
 // identity while open: at most MAX_BYTES + 1 bytes, so `truncated` says whether
 // the file is longer than MAX_BYTES. `Fail` is the error class to throw.
 async function boundedRead(file, Fail) {
-  const info = await fs.lstat(file)
-  if (!info.isFile() || info.nlink !== 1) throw new Fail("not a regular file")
+  const info = await fs.lstat(file, EXACT)
+  if (!info.isFile() || info.nlink !== 1n) throw new Fail("not a regular file")
   const handle = await fs.open(file, "r")
   try {
-    const current = await handle.stat()
-    if (current.ino !== info.ino || current.dev !== info.dev) throw new Fail("file identity changed")
+    const current = await handle.stat(EXACT)
+    if (!sameFile(current, info)) throw new Fail("file identity changed")
     const buffer = Buffer.alloc(MAX_BYTES + 1)
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
     return { raw: buffer.toString("utf8", 0, Math.min(bytesRead, MAX_BYTES)), truncated: bytesRead > MAX_BYTES }
@@ -381,13 +382,13 @@ async function candidate(item, inventory, options) {
   const receiptPath = path.join(admin, "desk-closeout.json")
   let raw, record
   try { raw = await smallFile(receiptPath); record = JSON.parse(raw) } catch { throw new Error("exact ownership receipt missing or unreadable") }
-  const info = await fs.stat(cwd)
+  const info = await fs.stat(cwd, EXACT)
   const card = path.resolve(options.deskRoot, record.task ?? "")
   if (record.version !== 2 || !text(record.owner) || !samePath(String(record.worktree), cwd) || !samePath(String(record.repository), common) || record.branch !== item.branch ||
       !inventory.cardRecords[card]?.repositories.includes(item.repository)) throw new Error("exact ownership mismatch")
   if (await cardFrontmatter(card) !== inventory.cardRecords[card].body) throw new Error("task ownership changed")
   if (record.disposition !== "remove") throw new Error("intentionally retained worktree")
-  if (record.identity?.dev !== info.dev || record.identity?.ino !== info.ino) throw new Error("worktree identity changed")
+  if (!matchesRecordedFile(info, record.identity)) throw new Error("worktree identity changed")
   if (!SHA.test(record.head) || item.head !== record.head) throw new Error("local commits or HEAD changed since release")
   if (!REF.test(record.base) || !SHA.test(record.delivered)) throw new Error("delivery reference unverified")
   await releasedWriters(record.release, { processStart, signal })

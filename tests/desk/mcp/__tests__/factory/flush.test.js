@@ -21,6 +21,7 @@ import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { BOT, TOKEN, fakeGitHub, httpError } from "./_fake_github.js"
 import { indexJob } from "./_index_helper.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { different } from "../_file_identity.js"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
 async function load() {
@@ -1643,7 +1644,7 @@ test("a stale lock replaced by another flush between its two reads is left to th
   let reads = 0
   t.mock.method(fs, "stat", async (file, ...rest) => {
     const value = await stat(file, ...rest)
-    if (file === lock && ++reads === 2) return { ...value, ino: value.ino + 1, mtimeMs: Date.now() }
+    if (file === lock && ++reads === 2) return { ...value, ino: different(value.ino) }
     return value
   })
   const github = fakeGitHub()
