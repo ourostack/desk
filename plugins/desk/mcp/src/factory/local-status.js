@@ -70,8 +70,9 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { readFileSync, readdirSync, statSync } from "node:fs"
+import { readdirSync, statSync } from "node:fs"
 import * as path from "node:path"
+import { deskVersion } from "../package-metadata.js"
 
 import { consentDecision, consentRecords as readConsentRecords, factoryStateDir } from "./boot-check.js"
 import { jobId } from "./binding.js"
@@ -117,15 +118,8 @@ const HUNG_STRIKES = 2
 
 const finiteCount = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
 
-/** The version of Desk running this code, from the plugin.json beside it, or `null` (the same source `derive-run.js` reads). */
-export function ownVersion(read = readFileSync) {
-  try {
-    const { version } = JSON.parse(read(new URL("../../../plugin.json", import.meta.url), "utf8"))
-    return typeof version === "string" ? version : null
-  } catch {
-    return null
-  }
-}
+/** The version of Desk running this code, or `null` (`package-metadata.js`'s one resolver). */
+export const ownVersion = () => deskVersion()
 
 /** How many orphans the record holds frozen by repeated interruptions (two strikes) under Desk `version` (a newer Desk starts the count again), or 0. */
 export function orphansHung(record, version) {

@@ -64,7 +64,7 @@ test("startup helpers default to the live process environment", () => {
 })
 
 test("server version and entrypoint checks use their real defaults", () => {
-  assert.match(resolveMcpServerVersion({ mcpRoot }), /^\d+\.\d+\.\d+/u)
+  assert.match(resolveMcpServerVersion(), /^\d+\.\d+\.\d+/u)
   assert.equal(typeof resolveMcpServerVersion(), "string")
   assert.equal(typeof isEntrypoint(), "boolean")
 })

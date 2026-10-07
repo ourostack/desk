@@ -8,6 +8,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
+import { deskVersion } from "../package-metadata.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 
@@ -104,12 +105,8 @@ export function staleDeskFinding({ running, latest, agentHost }) {
 }
 
 function readRunningVersion(pluginRoot) {
-  try {
-    const version = JSON.parse(readFileSync(path.join(pluginRoot, "plugin.json"), "utf8")).version
-    return parseVersion(version) === null ? null : version
-  } catch {
-    return null
-  }
+  const version = deskVersion({ DESK_PLUGIN_ROOT: pluginRoot })
+  return parseVersion(version) === null ? null : version
 }
 
 function readCache(file, now) {

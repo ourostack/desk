@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.220 — 2026-10-07
+
+Desk now reports one version everywhere an agent can see one: the Desk plugin release, such as `3.2.0-alpha.100`. Before, an agent that asked for "the Desk version" could be told the MCP runtime package's version (`1.4.0-alpha.6`), which does not change with each release. The MCP handshake, `desk_status` (`runtime.plugin.version` and the compact `plugin_version`) and `desk_doctor`'s preview answer (`mcp_version` is now `desk_version`) all say the release. The runtime package's own version stays an internal detail for the runtime pack and is no longer reported to agents.
+
+The factory reads the same version. In the MCP server, which runs from a source mirror, the factory's own version used to be unreadable (null); it is now the real release. So orphan-pass findings become version-aware, and `orphan_derive_failed` can now appear in status. The factory's loop health, the stale-Desk check, the problem filer and the feedback store all use the one resolver, which reads `DESK_PLUGIN_ROOT`, then `CLAUDE_PLUGIN_ROOT`. A feedback note keeps `unknown` as its preview version when the release cannot be read, so the participant's note is kept.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.219 — 2026-10-07
 
 The factory flush now withdraws a delivered waste label when its session's facts no longer bind the label's job, so the store stops holding labels for sessions that are not on their task's timeline (the site's `labels_mismatch` alarm). A session bound to a job by an older binder and dropped from it by a later derivation left its label in the store for good, because nothing withdrew a label. Every flush now compares each delivered label with the session's local facts (`jobs` only, since the site builds a job's sessions from `jobs`, not from an outcome the session signed off) and sends the delete through the ordinary retraction, so the same consent, routing, refusal and "only what this machine delivered" rules apply. It fails closed: a session whose facts are missing, unreadable, linked or in a newer format is never withdrawn, and a delivered label with no recorded path is found by publishing it again and withdrawn only when the store holds exactly those bytes. Once the delete has merged, the label is held back locally as `job_unbound` (the local file stays) and is released if the session binds the job again. The label's session keeps its facts and its other files.

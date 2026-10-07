@@ -6,7 +6,7 @@ import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "../db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
-import { packageMetadata as packageJson } from "../package-metadata.js"
+import { deskVersion } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
@@ -84,7 +84,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
         relative_path: path.posix.join("desks", path.basename(effectiveRoot)),
       }
   const root = rootStatus(deskRoot, statusContext.root)
-  const runtime = runtimeStatus(statusContext.runtime ?? {})
+  const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
   const localDb = root.valid
     ? inspectLocalDb(root.path)
     : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
@@ -469,12 +469,12 @@ function rootStatus(deskRoot, rootContext = {}) {
   }
 }
 
-function runtimeStatus(runtime) {
+function runtimeStatus(runtime, env) {
   const sourceMirrorPath = runtime.source_mirror_path ?? runtime.sourceMirrorPath ?? null
   return {
     plugin: {
-      name: packageJson.name,
-      version: packageJson.version,
+      name: "desk",
+      version: deskVersion(env),
     },
     node: {
       platform: process.platform,
