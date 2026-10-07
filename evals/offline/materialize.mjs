@@ -56,6 +56,11 @@ export async function materializeFixture({ manifest, fixtureId, sourceRoot, root
   git(["config", "user.name", gitIdentity.committerName]);
   git(["config", "user.email", gitIdentity.committerEmail]);
   git(["config", "core.hooksPath", "/dev/null"]);
+  // Every `git commit` (the actor's, and a test's) otherwise starts `git maintenance run --auto --detach`: a background
+  // process that takes `.git/objects/maintenance.lock` and removes it again. It outlives the commit, so the inventory
+  // walk that follows can list the lock and find it gone (`lstat` ENOENT). Nothing here wants background upkeep.
+  git(["config", "maintenance.auto", "false"]);
+  git(["config", "gc.auto", "0"]);
   git(["add", "--all"]);
   git(["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Seed fixed evaluation fixture"]);
   const baseCommit = git(["rev-parse", "HEAD"]);

@@ -230,6 +230,22 @@ test("T14 npm lifecycle and project config cannot replace an apparently maintain
   }
 });
 
+// Regression for a flake: a commit in a fixture repo started a detached `git maintenance run --auto`, which holds
+// `.git/objects/maintenance.lock` briefly; an inventory walk that raced it failed with `lstat` ENOENT on that lock.
+test("a commit in a materialized fixture repo starts no background git maintenance", async () => {
+  const f = await fixture("retry-policy-v1");
+  assert.equal(command(f, "git", ["config", "--get", "maintenance.auto"]), "false");
+  assert.equal(command(f, "git", ["config", "--get", "gc.auto"]), "0");
+  const trace = path.join(f.base, "trace2.json");
+  fs.writeFileSync(path.join(f.roots.actor, "src/trace-me.txt"), "x\n");
+  command(f, "git", ["add", "src/trace-me.txt"]);
+  const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Trace commit"], { cwd: f.roots.actor, encoding: "utf8", env: { PATH: process.env.PATH, HOME: f.base, GIT_TRACE2_EVENT: trace, GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@a", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@a" } });
+  assert.equal(result.status, 0, result.stderr);
+  const children = fs.readFileSync(trace, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)).filter(event => event.event === "child_start");
+  assert.deepEqual(children.filter(event => event.argv.includes("maintenance") || event.argv.includes("gc")), []);
+  assert.equal(fs.existsSync(path.join(f.roots.actor, ".git/objects/maintenance.lock")), false);
+});
+
 test("T14 hidden assertions stay parent-only, including zero, default and invalid input comparisons", async () => {
   const f = await fixture("retry-policy-v1");
   const initial = await executeHeldOutCheck({ ...f.options, checkId: "discussion-no-edit" });
