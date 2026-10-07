@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.218 — 2026-10-07
+
+Factory: a job's lead time is never shorter than the span of its own recorded segments. When the task card's dates give less (an adopted card created and closed at nearly the same moment, or a job that kept working after its first done), the lead time is raised to that span and published as partial with the reason `card_dates_shorter_than_work`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.217 — 2026-10-07
 
 Two fixes to the steps in `task_update`. The `step_note` that says which steps are "now ready" is now read from the card after the refresh, so a step the call added and the refresh then found already delivered is no longer called ready, and a step the refresh unblocked still is.
