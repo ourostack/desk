@@ -89,8 +89,9 @@ function existsAt({ git, ref, file }) {
 
 // Installed dependencies are gitignored, so committing them takes `git add -f`; one such commit made the version check
 // list a million characters of paths. Only `node_modules` is refused: `vendor/` is not ignored and a tracked one is
-// legitimate (evals/offline/vendor/gauntlet is a reviewed upstream copy with its license).
-const FORBIDDEN_TRACKED = /(^|\/)node_modules\//u;
+// legitimate (evals/offline/vendor/gauntlet is a reviewed upstream copy with its license). A symlink or submodule
+// named node_modules is listed as the bare path, so the name may end the path as well as start a directory.
+const FORBIDDEN_TRACKED = /(^|\/)node_modules(\/|$)/u;
 
 function checkNoTrackedDependencies(git) {
   const tracked = git(["ls-files", "-z"]).split("\0").filter((file) => FORBIDDEN_TRACKED.test(file));
