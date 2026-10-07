@@ -1691,7 +1691,7 @@ export async function outdatedLabelRecords(env, store, { ownVersion = ownDeskVer
       found.push({ key: `labels/${job}/${file}`, session: file.slice(0, -".json".length), labels, record: path.join(jobDir, file) })
     }
   }
-  return found.sort((a, b) => (a.key < b.key ? -1 : 1))
+  return found.sort((a, b) => a.key.localeCompare(b.key))
 }
 
 /**
