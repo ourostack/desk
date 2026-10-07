@@ -103,7 +103,7 @@ import { LIMITS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js
 export const BRIEF_SCHEMA = "desk.factory.evaluator-brief/1"
 export const EVALUATOR_SKILL = "desk:factory-evaluator"
 /** The rubric `skills/factory-evaluator/SKILL.md` states; labels carry it as `evaluator.rubric`. */
-export const RUBRIC_VERSION = "2"
+export const RUBRIC_VERSION = "3"
 
 const DESK_VERSION = /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-(?:alpha|beta|rc)\.[0-9]{1,4})?$/u
 // The session ID an outbox file name (`<host>-<session_id>.json`) carries.

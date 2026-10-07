@@ -5,7 +5,7 @@ description: For `desk:observer` labeling the waste in a finished job's sessions
 
 # Label a finished job's waste
 
-Rubric version: 2
+Rubric version: 3
 
 You are a fresh `observer` with none of the working agent's context. Desk gives you one brief file per session of a finished job. For each brief, read the evidence, label the session's stretches, and write labels the factory can publish. Your labels are evidence for the job's report and for kaizen; they are never a verdict on anyone.
 

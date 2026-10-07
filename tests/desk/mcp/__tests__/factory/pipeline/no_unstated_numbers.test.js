@@ -1,6 +1,6 @@
 // The last check of the number-states package: no number the pipeline writes lacks its state.
 //
-// The test builds three stores and walks every JSON file under `jobs/` and `rollups/` of each: the two checked-in fixture stores
+// The test builds three stores and walks every JSON file under `jobs/` (the per-session swimlane files under `jobs/<job>/` too) and `rollups/` of each: the two checked-in fixture stores
 // (published facts `/1`, read through the legacy reader) and one store freshly derived from the three hosts' fixtures (`/2`).
 // Every numeric leaf must sit inside a number object (`class` and `state`), inside a rollup stat or totals leaf (`n`, `N`, `state`),
 // or on `STRUCTURAL`, where each entry says why the number needs no state. A new numeric leaf outside all three fails the test.
@@ -8,7 +8,7 @@
 import "../../_isolated_env.mjs"
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -64,6 +64,17 @@ const STRUCTURAL = Object.freeze([
   ["job/timeline/agents/[]/n", "a worker number, an identifier"],
   ["job/timeline/agents/[]/parent", "the worker number of a worker's parent, an identifier; null for the main agent"],
   ["job/timeline/prs/[]/number", "a pull request number, an identifier"],
+  ["job/timeline/prs/[]/at_ms", "when a pull request was opened, on the job clock; absent when the facts carry no time for it (a public desk's never do)"],
+  ["job/timeline/human_turns/[]/at_ms", "when a human prompt arrived, on the job clock; a turn that cannot be placed on this job is not listed"],
+  ["job/timeline/human_turns/[]/window_ms", "the time from the agent's stop (or the previous prompt) to this prompt, published in the facts; null for the first prompt"],
+  ["session/offset_ms", "where the session starts on the job clock; a session with no job offset has no swimlane file"],
+  ["session/end_ms", "where the session ends on the job clock, its offset plus its published span"],
+  ["session/intervals/[]/start_ms", "an interval time on the job clock: where it sits, not a measure; an interval that was not recorded has no entry"],
+  ["session/intervals/[]/end_ms", "an interval time on the job clock: where it sits, not a measure; an interval that was not recorded has no entry"],
+  ["session/intervals/[]/worker", "a worker number, an identifier"],
+  ["session/stretches/[]/start_ms", "where a labeled stretch starts on the job clock, copied from the labels; an unlabeled span has no stretch"],
+  ["session/stretches/[]/end_ms", "where a labeled stretch ends on the job clock, copied from the labels; an unlabeled span has no stretch"],
+  ["session/stretches/[]/evidence/[]", "an index into the file's own interval list, naming the interval a stretch cites"],
   ["job/timeline/prs/[]/worker", "the worker number that opened the pull request, an identifier; absent when the facts do not name one"],
   ["job/timeline/lead_window/start_ms", "where the lead window starts on the job clock; the window carries the lead time's own state and reasons"],
   ["job/timeline/lead_window/end_ms", "where the lead window ends on the job clock; the window carries the lead time's own state and reasons"],
@@ -154,16 +165,27 @@ function matches(pattern, segments) {
 // ---------------------------------------------------------------------------
 
 const isNumber = (value) => typeof value === "number"
+// A swimlane file's stretches are labels, whose `class` is the label's class (value, support, muda, unknown), not a number class.
+const isLabelStretch = (kind, segments) => kind === "session" && segments.join("/") === "stretches/[]"
 const isNumberObject = (node) => Object.hasOwn(node, "class")
 const isStat = (node) => Number.isInteger(node.n) && Number.isInteger(node.N) && Object.hasOwn(node, "state")
 
-/** Every JSON file under `jobs/` and `rollups/` of a build output, as `{ kind, name, value }`. */
+/**
+ * Every JSON file under `jobs/` and `rollups/` of a build output, as `{ kind, name, value }`, including each job's per-session swimlane
+ * files under `jobs/<job>/` (kind `session`), which are published next to the job files.
+ */
 function outputJson(out) {
   const found = []
+  const read = (file) => JSON.parse(readFileSync(file, "utf8"))
   for (const dir of ["jobs", "rollups"]) {
     for (const name of readdirSync(path.join(out, dir)).sort()) {
+      const at = path.join(out, dir, name)
+      if (dir === "jobs" && statSync(at).isDirectory()) {
+        for (const session of readdirSync(at).sort()) found.push({ kind: "session", name: `${dir}/${name}/${session}`, value: read(path.join(at, session)) })
+        continue
+      }
       if (!name.endsWith(".json")) continue
-      found.push({ kind: dir === "jobs" ? "job" : `rollups/${name}`, name: `${dir}/${name}`, value: JSON.parse(readFileSync(path.join(out, dir, name), "utf8")) })
+      found.push({ kind: dir === "jobs" ? "job" : `rollups/${name}`, name: `${dir}/${name}`, value: read(at) })
     }
   }
   return found
@@ -180,7 +202,7 @@ function walk(file) {
     if (Array.isArray(node)) {
       node.forEach((entry) => visit(entry, [...segments, "[]"]))
     } else if (node !== null && typeof node === "object") {
-      if (isNumberObject(node)) {
+      if (isNumberObject(node) && !isLabelStretch(file.kind, segments)) {
         seen.numberObjects.push({ node, at: segments.join("/") })
         for (const [key, child] of Object.entries(node)) {
           if (key === "state" || key === "reasons") continue
@@ -308,6 +330,13 @@ async function derivedStore() {
   const claudeAgents = derived.claude.agents.map((agent) => agent.n)
   assert.ok(claudeAgents.length >= 2, "the Claude fixture has subagents, so a job can own only some of its workers")
   const first = bound(derived.claude, JOB_SPLIT, [0])
+  // The card was created a second before the session started, so the job clock places the session, its human turns and its pull
+  // requests, and the walk sees those timeline numbers.
+  first.jobs[0].task_created_at = new Date(Date.parse(derived.claude.session.started_at) - 1000).toISOString()
+  // The Claude fixture records one prompt, the first, whose window is null; a second prompt after the agent stopped gives the walk a
+  // human turn with a window.
+  const promptAt = Date.parse(derived.claude.human_turns[0].at) + 2000
+  first.human_turns = [...derived.claude.human_turns, { at: new Date(promptAt).toISOString(), basis: "after_stop", window_ms: 1500, prompt_class: "s", output_class: "s" }]
   // The controller's whole span is this job's, so its turns can be placed on it and its attention is a figure.
   first.jobs[0].segments = [{ start_ms: 0, end_ms: Math.floor(Date.parse(derived.claude.session.derived_through) - Date.parse(derived.claude.session.started_at)) }]
   const second = bound(derived.claude, JOB_REST, claudeAgents.slice(1))
@@ -350,6 +379,7 @@ test("the walk sees the files it is meant to see", () => {
   for (const [label, out] of STORES) {
     const kinds = outputJson(out).map((file) => file.kind)
     assert.ok(kinds.filter((kind) => kind === "job").length >= 2, `${label}: job files`)
+    assert.ok(kinds.includes("session"), `${label}: per-session swimlane files`)
     for (const name of ["coverage", "measures", "muda", "tool-kinds", "totals"]) assert.ok(kinds.includes(`rollups/${name}.json`), `${label}: ${name}`)
   }
   assert.deepEqual(fresh.files.map((published) => published.schema), Array(3).fill("desk.factory.published/2"))

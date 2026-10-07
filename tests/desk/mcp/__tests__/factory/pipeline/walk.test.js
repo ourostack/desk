@@ -356,6 +356,8 @@ test("the causes rollup counts each session's time once, largest first, and its 
   const pareto = computeRollups({ records, sessions: [session], labels }).muda.groupings.overall.all
   assert.equal(causes.total_ms, pareto.muda_time_ms - pareto.agents_working_unlabeled_ms.value)
   assert.equal(stackupRollup([]).jobs.length, 0)
+  // The stack-up says its totals are wall-clock time inside the lead window, so no reader expects them to match the muda rollup.
+  assert.equal(stackupRollup([]).basis, "wall_clock_in_lead_window")
 })
 
 test("a figure that is not measured must name a reason", () => {

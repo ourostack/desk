@@ -104,7 +104,7 @@ test("every Desk-shaped plugin version and every rubric from 1 to 999 passes", (
     for (const stretch of value.stretches) stretch.evaluator_version = version
     assert.deepEqual(validateLabels(value), { ok: true, errors: [] }, version)
   }
-  for (const rubric of ["1", "9", "10", "999"]) {
+  for (const rubric of ["1", "2", "3", "9", "10", "999"]) {
     const value = golden()
     value.evaluator.rubric = rubric
     assert.deepEqual(validateLabels(value), { ok: true, errors: [] }, rubric)

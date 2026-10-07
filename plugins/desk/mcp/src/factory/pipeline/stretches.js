@@ -180,6 +180,9 @@ export function correctStretches(stretches, session, binding) {
     if (stretch.class !== "muda" || stretch.waste !== "waiting") return [piece(stretch, {}, stretch)]
     const evidence = evidenceIntervals(session, stretch.evidence)
     const cause = waitedOn(evidence)
+    // The workers the evidence shows waiting do not count as working against their own wait. The turn that holds a long or failing
+    // tool call spans the whole wait, so counting it would split away every `long_tool_call` and `tool_failure` stretch. Only the
+    // other workers of the job, such as a subagent running while the main agent waits, make part of a wait agent work.
     const waiting = new Set(evidence.filter((interval) => waitCauseOf(interval) !== null).map((interval) => interval.agent))
     const work = union(bound.filter((interval) => !waiting.has(interval.agent) && interval.start_ms < stretch.end_ms && interval.end_ms > stretch.start_ms))
     const { inside, outside } = splitBySpans(stretch.start_ms, stretch.end_ms, work)

@@ -41,7 +41,10 @@
 //     working. Stretches outside the window (before the card, after done)
 //     are not in it. A session with no job offset cannot be placed: its time
 //     reads as no session, and the segments that depend on placement are
-//     partial (`job_offsets_unavailable`).
+//     partial (`job_offsets_unavailable`). The document says so in
+//     `basis: "wall_clock_in_lead_window"`: its waste totals are wall-clock
+//     time inside the lead window, so they do not match the muda rollup,
+//     which sums each session's labeled time.
 //   - Labeled figures are measured only when every session of the job is
 //     labeled; partial (`partial`: only some sessions supplied it) when
 //     some are; unavailable (`not_labeled`, or `open_job` for a job that is
@@ -73,6 +76,8 @@ export const GAP_WAITED_ON = Object.freeze(["next_prompt", "api_retry", "queue_b
 const STACKUP_CLASSES = Object.freeze(["value", "support"])
 const STACKUP_WASTES = Object.freeze([...LABEL_WASTES, UNKNOWN_LABEL])
 
+// What a stack-up segment measures (see the header).
+const STACKUP_BASIS = "wall_clock_in_lead_window"
 const MS_PER_HOUR = 3_600_000
 const TOP_CAUSES = 3
 const SHARED = "labels_from_shared_session"
@@ -371,6 +376,7 @@ function taskRow(timeline, formulas, window, stretches, coverage, active, walk, 
 export function stackupRollup(walks) {
   return {
     schema: ROLLUPS_SCHEMA,
+    basis: STACKUP_BASIS,
     burst_idle_gap_ms: BURST_IDLE_GAP_MS,
     classes: STACKUP_CLASSES,
     wastes: STACKUP_WASTES,

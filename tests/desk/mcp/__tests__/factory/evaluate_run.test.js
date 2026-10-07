@@ -171,7 +171,7 @@ test("the brief builder's caller contracts throw without naming a value", () => 
 })
 
 test("the rubric the skill states is the rubric version labels carry", () => {
-  assert.equal(RUBRIC_VERSION, "2")
+  assert.equal(RUBRIC_VERSION, "3")
   assert.match(SKILL, new RegExp(`^Rubric version: ${RUBRIC_VERSION}$`, "mu"))
   assert.match(SKILL, /^name: factory-evaluator$/mu)
   assert.equal(EVALUATOR_SKILL, "desk:factory-evaluator")
@@ -222,7 +222,7 @@ test("labels for another job or session, or from another evaluator version or ru
   other.job = "5e6f708192a3b4c5d6e7f8091a2b3c4d"
   other.session = "4c1d2e6f-9b2e-4d3f-8a4b-2c3d4e5f6071"
   other.evaluator.plugin_version = "3.2.0-alpha.41"
-  other.evaluator.rubric = "3"
+  other.evaluator.rubric = "2"
   assert.deepEqual(acceptEvaluation(brief(), bytes(other)).errors, [
     { code: "job_mismatch", path: "job" },
     { code: "session_mismatch", path: "session" },
@@ -461,10 +461,10 @@ test("a brief written before the rubric changed cannot let /2 labels through as 
   await seed(env)
   await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
   const stale = labels()
-  stale.evaluator.rubric = "1"
+  stale.evaluator.rubric = "2"
   const { brief } = await answer(env, stale)
   const written = JSON.parse(await fs.readFile(brief, "utf8"))
-  await fs.writeFile(brief, JSON.stringify({ ...written, evaluator: { ...written.evaluator, rubric: "1" } }))
+  await fs.writeFile(brief, JSON.stringify({ ...written, evaluator: { ...written.evaluator, rubric: "2" } }))
   assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), {
     job: JOB, sessions: [{ session: SESSION, result: "rejected", errors: [{ code: "evaluator_mismatch", path: "evaluator.rubric" }] }], request: "kept",
   })
