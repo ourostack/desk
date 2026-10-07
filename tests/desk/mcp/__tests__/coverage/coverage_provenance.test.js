@@ -1,10 +1,14 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import TestExclude from "test-exclude"
+import { DETECT_CHILD_SOURCE } from "../../../../../plugins/desk/mcp/src/coverage/detect-child.js"
+import { parseMigration, pendingMigrations } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
 import { runCoverageCommand } from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
 
 const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
@@ -191,6 +195,80 @@ test("the producer's non-perfect aggregate is preserved rather than replaced wit
   assert.deepEqual(JSON.parse(run.reportBytes), summary)
 })
 
+// The migration Detect scripts run under a fixed production budget; instrumenting them makes a startup test depend on how many files the change touches.
+test("the registration skips only a migration Detect child, and registers the maintained loader for every other process", t => {
+  const run = runFixture(t, { [sourceFile]: metrics(), total: metrics() })
+  const { args } = run.invocation
+  const registrationUrl = args[args.indexOf("--import") + 1]
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-coverage-registration-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const marker = path.join(dir, "registered")
+  const fakeLoader = path.join(dir, "loader.mjs")
+  const script = path.join(dir, "script.mjs")
+  writeFileSync(fakeLoader, `import { writeFileSync } from "node:fs"\nexport async function initialize() { writeFileSync(${JSON.stringify(marker)}, "x") }\n`)
+  writeFileSync(script, "")
+  const registration = decodeURIComponent(registrationUrl.replace("data:text/javascript,", "")).replace(/register\(".*"\);$/u, `register(${JSON.stringify(pathToFileURL(fakeLoader).href)});`)
+  const registers = (argv, env) => {
+    rmSync(marker, { force: true })
+    const { status, stderr } = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(registration)}`, script, ...argv], { env: { PATH: process.env.PATH, ...env }, encoding: "utf8" })
+    assert.equal(status, 0, stderr)
+    return existsSync(marker)
+  }
+  assert.equal(registers(["--detect"], { DESK_PLUGIN_ROOT: dir }), false, "a migration Detect child run by the driver is not instrumented")
+  assert.equal(registers(["--detect"], {}), true, "a direct --detect run by its own test is still instrumented")
+  assert.equal(registers([], { DESK_PLUGIN_ROOT: dir }), true, "a process that is not Detect is still instrumented")
+})
+
+test("the gate hands its test process no DESK_PLUGIN_ROOT, so only the migration driver can mark a Detect child", t => {
+  const run = runFixture(t, { [sourceFile]: metrics(), total: metrics() }, { env: { DESK_PLUGIN_ROOT: "/exported/by/the/caller", KEPT: "yes" } })
+  assert.equal(Object.hasOwn(run.invocation.options.env, "DESK_PLUGIN_ROOT"), false)
+  assert.equal(run.invocation.options.env.KEPT, "yes")
+})
+
+test("the offline registration helper leaves a migration Detect child uninstrumented and registers every other process", t => {
+  const helper = pathToFileURL(path.join(mcpRoot, "../../../evals/offline/__tests__/helpers/register-coverage.mjs")).href
+  const dir = mkdtempSync(path.join(tmpdir(), "desk-offline-registration-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const detect = spawnSync(process.execPath, ["--input-type=module", "-e", "import(process.argv[1]).then(() => console.log(process.env.NODE_OPTIONS ?? \"\"))", helper, "--detect"], {
+    env: { PATH: process.env.PATH, OFFLINE_COVERAGE_PACKAGE_ROOT: mcpRoot, DESK_PLUGIN_ROOT: dir }, encoding: "utf8",
+  })
+  assert.equal(detect.status, 0, detect.stderr)
+  assert.doesNotMatch(detect.stdout, /register-coverage\.mjs/u, "a Detect child neither re-adds the helper to NODE_OPTIONS nor registers the hooks")
+  const other = spawnSync(process.execPath, ["--input-type=module", "-e", "import(process.argv[1]).then(() => console.log(process.env.NODE_OPTIONS ?? \"\"))", helper], {
+    env: { PATH: process.env.PATH, OFFLINE_COVERAGE_PACKAGE_ROOT: mcpRoot, DESK_PLUGIN_ROOT: dir }, encoding: "utf8",
+  })
+  assert.equal(other.status, 0, other.stderr)
+  assert.match(other.stdout, /--import=\S*register-coverage\.mjs/u, "any other process is still instrumented")
+})
+
+// The gate exempts a process by `--detect` plus DESK_PLUGIN_ROOT. If the driver or a Detect block stops using them, the exemption silently stops applying and startup tests depend on PR size again.
+test("every migration Detect block that runs node passes --detect under $DESK_PLUGIN_ROOT, and the driver sets DESK_PLUGIN_ROOT for it", async t => {
+  const migrations = path.join(mcpRoot, "..", "migrations")
+  const files = readdirSync(migrations).filter(file => /^\d.*\.md$/u.test(file))
+  let nodeDetects = 0
+  for (const file of files) {
+    const migration = parseMigration(readFileSync(path.join(migrations, file), "utf8"), file.replace(/\.md$/u, ""))
+    assert.ok(migration, `${file} parses`)
+    const nodeLines = migration.blocks.Detect.split("\n").filter(line => /^\s*node\s/u.test(line))
+    for (const line of nodeLines) {
+      nodeDetects += 1
+      assert.match(line, /"\$DESK_PLUGIN_ROOT\//u, `${file}: Detect runs a script under $DESK_PLUGIN_ROOT`)
+      assert.match(line, /\s--detect(\s|$)/u, `${file}: Detect passes --detect`)
+    }
+  }
+  assert.ok(nodeDetects >= 2, "the tidy and status-normalize Detect blocks are present")
+  const root = mkdtempSync(path.join(tmpdir(), "desk-detect-driver-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(path.join(root, "migrations"))
+  const seen = path.join(root, "seen")
+  writeFileSync(path.join(root, "migrations", "01-probe.md"), [
+    "---", "id: 01-probe", "description: probe", "safety: safe", "needs_restart: false", "---", "", "## Detect", "", "```bash",
+    `printf '%s' "$DESK_PLUGIN_ROOT" > '${seen}'; exit 1`, "```", "", "## Safety check", "", "```bash", "exit 0", "```", "", "## Migrate", "", "```bash", "exit 0", "```", "", "## Announce", "", "Done.", "",
+  ].join("\n"))
+  await pendingMigrations({ pluginRoot: root, env: { PATH: process.env.PATH }, cwd: root, budgetMs: 30_000 })
+  assert.equal(readFileSync(seen, "utf8"), root)
+})
+
 test("an absent producer aggregate is not manufactured from native output", t => {
   const run = runFixture(t, { [sourceFile]: metrics() })
   assert.equal(run.result, 0)
@@ -213,7 +291,7 @@ test("the actual producer invocation binds the maintained loader, dependency cwd
   assert.equal(args[importIndex - 1], process.execPath)
   const registration = decodeURIComponent(args[importIndex + 1].replace("data:text/javascript,", ""))
   const loader = pathToFileURL(path.join(mcpRoot, "node_modules", "@istanbuljs", "esm-loader-hook", "index.js")).href
-  assert.equal(registration, `import { register } from "node:module"; register(${JSON.stringify(loader)});`)
+  assert.equal(registration, `import { register } from "node:module"; const isMigrationDetectChild = ${DETECT_CHILD_SOURCE}; if (!isMigrationDetectChild(process.argv, process.env)) register(${JSON.stringify(loader)});`)
   assert.equal(options.env.NODE_OPTIONS, `--import=${args[importIndex + 1]}`)
   assert.equal(options.env.NODE_PATH, path.join(mcpRoot, "node_modules"))
   // The second preload is the global test setup: a temporary HOME and XDG folders for every test process.

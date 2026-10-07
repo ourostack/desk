@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process"
+import { DETECT_CHILD_SOURCE } from "./detect-child.js"
 import {
   copyFileSync,
   existsSync,
@@ -446,7 +447,8 @@ function runInstrumentedTests({
   const offline = resolveOfflineEvaluationScope({ repoRoot, requiredFiles })
   const configPath = writeProducerConfig({ repoRoot, requiredFiles, offline, reportDirectory, rawDirectory, silent: Boolean(testFiles), fsOps })
   const loader = pathToFileURL(require.resolve("@istanbuljs/esm-loader-hook")).href
-  const registration = `import { register } from "node:module"; register(${JSON.stringify(loader)});`
+  // Migration Detect children stay uninstrumented (see detect-child.js); the registration inlines the one shared predicate.
+  const registration = `import { register } from "node:module"; const isMigrationDetectChild = ${DETECT_CHILD_SOURCE}; if (!isMigrationDetectChild(process.argv, process.env)) register(${JSON.stringify(loader)});`
   // The repository's own offline registration helper is a superset of this registration: it installs the same maintained hook and additionally gives the source-pinned TypeScript leaves a module format that hook will instrument.
   const registrationUrl = offline.registrationPath
     ? pathToFileURL(offline.registrationPath).href
@@ -476,7 +478,7 @@ function runInstrumentedTests({
     // The whole suite's TAP output passed spawnSync's 1 MiB default once the suite grew; a truncated child is killed and fails the gate with no message.
     maxBuffer: COVERAGE_OUTPUT_MAX_BYTES,
     env: {
-      ...env,
+      ...envWithoutDriverMarker(env),
       // Ordinary Node descendants do not inherit the parent's execArgv.
       NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --import=${registrationUrl}`.trim(),
       NODE_PATH: [path.join(defaultMcpRoot, "node_modules"), env.NODE_PATH].filter(Boolean).join(path.delimiter),
@@ -484,6 +486,12 @@ function runInstrumentedTests({
       DESK_COVERAGE_RUNNER_CHILD: "1",
     },
   })
+}
+
+// Only the migration driver may set DESK_PLUGIN_ROOT for a child; an exported value here would exempt the tests' own direct runs from instrumentation.
+function envWithoutDriverMarker(env) {
+  const { DESK_PLUGIN_ROOT: _removed, ...rest } = env
+  return rest
 }
 
 function resolveOfflineEvaluationScope({ repoRoot, requiredFiles }) {
