@@ -5,7 +5,7 @@ description: For `desk:observer` labeling the waste in a finished job's sessions
 
 # Label a finished job's waste
 
-Rubric version: 2
+Rubric version: 3
 
 You are a fresh `observer` with none of the working agent's context. Desk gives you one brief file per session of a finished job. For each brief, read the evidence, label the session's stretches, and write labels the factory can publish. Your labels are evidence for the job's report and for kaizen; they are never a verdict on anyone.
 
@@ -43,7 +43,7 @@ A stretch is a span `[start_ms, end_ms)` of the session in which one class holds
 - **`muda`**: waste. Give its `waste`, one of the eight:
   - `defects`: failures and their rework, such as a failed command, a broken build, a wrong change undone or a rejected review.
   - `overproduction`: work nobody asked for or used, such as an unrequested feature or a report no one reads.
-  - `waiting`: work stopped on something, such as a human answer, a permission prompt, CI or an API retry.
+  - `waiting`: work stopped on something, such as a human answer, a permission prompt, CI or an API retry. If any job worker is working, it is not `waiting`: label that work.
   - `non_utilized_talent`: capability left unused, such as doing by hand what an available tool or skill does, or not delegating what could run in parallel.
   - `transportation`: moving work between places without changing it, such as copying context between sessions or re-handing work over.
   - `inventory`: work started and left unfinished or queued, such as open branches, stale drafts or half-done tasks.
@@ -71,7 +71,7 @@ Every stretch cites at least one evidence range, and every range is an interval'
 
 ## Write labels, nothing else
 
-Write exactly this shape to `output`, and nothing else:
+Write exactly this shape to `output`:
 
 ```json
 {"schema":"desk.factory.labels/2","job":"<job>","session":"<session id>","evaluator":{"plugin_version":"<from the brief>","model":"<your model ID>","rubric":"<from the brief>"},"stretches":[{"start_ms":0,"end_ms":1000,"class":"muda","waste":"waiting","mura":false,"muri":false,"evidence":[[0,1000]],"confidence":"high","evaluator_version":"<from the brief>"}],"unavailable":[]}

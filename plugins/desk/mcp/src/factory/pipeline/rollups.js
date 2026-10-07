@@ -67,6 +67,14 @@
 //     partial or not labeled, never the whole session and never a zero.
 //     Each Pareto reports how many labeled sessions it summed and how many
 //     of them several jobs share.
+//   - Every existing total keeps its meaning: the `muda_time` measures and
+//     the Pareto rows sum the labels as the evaluator wrote them. Each
+//     Pareto adds the corrected figures (`stretches.js` `correctStretches`:
+//     the part of a `waiting` stretch during which a worker of the job was
+//     working is not waiting waste) under their own keys,
+//     `waiting_corrected_ms` and `agents_working_unlabeled_ms`, summed as
+//     the rows are (each session's time once). The two add up to the
+//     `waiting` row.
 //   - `search_waste` (milestone 4's organization signal) and the task card's
 //     `kind` are not in published facts (`desk.factory.published/1`), so
 //     `search_waste` is unavailable for every job (`not_in_published_facts`)
@@ -88,6 +96,7 @@
 import { LABEL_CONFIDENCE, LABELS_SCHEMAS, LABEL_WASTES, UNKNOWN_LABEL, checkLabelsAgainstFacts, compareVersions as compareEvaluatorVersions } from "../label-schema.js"
 import { covered, retryCoverage, splitSessions } from "./formulas.js"
 import { outcomeSections } from "./report.js"
+import { AGENTS_WORKING, UNLABELED_CLASS, correctStretches } from "./stretches.js"
 import { bindingsOverlap } from "./timeline.js"
 import { NUMBER_STATES, fieldsFeeding, withState } from "./number-states.js"
 import { reasonText } from "./report.js"
@@ -231,7 +240,8 @@ function clipStretches(stretches, spans) {
  * after the labels merged can leave them `evidence_unmatched`, for example),
  * `share_unknown` when the facts do not say which part of the session
  * was the job's, or `outside_share` when the labels have stretches but none
- * inside the job's share.
+ * inside the job's share. Each used entry also carries, not enumerable, its `corrected` stretches (`correctStretches`).
+ * `sharedLabels` holds the `<job>/<session id>` keys whose labels come from a shared session (see `sharedLabels`).
  */
 export function resolveLabels(labels, sessions) {
   const sessionsById = new Map()
@@ -241,6 +251,7 @@ export function resolveLabels(labels, sessions) {
   }
   const byJobSession = new Map()
   const reasons = []
+  const usedBySession = new Map()
   for (const entry of labels) {
     const matches = sessionsById.get(entry.session) ?? []
     if (entry.unavailable.includes("facts_missing")) reasons.push("facts_missing")
@@ -254,10 +265,35 @@ export function resolveLabels(labels, sessions) {
       else if (share === null) reasons.push("share_unknown")
       // Stretches, none inside the job's share: the evaluator labeled other jobs' time, which is no reading of this job, never a zero.
       else if (entry.stretches.length > 0 && clipped.length === 0) reasons.push("outside_share")
-      else byJobSession.set(`${entry.job}/${entry.session}`, { ...entry, stretches: clipped })
+      else {
+        const binding = matches[0].jobs.find((candidate) => candidate.job === entry.job)
+        const used = { ...entry, stretches: clipped }
+        // The corrected stretches ride along, not enumerable, so every existing total keeps reading the labels as written.
+        Object.defineProperty(used, "corrected", { value: correctStretches(clipped, matches[0], binding), enumerable: false })
+        byJobSession.set(`${entry.job}/${entry.session}`, used)
+        usedBySession.set(entry.session, [...(usedBySession.get(entry.session) ?? []), { entry, used, session: matches[0], binding, whole: clipped.length !== entry.stretches.length || clipped.some((stretch, index) => stretch.start_ms !== entry.stretches[index].start_ms || stretch.end_ms !== entry.stretches[index].end_ms) }])
+      }
     }
   }
-  return { files: labels.length, byJobSession, unused: countReasons(reasons, "files") }
+  return { files: labels.length, byJobSession, unused: countReasons(reasons, "files"), sharedLabels: sharedLabels(usedBySession) }
+}
+
+// The `<job>/<session id>` keys whose labels may describe another job's work: the session holds other jobs too, and either this job's
+// labels went beyond its own share (the evaluator labeled the whole session, so only the cut keeps other jobs' time out, and what is
+// left inside the share was judged without knowing whose it was) or another job's labels for the session are the same stretches. The
+// new rollups mark such a job's labeled figures partial (`labels_from_shared_session`); every existing total is unchanged. The test is
+// deliberately strict: any cut counts, even a stretch that runs a few milliseconds past the share, so a job that owns its labels can
+// read partial, but a shared one never reads whole.
+function sharedLabels(usedBySession) {
+  const keys = new Set()
+  for (const uses of usedBySession.values()) {
+    for (const use of uses) {
+      if (use.session.jobs.length < 2) continue
+      const same = uses.some((other) => other !== use && JSON.stringify(other.entry.stretches) === JSON.stringify(use.entry.stretches))
+      if (use.whole || same) keys.add(`${use.entry.job}/${use.entry.session}`)
+    }
+  }
+  return keys
 }
 
 const PARTLY = "host_records_partly"
@@ -296,7 +332,8 @@ function oneOrMixed(values) {
   return distinct.size === 1 ? [...distinct][0] : "mixed"
 }
 
-function pluginVersion(sources) {
+/** `pluginVersion(sources) -> version`: the one Desk version every session reports, else `mixed`, or `unknown` when any reports none. */
+export function pluginVersion(sources) {
   const perSession = sources.map((session) => {
     const versions = new Set(session.plugins.filter((plugin) => plugin.name === DESK_PLUGIN).map((plugin) => plugin.version))
     if (versions.size === 0) return "unknown"
@@ -347,7 +384,16 @@ function sessionWaste(entry) {
     if (recorded) confidence[stretch.waste][stretch.confidence] += duration
   }
   if (allVersions.size === 0) allVersions.add(entry.evaluator.plugin_version)
-  return { totals, confidence, versions, all_versions: [...allVersions], recorded, can_say_unknown: entry.schema !== LABELS_SCHEMAS[0] }
+  return { totals, confidence, versions, all_versions: [...allVersions], recorded, can_say_unknown: entry.schema !== LABELS_SCHEMAS[0], ...correctedWaiting(entry.corrected) }
+}
+
+// The corrected waiting time of one session's labels and the part the correction moved out of waste.
+function correctedWaiting(corrected) {
+  const sum = (test) => corrected.filter(test).reduce((total, stretch) => total + stretch.end_ms - stretch.start_ms, 0)
+  return {
+    waiting_corrected_ms: sum((stretch) => stretch.class === "muda" && stretch.waste === "waiting"),
+    agents_working_ms: sum((stretch) => stretch.class === UNLABELED_CLASS && stretch.reason === AGENTS_WORKING),
+  }
 }
 
 // The job's muda measures, and each labeled session's waste totals for the
@@ -474,9 +520,10 @@ function pareto(records) {
       const taken = covered.get(session.key) ?? []
       const remaining = session.labels.stretches.flatMap((stretch) => uncovered(stretch, taken))
       covered.set(session.key, mergeSpans([...taken, ...session.labels.stretches.map((stretch) => [stretch.start_ms, stretch.end_ms])]))
+      const corrected = session.labels.corrected?.flatMap((stretch) => uncovered(stretch, taken))
       const added = remaining.length === session.labels.stretches.length && remaining.every((piece, index) => piece === session.labels.stretches[index])
         ? session
-        : remaining.length > 0 ? sessionWaste({ ...session.labels, stretches: remaining }) : null
+        : remaining.length > 0 ? sessionWaste({ ...session.labels, stretches: remaining, corrected }) : null
       if (added !== null) {
         summed.push(added)
         addedBy.set(added, record.job)
@@ -493,7 +540,7 @@ function pareto(records) {
     sessions_labeled: bindingsPerSession.size,
     sessions_shared: [...bindingsPerSession.values()].filter((bindings) => bindings.some((left, index) => bindings.slice(index + 1).some((right) => bindingsOverlap(left, right)))).length,
   }
-  if (labeled.length === 0) return { ...base, muda_time_ms: null, wastes: [] }
+  if (labeled.length === 0) return { ...base, muda_time_ms: null, ...correctedFigures(base, []), wastes: [] }
   // Without a `/2` session nothing here could have said "unknown", so that row is left out rather than shown as a zero.
   const rowWastes = summed.some((session) => session.can_say_unknown) ? PARETO_WASTES : LABEL_WASTES
   const sums = Object.fromEntries(rowWastes.map((waste) => [waste, summed.reduce((sum, session) => sum + session.totals[waste], 0)]))
@@ -510,7 +557,19 @@ function pareto(records) {
     running += row.total_ms
     return { ...row, share: total === 0 ? null : row.total_ms / total, cumulative_share: total === 0 ? null : running / total }
   })
-  return { ...base, muda_time_ms: mudaTotal, wastes }
+  return { ...base, muda_time_ms: mudaTotal, ...correctedFigures(base, summed), wastes }
+}
+
+// The corrected waiting figures of a Pareto (see the header), with the Pareto's own count and state. No labeled job, or a session summed
+// without corrected stretches (built by hand), is no figure (`not_recorded`), never a zero.
+function correctedFigures(base, summed) {
+  const known = base.n > 0 && summed.every((session) => Object.hasOwn(session, "waiting_corrected_ms"))
+  const state = known ? base.state : "unavailable"
+  const excluded = base.jobs_excluded.map((entry) => entry.reason)
+  const missing = !known && (base.n > 0 || excluded.length === 0) ? ["not_recorded"] : []
+  const reasons = state === "measured" ? [] : [...new Set([...excluded, ...missing])].sort(compareText)
+  const figure = (key) => assertNamed({ state, ...(known ? { value: summed.reduce((sum, session) => sum + session[key], 0) } : {}), n: base.n, N: base.N, reasons })
+  return { waiting_corrected_ms: figure("waiting_corrected_ms"), agents_working_unlabeled_ms: figure("agents_working_ms") }
 }
 
 // A Pareto row's `evaluator_versions` and, when every label that speaks to it recorded one, its `confidence_ms` (see the header).
