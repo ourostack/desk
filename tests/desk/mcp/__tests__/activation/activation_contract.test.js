@@ -11,14 +11,14 @@ const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
 async function loadActivationContract() {
   const [schema, validator] = await Promise.all([
-    import(pathToFileURL(path.join(mcpRoot, "src", "activation", "schema.js"))),
-    import(pathToFileURL(path.join(mcpRoot, "src", "activation", "validate.js"))),
+    import("../../../../../plugins/desk/mcp/src/activation/schema.js"),
+    import("../../../../../plugins/desk/mcp/src/activation/validate.js"),
   ])
   return { ...schema, ...validator }
 }
 
 async function loadActivationFailures() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "failures.js")))
+  return import("../../../../../plugins/desk/mcp/src/activation/failures.js")
 }
 
 function validManifest(overrides = {}) {

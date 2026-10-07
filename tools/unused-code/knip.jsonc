@@ -10,15 +10,7 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   // Only unused code. Missing or unlisted dependencies, unresolved imports and binaries are a different question and stay out.
   // Class and enum members are left out because knip finds their uses through the types of installed dependencies, so the answer would change with what a machine has installed.
-  "include": ["files", "dependencies", "exports", "types", "nsExports", "nsTypes", "duplicates"],
-  // Exports in files that the coverage gate holds to 100% only when a pull request touches them, and that the gate measured below 100% in CI when this change touched them (readiness/journal.js, readiness/protocol.js, runtime/node-selection.js, util/rank.js, artifacts/performance-budgets.js). Making these exports private edits the file, so the gate then fails the pull request for coverage that is unrelated to the edit. Delete each entry when its file's coverage is fixed and the export is made private.
-  "ignoreIssues": {
-    "plugins/desk/mcp/src/artifacts/performance-budgets.js": ["exports"],
-    "plugins/desk/mcp/src/readiness/journal.js": ["exports"],
-    "plugins/desk/mcp/src/readiness/protocol.js": ["exports"],
-    "plugins/desk/mcp/src/runtime/node-selection.js": ["exports", "duplicates"],
-    "plugins/desk/mcp/src/util/rank.js": ["exports"]
-  },
+  "include": ["files", "dependencies", "unlisted", "unresolved", "exports", "types", "nsExports", "nsTypes", "duplicates"],
   "workspaces": {
     ".": {
       "entry": [
@@ -27,9 +19,12 @@
         "evals/boot-acceptance/*.mjs",
         "evals/offline/*.mjs",
         "evals/**/__tests__/**/*.{js,cjs,mjs}",
-        "tests/**/*.{js,cjs,mjs}"
+        "tests/**/*.{js,cjs,mjs}",
+        "plugins/desk/hooks/*.cjs",
+        "plugins/plain-language/hooks/*.cjs",
+        "plugins/superpowers/skills/**/*.{js,cjs}"
       ],
-      "project": ["scripts/**", ".github/scripts/**", "evals/**", "tests/**"],
+      "project": ["scripts/**", ".github/scripts/**", "evals/**", "tests/**", "plugins/desk/hooks/**", "plugins/plain-language/hooks/**", "plugins/superpowers/skills/**/*.{js,cjs}"],
       // evals/offline/vendor is a TypeScript package copied in from upstream, and the fixtures and cases are inputs the tests feed to the code under test, not Desk code.
       "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**"]
     },
@@ -38,25 +33,7 @@
         "bootstrap.cjs",
         "web.cjs",
         "web-proxy.cjs",
-        "scripts/*.{js,mjs}",
-        // dynamicallyLoaded: hooks and tests load these by a path string (`runtime("runtime/desk-health.js")` in hooks/boot-checks.cjs) or a computed URL (`import(`${FACTORY}x.js`)` in the tests), so knip cannot see the import.
-        "src/runtime/workspace-evidence.js",
-        "src/util/paths.js",
-        "src/runtime/bootstrap.js",
-        "src/runtime/runtime-deps.js",
-        "src/runtime/node-selection.js",
-        "src/activation/codex-smoke.js",
-        "src/activation/adapters/codex.js",
-        "src/activation/artifact-ledger.js",
-        "src/activation/support-matrix.js",
-        "src/activation/validate.js",
-        "src/artifacts/policy.js",
-        "src/artifacts/tombstones.js",
-        "src/snapshots/manifest.js",
-        "src/snapshots/restore.js",
-        "src/indexer/spec.js",
-        "src/factory/pipeline/formulas.js",
-        "src/factory/schema.js"
+        "scripts/*.{js,mjs}"
       ],
       "project": ["**/*.{js,cjs,mjs}"],
       "ignoreDependencies": [

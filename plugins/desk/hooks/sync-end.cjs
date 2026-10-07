@@ -18,12 +18,8 @@
 // no marker file, no derive/finalize job — just resolve this session's desk
 // root and run one local, no-network check against it.
 
-const path = require("node:path");
-const { pathToFileURL } = require("node:url");
 
-const ownRoot = path.resolve(__dirname, "..");
 const headless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
-const runtime = (file) => import(pathToFileURL(path.join(ownRoot, "mcp", file)).href);
 const MAX_INPUT = 1024 * 1024;
 
 async function readInput(stream, timeoutMs = 150) {
@@ -67,7 +63,7 @@ async function runHook({ host, payload, env = process.env } = {}) {
   try {
     // A headless evaluator session writes no sync record and runs no git.
     if (headless(env)) return "headless";
-    const { isPlainObject } = await runtime("src/factory/schema.js");
+    const { isPlainObject } = await import("../mcp/src/factory/schema.js");
     if (!["claude", "copilot"].includes(host) || !isPlainObject(payload)) return "invalid";
     const claude = host === "claude";
     const event = claude ? payload.hook_event_name : Object.hasOwn(payload, "reason") ? "sessionEnd" : null;
@@ -75,8 +71,8 @@ async function runHook({ host, payload, env = process.env } = {}) {
     const cwd = payload.cwd;
     if (typeof cwd !== "string" || cwd === "") return "invalid";
     const [{ resolveHookDeskRoot }, { finalUnpushedCheck }] = await Promise.all([
-      runtime("scripts/resolve-desk-root.js"),
-      runtime("src/runtime/sync-worker.js"),
+      import("../mcp/scripts/resolve-desk-root.js"),
+      import("../mcp/src/runtime/sync-worker.js"),
     ]);
     const { root: deskRoot } = resolveHookDeskRoot({ env, cwd });
     if (deskRoot === null) return "unavailable";

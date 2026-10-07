@@ -68,10 +68,8 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
-const { pathToFileURL } = require("node:url");
 // Loaded only by the detached launchers, never on the boot path.
 const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
-const runtime = (name) => import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", name)).href);
 // A headless evaluator session hears nothing from the boot checks and starts nothing (mcp/src/factory/headless-flag.js).
 const isHeadless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
 // Set on the repair a launcher re-executes in a compatible Node, so it runs the repair itself.
@@ -102,8 +100,8 @@ function reportPath(root, common) {
 
 async function location(root) {
   const canonical = await fs.realpath(root);
-  const { readInspectionGit } = await runtime("runtime/git-inspection.js");
-  const { TIDY_GIT_TIMEOUT_MS } = await runtime("runtime/workspace-tidy.js");
+  const { readInspectionGit } = await import("../mcp/src/runtime/git-inspection.js");
+  const { TIDY_GIT_TIMEOUT_MS } = await import("../mcp/src/runtime/workspace-tidy.js");
   // The report location serves the detached repair and the CLI, never the boot check's budget.
   const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { timeoutMs: TIDY_GIT_TIMEOUT_MS });
   if (!result.ok) throw new Error("bound desk is not an inspectable repository");
@@ -112,7 +110,7 @@ async function location(root) {
 }
 
 async function readReport(file) {
-  const { decodeTidyReport, TIDY_REPORT_MAX_BYTES } = await runtime("runtime/workspace-evidence.js");
+  const { decodeTidyReport, TIDY_REPORT_MAX_BYTES } = await import("../mcp/src/runtime/workspace-evidence.js");
   const info = await fs.lstat(file);
   if (!info.isFile() || info.nlink !== 1 || info.size > TIDY_REPORT_MAX_BYTES) throw new Error("unsafe workspace-tidy report");
   return decodeTidyReport(await fs.readFile(file, "utf8"));
@@ -186,7 +184,7 @@ function compatibleCommand(script, ...args) {
 async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, inspectionBudgetMs }, expired, signal) {
   try {
     const [{ resolveStartupRoot }, { resolveActivationConfigPath }] = await Promise.all([
-      runtime("util/startup-direction.js"), runtime("util/paths.js"),
+      import("../mcp/src/util/startup-direction.js"), import("../mcp/src/util/paths.js"),
     ]);
     // The server binds the same project folder: Claude's environment passes it, and Copilot's `sessionStart` hook records the session folder for the server.
     const bound = resolveStartupRoot({
@@ -194,7 +192,7 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
       hostProjectRoot: { claude: env.CLAUDE_PROJECT_DIR, copilot: sessionFolder }[host],
     });
     if (bound.error) return "workspace-tidy deferred; binding configuration unreadable; resolve with desk_status.";
-    const { inspectWorkspace, tidyLine, canonicalDeskRoot } = await runtime("runtime/workspace-tidy.js");
+    const { inspectWorkspace, tidyLine, canonicalDeskRoot } = await import("../mcp/src/runtime/workspace-tidy.js");
     // One identity for the bound desk, resolved once: a symlink alias and its
     // real path are the same desk for the inventory, the report and the lock.
     const root = bound.root ? await canonicalDeskRoot(bound.root) : null;
@@ -288,7 +286,7 @@ function personPrefix(env) {
  */
 async function boundRoot(ctx) {
   ctx.shared.root ??= (async () => {
-    const [{ resolveActivationConfigPath, resolveDeskRootWithSource }, { readSmallText }] = await Promise.all([runtime("util/paths.js"), runtime("factory/marker.js")]);
+    const [{ resolveActivationConfigPath, resolveDeskRootWithSource }, { readSmallText }] = await Promise.all([import("../mcp/src/util/paths.js"), import("../mcp/src/factory/marker.js")]);
     try {
       return resolveDeskRootWithSource({
         activationConfigPath: resolveActivationConfigPath({ env: ctx.env }),
@@ -312,7 +310,7 @@ const factoryCheck = {
     const root = await boundRoot(ctx);
     if (!root) return {};
     const [{ factoryBootCheck }, { readSmallText }, { PATTERNS }] = await Promise.all([
-      runtime("factory/boot-check.js"), runtime("factory/marker.js"), runtime("factory/schema.js"),
+      import("../mcp/src/factory/boot-check.js"), import("../mcp/src/factory/marker.js"), import("../mcp/src/factory/schema.js"),
     ]);
     const { metadata } = require("./factory-end.cjs");
     const home = ctx.env.HOME || require("node:os").homedir();
@@ -341,7 +339,7 @@ function improvementCards(ctx) {
   ctx.shared.improvement ??= (async () => {
     const root = await boundRoot(ctx);
     if (!root) return null;
-    const [{ improvementBootCheck }, { improvementPerson }] = await Promise.all([runtime("factory/boot-check.js"), runtime("desk/improvement-person.js")]);
+    const [{ improvementBootCheck }, { improvementPerson }] = await Promise.all([import("../mcp/src/factory/boot-check.js"), import("../mcp/src/desk/improvement-person.js")]);
     // The person the Desk tools resolve, from what is known without a network call; a crew desk whose person is not known is said, never read as empty.
     const who = await improvementPerson({ deskRoot: root, env: ctx.env, now: Date.now() }).catch(() => ({ status: "unresolved", reason: "invalid_member" }));
     if (who.status !== "ok") return { status: "unchecked", reason: who.reason };
@@ -360,7 +358,7 @@ const labelsCheck = {
   id: "labels",
   budgetMs: 60,
   async run(ctx) {
-    const [{ isNoninteractive }, { labelsBootCheck, labelsLine, labelsQuarantinedLine, cardOpenState, loopWorkerLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    const [{ isNoninteractive }, { labelsBootCheck, labelsLine, labelsQuarantinedLine, cardOpenState, loopWorkerLine }] = await Promise.all([import("../mcp/src/factory/session-kind.js"), import("../mcp/src/factory/boot-check.js")]);
     if (isNoninteractive(ctx.env)) return {};
     const labels = labelsBootCheck({ env: ctx.env });
     // Where the loop worker's last run was not a normal one, the line says so even when no label waits.
@@ -380,7 +378,7 @@ const andonCheck = {
   id: "andon",
   budgetMs: 30,
   async run(ctx) {
-    const [{ isNoninteractive }, { andonBootCheck, andonLine, andonUnknown, andonUnknownLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    const [{ isNoninteractive }, { andonBootCheck, andonLine, andonUnknown, andonUnknownLine }] = await Promise.all([import("../mcp/src/factory/session-kind.js"), import("../mcp/src/factory/boot-check.js")]);
     if (isNoninteractive(ctx.env)) return {};
     // An andon state that is not known is said out loud, never left to read as "no open andon".
     const unknown = andonUnknown({ env: ctx.env }).map(andonUnknownLine);
@@ -398,7 +396,7 @@ const improvementCheck = {
   id: "improvement",
   budgetMs: 80,
   async run(ctx) {
-    const [{ isNoninteractive }, { improvementLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    const [{ isNoninteractive }, { improvementLine }] = await Promise.all([import("../mcp/src/factory/session-kind.js"), import("../mcp/src/factory/boot-check.js")]);
     if (isNoninteractive(ctx.env)) return {};
     const cards = await improvementCards(ctx);
     withinDeadline(ctx);
@@ -411,7 +409,7 @@ const deskHealthCheck = {
   id: "desk-health",
   budgetMs: 50,
   async run(ctx) {
-    const [{ deskHealthCheck: check }, { isDeskWorkspace }] = await Promise.all([runtime("runtime/desk-health.js"), runtime("util/paths.js")]);
+    const [{ deskHealthCheck: check }, { isDeskWorkspace }] = await Promise.all([import("../mcp/src/runtime/desk-health.js"), import("../mcp/src/util/paths.js")]);
     const roots = [];
     if (ctx.host === "copilot" && isDeskWorkspace(ctx.sessionFolder)) roots.push(path.resolve(ctx.sessionFolder));
     const bound = await boundRoot(ctx);
@@ -433,7 +431,7 @@ const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorksp
 
 /** Records skipped checks in the protected factory status.json, only when factory state already exists. */
 async function recordSkipped(env, skipped) {
-  const { factoryStateRoot, writeStatus } = await runtime("factory/outbox.js");
+  const { factoryStateRoot, writeStatus } = await import("../mcp/src/factory/outbox.js");
   if (await factoryStateRoot(env, { create: false }) === null) return false;
   await writeStatus(env, { boot_checks: { at: new Date().toISOString(), skipped } });
   return true;
@@ -455,8 +453,8 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
 async function runBootChecks(options = {}) {
   const {
     checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
-    loadRedaction = () => runtime("util/redact.js"),
-    loadArgvSafeReason = () => runtime("runtime/argv-safe-reason.js"),
+    loadRedaction = () => import("../mcp/src/util/redact.js"),
+    loadArgvSafeReason = () => import("../mcp/src/runtime/argv-safe-reason.js"),
     spawnGit = spawnSync,
   } = options;
   const env = options.env ?? process.env;
@@ -470,8 +468,8 @@ async function runBootChecks(options = {}) {
   // Index tracing (spec.md §3): resolved once, the same way `factoryCheck`/
   // `deskHealthCheck` resolve their own desk root, and only watched when it
   // is itself a Git repository.
-  const { snapshotStagedPaths, diffStagedPaths, formatIndexDriftProblem, formatDeskProblem } = await runtime("runtime/index-drift.js");
-  const { isGitRepository } = await runtime("util/git-stage.js");
+  const { snapshotStagedPaths, diffStagedPaths, formatIndexDriftProblem, formatDeskProblem } = await import("../mcp/src/runtime/index-drift.js");
+  const { isGitRepository } = await import("../mcp/src/util/git-stage.js");
   const driftRoot = await boundRoot({ env, host: options.host, sessionFolder: options.sessionFolder, shared });
   const tracksIndex = typeof driftRoot === "string" && isGitRepository(driftRoot, spawnGit);
   // A failure's raw text (a staged path, an error message) never becomes an
@@ -486,7 +484,7 @@ async function runBootChecks(options = {}) {
   // argv -- falling back to the raw text it could not redact would defeat
   // the fix this function exists for.
   const argvSafeReason = await loadArgvSafeReason().then((mod) => mod.argvSafeReason, () => () => "reason unavailable (redactor not loaded)");
-  const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
+  const shouldLaunchFiler = await import("../mcp/src/runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
   // Queued the way every check's repair is: a fileProblem
   // closure that only builds the repair command (compatibleCommand,
   // synchronous), returns `file: "filing in background"`, and lets the
@@ -599,14 +597,14 @@ async function runBootChecks(options = {}) {
  * launcher that fails leaves the block honestly reporting `file: not filed:
  * filer_unavailable` rather than throwing.
  */
-async function migrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = path.resolve(__dirname, ".."), launchRepair: startRepair = launchCommand, loadArgvSafeReason = () => runtime("runtime/argv-safe-reason.js") } = {}) {
+async function migrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = path.resolve(__dirname, ".."), launchRepair: startRepair = launchCommand, loadArgvSafeReason = () => import("../mcp/src/runtime/argv-safe-reason.js") } = {}) {
   try {
-    const { startupMigrationLine } = await runtime("runtime/pending-migrations.js");
+    const { startupMigrationLine } = await import("../mcp/src/runtime/pending-migrations.js");
     // See runBootChecks's own comment above: argvSafeReason fails toward a
     // fixed, unrevealing string, never toward the raw reason it could not
     // redact.
     const argvSafeReason = await loadArgvSafeReason().then((mod) => mod.argvSafeReason, () => () => "reason unavailable (redactor not loaded)");
-    const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
+    const shouldLaunchFiler = await import("../mcp/src/runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
     const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
     return await startupMigrationLine({
       pluginRoot, env, cwd, budgetMs, host,
@@ -632,7 +630,7 @@ async function migrationLine({ host, env = process.env, sessionFolder, budgetMs,
 async function startFactory({ env = process.env, launch = launchCommand } = {}) {
   try {
     if (isHeadless(env)) return false;
-    const { hasContributingStore } = await runtime("factory/boot-check.js");
+    const { hasContributingStore } = await import("../mcp/src/factory/boot-check.js");
     if (!hasContributingStore(env)) return false;
     let delivery = false;
     try {
@@ -660,12 +658,12 @@ async function updateReport(root, operation) {
     throw error;
   }
   try {
-    const { readProcessStart } = await runtime("readiness/process-start.js");
+    const { readProcessStart } = await import("../mcp/src/readiness/process-start.js");
     const ownership = JSON.stringify({ token, pid: process.pid, start: await readProcessStart(process.pid) });
     await handle.writeFile(ownership);
     await handle.close();
-    const { tidyLine } = await runtime("runtime/workspace-tidy.js");
-    const { encodeTidyReport } = await runtime("runtime/workspace-evidence.js");
+    const { tidyLine } = await import("../mcp/src/runtime/workspace-tidy.js");
+    const { encodeTidyReport } = await import("../mcp/src/runtime/workspace-evidence.js");
     let previous = {};
     try { previous = await readReport(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
     const prepare = (result) => {
@@ -691,8 +689,8 @@ async function updateReport(root, operation) {
 
 async function runRepair(root) {
   return updateReport(root, async (previous, persist, prepare, canonical) => {
-    const { repairWorkspace } = await runtime("runtime/workspace-tidy.js");
-    const { dispositionRecord, mergeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
+    const { repairWorkspace } = await import("../mcp/src/runtime/workspace-tidy.js");
+    const { dispositionRecord, mergeTidyEvidence } = await import("../mcp/src/runtime/workspace-evidence.js");
     let evidence = previous;
     const result = await repairWorkspace({ deskRoot: canonical, onDisposition: async (entry) => {
       const next = mergeTidyEvidence(evidence, {}, entry);
@@ -710,7 +708,7 @@ async function runRepair(root) {
 
 async function acknowledgeRepair(root, acknowledgement) {
   return updateReport(root, async (previous, persist) => {
-    const { acknowledgeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
+    const { acknowledgeTidyEvidence } = await import("../mcp/src/runtime/workspace-evidence.js");
     return persist(acknowledgeTidyEvidence(previous, acknowledgement));
   });
 }
@@ -773,13 +771,13 @@ if (require.main === module) {
   const run = command === "--compatible" && root
     ? runCompatible(root, process.argv.slice(4))
     : command === "--fast-forward" && root
-    ? runtime("runtime/desk-health.js").then(({ fastForwardStateBranch }) => fastForwardStateBranch({ env: process.env, root }))
+    ? import("../mcp/src/runtime/desk-health.js").then(({ fastForwardStateBranch }) => fastForwardStateBranch({ env: process.env, root }))
     : command === "--repair" && root
     ? startRepair(root)
     : command === "--ack" && root && id && digest && canonicalEvidence
       ? acknowledgeRepair(root, { id, digest, canonicalEvidence })
       : command === "--revoke" && root && id && digest && canonicalEvidence
-        ? runtime("runtime/workspace-tidy.js").then(({ revokeWorkspaceRelease }) => revokeWorkspaceRelease({
+        ? import("../mcp/src/runtime/workspace-tidy.js").then(({ revokeWorkspaceRelease }) => revokeWorkspaceRelease({
           repository: root, worktree: id, branch: digest, owner: canonicalEvidence,
         }))
         : Promise.reject(new Error("usage: boot-checks.cjs --compatible <script> [args] | --fast-forward <desk> | --repair <desk> | --ack <desk> <id> <digest> <canonical-evidence> | --revoke <common-git-dir> <worktree> <branch-ref> <owner>"));

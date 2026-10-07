@@ -45,15 +45,15 @@ async function writeFile(root, rel, body) {
 }
 
 async function loadExclusionsModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "exclusions.js")))
+  return import("../../../../../plugins/desk/mcp/src/indexer/exclusions.js")
 }
 
 async function loadVectorPackModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "vector-packs.js")))
+  return import("../../../../../plugins/desk/mcp/src/indexer/vector-packs.js")
 }
 
 async function loadSnapshotModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "snapshots", "manifest.js")))
+  return import("../../../../../plugins/desk/mcp/src/snapshots/manifest.js")
 }
 
 async function writePolicySchemaFixture(pluginRoot) {

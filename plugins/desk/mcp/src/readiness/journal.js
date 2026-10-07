@@ -5,7 +5,13 @@ import { protectWindowsPaths } from "../feedback/windows-acl.js"
 import { withActiveLexicalGeneration } from "./generations.js"
 
 // The elected controller is the sole writer. No journal operation elects another owner.
-export async function openChangeJournal({ root, stateDir, io = filesystem }) {
+export async function openChangeJournal({
+  root,
+  stateDir,
+  io = filesystem,
+  platform = process.platform,
+  protect = protectWindowsPaths,
+}) {
   root = io.realpathSync(root)
   stateDir = path.resolve(stateDir)
   for (let current = stateDir; ; current = path.dirname(current)) {
@@ -15,9 +21,9 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
     }
     if (current === path.dirname(current)) break
   }
-  const created = await ensurePrivateJournalDirectory({ stateDir, io })
+  const created = await ensurePrivateJournalDirectory({ stateDir, io, platform, protect })
   const directoryStat = io.lstatSync(stateDir)
-  if (process.platform !== "win32" &&
+  if (platform !== "win32" &&
       (directoryStat.uid !== process.getuid() || (directoryStat.mode & 0o777) !== 0o700)) {
     throw new Error("journal has unsafe state directory ownership or permissions")
   }
@@ -30,7 +36,8 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
       entries.push({ path: file, kind: "file", created: false })
     }
   }
-  if (process.platform === "win32" && entries.length > 0) await protectWindowsPaths(entries)
+  const protectFile = platform === "win32" ? protect : null
+  if (protectFile && entries.length > 0) await protectFile(entries)
 
   let metadata = statIfPresent(io, metaPath) ? JSON.parse(io.readFileSync(metaPath, "utf8")) : null
   if (metadata && (metadata.root !== root || typeof metadata.id !== "string" || !metadata.id)) {
@@ -51,13 +58,13 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
   let closed = false
   if (corrupt) {
     // Persist the original bytes before replacing the derived log with its valid prefix.
-    await writeAtomic(io, path.join(stateDir, `changes.corrupt-${randomUUID()}.jsonl`), raw)
-    await writeAtomic(io, logPath, serialize(records))
+    await writeAtomic(io, path.join(stateDir, `changes.corrupt-${randomUUID()}.jsonl`), raw, undefined, protectFile)
+    await writeAtomic(io, logPath, serialize(records), undefined, protectFile)
     metadata.id = randomUUID()
     reason = "journal_corrupt"
   }
-  if (!statIfPresent(io, logPath)) await writeAtomic(io, logPath, "")
-  await writeAtomic(io, metaPath, JSON.stringify({ ...metadata, clean_shutdown: false }))
+  if (!statIfPresent(io, logPath)) await writeAtomic(io, logPath, "", undefined, protectFile)
+  await writeAtomic(io, metaPath, JSON.stringify({ ...metadata, clean_shutdown: false }), undefined, protectFile)
   let persistedFile = assertSafeFile(io, logPath)
 
   const cursor = () => ({ journal_id: metadata.id, sequence: records.at(-1)?.sequence ?? 0 })
@@ -172,7 +179,7 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
           { ...anchor, checkpoint: true },
           ...records.filter((record) => record.sequence > covered.sequence),
         ]
-        await writeAtomic(io, logPath, serialize(retained), guarded)
+        await writeAtomic(io, logPath, serialize(retained), guarded, protectFile)
         records = retained
         persistedBytes = Buffer.from(serialize(retained))
         persistedFile = assertSafeFile(io, logPath)
@@ -183,7 +190,7 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
         if (closed) return
         // Removed derived state has no clean-shutdown marker to persist.
         if (statIfPresent(io, stateDir)) {
-          await writeAtomic(io, metaPath, JSON.stringify({ ...metadata, clean_shutdown: !poisoned }))
+          await writeAtomic(io, metaPath, JSON.stringify({ ...metadata, clean_shutdown: !poisoned }), undefined, protectFile)
         }
         closed = true
       })
@@ -238,7 +245,7 @@ export class JournalIntegrityError extends Error {
   }
 }
 
-export function normalizeChangePath(value) {
+function normalizeChangePath(value) {
   if (typeof value !== "string" || !value || value.includes("\0") ||
       path.win32.isAbsolute(value) || path.posix.isAbsolute(value) ||
       value.includes(":") || value.split(/[\\/]/u).some((part) => !part || part === "." || part === "..")) {
@@ -347,15 +354,13 @@ function assertSafeFile(io, file) {
   return stat
 }
 
-async function writeAtomic(io, target, contents, replace = (operation) => operation()) {
+async function writeAtomic(io, target, contents, replace = (operation) => operation(), protectFile) {
   if (statIfPresent(io, target)) assertSafeFile(io, target)
   const temporary = `${target}.${randomUUID()}.tmp`
   let fd
   try {
     fd = io.openSync(temporary, "wx", 0o600)
-    if (process.platform === "win32") {
-      await protectWindowsPaths([{ path: temporary, kind: "file", created: true }])
-    }
+    if (protectFile) await protectFile([{ path: temporary, kind: "file", created: true }])
     io.writeFileSync(fd, contents)
     io.fsyncSync(fd)
     io.closeSync(fd)
@@ -363,7 +368,7 @@ async function writeAtomic(io, target, contents, replace = (operation) => operat
     replace(() => {
       io.renameSync(temporary, target)
       // Windows does not expose POSIX directory fsync; file handles are flushed above.
-      if (process.platform !== "win32") {
+      if (!protectFile) {
         const directory = io.openSync(path.dirname(target), "r")
         try { io.fsyncSync(directory) } finally { io.closeSync(directory) }
       }

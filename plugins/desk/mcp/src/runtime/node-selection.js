@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from "node:child_process"
-import { existsSync, readdirSync, statSync } from "node:fs"
+import { readdirSync, statSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -159,10 +159,9 @@ export function reexecWithCompatibleNode({
       forwardedSignal = signal
       child.kill(signal)
     }
+    // cleanup() removes this listener when the child closes, so it only ever runs while the child is alive.
     const terminateChildOnParentExit = () => {
-      if (!childClosed) {
-        child.kill("SIGTERM")
-      }
+      child.kill("SIGTERM")
     }
     const signalHandlers = new Map(
       ["SIGINT", "SIGTERM", "SIGHUP"].map((signal) => [
@@ -196,8 +195,6 @@ export function reexecWithCompatibleNode({
   })
 }
 
-export const reexecuteWithCompatibleNode = reexecWithCompatibleNode
-
 function addExecutable(candidates, candidate) {
   if (!hasText(candidate) || candidates.includes(candidate) || !isFile(candidate)) {
     return
@@ -205,21 +202,19 @@ function addExecutable(candidates, candidate) {
   candidates.push(candidate)
 }
 
+// An unreadable path (for example one under a directory the user cannot search) is not a candidate.
 function isFile(candidate) {
   try {
-    return existsSync(candidate) && statSync(candidate).isFile()
-  // This only changes when the path disappears or becomes inaccessible between the existence check and stat.
-  /* node:coverage ignore next 3 */
+    return statSync(candidate, { throwIfNoEntry: false })?.isFile() === true
   } catch {
     return false
   }
 }
 
+// An unreadable path (for example one under a directory the user cannot search) is not a candidate.
 function isDirectory(candidate) {
   try {
-    return existsSync(candidate) && statSync(candidate).isDirectory()
-  // This only changes when the path disappears or becomes inaccessible between the existence check and stat.
-  /* node:coverage ignore next 3 */
+    return statSync(candidate, { throwIfNoEntry: false })?.isDirectory() === true
   } catch {
     return false
   }

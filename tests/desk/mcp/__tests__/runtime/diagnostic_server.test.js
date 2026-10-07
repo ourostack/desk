@@ -213,7 +213,7 @@ test("diagnostic MCP completes the core handshake and keeps remediation coherent
   assert.equal(messages[0].result.serverInfo.name, "desk-mcp-diagnostic")
   assert.deepEqual(messages[1].result, {})
   // The full tool set, so a host that caches this first list never loses a tool once Desk recovers.
-  const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
+  const { TOOL_NAMES } = await import("../../../../../plugins/desk/mcp/src/tool-names.js")
   assert.deepEqual(
     messages[2].result.tools.map((tool) => tool.name),
     TOOL_NAMES,

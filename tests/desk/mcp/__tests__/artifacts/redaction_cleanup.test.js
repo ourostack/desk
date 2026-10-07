@@ -52,11 +52,11 @@ const SNAPSHOT_SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
 const SNAPSHOT_DOCUMENT_TREE_HASH = `sha256:${"b".repeat(64)}`
 
 async function loadTombstonesModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "artifacts", "tombstones.js")))
+  return import("../../../../../plugins/desk/mcp/src/artifacts/tombstones.js")
 }
 
 async function loadRebuildIndexScriptModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "scripts", "rebuild-index.js")).href)
+  return import("../../../../../plugins/desk/mcp/scripts/rebuild-index.js")
 }
 
 async function tmpRoot(prefix) {

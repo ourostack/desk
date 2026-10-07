@@ -28,7 +28,7 @@ const repoRoot = path.resolve(
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 const packageJson = loadJson(path.join(mcpRoot, "package.json"))
 const deskPluginVersion = loadJson(path.join(repoRoot, "plugins", "desk", "plugin.json")).version
-const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
+const { TOOL_NAMES } = await import("../../../../../plugins/desk/mcp/src/tool-names.js")
 const packageLock = loadJson(path.join(mcpRoot, "package-lock.json"))
 const hostTarget = `${process.platform}-${process.arch}-node-${process.versions.modules}`
 const productionLockHash = productionDependencyLockHash({ packageJson, packageLock })
@@ -823,7 +823,7 @@ test("MCP entrypoint is dependency-light before bootstrap", async () => {
   }
   for (const launchFunction of [
     "selectCompatibleNode",
-    "reexecuteWithCompatibleNode",
+    "reexecWithCompatibleNode",
     "startDiagnosticServer",
   ]) {
     assert.match(entrypoint, new RegExp(`\\b${launchFunction}\\b`, "u"))
