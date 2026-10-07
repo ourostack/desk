@@ -81,6 +81,7 @@ import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
+import { resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
@@ -1170,6 +1171,7 @@ export async function bootOnce({
   walkFn = walkTaskCards,
   repoFn = repoStates,
   localOnlyFn = recordLocalOnlyOnCards,
+  stateBranchFn = resolveStartupStateBranch,
   prFn = openPullRequests,
   factoryStatusFn = factoryStatus,
   improvementFn = improvementBootCheck,
@@ -1339,7 +1341,7 @@ export async function bootOnce({
   // A clone seen with no remote and no card url is recorded on its card as local-only, once: the only record the done
   // check trusts for a commit with nowhere to push (`tools/local-only.js`).
   try {
-    await localOnlyFn({ cards, deskRoot: root.path, spawnGit, homeDir })
+    await localOnlyFn({ cards, deskRoot: root.path, spawnGit, homeDir, stateBranch: stateBranchFn({ env, homeDir }) })
   } catch {
     // Recording is a convenience and never a reason to degrade a boot.
   }

@@ -91,8 +91,7 @@ function reasonCheckOf(returns) {
     compared += 1
     if (!agree) disagree += 1
   }
-  // `compared_verified` stays for older readers and equals `compared`: every recorded refusal counts.
-  return { compared, disagree, compared_verified: compared }
+  return { compared, disagree }
 }
 
 /**
@@ -120,12 +119,8 @@ function signoffCounts(outcomes, timelineJobs) {
     recorded: true,
     jobs: entries.length,
     accepted: entries.filter(isAccepted).length,
-    // Kept at 0 so a reader of the older shape still finds it: an acceptance is no longer split into verified and unverified.
-    accepted_unverified: 0,
     delivered_unsigned: inState("delivered_unsigned").length,
     refused: inState("refused").length,
-    // Kept at 0, like `accepted_unverified`: a refusal is no longer split by a verified flag.
-    refused_unverified: 0,
     reopened: inState("reopened").length,
     not_recorded: inState("not_recorded").length,
     not_delivered: inState("not_delivered").length,
@@ -151,8 +146,6 @@ function yieldRollup(verdicts) {
     passed,
     returned: counted.length - passed,
     awaiting_signoff: partial.filter((verdict) => verdict.reasons.includes("awaiting_signoff")).length,
-    // Kept at 0, like `accepted_unverified`: the store site reads it, and an acceptance is no longer split by a verified flag.
-    signoff_unverified: 0,
     changed_ask_only: counted.filter((verdict) => verdict.changed_ask_only === true).length,
     excluded: [...excluded].sort(([left], [right]) => compareText(left, right)).map(([reason, jobs]) => ({ reason, jobs })),
   }

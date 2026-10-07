@@ -293,7 +293,7 @@ export function migrationLine(pending, pluginRoot) {
   return parts.length ? `Desk migrations: ${parts.join(" ")}` : ""
 }
 
-/** The honest, no-op filing step: mirrors `host-enforcement-registration.js`'s `noFiler` -- see the doc comment above. */
+/** The honest, no-op filing step -- see the doc comment above. */
 async function defaultFileProblem() {
   return { file: "not filed: filer_unavailable" }
 }
@@ -309,8 +309,7 @@ async function defaultFileProblem() {
  * emits a full `Desk problem:` block instead of silently returning only the
  * index-drift lines found before the error. Filing is never done here, and
  * never awaited past this call: `fileProblem` is an injectable hook (default:
- * the honest `not filed: filer_unavailable`, mirroring `host-enforcement-
- * registration.js`'s `noFiler`), which `boot-checks.cjs`'s `migrationLine`
+ * the honest `not filed: filer_unavailable`), which `boot-checks.cjs`'s `migrationLine`
  * supplies for real, queuing the same detached `file-desk-problem.js` run
  * every other migrated mechanism uses.
  */
@@ -409,9 +408,7 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
         // No fileProblem here: this CLI already prints the block straight to the
         // agent running it, with no time budget and nothing to lose past a
         // timeout, unlike the hook path -- the honest `file: not filed:
-        // filer_unavailable` default is the right answer, matching
-        // `host-enforcement-registration.js`'s own `status.js` caller, which
-        // also supplies no filing step of its own.
+        // filer_unavailable` default is the right answer.
         if (drift.length > 0) io.stdout.write(`${await formatIndexDriftProblem({ kind: "migration block", label: tag, drift })}\n`)
       }
     }

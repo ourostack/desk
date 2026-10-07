@@ -141,9 +141,8 @@ test("fixture: the next step of each card carries the fact an agent listing read
   }
 })
 
-// ---- the gate's rule: stating the status anywhere clears a done claim ----
+// ---- stating the status anywhere clears a done claim ----
 
-import { doneClaims, statesStatus } from "../../plugins/desk/mcp/src/runtime/done-claim-gate.js"
 import { reportedStatuses } from "./claims.mjs"
 
 const R13_RUN_2 = "Done. I've completed the recorded next step and updated the task.\n\n**Work completed:**\n- Implemented the check\n\n**Task status:** Processing. The rain-delay policy implementation is complete and tested."
@@ -161,23 +160,6 @@ test("a reply that states the reported status is no done claim; the same words w
   assert.ok(taskDoneClaims("Done. Implemented the check.").length > 0)
 })
 
-test("the harness and the gate judge the same sentences the same way", () => {
-  const cases = [
-    ["Done. Tests pass. Task status: Processing.", "processing", false],
-    ["Done. Tests pass.", "processing", true],
-    ["Done reading the card; the task is at validating.", "validating", false],
-    ["I'm done for now.", "processing", false],
-    ["**Completed work:**\n- x\n\n**Current status:** Processing", "processing", false],
-    ["Work complete.", "validating", true],
-  ]
-  for (const [reply, status, blocked] of cases) {
-    const gate = doneClaims(reply).length > 0 && !statesStatus(reply, status)
-    const harness = taskDoneClaims(reply, { statuses: [status], stripQuotes: true }).length > 0
-    assert.equal(gate, blocked, `gate: ${reply}`)
-    assert.equal(harness, blocked, `harness: ${reply}`)
-  }
-})
-
 test("resume-named-task: a 'Done.' reply that states the task's status passes the done rule; one that does not fails", () => {
   const events = [use("c", "mcp__plugin_desk_desk__task_update", { track: "g", slug: "t", note: "n" }), answer("c", JSON.stringify({ status: "updated", report_as: "Task t is at processing (not done): next" }))]
   const ok = check("resume-named-task", [...BOOT_PLAIN, ...events], "Done. Wired the 30% check in RainDelayPolicy.\n\nTask status: Processing.")
@@ -186,15 +168,13 @@ test("resume-named-task: a 'Done.' reply that states the task's status passes th
   assert.ok(failures(bad).some((failure) => /said the task is done in the reply/u.test(failure)))
 })
 
-test("the harness and the gate read the same sentences as claims or not (review of 69442ece)", () => {
+test("the harness reads these sentences as claims or not (review of 69442ece)", () => {
   const claims = ["Done.", "Done. Task is done.", "Work complete.", "The task is complete.", "I'm done with the task and pushed.", "**Completed work:**\n- x", "Everything is done."]
   const quiet = ["I'm done with the task review.", "All tests are done running.", "The fix is done.", "Shipped.", "I'm done for now.", "Done reading the card.", "She wrote \"the task is complete\" in it.", "I read `Done.` in the log.", "```\nDone.\n```", "The task is not done yet.", "The task is complete once the PR merges.", "I was told the task was done."]
   for (const reply of claims) {
-    assert.ok(doneClaims(reply).length > 0, `gate: ${reply}`)
     assert.ok(taskDoneClaims(reply, { stripQuotes: true }).length > 0, `harness: ${reply}`)
   }
   for (const reply of quiet) {
-    assert.deepEqual(doneClaims(reply), [], `gate: ${reply}`)
     assert.deepEqual(taskDoneClaims(reply, { stripQuotes: true }), [], `harness: ${reply}`)
   }
   // A commit message is read as written, quotes and all.

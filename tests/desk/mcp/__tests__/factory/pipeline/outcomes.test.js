@@ -114,13 +114,11 @@ test("a store that records outcomes counts every state, and every acceptance cou
   assert.equal(signoff.recorded, true)
   assert.equal(signoff.jobs, 6)
   assert.equal(signoff.accepted, 3)
-  assert.equal(signoff.accepted_unverified, 0)
   assert.equal(signoff.not_recorded, 1)
   assert.equal(signoff.reopened, 1)
   assert.equal(signoff.not_delivered, 1)
   assert.equal(signoff.delivered_unsigned, 0)
   assert.equal(signoff.refused, 0)
-  assert.equal(signoff.refused_unverified, 0)
   assert.equal(signoff.no_record, 0)
   assert.equal(signoff.jobs_without_work_record, 0)
 })
@@ -141,7 +139,7 @@ test("a censored wait is counted under unsigned waits with its class, and a sign
   })
 })
 
-test("refusal reasons are counted by code whatever the verified flag, and refused_unverified stays 0", () => {
+test("refusal reasons are counted by code whatever the verified flag", () => {
   const sessions = [session([
     entry(J1, { state: "refused", verified: true, reason: "defect" }),
     entry(J2, { state: "refused", verified: false, reason: "defect" }),
@@ -150,7 +148,6 @@ test("refusal reasons are counted by code whatever the verified flag, and refuse
   ])]
   const { signoff } = computeOutcomeRollups({ sessions, reports: withRecord(J1, J2, J3, J4) })
   assert.equal(signoff.refused, 3)
-  assert.equal(signoff.refused_unverified, 0)
   assert.deepEqual(signoff.refusal_reasons, { not_what_was_asked: 0, defect: 2, changed_ask: 1, incomplete: 0, other: 0 })
 })
 
@@ -277,13 +274,13 @@ test("rework counts returns by catch point and compares reasons only on refusals
     state: "measured",
     value: { in_task: 1, at_review: 1, after_delivery: 5 },
     reasons: [],
-    reason_check: { compared: 4, disagree: 2, compared_verified: 4 },
+    reason_check: { compared: 4, disagree: 2 },
   })
 })
 
 test("rework is zero only when the history is recorded, and partial or unavailable when it is not", () => {
   assert.deepEqual(reworkFormula(created()).value, { in_task: 0, at_review: 0, after_delivery: 0 })
-  assert.deepEqual(reworkFormula(created()).reason_check, { compared: 0, disagree: 0, compared_verified: 0 })
+  assert.deepEqual(reworkFormula(created()).reason_check, { compared: 0, disagree: 0 })
   assert.equal(reworkFormula(null).reason, "not_recorded")
   const flowless = reworkFormula(entry(J1, { state: "accepted" }))
   assert.deepEqual(flowless, { class: "unavailable", state: "unavailable", value: null, reasons: ["history_not_recorded"], reason: "history_not_recorded" })
@@ -307,16 +304,9 @@ test("yield is passed over the delivered jobs that have a verdict", () => {
     created({ job: J4, state: "not_delivered", deliveries: 0 }),
   )
   assert.deepEqual(result, {
-    state: "measured", value: 0.5, reasons: [], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 0, signoff_unverified: 0, changed_ask_only: 0,
+    state: "measured", value: 0.5, reasons: [], n: 1, N: 2, passed: 1, returned: 1, awaiting_signoff: 0, changed_ask_only: 0,
     excluded: [{ reason: "history_not_recorded", jobs: 1 }, { reason: "not_delivered", jobs: 1 }],
   })
-})
-
-test("the yield rollup keeps emitting signoff_unverified as 0 for the store site, whatever the verified flags", () => {
-  const { first_pass_yield: result } = store(accepted(J1, { verified: false }), accepted(J2, { verified: null }), accepted(J3))
-  assert.equal(result.signoff_unverified, 0)
-  assert.equal(result.state, "measured")
-  assert.equal(result.passed, 3)
 })
 
 test("yield is partial and an upper bound while any counted job awaits sign-off", () => {
@@ -382,7 +372,7 @@ test("the reason check counts compared and disagreeing refusals and is unavailab
     accepted(J1, { returns: [refusal("defect", "agent_error", true), refusal("defect", "external", true), refusal("other", "agent_error", true), ret()] }),
     accepted(J2, { returns: [refusal("changed_ask", "agent_error", false)] }),
   )
-  assert.deepEqual(rework.reason_check, { state: "measured", compared: 3, disagree: 2, compared_verified: 3, reasons: [] })
+  assert.deepEqual(rework.reason_check, { state: "measured", compared: 3, disagree: 2, reasons: [] })
   const none = store(accepted(J1, { returns: [ret()] })).rework
   assert.deepEqual(none.reason_check, { state: "unavailable", reasons: ["no_refusals"] })
 })
@@ -753,7 +743,7 @@ test("each plugin version group's attention and outcomes add up to the overall f
   assert.equal(sum((group) => group.attention.headline.accepted_outcomes), attention.headline.accepted_outcomes)
   assert.equal(sum((group) => group.attention.human_turns), attention.human_turns)
   for (const part of ["attributed", "unattributed", "unplaced"]) assert.equal(sum((group) => group.attention.est_ms?.[part]), attention.est_ms[part], part)
-  for (const key of ["jobs", "accepted", "accepted_unverified", "delivered_unsigned", "refused", "reopened", "not_recorded", "not_delivered", "no_record", "jobs_without_work_record"]) {
+  for (const key of ["jobs", "accepted", "delivered_unsigned", "refused", "reopened", "not_recorded", "not_delivered", "no_record", "jobs_without_work_record"]) {
     assert.equal(sum((group) => group.signoff[key]), signoff[key], key)
   }
   for (const key of ["n", "N", "passed", "returned"]) assert.equal(sum((group) => group.first_pass_yield[key]), yieldRollup[key], key)

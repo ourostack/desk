@@ -91,8 +91,7 @@ async function noFiler() {
  *
  * Migrated onto the failure contract (spec.md §1, Part 5): filing is never
  * done here, and never awaited by this function's own callers past this
- * call -- `fileProblem` is an injectable hook, mirroring `host-enforcement-
- * registration.js`'s `hookRegistrationDeskProblem`. With no default filing
+ * call -- `fileProblem` is an injectable hook. With no default filing
  * step (real callers on a hot, tightly budgeted path could not afford an
  * account lookup and `gh` calls inline), the block renders honestly with
  * `file: not filed: filer_unavailable`; each real call site (boot-

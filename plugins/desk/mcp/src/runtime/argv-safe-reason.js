@@ -20,7 +20,7 @@
 // broke that path even though nothing on it ever calls `argvSafeReason`,
 // because an ES module's own static imports run at load time regardless of
 // which export is actually used. `argvSafeReason` is only ever reached from
-// `hooks/ask-gate.cjs` and `hooks/boot-checks.cjs`, which load this whole
+// `hooks/boot-checks.cjs` and the sync modules, which load this whole
 // module tree from the real, complete checkout, never from that minimal copy.
 
 import { redactDeskRelativePaths } from "../factory/desk-problem-template.js"

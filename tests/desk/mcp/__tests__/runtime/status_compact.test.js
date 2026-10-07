@@ -146,7 +146,6 @@ test("sync and enforcement conditions that matter become short notes", () => {
   assert.match(compactStatus({ ...ready, sync: { blocked: true } }).notes[0], /Pushing the desk is blocked\./u)
   assert.equal(compactStatus({ ...ready, sync: { blocked: false, behind: 2, ahead: 0 } }).sync, "2 commit(s) behind origin")
   assert.equal(compactStatus({ ...ready, sync: { blocked: false, behind: 0, ahead: 3 } }).sync, "3 commit(s) ahead of origin, not pushed yet")
-  assert.match(compactStatus({ ...ready, host_enforcement: { registered: false } }).notes[0], /deny hook is not registered/u)
   const minimal = compactStatus({ status: "ok" })
   assert.deepEqual(minimal.root, { path: null, source: null })
   assert.equal(minimal.plugin_version, null)
@@ -172,7 +171,6 @@ async function makeSession(t, runtimePayload) {
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
     hung: { probe: async () => ({ state: "refused" }) },
-    protect: async () => ({ protected: false }),
   })
   t.after(() => session.dispose())
   await session.admission.refresh({ force: true })

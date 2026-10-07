@@ -1066,7 +1066,6 @@ contract("boot prints the bound desk's AGENTS.md, and no step orders a read of i
   const hint = text("plugins/desk/mcp/src/util/deferred-tools.js");
   assert.match(hint, /If your host defers tools.*Claude Code: ToolSearch `select:mcp__plugin_desk_desk__task_update/su);
   assert.match(hint, /mcp__plugin_desk_desk__task_update/u);
-  assert.match(text("plugins/desk/mcp/src/runtime/task-status-guard.js"), /deferredToolsLoadHint\(host\)/u, "the guard's deny message carries the same hint");
 });
 // Kaizen card 5: archiving stages only the paths it moved, as git-hygiene's targeted staging requires.
 contract("archive-workflow stages only the paths it moved", () => {
@@ -1130,9 +1129,9 @@ contract("the card format skill points at the return rules", () => {
   const skill = text("plugins/desk/skills/task-card-format/SKILL.md");
   assert.match(skill, /`task-lifecycle`, "Returns"[^\n]+`return_reason`/u);
 });
-contract("the lifecycle skill says what an unverified answer can and cannot become", () => {
+contract("the lifecycle skill says Desk records a sign-off call as the answer and never asks for a repeat", () => {
   const skill = text("plugins/desk/skills/task-lifecycle/SKILL.md");
-  assert.match(skill, /Only an unverified acceptance on Claude Code can be upgraded: do not ask the operator again; when their next message arrives, repeat the call with the same answer\.[^\n]+An unverified refusal has already sent the task back to work, so there is nothing to sign until the next delivery[^\n]+On Copilot CLI and Codex every answer is unverified/u);
+  assert.match(skill, /Desk records the call as the operator's answer and does not check which turn made it\. Repeating the same answer changes nothing; a different answer replaces the one held\./u);
   assert.doesNotMatch(skill, /usually to repeat the call/u);
   assert.doesNotMatch(skill, /ask again in a later turn/u);
   assert.match(skill, /^\| `done` → `processing` \| NOTIFY \|[^\n]*\(`start-task`\)\. Moving out of `done`/mu);
@@ -1155,9 +1154,9 @@ contract("the store playbook states the outcome report keys as fact", () => {
   const playbook = text("plugins/desk/docs/factory-store-playbook.md");
   assert.doesNotMatch(playbook, /Marked for the lead/u);
   assert.match(playbook, /Read the `state` of a figure[^\n]+before any count/u);
-  assert.match(playbook, /a yield of 1 can be `partial`[^\n]+upper bound[^\n]+`reason_check\.disagree`[^\n]+a lower bound[^\n]+`compared_verified`/u);
-  assert.match(playbook, /`refused_unverified`[^\n]+`signoff: \{ recorded: false \}`/u);
-  assert.match(playbook, /`awaiting_signoff`, `signoff_unverified`[^\n]+`changed_ask_only`/u);
+  assert.match(playbook, /a yield of 1 can be `partial`[^\n]+upper bound[^\n]+`reason_check\.disagree`[^\n]+a lower bound/u);
+  assert.match(playbook, /`refusal_reasons`[^\n]+`signoff: \{ recorded: false \}`/u);
+  assert.match(playbook, /`awaiting_signoff`, `changed_ask_only`/u);
   assert.match(playbook, /An acceptance is recorded by the agent on the operator's word[^\n]+Show `no_record` beside the sign-off counts/u);
 });
 contract("local capture explains the remaining outcome fields", () => {
@@ -1203,18 +1202,6 @@ contract("the store playbook states the human turns shape, the attention rollup 
   assert.doesNotMatch(playbook, /so the site reads `thin sample`/u);
   assert.match(playbook, /`no_accepted_outcomes`[^\n]+never zero/u);
   assert.match(playbook, /store's limit for `unavailable` entries is now 231/u);
-});
-contract("the README says the ticket hook records whether, not checks that", () => {
-  const readme = text("plugins/desk/README.md");
-  assert.match(readme, /records whether the last turn-starting line of the transcript was typed by a human/u);
-});
-contract("the plugin README lists the sign-off witness hook with its three modes", () => {
-  const readme = text("plugins/desk/README.md");
-  const row = readme.split("\n").find((line) => line.startsWith("| sign-off witness |"));
-  assert.ok(row, "the host parity table has a sign-off witness row");
-  assert.match(row, /`UserPromptSubmit`[^|]*`prompt`[^|]*`Stop`[^|]*`stop`[^|]*`PreToolUse`[^|]*`ticket`/u);
-  assert.match(row, /`userPromptSubmitted`[^|]*`prompt`[^|]*`agentStop`[^|]*`stop`/u);
-  assert.match(row, /\| not wired \|$/u);
 });
 contract("public Desk skills name only the public factory store", () => {
   for (const file of [sessionStart, "plugins/desk/skills/first-run-bootstrap/SKILL.md", "plugins/desk/skills/task-lifecycle/SKILL.md", "plugins/desk/skills/task-card-format/SKILL.md"]) {
@@ -1355,12 +1342,10 @@ contract("resuming a named task continues its recorded next step, plans live in 
   assert.match(skill, /Choose the execution method[^.]*yourself[^.]*not a question for the operator/u);
   assert.match(skill, /`writing-plans` is a skill that writes a plan file\. It is not the host's Plan mode/u);
 });
-contract("every write to an existing task card goes through task_update, and the guard says which call to use", () => {
+contract("every write to an existing task card goes through task_update", () => {
   const lifecycle = text("plugins/desk/skills/task-lifecycle/SKILL.md");
   assert.match(lifecycle, /Every write to an existing task card goes through `task_update`/u);
   for (const field of ["note", "next_step", "frontmatter", "body_append"]) assert.match(lifecycle, new RegExp(`\`${field}\``, "u"));
-  const guard = text("plugins/desk/mcp/src/runtime/task-status-guard.js");
-  assert.match(guard, /Desk denies a direct edit of an existing task card/u);
   assert.match(text("plugins/desk/skills/task-card-format/SKILL.md"), /url: https:\/\/github\.com\/<org>\/OrderService\.git/u);
 });
 

@@ -62,7 +62,6 @@ function notesFor(payload, search) {
   }
   const sync = typeof payload.sync === "object" && payload.sync !== null ? payload.sync : null
   if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}.`)
-  if (payload.host_enforcement?.registered === false) notes.push("The host's deny hook is not registered: see desk_status with { detail: true } (`host_enforcement`).")
   return notes
 }
 

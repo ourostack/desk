@@ -123,9 +123,8 @@ const DONE_EVIDENCE_REF_CHECKS = {
 // and `task_archive` (when archiving a non-terminal task as completed
 // rather than abandoned) are the only tools that can carry a task to
 // `done`, so they are the only places this is enforced -- `toolName`
-// names whichever one is calling, for the error message. The direct-edit
-// bypass that run took is separately caught by the task-status-guard hook
-// (../runtime/task-status-guard.js), which points an agent back here.
+// names whichever one is calling, for the error message. A hand-edited card
+// is refused at commit by the desk's pre-commit hook (../desk/card-commit-guard.js).
 //
 // Only called on the transition into `done`: each caller already guards
 // this behind its own "moving from a non-`done` status" check, so
