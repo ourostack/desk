@@ -1,3 +1,5 @@
+export const READINESS_PROTOCOL_VERSION = 1
+
 export function requestMessage({ id, method, params = {} }) {
   return { type: "request", id, method, params }
 }

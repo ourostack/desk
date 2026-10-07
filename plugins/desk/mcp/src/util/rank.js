@@ -24,16 +24,16 @@
 // All exports are pure functions (no DB, no I/O) so the per-tool dispatch
 // can call them in tight loops without overhead.
 
-const BASE_WEIGHTS = Object.freeze({
+export const BASE_WEIGHTS = Object.freeze({
   semantic: 0.55,
   bm25: 0.25,
   recency: 0.12,
   state: 0.08,
 })
 
-const PIN_WEIGHT = 0.30
+export const PIN_WEIGHT = 0.30
 
-const STATE_BIAS = Object.freeze({
+export const STATE_BIAS = Object.freeze({
   drafting: 1.0,
   processing: 1.0,
   collaborating: 1.0,

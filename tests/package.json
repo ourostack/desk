@@ -1,5 +1,0 @@
-{
-  "private": true,
-  "type": "module",
-  "description": "Marks this folder's .js and .ts files as ES modules, so Node does not warn about a package.json with no type now that the repository root has one (for the unused-code check)."
-}

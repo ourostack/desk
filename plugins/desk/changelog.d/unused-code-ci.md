@@ -2,8 +2,8 @@ Pull requests now fail when they leave unused code behind. A new required check,
 
 ### Deleted, with the code left without purpose
 
-- 78 exports that nothing outside their own file imported are now private to that file, so the next reader can see they have no outside callers. Their values and behaviour are unchanged.
-- The unused `READINESS_PROTOCOL_VERSION` constant, the `readinessStates` function and the `diagnosticTools` list are gone.
-- The `reexecuteWithCompatibleNode`, `runtimeSupportMatrixPath` and `generateRuntimeSupportMatrix` aliases are gone; their callers use the canonical names `reexecWithCompatibleNode`, `deriveRuntimeSupportMatrixPath` and `buildRuntimeSupportMatrix`.
+- 72 exports that nothing outside their own file imported are now private to that file, so the next reader can see they have no outside callers. Their values and behaviour are unchanged.
+- The unused `readinessStates` function and `diagnosticTools` list are gone.
+- The `runtimeSupportMatrixPath` and `generateRuntimeSupportMatrix` aliases are gone; their caller uses the canonical names `deriveRuntimeSupportMatrixPath` and `buildRuntimeSupportMatrix`.
 
 No record Desk writes or publishes changes.

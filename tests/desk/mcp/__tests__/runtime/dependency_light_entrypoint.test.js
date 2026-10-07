@@ -820,7 +820,7 @@ test("MCP entrypoint is dependency-light before bootstrap", async () => {
   }
   for (const launchFunction of [
     "selectCompatibleNode",
-    "reexecWithCompatibleNode",
+    "reexecuteWithCompatibleNode",
     "startDiagnosticServer",
   ]) {
     assert.match(entrypoint, new RegExp(`\\b${launchFunction}\\b`, "u"))

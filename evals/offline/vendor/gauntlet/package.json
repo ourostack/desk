@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Marks the vendored TypeScript as ES modules, so Node does not warn about a package.json with no type now that the repository root has one (for the unused-code check)."
+}

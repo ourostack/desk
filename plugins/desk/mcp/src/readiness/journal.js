@@ -238,7 +238,7 @@ export class JournalIntegrityError extends Error {
   }
 }
 
-function normalizeChangePath(value) {
+export function normalizeChangePath(value) {
   if (typeof value !== "string" || !value || value.includes("\0") ||
       path.win32.isAbsolute(value) || path.posix.isAbsolute(value) ||
       value.includes(":") || value.split(/[\\/]/u).some((part) => !part || part === "." || part === "..")) {
