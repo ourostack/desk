@@ -129,6 +129,13 @@ function matchesRepos(target, identities) {
   return false
 }
 
+/** Is a GitHub PR's `owner/name` in this one recorded repo? "match"; "mismatch"; or "unknown" when the repo has no GitHub identity Desk can match (a plain name that only labels it, no GitHub remote on its clone). */
+export function prRepoVerdict(repo, prRepo, { spawnGit, homeDir, deskRoot }) {
+  const identities = repoIdentities([repo], { spawnGit, homeDir, deskRoot })
+  if (matchesRepos({ type: "github", id: prRepo.toLowerCase() }, identities)) return "match"
+  return identities.github.size === 0 ? "unknown" : "mismatch"
+}
+
 function repoRefusal(toolName, kind, ref, repos) {
   return (
     `${toolName}: \`evidence.ref\` ${JSON.stringify(ref)} is not in this task's repos (${describeRepos(repos)}). ` +

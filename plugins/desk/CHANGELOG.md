@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.218 — 2026-10-07
+
+Factory: a job's lead time is never shorter than the span of its own recorded segments. When the task card's dates give less (an adopted card created and closed at nearly the same moment, or a job that kept working after its first done), the lead time is raised to that span and published as partial with the reason `card_dates_shorter_than_work`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.217 — 2026-10-07
+
+Two fixes to the steps in `task_update`. The `step_note` that says which steps are "now ready" is now read from the card after the refresh, so a step the call added and the refresh then found already delivered is no longer called ready, and a step the refresh unblocked still is.
+
+A GitHub PR given as a step's new evidence must now be in that step's repo, matched the way Desk matches done evidence: by the repo's recorded name or the remotes of its local clone. A repo with no GitHub identity Desk can match (a plain name that only labels it) accepts any PR, and a card with no repos is unaffected. A step with no repo (`—`) on a card that has repos can no longer take a PR. The refusal names the way back: set the step to pending (with `expect` when it is settled), then give `repo` and `evidence`. Only evidence that is used is checked, so a reason on a dropped or blocked step is not refused. Rows already on a card are not rechecked.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.216 — 2026-10-07
 
 Desk no longer watches the harness or the shell. It acts only at its own boundaries: its MCP tools, the desk repository it owns, and its own session start and end. The harness provides and supervises its tools, and Desk neither intercepts them nor substitutes for them.
