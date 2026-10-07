@@ -596,11 +596,14 @@ test("artifact build scripts publish allowed artifacts only under canonical dirs
   try {
     writeApprovedPolicy(pluginRoot)
     await seedIndexedDesk({ deskRoot })
+    // This test is about where the artifacts are written, not how fast: the budgets are tested on their own, and a 1 s budget on a busy Windows runner failed it once with `performance_budget_exceeded`.
+    const budgetConfig = path.join(pluginRoot, "generous-budgets.json")
+    writeBudgetConfig(budgetConfig, { startup: { ensure_index_ms: 60000, snapshot_restore_ms: 60000, vector_pack_import_ms: 60000 }, rebuild: { vector_pack_rebuild_ms: 60000, snapshot_build_ms: 60000 }, artifacts: { snapshot_verify_ms: 60000, validate_ms: 60000 } })
 
     const vectorTarget = ARTIFACT_SCRIPT_TARGETS[0]
     const vectorRun = runNpmScript(
       vectorTarget.scriptName,
-      artifactArgs({ target: vectorTarget, deskRoot, pluginRoot }),
+      artifactArgs({ target: vectorTarget, deskRoot, pluginRoot, budgetConfig }),
     )
     assertScriptSucceeded(vectorRun)
     assert.deepEqual(
@@ -616,7 +619,7 @@ test("artifact build scripts publish allowed artifacts only under canonical dirs
     const snapshotRun = runNpmScript(
       snapshotTarget.scriptName,
       [
-        ...artifactArgs({ target: snapshotTarget, deskRoot, pluginRoot }),
+        ...artifactArgs({ target: snapshotTarget, deskRoot, pluginRoot, budgetConfig }),
         "--included-pack-id",
         vectorTarget.id,
       ],
