@@ -1,7 +1,7 @@
 name: controller probe
 on:
   push:
-    branches: [controller-probe]
+    branches: [controller-probe, probe-228]
 permissions:
   contents: read
 jobs:
