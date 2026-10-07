@@ -438,16 +438,6 @@ async function recordSkipped(env, skipped) {
   return true;
 }
 
-// The test seam. `DESK_BOOT_OVERRIDES` names a module that replaces parts of the registry for one process, so a test that
-// runs a real hook can fix what the checks say and what starts, without patching this module's exports. It may export
-// `checks` (the registry), `startFactory`, `migrationLine`, and `options` (merged over what `runBootChecks` is given).
-// Without the variable, or when the module does not load, the real registry runs.
-function overridesFor(env) {
-  const file = env?.DESK_BOOT_OVERRIDES;
-  if (typeof file !== "string" || file === "") return {};
-  try { return require(file); } catch { return {}; }
-}
-
 const validRepair = (repair) => Array.isArray(repair?.command) && repair.command.length > 0 && repair.command.every((part) => typeof part === "string" && part !== "");
 
 /**
@@ -461,11 +451,9 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
  * that carries a secret's value is redacted (mcp/src/util/redact.js); if the
  * redaction cannot load, the line is withheld rather than shown unredacted.
  */
-async function runBootChecks(given = {}) {
-  const overrides = overridesFor(given.env ?? process.env);
-  const options = { ...given, ...overrides.options };
+async function runBootChecks(options = {}) {
   const {
-    checks: registry = overrides.checks ?? checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
+    checks: registry = checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
     loadRedaction = () => import("../../mcp/src/util/redact.js"),
     loadArgvSafeReason = () => import("../../mcp/src/runtime/argv-safe-reason.js"),
     spawnGit = spawnSync,
@@ -610,7 +598,7 @@ async function runBootChecks(given = {}) {
  * launcher that fails leaves the block honestly reporting `file: not filed:
  * filer_unavailable` rather than throwing.
  */
-async function realMigrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = PLUGIN_ROOT_DIR, launchRepair: startRepair = launchCommand, loadArgvSafeReason = () => import("../../mcp/src/runtime/argv-safe-reason.js") } = {}) {
+async function migrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = PLUGIN_ROOT_DIR, launchRepair: startRepair = launchCommand, loadArgvSafeReason = () => import("../../mcp/src/runtime/argv-safe-reason.js") } = {}) {
   try {
     const { startupMigrationLine } = await import("../../mcp/src/runtime/pending-migrations.js");
     // See runBootChecks's own comment above: argvSafeReason fails toward a
@@ -640,7 +628,7 @@ async function realMigrationLine({ host, env = process.env, sessionFolder, budge
 }
 
 /** Starts factory-start.cjs detached when a store has `contribute: true`; resolves whether it started. Never rejects. */
-async function realStartFactory({ env = process.env, launch = launchCommand } = {}) {
+async function startFactory({ env = process.env, launch = launchCommand } = {}) {
   try {
     if (isHeadless(env)) return false;
     const { hasContributingStore } = await import("../../mcp/src/factory/boot-check.js");
@@ -773,18 +761,6 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 const checks = [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck];
-
-/** The pending-migration line (see above), or what a test's overrides answer instead. */
-function migrationLine(options = {}) {
-  const override = overridesFor(options.env ?? process.env).migrationLine;
-  return override ? override(options) : realMigrationLine(options);
-}
-
-/** Starts factory-start.cjs detached when a store has `contribute: true`, or does what a test's overrides do instead. */
-function startFactory(options = {}) {
-  const override = overridesFor(options.env ?? process.env).startFactory;
-  return override ? override(options) : realStartFactory(options);
-}
 
 // The command line of the entry file `hooks/boot-checks.cjs`: the spawned repair, fast-forward, compatible-node, acknowledge and revoke runs.
 function main(argv = process.argv.slice(2)) {

@@ -2,7 +2,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { readdirSync, readFileSync } from "node:fs"
+import { readdirSync, readFileSync, statSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -53,6 +53,26 @@ test("the hook files hosts register or start by path are thin entries over lib/,
     assert.doesNotMatch(text, /module\.exports|exports\./u, `${name} must not export`)
     assert.match(text, new RegExp(`require\\("\\./lib/${name.replace(".", "\\.")}"\\)`, "u"), `${name} must call its module under lib/`)
     assert.ok(text.split("\n").length <= 12, `${name} must stay a thin entry`)
+  }
+})
+
+// Tests reach the boot registry through a preload that lives under tests/. Nothing shipped may load code a session's environment names.
+function shippedFiles(directory) {
+  return readdirSync(directory).flatMap((name) => {
+    if (name === "node_modules" || name === "changelog.d" || name === "CHANGELOG.md") return []
+    const full = path.join(directory, name)
+    return statSync(full).isDirectory() ? shippedFiles(full) : [full]
+  })
+}
+
+test("no shipped Desk file reads a test seam, and no hook requires or imports a path read straight from the environment", () => {
+  const hooks = path.join(repository, "plugins", "desk", "hooks")
+  for (const file of shippedFiles(path.join(repository, "plugins", "desk"))) {
+    const text = readFileSync(file, "utf8")
+    assert.doesNotMatch(text, /DESK_BOOT_OVERRIDES|DESK_TEST_BOOT_FIXTURE/u, `${path.relative(repository, file)} must not read a test seam`)
+    if (file.startsWith(hooks) && /\.(?:cjs|js)$/u.test(file)) {
+      assert.doesNotMatch(text, /\b(?:require|import)\([^)]*\b(?:process\.)?env\b/u, `${path.relative(repository, file)} loads a path taken from the environment`)
+    }
   }
 })
 

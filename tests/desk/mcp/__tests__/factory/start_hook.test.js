@@ -15,8 +15,9 @@ import { indexJob } from "./_index_helper.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
+import { bootFixtureEnv } from "../_boot_fixture.js"
 import { STORE, scratch } from "./_session_helpers.js"
-import { TOTAL_BUDGET_MS, andonCheck, checks, deskHealthCheck, factoryCheck, labelsCheck, launchCommand, migrationLine, recordSkipped, runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { TOTAL_BUDGET_MS, andonCheck, checks, deskHealthCheck, factoryCheck, labelsCheck, launchCommand, recordSkipped, runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 import { main as factoryStartMain, DEADLINE_MS as factoryDeadlineMs } from "../../../../../plugins/desk/hooks/factory-start.cjs"
 
@@ -44,26 +45,6 @@ test("the registry runs its checks in order: factory, then labels, then desk-hea
   assert.equal(TOTAL_BUDGET_MS, 300)
   assert.ok(checks.every((entry) => entry.budgetMs <= 300))
 })
-
-test("DESK_BOOT_OVERRIDES replaces the checks, the factory start and the migration line, merges options, and does nothing when it cannot load", () => scratch(async ({ env, base }) => {
-  const file = path.join(base, "seam.cjs")
-  await fs.writeFile(file, `module.exports = {
-  checks: [{ id: "seam", budgetMs: 100, run: async () => ({ line: "from the seam" }) }],
-  startFactory: async () => "seam-started",
-  migrationLine: async () => "seam-migrations",
-  options: { totalBudgetMs: 4000 },
-};\n`)
-  const seam = { ...interactive(env), DESK_BOOT_OVERRIDES: file }
-  assert.equal(await runBootChecks({ ...quiet, env: seam }), "Desk boot pre-checks: from the seam")
-  assert.equal(await startFactory({ env: seam }), "seam-started")
-  assert.equal(await migrationLine({ env: seam }), "seam-migrations")
-  // An override module that is missing, or a variable that is empty, leaves the real registry in place.
-  for (const named of [path.join(base, "missing.cjs"), ""]) {
-    const real = { ...interactive(env), DESK_BOOT_OVERRIDES: named }
-    assert.notEqual(await migrationLine({ env: real, host: "claude", budgetMs: 1 }), "seam-migrations")
-    assert.notEqual(await startFactory({ env: { ...real, DESK_FACTORY_HEADLESS: "0" }, launch: async () => {} }), "seam-started")
-  }
-}))
 
 test("no line from any check means no output at all; lines join into exactly one Desk boot line", async () => {
   const order = []
@@ -380,7 +361,7 @@ test("factory-start.cjs runs sweep and flush for consented stores, prints nothin
 // Startup output, byte for byte.
 // ---------------------------------------------------------------------------
 
-// The fixture checks and factory start, through the boot registry's own seam (`DESK_BOOT_OVERRIDES`), for the hook itself only.
+// The fixture checks and factory start, through the test-only preload (`_boot_fixture_preload.cjs`), for the hook itself only.
 async function overridesFor(dir, { lines = null, calls }) {
   const file = path.join(dir, `overrides-${Math.random().toString(16).slice(2)}.cjs`)
   await fs.writeFile(file, `
@@ -419,7 +400,7 @@ for (const host of ["claude", "copilot"]) {
     const calls = path.join(base, "calls.txt")
     const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }
     const silent = await overridesFor(base, { calls })
-    const quietRun = runHook(host, { ...hookEnv, DESK_BOOT_OVERRIDES: silent }, desk)
+    const quietRun = runHook(host, bootFixtureEnv(hookEnv, silent), desk)
     assert.equal(quietRun.status, 0, quietRun.stderr)
     const context = expectedContext(host, hookEnv, desk)
     const hasJq = spawnSync("jq", ["--version"]).status === 0
@@ -429,7 +410,7 @@ for (const host of ["claude", "copilot"]) {
     assert.doesNotMatch(quietRun.stdout, /Desk boot pre-checks:/u)
 
     const speaking = await overridesFor(base, { lines: ["one", "two"], calls })
-    const spokenRun = runHook(host, { ...hookEnv, DESK_BOOT_OVERRIDES: speaking }, desk)
+    const spokenRun = runHook(host, bootFixtureEnv(hookEnv, speaking), desk)
     assert.equal(spokenRun.status, 0, spokenRun.stderr)
     const spoken = JSON.parse(spokenRun.stdout)
     assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two"))
@@ -441,7 +422,7 @@ for (const host of ["claude", "copilot"]) {
 test("the real hooks with a bound desk and no decision add no factory boot line and never ask for consent", () => scratch(async ({ env, desk, base }) => {
   const overrides = path.join(base, "relax.cjs")
   await fs.writeFile(overrides, `module.exports = { options: { launch: async () => {}, launchRepair: async () => {}, totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } } };\n`)
-  const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk, DESK_BOOT_OVERRIDES: overrides }
+  const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }, overrides)
   for (const host of ["claude", "copilot"]) {
     const result = runHook(host, hookEnv, desk)
     assert.equal(result.status, 0, result.stderr)
@@ -519,7 +500,7 @@ module.exports = {
   startFactory: async () => true,
 };
 `)
-    const hookEnv = { ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk, DESK_BOOT_OVERRIDES: overrides }
+    const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk }, overrides)
     const run = host === "copilot"
       ? spawnSync(process.execPath, [path.join(root, "hooks", "copilot-session-start.cjs")], { env: hookEnv, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
       : spawnSync("bash", [path.join(root, "hooks", "session-start.sh"), path.join(root, "skills", "using-desk", "SKILL.md")], { env: hookEnv, encoding: "utf8" })

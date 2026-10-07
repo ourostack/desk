@@ -17,6 +17,7 @@ import { bootOnce, isNoninteractive } from "../../../../../plugins/desk/mcp/src/
 import { runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { runHook as endRunHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
 import { runHook as syncRunHook } from "../../../../../plugins/desk/hooks/lib/sync-end.cjs"
+import { bootFixtureEnv } from "../_boot_fixture.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
 import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
 
@@ -67,10 +68,10 @@ test("boot checks say nothing and the detached factory start never happens under
 for (const host of ["claude", "copilot"]) {
   test(`the ${host} start hook prints nothing and starts no process under the flag`, () => scratch(async ({ env, desk, base }) => {
     const calls = path.join(base, "calls.txt")
-    const overrides = path.join(base, "overrides.cjs")
-    await fs.writeFile(overrides, `const fs = require("node:fs");
+    const fixture = path.join(base, "fixture.cjs")
+    await fs.writeFile(fixture, `const fs = require("node:fs");
 module.exports = { startFactory: async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true } };`)
-    const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk, DESK_BOOT_OVERRIDES: overrides }
+    const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }, fixture)
     const run = (flag) => host === "copilot"
       ? spawnSync(process.execPath, [path.join(HOOKS, "copilot-session-start.cjs")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
       : spawnSync("bash", [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, encoding: "utf8" })

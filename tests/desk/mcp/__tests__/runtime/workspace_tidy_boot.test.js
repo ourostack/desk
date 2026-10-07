@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import { REPAIR_NODE_ENV, TOTAL_BUDGET_MS, compatibleCommand, launchRepair, readReport, reportPath as reportPathFor, runBootChecks, runCompatible, runRepair, startRepair, workspaceTidyCheck } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { createRequire } from "node:module"
 import { compatibleNode } from "../../../../../plugins/desk/hooks/compatible-node.cjs"
+import { bootFixtureEnv } from "../_boot_fixture.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { dispositionRecord, mergeTidyEvidence } from "../../../../../plugins/desk/mcp/src/runtime/workspace-evidence.js"
 
@@ -129,7 +130,7 @@ test("both actual startup hooks include exactly one boot line without changing t
   // Generous budgets: this test is about the envelope and the single line, not about a loaded host's timing.
   const overrides = path.join(f.root, "relax-budgets.cjs")
   await fs.writeFile(overrides, `module.exports = { options: { totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } } };\n`)
-  const env = { ...f.env, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk, DESK_BOOT_OVERRIDES: overrides }
+  const env = bootFixtureEnv({ ...f.env, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk }, overrides)
   for (const host of ["copilot", "claude"]) {
     const result = host === "copilot"
       ? execFileSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { env, input: JSON.stringify({ cwd: f.desk }), encoding: "utf8" })
@@ -210,7 +211,7 @@ require("node:module").syncBuiltinESMExports();
 process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.stringify({born, exited:Date.now(), children})));
 `)
   const child = spawn(host === "claude" ? "bash" : process.execPath, [path.join(plugin, "hooks", host === "claude" ? "session-start.sh" : "copilot-session-start.cjs")], {
-    env: { ...f.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk, NODE_OPTIONS: `--require=${preload}`, DESK_BOOT_OVERRIDES: overrides }, stdio: ["pipe", "pipe", "pipe"],
+    env: bootFixtureEnv({ ...f.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk, NODE_OPTIONS: `--require=${preload}` }, overrides), stdio: ["pipe", "pipe", "pipe"],
   })
   let output = ""
   child.stdout.on("data", (chunk) => { output += chunk })
