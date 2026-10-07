@@ -209,7 +209,7 @@ function isToolResultLine(line) {
 // content (text, image, or string); and it isn't made up only of tool
 // results. Only ever called on a line already known to be `type: "user"`
 // (from `handleUserLine`).
-export function isHumanPromptLine(line) {
+function isHumanPromptLine(line) {
   if (line.isMeta || line.isCompactSummary) return false
   if (line.promptSource === "system") return false
   const originKind = line.origin?.kind
@@ -218,7 +218,7 @@ export function isHumanPromptLine(line) {
   return hasTextOrImage && !isAllToolResult
 }
 
-// A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, the same rules the sign-off witness uses (`humanMark` in `signoff-witness.js`). `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
+// A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
 function isHumanTurnLine(line) {
   if (line.isSidechain === true || line.isMeta === true) return false
   if (Object.hasOwn(line, "scheduledTaskId") || Object.hasOwn(line, "scheduledFireId")) return false

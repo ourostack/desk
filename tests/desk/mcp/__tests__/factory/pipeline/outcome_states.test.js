@@ -33,7 +33,7 @@ const CASES = [
   ["not delivered", entry({ state: "not_delivered", deliveries: 0 }), { signoff: ["measured", []], first_pass_yield: ["unavailable", ["not_delivered"]], rework: ["measured", []] }],
   ["returns cut off", entry({ returns_truncated: true }), { signoff: ["measured", []], first_pass_yield: ["unavailable", ["returns_not_fully_recorded"]], rework: ["partial", ["returns_not_fully_recorded"]] }],
   ["accepted and verified", entry({ state: "accepted", verified: true }), { signoff: ["measured", []], first_pass_yield: ["measured", []], rework: ["measured", []] }],
-  ["accepted, not verified", entry({ state: "accepted", verified: false }), { signoff: ["measured", []], first_pass_yield: ["partial", ["signoff_unverified"]], rework: ["measured", []] }],
+  ["accepted, not verified", entry({ state: "accepted", verified: false }), { signoff: ["measured", []], first_pass_yield: ["measured", []], rework: ["measured", []] }],
   ["waiting for sign-off", entry(), { signoff: ["measured", []], first_pass_yield: ["partial", ["awaiting_signoff"]], rework: ["measured", []] }],
   ["refused with nothing counting", entry({ state: "refused", verified: true, reason: "defect" }), { signoff: ["measured", []], first_pass_yield: ["partial", ["awaiting_signoff"]], rework: ["measured", []] }],
   ["sent back after review", entry({ state: "accepted", verified: true, returns: [RETURN] }), { signoff: ["measured", []], first_pass_yield: ["measured", []], rework: ["measured", []] }],

@@ -59,7 +59,7 @@ import { activeTasks } from "../desk/active-tasks.js"
 import { folderHandle } from "../desk/handles.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
-import { factoryStatus } from "../tools/factory-context.js"
+import { factoryFindingLines, factoryStatus } from "../tools/factory-context.js"
 import {
   claudeBindingPath,
   DESK_ROOT_NOT_FOUND,
@@ -81,9 +81,11 @@ import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
+import { resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
+import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
 import { deferredToolsHint } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
@@ -857,6 +859,8 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     task: null,
     factory: null,
     stale_desk: null,
+    release_alert: null,
+    desk_problems: null,
   }
 }
 
@@ -1083,6 +1087,8 @@ function buildInstructionItems(ctx) {
   signoffInstructions(ctx.unsigned, { noninteractive, seen: ctx.signoffSeen === true }).forEach((text) => add(text))
   // An ask-and-stop blocker means the operator has one question to answer first: no card pickup on this boot.
   if (!noninteractive && needsOperator(ctx) === null) for (const text of improvementInstructions(improvement)) add(text)
+  // Factory findings (orphan pass, retention, a capture check that keeps failing) are body lines, so consent stays last.
+  for (const text of factoryFindingLines(ctx.factory)) add(`Factory: ${text}`)
   add("If the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop; never recreate or simulate it. Never clone or fetch to look for something the card says is on another machine, and never clone inside the desk folder; clone a missing repo only where an instruction above says to, at the path it gives.", null)
   add("When you report on a task, say its real status; say 'done' only for a task whose status is done.", null)
   add(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`, null)
@@ -1165,6 +1171,7 @@ export async function bootOnce({
   walkFn = walkTaskCards,
   repoFn = repoStates,
   localOnlyFn = recordLocalOnlyOnCards,
+  stateBranchFn = resolveStartupStateBranch,
   prFn = openPullRequests,
   factoryStatusFn = factoryStatus,
   improvementFn = improvementBootCheck,
@@ -1172,6 +1179,7 @@ export async function bootOnce({
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
   staleDeskFn = checkStaleDesk,
+  releaseAlertFn = checkReleaseAlert,
   nestedCards = NESTED_CARD_FIELDS,
   unsignedFn = recordUnsigned,
   signoffListedFn = noteSignoffListed,
@@ -1293,6 +1301,10 @@ export async function bootOnce({
   } catch (error) {
     degraded.push(`card_validation: ${error.message}`)
   }
+  // The release-alert lookup runs alongside the rest of boot, with its own hard budget; it never rejects.
+  const releaseAlert = Promise.resolve()
+    .then(() => (headless ? null : releaseAlertFn({ env, cards, now })))
+    .catch(() => null)
   if (!nestedCards) {
     const why = runtimeResolverFailure()
     pending.push(`card repos: not validated, gray-matter is not installed (the dependency-free reader cannot parse repos lists)${why === null ? "" : `; restoring the runtime dependencies failed: ${redactCredentialLikeText(why)}`}`)
@@ -1329,7 +1341,7 @@ export async function bootOnce({
   // A clone seen with no remote and no card url is recorded on its card as local-only, once: the only record the done
   // check trusts for a commit with nowhere to push (`tools/local-only.js`).
   try {
-    await localOnlyFn({ cards, deskRoot: root.path, spawnGit, homeDir })
+    await localOnlyFn({ cards, deskRoot: root.path, spawnGit, homeDir, stateBranch: stateBranchFn({ env, homeDir }) })
   } catch {
     // Recording is a convenience and never a reason to degrade a boot.
   }
@@ -1394,6 +1406,7 @@ export async function bootOnce({
   }
 
   const staleFinding = await staleDesk
+  const releaseFinding = await releaseAlert
   const status = healthWord(degraded)
   const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement }
   const instructions = buildInstructions(instructionContext)
@@ -1420,6 +1433,8 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    release_alert: releaseFinding?.release_alert ?? null,
+    desk_problems: releaseFinding?.desk_problems ?? null,
     needs_operator: needsOperator(instructionContext),
     // Only for the plain-text boot (`runBootCli` leaves it out of `--json`).
     text_instructions: buildTextInstructions(instructionContext),

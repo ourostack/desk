@@ -176,7 +176,8 @@ test("sweep derives even when the rebuild fails", { skip: process.getuid?.() ===
     assert.equal((await sweep(ctx.env)).written, 1)
     assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), false, "the failed rebuild will retry")
   } finally {
-    await fs.chmod(file, 0o600)
+    // The copy has no route at all, so the sweep may have kept it away (making it owner-readable first).
+    await fs.chmod(file, 0o600).catch(() => {})
   }
 }))
 
@@ -337,10 +338,12 @@ test("concurrent derivation serializes one session instead of overwriting freshe
 
 test("routing snapshot survives plugin cleanup, desk declaration wins, and warnings never enter facts", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
-  const marker = { ...await session(ctx), routing: { source: "overlay", store: "example/other", warnings: [{ code: "manifest_unreadable", manifest: path.join(ctx.base, "missing/plugin.json") }] } }
+  const clean = { ...await session(ctx), routing: { source: "overlay", store: "example/other", warnings: [] } }
   await setConsent(ctx.env, { store: STORE, contribute: true })
-  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "not_opted_in", store: "example/other" })
-  assert.equal((await readStatus(ctx.env)).routing_warnings.length, 1)
+  assert.deepEqual(await deriveMarker(ctx.env, clean), { result: "not_opted_in", store: "example/other" })
+  // A route recorded while a manifest could not be read is held while that manifest is gone: it might have declared another store.
+  const marker = { ...clean, routing: { ...clean.routing, warnings: [{ code: "manifest_unreadable", manifest: path.join(ctx.base, "missing/plugin.json") }] } }
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
   await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: STORE })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
   const root = await factoryStateRoot(ctx.env)
@@ -484,7 +487,8 @@ async function codexMarker(ctx) {
 }
 
 async function sibling(ctx, overrides) {
-  const marker = { ...await session(ctx), session_id: SIBLING_ID, ended_at: CODEX_AT, updated_at: new Date().toISOString(), routing: DEFAULT_ROUTING, ...overrides }
+  // A Claude Code or Copilot hook that read its plugin set lists Desk itself; a default route beside no plugins proves nothing.
+  const marker = { ...await session(ctx), session_id: SIBLING_ID, ended_at: CODEX_AT, updated_at: new Date().toISOString(), plugins: [{ name: "desk", version: "1.0.0" }], routing: DEFAULT_ROUTING, ...overrides }
   if (Object.hasOwn(overrides, "routing") && overrides.routing === undefined) delete marker.routing
   await writeMarker(ctx.env, marker)
   return marker
@@ -524,6 +528,8 @@ test("a Codex marker stays held for a distant, other-desk or overlay-routed sibl
   await held("sibling without a desk")
   await sibling(ctx, { host: "codex-cli" })
   await held("another Codex marker proves nothing")
+  await sibling(ctx, { plugins: [] })
+  await held("a sibling whose scan read no plugins (review finding 7)")
 }))
 
 test("a qualifying Claude or Copilot sibling releases the Codex marker, including through a symlinked desk path", () => scratch(async (ctx) => {
@@ -702,6 +708,15 @@ async function clone(ctx, { marker, name }, digit) {
 const reasons = async (ctx) => {
   const { orphans } = await readStatus(ctx.env)
   return Object.fromEntries(Object.entries(orphans.frozen).filter(([, count]) => count > 0))
+}
+
+// A copy with no route at all (no marker, no receipt desk root, no transcript desk) is kept away by the sweep; this puts it back in the outbox.
+async function unkeep(ctx, name) {
+  const root = await factoryStateRoot(ctx.env)
+  const kept = path.join(root, "retracted-copies", "ourostack__factory", name)
+  assert.equal(existsSync(kept), true, "the sweep kept the copy that has no route")
+  await fs.rename(kept, path.join(root, "outbox", "ourostack__factory", name))
+  await fs.rm(path.join(root, "retracted-copies"), { recursive: true })
 }
 
 const rebuilt = async (ctx) => {
@@ -902,6 +917,7 @@ test("an orphan whose outbox copy is unreadable stays frozen as no_facts, and on
   await fs.writeFile(marker.log_path, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
   assert.deepEqual(await rebuilt(ctx), [0, 1])
   assert.deepEqual(await reasons(ctx), { no_desk_root: 1 })
+  await unkeep(ctx, name)
   await fs.writeFile(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name), "not json")
   assert.deepEqual(await rebuilt(ctx), [0, 1])
   assert.deepEqual(await reasons(ctx), { no_facts: 1 })
@@ -929,6 +945,7 @@ test("the first cwd is read past a line that is not JSON; a relative cwd, or one
       return receipt
     })
     assert.deepEqual(await rebuilt(ctx), [0, 1], cwd)
+    await unkeep(ctx, `claude-code-${ID}.json`)
   }
 }))
 
@@ -1409,7 +1426,7 @@ test("a bound job's card record becomes its outcome entry", async () => {
     job: idFor("a", "one"),
     rev: ACCEPTED.flow.rev,
     state: "accepted",
-    verified: true,
+    verified: null,
     reason: null,
     deliveries: 1,
     delivered_at: "2026-09-25T09:00:00.000Z",
@@ -1648,12 +1665,14 @@ test("returns are kept for a card whose start cannot be read, and a card with a 
   assert.equal(entry.returns.length, 1)
 })
 
-test("a refusal's counts pass through as the record decides: a witnessed human changed_ask does not count, an unwitnessed one does", async () => {
-  const refusal = (verified) => formatReturn({ at: "2026-09-25T10:00:00.000Z", from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: "changed_ask", refusal_verified: verified })
-  const verified = await oneEntry({ flow: flowOf(), returns: [refusal(true)] })
+test("a refusal's counts pass through as the record decides: a human changed_ask does not count, with or without a legacy verified token", async () => {
+  const base = "2026-09-25T10:00:00.000Z done processing agent_error after_delivery refused=changed_ask"
+  const verified = await oneEntry({ flow: flowOf(), returns: [`${base} verified`] })
   assert.deepEqual(verified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: true }])
-  const unverified = await oneEntry({ flow: flowOf(), returns: [refusal(false)] })
-  assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: true, refusal: "changed_ask", refusal_verified: false }])
+  const unverified = await oneEntry({ flow: flowOf(), returns: [`${base} unverified`] })
+  assert.deepEqual(unverified.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: false }])
+  const current = await oneEntry({ flow: flowOf(), returns: [base] })
+  assert.deepEqual(current.returns, [{ reason: "agent_error", caught: "after_delivery", counts: false, refusal: "changed_ask", refusal_verified: null }])
 })
 
 // Focus on a task, then on a task whose card is gone (which clears), over and over: each stretch of the task stands alone between cleared stretches, so a cap that is exceeded has to drop time.

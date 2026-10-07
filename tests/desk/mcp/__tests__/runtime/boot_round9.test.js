@@ -12,7 +12,7 @@ import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/s
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
-import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint, deferredToolsLoadHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
+import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 
 const jq = async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" })
 const gh = async (args) => {
@@ -87,22 +87,22 @@ test("boot's tool-naming instruction, on both hosts, says a looked-up tool is lo
 })
 
 test("the deferred-tools hint names the exact Desk tools for the host it runs on", () => {
-  assert.match(deferredToolsLoadHint("claude"), /^If your host defers tools.*\(Claude Code: ToolSearch `select:/su)
-  assert.match(deferredToolsLoadHint("claude"), /mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status/u)
-  assert.doesNotMatch(deferredToolsLoadHint("claude"), /desk-task_update/u)
+  assert.match(deferredToolsHint("claude"), /^If your host defers tools.*\(Claude Code: ToolSearch `select:/su)
+  assert.match(deferredToolsHint("claude"), /mcp__plugin_desk_desk__task_update,mcp__plugin_desk_desk__desk_status/u)
+  assert.doesNotMatch(deferredToolsHint("claude"), /desk-task_update/u)
   // Copilot CLI exposes the server `desk` and the tool as `desk-task_update` (round I event logs); it has no ToolSearch.
-  const copilot = deferredToolsLoadHint("copilot")
+  const copilot = deferredToolsHint("copilot")
   assert.match(copilot, /`desk-task_update`/u)
   assert.match(copilot, /never through the shell/u)
   assert.doesNotMatch(copilot, /ToolSearch|mcp__plugin_desk_desk__/u)
   // No length comparison: what makes the Copilot hint right is what it names and omits (above), not how it compares in size with the Claude one.
   // Codex and an unknown host (and the hostless git hook) get both names.
   for (const host of ["codex", "unknown", undefined]) {
-    assert.match(deferredToolsLoadHint(host), /ToolSearch `select:mcp__plugin_desk_desk__task_update/u)
-    assert.match(deferredToolsLoadHint(host), /`desk-<name>`, such as `desk-task_update`/u)
+    assert.match(deferredToolsHint(host), /ToolSearch `select:mcp__plugin_desk_desk__task_update/u)
+    assert.match(deferredToolsHint(host), /`desk-<name>`, such as `desk-task_update`/u)
   }
-  assert.equal(DEFERRED_TOOLS_LOAD_HINT, deferredToolsLoadHint("unknown"))
-  assert.equal(deferredToolsHint("copilot"), `${copilot} If a Desk tool is still absent after that, repair first (see the session-start skill) and never continue silently in local-only mode.${CALL_IT}`)
+  assert.ok(deferredToolsHint("unknown").startsWith(DEFERRED_TOOLS_LOAD_HINT))
+  assert.ok(copilot.endsWith(` If a Desk tool is still absent after that, repair first (see the session-start skill) and never continue silently in local-only mode.${CALL_IT}`))
   assert.ok(DEFERRED_TOOLS_HINT.startsWith(DEFERRED_TOOLS_LOAD_HINT))
   assert.match(DEFERRED_TOOLS_HINT, /never continue silently in local-only mode/u)
 })
@@ -366,6 +366,18 @@ test("boot hands every card to the local-only recorder, and a recorder that thro
   assert.equal(seen[0].cards.length, 1)
   const threw = await boot(root, { localOnlyFn: async () => { throw new Error("denied") } })
   assert.equal(threw.status, "ready")
+})
+
+test("boot resolves the state branch from the same activation config the session uses and hands it to the local-only recorder", async () => {
+  const root = await desk()
+  const config = path.join(root, "activation.json")
+  await fs.writeFile(config, JSON.stringify({ schema_version: 1, desk: { root, state_branch: "desk-state" } }))
+  const seen = []
+  const configured = await boot(root, { env: { DESK: root, DESK_ACTIVATION_CONFIG: config }, localOnlyFn: async (args) => { seen.push(args.stateBranch) } })
+  assert.equal(configured.status, "ready")
+  const plain = await boot(root, { localOnlyFn: async (args) => { seen.push(args.stateBranch) } })
+  assert.equal(plain.status, "ready")
+  assert.deepEqual(seen, ["desk-state", null])
 })
 
 test("active_tasks carries each task's next step on one line, whole and redacted, and null when the card has none", async () => {

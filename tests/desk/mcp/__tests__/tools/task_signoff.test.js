@@ -1,23 +1,20 @@
-// task_signoff — the one tool that records the operator's yes or no on a delivered task, with the witness and the clock injected.
+// task_signoff — the one tool that records the operator's yes or no on a delivered task, with the clock injected.
 
 import { test, mock } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { promises as fs, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { fileURLToPath } from "node:url"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { taskSignoff, TASK_SIGNOFF_FIELDS } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { REFUSAL_REASONS, RETURN_REASONS, parseReturn } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
-import { WITNESS_REASONS, issueTicket, recordPrompt, recordStop } from "../../../../../plugins/desk/mcp/src/runtime/signoff-witness.js"
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { TOOL_IMPLS, callTool } from "../../../../../plugins/desk/mcp/src/server.js"
-import { deferredToolsLoadHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
-import { isTaskToolName, mcpToolName } from "../../../../../plugins/desk/mcp/src/runtime/copilot-hook-payload.js"
+import { deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 import { toolKind } from "../../../../../plugins/desk/mcp/src/factory/tool-kinds.js"
-import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 import { osEnv } from "../_os_env.js"
 
@@ -25,13 +22,9 @@ const SENTINEL = "SENTINEL-card-body-text"
 const PR_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/7" }
 const FUTURE = Date.now() + 3_600_000
 const AT = new Date(FUTURE).toISOString()
-const UNVERIFIED_TAIL = " Desk could not see a human turn behind this answer, so it is recorded as unverified."
 const REPO = path.resolve(fileURLToPath(new URL("../../../../../", import.meta.url)))
 
 const now = () => FUTURE
-// A witnessed turn: a human prompt after the delivery and after the last stop, the main agent, a human origin.
-const human = (extra = {}) => () => ({ promptAt: FUTURE - 60_000, stopAt: FUTURE - 120_000, mainAgent: true, humanOrigin: true, ...extra })
-const nobody = () => null
 const spy = () => {
   const calls = []
   return { calls, fn: async (...args) => { calls.push(args) } }
@@ -88,7 +81,7 @@ async function legacyDone(root, slug, evidence = { kind: "pr", ref: PR_EVIDENCE.
 function sign(root, slug, input, extra = {}) {
   const finalize = extra.finalize ?? spy().fn
   const refreshSignoff = extra.refreshSignoff ?? spy().fn
-  return taskSignoff({ deskRoot: root, input: { track: "t", slug, ...input }, witness: human(), now, finalize, refreshSignoff, schedulePush: () => {}, ...extra })
+  return taskSignoff({ deskRoot: root, input: { track: "t", slug, ...input }, now, finalize, refreshSignoff, schedulePush: () => {}, ...extra })
 }
 
 const body = async (file) => readFileSync(file, "utf8")
@@ -100,56 +93,24 @@ const rewrite = async (file, change) => {
   await writeMarkdown(file, data, parsed.content)
 }
 
-test("an acceptance of a delivered task writes accepted with the verdict's verified value", async () => {
+test("an acceptance of a delivered task writes accepted", async () => {
   const root = await mkTempDeskRoot()
   const file = await delivered(root, "ship-fix")
   const before = (await readFront(file)).data
   const result = await sign(root, "ship-fix", { outcome: "accepted" })
   assert.equal(result.status, "signed")
-  assert.equal(result.path, "t/ship-fix/task.md")
-  assert.deepEqual(result.signoff, { state: "accepted", at: AT, verified: true, reason: null })
-  assert.equal(result.verified, true)
+  assert.equal(result.path, "t/"ship-fix"/task.md")
+  assert.deepEqual(result.signoff, { state: "accepted", at: AT, reason: null })
   assert.equal(result.say, "Recorded: ship-fix accepted.")
-  assert.equal("unverified_because" in result, false)
+  for (const key of ["verified", "unverified_because", "unverified_note"]) assert.equal(key in result, false, key)
   const { data } = await readFront(file)
-  assert.deepEqual(data.signoff, { state: "accepted", at: AT, verified: true, reason: null })
+  assert.deepEqual(data.signoff, { state: "accepted", at: AT, reason: null })
   assert.equal(data.status, "done")
   assert.equal(data.flow.rev, before.flow.rev + 1)
   assert.equal(data.flow.deliveries, 1)
   assert.equal(data.title, before.title)
 })
 
-test("the witness is asked for this task and outcome with the injected clock", async () => {
-  const root = await mkTempDeskRoot()
-  await delivered(root, "ask-witness")
-  const asked = []
-  await sign(root, "ask-witness", { outcome: "accepted" }, { witness: (request) => { asked.push(request); return human()() } })
-  assert.equal(asked.length, 1)
-  assert.equal(asked[0].track, "t")
-  assert.equal(asked[0].slug, "ask-witness")
-  assert.equal(asked[0].outcome, "accepted")
-  assert.equal(asked[0].now(), FUTURE)
-})
-
-test("an acceptance with no witness is recorded unverified and the answer says why", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "no-eyes")
-  const result = await sign(root, "no-eyes", { outcome: "accepted" }, { witness: nobody })
-  assert.equal(result.status, "signed")
-  assert.equal(result.verified, false)
-  assert.equal(result.unverified_because, "no_witness")
-  assert.equal(result.unverified_note, "Desk found no record of a human turn behind this call, so the answer is kept as unverified. Repeat the call in a later turn on a host where Desk can see the operator's message.")
-  assert.equal(result.say, `Recorded: no-eyes accepted.${UNVERIFIED_TAIL}`)
-  assert.equal((await readFront(file)).data.signoff.verified, false)
-})
-
-test("a witness that throws is no witness", async () => {
-  const root = await mkTempDeskRoot()
-  await delivered(root, "bad-witness")
-  const result = await sign(root, "bad-witness", { outcome: "accepted" }, { witness: () => { throw new Error("boom") } })
-  assert.equal(result.verified, false)
-  assert.equal(result.unverified_because, "no_witness")
-})
 
 test("a refusal needs a reason and a return_reason, each from its list", async () => {
   const root = await mkTempDeskRoot()
@@ -158,8 +119,6 @@ test("a refusal needs a reason and a return_reason, each from its list", async (
   const before = await body(file)
   const head = headOf(root)
   const finalize = spy()
-  const asked = []
-  const witness = () => { asked.push(1); return human()() }
   const cases = [
     [{ outcome: "refused" }, /a refusal needs `reason`, the operator's reason, one of not_what_was_asked, defect, changed_ask, incomplete, other/],
     [{ outcome: "refused", reason: "defect" }, /a refusal needs `return_reason`, your own reading of the cause, one of agent_error, changed_ask, new_information, external/],
@@ -167,11 +126,10 @@ test("a refusal needs a reason and a return_reason, each from its list", async (
     [{ outcome: "refused", reason: "defect", return_reason: "bogus" }, /a refusal needs `return_reason`/],
     [{ outcome: "refused", reason: "defect", return_reason: "" }, /a refusal needs `return_reason`/],
   ]
-  for (const [input, message] of cases) await assert.rejects(sign(root, "needs-both", input, { finalize: finalize.fn, witness }), message)
+  for (const [input, message] of cases) await assert.rejects(sign(root, "needs-both", input, { finalize: finalize.fn }), message)
   assert.equal(await body(file), before, "the card bytes are unchanged")
   assert.equal(headOf(root), head, "no commit")
   assert.equal(finalize.calls.length, 0)
-  assert.equal(asked.length, 0, "the witness is not consumed by a call that is refused up front")
 })
 
 test("an acceptance with a reason is refused", async () => {
@@ -190,13 +148,13 @@ test("input that is not a track, a slug and an outcome is refused and writes not
   const root = await mkTempDeskRoot()
   const file = await delivered(root, "odd-input")
   const before = await body(file)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: undefined, witness: human(), now }), /task_signoff: `track` and `slug` are required/)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t" }, witness: human(), now }), /task_signoff: `track` and `slug` are required/)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: 4, outcome: "accepted" }, witness: human(), now }), /task_signoff: `track` and `slug` are required/)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: "odd-input" }, witness: human(), now }), /task_signoff: `outcome` must be accepted or refused/)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: "odd-input", outcome: "maybe" }, witness: human(), now }), /task_signoff: `outcome` must be accepted or refused/)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "../x", slug: "odd-input", outcome: "accepted" }, witness: human(), now }), /task_signoff: `track` is not a valid task folder name/)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: "a/b", outcome: "accepted" }, witness: human(), now }), /task_signoff: `slug` is not a valid task folder name/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: undefined, now }), /task_signoff: `track` and `slug` are required/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t" }, now }), /task_signoff: `track` and `slug` are required/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: 4, outcome: "accepted" }, now }), /task_signoff: `track` and `slug` are required/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: "odd-input" }, now }), /task_signoff: `outcome` must be accepted or refused/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: "odd-input", outcome: "maybe" }, now }), /task_signoff: `outcome` must be accepted or refused/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "../x", slug: "odd-input", outcome: "accepted" }, now }), /task_signoff: `track` is not a valid task folder name/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "t", slug: "a/b", outcome: "accepted" }, now }), /task_signoff: `slug` is not a valid task folder name/)
   assert.equal(await body(file), before)
 })
 
@@ -205,7 +163,7 @@ test("an unknown track or slug is said so and nothing is written", async () => {
   await delivered(root, "real-one")
   const listing = await fs.readdir(root, { recursive: true })
   await assert.rejects(sign(root, "no-such-slug", { outcome: "accepted" }), /task_signoff: there is no task t\/no-such-slug in this desk; check the track and slug\. Nothing was recorded\./)
-  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "nope", slug: "real-one", outcome: "accepted" }, witness: human(), now }), /there is no task nope\/real-one/)
+  await assert.rejects(taskSignoff({ deskRoot: root, input: { track: "nope", slug: "real-one", outcome: "accepted" }, now }), /there is no task nope\/real-one/)
   assert.deepEqual(await fs.readdir(root, { recursive: true }), listing)
 })
 
@@ -229,13 +187,13 @@ test("a refusal puts the task back to processing and the answer says it is not d
   const result = await sign(root, "send-back", { outcome: "refused", reason: "defect", return_reason: "agent_error" })
   assert.equal(result.status, "signed")
   assert.equal(result.say, "Recorded: send-back sent back (defect); it is back in processing.")
-  assert.deepEqual(result.signoff, { state: "refused", at: AT, verified: true, reason: "defect" })
+  assert.deepEqual(result.signoff, { state: "refused", at: AT, reason: "defect" })
   assert.equal(result.report_as, "Task send-back is back at processing (not done).")
   assert.equal(result.report_note, "Do not tell the operator this task is done; it is at processing.")
   const { data } = await readFront(file)
   assert.equal(data.status, "processing")
   assert.equal(data.flow.reached, "processing")
-  assert.deepEqual(data.signoff, { state: "refused", at: AT, verified: true, reason: "defect" })
+  assert.deepEqual(data.signoff, { state: "refused", at: AT, reason: "defect" })
   assert.match(await fs.readFile(path.join(root, "t", "track.md"), "utf8"), /\| `send-back` \| processing \|/)
 })
 
@@ -245,21 +203,10 @@ test("a refusal appends a return caught after delivery with the human's reason a
   await sign(root, "return-line", { outcome: "refused", reason: "not_what_was_asked", return_reason: "changed_ask" })
   const { data } = await readFront(file)
   assert.equal(data.returns.length, 1)
-  assert.equal(data.returns[0], `${AT} done processing changed_ask after_delivery refused=not_what_was_asked verified`)
-  assert.deepEqual(parseReturn(data.returns[0]), { at: AT, from: "done", to: "processing", reason: "changed_ask", caught: "after_delivery", refusal: "not_what_was_asked", refusal_verified: true })
+  assert.equal(data.returns[0], `${AT} done processing changed_ask after_delivery refused=not_what_was_asked`)
+  assert.deepEqual(parseReturn(data.returns[0]), { at: AT, from: "done", to: "processing", reason: "changed_ask", caught: "after_delivery", refusal: "not_what_was_asked", refusal_verified: null })
 })
 
-test("an unverified refusal is recorded as unverified in the return", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "unseen-no")
-  const result = await sign(root, "unseen-no", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { witness: nobody })
-  assert.equal(result.verified, false)
-  assert.equal(result.say, `Recorded: unseen-no sent back (defect); it is back in processing.${UNVERIFIED_TAIL}`)
-  const { data } = await readFront(file)
-  assert.equal(data.status, "processing", "an unverified refusal still reopens the task")
-  assert.equal(data.returns[0], `${AT} done processing agent_error after_delivery refused=defect unverified`)
-  assert.equal(data.signoff.verified, false)
-})
 
 test("a task refused and delivered again starts unsigned and keeps the refusal in returns", async () => {
   const root = await mkTempDeskRoot()
@@ -268,9 +215,9 @@ test("a task refused and delivered again starts unsigned and keeps the refusal i
   await task_update({ deskRoot: root, input: { track: "t", slug: "again-and-again", frontmatter: { status: "done" }, evidence: PR_EVIDENCE }, finalize: async () => {} })
   const { data } = await readFront(file)
   assert.equal(data.status, "done")
-  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, reason: null })
   assert.equal(data.returns.length, 1)
-  assert.match(data.returns[0], /refused=incomplete verified$/)
+  assert.match(data.returns[0], /refused=incomplete$/)
   assert.equal(data.flow.deliveries, 2)
 })
 
@@ -282,8 +229,8 @@ test("a second refusal appends a second return", async () => {
   await sign(root, "twice-refused", { outcome: "refused", reason: "changed_ask", return_reason: "changed_ask" })
   const { data } = await readFront(file)
   assert.equal(data.returns.length, 2)
-  assert.match(data.returns[0], /agent_error after_delivery refused=defect verified$/)
-  assert.match(data.returns[1], /changed_ask after_delivery refused=changed_ask verified$/)
+  assert.match(data.returns[0], /agent_error after_delivery refused=defect$/)
+  assert.match(data.returns[1], /changed_ask after_delivery refused=changed_ask$/)
   assert.equal(data.status, "processing")
 })
 
@@ -294,7 +241,7 @@ test("a refusal of an archived task brings it back to the live tree", async () =
   const archived = path.join(root, "t", "_archive", "from-the-shelf")
   const live = path.join(root, "t", "from-the-shelf", "task.md")
   const result = await sign(root, "from-the-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" })
-  assert.equal(result.path, "t/from-the-shelf/task.md")
+  assert.equal(result.path, "t/"from-the-shelf"/task.md")
   await assert.rejects(fs.access(archived))
   const { data } = await readFront(live)
   assert.equal(data.status, "processing")
@@ -323,7 +270,7 @@ test("an acceptance of an archived task leaves it archived", async () => {
   initGit(root)
   const file = await delivered(root, "kept-on-shelf", { archive: true })
   const result = await sign(root, "kept-on-shelf", { outcome: "accepted" })
-  assert.equal(result.path, "t/_archive/kept-on-shelf/task.md")
+  assert.equal(result.path, path.join("t", "_archive", "kept-on-shelf", "task.md"))
   const { data } = await readFront(file)
   assert.equal(data.signoff.state, "accepted")
   assert.equal(data.status, "done")
@@ -331,57 +278,8 @@ test("an acceptance of an archived task leaves it archived", async () => {
   assert.equal(git(root, "log", "-1", "--format=%s").trim(), "task_signoff: t/kept-on-shelf")
 })
 
-test("an unwitnessed call cannot change a witnessed sign-off", async () => {
-  const root = await mkTempDeskRoot()
-  initGit(root)
-  const file = await delivered(root, "seen-once")
-  await sign(root, "seen-once", { outcome: "accepted" })
-  const before = await body(file)
-  const head = headOf(root)
-  const finalize = spy()
-  const message = { message: "task_signoff: a verified answer is already recorded for this task and this call could not be verified, so nothing was changed." }
-  await assert.rejects(sign(root, "seen-once", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { witness: nobody, finalize: finalize.fn }), message)
-  assert.equal(await body(file), before)
-  assert.equal(headOf(root), head)
-  assert.equal(finalize.calls.length, 0)
-})
 
-test("an unverified acceptance never overwrites a verified refusal or acceptance", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "held-refusal")
-  await rewrite(file, (data) => { data.signoff = { state: "refused", at: "2026-10-05T11:00:00.000Z", verified: true, reason: "defect" } })
-  const before = await body(file)
-  const lower = /a verified answer is already recorded/
-  await assert.rejects(sign(root, "held-refusal", { outcome: "accepted" }, { witness: nobody }), lower)
-  await assert.rejects(sign(root, "held-refusal", { outcome: "accepted" }, { witness: human({ humanOrigin: false }) }), lower)
-  assert.equal(await body(file), before)
-  const second = await delivered(root, "held-accept")
-  await sign(root, "held-accept", { outcome: "accepted" })
-  const accepted = await body(second)
-  await assert.rejects(sign(root, "held-accept", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { witness: nobody }), lower)
-  assert.equal(await body(second), accepted)
-})
-
-test("a verified call upgrades an unverified one", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "seen-later")
-  await sign(root, "seen-later", { outcome: "accepted" }, { witness: nobody })
-  assert.equal((await readFront(file)).data.signoff.verified, false)
-  const finalize = spy()
-  const result = await sign(root, "seen-later", { outcome: "accepted" }, { finalize: finalize.fn })
-  assert.equal(result.status, "signed")
-  assert.equal(result.verified, true)
-  assert.equal(result.say, "Recorded: seen-later accepted.")
-  assert.equal((await readFront(file)).data.signoff.verified, true)
-  assert.equal(finalize.calls.length, 1)
-  const other = await delivered(root, "seen-later-no")
-  await sign(root, "seen-later-no", { outcome: "accepted" }, { witness: nobody })
-  const flipped = await sign(root, "seen-later-no", { outcome: "refused", reason: "defect", return_reason: "agent_error" })
-  assert.equal(flipped.verified, true)
-  assert.equal((await readFront(other)).data.status, "processing")
-})
-
-test("repeating a witnessed acceptance changes nothing and says so", async () => {
+test("repeating an acceptance changes nothing and says so", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   const file = await delivered(root, "said-twice")
@@ -393,42 +291,73 @@ test("repeating a witnessed acceptance changes nothing and says so", async () =>
   const result = await sign(root, "said-twice", { outcome: "accepted" }, { finalize: finalize.fn, refreshSignoff: refresh.fn })
   assert.equal(result.status, "unchanged")
   assert.equal(result.say, "Already recorded: said-twice accepted.")
-  assert.equal(result.verified, true)
-  assert.equal(result.path, "t/said-twice/task.md")
+  assert.equal(result.path, "t/"said-twice"/task.md")
   assert.equal(await body(file), before)
   assert.equal(headOf(root), head)
   assert.equal(finalize.calls.length, 0)
   assert.equal(refresh.calls.length, 0)
-  // An unwitnessed repeat of a witnessed answer is also unchanged, and keeps the record's verified value.
-  const lower = await sign(root, "said-twice", { outcome: "accepted" }, { witness: nobody })
-  assert.equal(lower.status, "unchanged")
-  assert.equal(lower.verified, true)
-  assert.equal(lower.say, "Already recorded: said-twice accepted.")
-  assert.equal(await body(file), before)
-})
-
-test("an unverified repeat of an unverified answer says it is still unverified", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "unseen-twice")
-  await sign(root, "unseen-twice", { outcome: "accepted" }, { witness: nobody })
-  const before = await body(file)
-  const result = await sign(root, "unseen-twice", { outcome: "accepted" }, { witness: nobody })
-  assert.equal(result.status, "unchanged")
-  assert.equal(result.verified, false)
-  assert.equal(result.unverified_because, "no_witness")
-  assert.equal(result.say, `Already recorded: unseen-twice accepted.${UNVERIFIED_TAIL}`)
-  assert.equal(await body(file), before)
 })
 
 test("a done card holding a refusal answers unchanged to the same refusal", async () => {
   const root = await mkTempDeskRoot()
   const file = await delivered(root, "hand-built")
-  await rewrite(file, (data) => { data.signoff = { state: "refused", at: "2026-10-05T11:00:00.000Z", verified: true, reason: "defect" } })
+  await rewrite(file, (data) => { data.signoff = { state: "refused", at: "2026-10-05T11:00:00.000Z", reason: "defect" } })
   const before = await body(file)
   const result = await sign(root, "hand-built", { outcome: "refused", reason: "other", return_reason: "external" })
   assert.equal(result.status, "unchanged")
   assert.equal(result.say, "Already recorded: hand-built sent back.")
   assert.equal(await body(file), before)
+})
+
+test("an old-shape card whose signoff block has verified: true still reads, and a repeated same answer is unchanged and keeps the block", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const file = await delivered(root, "old-shape")
+  const old = { state: "accepted", at: "2026-10-05T11:00:00.000Z", verified: true, reason: null }
+  await rewrite(file, (data) => { data.signoff = old })
+  settle(root)
+  const before = await body(file)
+  const head = headOf(root)
+  const finalize = spy()
+  const result = await sign(root, "old-shape", { outcome: "accepted" }, { finalize: finalize.fn })
+  assert.equal(result.status, "unchanged")
+  assert.equal(result.say, "Already recorded: old-shape accepted.")
+  assert.equal(await body(file), before)
+  assert.equal(headOf(root), head)
+  assert.equal(finalize.calls.length, 0)
+  assert.deepEqual((await readFront(file)).data.signoff, old)
+  const refused = await delivered(root, "old-shape-no")
+  await rewrite(refused, (data) => { data.signoff = { state: "refused", at: "2026-10-05T11:00:00.000Z", verified: false, reason: "defect" } })
+  const held = await body(refused)
+  assert.equal((await sign(root, "old-shape-no", { outcome: "refused", reason: "defect", return_reason: "agent_error" })).status, "unchanged")
+  assert.equal(await body(refused), held)
+})
+
+test("a different outcome replaces the answer already held", async () => {
+  const root = await mkTempDeskRoot()
+  const file = await delivered(root, "changed-mind")
+  await sign(root, "changed-mind", { outcome: "accepted" })
+  assert.equal((await readFront(file)).data.signoff.state, "accepted")
+  const result = await sign(root, "changed-mind", { outcome: "refused", reason: "defect", return_reason: "agent_error" })
+  assert.equal(result.status, "signed")
+  const { data } = await readFront(file)
+  assert.equal(data.status, "processing")
+  assert.deepEqual(data.signoff, { state: "refused", at: AT, reason: "defect" })
+  assert.equal(data.returns.length, 1)
+  const old = await delivered(root, "changed-mind-old")
+  await rewrite(old, (data) => { data.signoff = { state: "refused", at: "2026-10-05T11:00:00.000Z", verified: true, reason: "defect" } })
+  const accepted = await sign(root, "changed-mind-old", { outcome: "accepted" })
+  assert.equal(accepted.status, "signed")
+  assert.deepEqual((await readFront(old)).data.signoff, { state: "accepted", at: AT, reason: null })
+})
+
+test("parseReturn reads the five-part, the six-part and the old seven-part line", () => {
+  const base = `${AT} done processing agent_error after_delivery`
+  assert.deepEqual(parseReturn(base), { at: AT, from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: null, refusal_verified: null })
+  assert.deepEqual(parseReturn(`${base} refused=defect`), { at: AT, from: "done", to: "processing", reason: "agent_error", caught: "after_delivery", refusal: "defect", refusal_verified: null })
+  assert.equal(parseReturn(`${base} refused=defect verified`).refusal_verified, true)
+  assert.equal(parseReturn(`${base} refused=defect unverified`).refusal_verified, false)
+  assert.equal(parseReturn(`${base} refused=defect maybe`), null)
 })
 
 test("a legacy done task can be accepted and its flow record starts as adopted", async () => {
@@ -439,7 +368,7 @@ test("a legacy done task can be accepted and its flow record starts as adopted",
   const { data } = await readFront(file)
   assert.equal(data.flow.since, "adopted")
   assert.equal(data.signoff.state, "accepted")
-  assert.equal(data.signoff.verified, true)
+  assert.equal("verified" in data.signoff, false)
   assert.equal(data.status, "done")
 })
 
@@ -454,104 +383,6 @@ test("a legacy done task that is refused gets a flow, a return and its place at 
   assert.equal(data.returns.length, 1)
 })
 
-test("the time of delivery for the verdict is the flow's, else the evidence's, and absent only when both are unreadable", async () => {
-  const root = await mkTempDeskRoot()
-  // A legacy card delivered "later" than the human turn: same turn.
-  const late = await legacyDone(root, "legacy-late", { kind: "pr", ref: PR_EVIDENCE.ref, recorded_at: new Date(FUTURE).toISOString() })
-  const sameTurn = await sign(root, "legacy-late", { outcome: "accepted" })
-  assert.equal(sameTurn.unverified_because, "same_turn_as_delivery")
-  assert.equal((await readFront(late)).data.signoff.verified, false)
-  // A flow time that cannot be read falls back to the evidence time.
-  const fallback = await delivered(root, "flow-unreadable")
-  await rewrite(fallback, (data) => { data.flow.delivered_at = "not a time"; data.evidence.recorded_at = new Date(FUTURE).toISOString() })
-  assert.equal((await sign(root, "flow-unreadable", { outcome: "accepted" })).unverified_because, "same_turn_as_delivery")
-  // Both unreadable: absent, so it does not stand in the way.
-  const neither = await delivered(root, "both-unreadable")
-  await rewrite(neither, (data) => { data.flow.delivered_at = "not a time"; data.evidence.recorded_at = "nor this" })
-  assert.equal((await sign(root, "both-unreadable", { outcome: "accepted" })).verified, true)
-  // No evidence time at all on a card with no flow: absent.
-  const bare = await legacyDone(root, "no-evidence-time", { kind: "pr", ref: PR_EVIDENCE.ref })
-  assert.equal((await sign(root, "no-evidence-time", { outcome: "accepted" })).verified, true)
-  assert.ok(bare)
-  // A readable evidence time that is a Date (a YAML reader may make one) is used too.
-  const dated = await delivered(root, "evidence-date")
-  await rewrite(dated, (data) => { data.flow.delivered_at = null; data.evidence.recorded_at = new Date(FUTURE) })
-  assert.equal((await sign(root, "evidence-date", { outcome: "accepted" })).unverified_because, "same_turn_as_delivery")
-})
-
-test("a delivery after the human turn is the same turn, from the flow's time", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "turn-order")
-  const deliveredAt = Date.parse((await readFront(file)).data.flow.delivered_at)
-  const result = await sign(root, "turn-order", { outcome: "accepted" }, { witness: human({ promptAt: deliveredAt - 1000, stopAt: deliveredAt - 5000 }) })
-  assert.equal(result.unverified_because, "same_turn_as_delivery")
-  assert.equal(result.unverified_note, "Record the answer in a later turn, after the operator has replied.")
-})
-
-// Each reason the witness can give reaches the answer with its code and one thing to do.
-const NOTES = {
-  no_witness: "Desk found no record of a human turn behind this call, so the answer is kept as unverified. Repeat the call in a later turn on a host where Desk can see the operator's message.",
-  subagent: "A subagent must not record the operator's answer. Leave it to the main agent.",
-  subagent_not_ruled_out: "Desk could not tell the main agent from a subagent, so the answer is kept as unverified. Repeat the call from the main agent in a later turn, on a host where Desk can see it.",
-  not_human_origin: "This turn did not start with a message from the operator. Record the answer after the operator replies.",
-  human_origin_unknown: "Desk could not tell whether the operator's message started this turn, so the answer is kept as unverified. Repeat the call in a later turn after the operator replies.",
-  no_prompt_since_stop: "No operator message has arrived since you last stopped. Record the answer after the operator replies.",
-  same_turn_as_delivery: "Record the answer in a later turn, after the operator has replied.",
-}
-const WITNESS_FOR = {
-  no_witness: nobody,
-  subagent: human({ mainAgent: false }),
-  subagent_not_ruled_out: human({ mainAgent: null }),
-  not_human_origin: human({ humanOrigin: false }),
-  human_origin_unknown: human({ humanOrigin: null }),
-  no_prompt_since_stop: human({ stopAt: FUTURE }),
-  same_turn_as_delivery: human({ promptAt: 1000, stopAt: 0 }),
-}
-
-test("each witness reason reaches the answer with its note, and the list is covered", async () => {
-  assert.deepEqual(Object.keys(NOTES).sort(), WITNESS_REASONS.filter((reason) => reason !== "witnessed").sort())
-  const root = await mkTempDeskRoot()
-  for (const [reason, witness] of Object.entries(WITNESS_FOR)) {
-    const slug = `reason-${reason.replaceAll("_", "-")}`
-    const file = await delivered(root, slug)
-    const result = await sign(root, slug, { outcome: "accepted" }, { witness })
-    assert.equal(result.verified, false, reason)
-    assert.equal(result.unverified_because, reason)
-    assert.equal(result.unverified_note, NOTES[reason])
-    assert.ok(result.say.endsWith(UNVERIFIED_TAIL), reason)
-    assert.equal((await readFront(file)).data.signoff.verified, false, reason)
-  }
-})
-
-test("threat: the call in the turn that delivered the work is recorded unverified", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "same-turn")
-  const deliveredAt = Date.parse((await readFront(file)).data.flow.delivered_at)
-  const result = await sign(root, "same-turn", { outcome: "accepted" }, { witness: human({ promptAt: deliveredAt - 1, stopAt: deliveredAt - 100 }) })
-  assert.equal(result.status, "signed")
-  assert.equal(result.unverified_because, "same_turn_as_delivery")
-})
-
-test("threat: no witness (Codex, hooks off) is recorded unverified", async () => {
-  const root = await mkTempDeskRoot()
-  await delivered(root, "codex-turn")
-  const result = await sign(root, "codex-turn", { outcome: "accepted" }, { witness: nobody })
-  assert.equal(result.unverified_because, "no_witness")
-})
-
-test("threat: Copilot (the main agent is not proven) is recorded unverified", async () => {
-  const root = await mkTempDeskRoot()
-  await delivered(root, "copilot-turn")
-  const result = await sign(root, "copilot-turn", { outcome: "accepted" }, { witness: () => ({ promptAt: FUTURE - 60_000, stopAt: FUTURE - 120_000, mainAgent: null, humanOrigin: true }) })
-  assert.equal(result.unverified_because, "subagent_not_ruled_out")
-})
-
-test("threat: a notification or wake-up that started the turn is recorded unverified", async () => {
-  const root = await mkTempDeskRoot()
-  await delivered(root, "wake-up-turn")
-  const result = await sign(root, "wake-up-turn", { outcome: "accepted" }, { witness: human({ humanOrigin: false }) })
-  assert.equal(result.unverified_because, "not_human_origin")
-})
 
 test("a sign-off asks the factory to re-derive the job's sessions", async () => {
   const root = await mkTempDeskRoot()
@@ -574,7 +405,7 @@ test("a sign-off asks the factory to re-derive the job's sessions", async () => 
 test("the default finalize does nothing when the factory is not set up, and a card with no resolvable job still signs", async () => {
   const root = await mkTempDeskRoot()
   await delivered(root, "default-finalize")
-  const result = await taskSignoff({ deskRoot: root, input: { track: "t", slug: "default-finalize", outcome: "accepted" }, witness: human(), now })
+  const result = await taskSignoff({ deskRoot: root, input: { track: "t", slug: "default-finalize", outcome: "accepted" }, now })
   assert.equal(result.status, "signed")
 })
 
@@ -669,7 +500,7 @@ test("the answer carries the sentence the agent must say and no card body text, 
   await delivered(root, "private-three", { archive: true })
   const answers = [
     await sign(root, "private-one", { outcome: "accepted" }),
-    await sign(root, "private-two", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { witness: nobody }),
+    await sign(root, "private-two", { outcome: "refused", reason: "defect", return_reason: "agent_error" }),
     await sign(root, "private-three", { outcome: "refused", reason: "other", return_reason: "external" }),
     await sign(root, "private-one", { outcome: "accepted" }),
   ]
@@ -691,7 +522,8 @@ test("the answer carries the sentence the agent must say and no card body text, 
 
 test("the tool is listed, has a schema whose fields match TASK_SIGNOFF_FIELDS, and dispatches", async () => {
   assert.ok(TOOL_NAMES.includes("task_signoff"))
-  assert.equal(TOOL_DESCRIPTIONS.task_signoff, "Record the operator's answer to a delivered task: accepted or refused. Call it only after the operator has answered, in a turn after the one that delivered the work. A refusal needs `reason` (theirs) and `return_reason` (your own reading) and puts the task back to processing. Desk marks the answer verified only when it saw a human turn behind it. A subagent never calls this.")
+  assert.ok(TOOL_DESCRIPTIONS.task_signoff.startsWith("Record the operator's answer to a delivered task: accepted or refused. Call it only after the operator has answered, in a turn after the one that delivered the work. A refusal needs `reason` (theirs) and `return_reason` (your own reading) and puts the task back to processing."))
+  assert.ok(!/witness/iu.test(TOOL_DESCRIPTIONS.task_signoff))
   const schema = TOOL_INPUT_SCHEMAS.task_signoff
   assert.deepEqual(Object.keys(schema.properties).sort(), [...TASK_SIGNOFF_FIELDS].sort())
   assert.deepEqual(schema.required, ["track", "slug", "outcome"])
@@ -717,11 +549,9 @@ test("every place that lists the tools lists task_signoff", () => {
   assert.ok(read("scripts/test-desk-docs.cjs").includes('"task_signoff"'))
   assert.ok(read("scripts/audit-codex-plugin-cache.cjs").includes('"task_signoff"'))
   assert.ok(read("plugins/desk/mcp/README.md").includes("`task_signoff`"))
-  for (const host of ["claude", "copilot"]) assert.ok(deferredToolsLoadHint(host).includes("task_signoff"), host)
+  for (const host of ["claude", "copilot"]) assert.ok(deferredToolsHint(host).includes("task_signoff"), host)
   assert.equal(toolKind({ host: "copilot-cli", name: "desk-task_signoff" }), "desk")
   assert.equal(toolKind({ host: "claude-code", name: "mcp__plugin_desk_desk__task_signoff" }), "desk")
-  assert.equal(isTaskToolName("desk-task_signoff"), true)
-  assert.equal(mcpToolName("desk-task_signoff"), "mcp__desk__task_signoff")
 })
 
 test("a clock that gives no usable time is refused and nothing is written", async () => {
@@ -732,44 +562,6 @@ test("a clock that gives no usable time is refused and nothing is written", asyn
   assert.equal(await body(file), before)
 })
 
-// ── fix round 1 ─────────────────────────────────────────────────────────────
-
-const deliveredMs = async (file) => Date.parse((await readFront(file)).data.flow.delivered_at)
-
-test("a prompt in the same clock second as the delivery is the same turn, and one in the next second is a later turn", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "same-second")
-  const stored = await deliveredMs(file)
-  assert.equal(stored % 1000, 0, "the card keeps the delivery to the whole second")
-  const at = (offset) => human({ promptAt: stored + offset, stopAt: stored - 5000 })
-  // A prompt 137 ms before a delivery that landed 500 ms into the second, and one after its true time: both unverified.
-  for (const [slug, offset] of [["second-before", 363], ["second-after", 700], ["second-end", 999]]) {
-    if (slug !== "second-before") await delivered(root, slug)
-    const result = await sign(root, slug === "second-before" ? "same-second" : slug, { outcome: "accepted" }, { witness: at(offset) })
-    assert.equal(result.unverified_because, "same_turn_as_delivery", slug)
-    assert.equal(result.verified, false)
-  }
-  const next = await delivered(root, "next-second")
-  const later = await sign(root, "next-second", { outcome: "accepted" }, { witness: human({ promptAt: (await deliveredMs(next)) + 1000, stopAt: 0 }) })
-  assert.equal(later.verified, true)
-})
-
-test("a delivery time that carries milliseconds is used as it is", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "with-millis")
-  await rewrite(file, (data) => { data.flow.delivered_at = "2026-10-05T10:00:00.250Z" })
-  const base = Date.parse("2026-10-05T10:00:00.250Z")
-  const ok = await sign(root, "with-millis", { outcome: "accepted" }, { witness: human({ promptAt: base + 1, stopAt: base - 1000 }) })
-  assert.equal(ok.verified, true)
-})
-
-test("a witness that carries its own delivery time does not override the card's", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "own-time")
-  const stored = await deliveredMs(file)
-  const result = await sign(root, "own-time", { outcome: "accepted" }, { witness: human({ promptAt: stored + 500, stopAt: stored - 1000, deliveredAt: 1 }) })
-  assert.equal(result.unverified_because, "same_turn_as_delivery")
-})
 
 test("a refusal refreshes the signoff status too, and `updated` is written in whole seconds", async () => {
   const root = await mkTempDeskRoot()
@@ -780,54 +572,6 @@ test("a refusal refreshes the signoff status too, and `updated` is written in wh
   assert.match((await readFront(file)).data.updated, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/u)
 })
 
-// The production witness: no `witness` is injected, so these go through `witnessFor` with the environment the host gives.
-
-async function realWitnessDesk(slug, hostEnv) {
-  const root = await mkTempDeskRoot()
-  const state = await mkTempDeskRoot()
-  const env = { HOME: state, XDG_STATE_HOME: state, ...hostEnv }
-  const file = await delivered(root, slug)
-  return { root, env, stateDir: resolveDeskStateDir({ env }), file, at: (await deliveredMs(file)) + 10_000 }
-}
-
-const humanLine = (at) => JSON.stringify({ type: "user", timestamp: new Date(at).toISOString(), promptSource: "typed", turnOrigin: "human", origin: { kind: "human" }, message: { role: "user", content: "yes, accepted" } })
-const callLineFor = (at, id) => JSON.stringify({ type: "assistant", timestamp: new Date(at).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id, name: "mcp__desk__task_signoff", input: {} }] } })
-
-test("through the server with no witness injected and no ticket, the answer and the card say unverified", async () => {
-  const root = await mkTempDeskRoot()
-  const file = await delivered(root, "default-dispatch")
-  const answer = JSON.parse((await callTool({ deskRoot: root, name: "task_signoff", input: { track: "t", slug: "default-dispatch", outcome: "accepted" } })).content[0].text)
-  assert.equal(answer.status, "signed")
-  assert.equal(answer.verified, false)
-  assert.equal(answer.unverified_because, "no_witness")
-  assert.equal(answer.signoff.verified, false)
-  assert.equal((await readFront(file)).data.signoff.verified, false)
-})
-
-test("the production witness verifies a call that has a real ticket from the hook", async () => {
-  const { root, env, stateDir, file, at } = await realWitnessDesk("real-ticket", { CLAUDECODE: "1" })
-  const transcript = path.join(env.HOME, "transcript.jsonl")
-  await fs.writeFile(transcript, [humanLine(at), callLineFor(at + 1000, "toolu_real")].join("\n") + "\n")
-  recordPrompt({ session_id: "s1" }, { stateDir, now: () => at })
-  issueTicket({ hook_event_name: "PreToolUse", session_id: "s1", transcript_path: transcript, tool_use_id: "toolu_real", tool_input: { track: "t", slug: "real-ticket", outcome: "accepted" } }, { env, stateDir, now, clock: () => 0, sleep: () => {} })
-  const result = await taskSignoff({ deskRoot: root, input: { track: "t", slug: "real-ticket", outcome: "accepted" }, env, now, finalize: async () => {}, refreshSignoff: async () => {}, schedulePush: () => {} })
-  assert.equal(result.verified, true)
-  assert.equal(result.say, "Recorded: real-ticket accepted.")
-  assert.equal((await readFront(file)).data.signoff.verified, true)
-})
-
-test("the production witness on Copilot is always unverified, because the main agent is not proven", async () => {
-  const { root, env, stateDir, file, at } = await realWitnessDesk("real-copilot", { COPILOT_AGENT_SESSION_ID: "cs1" })
-  const home = path.join(env.HOME, "copilot")
-  await fs.mkdir(path.join(home, "session-state", "cs1"), { recursive: true })
-  await fs.writeFile(path.join(home, "session-state", "cs1", "events.jsonl"), JSON.stringify({ type: "user.message", data: { content: "yes" } }) + "\n")
-  recordStop({ session_id: "cs1" }, { stateDir, now: () => at - 5000 })
-  recordPrompt({ session_id: "cs1" }, { stateDir, now: () => at })
-  const result = await taskSignoff({ deskRoot: root, input: { track: "t", slug: "real-copilot", outcome: "accepted" }, env: { ...env, COPILOT_HOME: home }, now, finalize: async () => {}, refreshSignoff: async () => {}, schedulePush: () => {} })
-  assert.equal(result.verified, false)
-  assert.equal(result.unverified_because, "subagent_not_ruled_out")
-  assert.equal((await readFront(file)).data.signoff.verified, false)
-})
 
 test("with nothing injected, a sign-off refreshes status.json.signoff from the desk as it now stands", async () => {
   const { readStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")

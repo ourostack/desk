@@ -19,61 +19,61 @@ function fixtureEnv(t) {
 
 test("the first qualifying event always launches", (t) => {
   const { env } = fixtureEnv(t)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom" }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom" }), true)
 })
 
 test("10 consecutive qualifying events for the same mechanism and signature spawn exactly one filer", (t) => {
   const { env } = fixtureEnv(t)
   const launches = []
-  for (let index = 0; index < 10; index += 1) launches.push(shouldLaunchFiler({ env, mechanism: "protected-checkout", signature: "same command" }))
+  for (let index = 0; index < 10; index += 1) launches.push(shouldLaunchFiler({ env, mechanism: "boot-check", signature: "same command" }))
   assert.deepEqual(launches, [true, ...Array(9).fill(false)])
 })
 
 test("a different signature under the same mechanism is tracked independently", (t) => {
   const { env } = fixtureEnv(t)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "reason one" }), true)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "reason two" }), true)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "reason one" }), false)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "reason one" }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "reason two" }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "reason one" }), false)
 })
 
 test("a different mechanism under the same signature is tracked independently", (t) => {
   const { env } = fixtureEnv(t)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom" }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom" }), true)
   assert.equal(shouldLaunchFiler({ env, mechanism: "index-drift", signature: "boom" }), true)
 })
 
 test("a qualifying event past the cooldown window launches again", (t) => {
   const { env } = fixtureEnv(t)
   let now = 0
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom", now: () => now }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom", now: () => now }), true)
   now += DEFAULT_FILER_COOLDOWN_MS - 1
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom", now: () => now }), false, "still within the hour")
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom", now: () => now }), false, "still within the hour")
   now += 2
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom", now: () => now }), true, "past the hour")
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom", now: () => now }), true, "past the hour")
 })
 
 test("a custom cooldownMs is honored", (t) => {
   const { env } = fixtureEnv(t)
   let now = 0
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom", cooldownMs: 1000, now: () => now }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom", cooldownMs: 1000, now: () => now }), true)
   now += 999
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom", cooldownMs: 1000, now: () => now }), false)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom", cooldownMs: 1000, now: () => now }), false)
   now += 2
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom", cooldownMs: 1000, now: () => now }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom", cooldownMs: 1000, now: () => now }), true)
 })
 
 test("fails toward launching when the state directory cannot be read or written", () => {
   const env = { HOME: path.join("/dev/null", "not-a-real-directory") }
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom" }), true)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom" }), true, "never persisted, so every call launches")
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom" }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom" }), true, "never persisted, so every call launches")
 })
 
 test("treats a corrupt or unrecognizable previous stamp as no previous stamp", (t) => {
   const { env } = fixtureEnv(t)
-  const first = shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom" })
+  const first = shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom" })
   assert.equal(first, true)
   // A second call right away, still within the cooldown, is throttled -- this just re-confirms the happy path before the corrupt-file case below.
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "boom" }), false)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "boom" }), false)
 })
 
 test("default env and now match every other real caller", (t) => {
@@ -81,17 +81,17 @@ test("default env and now match every other real caller", (t) => {
   const originalHome = process.env.HOME
   process.env.HOME = env.HOME
   t.after(() => { process.env.HOME = originalHome })
-  assert.equal(shouldLaunchFiler({ mechanism: "ask-gate", signature: "boom" }), true)
-  assert.equal(typeof shouldLaunchFiler({ mechanism: "ask-gate" }), "boolean")
+  assert.equal(shouldLaunchFiler({ mechanism: "desk-sync", signature: "boom" }), true)
+  assert.equal(typeof shouldLaunchFiler({ mechanism: "desk-sync" }), "boolean")
   // Every argument defaulted, exactly as an accidental no-args call would see: still never throws.
   assert.equal(typeof shouldLaunchFiler(), "boolean")
 })
 
 test("an empty or missing signature is still tracked, distinctly from any named signature", (t) => {
   const { env } = fixtureEnv(t)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate" }), true)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate" }), false)
-  assert.equal(shouldLaunchFiler({ env, mechanism: "ask-gate", signature: "named" }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync" }), true)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync" }), false)
+  assert.equal(shouldLaunchFiler({ env, mechanism: "desk-sync", signature: "named" }), true)
 })
 
 test("under a node:test run, a real (non-temp) state home is refused rather than written -- the same guard last-start.js's writers use", (t) => {
@@ -99,6 +99,6 @@ test("under a node:test run, a real (non-temp) state home is refused rather than
   // developer's real home, so a stamp landing here would be exactly the incident the guard exists to stop.
   const fakeReal = mkFakeRealRoot("desk-filer-throttle-fake-real-")
   t.after(() => rmSync(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
-  assert.equal(shouldLaunchFiler({ env: { HOME: fakeReal }, mechanism: "ask-gate", signature: "boom" }), true, "still fails toward launching")
+  assert.equal(shouldLaunchFiler({ env: { HOME: fakeReal }, mechanism: "desk-sync", signature: "boom" }), true, "still fails toward launching")
   assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
 })

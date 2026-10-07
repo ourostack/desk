@@ -16,7 +16,7 @@ import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 export const COPILOT_SESSION_DIR = "copilot-sessions"
-export const COPILOT_SESSION_ENV = "COPILOT_AGENT_SESSION_ID"
+const COPILOT_SESSION_ENV = "COPILOT_AGENT_SESSION_ID"
 const RECORD_VERSION = 1
 const STALE_MS = 30 * 24 * 60 * 60 * 1000
 

@@ -15,7 +15,7 @@ import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { checkLabelsAgainstFacts, validateLabelsBytes } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import {
-  factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeVisibilityCache,
+  factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus, writeVisibilityCache,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
@@ -44,8 +44,11 @@ async function setup(env) {
   await setConsent(env, { store: STORE, contribute: true, account: ACCOUNT })
 }
 
+// With the derivation receipt a sweep writes, so a held session is known to have been derived for this store.
 async function putFacts(env, n) {
-  assert.equal((await writeLocalFacts(env, STORE, localFacts(n))).written, true)
+  const { name } = await writeLocalFacts(env, STORE, localFacts(n))
+  assert.equal(typeof name, "string")
+  await writeStatus(env, { derivations: { [name]: { store: STORE, checked_route: STORE } } })
 }
 
 async function putLabels(env, n, value = localLabels(n)) {
@@ -103,7 +106,7 @@ test("a private desk's labels keep their plain job, as its facts do", () => scra
   execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/private-desk.git"])
   const log = path.join(base, "log-1.jsonl")
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   await putFacts(env, 1)
   await putLabels(env, 1)
   const github = fakeGitHub({ visibility: { "acme/private-desk": "private" } })
@@ -280,7 +283,7 @@ test("a desk whose visibility cannot be asked holds back its labels with its fac
   execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/private-desk.git"])
   const log = path.join(base, "log-1.jsonl")
   await fs.writeFile(log, "{}\n")
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: desk, desk_root: await fs.realpath(desk), end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   await putFacts(env, 1)
   await putLabels(env, 1)
   await writeVisibilityCache(env, { "acme/private-desk": { visibility: "private", checked_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() } })

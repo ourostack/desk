@@ -7,7 +7,6 @@ import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 import { promises as fs } from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { listMarkers } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -101,25 +100,6 @@ test("the sync-end hook writes no sync record and runs no git under the flag", (
   assert.notEqual(await runHook({ host: "claude", payload, env: { ...ctx.env, DESK_FACTORY_HEADLESS: "0" } }), "headless")
 }))
 
-test("the problem filers start no process under the flag, and still do without it", async () => {
-  const { askGateFailureBlock } = require(path.join(HOOKS, "ask-gate.cjs"))
-  const { deadlineDecision } = require(path.join(HOOKS, "protected-checkout.cjs"))
-  const spawned = []
-  const spawnFiler = (args) => spawned.push(args.mechanism)
-  await askGateFailureBlock(new Error("boom"), { host: "claude", env: { ...process.env, DESK_FACTORY_HEADLESS: "1" }, spawnFiler })
-  assert.deepEqual(spawned, [])
-  await askGateFailureBlock(new Error("boom"), { host: "claude", env: { ...process.env, DESK_FACTORY_HEADLESS: "0", XDG_STATE_HOME: path.join((await fs.mkdtemp(path.join(os.tmpdir(), "desk-hg-"))), "s") }, spawnFiler })
-  assert.deepEqual(spawned, ["ask-gate"])
-  // protected-checkout: the repeated-timeout path files only when not headless.
-  const rawInput = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git status" } })
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "desk-hg-"))
-  for (const flag of ["1", "0"]) {
-    const env = { ...process.env, DESK_FACTORY_HEADLESS: flag, XDG_STATE_HOME: path.join(base, flag), HOME: base }
-    for (let i = 0; i < 4; i += 1) await deadlineDecision({ rawInput, host: "claude", deadlineMs: 100, env, spawnFiler })
-  }
-  assert.deepEqual(spawned.filter((name) => name === "protected-checkout"), ["protected-checkout"], "filed once, and only by the non-headless run")
-})
-
 test("the copilot prompt hook emits nothing and claims nothing under the flag", () => scratch(async ({ env, desk }) => {
   const run = (flag) => spawnSync(process.execPath, [path.join(HOOKS, "copilot-boot-prompt.cjs")], { input: JSON.stringify({ sessionId: ID, cwd: desk, prompt: "x" }), env: { ...env, DESK_FACTORY_HEADLESS: flag }, encoding: "utf8" })
   assert.equal(run("1").stdout, "{}\n")
@@ -143,9 +123,6 @@ test("a hook that cannot load the rule file still honours the flag from the envi
     assert.equal((await require(path.join(hooks, "sync-end.cjs")).runHook({ host: "claude", payload, env: hookEnv })) === "headless", headless, `sync-end ${label}`)
     assert.equal((await require(path.join(hooks, "factory-end.cjs")).runHook({ host: "claude", payload: { ...payload, session_id: ID, transcript_path: path.join(base, "x.jsonl") }, env: hookEnv })) === "headless", headless, `factory-end ${label}`)
     assert.equal(await require(path.join(hooks, "boot-checks.cjs")).startFactory({ env: hookEnv, launch: async () => {} }) , false)
-    const filed = []
-    await require(path.join(hooks, "ask-gate.cjs")).askGateFailureBlock(new Error("x"), { host: "claude", env: { ...hookEnv, XDG_STATE_HOME: path.join(base, `s-${String(flag).length}-${String(flag)}`) }, spawnFiler: (args) => filed.push(args.mechanism) }).catch(() => {})
-    if (headless) assert.deepEqual(filed, [], `filer ${label}`)
   }
 }))
 

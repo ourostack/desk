@@ -31,7 +31,7 @@ Only a current, unsatisfied `needs-human-approval` is a hard exception. A produc
 
 Before any fan-out, the root identifies dependencies, write sets, exclusive resources, the integration fold, the evidence each child must return, and the final synthesis it will own. If those stay implicit, the work is not ready to split.
 
-Every child brief carries one line `Desk-Task: <track>/<slug>` naming the task the child's work serves, or `Desk-Task: none` when it serves none: the factory credits a child's work to a task only through that line or the task the parent held when it spawned the child. On Claude Code a hook adds the line from the task the main agent holds and refuses a brief with no line when none is held; on Copilot it refuses only; on Codex no hook runs, so the line in the brief is the whole mechanism. A child that dispatches its own child copies the line from its own brief.
+Every child brief carries one line `Desk-Task: <track>/<slug>` naming the task the child's work serves, or `Desk-Task: none` when it serves none: the factory credits a child's work to a task only through that line or the task the parent held when it spawned the child. No hook adds or checks the line on any host: the line in the brief is the whole mechanism, so copy it into every brief. A child that dispatches its own child copies the line from its own brief.
 
 Include `task-lifecycle`'s **Resources** inventory in every child return contract, including reviewers: every created worktree and local/remote branch, exact repository/path/ref, current state, owner and verified disposition, or `none created`. Record ownership and disposition at creation, not from branch-name patterns at cleanup time. At each task, iteration or delegated-assignment boundary, its owner closes out through `git-hygiene`; the Superpowers controller removes completed task worktrees through `using-superpowers-with-desk`'s mapped controller duty before releasing their reservations. A return or root exit alone does not prove that delegated, remote, MCP or command writers are absent.
 
@@ -45,7 +45,7 @@ Invoke `superpowers:requesting-code-review` once at the diff boundary with the c
 
 ## Ready-set scheduling and continuous peer review
 
-This section consumes the cross-repository plan's five-column Markdown DAG, its node states and the T01 adapter's mapped context; it produces ordered dispatch/acceptance events linked to native call IDs, resource ownership and commit-review receipts. It defines no task schema or frontmatter, no universal graph parser, service or database, and it never touches a Superpowers payload.
+This section consumes the cross-repository plan's Markdown DAG, whose table contract is the card's `## Steps` table (`Step | Depends on | Repo | State | Evidence`, defined in `task-card-format`), its node states and the T01 adapter's mapped context; it produces ordered dispatch/acceptance events linked to native call IDs, resource ownership and commit-review receipts. It defines no task schema or frontmatter, no universal graph parser, service or database, and it never touches a Superpowers payload.
 
 ```text
 1. Read the plan and progress; reject unknown dependencies and dependency cycles before dispatch.
@@ -67,6 +67,20 @@ A candidate is accepted only after spec/targeted proof and a completed finding d
 On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one.
 
 Final behavioral scheduling proof — that dispatch, serialization and acceptance actually execute this way at runtime — belongs to a later task; this section ships the source contract and the real caller/provider witnesses only.
+
+## Choosing and briefing agents
+
+Choose each subagent's model deliberately, by the work's need for capability. Pick from whatever model family the host offers rather than inheriting the default, and reserve the most capable, most expensive tier for work that needs it, usually the root agent's own synthesis and judgment. Use the smallest, fastest tier for mechanical retrieval or lookup work and a mid tier for real engineering, analysis, drafting or review. A launch mode that copies the parent's context and model (for example, a fork) is fine when inheriting the full context is genuinely worth the top-tier cost; make that a conscious choice, not a default.
+
+A child brief bounds the work and leaves the method to the child; a handoff to a peer that owns its task is not a brief. A handoff never tells that agent how to do its work. Put yourself in its shoes: it owns its task and its method, and you do not know its state. Do not presume what it has done, where it stopped or what blocks it. Say what you would want to hear in its position: what your own side changed and intends to touch, what was decided, where the edges are, what you would like from it, and how to reach you. No step lists, no commands. Keep the message short and point to the task card.
+
+## Merging and the terminal state
+
+If a repository will let you merge, merge when confident. Being inside the operator's work boundary does not by itself require their approval. Do not ask the human to approve a pull request unless the repository or platform itself enforces a human approval (a required reviewer, a branch policy) or they asked for it on that work. When a platform does enforce one, request it with the exact reviewed head and status and resume after it. You own the whole terminal state either way: prepare the PR, wait for checks, review, merge, deploy, smoke, clean up, and never report completion while the PR remains open.
+
+## The factory itself
+
+When the work is the factory itself, invoke `factory-work` first. Start from Lean, not as a lens applied on request: before you propose, design or judge anything, name the governing Lean concept (the full improvement cycle, plan, do, check, act, is one of them), and carry a "Lean reading" section in every factory design and plan.
 
 ## Requirements that arrive during execution
 

@@ -1,4 +1,4 @@
-Desk now behaves the same on Windows as on macOS and Linux in the places the new Windows test run found. The index, the vector packs and snapshots, and the paths that task, track, lesson, friction and move tools report now spell every desk path with `/` instead of a Windows backslash, so a Windows desk matches the vector packs and snapshots Desk ships and a Windows agent sees the same paths as everyone else. The task-status guard now resolves a card path through the nearest folder that exists, so a new task card written through a linked desk folder can no longer slip past the guard. The Windows ACL step finds `SystemRoot` whatever its capitalization, as Git Bash spells it.
+Desk now behaves the same on Windows as on macOS and Linux in the places the new Windows test run found. The index, the vector packs and snapshots, and the paths that task, track, lesson, friction and move tools report now spell every desk path with `/` instead of a Windows backslash, so a Windows desk matches the vector packs and snapshots Desk ships and a Windows agent sees the same paths as everyone else. The Windows ACL step finds `SystemRoot` whatever its capitalization, as Git Bash spells it.
 
 Protecting the same private folder many times in one run is faster on Windows. Desk starts Windows PowerShell for every protected write, which takes several hundred milliseconds, and a factory flush repeats that dozens of times. A folder this process already protected and verified is now skipped while its identity and change time are unchanged, and any change to it, including to its access rules, protects it again.
 
@@ -6,7 +6,7 @@ Workspace tidy now removes merged worktrees on Windows. Git reports paths with f
 
 The index links planning, doing and feedback docs to their task and honors pinned iterations on Windows. A failed move or archive no longer leaves an empty folder. Archiving a task with a symlinked card works with short temp paths. The workspace watcher no longer crashes the controller when the desk path uses an 8.3 short name.
 
-The task-card guard now recognises absolute Windows paths in shell writes, and the Bash guard resolves `/c/...` and `$(pwd)` paths and hands nested shells forward-slash Windows paths. Both had let a protected action through on Windows. Guard denials name the checkout in one spelling, and the card pre-commit refusal keeps its first sentence within the length limit.
+The card pre-commit refusal keeps its first sentence within the length limit, and guard denials name the checkout in one spelling.
 
 Desk no longer starts a separate PowerShell for each of several identical folder-protection requests made at the same moment on Windows. They share one run, which is faster and avoids concurrent rewrites of one folder's permissions.
 

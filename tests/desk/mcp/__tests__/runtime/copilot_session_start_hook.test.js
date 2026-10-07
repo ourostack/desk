@@ -37,13 +37,13 @@ test("a hook payload with no session id records nothing but still starts the ses
   assert.match(context, /Desk startup:/u)
 })
 
-test("the plugin registers the card guard, the done-claim gate and its two feeders for Copilot", () => {
+test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
   const hooks = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
   const commands = (event) => hooks[event].map((entry) => entry.bash)
-  assert.ok(commands("preToolUse").includes('node "${PLUGIN_ROOT}/hooks/task-status-guard.cjs" copilot'))
-  assert.ok(commands("agentStop").includes('node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot stop'))
-  assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot track', 'node "${PLUGIN_ROOT}/hooks/brief-task-line.cjs" copilot record'])
-  assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot prompt', 'node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"', 'node "${PLUGIN_ROOT}/hooks/signoff-witness.cjs" prompt'])
+  assert.equal(hooks.preToolUse, undefined, "Desk registers no hook on the host's tool calls")
+  assert.equal(hooks.postToolUse, undefined)
+  assert.deepEqual(commands("agentStop"), ['node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot'])
+  assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"'])
 })
 
 test("the first prompt of a session gets the boot direction as context, in either order with sessionStart, and later prompts get none", () => {

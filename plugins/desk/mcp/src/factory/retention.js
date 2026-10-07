@@ -1,5 +1,6 @@
 // The local lines `factory.js status` shows for the parts that keep local state small and for a store check that keeps failing, so a stopped part
-// signals where a reader looks. Pure: it reads the status record it is given and returns text of counts, fixed codes and timestamps only.
+// signals where a reader looks, and the findings the doctor and the boot status raise for the same two (`local-status.js`), so it is also pushed.
+// Pure: it reads the status record it is given and returns counts, fixed codes, store names and timestamps only.
 
 /** After this many stale pull requests in a row because the store's own capture check could not read the commits, the status line says so. */
 export const CHECK_UNAVAILABLE_ALARM = 3
@@ -19,12 +20,25 @@ export function retentionLine(status) {
   return `retention: ran ${at}, ${count(retention.tombstones_pruned) ?? "unknown"} tombstones pruned${copies === null ? "" : `, ${copies} delivered copies pruned in the last orphan pass`}${failed === null ? "" : `, ${failed} copy prunes FAILED`}`
 }
 
-/** `captureCheckLines(status) -> string[]`: one line per store whose own capture check has been unavailable `CHECK_UNAVAILABLE_ALARM` times or more in a row. */
+/**
+ * `retentionFinding(status) -> "prune_failed" | "copies_prune_failed" | null`: a pruning part that stopped, which the doctor and the boot status
+ * raise (`local-status.js`) so it is pushed, not only shown where a reader looks: the last sweep's tombstone pruning failed, or the last orphan
+ * pass counted a delivered-copy prune that threw.
+ */
+export function retentionFinding(status) {
+  if (isObject(status?.retention) && status.retention.failed !== undefined) return "prune_failed"
+  const failed = count(isObject(status?.orphans) ? status.orphans.copies_prune_failed : undefined)
+  return failed !== null && failed > 0 ? "copies_prune_failed" : null
+}
+
+/** `captureCheckFindings(status) -> { store, times }[]`: each store whose own capture check has been unavailable `CHECK_UNAVAILABLE_ALARM` times or more in a row. */
+export function captureCheckFindings(status) {
+  return Object.entries(isObject(status?.capture) ? status.capture : {})
+    .map(([store, entry]) => ({ store, times: isObject(entry) ? count(entry.check_unavailable) : null }))
+    .filter(({ times }) => times !== null && times >= CHECK_UNAVAILABLE_ALARM)
+}
+
+/** `captureCheckLines(status) -> string[]`: one line per store in `captureCheckFindings`. */
 export function captureCheckLines(status) {
-  const lines = []
-  for (const [store, entry] of Object.entries(isObject(status?.capture) ? status.capture : {})) {
-    const times = isObject(entry) ? count(entry.check_unavailable) : null
-    if (times !== null && times >= CHECK_UNAVAILABLE_ALARM) lines.push(`capture: the store's own check could not read the record ${times} times in a row (${store}); the record is not blamed and goes again, but it is not landing`)
-  }
-  return lines
+  return captureCheckFindings(status).map(({ store, times }) => `capture: the store's own check could not read the record ${times} times in a row (${store}); the record is not blamed and goes again, but it is not landing`)
 }

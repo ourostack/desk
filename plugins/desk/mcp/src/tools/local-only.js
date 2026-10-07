@@ -14,7 +14,7 @@ import { realpathSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths, commitBranchRefusal } from "../util/git-stage.js"
 import { deskRelativePath, resolveLocalPath, isPathContained } from "../util/paths.js"
 
 const GIT_TIMEOUT_MS = 5000
@@ -82,7 +82,7 @@ export function withLocalOnlyRecorded(repos, { spawnGit = spawnSync, homeDir = o
  * remote. Boot only ever adds the mark (the done check re-reads the clone's remotes itself). Returns the cards it
  * changed as `track/slug`. Never throws.
  */
-export async function recordLocalOnlyOnCards({ cards, deskRoot, spawnGit = spawnSync, homeDir = os.homedir() }) {
+export async function recordLocalOnlyOnCards({ cards, deskRoot, spawnGit = spawnSync, homeDir = os.homedir(), stateBranch = null }) {
   const recorded = []
   for (const card of cards) {
     if (["done", "cancelled"].includes(card.data?.status) || !Array.isArray(card.data?.repos)) continue
@@ -103,9 +103,11 @@ export async function recordLocalOnlyOnCards({ cards, deskRoot, spawnGit = spawn
       const git = isGitRepository(deskRoot, spawnGit)
       const rel = deskRelativePath(deskRoot, card.file)
       if (git && hasUnstagedWork(deskRoot, [rel], spawnGit)) continue
+      // Off the desk's branch, Desk writes nothing: the card stays unrecorded.
+      if (git && commitBranchRefusal(deskRoot, spawnGit, stateBranch) !== null) continue
       const parsed = await readMarkdown(card.file)
       await writeMarkdown(card.file, { ...parsed.data, repos: entries }, parsed.content)
-      if (git && stagePaths(deskRoot, [rel], spawnGit).ok) commitPaths(deskRoot, [rel], `boot: record local-only clone on ${card.track}/${card.slug}`, spawnGit)
+      if (git && stagePaths(deskRoot, [rel], spawnGit, stateBranch).ok) commitPaths(deskRoot, [rel], `boot: record local-only clone on ${card.track}/${card.slug}`, spawnGit, stateBranch)
       recorded.push(`${card.track}/${card.slug}`)
     } catch {
       // Recording is a convenience; a card that cannot be patched simply stays unrecorded.

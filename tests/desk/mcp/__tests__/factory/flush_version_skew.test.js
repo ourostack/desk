@@ -49,7 +49,7 @@ async function deliver(ctx, count) {
     desks.push(desk)
     const log = path.join(ctx.base, `log-${n}.jsonl`)
     await fs.writeFile(log, "{}\n")
-    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
     assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(n))).written, true)
     assert.equal((await writeLocalLabels(ctx.env, STORE, { ...structuredClone(LABELS), session: sessionId(n) })).written, true)
   }
@@ -118,10 +118,13 @@ test("the flush migrates a retracting session's copy left in the outbox, and ado
   assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(1), sessionId(2)])
   // Idempotent.
   assert.deepEqual(await keepRetractedCopies(ctx.env, STORE, [sessionId(1), sessionId(2)]), [])
-  // A restore never overwrites a file that is already there, and moves nothing for a session with no copy.
+  // A restore never overwrites a file that is already there, and moves nothing for a session with no copy. The kept copy the live one beat is
+  // retired beside itself, never deleted, so the session no longer reads as kept.
   await fs.writeFile(path.join(root, "outbox", SLUG, nameOf(1)), `${JSON.stringify(localFacts(1))}\n`, { mode: 0o600 })
   assert.deepEqual(await restoreRetractedCopies(ctx.env, STORE, [sessionId(1), sessionId(9)]), [`labels/${LABELS.job}/${sessionId(1)}.json`])
-  assert.equal(await exists(path.join(kept, nameOf(1))), true)
+  assert.equal(await exists(path.join(kept, nameOf(1))), false)
+  assert.equal(await exists(path.join(kept, `${nameOf(1)}.kept-1`)), true)
+  assert.deepEqual(await keptSessions(ctx.env, STORE), [sessionId(2)])
 }))
 
 test("facts or labels with keys a newer Desk wrote are skipped and counted as newer_format, never quarantined; any other failure still is", () => scratch(async (ctx) => {
@@ -135,7 +138,7 @@ test("facts or labels with keys a newer Desk wrote are skipped and counted as ne
   for (const n of [1, 2, 3, 4, 5]) {
     const log = path.join(ctx.base, `log-${n}.jsonl`)
     await fs.writeFile(log, "{}\n")
-    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+    await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   }
   const extra = localFacts(1)
   extra.session.at_ms = 5
@@ -181,7 +184,7 @@ test("a session whose receipt records a newer binding version is skipped and cou
   await reroute(desk, STORE)
   const log = path.join(ctx.base, "log.jsonl")
   await fs.writeFile(log, "{}\n")
-  await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(ctx.env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: log, cwd: ctx.base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   assert.equal((await writeLocalFacts(ctx.env, STORE, localFacts(1))).written, true)
   const { writeStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   await writeStatus(ctx.env, { derivations: { [nameOf(1)]: { store: STORE, marker: "x", binding_version: 999 } } })

@@ -257,7 +257,7 @@ test("quarantined, delivered and retracting state decide the bucket", () => scra
   await setConsent(ctx.env, { store: STORE, contribute: true })
   for (const id of ids.slice(0, 4)) await put(claudeFile(ctx, "-Users-someone-work", id))
   const name = (id) => `claude-code-${id}.json`
-  const current = { binding_version: BINDING_VERSION, store: STORE }
+  const current = { binding_version: BINDING_VERSION, store: STORE, checked_route: STORE }
   await writeStatus(ctx.env, { derivations: Object.fromEntries(ids.slice(0, 4).map((id) => [name(id), current])) })
   await put(path.join(root, "outbox", "ourostack__factory", name(ids[0])), "{}")
   await put(path.join(root, "quarantine", "ourostack__factory", name(ids[0])), "{}")
@@ -309,14 +309,16 @@ test("a marker with no desk is explicit, and a Codex default route nothing prove
 test("placesFor says unknown when no store is known and reads the session's own retracting records", () => {
   const places = placesFor({ markers: [], receipts: {}, retracting: new Map() })
   assert.equal(places(`claude-code-${ID}.json`, null), "unknown")
-  assert.equal(places(`claude-code-${ID}.json`, STORE), "here")
+  // With no marker, only the route this Desk checked for the session places it here.
+  assert.equal(places(`claude-code-${ID}.json`, STORE), "stale")
+  assert.equal(placesFor({ markers: [], receipts: { [`claude-code-${ID}.json`]: { store: STORE, checked_route: STORE } }, retracting: new Map() })(`claude-code-${ID}.json`, STORE), "here")
   const done = new Map([[STORE, { [`claude-code-${ID}.json`]: { path: "p", blob: "b", done: true }, [`claude-code-${ids[0]}.json`]: { done: false } }]])
   assert.equal(placesFor({ markers: [], receipts: {}, retracting: done })(`claude-code-${ID}.json`, STORE), "away")
 })
 
 test("placesFor asks the sibling markers to prove a Codex default route", () => scratch(async (ctx) => {
   const codex = { schema_version: 1, host: "codex-cli", session_id: CODEX_ID, log_path: "/x", cwd: ctx.desk, desk_root: ctx.desk, end_reason: "complete", ended_at: recent(), plugins: [], updated_at: recent() }
-  const places = placesFor({ markers: [codex], receipts: { junk: "not a receipt" }, retracting: new Map() })
+  const places = placesFor({ markers: [codex], receipts: { junk: "not a receipt", [`codex-cli-${CODEX_ID}.json`]: { store: STORE, checked_route: STORE } }, retracting: new Map() })
   assert.equal(places(`codex-cli-${CODEX_ID}.json`, STORE), "here")
   // A receipt that is not an object passes through the lower-casing untouched.
   await writeStatus(ctx.env, { derivations: { junk: "not a receipt" } })

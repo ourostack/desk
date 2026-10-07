@@ -1687,6 +1687,20 @@ test("bootOnce: the text boot gives undecided factory consent as one short line 
   assert.ok(!decided.text_instructions.some((line) => /[Ff]actory consent/u.test(line)))
 })
 
+test("bootOnce: the factory findings (orphan pass, retention, a store check that keeps failing) are plain-text boot lines before the consent line", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const findings = () => ({ ...UNDECIDED(), orphans: "pass_failed", retention: "prune_failed", capture_check_unavailable: [{ store: "ourostack/factory-intake", times: 3 }] })
+  const plain = (await healthyBoot(root, { factoryStatusFn: findings })).text_instructions
+  const at = (pattern) => plain.findIndex((line) => pattern.test(line))
+  assert.ok(at(/^Factory: orphan pass needs attention: pass_failed\. /u) !== -1)
+  assert.ok(at(/^Factory: local retention needs attention: prune_failed\. /u) !== -1)
+  assert.ok(at(/^Factory: ourostack\/factory-intake: capture record not landing, the store's own check could not read it 3 times in a row\. /u) !== -1)
+  assert.match(plain.at(-1), /^Factory consent is undecided/u, "consent stays last")
+  const quiet = (await healthyBoot(root, { factoryStatusFn: () => null })).text_instructions
+  assert.equal(quiet.some((line) => line.startsWith("Factory: ")), false, "no factory status, no finding line")
+})
+
 test("bootOnce: the text boot folds the rules into short closing wording, drops the host list, and keeps the tool hint", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "open-task", VALID_CARD)

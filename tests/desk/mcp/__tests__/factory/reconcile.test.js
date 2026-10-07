@@ -107,7 +107,7 @@ async function addSession({ base, desk, env }, n, track, slug, options = {}) {
     ...(focusDisagrees ? { focus_disagrees: [job] } : {}),
     ...receiptFields,
   }
-  if (receipt !== null) await writeStatus(env, { derivations: { [name]: { store, marker: "m", binding_version: receipt, ...receiptJob, size: 1, mtime: 1, ino: 1, dev: 1 } } })
+  if (receipt !== null) await writeStatus(env, { derivations: { [name]: { store, checked_route: store, marker: "m", binding_version: receipt, ...receiptJob, size: 1, mtime: 1, ino: 1, dev: 1 } } })
   const logPath = path.join(base, "logs", `${n}.jsonl`)
   if (log) {
     await mkdir(path.dirname(logPath), { recursive: true })
@@ -128,7 +128,7 @@ async function writeMarker(root, { name, host, id, desk, logPath, store, deskRoo
   await mkdir(path.join(root, "markers"), { recursive: true })
   await writeFile(path.join(root, "markers", name), JSON.stringify({
     schema_version: 1, host, session_id: id, log_path: logPath, cwd: desk, desk_root: deskRoot, end_reason: null,
-    ended_at: endedAt, plugins: [], updated_at: "2026-09-25T09:30:00.000Z",
+    ended_at: endedAt, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: "2026-09-25T09:30:00.000Z",
     ...(routing ? { routing: { store, source: "default", warnings: [] } } : {}),
   }))
 }
@@ -283,7 +283,7 @@ test("a marker routed to a store with no consent is not_opted_in, and a store-le
   assert.deepEqual(result.unbound_markers, [{ session: `claude-code-${sessionId(1)}`, reason: "not_opted_in", detail: "store_without_consent" }])
   await writeFile(path.join(root, "markers", `claude-code-${sessionId(1)}.json`), JSON.stringify({
     schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: logPath, cwd: desk, desk_root: desk, end_reason: null,
-    ended_at: "2026-09-25T09:30:00.000Z", plugins: [], updated_at: "2026-09-25T09:30:00.000Z",
+    ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: "2026-09-25T09:30:00.000Z",
     routing: { store: null, source: "invalid_declaration", warnings: [] },
   }))
   const declared = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
@@ -324,7 +324,7 @@ test("a task with no card is card_missing, a marker with a missing desk root is 
   await mkdir(path.join(root, "markers"), { recursive: true })
   await writeFile(path.join(root, "markers", `claude-code-${sessionId(1)}.json`), JSON.stringify({
     schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(desk, "x.jsonl"), cwd: desk, desk_root: null, end_reason: null,
-    ended_at: "2026-09-25T09:30:00.000Z", plugins: [], updated_at: "2026-09-25T09:30:00.000Z",
+    ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: "2026-09-25T09:30:00.000Z",
   }))
   assert.equal(reasonsOf(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }), "kept")[0], "not_bound", "a marker with no desk root is not this desk's")
 }))
@@ -619,7 +619,7 @@ async function addBoundSession(context) {
   const { desk, env } = context
   const root = await factoryStateRoot(env)
   await writeFile(path.join(root, "consent.json"), JSON.stringify({ schema_version: 1, stores: { [STORE]: { contribute: true, account: "a", intake_id: "0123456789abcdef" } } }))
-  await writeFile(path.join(root, "status.json"), JSON.stringify({ last_flush: {}, derivations: { [`claude-code-${sessionId(3)}.json`]: { binding_version: BINDING_VERSION } } }))
+  await writeFile(path.join(root, "status.json"), JSON.stringify({ last_flush: {}, derivations: { [`claude-code-${sessionId(3)}.json`]: { binding_version: BINDING_VERSION, store: STORE, checked_route: STORE } } }))
   const facts = structuredClone(GOLDEN)
   facts.session.id = sessionId(3)
   facts.jobs = [{ job: jobOf(desk, "t", "a"), basis: ["desk_tool"], task_created_at: null, transitions: [], observed: null }]

@@ -196,10 +196,13 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
   const dirs = [];
   let incomplete = false;
   let timedOut = false;
+  // Why the scan is incomplete, the first reason found, for the doctor: it names the hold and its remedy.
+  let reason = null;
+  const hold = (code) => { incomplete = true; reason ??= code; };
   const late = () => {
     if (performance.now() <= deadline) return false;
     timedOut = true;
-    incomplete = true;
+    hold("scan_deadline");
     return true;
   };
   // Each plugin records where it was installed from (`source`), which decides whether a public store may name it.
@@ -209,7 +212,7 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
   };
   const unknown = () => null;
   // Codex has no plugin registry Desk reads, so a Codex marker records no plugins and routes by the desk alone.
-  if (host === "codex") return { plugins, dirs, incomplete, timedOut };
+  if (host === "codex") return { plugins, dirs, incomplete, timedOut, reason };
   const sourceLate = () => performance.now() > sourceDeadline;
   if (host === "copilot") {
     // opendir bounds the enumeration as well as the number of file reads.
@@ -218,8 +221,10 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
       let entry;
       let scanned = 0;
       while ((entry = dir.readSync()) !== null) {
-        if (++scanned > 128 || dirs.length === 64) { incomplete = true; break; }
-        if (entry.isDirectory()) dirs.push(path.join(path.dirname(pluginRoot), entry.name));
+        if (++scanned > 128 || dirs.length === 64) { hold("too_many_plugins"); break; }
+        // A plugin installed as a link to its folder is a plugin too: the route reads it through the link, and a link that does not resolve
+        // to a folder holds the route (`store-route.js`).
+        if (entry.isDirectory() || entry.isSymbolicLink()) dirs.push(path.join(path.dirname(pluginRoot), entry.name));
       }
     } finally { dir.closeSync(); }
     // Agency sessions copy their plugins from Agency's cache; plain Copilot installs them from a marketplace.
@@ -235,37 +240,57 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
         const plugin = JSON.parse(readSmallText(path.join(folder, "plugin.json")));
         add(plugin.name, plugin.version, source);
       } catch {
-        // resolveStore records unreadable manifests as local status warnings.
+        // The plugin is left out of the facts; resolveStore reads the manifest again and holds the route when it is unreadable.
       }
     }
   } else {
     try {
       const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
-      const installed = JSON.parse(readSmallText(path.join(configDir, "plugins", "installed_plugins.json"), MAX_INPUT));
-      if (!installed.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
-      incomplete = Object.keys(installed.plugins).length > 64;
+      const registry = path.join(configDir, "plugins", "installed_plugins.json");
+      let installed;
+      try {
+        installed = JSON.parse(readSmallText(registry, MAX_INPUT));
+      } catch (error) {
+        throw new Error(error.code === "ENOENT" ? "registry_missing" : "registry_unreadable");
+      }
+      if (!installed?.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
+      if (Object.keys(installed.plugins).length > 64) hold("too_many_plugins");
+      const deskInstalls = [];
       const marketplaceOf = sources ? claudeSources(configDir, readSmallText, PATTERNS, sourceLate) : unknown;
       for (const [key, records] of Object.entries(installed.plugins).slice(0, 64)) {
         const source = () => marketplaceOf(key);
         if (late()) break;
-        if (!Array.isArray(records)) { incomplete = true; continue; }
-        if (records.length > 64) incomplete = true;
+        if (!Array.isArray(records)) { hold("registry_unreadable"); continue; }
+        if (records.length > 64) hold("too_many_plugins");
         for (const record of records.slice(0, 64)) {
-          if (!record || typeof record !== "object") { incomplete = true; continue; }
+          if (!record || typeof record !== "object") { hold("registry_unreadable"); continue; }
           add(key.split("@")[0], record.version, source);
-          if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { incomplete = true; continue; }
+          if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { hold("registry_unreadable"); continue; }
+          if (key.split("@")[0] === "desk") deskInstalls.push(record.installPath);
           if (dirs.includes(record.installPath)) continue;
-          if (dirs.length === 64) incomplete = true;
+          if (dirs.length === 64) hold("too_many_plugins");
           else dirs.push(record.installPath);
         }
       }
+      // A Desk the registry does not list was loaded another way (`claude --plugin-dir`), and so may any overlay beside it: the registry
+      // does not name the plugin set, so the route is held. A Desk record in the same cache folder as the running one is another version of
+      // it (Desk updated while this session ran, which keeps the old version's folder): that Desk is listed.
+      const sibling = (install) => samePath(path.dirname(install), path.dirname(pluginRoot));
+      if (!late() && !dirs.some((dir) => samePath(dir, pluginRoot)) && !deskInstalls.some(sibling)) hold("desk_not_in_registry");
     } catch (error) {
-      // Missing metadata is represented by no plugin facts, never invented.
-      incomplete = error.code !== "ENOENT";
+      // Missing metadata is represented by no plugin facts, never invented. A registry that is missing or unreadable could have named an
+      // overlay that declares a private store, so the scan is incomplete and the route is held (fail closed, ruling 2026-10-06).
+      hold(error.message === "registry_missing" ? "registry_missing" : "registry_unreadable");
     }
   }
   late();
-  return { plugins, dirs, incomplete, timedOut };
+  return { plugins, dirs, incomplete, timedOut, reason };
+}
+
+// Whether two paths name the same folder, following links; a path that cannot be resolved is compared as written.
+function samePath(left, right) {
+  const real = (value) => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
+  return real(left) === real(right);
 }
 
 // A Codex thread spawned by another thread is not a session. SessionEnd never fires for one, but a payload or rollout that names a parent is refused anyway.

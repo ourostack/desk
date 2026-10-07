@@ -208,7 +208,7 @@ test("no desk_commit when the commit failed, git cannot name HEAD, or the desk i
   assert.equal(failed.commit.status, "failed")
   assert.equal(Object.hasOwn(failed, "desk_commit"), false)
   for (const answer of [{ status: 1, stdout: "", stderr: "" }, { status: 0, stdout: "  \n" }, { status: 0, stdout: null }, null]) {
-    const result = await task_update({ deskRoot: root, input: { track: "t", slug: "s", note: "b" }, schedulePush: () => {}, spawnGit: wrap((args) => args.includes("--short"), answer) })
+    const result = await task_update({ deskRoot: root, input: { track: "t", slug: "s", note: "b" }, schedulePush: () => {}, spawnGit: wrap((args) => args.includes("rev-parse") && args.includes("--short"), answer) })
     assert.equal(Object.hasOwn(result, "desk_commit"), false, JSON.stringify(answer))
     assert.equal(Object.hasOwn(result, "desk_pushed"), false)
   }

@@ -204,10 +204,11 @@ test("task_update with a status change and no next_step shows the step too, and 
   assert.match(result.next_step_note, /^next_step unchanged/u)
 })
 
-test("task_update that sets next_step, or changes neither status nor note, adds no reminder", async () => {
+test("task_update that sets next_step echoes it and adds no reminder, and a call that changes neither status nor note adds no reminder", async () => {
   const root = await deskWithTask()
   const set = await task_update({ deskRoot: root, input: { track: "t", slug: "s", note: "did it", next_step: "open the PR" } })
-  assert.equal(Object.hasOwn(set, "next_step"), false)
+  // The new step is echoed so the agent sees it took effect; the "unchanged" reminder is not.
+  assert.equal(set.next_step, "open the PR")
   assert.equal(Object.hasOwn(set, "next_step_note"), false)
   const other = await task_update({ deskRoot: root, input: { track: "t", slug: "s", body_append: "More." } })
   assert.equal(Object.hasOwn(other, "next_step_note"), false)

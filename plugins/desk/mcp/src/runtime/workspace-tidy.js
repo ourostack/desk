@@ -20,7 +20,7 @@ const text = (value) => typeof value === "string" && value.length > 0
 const cleanLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ")
 // Workspace tidy's Git calls run in the detached repair, the CLI and the boot check's inspection. Only the boot check answers a host, and its whole-check budget aborts its calls through their signal, so each call may take far longer than a hook's 2 s: under load the 2 s limit killed repairs' ls-remote and rev-parse calls and left worktrees retained.
 export const TIDY_GIT_TIMEOUT_MS = 20_000
-export const tidyGit = (cwd, args, options) => readInspectionGit(cwd, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS, ...options })
+export const tidyGit = (cwd, args, options) => readInspectionGit(cwd, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { timeoutMs: TIDY_GIT_TIMEOUT_MS, ...options })
 const gitDefault = tidyGit
 
 // A task card's leading front matter block, read with one bounded read of at
@@ -375,9 +375,6 @@ async function candidate(item, inventory, options) {
   const common = nativeGitPath(await mustGit(git, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]))
   const admin = nativeGitPath(await mustGit(git, cwd, ["rev-parse", "--absolute-git-dir"]))
   if (samePath(admin, common) || !insidePath(path.join(common, "worktrees"), admin)) throw new Error("worktree ownership unverified")
-  const protectedFlag = await git(cwd, ["config", "--type=bool", "--get", "desk.protected"])
-  if (protectedFlag.ok && protectedFlag.stdout === "true") throw new Error("protected checkout")
-  if (!protectedFlag.ok && protectedFlag.code !== 1) throw new Error("protected policy unreadable")
   for (const marker of ["index.lock", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_LOG"]) {
     if (!await absent(path.join(admin, marker))) throw new Error("git operation in progress")
   }

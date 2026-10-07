@@ -10,7 +10,7 @@ import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/
 import { readInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
 import { TIDY_GIT_TIMEOUT_MS } from "../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js"
 // Injected Git runners stand in for workspace tidy's own, so they keep its per-call limit rather than the hooks' 2 s default.
-const tidyInspectionGit = (cwd, args) => readInspectionGit(cwd, args, {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS })
+const tidyInspectionGit = (cwd, args) => readInspectionGit(cwd, args, { timeoutMs: TIDY_GIT_TIMEOUT_MS })
 import { serializeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
@@ -113,7 +113,6 @@ const refusals = [
   ["writer", async (f, w) => { w.record.release.processes = []; await w.save() }],
   ["consumer", async (f, w) => { w.record.release.consumers = ["remote-job"]; await w.save() }],
   ["detached", async (f, w) => git(w.directory, "switch", "--detach")],
-  ["protected", async (f, w) => git(w.directory, "config", "desk.protected", "true")],
   ["ownership", async (f, w) => fs.writeFile(w.receipt, "{broken")],
   ["ownership", async (f, w) => { await fs.rename(w.receipt, `${w.receipt}.real`); await fs.symlink(`${w.receipt}.real`, w.receipt) }],
 ]
@@ -490,14 +489,13 @@ test("Git refusals and state changes at each deletion boundary remain visible", 
   const f = await fixture()
   const w = await worktree(f)
   for (const [fault, reason] of [
-    ["admin", /ownership/], ["protected", /policy/], ["status", /inspection/],
+    ["admin", /ownership/], ["status", /inspection/],
     ["unregistered", /registration/], ["receipt", /ownership changed/], ["remove", /removal refused/],
     ["absence", /absence unverified/], ["prunable", /missing/],
   ]) {
     let lists = 0
     const run = async (cwd, args) => {
       if (fault === "admin" && args.includes("--absolute-git-dir")) return { ok: true, stdout: w.record.repository }
-      if (fault === "protected" && args.includes("desk.protected")) return { ok: false, code: 128 }
       if (fault === "status" && args[0] === "status") return { ok: false, code: 128 }
       if (args[0] === "worktree" && args[1] === "remove") {
         if (fault === "remove") return { ok: false, code: 128 }

@@ -1,8 +1,8 @@
 // The two body edits `task_update` makes for the agent, so a task card's progress is only ever written through
 // Desk's tools: `note` appends a dated line to the card's `## Progress log`, and `next_step` replaces the card's
-// recorded `**Next step:**` paragraph. A PreToolUse guard denies direct Write/Edit/MultiEdit on a live card
-// (runtime/task-status-guard.js) because an agent that could edit the card freely wrote "Push routing
-// confirmed ... scenario is handled" into it with no PR and no check (boot acceptance round A).
+// recorded `**Next step:**` paragraph. An agent that could edit the card freely once wrote "Push routing
+// confirmed ... scenario is handled" into it with no PR and no check (boot acceptance round A); the desk's
+// pre-commit hook (desk/card-commit-guard.js) now refuses a hand commit of a card.
 //
 // Both edits read the body line by line and ignore fenced code blocks, so a marker or heading quoted inside a
 // fence is never mistaken for the card's own. Line endings are kept: a card written with CRLF stays CRLF.
@@ -19,7 +19,7 @@ function oneLine(text) {
 }
 
 /** The body's lines, its line ending, and which lines sit inside a fenced code block (fence lines included). */
-function scan(body) {
+export function scan(body) {
   const eol = body.includes("\r\n") ? "\r\n" : "\n"
   const lines = body.split(/\r?\n/u)
   const fenced = []
