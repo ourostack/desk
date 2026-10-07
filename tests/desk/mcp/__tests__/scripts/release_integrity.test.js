@@ -128,6 +128,62 @@ test("a diff past the explicit limit says so instead of a bare ENOBUFS", () => {
   })
 })
 
+// Track paths without a working tree: a blob (or symlink, mode 120000, or gitlink, mode 160000) at each path.
+function track(root, entries) {
+  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, input: "x\n", encoding: "utf8" }).trim()
+  for (const [mode, file] of entries) {
+    const sha = mode === "160000" ? "1".repeat(40) : blob
+    git(root, "update-index", "--add", "--cacheinfo", `${mode},${sha},${file}`)
+  }
+  git(root, "commit", "-q", "-m", "force-added")
+}
+
+const nodeModulesProblem = (root, base) => checker.checkReleaseIntegrity({ repoRoot: root, base }).filter((problem) => /node_modules/u.test(problem))
+
+test("tracked node_modules paths are a problem, with or without a base, and the message is exact", () => {
+  withRepo((root) => {
+    track(root, [
+      ["100644", "node_modules/x"],
+      ["100644", "plugins/alpha/node_modules/deep/y"],
+      ["120000", "plugins/desk/node_modules"],
+      ["160000", "sub/node_modules"],
+      ["100644", "evals/vendor/ok"],
+      ["100644", "my_node_modules/f"],
+      ["100644", "node_modules2/f"],
+    ])
+    for (const base of [null, "base"]) {
+      assert.deepEqual(nodeModulesProblem(root, base), [
+        "4 tracked path(s) are inside node_modules/ (node_modules/x, plugins/alpha/node_modules/deep/y, plugins/desk/node_modules and 1 more); " +
+          "remove them from the commit (`git rm -r --cached`), because node_modules is gitignored and was only added with `git add -f`",
+      ])
+    }
+  })
+})
+
+test("three tracked node_modules paths are all named and none is counted as more", () => {
+  withRepo((root) => {
+    track(root, [["100644", "node_modules/x"], ["100644", "plugins/alpha/node_modules/deep/y"], ["120000", "plugins/desk/node_modules"]])
+    assert.deepEqual(nodeModulesProblem(root, null), [
+      "3 tracked path(s) are inside node_modules/ (node_modules/x, plugins/alpha/node_modules/deep/y, plugins/desk/node_modules); " +
+        "remove them from the commit (`git rm -r --cached`), because node_modules is gitignored and was only added with `git add -f`",
+    ])
+  })
+})
+
+test("a bare gitlink named node_modules is flagged on its own", () => {
+  withRepo((root) => {
+    track(root, [["160000", "node_modules"]])
+    assert.match(nodeModulesProblem(root, null)[0], /^1 tracked path\(s\) are inside node_modules\/ \(node_modules\);/u)
+  })
+})
+
+test("names that only contain node_modules, and a tracked vendor/, are not flagged", () => {
+  withRepo((root) => {
+    track(root, [["100644", "my_node_modules/f"], ["100644", "node_modules2/f"], ["100644", "evals/vendor/ok"], ["120000", "plugins/desk/node_modules_link"]])
+    assert.deepEqual(nodeModulesProblem(root, null), [])
+  })
+})
+
 test("a test-only change needs no release", () => {
   withRepo((root) => {
     mkdirSync(path.join(root, "plugins", "alpha", "__tests__"), { recursive: true })
