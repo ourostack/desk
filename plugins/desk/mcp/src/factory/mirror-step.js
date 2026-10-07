@@ -34,8 +34,8 @@ import { fileKaizenCard } from "./kaizen-file.js"
 import { recordStep } from "./loop-status.js"
 import { PATTERNS } from "./schema.js"
 
-export const MAX_ATTEMPTS = 20
-export const MIRROR_BODY = "An improvement card on a Desk machine names this measure. A public card carries structured fields only."
+const MAX_ATTEMPTS = 20
+const MIRROR_BODY = "An improvement card on a Desk machine names this measure. A public card carries structured fields only."
 
 const STORE_LEVEL = new Set(["held_cap", "route_unknown", "not_opted_in", "store_invalid", "no_account", "gh_missing", "auth_failed"])
 // Codes that mean the filer or GitHub failed rather than that a rule held the card back.

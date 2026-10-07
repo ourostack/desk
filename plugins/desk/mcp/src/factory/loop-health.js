@@ -36,14 +36,14 @@ export const AGE_ALARM_DAYS = 7
 export const STUCK_ALARM_DAYS = 21
 export const STALE_AFTER_HOURS = 72
 /** A stored time this far ahead of the clock is clock skew, not a fresh reading. */
-export const FUTURE_ALLOWANCE_MINUTES = 5
-export const RECORD_SCHEMA = "desk.factory.loop/1"
+const FUTURE_ALLOWANCE_MINUTES = 5
+const RECORD_SCHEMA = "desk.factory.loop/1"
 
 /** Every state code the evaluator step writes; a stored state outside the list reads `unavailable` in the record. */
 export const HEADLESS_STATES = Object.freeze(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host"])
 /** The states an agent can fix; only these open `loop_alarm:headless_blocked` (a spent cap, a switch and per-token billing are shown, never carded). */
 export const BLOCKING_STATES = Object.freeze(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
-export const BLOCKED_DAYS_FOR_ALARM = 2
+const BLOCKED_DAYS_FOR_ALARM = 2
 
 const HOUR_MS = 3600 * 1000
 const DAY_MS = 24 * HOUR_MS

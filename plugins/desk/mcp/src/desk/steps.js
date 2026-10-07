@@ -14,9 +14,9 @@
 import { scan } from "../tools/task-body.js"
 import { isDerivable } from "./step-delivery.js"
 
-export const STEP_STATES = ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"]
-export const DERIVED_STATES = ["in review", "merged", "delivered"]
-export const STEP_FIELDS = ["id", "state", "depends_on", "repo", "evidence", "reason", "expect", "dependents_ok"]
+const STEP_STATES = ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"]
+const DERIVED_STATES = ["in review", "merged", "delivered"]
+const STEP_FIELDS = ["id", "state", "depends_on", "repo", "evidence", "reason", "expect", "dependents_ok"]
 const NEEDS_REASON = ["blocked", "dropped"]
 export const SETTLED = ["delivered", "dropped"]
 const HEADING = "## Steps"

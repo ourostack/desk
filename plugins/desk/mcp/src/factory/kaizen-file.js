@@ -68,7 +68,7 @@ export const FRICTION_CLASSES = Object.freeze(["guard", "hook", "mcp_tool", "ski
 // The plugins the public `ourostack` marketplace distributes; any other plugin's name stays off public stores.
 export const PUBLIC_PLUGINS = Object.freeze(["crew", "desk", "plain-language", "superpowers"])
 export const MAX_CARDS_PER_DAY = 5
-export const FINGERPRINT_PREFIX = "<!-- desk-kaizen-fingerprint: "
+const FINGERPRINT_PREFIX = "<!-- desk-kaizen-fingerprint: "
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const MAX_TITLE = 120
@@ -79,7 +79,7 @@ const HIGHER_IS_BETTER = new Set(["flow_efficiency"])
 // reuse this exact scrub instead of duplicating it -- the one deliberate
 // departure spec.md's fingerprint design calls out is the fingerprint
 // itself (no machine secret), not this credential/path/email defense.
-export const PRIVATE_TEXT = [
+const PRIVATE_TEXT = [
   /(^|[\s("'`])~[\\/]/u,
   /\/(Users|home)\//u,
   /[A-Za-z]:\\/u,

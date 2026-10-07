@@ -16,8 +16,8 @@
 
 import { parsePrUrl } from "./release-version.js"
 
-export const MAX_CALLS = 5
-export const MAX_CHECK_RUNS = 100
+const MAX_CALLS = 5
+const MAX_CHECK_RUNS = 100
 const GREEN = new Set(["success", "neutral", "skipped"])
 
 function failure(code) {

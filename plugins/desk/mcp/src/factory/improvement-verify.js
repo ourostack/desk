@@ -66,8 +66,8 @@ export const DESK_PROBLEM_QUIET_DAYS = 7
 export const MAX_READING_AGE_HOURS = 72
 // A card with its own signal that reads measured present at this many verifying checks reopens then.
 export const RECURRING_VERIFYING_CHECKS = 3
-export const RECONCILE_CLEAR_RUNS = 2
-export const RECONCILE_RECURRING_RUNS = 3
+const RECONCILE_CLEAR_RUNS = 2
+const RECONCILE_RECURRING_RUNS = 3
 export const CONFIRMED_COMMENT = "Closed by the Desk loop: the check confirmed this change."
 export const UNVERIFIED_COMMENT = "Closed by the Desk loop: this change could not be verified by this measure."
 

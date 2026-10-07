@@ -37,7 +37,7 @@ import { CAPTURE_LOOP_KEY, CAPTURE_PATH, CAPTURE_SCHEMA, NOT_COUNTED, validateCa
 import { ENUMS, PATTERNS } from "./schema.js"
 
 export const CAPTURE_INVALID = "capture_invalid"
-export const OWNER_NONE = "-"
+const OWNER_NONE = "-"
 
 const INTAKE_ID = /^[0-9a-f]{16}$/u
 const NOT_COUNTED_STATES = ["capped", "unreadable"]

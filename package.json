@@ -1,0 +1,11 @@
+{
+  "name": "ourostack-desk-repo-checks",
+  "private": true,
+  "description": "Repository-level checks only. Desk itself ships from plugins/desk.",
+  "devDependencies": {
+    "knip": "^5"
+  },
+  "scripts": {
+    "knip": "knip"
+  }
+}

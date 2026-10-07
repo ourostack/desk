@@ -1,0 +1,68 @@
+// Finds code nothing uses: files no entry point reaches, exports nothing imports, unused dependencies and duplicate exports.
+// Run it locally with `npm run knip` from the repository root. The "Unused code" CI job runs the same command and is part of the required CI gate.
+//
+// Desk is plain JavaScript loaded in four ways, and each way is an entry point below:
+//   - the MCP server (plugins/desk/mcp/index.js and the bootstrap, web and proxy launchers it ships with),
+//   - hooks registered in plugins/desk/hooks/hooks.json and copilot-hooks.json, and scripts that package.json scripts or workflows run,
+//   - the Node test runner's test files, which are entry points by design: a module only a test reaches still counts as used,
+//   - modules those loaders pull in by a path string or a computed URL, which a static analyser cannot follow (listed under "dynamicallyLoaded").
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  // Only unused code. Missing or unlisted dependencies, unresolved imports and binaries are a different question and stay out.
+  "include": ["files", "dependencies", "exports", "types", "nsExports", "nsTypes", "duplicates", "classMembers", "enumMembers"],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.{cjs,js,mjs}",
+        ".github/scripts/*.mjs",
+        "evals/boot-acceptance/*.mjs",
+        "evals/offline/*.mjs",
+        "evals/**/__tests__/**/*.{js,cjs,mjs}",
+        "tests/**/*.{js,cjs,mjs}"
+      ],
+      "project": ["scripts/**", ".github/scripts/**", "evals/**", "tests/**"],
+      // evals/offline/vendor is a TypeScript package copied in from upstream, and the fixtures and cases are inputs the tests feed to the code under test, not Desk code.
+      "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**"]
+    },
+    "plugins/desk/mcp": {
+      "entry": [
+        "bootstrap.cjs",
+        "web.cjs",
+        "web-proxy.cjs",
+        "scripts/*.{js,mjs}",
+        // dynamicallyLoaded: hooks and tests load these by a path string (`runtime("runtime/desk-health.js")` in hooks/boot-checks.cjs) or a computed URL (`import(`${FACTORY}x.js`)` in the tests), so knip cannot see the import.
+        "src/runtime/workspace-evidence.js",
+        "src/util/paths.js",
+        "src/runtime/bootstrap.js",
+        "src/runtime/runtime-deps.js",
+        "src/runtime/node-selection.js",
+        "src/activation/codex-smoke.js",
+        "src/activation/adapters/codex.js",
+        "src/activation/artifact-ledger.js",
+        "src/activation/support-matrix.js",
+        "src/activation/validate.js",
+        "src/artifacts/policy.js",
+        "src/artifacts/tombstones.js",
+        "src/snapshots/manifest.js",
+        "src/snapshots/restore.js",
+        "src/indexer/spec.js",
+        "src/factory/pipeline/formulas.js",
+        "src/factory/schema.js"
+      ],
+      "project": ["**/*.{js,cjs,mjs}"],
+      "ignoreDependencies": [
+        // nyc and the ESM coverage loader run the coverage gate: scripts/run-coverage.js starts nyc as a child process and the loader is passed by name (--import), so no import statement names either.
+        "nyc",
+        "@istanbuljs/esm-loader-hook",
+        // Source of the vendored tables in src/util/unicode-16. It is kept as a dev dependency so the tables can be reproduced (src/util/unicode-16/README.md); no code imports it.
+        "@unicode/unicode-16.0.0"
+      ]
+    },
+    "plugins/desk/browser-context-broker": {
+      "entry": ["bin/*.mjs"],
+      "project": ["**/*.mjs"],
+      // The broker's tests live under tests/desk/browser-context-broker, outside this package, and they import playwright-core from this package's install.
+      "ignoreDependencies": ["playwright-core"]
+    }
+  }
+}

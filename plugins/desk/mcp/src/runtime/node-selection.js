@@ -196,8 +196,6 @@ export function reexecWithCompatibleNode({
   })
 }
 
-export const reexecuteWithCompatibleNode = reexecWithCompatibleNode
-
 function addExecutable(candidates, candidate) {
   if (!hasText(candidate) || candidates.includes(candidate) || !isFile(candidate)) {
     return

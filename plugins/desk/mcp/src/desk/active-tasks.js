@@ -180,7 +180,7 @@ function finishedCleanup(deskRoot, env) {
 const FINISHED_SHOWN = 20
 
 // null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
-export function readCardData(filePath) {
+function readCardData(filePath) {
   let fd
   try {
     fd = openSync(filePath, "r")

@@ -33,14 +33,14 @@ import { CAPTURE_PATH } from "./capture-schema.js"
 import { loopSlotFrom } from "./loop-slot.js"
 import { gitBlobSha, readStatus, writeStatus } from "./outbox.js"
 
-export const CAPTURE_FLAG = 1
-export const SEND_INTERVAL_MS = 20 * 60 * 60 * 1000
-export const FRESH_MS = 3 * 24 * 60 * 60 * 1000
-export const NOT_READY_MS = 24 * 60 * 60 * 1000
-export const INVALID_MS = 24 * 60 * 60 * 1000
-export const REFUSED_MS = 7 * 24 * 60 * 60 * 1000
-export const NOT_READY = "store_not_ready"
-export const INVALID = "capture_invalid"
+const CAPTURE_FLAG = 1
+const SEND_INTERVAL_MS = 20 * 60 * 60 * 1000
+const FRESH_MS = 3 * 24 * 60 * 60 * 1000
+const NOT_READY_MS = 24 * 60 * 60 * 1000
+const INVALID_MS = 24 * 60 * 60 * 1000
+const REFUSED_MS = 7 * 24 * 60 * 60 * 1000
+const NOT_READY = "store_not_ready"
+const INVALID = "capture_invalid"
 
 const SHA = /^[0-9a-f]{40}$/u
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -49,7 +49,7 @@ const iso = (ms) => new Date(ms).toISOString()
 const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable"]
 
 /** The coverage the record may be built from: parsable `ran_at`, not in the future, under three days old; else null. */
-export function freshCoverage(status, nowMs) {
+function freshCoverage(status, nowMs) {
   const coverage = status?.coverage
   if (!isObject(coverage)) return null
   const ranAt = timeOf(coverage.ran_at)

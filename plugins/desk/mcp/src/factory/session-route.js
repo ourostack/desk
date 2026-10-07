@@ -57,9 +57,9 @@ import { recheckRoute, resolveStore } from "./store-route.js"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 /** A marker older than this is pruned by `listMarkers`; it says nothing about the route. */
-export const MARKER_TTL_MS = 30 * DAY_MS
+const MARKER_TTL_MS = 30 * DAY_MS
 /** A Codex default route is proven by a non-Codex marker for the same desk within this window, as the sweep proves it. */
-export const ROUTE_PROOF_WINDOW_MS = 30 * DAY_MS
+const ROUTE_PROOF_WINDOW_MS = 30 * DAY_MS
 
 /**
  * The state folder (`<factory state>/retracted-copies/<store-slug>/`) that keeps the local copies of a session that left a store: the flush
@@ -75,7 +75,7 @@ const UNKNOWN = Object.freeze({ kind: "unknown" })
 const DERIVED = Object.freeze({ kind: "derived" })
 const isStore = (value) => typeof value === "string" && PATTERNS.prRepo.test(value) && !/(?:^|\/)\.\.?$/u.test(value)
 /** The time a marker last spoke for its session: when it ended, else when it was last updated. */
-export const markerTime = (marker) => Date.parse(marker.ended_at ?? marker.updated_at)
+const markerTime = (marker) => Date.parse(marker.ended_at ?? marker.updated_at)
 
 function realDesk(root) {
   try {

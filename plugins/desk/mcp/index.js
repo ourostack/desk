@@ -43,7 +43,7 @@ import {
 import {
   discoverNodeCandidates,
   REEXEC_ATTEMPT_ENV,
-  reexecuteWithCompatibleNode,
+  reexecWithCompatibleNode,
   selectCompatibleNode,
 } from "./src/runtime/node-selection.js"
 import { claudeBindingPath } from "./src/util/paths.js"
@@ -154,7 +154,7 @@ export async function main({
   diagnosticServerStarter = startDiagnosticServer,
   nodeCandidateDiscoverer = discoverNodeCandidates,
   nodeSelector = selectCompatibleNode,
-  nodeReexecutor = reexecuteWithCompatibleNode,
+  nodeReexecutor = reexecWithCompatibleNode,
   readinessPolicy: injectedReadinessPolicy,
   authorityProviders = {},
   nodeVersion = process.versions.node,

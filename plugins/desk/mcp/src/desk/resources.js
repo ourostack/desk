@@ -19,8 +19,8 @@ import { scan } from "../tools/task-body.js"
 import { TERMINAL_STATES } from "./lifecycle.js"
 import { readSteps, SETTLED, SEPARATOR, splitCells } from "./steps.js"
 
-export const RESOURCE_FIELDS = ["identity", "step", "intended", "disposition", "details"]
-export const DISPOSITIONS = ["removed-and-absent", "named transfer", "retained-with-trigger"]
+const RESOURCE_FIELDS = ["identity", "step", "intended", "disposition", "details"]
+const DISPOSITIONS = ["removed-and-absent", "named transfer", "retained-with-trigger"]
 const HEADING = "## Resources"
 // The contract's columns, in its order.
 const COLUMNS = [

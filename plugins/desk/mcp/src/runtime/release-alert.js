@@ -19,17 +19,17 @@ import * as path from "node:path"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 
-export const RELEASE_REPO = "ourostack/desk"
+const RELEASE_REPO = "ourostack/desk"
 export const RELEASE_ISSUE_TITLE = "Desk release needs attention"
 export const RELEASE_ISSUES_URL = `https://api.github.com/repos/${RELEASE_REPO}/issues?state=open&per_page=100`
-export const RELEASE_ALERT_BUDGET_MS = 1500
+const RELEASE_ALERT_BUDGET_MS = 1500
 export const RELEASE_ALERT_TTL_MS = 10 * 60 * 1000
 export const RELEASE_ALERT_CACHE_FILE = "release-alert.json"
-export const RELEASE_ALERT_SWITCH = "DESK_BOOT_RELEASE_CHECK"
-export const MAX_RESPONSE_BYTES = 512 * 1024
+const RELEASE_ALERT_SWITCH = "DESK_BOOT_RELEASE_CHECK"
+const MAX_RESPONSE_BYTES = 512 * 1024
 // The label Desk files its own failures under (`LABEL` in `factory/desk-problem-file.js`, which a test keeps equal; not imported so boot stays light).
 export const DESK_PROBLEM_LABEL = "desk-problem"
-export const MAX_LISTED_PROBLEMS = 3
+const MAX_LISTED_PROBLEMS = 3
 const DAY_MS = 24 * 60 * 60 * 1000
 
 const TERMINAL = new Set(["done", "cancelled"])

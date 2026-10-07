@@ -38,7 +38,7 @@ export const DESK_ROOT_NOT_FOUND = "DESK_ROOT_NOT_FOUND"
 // desk.root or $DESK) whose folder is missing, not a folder or unreadable.
 export const DESK_ROOT_UNAVAILABLE = "DESK_ROOT_UNAVAILABLE"
 // An activation config that cannot be read, is not JSON, or has the wrong schema.
-export const ACTIVATION_CONFIG_INVALID = "ACTIVATION_CONFIG_INVALID"
+const ACTIVATION_CONFIG_INVALID = "ACTIVATION_CONFIG_INVALID"
 // The source of a personal home-folder fallback ($HOME/desk, $HOME/worker-workspace).
 export const HOME_FALLBACK = "home_fallback"
 // The source of a loaded work overlay's home-folder desk ($HOME/ms-desk).
@@ -59,7 +59,7 @@ export function resolveDeskRoot(explicit, options = {}) {
 // not be recognized, and the overlay's home desk would not be consulted.
 // "Loaded" means present in this Agency session's composition, not that the
 // session's selected agent belongs to the overlay.
-export const AGENCY_SESSION_CONTAINER = /^agency-plugin-[A-Za-z0-9_-]+\.p[1-9][0-9]*$/u
+const AGENCY_SESSION_CONTAINER = /^agency-plugin-[A-Za-z0-9_-]+\.p[1-9][0-9]*$/u
 
 // Work overlays whose home-folder desk Desk may bind when nothing else binds a
 // desk, and only while that overlay is loaded next to Desk.

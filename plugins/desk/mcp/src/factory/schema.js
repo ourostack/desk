@@ -343,7 +343,7 @@ export const MODEL_SPEC = {
   tokens: objectField(TOKENS_SPEC),
 }
 
-export const PLUGIN_SPEC = {
+const PLUGIN_SPEC = {
   name: patternField(PATTERNS.pluginName),
   version: patternField(PATTERNS.semver),
 }
@@ -402,7 +402,7 @@ export function prFields(value) {
 
 // `jobs[].agents`: the workers whose work belongs to the job. A non-empty,
 // duplicate-free list of worker numbers; absent means every worker in the session.
-export function checkJobAgents(value, path, errors) {
+function checkJobAgents(value, path, errors) {
   if (!Array.isArray(value)) {
     addError(errors, "type", path)
     return false
@@ -435,7 +435,7 @@ export function checkJobAgents(value, path, errors) {
 // that the controller's (worker 0's) evidence gives to the job. Each is
 // half-open, `[start_ms, end_ms)`, and `shared: true` marks a span another job
 // of the session holds too. Within a job they are ascending and never overlap.
-export const SEGMENT_SPEC = {
+const SEGMENT_SPEC = {
   start_ms: nonNegIntField(),
   end_ms: nonNegIntField(),
 }

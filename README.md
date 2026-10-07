@@ -33,6 +33,10 @@ evals/                            # Offline evaluation contracts
 scripts/                          # Validation and release checks run in CI
 ```
 
+## Unused code
+
+All code has a purpose, so CI fails a pull request that leaves unused code behind. Run `npm ci && npm run knip` from the repository root to find unused files, exports, dependencies and duplicate exports before you push; [`knip.jsonc`](knip.jsonc) lists the entry points and gives the reason for every exception, and the CI job is named "Unused code".
+
 ## Releasing
 
 Hosts pick up changes differently: Agency re-resolves the branch, while Claude Code updates only when a plugin's version string changes. Every change to a plugin's files therefore ships as a new version, named the same in every manifest and in the marketplace entry. CI enforces this with `node scripts/check-release-integrity.cjs`, and `node scripts/check-dependency-channels.cjs` keeps plugin dependencies on the `main` channel instead of exact commits.

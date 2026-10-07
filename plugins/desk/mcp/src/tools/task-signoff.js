@@ -47,7 +47,7 @@ function checkInput(values) {
 }
 
 // The one sentence the agent includes in its reply.
-export function sentence({ slug, outcome, reason, changed }) {
+function sentence({ slug, outcome, reason, changed }) {
   const lead = changed ? "Recorded" : "Already recorded"
   if (outcome === "refused") return changed ? `${lead}: ${slug} sent back (${reason}); it is back in processing.` : `${lead}: ${slug} sent back.`
   return `${lead}: ${slug} accepted.`

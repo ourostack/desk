@@ -139,7 +139,7 @@ export function createStartupExceptionDiagnostic({ error } = {}) {
 // answering desk_status/desk_doctor and points at setup instead of exiting.
 // Overlays that own onboarding (a crew workspace, for example) name their own
 // skill; they also own the binding, so only the default path names the file.
-export const DEFAULT_ONBOARDING_SKILL = "desk:first-run-bootstrap"
+const DEFAULT_ONBOARDING_SKILL = "desk:first-run-bootstrap"
 
 export function createSetupDiagnostic({
   pathsTried = [],
