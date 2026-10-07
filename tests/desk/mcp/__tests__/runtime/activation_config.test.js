@@ -15,6 +15,13 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { openSession } from "../launch/_mcp_session.js"
+import { spawnSync } from "node:child_process"
+function diag(root) {
+  const ps = spawnSync("ps", ["-eo", "pid,ppid,etimes,args"], { encoding: "utf8" }).stdout.split("\n").filter((l) => l.includes(root) || /controller|index\.js|node/u.test(l)).join("\n")
+  const ls = spawnSync("find", [root, "-newermt", "-30 seconds", "-printf", "%p %TT\\n"], { encoding: "utf8" }).stdout.split("\n").slice(0, 60).join("\n")
+  const ls2 = spawnSync("find", [root, "-maxdepth", "6"], { encoding: "utf8" }).stdout.split("\n").slice(0, 80).join("\n")
+  console.error(`DIAG-PS\n${ps}\nDIAG-NEW\n${ls}\nDIAG-TREE\n${ls2}`)
+}
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -943,7 +950,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }) } catch (error) { diag(fixture.root); throw error }
   }
 })
 
@@ -980,7 +987,7 @@ test("entrypoint stdio startup lets host/session root override activation config
       "conflicting DESK root must not receive writes when host/session root is present",
     )
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }) } catch (error) { diag(fixture.root); throw error }
   }
 })
 
@@ -1020,7 +1027,7 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")
     assert.equal(sourceMirrorCount(activationCache), 1, "repeated startup should reuse the same source mirror for unchanged MCP source")
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }) } catch (error) { diag(fixture.root); throw error }
   }
 })
 
