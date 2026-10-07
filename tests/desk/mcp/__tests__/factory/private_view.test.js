@@ -14,7 +14,7 @@ import { keyedJobId } from "../../../../../plugins/desk/mcp/src/factory/publish.
 import { runJobLinkCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { SITE, SITE_FILES, main, runIfMain, taskNames, viewDir } from "../../../../../plugins/desk/mcp/scripts/private-view.js"
 import { osEnv } from "../_os_env.js"
-import { NO_FILE_SYMLINKS, NO_POSIX_MODES, isWindows } from "../_platform.js"
+import { NO_BACKSLASH_NAMES, NO_FILE_SYMLINKS, NO_POSIX_MODES, isWindows } from "../_platform.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/private-view.js", import.meta.url))
 
@@ -188,7 +188,7 @@ test("an output folder inside a Git work tree or the factory state folder is ref
 }))
 
 test("viewDir honors XDG_STATE_HOME and falls back to the home folder", () => {
-  assert.equal(viewDir({ XDG_STATE_HOME: "/x/state" }), path.join("/x/state", "desk-private-view", "factory"))
+  assert.equal(viewDir({ XDG_STATE_HOME: "/x/state" }), path.resolve("/x/state", "desk-private-view", "factory"))
   assert.equal(viewDir({}), path.join(os.homedir(), ".local", "state", "desk-private-view", "factory"))
 })
 
@@ -205,7 +205,7 @@ test("the names agree with factory.js job-link --this-machine, including for a r
   assert.ok(link.link.endsWith(`${Object.entries(jobs).find(([, value]) => value.task === "renamed")[0]}.md`))
 }))
 
-test("a folder name that cannot be a job ID is refused by name", () => scratch(async ({ env, root }) => {
+test("a folder name that cannot be a job ID is refused by name", { skip: NO_BACKSLASH_NAMES }, () => scratch(async ({ env, root }) => {
   await readMachineSecret(env)
   card(root, "track-a/bad\\name", "---\ntitle: Bad\n---\n")
   await assert.rejects(taskNames({ root, env }), /track-a\/bad\\name/u)
@@ -241,8 +241,10 @@ test("runIfMain runs only as the entry point, printing the URL or the failure", 
   const { write: stdout } = process.stdout
   const { write: stderr } = process.stderr
   const out = []
-  process.stdout.write = (text) => { out.push(text); return true }
-  process.stderr.write = (text) => { out.push(text); return true }
+  // Only the script's own text: the test runner reports through the same streams, as binary chunks, while they are replaced.
+  const capture = (text) => { if (typeof text === "string") out.push(text); return true }
+  process.stdout.write = capture
+  process.stderr.write = capture
   try {
     assert.equal(await runIfMain(url, entry, async ({ log }) => { log("note"); return { url: "http://127.0.0.1:1/" } }), true)
     assert.equal(await runIfMain(url, entry, async () => { throw new Error("nope") }), true)

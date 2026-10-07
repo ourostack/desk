@@ -33,3 +33,15 @@ test("iteration history entries become edges to the task, whichever way their pa
 test("a task whose history is not a list has no iteration edges", () => {
   assert.deepEqual(computeRefs([doc("t/s/task.md", "task", { frontmatter: { iterations: { history: "none" } } })]), [])
 })
+
+test("a planning, doing or feedback document is linked to its task card only when the card exists, and a repeated edge is kept once", () => {
+  const task = doc("t/s/task.md", "task")
+  const planning = doc("t/s/planning.md", "planning")
+  const edges = computeRefs([task, planning, planning, doc("t/s/doing.md", "doing"), doc("t/s/feedback.md", "feedback")])
+  assert.deepEqual(edges, [
+    { from: "t/s/planning.md", to: "t/s/task.md", ref_kind: "planning_of" },
+    { from: "t/s/doing.md", to: "t/s/task.md", ref_kind: "doing_of" },
+    { from: "t/s/feedback.md", to: "t/s/task.md", ref_kind: "feedback_of" },
+  ])
+  assert.deepEqual(computeRefs([planning, doc("t/s/doing.md", "doing"), doc("t/s/feedback.md", "feedback")]), [])
+})
