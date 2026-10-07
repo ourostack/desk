@@ -921,35 +921,43 @@ const namesPresentRepo = (sentence, present) => [...present].some((name) => new 
 // agent ("I cloned watering-schedule-api into ...", "Cloned greenhouse-irrigation to ...") reports an act, and the boot's list does not show that the agent did it.
 const PRESENT_STATE = /\b(?:is|are)\s+(?:already\s+|now\s+)?(?:cloned|present|ready|here|available|on this machine)\b|\bthe clone (?:is|lives) (?:at|in|under)\b/i
 const AGENT_CLONED = /\b(?:I|we)(?:['\u2019]ve| have)?\s+(?:just\s+|successfully\s+)?cloned\b|\bcloned\s+(?:the\s+|your\s+|a\s+)?(?:repo|repository|fork|project|[\w.-]+\/[\w.-]+)|^[\s*_`"'(-]*(?:just\s+|successfully\s+)?cloned\b/i
-// A sentence that restates a fact the boot listed: "Repo is cloned locally and clean on branch `feature/rain-delay`." Four things have to hold, or it is a claim like any other:
-//   - it starts with a bare subject ("the repo", "the clone") and says it is present or cloned (no "now": "is now cloned" reports a change);
-//   - it carries a boot fact: the listed branch, a listed path or a listed repo name, so a bare "Repo is cloned and ready." restates nothing;
-//   - it names nothing else: no `owner/name` slug, no other path, no backticked name that is not a listed branch ("The claude-code repo is cloned" names a repo, so it still needs a clone);
-//   - the agent is not a subject in it ("I got it from the fork"), and the run made no clone attempt at all, successful or failed (see `restatesPresentRepo`).
+// A sentence that restates a fact the boot listed: "Repo is cloned locally and clean on branch `feature/rain-delay`." All of these have to hold, or it is a claim like any other:
+//   - it starts with a bare subject ("the repo", "the clone") and says it is present or cloned (no "now": "is now cloned" reports a change), and says it once: a second clone or present verb is a second claim;
+//   - it carries a boot fact (the listed branch, a listed path or a listed repo name, matched as whole words), so a bare "Repo is cloned and ready." restates nothing;
+//   - once the boot facts and the bare-subject phrase are taken out, only filler remains ("locally", "clean", "on branch", "there too"): any other text, a name, a path or a second clause, makes it a claim
+//     ("...on branch `feature/rain-delay`, and the claude-code repo is cloned too." fails);
+//   - the agent is not a subject in it ("I got it from the fork"), and the run made no clone attempt at all, successful or failed (`git clone`, `gh repo clone`, `gh repo fork --clone`).
 const BARE_SUBJECT_STATE = /^[\s*_`"'(-]*(?:the\s+)?(?:repo(?:sitory)?|clone|checkout)\s+(?:is|are)\s+(?:already\s+)?(?:cloned|present|ready|here|available)\b/i
+const PRESENT_VERBS = /\b(?:cloned|present|ready|available)\b|\b(?:is|are)\s+here\b/gi
+const RESTATEMENT_FILLER = new Set(["a", "also", "and", "as", "at", "branch", "checked", "clean", "dirty", "here", "in", "is", "local", "locally", "no", "on", "out", "remote", "configured", "the", "there", "too", "uncommitted", "with", "changes"])
 const AGENT_SUBJECT = /\b(?:I|we)\b|\b(?:I|we)['\u2019](?:ve|d|ll|m)\b/u
+const escapeFact = (fact) => fact.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+const factPattern = (fact, flags = "iu") => new RegExp(`(?<![\\w.~/-])${escapeFact(fact)}(?![\\w-])`, flags)
+// A `gh repo fork --clone` clones the fork: an attempt, though `gitClones` does not read it as a clone.
+const isForkClone = (words) => words[0] === "gh" && words[1] === "repo" && words[2] === "fork" && words.some((word) => /^--clone(?:=true)?$/u.test(word))
 function restatesPresentRepo(sentence, calls, ctx) {
   if (!BARE_SUBJECT_STATE.test(sentence) || AGENT_CLONED.test(sentence) || AGENT_SUBJECT.test(sentence)) return false
+  if ((sentence.match(PRESENT_VERBS) ?? []).length > 1) return false
   const folders = runnerFolders(ctx ?? {})
-  const attempted = calls.some((call) => call.name === "Bash" && gitClones(String(call.input?.command ?? ""), { cwd: folders?.cwd, home: folders?.homeDir }).length > 0)
+  const attempted = calls.some((call) => call.name === "Bash" && (gitClones(String(call.input?.command ?? ""), { cwd: folders?.cwd, home: folders?.homeDir }).length > 0 || simpleCommands(String(call.input?.command ?? "")).some(({ words }) => isForkClone(words))))
   if (attempted) return false
-  const branches = new Set()
   const facts = new Set()
   for (const text of bootResults(calls)) {
     for (const match of text.matchAll(/^- ([\w.-]+) \(([^)\n]*)\): ([^\n]*)/gmu)) {
-      facts.add(match[1].toLowerCase())
-      for (const task of match[2].split(",")) facts.add(task.trim().split("/").pop().toLowerCase())
-      for (const path of match[3].matchAll(/(~?\/[^\s,()]+)/gu)) facts.add(path[1].toLowerCase())
+      facts.add(match[1])
+      for (const task of match[2].split(",")) facts.add(task.trim().split("/").pop())
+      for (const found of match[3].matchAll(/(~?\/[^\s,()]+)/gu)) facts.add(found[1])
       const branch = /\bbranch ([^\s,]+)/u.exec(match[3])
-      if (branch !== null) { branches.add(branch[1]); facts.add(branch[1].toLowerCase()) }
+      if (branch !== null) facts.add(branch[1])
     }
   }
-  if (facts.size === 0) return false
-  const lower = sentence.toLowerCase()
-  if (![...facts].some((fact) => lower.includes(fact))) return false
-  const rest = sentence.replace(/`([^`]*)`/gu, (whole, name) => (branches.has(name) ? "" : whole))
-  const stripped = [...facts].reduce((text, fact) => text.split(fact).join(""), rest.toLowerCase())
-  return !/`|\b[\w.-]+\/[\w.-]+\b|[~/][\w.-]*\//u.test(stripped)
+  const listed = [...facts].filter((fact) => fact !== "")
+  if (!listed.some((fact) => factPattern(fact).test(sentence))) return false
+  // Longest facts first, so a path goes before the repo name inside it; backticks around a fact go with it.
+  let rest = sentence.replace(BARE_SUBJECT_STATE, " ")
+  for (const fact of listed.sort((a, b) => b.length - a.length)) rest = rest.replace(factPattern(fact, "giu"), " ").replace(/`\s*`/gu, " ")
+  const words = rest.toLowerCase().replace(/[.,;:!()*_`"']/gu, " ").split(/\s+/u).filter((word) => word !== "")
+  return words.every((word) => RESTATEMENT_FILLER.has(word))
 }
 const statesPresentRepo = (sentence, present, calls = [], ctx = {}) => (namesPresentRepo(sentence, present) && PRESENT_STATE.test(sentence) && !AGENT_CLONED.test(sentence)) || restatesPresentRepo(sentence, calls, ctx)
 
