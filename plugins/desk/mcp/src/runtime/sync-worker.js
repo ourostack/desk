@@ -94,7 +94,7 @@ export function resolveSyncLockPath({ root, env }) {
 }
 
 /** Where Desk's last successful fetch time for this root is recorded: its own file, so that write never rewrites the pull record. */
-export function fetchOkPath({ root, env }) {
+function fetchOkPath({ root, env }) {
   return path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.fetch-ok.json`)
 }
 
