@@ -66,12 +66,12 @@ test("a denied card edit is no claim, no code edit and no write", () => {
   assert.equal(editedCode(ran), true)
 })
 
-test("end to end: a card edit the hook denied does not fail the run as a done claim", () => {
+test("end to end: a card edit the permission layer refused does not fail the run as a done claim; the same edit that went through fails it", () => {
   const ctx = buildContext(parseStreamJson(stream(
     use("b", "Bash", { command: "node /p/plugins/desk/mcp/scripts/session-boot.js --task watering-schedule-api" }),
     answer("b", "Desk boot: ready\n"),
     use("e", "Edit", { file_path: `${RUN}/fixture/desk/greenhouse-ops/watering-schedule-api/task.md`, new_string: "**Done:** wired the check and the tests pass." }),
-    answer("e", HOOK_DENIAL, true),
+    answer("e", "Permission to use Edit has been denied.", true),
     text("Wired the 30% check into RainDelayPolicy.should_delay(); the card stays at processing."),
     done("Wired the 30% check into RainDelayPolicy.should_delay(); the card stays at processing."),
   )))
@@ -79,6 +79,18 @@ test("end to end: a card edit the hook denied does not fail the run as a done cl
   const verdict = findScenario("resume-named-task").check(ctx)
   assert.deepEqual(failures(verdict), [])
   assert.ok(verdict.notes.some((note) => note.startsWith("WARNING: tried to edit a task card directly")), "the attempt is still noted")
+
+  // Desk no longer denies the edit: when it went through, the agent broke the "cards change only through task_update" rule itself.
+  const through = buildContext(parseStreamJson(stream(
+    use("b", "Bash", { command: "node /p/plugins/desk/mcp/scripts/session-boot.js --task watering-schedule-api" }),
+    answer("b", "Desk boot: ready\n"),
+    use("e", "Edit", { file_path: `${RUN}/fixture/desk/greenhouse-ops/watering-schedule-api/task.md`, new_string: "**Next step:** run the tests." }),
+    answer("e", "The file has been updated.", false),
+    text("Wired the 30% check into RainDelayPolicy.should_delay(); the card stays at processing."),
+    done("Wired the 30% check into RainDelayPolicy.should_delay(); the card stays at processing."),
+  )))
+  through.deskRoot = `${RUN}/fixture/desk`
+  assert.ok(failures(findScenario("resume-named-task").check(through)).some((failure) => /edited a task card directly/.test(failure)))
 })
 
 // ── Allowed writes ──────────────────────────────────────────────────────
