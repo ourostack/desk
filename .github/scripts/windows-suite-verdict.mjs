@@ -1,6 +1,6 @@
 // Decides the Windows suite's verdict from the per-file results the standard-user shards uploaded, not from the shards' job conclusions.
 // Usage: node windows-suite-verdict.mjs <folder holding one results folder per shard> <expected shard count> [<tests folder> [<only regex>]]
-// Exit code: 0 only when every expected shard reported, each results file names the shard its folder says, the files reported across the shards are exactly the suite's test files, and every one passed.
+// Exit code: 0 only when every expected shard reported, each results file names the shard its folder says, the files reported across the shards are exactly the suite's test files, and every one passed and ran at least one test (passed, failed or skipped).
 // The suite's files are found with the same code the shard runner uses (suite-files.mjs), so a shard that ran nothing, or a file no shard reported, is named and fails.
 import fs from "node:fs"
 import path from "node:path"
@@ -24,6 +24,8 @@ export function verdict(root, expected, testsRoot = defaultTests, only = "") {
       reported.set(r.file, (reported.get(r.file) ?? 0) + 1)
       if (r.timedOut) problems.push(`${folder.name}: ${r.file} timed out`)
       else if (r.exitCode !== 0 || r.fail > 0) problems.push(`${folder.name}: ${r.file} failed (${r.fail} failed tests, exit ${r.exitCode})`)
+      // A file that ran no test at all (it crashed while loading, or the runner printed nothing) is not a pass; an all-skipped file still ran its tests, so it counts.
+      else if ((r.pass ?? 0) + (r.fail ?? 0) + (r.skipped ?? 0) < 1) problems.push(`${folder.name}: ${r.file} ran no tests`)
     }
   }
   if (numbers.size !== folders.length) problems.push("two result folders name the same shard")

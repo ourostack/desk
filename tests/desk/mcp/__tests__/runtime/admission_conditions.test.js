@@ -706,9 +706,9 @@ test("--degraded with a crew-state code serves reads and refuses writes; with --
 
 // Send tools/list, ping and desk_status every `intervalMs` for `forMs`, or, with `untilState`, until desk_status reports that state and then `afterMs` more.
 // A blocked thread stalls the answers, and the test says so two ways: the median answer must come within `budgetMs` (the same 200 ms on every platform: one slow answer on a shared runner is jitter, a slow median is a busy thread),
-// and no single answer may take longer than `hardCapMs`, which a stalled thread (seconds) exceeds and jitter (the slowest Windows sample seen so far was 506 ms) does not. The measured values go to the test's diagnostics.
+// and no single answer may take longer than `hardCapMs`, which a thread blocked for a second or more exceeds and jitter (the slowest Windows sample seen so far was 506 ms) does not. A single 1.5 s block fails the cap even though the median stays low. The measured values go to the test's diagnostics.
 const ANSWER_BUDGET_MS = 200
-const ANSWER_HARD_CAP_MS = 2000
+const ANSWER_HARD_CAP_MS = 750
 const median = (values) => [...values].sort((x, y) => x - y)[Math.floor(values.length / 2)]
 async function assertAnswersFast(session, t, { forMs = 4000, budgetMs = ANSWER_BUDGET_MS, hardCapMs = ANSWER_HARD_CAP_MS, intervalMs = 100, untilState = null, afterMs = 0, deadlineMs = 60000 } = {}) {
   const started = Date.now()

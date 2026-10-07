@@ -72,7 +72,7 @@ function verdictOf(shards, expected, suite = ["a.test.js", "b.test.js"], extra =
   }
 }
 
-const ok = (file) => ({ file, exitCode: 0, timedOut: false, fail: 0 })
+const ok = (file) => ({ file, exitCode: 0, timedOut: false, pass: 1, fail: 0, skipped: 0 })
 const two = (a, b) => ({ "windows-standard-shard-1": { shard: "1/2", results: a }, "windows-standard-shard-2": { shard: "2/2", results: b } })
 
 test("the aggregate verdict is zero only when every shard reported its number and the shards ran exactly the suite's files, all passing", () => {
@@ -116,6 +116,15 @@ test("a results file whose shard number does not match its folder, or a file rep
   const sameShard = verdictOf({ "x-shard-1": { shard: "1/2", results: [ok("a.test.js")] }, "y-shard-1": { shard: "1/2", results: [ok("b.test.js")] } }, 2)
   assert.equal(sameShard.status, 1)
   assert.match(sameShard.out, /name the same shard/u)
+})
+
+test("a file that ran no tests fails, and a file whose tests were all skipped does not", () => {
+  const none = (file) => ({ ...ok(file), pass: 0 })
+  const empty = verdictOf(two([ok("a.test.js")], [none("b.test.js")]), 2)
+  assert.notEqual(empty.status, 0)
+  assert.match(empty.out, /b\.test\.js ran no tests/u)
+  const skipped = verdictOf(two([ok("a.test.js")], [{ ...none("b.test.js"), skipped: 3 }]), 2)
+  assert.equal(skipped.status, 0, skipped.out)
 })
 
 test("with an only filter, the suite is the files the filter selects", () => {

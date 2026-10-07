@@ -510,11 +510,44 @@ test("the live claim and the day cap are per machine, and a card with another ma
 test("two simultaneous claimNext calls on one open card give exactly one claimed", async () => {
   const where = await desk()
   await open(where)
-  // Each claim writes the card, and on Windows every protected write starts PowerShell, so the one that holds the lock can keep the others waiting past the default 5 s: they then answer `lock_busy`, which is the lock working, not a second claim. The wait is long here so the test sees the claim answers.
+  // A caller that cannot get the lock within the default 5 s answers `lock_busy`, which is the lock working, not a second claim. The Windows run failed once with a result that was not `claimed` or `claim_held`; the log did not show which result it was, so the cause (a slow holder, so `lock_busy`, is the likely one) is not shown. The wait is long here so the test sees the claim answers, and the message names every result.
   const results = await Promise.all([claim(where, { lockWaitMs: 120000 }), claim(where, { lockWaitMs: 120000 }), claim(where, { lockWaitMs: 120000 })])
   assert.equal(results.filter((r) => r.result === "claimed").length, 1, JSON.stringify(results.map((r) => r.result)))
   assert.equal(results.filter((r) => r.result === "claim_held").length, 2)
   assert.equal((await read(where))[0].claim_log.length, 1)
+})
+
+test("on Windows, a lock folder whose deletion is still pending is waited for, and a refusal that lasts is surfaced", async (t) => {
+  const where = await desk()
+  await open(where)
+  const mkdir = fs.mkdir
+  let refusals = 2
+  const transient = t.mock.method(fs, "mkdir", async (target, ...rest) => {
+    if (refusals > 0 && String(target).endsWith(".improvement.lock")) {
+      refusals -= 1
+      throw Object.assign(new Error("pending delete"), { code: refusals === 1 ? "EPERM" : "EACCES" })
+    }
+    return mkdir(target, ...rest)
+  })
+  assert.equal((await claim(where, { lockHooks: { platform: "win32" } })).result, "claimed")
+  assert.equal(refusals, 0)
+  transient.mock.restore()
+  // Off Windows the same refusal is a real fault and is thrown at once.
+  const failure = Object.assign(new Error("denied"), { code: "EPERM" })
+  const denied = t.mock.method(fs, "mkdir", async (target, ...rest) => {
+    if (String(target).endsWith(".improvement.lock")) throw failure
+    return mkdir(target, ...rest)
+  })
+  await assert.rejects(() => claim(where, { lockHooks: process.platform === "win32" ? { platform: "linux" } : {} }), (error) => error === failure)
+  // A refusal that lasts is surfaced once the 5 s bound is spent (a clock that jumps 3 s per reading reaches it after a few tries).
+  let clock = Date.now()
+  const jumping = t.mock.method(Date, "now", () => (clock += 3000))
+  try {
+    await assert.rejects(() => claim(where, { lockHooks: { platform: "win32" } }), (error) => error === failure)
+  } finally {
+    jumping.mock.restore()
+    denied.mock.restore()
+  }
 })
 
 test("claimNext refuses a bad machine, a bad session and a bad location", async () => {
