@@ -13,7 +13,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 
 const require = createRequire(import.meta.url)
 const { compatibleNode, hookProbe, PROBE_BUDGET_MS } = require("../../../../../plugins/desk/hooks/compatible-node.cjs")
-const factoryEnd = require("../../../../../plugins/desk/hooks/factory-end.cjs")
+const { launch: launchWorker } = require("../../../../../plugins/desk/hooks/lib/factory-end.cjs")
 const bootstrap = require("../../../../../plugins/desk/mcp/bootstrap.cjs")
 
 const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
@@ -116,14 +116,14 @@ test("the factory hook starts its worker only in a compatible Node, and starts n
   const script = path.join(root, "worker.cjs")
   await fs.writeFile(script, `require("node:fs").writeFileSync(${JSON.stringify(proof)}, process.execPath + " " + process.argv.slice(2).join(" "))\n`)
   const resolved = []
-  assert.equal(await factoryEnd.launch(script, ["derive"], process.env, (options) => { resolved.push(options.env); return { node: null, range: ">=20.0.0" } }), undefined)
+  assert.equal(await launchWorker(script, ["derive"], process.env, (options) => { resolved.push(options.env); return { node: null, range: ">=20.0.0" } }), undefined)
   assert.deepEqual(resolved, [process.env])
-  await factoryEnd.launch(script, ["derive"], process.env, () => ({ node: process.execPath, range: ">=20.0.0" }))
+  await launchWorker(script, ["derive"], process.env, () => ({ node: process.execPath, range: ">=20.0.0" }))
   const deadline = Date.now() + 10_000
   let ran = null
   while (ran === null && Date.now() < deadline) {
     try { ran = await fs.readFile(proof, "utf8") } catch { await new Promise((resolve) => setTimeout(resolve, 25)) }
   }
   assert.equal(ran, `${process.execPath} derive`)
-  await assert.rejects(factoryEnd.launch(script, [], process.env, () => ({ node: path.join(root, "missing-node"), range: ">=20.0.0" })), { code: "ENOENT" })
+  await assert.rejects(launchWorker(script, [], process.env, () => ({ node: path.join(root, "missing-node"), range: ">=20.0.0" })), { code: "ENOENT" })
 })

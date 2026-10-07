@@ -37,12 +37,22 @@ test("the Desk hooks the unused-code check lists are the ones hooks.json and cop
   const hooks = registered(["plugins", "desk", "hooks", "hooks.json"], ["plugins", "desk", "hooks", "copilot-hooks.json"])
   assert.ok(hooks.size > 0)
   for (const hook of hooks) assert.ok(entries.includes(hook), `${hook} is registered but not listed in knip.jsonc`)
-  const bootChecks = read("plugins", "desk", "hooks", "boot-checks.cjs")
+  const bootChecks = read("plugins", "desk", "hooks", "lib", "boot-checks.cjs")
   for (const entry of entries.filter((name) => !hooks.has(name))) {
-    assert.ok(bootChecks.includes(`"${entry}"`), `${entry} is listed in knip.jsonc but neither registered nor started by boot-checks.cjs`)
+    assert.ok(bootChecks.includes(`"${entry}"`), `${entry} is listed in knip.jsonc but neither registered nor started by lib/boot-checks.cjs`)
   }
   for (const entry of entries) {
     assert.ok(readdirSync(path.join(repository, "plugins", "desk", "hooks")).includes(entry), `${entry} does not exist`)
+  }
+})
+
+// A hook's logic is a module with named exports under lib/, which knip checks export by export. A registered file that exported its own members would be loaded as one whole object again, which knip cannot see through.
+test("the hook files hosts register or start by path are thin entries over lib/, with no exports of their own", () => {
+  for (const name of ["boot-checks.cjs", "factory-end.cjs", "sync-end.cjs"]) {
+    const text = read("plugins", "desk", "hooks", name)
+    assert.doesNotMatch(text, /module\.exports|exports\./u, `${name} must not export`)
+    assert.match(text, new RegExp(`require\\("\\./lib/${name.replace(".", "\\.")}"\\)`, "u"), `${name} must call its module under lib/`)
+    assert.ok(text.split("\n").length <= 12, `${name} must stay a thin entry`)
   }
 })
 

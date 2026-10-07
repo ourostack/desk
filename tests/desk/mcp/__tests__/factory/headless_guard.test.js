@@ -14,14 +14,15 @@ import { HEADLESS_CODE, READ_ONLY_TOOLS, headlessRefusal, isHeadlessFactorySessi
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { bootOnce, isNoninteractive } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
+import { runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { runHook as endRunHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
+import { runHook as syncRunHook } from "../../../../../plugins/desk/hooks/lib/sync-end.cjs"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
 import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
 
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
 const PLUGIN = path.dirname(HOOKS)
-const endHook = () => require(path.join(HOOKS, "factory-end.cjs"))
-const bootChecks = () => require(path.join(HOOKS, "boot-checks.cjs"))
 
 test("the flag counts only when set and neither empty nor 0", () => {
   for (const value of ["1", "true", "yes", " 1 ", " ", " 0 "]) assert.equal(isHeadlessFactorySession({ DESK_FACTORY_HEADLESS: value }), true, value)
@@ -34,7 +35,7 @@ test("the end hook writes no marker and starts nothing under the flag, and behav
   const marker = await session(ctx)
   const payload = { session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: "SessionEnd", reason: "prompt_input_exit" }
   const spawned = []
-  const run = (env) => endHook().runHook({ host: "claude", payload, env, launch: async (...args) => spawned.push(args) })
+  const run = (env) => endRunHook({ host: "claude", payload, env, launch: async (...args) => spawned.push(args) })
   for (const value of ["1", "true"]) assert.equal(await run({ ...ctx.env, DESK_FACTORY_HEADLESS: value }), "headless")
   assert.deepEqual(await listMarkers(ctx.env), [])
   assert.deepEqual(spawned, [])
@@ -52,7 +53,6 @@ test("the bounded end hook process spawns no worker and writes no marker under t
 }))
 
 test("boot checks say nothing and the detached factory start never happens under the flag", async () => {
-  const { runBootChecks, startFactory } = bootChecks()
   let ran = 0
   let launched = 0
   const checks = [{ id: "x", budgetMs: 100, run: async () => { ran += 1; return { line: "speaks" } } }]
@@ -67,10 +67,10 @@ test("boot checks say nothing and the detached factory start never happens under
 for (const host of ["claude", "copilot"]) {
   test(`the ${host} start hook prints nothing and starts no process under the flag`, () => scratch(async ({ env, desk, base }) => {
     const calls = path.join(base, "calls.txt")
-    const preload = path.join(base, "preload.cjs")
-    await fs.writeFile(preload, `const fs = require("node:fs"); const boot = require(${JSON.stringify(path.join(HOOKS, "boot-checks.cjs"))});
-boot.startFactory = async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true };`)
-    const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk, NODE_OPTIONS: `--require=${preload}` }
+    const overrides = path.join(base, "overrides.cjs")
+    await fs.writeFile(overrides, `const fs = require("node:fs");
+module.exports = { startFactory: async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true } };`)
+    const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk, DESK_BOOT_OVERRIDES: overrides }
     const run = (flag) => host === "copilot"
       ? spawnSync(process.execPath, [path.join(HOOKS, "copilot-session-start.cjs")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
       : spawnSync("bash", [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, encoding: "utf8" })
@@ -94,10 +94,9 @@ test("the start hook script and the helper agree on every flag value, whitespace
 }))
 
 test("the sync-end hook writes no sync record and runs no git under the flag", () => scratch(async (ctx) => {
-  const { runHook } = require(path.join(HOOKS, "sync-end.cjs"))
   const payload = { hook_event_name: "SessionEnd", cwd: ctx.desk, session_id: ID }
-  assert.equal(await runHook({ host: "claude", payload, env: { ...ctx.env, DESK_FACTORY_HEADLESS: "1" } }), "headless")
-  assert.notEqual(await runHook({ host: "claude", payload, env: { ...ctx.env, DESK_FACTORY_HEADLESS: "0" } }), "headless")
+  assert.equal(await syncRunHook({ host: "claude", payload, env: { ...ctx.env, DESK_FACTORY_HEADLESS: "1" } }), "headless")
+  assert.notEqual(await syncRunHook({ host: "claude", payload, env: { ...ctx.env, DESK_FACTORY_HEADLESS: "0" } }), "headless")
 }))
 
 test("the copilot prompt hook emits nothing and claims nothing under the flag", () => scratch(async ({ env, desk }) => {
@@ -120,9 +119,9 @@ test("a hook that cannot load the rule file still honours the flag from the envi
     assert.equal(start.stdout === "", headless, `copilot start ${label}`)
     const prompt = spawnSync(process.execPath, [path.join(hooks, "copilot-boot-prompt.cjs")], { input: JSON.stringify({ sessionId: ID, cwd: desk }), env: hookEnv, encoding: "utf8" })
     assert.equal(prompt.status, 0)
-    assert.equal((await require(path.join(hooks, "sync-end.cjs")).runHook({ host: "claude", payload, env: hookEnv })) === "headless", headless, `sync-end ${label}`)
-    assert.equal((await require(path.join(hooks, "factory-end.cjs")).runHook({ host: "claude", payload: { ...payload, session_id: ID, transcript_path: path.join(base, "x.jsonl") }, env: hookEnv })) === "headless", headless, `factory-end ${label}`)
-    assert.equal(await require(path.join(hooks, "boot-checks.cjs")).startFactory({ env: hookEnv, launch: async () => {} }) , false)
+    assert.equal((await require(path.join(hooks, "lib", "sync-end.cjs")).runHook({ host: "claude", payload, env: hookEnv })) === "headless", headless, `sync-end ${label}`)
+    assert.equal((await require(path.join(hooks, "lib", "factory-end.cjs")).runHook({ host: "claude", payload: { ...payload, session_id: ID, transcript_path: path.join(base, "x.jsonl") }, env: hookEnv })) === "headless", headless, `factory-end ${label}`)
+    assert.equal(await require(path.join(hooks, "lib", "boot-checks.cjs")).startFactory({ env: hookEnv, launch: async () => {} }) , false)
   }
 }))
 
