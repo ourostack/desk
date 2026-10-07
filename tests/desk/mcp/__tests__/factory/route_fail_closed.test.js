@@ -4,11 +4,11 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { createRequire } from "node:module"
 import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
 
+import { runHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
+import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 import { factoryStateRoot, listMarkers, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { markerRoute, proofIndex, provenBy, sessionPlace, sessionRoute } from "../../../../../plugins/desk/mcp/src/factory/session-route.js"
 import { placesFor } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
@@ -22,8 +22,6 @@ import { factoryFindingLines } from "../../../../../plugins/desk/mcp/src/tools/f
 import { ID, STORE, json, recent, scratch, session } from "./_session_helpers.js"
 
 const PRIVATE = "corp/private-factory"
-const require = createRequire(import.meta.url)
-const hook = () => require(fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url)))
 const TRUNCATED = '{"name":"corp","version":"1.0.0","desk":{"factory":{"store":"corp/private-fac'
 const HEALTHY = JSON.stringify({ name: "corp", version: "1.0.0", desk: { factory: { store: PRIVATE } } })
 
@@ -42,7 +40,7 @@ async function claudeHome(ctx, manifest) {
 
 const endPayload = (ctx, marker, event = "SessionEnd") => ({ session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: event, reason: "prompt_input_exit" })
 // The hook runs from Desk's registered install folder, as an installed Desk does (`claudeHome`).
-const runClaude = (ctx, payload, pluginRoot = path.join(ctx.base, "installed", "desk")) => hook().runHook({ host: "claude", payload, env: ctx.env, pluginRoot, launch: async () => {} })
+const runClaude = (ctx, payload, pluginRoot = path.join(ctx.base, "installed", "desk")) => runHook({ host: "claude", payload, env: ctx.env, pluginRoot, launch: async () => {} })
 const outboxHas = async (env, store) => existsSync(path.join(await factoryStateRoot(env), "outbox", store.replace("/", "__"), `claude-code-${ID}.json`))
 
 test("reproduction r1 through the end hook: an overlay truncated mid-write records no store, and the session is held", () => scratch(async (ctx) => {
@@ -105,7 +103,7 @@ test("a Copilot overlay whose plugin.json cannot be parsed holds the route", () 
   await json(path.join(pluginRoot, "plugin.json"), { name: "desk", version: "1.0.0" })
   await fs.mkdir(path.join(plugins, "corp"), { recursive: true })
   await fs.writeFile(path.join(plugins, "corp", "plugin.json"), TRUNCATED)
-  assert.equal(await hook().runHook({ host: "copilot", payload: { sessionId: ID, cwd: ctx.desk, reason: "complete" }, env: ctx.env, pluginRoot, launch: async () => {} }), "written")
+  assert.equal(await runHook({ host: "copilot", payload: { sessionId: ID, cwd: ctx.desk, reason: "complete" }, env: ctx.env, pluginRoot, launch: async () => {} }), "written")
   const [saved] = await listMarkers(ctx.env)
   assert.equal(saved.log_path, marker.log_path)
   assert.deepEqual(saved.routing, { store: null, source: "invalid_declaration", warnings: [{ code: "manifest_unparseable", manifest: path.join(plugins, "corp", "plugin.json") }] })
@@ -207,7 +205,7 @@ test("finding 3: a Copilot overlay installed as a link to its folder is read thr
   const real = path.join(ctx.base, "dev", "corp")
   await json(path.join(real, "plugin.json"), { name: "corp", version: "1.0.0", desk: { factory: { store: PRIVATE } } })
   await fs.symlink(real, path.join(plugins, "corp"))
-  const run = () => hook().runHook({ host: "copilot", payload: { sessionId: ID, cwd: ctx.desk, reason: "complete" }, env: ctx.env, pluginRoot, launch: async () => {} })
+  const run = () => runHook({ host: "copilot", payload: { sessionId: ID, cwd: ctx.desk, reason: "complete" }, env: ctx.env, pluginRoot, launch: async () => {} })
   assert.equal(await run(), "written")
   assert.deepEqual((await listMarkers(ctx.env))[0].routing, { store: PRIVATE, source: "overlay", warnings: [] })
   await fs.rm(real, { recursive: true })
@@ -220,7 +218,7 @@ test("finding 6: a Desk the registry does not list (claude --plugin-dir) holds t
   await claudeHome(ctx, HEALTHY)
   await runClaude(ctx, endPayload(ctx, marker), path.join(ctx.base, "dev", "desk"))
   assert.deepEqual((await listMarkers(ctx.env))[0].routing, { store: null, source: "invalid_declaration", warnings: [] })
-  const scan = hook().metadata({ host: "claude", pluginRoot: path.join(ctx.base, "dev", "desk"), home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
+  const scan = metadata({ host: "claude", pluginRoot: path.join(ctx.base, "dev", "desk"), home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
   assert.equal(scan.reason, "desk_not_in_registry")
   const status = factoryLocalStatus({ env: ctx.env, deskRoot: ctx.desk, pluginDirs: scan.dirs, pluginScanIncomplete: scan.incomplete, pluginScanReason: scan.reason })
   assert.deepEqual(status.held_by, [{ reason: "desk_not_in_registry", path: null, remedy: HOLD_REMEDIES.desk_not_in_registry }])
@@ -448,6 +446,6 @@ test("N3: a Desk updated while the session ran is listed through its sibling ver
   await runClaude(ctx, endPayload(ctx, marker), old)
   assert.deepEqual((await listMarkers(ctx.env))[0].routing, { store: STORE, source: "default", warnings: [] })
   // A Desk outside that cache folder is still not listed.
-  const scan = hook().metadata({ host: "claude", pluginRoot: path.join(ctx.base, "dev", "desk"), home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
+  const scan = metadata({ host: "claude", pluginRoot: path.join(ctx.base, "dev", "desk"), home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
   assert.equal(scan.reason, "desk_not_in_registry")
 }))

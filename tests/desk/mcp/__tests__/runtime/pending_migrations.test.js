@@ -4,7 +4,6 @@ import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { createRequire } from "node:module"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
   MIGRATION_BUDGET_MS,
@@ -21,7 +20,7 @@ import {
 
 const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const deskPluginRoot = path.resolve(mcpRoot, "..")
-const boot = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/boot-checks.cjs")
+import { migrationLine as bootMigrationLine } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 
 function migrationText({ id, safety = "safe", restart = false, agent = null, detect = "exit 0", check = "exit 0", migrate = "exit 0", announce = "Done.", description = "a test migration" }) {
   return [
@@ -283,7 +282,7 @@ test("migrationLine (the boot-check hook helper) queues the detached filer, neve
   // `env` here would fall back to the process-wide isolated-test HOME and collide with
   // the next test's identical mechanism+reason.
   const launched = []
-  const line = await boot.migrationLine({
+  const line = await bootMigrationLine({
     host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
     launchRepair: async (command, env) => { launched.push({ command, env }) },
   })
@@ -298,7 +297,7 @@ test("migrationLine (the boot-check hook helper) queues the detached filer, neve
 })
 
 test("migrationLine falls back to 'not filed: filer_unavailable' when the launcher itself fails, without throwing", async () => {
-  const line = await boot.migrationLine({
+  const line = await bootMigrationLine({
     host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
     launchRepair: async () => { throw new Error("spawn failed") },
   })
@@ -314,7 +313,7 @@ test("migrationLine's filer argv carries the fixed 'reason unavailable' placehol
   // with a `loadArgvSafeReason` that rejects, and checks the launched
   // command's own `--reason` argument rather than the human-facing block.
   const launched = []
-  const line = await boot.migrationLine({
+  const line = await bootMigrationLine({
     host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
     launchRepair: async (command, env) => { launched.push({ command, env }) },
     loadArgvSafeReason: async () => { throw new Error("argv-safe-reason module missing") },
@@ -464,16 +463,16 @@ test("a pending tidy puts the tidy instruction in the startup context; a tidy de
   const pending = await tidyDesk({ messy: true })
   for (const host of ["claude", "copilot"]) {
     const env = host === "claude" ? { ...pending.env, CLAUDE_PROJECT_DIR: pending.home } : pending.env
-    const line = await boot.migrationLine({ host, env, sessionFolder: pending.home, budgetMs: 60_000 })
+    const line = await bootMigrationLine({ host, env, sessionFolder: pending.home, budgetMs: 60_000 })
     assert.match(line, /^Desk migrations: 02-tidy-desk is pending\. Do it now, before other work and without asking/u, host)
     assert.ok(line.includes(`node '${path.join(deskPluginRoot, "mcp", "scripts", "migrations.js")}' run 02-tidy-desk --tools-root <root.path>`), host)
     assert.ok(line.length < 400, `${host}: the line stays short (${line.length})`)
     assert.doesNotMatch(line, /01-move-to-ourostack-desk/u)
   }
   const tidy = await tidyDesk({ messy: false })
-  assert.equal(await boot.migrationLine({ host: "claude", env: tidy.env, budgetMs: 60_000 }), "")
-  assert.equal(await boot.migrationLine({ host: "copilot", env: tidy.env, sessionFolder: tidy.home, budgetMs: 60_000 }), "")
-  assert.equal(await boot.migrationLine({ host: "copilot", env: tidy.env, budgetMs: 60_000 }), "", "no session folder: the process folder stands in")
+  assert.equal(await bootMigrationLine({ host: "claude", env: tidy.env, budgetMs: 60_000 }), "")
+  assert.equal(await bootMigrationLine({ host: "copilot", env: tidy.env, sessionFolder: tidy.home, budgetMs: 60_000 }), "")
+  assert.equal(await bootMigrationLine({ host: "copilot", env: tidy.env, budgetMs: 60_000 }), "", "no session folder: the process folder stands in")
 })
 
 // ── `scripts/migrations.js run <id>` ─────────────────────────────────────
@@ -592,7 +591,7 @@ test("scripts/migrations.js runs Desk's own tidy migration and prints its steps 
   const again = spawnSync(process.execPath, [script, "run", "02-tidy-desk", "--tools-root", pending.desk], { env: pending.env, cwd: pending.home, encoding: "utf8" })
   assert.equal(again.status, 0)
   assert.match(again.stdout, /^Migration 02-tidy-desk is on hold because another session has been tidying this desk since \S+; nothing to do now\.\n$/u)
-  assert.match(await boot.migrationLine({ host: "claude", env: { ...pending.env, CLAUDE_PROJECT_DIR: pending.home }, budgetMs: 60_000 }), /^Desk migrations: 02-tidy-desk is on hold because another session has been tidying this desk since \S+\. Nothing to do for it now/u)
+  assert.match(await bootMigrationLine({ host: "claude", env: { ...pending.env, CLAUDE_PROJECT_DIR: pending.home }, budgetMs: 60_000 }), /^Desk migrations: 02-tidy-desk is on hold because another session has been tidying this desk since \S+\. Nothing to do for it now/u)
   const tidy = await tidyDesk({ messy: false })
   const nothing = spawnSync(process.execPath, [script, "run", "02-tidy-desk", "--tools-root", tidy.desk], { env: tidy.env, cwd: tidy.home, encoding: "utf8" })
   assert.deepEqual([nothing.status, nothing.stdout], [0, "Migration 02-tidy-desk is not needed; nothing to do.\n"])

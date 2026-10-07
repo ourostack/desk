@@ -51,8 +51,22 @@ function compareVersions(left, right) {
   return 0;
 }
 
-function defaultGit(repoRoot) {
-  return (args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+// Node's default `maxBuffer` is 1 MiB, and a pull request that adds a large tree (a committed node_modules, say) lists
+// more file names than that, so `git diff --name-only` died with ENOBUFS, a failure about output size and not about
+// versions. 512 MiB is far beyond any real diff; if even that is exceeded, say so instead of a bare ENOBUFS.
+const GIT_MAX_BUFFER = 512 * 1024 * 1024;
+
+function defaultGit(repoRoot, maxBuffer = GIT_MAX_BUFFER) {
+  return (args) => {
+    try {
+      return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer });
+    } catch (error) {
+      if (error?.code === "ENOBUFS") {
+        throw new Error(`git ${args.join(" ")} printed more than ${maxBuffer} bytes, which is more than this release check will read; the pull request changes an implausibly large number of files`, { cause: error });
+      }
+      throw error;
+    }
+  };
 }
 
 function readJsonAt({ git, ref, file, repoRoot }) {
@@ -73,8 +87,22 @@ function existsAt({ git, ref, file }) {
   }
 }
 
+// Installed dependencies are gitignored, so committing them takes `git add -f`; one such commit made the version check
+// list a million characters of paths. Only `node_modules` is refused: `vendor/` is not ignored and a tracked one is
+// legitimate (evals/offline/vendor/gauntlet is a reviewed upstream copy with its license). A symlink or submodule
+// named node_modules is listed as the bare path, so the name may end the path as well as start a directory.
+const FORBIDDEN_TRACKED = /(^|\/)node_modules(\/|$)/u;
+
+function checkNoTrackedDependencies(git) {
+  const tracked = git(["ls-files", "-z"]).split("\0").filter((file) => FORBIDDEN_TRACKED.test(file));
+  if (tracked.length === 0) return [];
+  const shown = tracked.slice(0, 3).join(", ");
+  const more = tracked.length > 3 ? ` and ${tracked.length - 3} more` : "";
+  return [`${tracked.length} tracked path(s) are inside node_modules/ (${shown}${more}); remove them from the commit (\`git rm -r --cached\`), because node_modules is gitignored and was only added with \`git add -f\``];
+}
+
 function checkReleaseIntegrity({ repoRoot = process.cwd(), base = null, git = defaultGit(repoRoot) } = {}) {
-  const problems = [];
+  const problems = checkNoTrackedDependencies(git);
   const marketplace = readJsonAt({ git, ref: null, file: MARKETPLACE, repoRoot });
   for (const entry of marketplace.plugins) {
     const dir = path.posix.normalize(entry.source.replace(/^\.\//u, ""));
@@ -163,4 +191,4 @@ if (require.main === module) {
   process.exitCode = runCli();
 }
 
-module.exports = { checkReleaseIntegrity, compareVersions, parseVersion, resolveBase, runCli };
+module.exports = { checkReleaseIntegrity, defaultGit, compareVersions, parseVersion, resolveBase, runCli };

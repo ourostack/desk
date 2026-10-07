@@ -43,7 +43,7 @@
       ]
     },
     // Hooks and skill scripts are their own workspaces so that an export nothing imports is reported even though the file is an entry point (includeEntryExports).
-    // knip cannot tell which member of a CommonJS hook is unused when tests load the whole module as one object, so tools/unused-code/hook-exports.mjs (run by the same `npm run knip`) checks every export of a hook that has `module.exports`.
+    // A hook's logic lives in lib/ (and plugins/desk/mcp/src/factory/plugin-sources.cjs) as a module with named exports, and tests, the other hooks and the server import it by name, so knip's own export analysis covers it. The registered files are thin entries with no exports.
     // The entries are listed by name, not by glob, so a hook file that is not listed (and not reached from a listed one) is reported as unused. tests/desk/mcp/__tests__/runtime/hook_registration.test.js checks that this list matches hooks.json and copilot-hooks.json.
     "plugins/desk/hooks": {
       "entry": [
@@ -52,11 +52,12 @@
         "sync-end.cjs",
         "copilot-session-start.cjs",
         "copilot-boot-prompt.cjs",
-        // Started detached by boot-checks.cjs `startFactory`, by a path string.
+        // Started by path, never imported: factory-start.cjs and loop-start.cjs detached by boot-checks `startFactory`, and boot-checks.cjs itself as a command (--repair, --compatible, --fast-forward, --ack, --revoke) by the hooks, the docs and the doctor.
+        "boot-checks.cjs",
         "factory-start.cjs",
         "loop-start.cjs"
       ],
-      "project": ["*.cjs"],
+      "project": ["*.cjs", "lib/*.cjs"],
       "includeEntryExports": true
     },
     "plugins/plain-language/hooks": {

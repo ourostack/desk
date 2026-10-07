@@ -2,17 +2,16 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { createRequire } from "node:module"
-import { pathToFileURL } from "node:url"
+import { pluginRootFor } from "../../../../../plugins/desk/mcp/src/factory/end-hook.js"
 import { backfillPluginSources, registrySource } from "../../../../../plugins/desk/mcp/src/factory/plugin-registry.js"
 import { deriveMarker } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { factoryStateRoot, readMarker, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { agencySources, copilotSources, metadata as scanMetadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
 import { isWindows } from "../_platform.js"
 
-const hook = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/factory-end.cjs")
 
 // A Claude Code plugin cache under <base>/cc/plugins/cache: each entry is [marketplace, plugin, version]. A marketplace is a GitHub marketplace (repo ourostack/desk, listing "listed" plugins) unless it is named in "nonGithub".
 async function claudeRegistry({ base, env }, entries, { listed = ["desk", "twice", "old"], nonGithub = [] } = {}) {
@@ -112,7 +111,7 @@ test("the backfill gives the same source as the end hook's own metadata for the 
   await json(path.join(ctx.base, "cc", "plugins", "installed_plugins.json"), { plugins: { "desk@ourostack": [{ version: "3.2.0", installPath: path.join(ctx.base, "cc", "plugins", "cache", "ourostack", "desk", "3.2.0") }] } })
   const { PATTERNS } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
   const { readSmallText } = await import("../../../../../plugins/desk/mcp/src/factory/marker.js")
-  const metadata = hook.metadata({ host: "claude", pluginRoot: ctx.base, home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
+  const metadata = scanMetadata({ host: "claude", pluginRoot: ctx.base, home: ctx.base, env: ctx.env, readSmallText, PATTERNS })
   const [hooked] = metadata.plugins
   assert.equal(registrySource("claude-code", hooked.name, hooked.version, { env: ctx.env }), hooked.source)
   assert.equal(hooked.source, "ourostack/desk")
@@ -187,14 +186,14 @@ test("the hook's own lookups still answer only a repository or null", () => scra
   const { readSmallText } = await import("../../../../../plugins/desk/mcp/src/factory/marker.js")
   await copilotRegistry(ctx, PLAIN_A, MARKETS_A)
   await agencyIndex(ctx, [["copilot:url:https://example.com/desk.git", "3.2.0"]])
-  const plain = hook.copilotSources(ctx.env.COPILOT_HOME, readSmallText, PATTERNS, () => false)
-  const agency = hook.agencySources(ctx.base, readSmallText, PATTERNS, () => false)
+  const plain = copilotSources(ctx.env.COPILOT_HOME, readSmallText, PATTERNS, () => false)
+  const agency = agencySources(ctx.base, readSmallText, PATTERNS, () => false)
   assert.equal(plain("desk", "3.2.0"), "ourostack/desk")
   assert.equal(plain("desk", "9.9.9"), null)
   assert.equal(agency("desk", "3.2.0"), null)
   assert.equal(agency("other", "3.2.0"), null)
   await fs.writeFile(path.join(ctx.base, ".local", "agency", "plugins", "cache", "cache_index.json"), "{not json")
-  assert.equal(hook.agencySources(ctx.base, readSmallText, PATTERNS, () => false)("desk", "3.2.0"), null)
+  assert.equal(agencySources(ctx.base, readSmallText, PATTERNS, () => false)("desk", "3.2.0"), null)
 }))
 
 test("a symlinked plugin or version folder in the Claude Code cache does not count", () => scratch(async (ctx) => {
@@ -231,27 +230,20 @@ test("a re-derive of a marker without sources publishes desk:worker by name, and
   assert.deepEqual(published.plugins.map((plugin) => plugin.name), ["desk"])
 }))
 
-test("when the end hook cannot be found the backfill finds no source and leaves the plugin hidden, without throwing", () => scratch(async (ctx) => {
+test("when the environment cannot be read the backfill finds no source and leaves the plugin hidden, without throwing", () => scratch(async (ctx) => {
   await claudeRegistry(ctx, [["ourostack", "desk", "3.2.0"]])
   const plugins = [{ name: "desk", version: "3.2.0" }]
   assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: ctx.env }), "ourostack/desk")
-  // A throwing getter makes the root lookup itself fail; the helper still answers null.
-  const broken = new Proxy({ ...ctx.env }, { get(target, key) { if (key === "DESK_PLUGIN_ROOT") throw new Error("boom"); return target[key] } })
+  // A throwing getter makes the home lookup itself fail; the helper still answers null.
+  const broken = new Proxy({ ...ctx.env }, { get(target, key) { if (key === "HOME") throw new Error("boom"); return target[key] } })
   assert.equal(registrySource("claude-code", "desk", "3.2.0", { env: broken }), null)
   assert.deepEqual(backfillPluginSources("claude-code", plugins, { env: broken }), plugins)
 }))
 
-test("loadEndHook answers the module from the named root or its own, and null from a mirror with no hooks folder", () => scratch(async (ctx) => {
-  const source = "../../../../../plugins/desk/mcp/src/factory/end-hook.js"
-  const { loadEndHook } = await import(source)
-  assert.equal(typeof loadEndHook({}).metadata, "function")
-  assert.equal(typeof loadEndHook({ DESK_PLUGIN_ROOT: path.join(ctx.base, "nowhere") }).metadata, "function")
-  assert.equal(loadEndHook(null), null)
-  // The installed shape: the same file in a source mirror with no hooks/ beside it, and no root that has one.
-  const mirror = path.join(ctx.base, "mirror", "mcp", "src", "factory")
-  await fs.mkdir(mirror, { recursive: true })
-  await fs.copyFile(new URL(source, import.meta.url), path.join(mirror, "end-hook.js"))
-  const mirrored = await import(pathToFileURL(path.join(mirror, "end-hook.js")).href)
-  assert.equal(mirrored.loadEndHook({ DESK_PLUGIN_ROOT: path.join(ctx.base, "nowhere") }), null)
-  // And the registry's own answer for a mirror is covered above by the broken-environment case.
-}))
+test("pluginRootFor answers the root the launcher names, then Claude's, then this checkout's own", () => {
+  const own = pluginRootFor({})
+  assert.equal(pluginRootFor({ DESK_PLUGIN_ROOT: "/launcher/desk", CLAUDE_PLUGIN_ROOT: "/claude/desk" }), path.resolve("/launcher/desk"))
+  assert.equal(pluginRootFor({ DESK_PLUGIN_ROOT: " ", CLAUDE_PLUGIN_ROOT: "/claude/desk" }), path.resolve("/claude/desk"))
+  assert.equal(path.basename(own), "desk")
+  assert.equal(pluginRootFor({ DESK_PLUGIN_ROOT: 5 }), own)
+})

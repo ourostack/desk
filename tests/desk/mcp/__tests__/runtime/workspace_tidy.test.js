@@ -13,10 +13,9 @@ import { TIDY_GIT_TIMEOUT_MS } from "../../../../../plugins/desk/mcp/src/runtime
 const tidyInspectionGit = (cwd, args) => readInspectionGit(cwd, args, { timeoutMs: TIDY_GIT_TIMEOUT_MS })
 import { serializeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { pathToFileURL } from "node:url"
-import { createRequire } from "node:module"
 import { dispositionRecord, mergeTidyEvidence } from "../../../../../plugins/desk/mcp/src/runtime/workspace-evidence.js"
 import { withWorkspaceClaim } from "../../../../../plugins/desk/mcp/src/runtime/workspace-claim.js"
-const boot = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/boot-checks.cjs")
+import { acknowledgeRepair, readReport, reportPath, runBootChecks, runRepair } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js", import.meta.url)
 const tidy = await import(moduleUrl).catch((error) => {
@@ -774,22 +773,22 @@ test("R7 an exact delivery endpoint cannot be rewritten to another repository fo
 test("R3 two repairs preserve squash branch and removed-resource evidence until canonical acknowledgement", async () => {
   const { f, w } = await squashFixture()
   git(f.repo, "push", "origin", "--delete", "topic")
-  const first = await boot.runRepair(f.desk)
+  const first = await runRepair(f.desk)
   assert.equal(first.removed.length, 1)
   assert.match(first.left[0].reason, /branch retained/)
-  const second = await boot.runRepair(f.desk)
+  const second = await runRepair(f.desk)
   assert.equal(second.removed.length, 1)
   assert.match(second.left[0].reason, /branch retained/)
   assert.equal(git(f.repo, "rev-parse", "topic"), w.record.head)
-  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
-  const persisted = await boot.readReport(file)
+  const file = reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const persisted = await readReport(file)
   assert.equal(persisted.removed.length, 1)
   assert.equal(persisted.resources[0].receipt.release.evidence, w.record.release.evidence)
   const resource = persisted.resources[0]
-  await assert.rejects(boot.acknowledgeRepair(f.desk, { id: resource.id, digest: "stale", canonicalEvidence: "task.md#resources" }), /changed/)
-  const acknowledged = await boot.acknowledgeRepair(f.desk, { id: resource.id, digest: resource.digest, canonicalEvidence: "task.md#resources" })
+  await assert.rejects(acknowledgeRepair(f.desk, { id: resource.id, digest: "stale", canonicalEvidence: "task.md#resources" }), /changed/)
+  const acknowledged = await acknowledgeRepair(f.desk, { id: resource.id, digest: resource.digest, canonicalEvidence: "task.md#resources" })
   assert.equal(acknowledged.resources.length, 0)
-  const third = await boot.runRepair(f.desk)
+  const third = await runRepair(f.desk)
   assert.deepEqual(third.left, [])
   assert.deepEqual(third.removed, [])
   assert.equal(git(f.repo, "rev-parse", "topic"), w.record.head)
@@ -829,20 +828,20 @@ test("R8 a desk bound through a symlink alias is the same desk: task lookup, rep
   assert.equal(result.removed[0].path, direct.directory)
 
   const viaHook = await worktree(f, "via-hook")
-  const repaired = await boot.runRepair(alias)
+  const repaired = await runRepair(alias)
   assert.equal(repaired.removed[0].path, viaHook.directory)
   assert.equal(repaired.root, f.desk, "the report's identity is the real path")
-  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
-  const persisted = await boot.readReport(file)
+  const file = reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const persisted = await readReport(file)
   assert.equal(persisted.root, f.desk)
   assert.equal("bound" in persisted, false, "the report stores one identity, the real path")
-  assert.equal((await boot.runRepair(f.desk)).root, f.desk, "the real path reaches the same report")
+  assert.equal((await runRepair(f.desk)).root, f.desk, "the real path reaches the same report")
 
   const env = { ...process.env, DESK: alias, DESK_ACTIVATION_CONFIG: "", HOME: f.root }
   const boots = async () => {
     let line
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      line = await boot.runBootChecks({ host: "claude", env, launch: async () => {} })
+      line = await runBootChecks({ host: "claude", env, launch: async () => {} })
       if (!line.includes("budget exceeded")) break
     }
     return line
@@ -850,7 +849,7 @@ test("R8 a desk bound through a symlink alias is the same desk: task lookup, rep
   assert.match(await boots(), /Last repair: Tidied 1 stale worktrees/, "the next boot through the alias finds the repair's report")
   await fs.writeFile(`${file}.lock`, "another-owner")
   assert.match(await boots(), /repair lock/, "and the lock the repair holds")
-  assert.deepEqual(await boot.runRepair(alias), { busy: true, lock: `${file}.lock` })
+  assert.deepEqual(await runRepair(alias), { busy: true, lock: `${file}.lock` })
   await fs.unlink(`${file}.lock`)
 
   // A report written before roots were canonical names the alias; it still belongs to this desk.
@@ -997,25 +996,25 @@ test("F1-I01 near-boundary history accepts safe cleanup, remains readable, ackno
   historical[historical.length - 1] = dispositionRecord(last.receipt, "removed", true)
   const before = JSON.stringify(historyReport())
   assert.ok(Buffer.byteLength(before) >= limit - 258 && Buffer.byteLength(before) < limit)
-  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const file = reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
   await fs.writeFile(file, before)
 
-  const result = await boot.runRepair(f.desk)
+  const result = await runRepair(f.desk)
   assert.ok(result.removed.some((entry) => entry.path === w.directory))
   await assert.rejects(fs.stat(w.directory), { code: "ENOENT" })
-  const readable = await boot.readReport(file)
+  const readable = await readReport(file)
   assert.ok((await fs.stat(file)).size <= limit)
   t.diagnostic(JSON.stringify({ historicalResources: historical.length, bytesBefore: Buffer.byteLength(before), bytesAfter: (await fs.stat(file)).size, acceptedCleanup: true }))
   assert.deepEqual(readable.resources.filter((entry) => entry.path !== w.directory), historical)
   const current = readable.resources.find((entry) => entry.path === w.directory)
-  await boot.acknowledgeRepair(f.desk, { id: current.id, digest: current.digest, canonicalEvidence: "task.md#resources" })
-  const drained = await boot.readReport(file)
+  await acknowledgeRepair(f.desk, { id: current.id, digest: current.digest, canonicalEvidence: "task.md#resources" })
+  const drained = await readReport(file)
   assert.deepEqual(drained.resources, historical)
   const later = await worktree(f, "later")
-  const resumed = await boot.runRepair(f.desk)
+  const resumed = await runRepair(f.desk)
   assert.ok(resumed.removed.some((entry) => entry.path === later.directory))
   assert.ok((await fs.stat(file)).size <= limit)
-  assert.equal((await boot.readReport(file)).resources.length, historical.length + 1)
+  assert.equal((await readReport(file)).resources.length, historical.length + 1)
 })
 
 test("F1-I01 exhausted canonical capacity refuses before cleanup and acknowledgement releases capacity", async () => {
@@ -1033,19 +1032,19 @@ test("F1-I01 exhausted canonical capacity refuses before cleanup and acknowledge
   historical[historical.length - 1] = dispositionRecord(last.receipt, "removed", true)
   const before = JSON.stringify(seed())
   assert.equal(Buffer.byteLength(before), 1_048_512)
-  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const file = reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
   await fs.writeFile(file, before)
-  await assert.rejects(boot.runRepair(f.desk), /capacity/)
+  await assert.rejects(runRepair(f.desk), /capacity/)
   assert.ok((await fs.stat(w.directory)).isDirectory())
   assert.equal(git(w.directory, "rev-parse", "HEAD"), w.record.head)
   assert.equal(await fs.readFile(file, "utf8"), before)
-  assert.deepEqual((await boot.readReport(file)).resources, historical)
+  assert.deepEqual((await readReport(file)).resources, historical)
   for (const entry of historical.slice(0, 4)) {
-    await boot.acknowledgeRepair(f.desk, { id: entry.id, digest: entry.digest, canonicalEvidence: "task.md#resources" })
+    await acknowledgeRepair(f.desk, { id: entry.id, digest: entry.digest, canonicalEvidence: "task.md#resources" })
   }
-  const resumed = await boot.runRepair(f.desk)
+  const resumed = await runRepair(f.desk)
   assert.ok(resumed.removed.some((entry) => entry.path === w.directory))
-  const after = await boot.readReport(file)
+  const after = await readReport(file)
   assert.deepEqual(after.resources.filter((entry) => entry.path !== w.directory), historical.slice(4))
   assert.ok((await fs.stat(file)).size <= 1_048_576)
 })

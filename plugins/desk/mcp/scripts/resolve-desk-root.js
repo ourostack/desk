@@ -34,23 +34,29 @@ export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd(), ho
   }
 }
 
-export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), loadBoot = () => import("../../hooks/boot-checks.cjs") } = {}) {
+// Named, so that what the registry exports and nothing here uses is reported as unused code.
+async function loadBootChecks() {
+  const { migrationLine, runBootChecks, startFactory } = await import("../../hooks/lib/boot-checks.cjs")
+  return { migrationLine, runBootChecks, startFactory }
+}
+
+export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), loadBoot = loadBootChecks } = {}) {
   const result = resolveHookDeskRoot({ env })
   let output = `${JSON.stringify(result)}\n`
   if (argv.includes("--root-only")) output = result.root ?? ""
   if (argv.includes("--startup-line")) output = claudeStartupDirection({ env })
   if (argv.includes("--boot-checks")) {
-    const { default: boot } = await loadBoot()
+    const { migrationLine, runBootChecks, startFactory } = await loadBoot()
     // Desk's own migration Detect blocks run alongside the boot checks, and
     // add one line only when a migration is pending.
-    const migrations = boot.migrationLine({ host: "claude", env })
+    const migrations = migrationLine({ host: "claude", env })
     // One agent line only when a boot check has something to say; otherwise the output is unchanged.
-    const line = await boot.runBootChecks({ host: "claude", env })
+    const line = await runBootChecks({ host: "claude", env })
     if (line) output += `\n\n${line}`
     const pending = await migrations
     if (pending) output += `\n\n${pending}`
     // Factory delivery starts detached only once the output is built.
-    await boot.startFactory({ env })
+    await startFactory({ env })
   }
   write(output)
 }

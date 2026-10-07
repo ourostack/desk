@@ -99,6 +99,91 @@ test("a changed plugin must carry a higher version; unchanged plugins need nothi
   })
 })
 
+// Regression: node's default 1 MiB maxBuffer made `git diff --name-only` fail with ENOBUFS on a pull request that lists
+// more file names than that (a committed node_modules), a failure unrelated to versions.
+test("a change that lists more than 1 MiB of file names is judged on versions, not failed on output size", () => {
+  withRepo((root) => {
+    const stream = []
+    for (let index = 0; index < 14000; index += 1) {
+      const name = `plugins/alpha/__tests__/${"d".repeat(70)}/file-${index}.test.js`
+      stream.push(`M 100644 inline ${name}\ndata 2\nx\n`)
+    }
+    const input = `commit refs/heads/main\ncommitter t <t@t> 1 +0000\ndata 4\nbig\nfrom refs/heads/main^0\n${stream.join("")}\n`
+    execFileSync("git", ["fast-import", "--quiet", "--force"], { cwd: root, input, maxBuffer: 1 << 28 })
+    git(root, "reset", "-q", "--hard", "main")
+    const listed = execFileSync("git", ["diff", "--name-only", "base...HEAD", "--", "plugins/alpha"], { cwd: root, encoding: "utf8", maxBuffer: 1 << 28 })
+    assert.ok(listed.length > 1024 * 1024, `the diff must exceed node's default maxBuffer, got ${listed.length}`)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+  })
+})
+
+test("a diff past the explicit limit says so instead of a bare ENOBUFS", () => {
+  withRepo((root) => {
+    writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+    commit(root)
+    assert.throws(
+      () => checker.checkReleaseIntegrity({ repoRoot: root, base: "base", git: checker.defaultGit(root, 8) }),
+      /printed more than 8 bytes.*implausibly large/u,
+    )
+  })
+})
+
+// Track paths without a working tree: a blob (or symlink, mode 120000, or gitlink, mode 160000) at each path.
+function track(root, entries) {
+  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, input: "x\n", encoding: "utf8" }).trim()
+  for (const [mode, file] of entries) {
+    const sha = mode === "160000" ? "1".repeat(40) : blob
+    git(root, "update-index", "--add", "--cacheinfo", `${mode},${sha},${file}`)
+  }
+  git(root, "commit", "-q", "-m", "force-added")
+}
+
+const nodeModulesProblem = (root, base) => checker.checkReleaseIntegrity({ repoRoot: root, base }).filter((problem) => /node_modules/u.test(problem))
+
+test("tracked node_modules paths are a problem, with or without a base, and the message is exact", () => {
+  withRepo((root) => {
+    track(root, [
+      ["100644", "node_modules/x"],
+      ["100644", "plugins/alpha/node_modules/deep/y"],
+      ["120000", "plugins/desk/node_modules"],
+      ["160000", "sub/node_modules"],
+      ["100644", "evals/vendor/ok"],
+      ["100644", "my_node_modules/f"],
+      ["100644", "node_modules2/f"],
+    ])
+    for (const base of [null, "base"]) {
+      assert.deepEqual(nodeModulesProblem(root, base), [
+        "4 tracked path(s) are inside node_modules/ (node_modules/x, plugins/alpha/node_modules/deep/y, plugins/desk/node_modules and 1 more); " +
+          "remove them from the commit (`git rm -r --cached`), because node_modules is gitignored and was only added with `git add -f`",
+      ])
+    }
+  })
+})
+
+test("three tracked node_modules paths are all named and none is counted as more", () => {
+  withRepo((root) => {
+    track(root, [["100644", "node_modules/x"], ["100644", "plugins/alpha/node_modules/deep/y"], ["120000", "plugins/desk/node_modules"]])
+    assert.deepEqual(nodeModulesProblem(root, null), [
+      "3 tracked path(s) are inside node_modules/ (node_modules/x, plugins/alpha/node_modules/deep/y, plugins/desk/node_modules); " +
+        "remove them from the commit (`git rm -r --cached`), because node_modules is gitignored and was only added with `git add -f`",
+    ])
+  })
+})
+
+test("a bare gitlink named node_modules is flagged on its own", () => {
+  withRepo((root) => {
+    track(root, [["160000", "node_modules"]])
+    assert.match(nodeModulesProblem(root, null)[0], /^1 tracked path\(s\) are inside node_modules\/ \(node_modules\);/u)
+  })
+})
+
+test("names that only contain node_modules, and a tracked vendor/, are not flagged", () => {
+  withRepo((root) => {
+    track(root, [["100644", "my_node_modules/f"], ["100644", "node_modules2/f"], ["100644", "evals/vendor/ok"], ["120000", "plugins/desk/node_modules_link"]])
+    assert.deepEqual(nodeModulesProblem(root, null), [])
+  })
+})
+
 test("a test-only change needs no release", () => {
   withRepo((root) => {
     mkdirSync(path.join(root, "plugins", "alpha", "__tests__"), { recursive: true })

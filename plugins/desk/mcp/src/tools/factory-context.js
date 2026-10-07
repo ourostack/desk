@@ -8,8 +8,8 @@
 // folders beside Desk's plugin root (`DESK_PLUGIN_ROOT`: Claude's launcher
 // sets it, and on every other host the server's entrypoint, `mcp/index.js`,
 // sets it to its own installed plugin folder; else this checkout's own). The scan is
-// the end hook's own `metadata`, loaded from that plugin root because an
-// installed server runs from a source mirror without `hooks/`, so the tools,
+// the end hook's own `metadata` (`plugin-sources.cjs`, which the hook imports
+// too), so the tools,
 // the hooks and the boot check route a desk to the same store. A scan that
 // fails is incomplete, which holds routing unless the desk declares its own
 // store.
@@ -18,7 +18,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { withLoopSwitch } from "../factory/loop-health.js"
-import { loadEndHook, pluginRootFor } from "../factory/end-hook.js"
+import { pluginRootFor } from "../factory/end-hook.js"
+import { metadata } from "../factory/plugin-sources.cjs"
 import { readSmallText } from "../factory/marker.js"
 import { factoryStateDir } from "../factory/boot-check.js"
 import { PATTERNS, isPlainObject } from "../factory/schema.js"
@@ -31,11 +32,8 @@ const text = (value) => (typeof value === "string" && value.trim() !== "" ? valu
 export function factoryPluginScan(env) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
   const pluginRoot = pluginRootFor(env)
-  // An installed server runs from a source mirror, where `hooks/` is not beside this file; `loadEndHook` finds it.
-  const hook = loadEndHook(env)
   try {
-    const { metadata } = hook
-    const { dirs, incomplete, reason = null } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
+    const { dirs, incomplete, reason } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
     return { dirs, incomplete, reason }
   } catch {
     return { dirs: [], incomplete: true, reason: null }

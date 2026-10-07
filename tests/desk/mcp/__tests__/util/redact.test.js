@@ -6,8 +6,6 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { createRequire } from "node:module"
-import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import { tmpdir } from "node:os"
 import {
@@ -20,8 +18,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/util/redact.js"
 import { deskStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 
-const require = createRequire(import.meta.url)
-const BOOT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/boot-checks.cjs", import.meta.url))
+import { runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 
 // Fixture names shaped like the incident without carrying a real value.
 const PASSWORD_FOLDER = "setup-root-pw-hunter-two"
@@ -82,7 +79,6 @@ test("the startup line redacts a credential-like segment of the bound root", () 
 })
 
 test("the Desk boot line redacts every check's credential-like segments", async () => {
-  const { runBootChecks } = require(BOOT)
   const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
   const line = await runBootChecks({
     ...quiet,
@@ -99,7 +95,6 @@ test("the Desk boot line redacts every check's credential-like segments", async 
 })
 
 test("the Desk boot line is withheld, never shown unredacted, when the redaction cannot load", async () => {
-  const { runBootChecks } = require(BOOT)
   const line = await runBootChecks({
     launchRepair: async () => {}, launch: async () => {}, record: async () => {},
     loadRedaction: async () => { throw new Error("missing") },

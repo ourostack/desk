@@ -16,12 +16,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { strict as assert } from "node:assert"
-import { createRequire } from "node:module"
-import { fileURLToPath } from "node:url"
 
-const require = createRequire(import.meta.url)
-const BOOT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/boot-checks.cjs", import.meta.url))
-const { runBootChecks } = require(BOOT)
+import { runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 // Every call gets its own throwaway HOME, so the filing throttle's stamp files never land under the process HOME and a rerun within the hour is never "already queued".
 const tempHomes = []
 const isolatedEnv = () => {
