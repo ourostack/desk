@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.227 — 2026-10-07
+
+The hook logic that tests and the server load is now in modules with named exports, so the unused-code check covers every export. The registered hook files (`hooks/factory-end.cjs`, `hooks/sync-end.cjs` and `hooks/boot-checks.cjs`) are thin entries that call [`hooks/lib/`](hooks/lib), and the install-source lookups and the plugin scan that the end hook, the factory tools and the plugin registry share moved to [`mcp/src/factory/plugin-sources.cjs`](mcp/src/factory/plugin-sources.cjs). The server no longer loads the end hook by path from the plugin root to read them. Hook behavior and output are unchanged, and every hook is still started by the same path, including `boot-checks.cjs --repair`, `--compatible`, `--fast-forward`, `--ack` and `--revoke`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.226 — 2026-10-07
 
 The headless evaluator now finds the Claude CLI on Windows. It looked in its fixed locations only through `HOME`, which Windows normally leaves unset, so it never searched them. On Windows it now uses `HOME` when set, then `USERPROFILE`, then the operating system's home folder. It also now finds the npm install's `claude.cmd`, which Node cannot start without a shell, and a shell would read the prompt's file paths as commands. Desk never runs the `.cmd`: it finds the program the npm package names (`node_modules/@anthropic-ai/claude-code`, field `bin`) and starts that directly, through its own Node when it is a script. A `.cmd` whose program cannot be found is skipped, and a run that is handed one starts nothing and reports `no_agent_cli`. Other systems are unchanged.
