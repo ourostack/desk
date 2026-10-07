@@ -48,7 +48,7 @@ function sessionOf(host, index, unavailable, offset = 0) {
     },
     // Human attention reads the turn list and the job's segments. The segment has no `agents` beside it, so every other formula ignores it.
     human_turns: [{ at_ms: 1000, basis: "first", window_ms: null, prompt_class: "s", output_class: "none" }],
-    jobs: [{ job: JOB, basis: ["desk_tool"], session_offset_ms: offset, segments: [{ start_ms: 0, end_ms: 20000 }], transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: 14000 }], observed: { status: "done", offset_ms: 14500 } }],
+    jobs: [{ job: JOB, basis: ["desk_tool"], session_offset_ms: offset, segments: [{ start_ms: 0, end_ms: 20000 }], transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: 25000 }], observed: { status: "done", offset_ms: 25500 } }],
     unavailable: unavailable.map(([field, reason]) => ({ field, reason })),
   }
 }

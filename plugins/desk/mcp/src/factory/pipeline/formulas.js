@@ -240,6 +240,35 @@ function leadTime(timeline, status) {
   return measured(Math.max(0, Math.max(...ends)), { censored: true, basis: "latest_session_end" })
 }
 
+// The job's own recorded work on the job clock, as [start, end] pairs: the spans of
+// each session that belong to the job (its binding's segments) and its recorded intervals. A
+// session whose share or offset is unknown adds nothing, so unknown data never moves a figure.
+function recordedSpans(timeline) {
+  const spans = timeline.intervals.map((interval) => [interval.start_ms, interval.end_ms])
+  timeline.source_sessions.forEach((source, index) => {
+    const offset = timeline.sessions[index].offset_ms
+    const binding = bindingOf(source, timeline.job)
+    if (offset === null) return
+    if (Array.isArray(binding.segments)) for (const segment of binding.segments) spans.push([offset + segment.start_ms, offset + segment.end_ms])
+  })
+  return spans
+}
+
+// A lead time never reads shorter than the work the job's own sessions recorded. The
+// card's dates can be: an adopted card is created and closed at nearly the same moment,
+// and a job can keep working after its first `done`. The floor is the wall-clock span of
+// the job's recorded spans (not summed agent time, which parallel workers push above wall
+// time). A longer span raises the figure to the span and marks it partial: at least that.
+// A span that cannot be read (or none) keeps the figure as it is.
+function floorLead(lead, timeline) {
+  if (lead.class === "unavailable") return lead
+  const spans = recordedSpans(timeline).flat()
+  if (spans.length === 0 || !spans.every(Number.isFinite)) return lead
+  const span = Math.max(...spans.filter((_, index) => index % 2 === 1)) - Math.min(...spans.filter((_, index) => index % 2 === 0))
+  if (!(span > lead.value)) return lead
+  return { ...lead, class: "inferred", value: span, partial: true, partial_reasons: ["card_dates_shorter_than_work"], basis: "recorded_segment_span" }
+}
+
 function longestWait(intervals) {
   const waits = intervals.filter((interval) => WAIT_KINDS.includes(interval.kind))
   if (waits.length === 0) return unavailable("no_wait_intervals")
@@ -485,7 +514,11 @@ export function calculateFormulas(timeline) {
   const status = currentStatus(timeline)
   const timingUnavailable = timedSessions.length === 0
   const timed = (compute) => timingUnavailable ? unavailable("job_offsets_unavailable") : compute()
-  const lead = leadTime(timeline, status)
+  // The card's own figure feeds the window-based numbers (active in lead, contributors, flow); only the published lead time is floored.
+  const cardLead = leadTime(timeline, status)
+  const lead = floorLead(cardLead, timeline)
+  // A raised lead time has no window the card's clock can measure over, so what reads that window says so instead of answering over the wrong one.
+  const windowLead = lead === cardLead ? cardLead : unavailable("card_dates_shorter_than_work")
 
   const activeIntervals = timeline.intervals.filter((interval) => ACTIVE_KINDS.has(interval.kind))
   const activeUnion = union(activeIntervals)
@@ -509,9 +542,9 @@ export function calculateFormulas(timeline) {
   const active = activeValue("active_time_ms", () => measured(activeMs))
   const busy = activeValue("busy_time_ms", () => measured(busyMs))
   const activeBeforeCard = activeValue("active_before_card_ms", () => measured(duration(clip(activeUnion, -Infinity, 0))))
-  const activeInLead = lead.class === "unavailable"
-    ? unavailable(lead.reason)
-    : activeValue("active_in_lead_ms", () => measured(duration(clip(activeUnion, 0, lead.value))))
+  const activeInLead = cardLead.class === "unavailable"
+    ? unavailable(cardLead.reason)
+    : activeValue("active_in_lead_ms", () => measured(duration(clip(activeUnion, 0, cardLead.value))))
   const parallelism = whenActive("parallelism", () => inferred(busyMs / activeMs, { method: "busy_time_ms/active_time_ms" }))
   const concurrentSessions = whenActive("concurrent_sessions", () => inferred(concurrency(activeUnion, bySession), { method: "active_session_interval_concurrency" }))
   const concurrentAgents = whenActive("concurrent_agents", () => inferred(concurrency(activeUnion, byAgent), { method: "active_agent_interval_concurrency" }))
@@ -529,10 +562,10 @@ export function calculateFormulas(timeline) {
   const queue = timed(() => covered(coverageOf("queue_before_start_ms", clockSources, new Set(), new Set()), () => measured(Math.max(0, Math.min(...timedSessions.map((session) => session.offset_ms))), { basis: "first_captured_session" })))
 
   let flowEfficiency
-  if (lead.class === "unavailable") flowEfficiency = unavailable(lead.reason)
-  else if (lead.value === 0) flowEfficiency = unavailable("zero_lead_time")
+  if (windowLead.class === "unavailable") flowEfficiency = unavailable(windowLead.reason)
+  else if (cardLead.value === 0) flowEfficiency = unavailable("zero_lead_time")
   else if (activeInLead.class === "unavailable") flowEfficiency = activeInLead
-  else flowEfficiency = withCoverage(inferred(activeInLead.value / lead.value, { censored: lead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency"))
+  else flowEfficiency = withCoverage(inferred(activeInLead.value / cardLead.value, { censored: cardLead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency"))
 
   const hosts = {}
   for (const session of sourceSessions) hosts[session.session.host] = (hosts[session.session.host] ?? 0) + 1
@@ -572,7 +605,7 @@ export function calculateFormulas(timeline) {
     concurrent_agents: concurrentAgents,
     waits,
     longest_wait: longest,
-    lead_contributors: leadContributors({ lead, timingUnavailable, activeInLead, queue, waits, waitUnions }),
+    lead_contributors: leadContributors({ lead: windowLead, timingUnavailable, activeInLead, queue, waits, waitUnions }),
     flow_efficiency: flowEfficiency,
     tool_calls_by_kind: withCoverage(measured(sumMap(counted, "tool_calls")), countCoverage("tool_calls_by_kind")),
     references: referencesResult(references, parts, { privatePrs, privateCommits }),
