@@ -1,7 +1,7 @@
 // Which Desk gates fired in a boot-acceptance run, on either host.
 //
 // A run's transcript shows what the model did; it does not show whether Desk's own hooks fired and what they said. Claude Code puts hook activity
-// in its stream-json (`system` hook events, a synthetic `Stop hook feedback:` user message, `PreToolUse:<Tool> hook error:` tool results). Copilot's
+// in its stream-json (`system` hook events; the SessionStart ones are what the report reads). Copilot's
 // `--output-format json` stream carries none of it: the hook events live in the session's own `events.jsonl` under `<COPILOT_HOME>/session-state/<id>/`,
 // which the run's temp HOME takes with it. This module saves a reduced, redacted copy of that file next to the transcript (`reduceCopilotEvents`) and
 // counts the gates from it (`copilotGates`), and counts the Claude gates from the stream (`claudeGates`). `gateReport` picks by host.

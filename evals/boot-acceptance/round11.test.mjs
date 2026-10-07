@@ -23,7 +23,7 @@ const HOOK_DENIAL = "PreToolUse:Edit hook error: Desk denies a direct edit of an
 
 // ── Denied calls ────────────────────────────────────────────────────────
 
-// The exact strings real hook denials left in the round D and r11-check transcripts (cut after the first sentence or two).
+// The exact strings real hook denials left in the round D and r11-check transcripts (cut after the first sentence or two). Historical: Desk shipped those guards then and no longer does; the strings stay because they are the shape a host refusal takes.
 const REAL_DENIALS = [
   "PreToolUse:Edit hook error: Desk denies a direct edit of an existing task card: every write to a card goes through `task_update`, which commits it for you and keeps its history honest. This edit changes the card's `status:` (`processing` to `validating`): call `task_update` with { track: \"greenhouse-ops\", slug: \"watering-schedule-api\", frontmatter: { status: \"validating\" } }",
   "PreToolUse:Edit hook error: Desk denies a direct edit that changes a task card's `status:` (`processing` to `validating`). Call `task_update` instead with `{ track: \"lighthouse-relay\", slug: \"beacon-relay-push-check\", frontmatter: { status: \"validating\" } }`",

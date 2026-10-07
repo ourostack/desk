@@ -425,7 +425,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     // Every check this host could run passed; the checks it could not run are the `not_applicable` list, counted here, never credited as passes.
     judged_pass: checkResult.outcome === "pass",
     not_applicable_count: checkResult.notApplicable.length,
-    // Which of Desk's own gates fired (see gates.mjs): hook feedback and denials on Claude; the first-prompt pointer, denials and stop blocks on Copilot.
+    // Which of Desk's own gates fired (see gates.mjs): the SessionStart hooks on Claude; the first-prompt pointer, the start hook and hook failures on Copilot.
     gates,
     // The scenario turn's final reply and the critique turn's reply are separate fields.
     final_reply: ctx.finalResultText,
