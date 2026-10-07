@@ -985,6 +985,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const applied = applyRefresh(newBody, refresh.derived)
   newBody = applied.body
   const refreshed = applied.answer
+  // What is ready is read from the card as it now stands, after the refresh: a step the call added and the refresh then derived past pending is not ready, and a step the refresh unblocked is.
+  const readyNow = readyOf(readSteps(newBody).rows ?? [])
+  if (stepResult !== null) stepResult = { ...stepResult, ready: stepResult.ready.filter((id) => readyNow.includes(id)) }
+  refreshed.ready = refreshed.ready.filter((id) => readyNow.includes(id))
   const stepsNow = stepsView(newBody, refresh)
   if (merged.status === "done" && existing.data.status !== "done") {
     deliveryCheck = await assertDoneEvidence(evidence, deskRoot, "task_update", {

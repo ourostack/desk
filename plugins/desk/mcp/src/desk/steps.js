@@ -13,6 +13,7 @@
 
 import { scan } from "../tools/task-body.js"
 import { isDerivable } from "./step-delivery.js"
+import { findPullRequests } from "../tools/delivery-gate.js"
 
 export const STEP_STATES = ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"]
 export const DERIVED_STATES = ["in review", "merged", "delivered"]
@@ -203,6 +204,8 @@ export function applyStep(body, input, tool, repos) {
   let repo = existing?.repo ?? null
   if (input.repo !== undefined) repo = NONE.test(String(input.repo).trim()) ? null : String(input.repo).trim()
   if (repo !== null && !repos.includes(repo)) refuse(`${named} names repo ${JSON.stringify(repo)}, which is not one of the card's repos (${repos.join(", ") || "none"})`)
+  // A GitHub PR names a repository, so a step with no repo cannot take one as evidence on a card that has repos: Desk would derive the step from a PR it cannot place under any of the card's repos. (Which GitHub repository a card repo name stands for is not recorded, so a step that has a repo is not compared with the PR's.)
+  if (repo === null && repos.length > 0 && typeof input.evidence === "string" && findPullRequests(input.evidence).length > 0) refuse(`${named} has no repo, so a GitHub PR cannot be its evidence; give the step one of the card's repos (${repos.join(", ")}) first, while it is pending`)
   // Evidence is kept unless the call gives new text; a blocked or dropped step keeps what it had behind its reason.
   const evidence = NEEDS_REASON.includes(state) ? (proof === "" ? existing.evidence : withReason(proof, evidenceBehind(existing))) : proof !== "" ? proof : evidenceBehind(existing)
   const row = { line: existing?.line, id, depends_on: depends, repo, state, evidence }
