@@ -27,7 +27,7 @@ import {
 
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "./tool-names.js"
 import { TOOL_INPUT_SCHEMAS } from "./tool-schemas.js"
-import { packageMetadata } from "./package-metadata.js"
+import { deskVersion } from "./package-metadata.js"
 import {
   task_create,
   task_update,
@@ -315,7 +315,7 @@ export function createMcpServer() {
   return new Server(
     {
       name: "desk-mcp",
-      version: packageMetadata.version,
+      version: deskVersion() ?? "0.0.0",
     },
     {
       capabilities: { tools: {} },

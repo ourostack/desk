@@ -13,8 +13,8 @@
 // asked, and nothing else.
 
 import { randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
 import * as path from "node:path"
+import { deskVersion } from "../package-metadata.js"
 
 import { resolveProtectedStore, withProtectedStore } from "../protected/store.js"
 
@@ -41,12 +41,9 @@ CREATE TABLE IF NOT EXISTS feedback_entries (
 );
 `
 
-/** The preview build the participant is giving feedback about. */
+/** The preview build the participant is giving feedback about; "unknown" when the Desk version cannot be read, so the note is still kept. */
 function previewVersion(pluginRoot) {
-  const manifest = pluginRoot === undefined
-    ? new URL("../../../plugin.json", import.meta.url)
-    : path.join(pluginRoot, "plugin.json")
-  return JSON.parse(readFileSync(manifest, "utf8")).version
+  return deskVersion(pluginRoot === undefined ? process.env : { DESK_PLUGIN_ROOT: pluginRoot }) ?? "unknown"
 }
 
 /**

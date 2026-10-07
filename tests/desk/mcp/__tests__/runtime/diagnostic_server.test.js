@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
+const deskPluginVersion = JSON.parse(readFileSync(path.join(repoRoot, "plugins", "desk", "plugin.json"), "utf8")).version
 const diagnosticServerUrl = pathToFileURL(
   path.join(mcpRoot, "src", "runtime", "diagnostic-server.js"),
 ).href
@@ -87,9 +88,9 @@ test("diagnostic mode offers the same non-identifying preview snapshot and fails
   const snapshot = parseToolPayload(messages[1])
   assert.equal(snapshot.collection, "local-on-demand")
   assert.equal(snapshot.runtime_state, "diagnostic")
-  assert.match(snapshot.mcp_version, /^\d+\.\d+\.\d+/u)
+  assert.equal(snapshot.desk_version, deskPluginVersion)
   assert.deepEqual(Object.keys(snapshot).sort(), [
-    "architecture", "collection", "mcp_version", "node_abi", "node_major",
+    "architecture", "collection", "desk_version", "node_abi", "node_major",
     "platform", "purpose", "runtime_state", "schema_version",
   ])
   assert.doesNotMatch(JSON.stringify(snapshot), /Users|unit|cache|path|remediation/u)

@@ -79,7 +79,7 @@ test("Desk 3.2.0-alpha.219 and MCP 1.4.0-alpha.6 candidate surfaces move togethe
   try {
     await server.connect(serverTransport)
     await client.connect(clientTransport)
-    recordMismatch(errors, "MCP initialize handshake", client.getServerVersion().version, expectedMcpVersion)
+    recordMismatch(errors, "MCP initialize handshake", client.getServerVersion().version, expectedPluginVersion)
   } finally {
     await client.close()
     await server.close()

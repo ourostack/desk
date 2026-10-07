@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, writeFileSync, promises as fs } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { factoryStateRoot, gitBlobSha, listMarkers, markDelivered, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { LIMITS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
@@ -110,6 +111,22 @@ test("with no ownVersion override, the real running version is read from the co-
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "999.0.0", source: "ourostack/desk" }] }
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
+}))
+
+test("the running version a deriver holds against follows DESK_PLUGIN_ROOT", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const other = await fs.mkdtemp(path.join(os.tmpdir(), "desk-derive-version-"))
+  await fs.writeFile(path.join(other, "plugin.json"), JSON.stringify({ version: "1000.0.0" }))
+  const saved = process.env.DESK_PLUGIN_ROOT
+  process.env.DESK_PLUGIN_ROOT = other
+  try {
+    const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "999.0.0", source: "ourostack/desk" }] }
+    assert.notDeepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null }, "the plugin.json at DESK_PLUGIN_ROOT is newer than the marker's declared Desk")
+  } finally {
+    if (saved === undefined) delete process.env.DESK_PLUGIN_ROOT
+    else process.env.DESK_PLUGIN_ROOT = saved
+  }
 }))
 
 test("missing, unreadable and mismatched logs have explicit outcomes", () => scratch(async (ctx) => {

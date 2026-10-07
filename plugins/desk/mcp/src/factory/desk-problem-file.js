@@ -37,7 +37,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { readFileSync } from "node:fs"
+import { deskVersion } from "../package-metadata.js"
 
 import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX, deskProblemCard } from "./desk-problem-template.js"
@@ -57,14 +57,6 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // (`auth token`, the dedup listing, the create), never just the account lookup, so a hanging runner
 // never leaves this function running past it -- see `desk_problem_file.test.js`'s deadline test.
 const DEFAULT_DEADLINE_MS = 30000
-
-// The version of Desk actually running this code, read from the plugin.json
-// that ships beside it -- the same file and the same unguarded read
-// `derive-run.js`'s own `ownDeskVersion` uses; plugin.json always ships with
-// this module, so there is nothing to fail over to.
-function ownDeskVersion() {
-  return JSON.parse(readFileSync(new URL("../../../plugin.json", import.meta.url), "utf8")).version
-}
 
 async function recentFilings(env, now) {
   const filed = (await readStatus(env)).desk_problem_filed ?? {}
@@ -143,8 +135,8 @@ async function attemptFiling(env, {
 }) {
   const signature = normalizeErrorSignature(rawText)
   const fingerprint = deskProblemFingerprint(mechanism, signature)
-  const deskVersion = ownDeskVersion()
-  const { title, body } = deskProblemCard({ mechanism, deskVersion, host, rawText, fixAttempt, fingerprint })
+  const runningVersion = deskVersion() ?? "unknown"
+  const { title, body } = deskProblemCard({ mechanism, deskVersion: runningVersion, host, rawText, fixAttempt, fingerprint })
   const pasteReady = `${title}\n\n${body}`
   const deadline = now() + deadlineMs
   const remaining = () => Math.max(0, deadline - now())
@@ -167,7 +159,7 @@ async function attemptFiling(env, {
       if (existing !== undefined) {
         // A known problem is hit again: count it, with the running Desk version, so a recurrence after the fix is visible.
         // The count never changes the result; a failed write leaves one stable code on stderr.
-        const recorded = await Promise.resolve().then(() => recordKnown(env, existing.number, { version: deskVersion, now })).catch(() => ({ recorded: false, code: "record_failed" }))
+        const recorded = await Promise.resolve().then(() => recordKnown(env, existing.number, { version: runningVersion, now })).catch(() => ({ recorded: false, code: "record_failed" }))
         const hitLost = !recorded.recorded && recorded.code !== "headless_session"
         if (hitLost) process.stderr.write(`desk-problem: known_hit_not_recorded ${recorded.code}\n`)
         return { result: "known", url: existing.url, hitLost }
