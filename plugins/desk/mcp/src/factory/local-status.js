@@ -39,7 +39,7 @@
 // `retention` is present only when a pruning part stopped (`retention.js` `retentionFinding`): `"prune_failed"` (the last sweep's tombstone
 // pruning failed) or `"copies_prune_failed"` (the last orphan pass counted a delivered-copy prune that threw). `capture_check_unavailable` is
 // present only when a store's own capture check could not read the record `CHECK_UNAVAILABLE_ALARM` (3) or more times in a row:
-// `[{ store, times }]`. Like `orphans`, both are pushed to the doctor and the boot status, not only shown by `factory.js status`.
+// `[{ store, times }]`. `capture_dropped` is present when a record dropped from a rebuilt intake branch was still not sent six hours later: `[{ store, since }]`. Like `orphans`, all are pushed to the doctor and the boot status, not only shown by `factory.js status`.
 //
 // The result carries store names, codes and counts only: never the machine
 // secret, an account, an intake ID, a token or any content, and no local
@@ -80,7 +80,7 @@ import { deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, 
 import { readSmallText, validMarker } from "./marker.js"
 import { jobReportUrl } from "./pipeline/build.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
-import { captureCheckFindings, retentionFinding } from "./retention.js"
+import { captureCheckFindings, captureDroppedFindings, retentionFinding } from "./retention.js"
 import { HOLD_REMEDIES, holdReason } from "./held-route.js"
 import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, isFolder, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
@@ -297,6 +297,7 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const retention = status === UNREADABLE ? null : retentionFinding(status)
   // Only a store this machine still contributes to: a count left from before consent was withdrawn never settles, so it is no finding.
   const captureCheck = status === UNREADABLE ? [] : captureCheckFindings(status).filter(({ store }) => PATTERNS.prRepo.test(store) && decision(records, store) === "yes")
+  const captureDropped = status === UNREADABLE ? [] : captureDroppedFindings(status, Date.now()).filter(({ store }) => PATTERNS.prRepo.test(store) && decision(records, store) === "yes")
   return {
     store: routing.store,
     source: routing.source,
@@ -308,6 +309,7 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
     ...(hung > 0 ? { orphans_hung: hung } : {}),
     ...(retention === null ? {} : { retention }),
     ...(captureCheck.length > 0 ? { capture_check_unavailable: captureCheck } : {}),
+    ...(captureDropped.length > 0 ? { capture_dropped: captureDropped } : {}),
     ...heldFields(routing, pluginScanReason, status === UNREADABLE ? {} : status),
   }
 }
