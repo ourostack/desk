@@ -1,6 +1,6 @@
 // Reports an export of a hook that nothing uses.
 // knip cannot see this for a CommonJS hook: tests load a hook as one whole object (`require(".../boot-checks.cjs")`) and then use some of its members, so knip counts the whole object as used and no single export as unused.
-// A hook export counts as used when another tracked JavaScript file both names the hook (its file name) and the export (as a whole word). The check runs in the same job as knip, over the same working tree.
+// A hook export counts as used when another tracked JavaScript file reads it as a member of some object (`hook.key`, how production code reaches the hook's helpers), or both names the hook (its file name) and uses the export as a whole word. The check runs in the same job as knip, over the same working tree.
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -26,7 +26,8 @@ for (const hook of hooks) {
   const exported = Object.keys(require(join(repository, hook)))
   for (const key of exported) {
     const word = new RegExp(`(?<![\\w$])${key.replaceAll("$", "\\$")}(?![\\w$])`, "u")
-    const used = [...sources].some(([file, text]) => file !== hook && text.includes(stem) && word.test(text))
+    const member = new RegExp(`\\.${key.replaceAll("$", "\\$")}(?![\\w$])`, "u")
+    const used = [...sources].some(([file, text]) => file !== hook && (member.test(text) || (text.includes(stem) && word.test(text))))
     if (!used) {
       unused += 1
       console.log(`Unused hook export  ${key}  ${hook}`)
