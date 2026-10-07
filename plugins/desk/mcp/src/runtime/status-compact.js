@@ -62,13 +62,24 @@ function notesFor(payload, search) {
   }
   const sync = typeof payload.sync === "object" && payload.sync !== null ? payload.sync : null
   if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}.`)
-  if (payload.host_enforcement?.registered === false) notes.push("The host's deny hook is not registered: see desk_status with { detail: true } (`host_enforcement`).")
   return notes
 }
 
 // A diagnostic that is not ready carries what the agent must act on (the onboarding remediation, the binding path, the
 // paths tried); those payloads are small, so the keys are passed through whole.
 const DIAGNOSTIC_KEYS = ["mode", "reason", "reason_detail", "binding_path", "paths_tried", "remediation"]
+
+const DETAIL_PENDING_SUMMARY = "Desk is ready, but its details (root, search, sync) are still loading, so the empty fields below are not a missing desk. Call desk_status again shortly."
+
+// The first line of a runtime status error, at most 200 characters, so a stack or a long message never fills the answer.
+function errorLine(error) {
+  const first = error.trim().split(/\r?\n/u)[0].trim()
+  if (first === "") return "unknown error"
+  return first.length > 200 ? `${first.slice(0, 199)}…` : first
+}
+
+const statusErrorSummary = (error) => `Desk is ready, but its runtime status failed (${error}), so the empty fields below (root, search, sync) are not a missing desk. Call desk_status again; if it fails the same way, call desk_doctor.`
+const NO_DETAIL_SUMMARY = "Desk is ready, but this answer carries no runtime detail (the runtime is not loaded, or Desk is in refuse mode), so the empty root, search and sync fields below are not a missing desk. Call desk_doctor to see why."
 
 /** The compact answer for a full desk_status payload (already merged with the admission fields). */
 export function compactStatus(payload) {
@@ -77,9 +88,15 @@ export function compactStatus(payload) {
   // A desk that is otherwise ready is degraded by a failed sync, exactly as the boot script reports it.
   const state = base === "ready" ? healthWord(syncProblem === null ? [] : [syncProblem]) : base
   const search = payload.readiness?.state ?? "not_checked"
+  // Desk is ready, but the runtime's status detail missed this call's short budget: the root, search and sync fields below are empty because they are not loaded yet, not because there is no desk.
+  const detailPending = state === "ready" && payload.detail_pending === true
+  // The other ways a ready desk answers without its root, each with its own cause, so the empty fields are never read as "no desk".
+  const statusError = state === "ready" && typeof payload.status_error === "string" ? errorLine(payload.status_error) : null
+  const noDetail = state === "ready" && !detailPending && statusError === null && !payload.root?.path
+  const readySummary = detailPending ? DETAIL_PENDING_SUMMARY : statusError !== null ? statusErrorSummary(statusError) : noDetail ? NO_DETAIL_SUMMARY : "Desk is ready."
   const compact = {
     state,
-    summary: state === "ready" ? "Desk is ready." : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
+    summary: state === "ready" ? readySummary : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
     degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
     ...(state === "ready" ? {} : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
@@ -88,6 +105,8 @@ export function compactStatus(payload) {
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),
     search,
     notes: notesFor(payload, search),
+    ...(detailPending ? { detail_pending: true } : {}),
+    ...(statusError === null ? {} : { status_error: statusError }),
     root: { path: payload.root?.path ?? null, source: payload.root?.source ?? null },
     // The person a migration or a person-scoped write needs (`--tools-person`); null for a single-person desk.
     write_scope: { mode: payload.write_scope?.mode ?? null, person: payload.write_scope?.person ?? null },

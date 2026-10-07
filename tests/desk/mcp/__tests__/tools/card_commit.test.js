@@ -28,6 +28,7 @@ function fakeGit(opts = {}) {
     if (rest[0] === "ls-files" && rest.includes("--others")) return ok((opts.untracked ?? []).join("\0"))
     if (rest[0] === "ls-files") return ok((opts.tracked ?? []).includes(rest.at(-1)) ? `${rest.at(-1)}\n` : "")
     if (rest[0] === "add") return opts.addFails ? { status: 1, stdout: "", stderr: "x" } : ok()
+    if (rest[0] === "symbolic-ref") return rest.includes("refs/remotes/origin/HEAD") ? { status: 1, stdout: "", stderr: "" } : ok(`${opts.branch ?? "main"}\n`)
     if (rest[0] === "commit") return opts.commitFails ? { status: 1, stdout: "", stderr: "x" } : ok()
     throw new Error(`unexpected git ${rest.join(" ")}`)
   }

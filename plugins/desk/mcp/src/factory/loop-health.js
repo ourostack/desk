@@ -1,7 +1,7 @@
 // The loop's health record and its own alarms: the `measure` step.
 //
 // `buildLoopHealth` reads the improvement cards and the numbers the other steps left in `status.json` and builds
-// the `desk.factory.loop/1` record, kept on this machine (a later change flattens it to `loop_slot_v1` and delivers it): counts, ages, the last result of each step
+// the `desk.factory.loop/1` record, kept on this machine (`loop-slot.js` flattens it to the capture record's `loop_slot_v1`): counts, ages, the last result of each step
 // and the headless evaluator's state. Every number is a Count in the number-states shape every published factory number
 // uses, `{ state: "measured", value, reasons: [] }` or `{ state: "unavailable", value: null, reasons: [reason] }`, so a
 // number that could not be read never shows as 0. The record holds codes,
@@ -29,6 +29,7 @@ import { conditionOf, observeConditions } from "./loop-conditions.js"
 import { MIN_GAP_HOURS, STEPS, recordStep, staleSteps } from "./loop-status.js"
 import { readStatus, updateStatus } from "./outbox.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
+import { slotValid } from "./loop-slot.js"
 import { PATTERNS } from "./schema.js"
 
 export const AGE_ALARM_DAYS = 7
@@ -115,6 +116,8 @@ function cardSection(read, nowMs) {
   }
   const cards = read.cards
   const inState = (...states) => cards.filter((card) => states.includes(card.state))
+  // Loop alarm cards are the loop's own and are counted in `loop_alarms_open`, so the four card counts leave them out, as the ages do.
+  const own = (state) => inState(state).filter((card) => card.source !== "loop_alarm")
   const live = (card) => isClaimLive(card, nowMs)
   const since = nowMs - WINDOW_DAYS * DAY_MS
   const closedWithin = (state) => cards.filter((card) => card.state === state && Date.parse(card.closed_at) >= since).length
@@ -127,11 +130,11 @@ function cardSection(read, nowMs) {
   return {
     cards,
     improvement: {
-      open: count(inState("open").length),
-      claimed: count(inState("claimed").filter(live).length),
+      open: count(own("open").length),
+      claimed: count(own("claimed").filter(live).length),
       claim_expired: count(inState("claimed").filter((card) => !live(card)).length),
-      shipped: count(inState("shipped").length),
-      verifying: count(inState("verifying").length),
+      shipped: count(own("shipped").length),
+      verifying: count(own("verifying").length),
       oldest_open_age_days: oldest(inState("open", "claimed"), "none_open"),
       oldest_in_verification_age_days: oldest(inState("shipped", "verifying"), "none_in_verification"),
       closed_confirmed_30d: count(closedWithin("closed_confirmed")),
@@ -303,7 +306,7 @@ export function assembleLoop({ status, read, nowMs, version }) {
     worker: workerSection(loopStatus.worker),
   }
   const blocked = evaluator !== null && isObject(evaluator.headless) && isInteger(evaluator.headless.blocked_days) ? evaluator.headless.blocked_days : null
-  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid }, cards: cards.cards }
+  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid, slot_invalid: !slotValid(loop) }, cards: cards.cards }
 }
 
 function toMillis(now) {
@@ -355,6 +358,8 @@ export function loopAlarms(loop, signals = {}) {
   if (BLOCKING_STATES.includes(evaluator.headless.state) && isInteger(signals.blocked_days) && signals.blocked_days >= BLOCKED_DAYS_FOR_ALARM) alarms.push({ name: "headless_blocked", evidence: { blocked_days: signals.blocked_days } })
   if (isInteger(signals.cards_invalid) && signals.cards_invalid > 0) alarms.push({ name: "cards_invalid", evidence: { files: signals.cards_invalid } })
   if (measuredAbove(evaluator.labels_quarantined, 0)) alarms.push({ name: "labels_quarantined", evidence: { count: evaluator.labels_quarantined.value } })
+  // The record's own slot fails the store's rule, so the capture record goes without it: said once as an alarm, never silence.
+  if (signals.slot_invalid === true) alarms.push({ name: "capture_loop_slot", evidence: {} })
   for (const step of signals.attempted ?? []) if (STEPS.includes(step) && steps[step].stale) alarms.push({ name: `step_stale:${step}`, evidence: { failures: steps[step].failures.value } })
   return alarms
 }

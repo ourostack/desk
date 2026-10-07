@@ -29,8 +29,9 @@
 //                                      { path, blob, done: true, at }, a tombstone once the delete is done (`at` is when;
 //                                      `pruneTombstones` removes it after `TOMBSTONE_RETENTION_MS`, and stamps an older one without `at`)
 //   retracted-copies/<store-slug>/<name>.json, retracted-copies/<store-slug>/labels/<job>/<session>.json
-//                                      the local facts and labels of a session whose delete was pushed, kept
-//                                      outside outbox/ so an older Desk's flush never lists them (never deleted)
+//                                      the local facts and labels of a session that is not here (away, stale, stalled
+//                                      or unknown, or whose delete was pushed), kept outside outbox/ so an older Desk's
+//                                      flush never lists them and "away" outlives `status.json` (never deleted)
 //   quarantine/<store-slug>/<name>     { reason, at, blob? } (blob: the
 //                                      published blob sha the store refused),
 //                                      and for labels
@@ -92,13 +93,15 @@ import { freshVisibility } from "./desk-visibility.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { LABELS_SCHEMA, validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
-import { RETRACTED_COPIES } from "./session-route.js"
+import { RETRACTED_COPIES, markerRoute, recordedHeld } from "./session-route.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
 const MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/** How long a marker whose route is held is kept: long enough for the operator to declare the desk's store, which releases it (`held-route.js`). */
+export const HELD_MARKER_TTL_MS = 90 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
@@ -601,7 +604,9 @@ export async function withNamedLock(env, name, body, { platform = process.platfo
 
 /**
  * `listMarkers(env) -> Marker[]`: prunes (deletes) a marker whose
- * `updated_at` cannot be parsed or is more than 30 days old; a marker that
+ * `updated_at` cannot be parsed or is more than 30 days old, or 90 days for
+ * a marker whose route is held (`held-route.js`; a held marker pruned is
+ * counted in `status.json` `held_pruned`); a marker that
  * fails to parse as JSON is dropped the same way rather than blocking every
  * other marker. Only regular files matching the marker name shape are
  * considered; a symlink, a hard link, a leftover temp file or anything else
@@ -614,6 +619,7 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
   const { dir } = directory
   const nowMs = Date.parse(now())
   const kept = []
+  let heldPruned = 0
   for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
     const file = path.join(dir, name)
     const before = await lstatIfPresent(file, NAMING)
@@ -624,19 +630,31 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
       if (error.code === "ENOENT" || error.message === "metadata_unreadable" || error.message === "marker_changed") continue
       if (!(error instanceof SyntaxError)) throw error
     }
-    if (marker === null || nowMs - Date.parse(marker.updated_at) > MARKER_TTL_MS) {
+    const age = marker === null ? Infinity : nowMs - Date.parse(marker.updated_at)
+    const held = marker !== null && age > MARKER_TTL_MS && heldNow(marker)
+    if (marker === null || age > (held ? HELD_MARKER_TTL_MS : MARKER_TTL_MS)) {
       // Recheck the directory and exact leaf before pruning; never follow a replacement.
       await assertMarkerDirectory(directory)
       const current = await lstatIfPresent(file, NAMING)
       if (before !== null && current !== null && current.isFile() && current.nlink === 1 && current.dev === before.dev && current.ino === before.ino) {
-        await fsp.unlink(file).catch(() => {})
+        const removed = await fsp.unlink(file).then(() => true, () => false)
+        if (removed && held) heldPruned += 1
       }
     } else {
       kept.push(marker)
     }
   }
   await assertMarkerDirectory(directory)
+  // A held session pruned uncaptured is counted, so `desk_doctor` says it was lost rather than dropping it silently.
+  if (heldPruned > 0) {
+    await updateStatus(env, (current) => ({ ...current, held_pruned: { count: (Number.isSafeInteger(current.held_pruned?.count) ? current.held_pruned.count : 0) + heldPruned, last_at: now() } }), { platform, runner }).catch(() => {})
+  }
   return kept
+}
+
+// Whether a marker's route is held now (`session-route.js`).
+function heldNow(marker) {
+  return typeof marker.desk_root === "string" && recordedHeld(marker) && markerRoute(marker).store === null
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,18 +1021,20 @@ export async function updateStatus(env, mutate, { platform = process.platform, r
 }
 
 /**
- * `recordRoutes(env, routes)`: for each `{ name: { store, deskRoot } }`, keeps `store` as `route`, and `deskRoot` (an absolute path) as
- * `desk_root`, in the derivation receipt of facts file `name`, the other keys unchanged (a receipt is created when there is none).
+ * `recordRoutes(env, routes)`: for each `{ name: { store, deskRoot } }`, keeps `store` as `route` and as `checked_route`, and `deskRoot` (an
+ * absolute path) as `desk_root`, in the derivation receipt of facts file `name`, the other keys unchanged (a receipt is created when there is none).
  * `route` is the store the session last positively routed to, as the flush saw it. It outlives the marker, which is pruned after 30 days,
  * and the sweep's own `store`, which a route to a store without consent never updates, so a session whose marker is gone keeps the route it
- * last had; `desk_root` lets the flush read the desk's declaration then (`session-route.js`). Both stay local and are never published.
+ * last had; `desk_root` lets the flush read the desk's declaration then (`session-route.js`). `checked_route` is the same store, written only
+ * by a Desk that holds a route recorded beside an unreadable overlay: placement without a marker trusts it alone, never `route`, which an
+ * older Desk also wrote. All stay local and are never published.
  */
 export async function recordRoutes(env, routes, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   return updateJsonLocked(root, path.join(root, "status.json"), { last_flush: {} }, (current) => {
     const derivations = { ...current.derivations }
     for (const [name, { store, deskRoot }] of Object.entries(routes)) {
-      derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), route: store, desk_root: deskRoot }
+      derivations[name] = { ...(isPlainObject(derivations[name]) ? derivations[name] : {}), route: store, checked_route: store, desk_root: deskRoot }
     }
     return { ...current, derivations }
   }, { platform, env, runner }, isStatusShape)
@@ -1443,13 +1463,17 @@ const pathOf = (folders, rel) => (rel.startsWith("labels/") ? path.join(folders.
 
 // Moves one copy as a write then an unlink, so every guard `writeAtomic` and `readProtectedBytes` apply holds and a crash leaves both copies,
 // never none. A copy is never overwritten and never lost: at the kept side a different file already there keeps its place and the incoming one
-// is written beside it (`<name>.kept-<n>`); at the live side an existing file wins and the kept copy stays.
+// is written beside it (`<name>.kept-<n>`); at the live side an existing file wins (it is the newer derive of a session that routes here) and the
+// kept copy is retired beside itself as `<name>.kept-<n>`, which nothing lists, so the session no longer reads as one that left the store.
 async function moveCopy(root, from, to, rel, { keep, platform, env, runner }) {
   const source = pathOf(from, rel)
   const target = pathOf(to, rel)
   const bytes = await readProtectedBytes(source)
   const present = (await lstatIfPresent(target, NAMING)) !== null
-  if (present && !keep) return false
+  if (present && !keep) {
+    await fsp.rename(source, await nextSiblingPath(source, "kept"))
+    return false
+  }
   if (!present) await writeAtomic(root, target, bytes, { platform, env, runner })
   else if (!bytes.equals(await readProtectedBytes(target))) await writeAtomic(root, await nextSiblingPath(target, "kept"), bytes, { platform, env, runner })
   await fsp.unlink(source)
@@ -1486,6 +1510,34 @@ export async function keepRetractedCopies(env, store, sessions, { platform = pro
   return moveSessions(env, store, sessions, { keep: true, platform, runner })
 }
 
+/**
+ * `keepCopiesElsewhere(env, routeOf) -> { store, name }[]`: for every session with a copy in some store's outbox or labels folder, `await routeOf(session)`
+ * says where it belongs now: a store name (it routes there positively), `null` (no route can be found: it belongs nowhere), or `undefined`
+ * (nothing new is known: leave it). A copy in a store it does not belong to moves to that store's `retracted-copies/` (`keepRetractedCopies`), so
+ * that store never publishes it again, even when its own flush does not run (its consent is off) and every other record of the move is later lost.
+ * Each store's folders are listed once. Store names compare without regard to case. Returns what moved, by store and name.
+ */
+export async function keepCopiesElsewhere(env, routeOf, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const moved = []
+  for (const slug of [...new Set([...(await listDirSafe(path.join(root, "outbox"))), ...(await listDirSafe(path.join(root, "labels")))])].sort()) {
+    const store = slug.replace("__", "/")
+    if (!PATTERNS.prRepo.test(store) || storeSlug(store) !== slug) continue
+    const live = liveFolders(root, slug)
+    const present = new Set((await listRegularFiles(live.facts, OUTBOX_NAME_PATTERN)).map((name) => name.slice(-41, -5)))
+    for (const job of await listDirSafe(live.labels)) {
+      if (PATTERNS.jobId.test(job)) for (const file of await listRegularFiles(path.join(live.labels, job), LABELS_NAME_PATTERN)) present.add(file.slice(0, -5))
+    }
+    const away = []
+    for (const session of [...present].sort()) {
+      const target = await routeOf(session)
+      if (target === null || (typeof target === "string" && target.toLowerCase() !== store.toLowerCase())) away.push(session)
+    }
+    if (away.length > 0) moved.push(...(await keepRetractedCopies(env, store, away, { platform, runner })).map((name) => ({ store, name })))
+  }
+  return moved
+}
+
 /** `keptSessions(env, store) -> string[]`: the session ids that have a kept copy, whether or not a retracting record names them. */
 export async function keptSessions(env, store, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
@@ -1497,7 +1549,7 @@ export async function keptSessions(env, store, { platform = process.platform, ru
   return [...found].sort()
 }
 
-/** `restoreRetractedCopies(env, store, sessions) -> string[]`: the route is back, so the kept copies of `sessions` return to the outbox and the labels folder, unless a file is already there. */
+/** `restoreRetractedCopies(env, store, sessions) -> string[]`: the route is back, so the kept copies of `sessions` return to the outbox and the labels folder; where a file is already there it wins and the kept copy is retired beside itself (`moveCopy`). */
 export async function restoreRetractedCopies(env, store, sessions, { platform = process.platform, runner = undefined } = {}) {
   return moveSessions(env, store, sessions, { keep: false, platform, runner })
 }
@@ -1585,22 +1637,25 @@ export async function releaseQuarantined(env, store, names) {
  * quarantined with the same code are released, and so are labels held back
  * as `facts_quarantined` for a facts file released here. Every other record
  * stays, and so does one that is not a regular file or does not parse.
+ * With `sessions` (a set of session ids), only the records of those sessions
+ * go: the flush releases only sessions that are here.
  * Returns the released facts names and labels keys, each sorted.
  */
-export async function releaseRefusedPluginNames(env, store) {
+export async function releaseRefusedPluginNames(env, store, { sessions = null } = {}) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env)
   const dir = path.join(root, "quarantine", slug)
+  const wanted = (name) => sessions === null || sessions.has(name.slice(-41, -5))
   const refused = []
   for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
-    if ((await quarantineReason(path.join(dir, name)))?.reason === REFUSED_PLUGIN_NAMES) refused.push(name)
+    if (wanted(name) && (await quarantineReason(path.join(dir, name)))?.reason === REFUSED_PLUGIN_NAMES) refused.push(name)
   }
   const { facts, labels } = await releaseQuarantined(env, store, refused)
   for (const job of await listDirSafe(path.join(dir, "labels"))) {
     const jobDir = path.join(dir, "labels", job)
     if (!PATTERNS.jobId.test(job) || !(await lstatIfPresent(jobDir, NAMING)).isDirectory()) continue
     for (const file of await listRegularFiles(jobDir, LABELS_NAME_PATTERN)) {
-      if ((await quarantineReason(path.join(jobDir, file)))?.reason !== REFUSED_PLUGIN_NAMES) continue
+      if (!wanted(file) || (await quarantineReason(path.join(jobDir, file)))?.reason !== REFUSED_PLUGIN_NAMES) continue
       await fsp.unlink(path.join(jobDir, file))
       labels.push(`labels/${job}/${file}`)
     }

@@ -56,6 +56,39 @@ const RETURN_REASON = {
   description: "Required when this call sends a task backwards (out of `done`, or to a stage below the furthest one it reached): why. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke). Refused on any call that is not a return.",
 }
 
+// Mirrors STEP_STATES in src/desk/steps.js, less the states Desk derives (DERIVED_STATES) (this file stays free of imports).
+const STEP = {
+  type: "object",
+  properties: {
+    id: text("The step's name: short kebab-case, unique on the card, never renamed. Unknown names add a row."),
+    state: { type: "string", enum: ["pending", "in progress", "blocked", "dropped"], description: "Where the step is. A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from the PR URL (or `task:<track>/<slug>` for a delegated step) in `evidence`; callers cannot." },
+    depends_on: list("The steps that must be delivered (or dropped) first; empty for none. Needed for a new step; changes only while the step is pending."),
+    repo: text("One of the card's repos, or \"—\" for none. Needed for a new step; changes only while the step is pending."),
+    evidence: text("The PR URL that backs the step (Desk derives the step's state from it), `task:<track>/<slug>` for a step delegated to its own card, or a line on where it stands."),
+    reason: text("Why the step is blocked or dropped; written into the step's Evidence cell."),
+    expect: text("The state you last saw. If the step is in another state now, nothing is written and the refusal shows the current row."),
+    dependents_ok: list("When dropping a step: the steps that depend on it and are still valid. The others become blocked."),
+  },
+  required: ["id"],
+  additionalProperties: false,
+  description: "One row of the card's `## Steps` table, a JSON object.",
+}
+
+// Mirrors DISPOSITIONS and RESOURCE_FIELDS in src/desk/resources.js.
+const RESOURCE = {
+  type: "object",
+  properties: {
+    identity: text("`worktree:<absolute path>` or `branch:<owner/repo>#<name>` (or `branch:<org/project/repo>#<name>` for Azure DevOps): a worktree or branch you created. Unknown identities add a row; known ones update it."),
+    step: text("The step (a name in the card's `## Steps` table) that owns it; written as `step <id>`. Cleanup is due when that step is delivered or dropped."),
+    intended: text("What you intend to do with it, in a few words (for example `remove after merge`)."),
+    disposition: { type: "string", enum: ["removed-and-absent", "named transfer", "retained-with-trigger"], description: "Record this once the resource is dealt with; needs `details`. Desk removes nothing." },
+    details: text("With `disposition`: removed-and-absent, the readback that it is gone; named transfer, who took it and that they acknowledged; retained-with-trigger, why, who owns it and what triggers its cleanup."),
+  },
+  required: ["identity"],
+  additionalProperties: false,
+  description: "One row of the card's `## Resources` table, a JSON object.",
+}
+
 const TASK_PROGRESS = {
   note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
   next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
@@ -65,11 +98,11 @@ const TASK_DONE_EVIDENCE = {
   type: "object",
   additionalProperties: false,
   properties: {
-    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code"], description: "What kind of reference this is." },
-    ref: text('The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
+    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code", "steps"], description: "What kind of reference this is. `steps` closes a card that has a `## Steps` table: it needs no `ref`, and Desk refreshes every step from its pull request and refuses while any is not delivered or dropped." },
+    ref: text('Not needed for `steps`. The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
   },
-  required: ["kind", "ref"],
-  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. A task whose card lists `repos` can only be finished with `pr` (a PR URL in one of those repos) or `commit` (a commit that resolves in a recorded clone and is pushed): `ci_run` and `non_code` are refused, and a commit made in the desk never counts. One exception: a repo Desk recorded as local-only (`local_only: true` on its entry in the card as it was before this call; Desk sets it when `task_create` or boot first sees the clone with no remote and the entry has no `url`, and no call can set it) accepts a commit in that clone that a local branch or HEAD reaches and that was made after the task was created. If the work cannot be delivered yet (nothing pushed, no PR), do not mark the task done: leave it at `validating` and tell the operator the commit sha. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
+  required: ["kind"],
+  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. A card with a readable `## Steps` table can only be finished with `{ kind: \"steps\" }`, and every other card never with it. A task whose card lists `repos` (and has no steps table) can only be finished with `pr` (a PR URL in one of those repos) or `commit` (a commit that resolves in a recorded clone and is pushed): `ci_run` and `non_code` are refused, and a commit made in the desk never counts. One exception: a repo Desk recorded as local-only (`local_only: true` on its entry in the card as it was before this call; Desk sets it when `task_create` or boot first sees the clone with no remote and the entry has no `url`, and no call can set it) accepts a commit in that clone that a local branch or HEAD reaches and that was made after the task was created. If the work cannot be delivered yet (nothing pushed, no PR), do not mark the task done: leave it at `validating` and tell the operator the commit sha. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
 }
 
 const TASK_ARCHIVE_OUTCOME = {
@@ -123,8 +156,9 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     predecessor: { type: "object", additionalProperties: true, description: "The task this one continues, such as { track, slug }." },
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
+    steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table; each may depend on the ones before it. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),

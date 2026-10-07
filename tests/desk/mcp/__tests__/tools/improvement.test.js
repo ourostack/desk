@@ -41,6 +41,7 @@ function fakeGit(opts = {}) {
     if (rest[0] === "diff") return ok("")
     // Everything in the card folder is uncommitted unless the test says the folder is clean.
     if (rest[0] === "ls-files" && rest.includes("--others")) return ok((opts.untracked ?? (opts.clean ? [] : scan(args[1], rest.at(-1)))).join("\0"))
+    if (rest[0] === "symbolic-ref") return rest.includes("refs/remotes/origin/HEAD") ? { status: 1, stdout: "", stderr: "" } : ok("main\n")
     if (rest[0] === "commit") return opts.commitFails ? { status: 1, stdout: "", stderr: "secret text" } : ok()
     return ok()
   }

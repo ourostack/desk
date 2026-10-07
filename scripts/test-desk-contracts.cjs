@@ -1066,7 +1066,6 @@ contract("boot prints the bound desk's AGENTS.md, and no step orders a read of i
   const hint = text("plugins/desk/mcp/src/util/deferred-tools.js");
   assert.match(hint, /If your host defers tools.*Claude Code: ToolSearch `select:mcp__plugin_desk_desk__task_update/su);
   assert.match(hint, /mcp__plugin_desk_desk__task_update/u);
-  assert.match(text("plugins/desk/mcp/src/runtime/task-status-guard.js"), /deferredToolsLoadHint\(host\)/u, "the guard's deny message carries the same hint");
 });
 // Kaizen card 5: archiving stages only the paths it moved, as git-hygiene's targeted staging requires.
 contract("archive-workflow stages only the paths it moved", () => {
@@ -1130,9 +1129,9 @@ contract("the card format skill points at the return rules", () => {
   const skill = text("plugins/desk/skills/task-card-format/SKILL.md");
   assert.match(skill, /`task-lifecycle`, "Returns"[^\n]+`return_reason`/u);
 });
-contract("the lifecycle skill says what an unverified answer can and cannot become", () => {
+contract("the lifecycle skill says Desk records a sign-off call as the answer and never asks for a repeat", () => {
   const skill = text("plugins/desk/skills/task-lifecycle/SKILL.md");
-  assert.match(skill, /Only an unverified acceptance on Claude Code can be upgraded: do not ask the operator again; when their next message arrives, repeat the call with the same answer\.[^\n]+An unverified refusal has already sent the task back to work, so there is nothing to sign until the next delivery[^\n]+On Copilot CLI and Codex every answer is unverified/u);
+  assert.match(skill, /Desk records the call as the operator's answer and does not check which turn made it\. Repeating the same answer changes nothing; a different answer replaces the one held\./u);
   assert.doesNotMatch(skill, /usually to repeat the call/u);
   assert.doesNotMatch(skill, /ask again in a later turn/u);
   assert.match(skill, /^\| `done` → `processing` \| NOTIFY \|[^\n]*\(`start-task`\)\. Moving out of `done`/mu);
@@ -1155,10 +1154,10 @@ contract("the store playbook states the outcome report keys as fact", () => {
   const playbook = text("plugins/desk/docs/factory-store-playbook.md");
   assert.doesNotMatch(playbook, /Marked for the lead/u);
   assert.match(playbook, /Read the `state` of a figure[^\n]+before any count/u);
-  assert.match(playbook, /a yield of 1 can be `partial`[^\n]+upper bound[^\n]+`reason_check\.disagree`[^\n]+a lower bound[^\n]+`compared_verified`/u);
-  assert.match(playbook, /`refused_unverified`[^\n]+`signoff: \{ recorded: false \}`/u);
-  assert.match(playbook, /`signoff_unverified`, `changed_ask_only`/u);
-  assert.match(playbook, /An unverified sign-off is never an acceptance[^\n]+Show `no_record` beside the sign-off counts/u);
+  assert.match(playbook, /a yield of 1 can be `partial`[^\n]+upper bound[^\n]+`reason_check\.disagree`[^\n]+a lower bound/u);
+  assert.match(playbook, /`refusal_reasons`[^\n]+`signoff: \{ recorded: false \}`/u);
+  assert.match(playbook, /`awaiting_signoff`, `changed_ask_only`/u);
+  assert.match(playbook, /An acceptance is recorded by the agent on the operator's word[^\n]+Show `no_record` beside the sign-off counts/u);
 });
 contract("local capture explains the remaining outcome fields", () => {
   const doc = text("plugins/desk/docs/factory-local-capture.md");
@@ -1203,18 +1202,6 @@ contract("the store playbook states the human turns shape, the attention rollup 
   assert.doesNotMatch(playbook, /so the site reads `thin sample`/u);
   assert.match(playbook, /`no_accepted_outcomes`[^\n]+never zero/u);
   assert.match(playbook, /store's limit for `unavailable` entries is now 231/u);
-});
-contract("the README says the ticket hook records whether, not checks that", () => {
-  const readme = text("plugins/desk/README.md");
-  assert.match(readme, /records whether the last turn-starting line of the transcript was typed by a human/u);
-});
-contract("the plugin README lists the sign-off witness hook with its three modes", () => {
-  const readme = text("plugins/desk/README.md");
-  const row = readme.split("\n").find((line) => line.startsWith("| sign-off witness |"));
-  assert.ok(row, "the host parity table has a sign-off witness row");
-  assert.match(row, /`UserPromptSubmit`[^|]*`prompt`[^|]*`Stop`[^|]*`stop`[^|]*`PreToolUse`[^|]*`ticket`/u);
-  assert.match(row, /`userPromptSubmitted`[^|]*`prompt`[^|]*`agentStop`[^|]*`stop`/u);
-  assert.match(row, /\| not wired \|$/u);
 });
 contract("public Desk skills name only the public factory store", () => {
   for (const file of [sessionStart, "plugins/desk/skills/first-run-bootstrap/SKILL.md", "plugins/desk/skills/task-lifecycle/SKILL.md", "plugins/desk/skills/task-card-format/SKILL.md"]) {
@@ -1355,12 +1342,10 @@ contract("resuming a named task continues its recorded next step, plans live in 
   assert.match(skill, /Choose the execution method[^.]*yourself[^.]*not a question for the operator/u);
   assert.match(skill, /`writing-plans` is a skill that writes a plan file\. It is not the host's Plan mode/u);
 });
-contract("every write to an existing task card goes through task_update, and the guard says which call to use", () => {
+contract("every write to an existing task card goes through task_update", () => {
   const lifecycle = text("plugins/desk/skills/task-lifecycle/SKILL.md");
   assert.match(lifecycle, /Every write to an existing task card goes through `task_update`/u);
   for (const field of ["note", "next_step", "frontmatter", "body_append"]) assert.match(lifecycle, new RegExp(`\`${field}\``, "u"));
-  const guard = text("plugins/desk/mcp/src/runtime/task-status-guard.js");
-  assert.match(guard, /Desk denies a direct edit of an existing task card/u);
   assert.match(text("plugins/desk/skills/task-card-format/SKILL.md"), /url: https:\/\/github\.com\/<org>\/OrderService\.git/u);
 });
 
@@ -1479,13 +1464,96 @@ requires(
   "the MCP readme lists the three improvement tools",
   /## Tools exposed \(23\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 23 tools are wired/u,
 );
-contract("the changelog fragment for the loop exists, has no heading and says what changed for the reader", () => {
-  const fragment = text("plugins/desk/changelog.d/factory-closed-loop.md");
+contract("the changelog text for the loop has no heading and says what changed for the reader", () => {
+  // Before a release the text is the fragment. The release folds the fragment into the changelog and deletes it, and
+  // the release workflow checks that release commit, so after a release the same paragraphs sit under the new version.
+  const fragmentPath = "plugins/desk/changelog.d/factory-closed-loop.md";
+  const opening = "The factory's improvement loop now runs by itself.";
+  let fragment;
+  if (fs.existsSync(path.join(root, fragmentPath))) {
+    fragment = text(fragmentPath);
+  } else {
+    const changelog = text("plugins/desk/CHANGELOG.md");
+    const start = changelog.indexOf(opening);
+    assert.notEqual(start, -1, "neither the fragment nor the released changelog holds the loop's text");
+    const rest = changelog.slice(start);
+    const end = rest.search(/^## /mu);
+    fragment = (end === -1 ? rest : rest.slice(0, end)).split(/\n\n/u).slice(0, 5).join("\n\n");
+  }
   assert.doesNotMatch(fragment, /^#{1,2} /mu);
   assert.match(fragment, /improvement card/iu);
   assert.match(fragment, /improvement_next/u);
   assert.match(fragment, /subscription/iu);
   assert.doesNotMatch(fragment, /Ships desk-mcp@/u);
+});
+
+// General operator rules live in the skill that owns their topic, so every operator's agents follow them. Each row pins the
+// key wording of one rule; the wording failing to match means the rule was reworded or dropped from its skill.
+contract("every general operator rule is stated in the skill that owns its topic", () => {
+  const skill = (name) => `plugins/desk/skills/${name}/SKILL.md`;
+  const rules = [
+    ["interaction-style", /form-style question interfaces/u],
+    ["interaction-style", /Converse in normal chat, one decision group at a time, and ask only when genuinely blocked/u],
+    ["interaction-style", /Plan for few, long conversations, not many short ones/u],
+    ["interaction-style", /ask for the principles behind a decision rather than each instance of it, then decide the instances yourself, record them as rulings and keep going/u],
+    ["interaction-style", /running agenda on the task card \(questions that are truly theirs, each with the evidence and a recommendation\)/u],
+    ["interaction-style", /never end a status update with a question that can wait for the agenda/u],
+    ["using-superpowers-with-desk", /Never enter, request or recommend the host's Plan mode: work in the active execution mode/u],
+    ["using-superpowers-with-desk", /treat it as a runtime or tooling fault and use another valid execution path/u],
+    ["using-desk", /Product, UX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship/u],
+    ["using-desk", /spending their money, credentials or accounts only they can act in; an irreversible action/u],
+    ["using-desk", /Download CI output from the operator's own repositories without asking/u],
+    ["using-desk", /run sign-in flows yourself rather than asking; never type a password or paste a secret/u],
+    ["using-desk", /merge when confident wherever the repository lets you, and never report completion with the PR open/u],
+    ["using-desk", /Choose each child's model deliberately/u],
+    ["using-desk", /A child brief bounds the work and leaves the method to the child\. A handoff to a peer that owns its task is not a brief: say what you changed and intend to touch, what was decided, the edges and how to reach you; never tell it how to work or presume its state/u],
+    ["using-desk", /A constraint we authored is a design decision we can change, not a wall to route around/u],
+    ["using-desk", /design tools for agents by asking what an agent would want/u],
+    ["work-orchestration", /Choose each subagent's model deliberately, by the work's need for capability\. Pick from whatever model family the host offers rather than inheriting the default[\s\S]+most capable, most expensive tier[\s\S]+smallest, fastest tier for mechanical retrieval or lookup work and a mid tier for real engineering, analysis, drafting or review/u, "Choosing and briefing agents"],
+    ["work-orchestration", /fork\) is fine when inheriting the full context is genuinely worth the top-tier cost; make that a conscious choice, not a default/u, "Choosing and briefing agents"],
+    ["work-orchestration", /A child brief bounds the work and leaves the method to the child; a handoff to a peer that owns its task is not a brief\. A handoff never tells that agent how to do its work[\s\S]+you do not know its state[\s\S]+Do not presume what it has done, where it stopped or what blocks it[\s\S]+what your own side changed and intends to touch, what was decided, where the edges are, what you would like from it, and how to reach you[\s\S]+No step lists, no commands\. Keep the message short and point to the task card/u, "Choosing and briefing agents"],
+    ["work-orchestration", /If a repository will let you merge, merge when confident[\s\S]+does not by itself require their approval[\s\S]+unless the repository or platform itself enforces a human approval[\s\S]+exact reviewed head and status and resume after it[\s\S]+prepare the PR, wait for checks, review, merge, deploy, smoke, clean up, and never report completion while the PR remains open/u, "Merging and the terminal state"],
+    ["work-orchestration", /invoke `factory-work` first\. Start from Lean[\s\S]+"Lean reading" section in every factory design and plan/u, "The factory itself"],
+    ["factory-work", /Lean is the starting point for every question about the factory, not a lens applied when the operator asks/u],
+    ["factory-work", /Every factory review brief also asks whether the change breaks a Lean principle or the terrarium/u],
+    ["curator", /invoke `factory-work` first: lean is the starting point, every factory design and plan carries a "lean reading" section/iu],
+    ["independent-review", /invoke `factory-work` first and put its review questions in the brief, including whether the change breaks a Lean principle or the terrarium/u],
+    ["git-hygiene", /If the operator lists a commit address for the repository's owner, set the repository's `user\.email` to it before committing; on a new machine, set it once in each clone\. GitHub can block any push/u],
+    ["git-hygiene", /Do not store secrets, credentials or private tokens in the desk/u],
+    ["content-routing", /Fold new context into existing docs when possible/u],
+    ["content-routing", /Tools for agents are designed by their user: the agent[\s\S]+"what would I want to use, and what would confuse me\?"[\s\S]+conversation partner, not the customer/u],
+    // Rules the skills already stated; pinned so the desk's own instruction file can drop its copy.
+    ["using-desk", /task state and reusable artifacts live in the desk, a Git repository/u],
+    ["using-desk", /Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made[\s\S]+; commit and push desk changes\./u],
+    ["using-desk", /Desks and shared workspace state live on their default branch/u],
+    ["git-hygiene", /## Never leave state behind\n\nBefore the session ends, persist task-owned changes/u],
+    ["friction-management", /appending new entries during real use/u],
+    ["directory-structure", /the desk lives at `\$DESK\/` \(shorthand for the desk's absolute path/u],
+    ["directory-structure", /never dump planning artifacts, design docs, flow diagrams, or binaries directly at track root — use `_planning\/`/u],
+    ["task-lifecycle", /## State-change protocol\n\nKeep task state current as work moves\./u],
+    ["friction-management", /capture friction close to where it hurts\./u],
+    ["content-routing", /Each layer states only what it adds, and triggered skills keep their procedures/u],
+  ];
+  const failures = [];
+  for (const [name, pattern, heading] of rules) {
+    let body = text(skill(name));
+    if (heading) {
+      const start = body.indexOf(`\n## ${heading}\n`);
+      if (start === -1) {
+        failures.push(`${name}: missing section ${heading}`);
+        continue;
+      }
+      body = body.slice(start + 1).split(/\n## /u, 1)[0];
+    }
+    if (!pattern.test(body)) failures.push(`${name}${heading ? ` (${heading})` : ""}: ${pattern}`);
+  }
+  for (const [file, pattern] of [
+    ["plugins/plain-language/skills/plain-language/SKILL.md", /Never hard-wrap authored prose/u],
+    ["SETUP.md", /say "set this up"/u],
+  ]) {
+    if (!pattern.test(text(file))) failures.push(`${file}: ${pattern}`);
+  }
+  assert.deepEqual(failures, [], `a general operator rule lost its wording:\n${failures.join("\n")}`);
 });
 
 assert.equal(

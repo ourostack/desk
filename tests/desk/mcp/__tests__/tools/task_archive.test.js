@@ -498,7 +498,7 @@ test("task_archive that finishes a task marks it delivered_unsigned and answers 
   assert.ok(!JSON.stringify(result).includes(SENTINEL))
   const file = path.join(root, "t", "_archive", "finish-me", "task.md")
   const { data } = await readFront(file)
-  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, verified: null, reason: null })
+  assert.deepEqual(data.signoff, { state: "delivered_unsigned", at: null, reason: null })
   assert.equal(data.flow.since, "created")
   assert.equal(data.flow.rev, 1)
   assert.equal(data.flow.deliveries, 1)

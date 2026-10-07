@@ -2,10 +2,8 @@ import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import * as path from "node:path"
 
-// Capture the host environment, never the proposed command's environment. In
-// particular PATH, executable search paths and loader variables are not input.
+// Capture the host environment once. In particular PATH, executable search paths and loader variables are not input.
 const HOST_ENV = { ...process.env }
-const LOCATION_KEYS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_NAMESPACE"]
 let trustedGit
 
 // Windows environment names are case-insensitive, but HOST_ENV is a plain copy, so its lookups are not. Claude Code runs hooks through Git Bash, which passes PROGRAMFILES in capitals.
@@ -27,21 +25,15 @@ export function resolveInspectionGit({ platform = process.platform, env = HOST_E
   return executable
 }
 
-export function inspectionEnvironment(modeled) {
+function inspectionEnvironment() {
   const env = { ...HOST_ENV }
   for (const key of Object.keys(env)) {
     if (/^(?:GIT_|LD_|DYLD_)/u.test(key)) delete env[key]
   }
-  for (const key of LOCATION_KEYS) {
-    if (typeof modeled[key] === "string") {
-      if (modeled[key].includes("\0")) throw new Error(`unresolved Git location: ${key}`)
-      env[key] = modeled[key]
-    }
-  }
   return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }
 }
 
-// A hook answers its host within seconds, so by default each inspection call gets 2 s. The protected-checkout guard passes what is left of its whole-command budget; callers off the hook path, such as the detached workspace repair, pass a longer limit.
+// A hook answers its host within seconds, so by default each inspection call gets 2 s. Callers off the hook path, such as the detached workspace repair, pass a longer limit.
 export const INSPECTION_TIMEOUT_MS = 2000
 
 // No inspection Git may outlive the process that started it. Three layers, each covering what the one before cannot:
@@ -189,9 +181,9 @@ function runInspection({ file, argv, env, cwd, signal, timeoutMs }) {
   })
 }
 
-export async function readInspectionGit(cwd, args, modeled, { signal, timeoutMs = INSPECTION_TIMEOUT_MS, watchdog = watchdogBroken ? undefined : resolveWatchdog() } = {}) {
+export async function readInspectionGit(cwd, args, { signal, timeoutMs = INSPECTION_TIMEOUT_MS, watchdog = watchdogBroken ? undefined : resolveWatchdog() } = {}) {
   trustedGit ??= resolveInspectionGit()
-  const env = inspectionEnvironment(modeled)
+  const env = inspectionEnvironment()
   if (signal?.aborted) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR" })
   const command = inspectionCommand({ watchdog, git: trustedGit, args, timeoutMs, env })
   let result = await runInspection({ ...command, cwd, signal, timeoutMs })

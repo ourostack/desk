@@ -48,6 +48,12 @@
 // `cardOpen` and `openKeys` come from `improvementBootCheck`, and when the
 // cards could not be read (null) the line says that instead.
 //
+// `andonUnknown({ env, now })` names each contributing store whose andon
+// state is not known (no record, an unreadable `status.json`, a failed or a
+// stale refresh), or one entry with `store: null` (`consent_unreadable`) when
+// `consent.json` exists but cannot be read, and `andonUnknownLine` says so;
+// see it.
+//
 // `andonBootCheck({ env })` reads, when a store has `contribute: true`,
 // `status.json`'s `andon` record, which the start-time delivery refreshes
 // (`andon-watch.js`), and returns the open andon issues for each such store.
@@ -292,6 +298,48 @@ export function andonBootCheck({ env }) {
     if (issues.length > 0) found.push({ store, issues })
   }
   return found
+}
+
+/** A contributing store's andon record older than this (72 hours) no longer says whether the line is stopped. */
+export const ANDON_STALE_MS = 72 * 60 * 60 * 1000
+// A refresh stamped further ahead than this was written by a clock that ran fast; it says nothing about now.
+const ANDON_SKEW_MS = 5 * 60 * 1000
+const ANDON_CODE = /^[a-z0-9_]{1,40}$/u
+
+/**
+ * `andonUnknown({ env, now }) -> [{ store, since, code }]`: each store with `contribute: true` whose andon state is not known now, sorted by
+ * store, so the boot line says so instead of reading as "no open andon" (fail closed, ruling 2026-10-06). `since` is the ISO time of the
+ * last successful refresh, or null when there is none. `code`: `status_unreadable` (`status.json` cannot be read or parsed),
+ * `not_refreshed` (no record yet), `future_dated` (the record is stamped more than five minutes ahead), the refresh's own failure code
+ * when the last refresh failed after the last success (`auth_failed`, `config_missing`, `http_404`, ...; `andon-watch.js` records it),
+ * or `stale` (the last success is older than `ANDON_STALE_MS`). Never writes.
+ */
+export function andonUnknown({ env, now = Date.now() }) {
+  // A consent file that exists and cannot be read hides which stores this machine contributes to: that is said, never read as none.
+  if (consentRecords(factoryStateDir(env)) === null) return [{ store: null, since: null, code: "consent_unreadable" }]
+  const stores = contributingStores(env).sort()
+  if (stores.length === 0) return []
+  const status = readState(path.join(factoryStateDir(env), "status.json"), {})
+  if (status === null) return stores.map((store) => ({ store, since: null, code: "status_unreadable" }))
+  const andon = isPlainObject(status.andon) ? status.andon : {}
+  const unknown = []
+  for (const store of stores) {
+    const record = isPlainObject(andon[store]) ? andon[store] : {}
+    const checked = Date.parse(record.checked_at)
+    const since = Number.isFinite(checked) && checked <= now + ANDON_SKEW_MS ? checked : null
+    const failure = ANDON_CODE.test(record.failure) ? record.failure : null
+    const failedAt = Date.parse(record.failed_at)
+    const failedLast = failure !== null && Number.isFinite(failedAt) && (since === null || failedAt >= since)
+    const code = failedLast ? failure : since === null ? (Number.isFinite(checked) ? "future_dated" : "not_refreshed") : now - since > ANDON_STALE_MS ? "stale" : null
+    if (code !== null) unknown.push({ store, since: since === null ? null : new Date(since).toISOString(), code })
+  }
+  return unknown
+}
+
+/** The agent line for one `andonUnknown` entry. */
+export function andonUnknownLine({ store, since, code }) {
+  if (store === null) return `Factory: andon state unknown (${code}): consent.json cannot be read, so the stores this machine contributes to are unknown`
+  return `Factory: andon state unknown for ${store} ${since === null ? "(never refreshed)" : `since ${since.slice(0, 10)}`} (${code})`
 }
 
 /** See the header. Never writes and never opens a request or a quarantine record; every listing is capped. */

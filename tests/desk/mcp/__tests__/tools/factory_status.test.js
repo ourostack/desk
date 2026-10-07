@@ -50,7 +50,7 @@ test("the plugin scan follows the host: Copilot reads Desk's siblings, Claude re
   assert.deepEqual(claude.dirs, [host.desk, host.overlay])
   await fs.writeFile(path.join(host.claudeEnv.CLAUDE_CONFIG_DIR, "plugins", "installed_plugins.json"), "{ broken")
   assert.equal(factoryPluginScan(host.claudeEnv).incomplete, true, "an unreadable registry is an incomplete scan")
-  assert.deepEqual(factoryPluginScan({ ...host.env, DESK_PLUGIN_ROOT: path.join(base, "missing", "desk") }), { dirs: [], incomplete: true })
+  assert.deepEqual(factoryPluginScan({ ...host.env, DESK_PLUGIN_ROOT: path.join(base, "missing", "desk") }), { dirs: [], incomplete: true, reason: null })
   const homeless = { ...host.claudeEnv, HOME: "" }
   assert.equal(factoryPluginScan(homeless).incomplete, true, "an empty HOME falls back to the OS home and the scan still answers")
 }))
@@ -62,7 +62,7 @@ test("the plugin scan loads the end hook from the launcher's plugin root, not fr
   const host = await plugins(base, env)
   await fs.mkdir(path.join(host.desk, "hooks"), { recursive: true })
   await fs.writeFile(path.join(host.desk, "hooks", "factory-end.cjs"), `module.exports = { metadata: ({ pluginRoot }) => ({ plugins: [], dirs: [pluginRoot + "#from-launcher-root"], incomplete: false }) }\n`)
-  assert.deepEqual(factoryPluginScan(host.env), { dirs: [`${host.desk}#from-launcher-root`], incomplete: false })
+  assert.deepEqual(factoryPluginScan(host.env), { dirs: [`${host.desk}#from-launcher-root`], incomplete: false, reason: null })
   await fs.rm(path.join(host.desk, "hooks"), { recursive: true })
   assert.equal(factoryPluginScan(host.env).incomplete, false, "a plugin root without hooks falls back to this checkout's own end hook")
 }))
@@ -114,13 +114,14 @@ test("desk_doctor reports the factory as data and as a summary section, and says
   assert.match(body.summary, /\n\nFactory\n  no store resolved \(invalid_declaration\); facts are held on this machine\n  ourostack\/factory: yes/u)
 }))
 
-test("desk_doctor names skipped plugin manifests by code only", () => scratch(async ({ base, desk, env }) => {
+test("desk_doctor names an unreadable plugin manifest with its path, reason and remedy, and the route is held", () => scratch(async ({ base, desk, env }) => {
   const host = await plugins(base, env, { declare: false })
   await fs.writeFile(path.join(host.overlay, "plugin.json"), "{ broken")
   const body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.deepEqual(body.factory.warnings, ["manifest_unparseable"])
-  assert.match(body.summary, /\n  plugin manifests skipped: manifest_unparseable\n(  sign-off:[^\n]*\n)?Loop\n  no loop record yet/u)
-  assert.equal(body.summary.includes(base), false)
+  assert.deepEqual([body.factory.store, body.factory.source], [null, "invalid_declaration"], "a broken manifest holds the route")
+  // A hold names the path the operator must fix: a plugin manifest, never factory state or content.
+  assert.ok(body.summary.includes(`\n  this desk's route is held, so its sessions are never published: manifest_unparseable at ${path.join(host.overlay, "plugin.json")}: fix, reinstall or remove that plugin`))
 }))
 
 test("desk_doctor's preview and no-desk paths carry no factory data", () => scratch(async ({ base, env }) => {
@@ -177,7 +178,7 @@ test("desk_doctor reports a failed, interrupted or stalled orphan pass by its co
   assert.match(body.summary, /orphan pass needs attention: orphans_hung \(1 orphans hung\)\./u)
   await orphans({ ran_at: "2020-01-01T00:00:00.000Z" })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, undefined, "no session ended lately: a machine that stopped contributing is not alarmed")
-  await writeMarker(host.env, { schema_version: 1, host: "claude-code", session_id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60", log_path: path.join(base, "log.jsonl"), cwd: desk, desk_root: desk, end_reason: "complete", ended_at: new Date().toISOString(), plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(host.env, { schema_version: 1, host: "claude-code", session_id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60", log_path: path.join(base, "log.jsonl"), cwd: desk, desk_root: desk, end_reason: "complete", ended_at: new Date().toISOString(), plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, undefined, "markers alone, without contribution switched on, do not alarm")
   await setConsent(host.env, { store: STORE, contribute: true, account: "example-user" })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.orphans, "pass_stale")
@@ -318,3 +319,39 @@ test("the factory status carries the stored loop record, and null when the recor
   await fs.writeFile(path.join(factoryStateDir(host.env), "status.json"), "{ broken")
   assert.equal(factoryStatus({ env: host.env, deskRoot: desk }).loop, null)
 }))
+
+test("desk_doctor and desk_status raise a stopped pruning and a store check that keeps failing as findings, not only a factory.js status line", () => scratch(async ({ base, desk, env }) => {
+  const host = await plugins(base, env, { declare: false })
+  await setConsent(host.env, { store: STORE, contribute: true, account: "example-user" })
+  await writeStatus(host.env, { retention: { ran_at: new Date().toISOString(), tombstones_pruned: 0 }, capture: { [STORE]: { check_unavailable: 2 } } })
+  let body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(body.factory.retention, undefined)
+  assert.equal(body.factory.capture_check_unavailable, undefined)
+  assert.equal(body.summary.includes("retention"), false)
+  assert.equal(body.summary.includes("not landing"), false)
+  await writeStatus(host.env, { retention: { ran_at: new Date().toISOString(), failed: "prune_failed" }, capture: { [STORE]: { check_unavailable: 3 }, "../x": { check_unavailable: 9 } } })
+  body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(body.factory.retention, "prune_failed")
+  assert.deepEqual(body.factory.capture_check_unavailable, [{ store: STORE, times: 3 }], "only a store name is ever reported")
+  assert.match(body.summary, /\n  local retention needs attention: prune_failed\. Run `node mcp\/scripts\/factory\.js status` from the Desk plugin folder and read its retention line; if pruning keeps failing, file a Desk problem\./u)
+  assert.match(body.summary, /\n  ourostack\/factory: capture record not landing, the store's own check could not read it 3 times in a row\. The store's own check, not this machine, is failing: file a problem against ourostack\/factory's capture check/u)
+  assert.equal((await desk_status({ deskRoot: desk, env: host.env })).factory.retention, "prune_failed")
+  // A store this machine no longer contributes to never settles its count, so it is no finding.
+  await setConsent(host.env, { store: STORE, contribute: false })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.capture_check_unavailable, undefined)
+  await writeStatus(host.env, { retention: { ran_at: new Date().toISOString(), tombstones_pruned: 0 }, orphans: { started_at: new Date().toISOString(), ran_at: new Date().toISOString(), cursor: null, last_wrap_at: null, sweeps_in_walk: 0, examined: 1, unexamined: 0, copies_prune_failed: 1 } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.retention, "copies_prune_failed")
+  await fs.writeFile(path.join(factoryStateDir(host.env), "status.json"), "{ not json")
+  body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(body.factory.retention, undefined, "an unreadable status is no finding either way")
+  assert.equal(body.factory.capture_check_unavailable, undefined)
+}))
+
+test("the doctor's summary counts kept copies with no route back, with the oldest one's age, and says nothing when there are none", async () => {
+  const { factorySummary, factoryFindingLines } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
+  const status = (extra) => ({ store: STORE, source: "desk", consent: "yes", stores: [{ store: STORE, consent: "yes", pending: 0, route_changed: 2, quarantined: 0, last_flush: null, ...extra }], warnings: [] })
+  assert.match(factorySummary(status({ kept_frozen: 2, kept_frozen_oldest_days: 40 })), /\n  ourostack\/factory: 2 kept copies have no route back and are never published \(oldest 40 days\)/u)
+  assert.match(factorySummary(status({ kept_frozen: 1, kept_frozen_oldest_days: null })), /\(oldest of unknown age\)/u)
+  assert.equal(factorySummary(status({})).includes("no route back"), false)
+  assert.deepEqual(factoryFindingLines(null), [])
+})

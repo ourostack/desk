@@ -13,8 +13,9 @@
 // partial list would make the cards left out read as clear.
 //
 // Observation. After a successful read of every store for a kind, `observeConditions` gets the complete list of ids of that
-// source that hold now. A kind that could not be read in some store (a failed fetch, an unreadable account) is not observed
-// at all; a failed look is never a clear look.
+// source that hold now. A kind that could not be read in some store (a failed fetch, an unreadable account, a store whose
+// `factory.json` is missing, `config_missing`) is not observed at all; a failed look is never a clear look. An andon id
+// already recorded present whose issue is still open but no longer tracked (the store's plugin list shrank) stays present.
 //
 // Result. `runRouteIssuesStep(env, { deskRoot, personPrefix, runner, now, ...seams }) -> { ok, result, opened, counts }`.
 // `opened` lists keys opened or reopened this run. `result`: `routed` (every kind read), `partly_read` (some kinds read, `ok`
@@ -34,13 +35,13 @@ import * as path from "node:path"
 
 import { cardKey, openImprovement } from "../desk/improvement-cards.js"
 import { cardCommitMessage, writeCardCommitted as writeCardCommittedDefault } from "../tools/_card-commit.js"
-import { BUILD_AUTHOR, trackedAndonIssues } from "./andon-watch.js"
+import { BUILD_AUTHOR, readAndonConfig, trackedAndonIssues, untrackedAndonIssues } from "./andon-watch.js"
 import { LABEL as DESK_PROBLEM_LABEL, STORE as DESK_REPO } from "./desk-problem-file.js"
 import { ghRunner } from "./flush.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { observeConditions } from "./loop-conditions.js"
 import { readConsent, readStatus, updateStatus } from "./outbox.js"
-import { ANDON_LABEL, parseStoreConfig } from "./pipeline/andon.js"
+import { ANDON_LABEL } from "./pipeline/andon.js"
 import { issuesClient } from "./store-issues.js"
 
 export const MAX_ISSUES_PER_KIND = 50
@@ -109,6 +110,7 @@ export async function runRouteIssuesStep(env, {
   const accounts = [...new Set(stores.map(({ account }) => account))]
   const consenting = new Set(accounts.map((account) => account.toLowerCase()))
   const fail = (kind, code) => { state[kind].failed ??= code }
+  const untrackedAndon = []
   const guarded = async (kind, body) => {
     try {
       await body()
@@ -126,9 +128,13 @@ export async function runRouteIssuesStep(env, {
     }
     const client = issuesClient({ runner, repo: store, token: entry.token })
     await guarded("andon", async () => {
-      const config = parseStoreConfig(await client.readFile("factory.json"))
-      if (!config.ok) throw Object.assign(new Error("config"), { code: "invalid_config" })
-      take("andon", store, trackedAndonIssues(await client.listIssues({ label: ANDON_LABEL, state: "open" }), new Set(config.plugins)))
+      // A missing factory.json is config_missing, so the kind is not observed: never "tracks nothing", which would read as clear.
+      const config = await readAndonConfig(client)
+      if (!config.ok) throw Object.assign(new Error("config"), { code: config.code === "config_missing" ? "config_missing" : "invalid_config" })
+      const open = await client.listIssues({ label: ANDON_LABEL, state: "open" })
+      take("andon", store, trackedAndonIssues(open, new Set(config.plugins)))
+      // Still open but left out only by a shrunken plugin list: not a card, yet never read as clear.
+      untrackedAndon.push(...untrackedAndonIssues(open, new Set(config.plugins)).map((issue) => `${store}#${issue.number}`))
     })
     await guarded("store_build", async () => {
       take("store_build", store, (await client.listIssues({ label: BUILD_FAILING_LABEL, state: "open" })).filter((issue) => !issue.pull_request && (issue.author === BUILD_AUTHOR || consenting.has(String(issue.author).toLowerCase()))))
@@ -179,7 +185,8 @@ export async function runRouteIssuesStep(env, {
     try {
       const recorded = await recordedPresent(source)
       const readStores = new Set(stores.map(({ store }) => store))
-      const kept = kind === "desk_problem" ? excludedDeskProblems.filter((id) => recorded.includes(id)) : recorded.filter((id) => !readStores.has(id.split("#")[0]))
+      const kept = kind === "desk_problem" ? excludedDeskProblems.filter((id) => recorded.includes(id))
+        : recorded.filter((id) => !readStores.has(id.split("#")[0]) || (kind === "andon" && untrackedAndon.includes(id)))
       const present = [...entry.ids, ...kept]
       observed = await observeImpl(env, { source, present, now: new Date(nowMs) })
     } catch {

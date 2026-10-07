@@ -27,6 +27,9 @@ import { loadFrontmatterParser } from "./organization.js"
 import { redactCredentialLikeText, redactName, redactTitle, REDACTED_SEGMENT, REDACTED_TITLE } from "../util/redact.js"
 import { folderHandle } from "./handles.js"
 import { TERMINAL_STATES } from "./lifecycle.js"
+import { readSteps, summarizeSteps } from "./steps.js"
+import { dueResources } from "./resources.js"
+import { cardFiles, readCleanupIndex } from "./cleanup-index.js"
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const MAX_CARD_BYTES = 64 * 1024
@@ -142,8 +145,42 @@ function blockerOf(content) {
   return null
 }
 
+// The card's `## Steps` table as a compact summary (steps.js), or nothing when it has none, has no rows or is left as prose.
+// The table sits right after `## Outcome`, so it is inside the bounded read of a card that is long below it.
+function stepsOf(content, truncated) {
+  const { rows } = readSteps(content, { truncated })
+  if (rows === undefined || rows.length === 0) return {}
+  const summary = summarizeSteps(rows)
+  return { steps: { ...summary, blocked: summary.blocked.map(({ id, reason }) => ({ id, reason: redactCredentialLikeText(reason) })) } }
+}
+
+// How many of the card's `## Resources` rows are due for cleanup (resources.js), or nothing when none are. Reads only the body already read and the file system, with no network call.
+function cleanupOf(content, truncated, status) {
+  const due = dueResources(content, { status, truncated }).length
+  return due === 0 ? {} : { cleanup_due_count: due }
+}
+
+// The finished or archived cards this machine's cleanup index lists that still have rows due. A card still unfinished is left out: the scan above counts it.
+function finishedCleanup(deskRoot, env) {
+  const out = []
+  for (const rel of readCleanupIndex(deskRoot, env)) {
+    const [live, archived] = cardFiles(deskRoot, rel)
+    const liveCard = readCardData(live)
+    const status = liveCard === null ? null : asText(liveCard.data.status)
+    if (liveCard !== null && !TERMINAL_STATUSES.has(status)) continue
+    const card = liveCard ?? readCardData(archived)
+    if (card === null) continue
+    const due = dueResources(card.content, { status: asText(card.data.status), truncated: card.truncated }).length
+    if (due > 0) out.push({ card: rel.split(/[\\/]/u).map(redactName).join("/"), due })
+  }
+  return out
+}
+
+// Boot names this many finished cards; the rest are counted ("and N more"), never left out of the totals.
+const FINISHED_SHOWN = 20
+
 // null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
-function readCardData(filePath) {
+export function readCardData(filePath) {
   let fd
   try {
     fd = openSync(filePath, "r")
@@ -155,7 +192,7 @@ function readCardData(filePath) {
     const bytesRead = readSync(fd, buffer, 0, MAX_CARD_BYTES, 0)
     try {
       const parsed = parseFrontmatter(buffer.toString("utf8", 0, bytesRead))
-      return { data: parsed.data, content: parsed.content }
+      return { data: parsed.data, content: parsed.content, truncated: bytesRead === MAX_CARD_BYTES }
     } catch {
       return { data: {}, content: "" }
     }
@@ -202,7 +239,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
     for (const taskName of listDirs(trackDir)) {
       const card = readCardData(path.join(trackDir, taskName, "task.md"))
       if (card === null) continue
-      const { data, content } = card
+      const { data, content, truncated } = card
       const status = asText(data.status)
       if (TERMINAL_STATUSES.has(status)) continue
       const slug = redactName(taskName)
@@ -220,6 +257,8 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
         repos: shownRepos(data.repos),
         next_step: nextStepOf(content),
         blocker: blockerOf(content),
+        ...stepsOf(content, truncated),
+        ...cleanupOf(content, truncated, status),
       })
     }
     if (tasks.length === 0) continue
@@ -236,12 +275,13 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
  *
  * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
  * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
- * where `repos` is `[{ name?, local_path?, mode? }]`.
+ * where `repos` is `[{ name?, local_path?, mode? }]`, and `steps` (only on a card with a readable `## Steps` table) is `{ total, delivered, ready: [id], blocked: [{ id, reason }] }`, dropped steps not counted, and `cleanup_due_count` (only when some) is how many of its `## Resources` rows are due for cleanup.
+ * `cleanup` (only when some rows are due): `{ items, cards, finished: [{ card, due }], more }` (`finished` lists the first 20; `more` counts the rest), over the unfinished cards above and the finished or archived cards this machine's cleanup index lists (./cleanup-index.js); `finished` names the latter.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.
  * `redacted`: `{ names, titles }`, how many names and titles were hidden.
  */
-export function activeTasks(deskRoot) {
+export function activeTasks(deskRoot, { env = process.env } = {}) {
   const counts = { names: 0, titles: 0 }
   const tracks = scanDesk(deskRoot, deskRoot, null, counts)
   for (const alias of listDirs(path.join(deskRoot, "desks"))) {
@@ -250,10 +290,15 @@ export function activeTasks(deskRoot) {
     tracks.push(...scanDesk(deskRoot, path.join(deskRoot, "desks", alias), desk, counts))
   }
   tracks.sort((a, b) => byUpdatedDesc(a.tasks[0], b.tasks[0]))
+  const live = tracks.flatMap((track) => track.tasks.map((task) => task.cleanup_due_count ?? 0)).filter((count) => count > 0)
+  const everyFinished = finishedCleanup(deskRoot, env)
+  const finished = everyFinished.slice(0, FINISHED_SHOWN)
+  const items = live.reduce((sum, count) => sum + count, 0) + everyFinished.reduce((sum, entry) => sum + entry.due, 0)
   return {
     tracks,
     task_count: tracks.reduce((sum, track) => sum + track.tasks.length, 0),
     track_count: tracks.length,
     redacted: counts,
+    ...(items === 0 ? {} : { cleanup: { items, cards: live.length + everyFinished.length, finished, more: everyFinished.length - finished.length } }),
   }
 }

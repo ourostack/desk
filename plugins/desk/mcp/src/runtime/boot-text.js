@@ -131,14 +131,20 @@ export function ceiling(text, limit = TEXT_CEILING) {
 // A next step or blocker that says the thing lives only on another machine gets ELSEWHERE_NOTE (elsewhere-note.js, shared with the clone guard).
 export { ELSEWHERE_NOTE }
 
+// A card with no step ready or moving and one blocked is blocked work whatever its status says; a card with a step still moving is not.
+const stepsBlocked = (task) => task.steps !== undefined && task.steps.ready.length === 0 && task.steps.moving === 0 && task.steps.blocked.length > 0
+const stepsLine = ({ delivered, total, ready }) => `  Steps: ${delivered} of ${total} delivered${ready.length > 0 ? `; ready: ${ready.join(", ")}` : ""}`
+
 function stepLines(task) {
   const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
   const blocker = typeof task.blocker === "string" && task.blocker !== "" ? task.blocker : null
+  const steps = task.steps === undefined ? [] : [stepsLine(task.steps)]
   if (task.status === "blocked") {
-    if (blocker !== null) return [`  blocker: ${ceiling(blocker)}`, ...(next === null ? [] : [`  next: ${ceiling(next)}`])]
-    return [`  blocker: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`]
+    if (blocker !== null) return [`  blocker: ${ceiling(blocker)}`, ...(next === null ? [] : [`  next: ${ceiling(next)}`]), ...steps]
+    return [`  blocker: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`, ...steps]
   }
-  return [`  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`]
+  const stuck = stepsBlocked(task) ? [`  blocker: ${ceiling(task.steps.blocked.map((step) => `${step.id}: ${step.reason}`).join("; "))}`] : []
+  return [...stuck, `  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`, ...steps]
 }
 
 // What Desk's own access check found for the active account, in words that claim nothing the check did not show.
@@ -218,7 +224,8 @@ function taskLines(track, task, pushNotes) {
   const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
   const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
   const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
-  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...elsewhere, ...push]
+  const cleanup = task.cleanup_due_count > 0 ? [`  cleanup due: ${task.cleanup_due_count}`] : []
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...cleanup, ...elsewhere, ...push]
 }
 
 // A repo's path as boot prints it: already expanded against this machine's HOME, with the card's own spelling after it ("/home/me/code/x (~/code/x)"), so an agent never expands `~` itself
@@ -298,7 +305,7 @@ function taskSection(result, lines) {
   lines.push("", `Active tasks (${result.active_tasks.task_count})${namedOnly ? ", showing the named one" : ""}:`)
   if (tracks.length === 0) lines.push("- none")
   // Blocked tasks first, then the most recently updated, before the cap cuts the list.
-  const rank = ({ task }) => (task.status === "blocked" ? 0 : 1)
+  const rank = ({ task }) => (task.status === "blocked" || stepsBlocked(task) ? 0 : 1)
   const everyTask = tracks
     .flatMap((track) => track.tasks.map((task) => ({ track, task })))
     .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
@@ -308,7 +315,7 @@ function taskSection(result, lines) {
   const groups = new Map()
   const shownTasks = namedOnly ? pinned : [...pinned, ...everyTask.slice(0, TASKS_SHOWN_CAP - pinned.length)]
   for (const entry of shownTasks) {
-    const status = entry.task.status ?? "no status"
+    const status = stepsBlocked(entry.task) ? "blocked" : (entry.task.status ?? "no status")
     groups.set(status, [...(groups.get(status) ?? []), entry])
   }
   const pushNotes = pushNotesByTask(result.push_accounts)
@@ -322,9 +329,17 @@ function taskSection(result, lines) {
   } else if (hidden > 0) lines.push("", `...and ${hidden} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
 }
 
+// One line when any card has resource rows due for cleanup (over every card boot read and this machine's cleanup index, not only the tasks shown), then a line for each finished or archived card, which has no task line; nothing when none are due.
+function cleanupLines(result) {
+  const cleanup = result.active_tasks?.cleanup
+  if (cleanup === undefined) return []
+  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`
+  return ["", `Cleanup due: ${plural(cleanup.items, "item")} on ${plural(cleanup.cards, "card")} (see the task lines)`, ...cleanup.finished.map((entry) => `- ${entry.card} (finished): ${entry.due} due`), ...(cleanup.more > 0 ? [`- and ${cleanup.more} more finished ${cleanup.more === 1 ? "card" : "cards"}`] : [])]
+}
+
 /**
  * The boot result as readable text, leading with the work: one status line (status, desk, host, sync in plain words),
- * the stale-Desk line when there is one, the active tasks grouped by state with each task's push route, the open pull
+ * the stale-Desk line and the release-alert and open-Desk-problems lines when there are any, the active tasks grouped by state with each task's push route, the open pull
  * requests and repos, then only the instructions that apply to this boot, and the desk's AGENTS.md. Every section is
  * omitted when it has nothing to say, so a healthy boot stays short. `result.text_instructions`, when the boot made
  * them, are the plain-text wording of the instructions (shorter, with the push routes and the factory script moved out);
@@ -356,11 +371,14 @@ export function formatBootText(result) {
   const lines = [status.join(" | ")]
   if (waiting) lines.push(`Needs you first: ${result.needs_operator.question}`)
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
+  if (typeof result.release_alert?.line === "string") lines.push(result.release_alert.line)
+  if (typeof result.desk_problems?.line === "string") lines.push(result.desk_problems.line)
   // The headline already says why the sync failed and what else failed (up to three short entries), so those entries would only repeat it.
   for (const line of result.degraded ?? []) if (!inHeadline.has(line) && (sync === null || !line.startsWith("sync: "))) lines.push(`- degraded: ${line}`)
   for (const line of result.pending ?? []) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...namedTaskLines(result.task))
   taskSection(result, lines)
+  lines.push(...cleanupLines(result))
   lines.push(...unsignedLines(result.unsigned_deliveries))
   if ((result.open_prs ?? []).length > 0) lines.push("", "Open pull requests:", ...result.open_prs.map(prLine))
   if ((result.repo_states ?? []).length > 0) lines.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))

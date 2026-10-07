@@ -605,69 +605,9 @@ function deskPluginPathFor(pluginId, namespace) {
   return ["plugins", pluginRef(pluginId, namespace)]
 }
 
-// Desk-only enforcement (spec §5, Part 8): pinned in every mode, including
-// manual-only, since both are safety pins independent of whether MCP
-// autostart is enabled. `features.memories = false` gates Codex's own
-// cross-session memory (docs/host-enforcement-live-proof.md's confirmed,
-// sufficient gate); the `[[hooks.PreToolUse]]` entry registers the same
-// `host-enforcement.cjs` script Claude Code and Copilot both use, passing
-// `codex` as its own host id, matched broadly (`matcher = "*"`, the exact
-// form the live-proof schema probe confirmed) since the shared runtime
-// decides allow/deny per tool name regardless of which call triggered it.
-// Codex's own hook-trust gate means this registration is not active yet
-// (silently skipped without `--dangerously-bypass-hook-trust`, with no
-// supported, automatable way found to grant that trust ahead of time) --
-// `host-enforcement-registration.js`'s `verifyHookRegistered` reports that
-// honestly rather than claiming this entry protects the session today. It is
-// still written here, forward-compatible, so nothing else has to change the
-// day Codex ships a non-interactive trust grant.
-//
-// Both pieces are always real, root-absolute table headers, never a bare
-// dotted key: a bare `features.memories = false` right after the BEGIN
-// marker would bind to whatever table the operator's own config last opened
-// (for example a trailing `[shell_environment_policy]`), silently becoming
-// `shell_environment_policy.features.memories` (review round, Part 8 fix
-// round). `[[hooks.PreToolUse]]` is TOML's array-of-tables syntax for the
-// exact same data the live-proof schema uses (`[hooks] PreToolUse =
-// [{matcher, hooks = [{type, command}]}]`): unlike a plain `[hooks]` header,
-// it is safe to add even when the operator already declares their own
-// `[hooks]` table elsewhere, because it only *extends* that table with a new
-// key rather than redeclaring it.
-//
-// Each piece is independently skipped, never failing activation, when the
-// operator's own config already uses that key: `renderFeaturesBlock` skips
-// when a root `[features]` table or `features.`-prefixed key already exists
-// (Codex's own default is already `false`; an operator who sets it is making
-// their own choice, and duplicating `[features]` is invalid TOML anyway).
-// `renderHooksBlock` skips when `hooks.PreToolUse` is already defined in any
-// form, most importantly a static inline array (`PreToolUse = [...]`), which
-// an array-of-tables entry cannot be appended to without breaking the file.
-// `verifyHookRegistered`'s Codex reason names the hook-trust gap regardless
-// of whether this entry actually landed, so skipping it here never makes
-// that reason less true.
-function renderFeaturesBlock(existingConfig) {
-  if (tomlRootFeaturesTableUsed(existingConfig)) {
-    return null
-  }
-  return `[features]\nmemories = false`
-}
-
-function renderHooksBlock(input, existingConfig) {
-  if (tomlHooksEventUsed(existingConfig, "PreToolUse")) {
-    return null
-  }
-  const command = tomlString(`node "${input.pluginRoot}/hooks/host-enforcement.cjs" codex`)
-  return `[[hooks.PreToolUse]]
-matcher = "*"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = ${command}`
-}
-
 // The factory records each Codex session with `factory-end.cjs codex` on SessionEnd. Sources, all openai/codex at 60947e234156ac12bdb7fba2477d3965f166bd34:
 // - `codex-rs/config/src/hook_config.rs` (`HookEventsToml`): `[[hooks.SessionEnd]]` is the same array-of-tables shape as PreToolUse, and a command handler's timeout key is `timeout` (seconds).
-// - `codex-rs/hooks/src/engine/discovery.rs` `normalize_command_hook`: SessionEnd defaults to 1 s and is clamped to 1..3 s, so 3 is the most the hook can ask for. Hooks are trust-gated exactly as PreToolUse is (see above), so capture stays inactive until Codex trusts the hook.
+// - `codex-rs/hooks/src/engine/discovery.rs` `normalize_command_hook`: SessionEnd defaults to 1 s and is clamped to 1..3 s, so 3 is the most the hook can ask for. Codex's hook-trust gate leaves an untrusted hook inactive, so capture stays inactive until Codex trusts the hook.
 // - `codex-rs/hooks/src/events/common.rs` `matcher_pattern_for_event`: SessionEnd honors a matcher against its reason; leaving the matcher out matches every end.
 // - `codex-rs/core/src/hook_runtime.rs#L471-L499`: SessionEnd fires for the root thread only.
 const SESSION_END_TIMEOUT_SECONDS = 3
@@ -683,37 +623,6 @@ function renderSessionEndBlock(input, existingConfig) {
 type = "command"
 command = ${command}
 timeout = ${SESSION_END_TIMEOUT_SECONDS}`
-}
-
-function renderHostEnforcementBlock(input, existingConfig) {
-  return [
-    renderFeaturesBlock(existingConfig),
-    renderHooksBlock(input, existingConfig),
-    renderSessionEndBlock(input, existingConfig),
-  ].filter((section) => section !== null).join("\n\n")
-}
-
-/** Whether the root `features` table is already used anywhere in `content`: a `[features]` (or `[features.*]`) header, or a root-level `features`/`features.*` dotted key declared before the first table header. Nested uses under some other table (`[foo]` then `features.bar = 1`, which sets `foo.features.bar`) do not count -- only the root `features` namespace Codex itself reads does. */
-function tomlRootFeaturesTableUsed(content) {
-  let sectionPath = []
-  for (const rawLine of content.split(/\r?\n/u)) {
-    const line = stripTomlComment(rawLine).trim()
-    if (!line) continue
-
-    const tablePath = parseTomlTableHeader(line)
-    if (tablePath) {
-      sectionPath = tablePath
-      if (tablePath[0] === "features") return true
-      continue
-    }
-
-    if (sectionPath.length > 0) continue
-    const equalsIndex = findTomlTopLevelEquals(line)
-    if (equalsIndex === -1) continue
-    const keyPath = parseTomlDottedKey(line.slice(0, equalsIndex))
-    if (keyPath && keyPath[0] === "features") return true
-  }
-  return false
 }
 
 /** Whether `hooks.<event>` is already used anywhere in `content`, in any form: a `[hooks.<event>]` (or deeper) header, an array-of-tables `[[hooks.<event>]]` header, or an `<event> = ...` key under an open `[hooks]` table (most importantly a static inline array, which an appended `[[hooks.<event>]]` entry cannot coexist with). */
@@ -766,7 +675,7 @@ default_tools_approval_mode = "prompt"`
     : ""
 
   return `# BEGIN desk activation: ${manifest.id}@${manifest.version} mode=${input.mode} owner=desk-activation
-${renderHostEnforcementBlock(input, existingConfig)}
+${renderSessionEndBlock(input, existingConfig) ?? ""}
 
 ${renderPluginEnableBlocks(input, selectedActivation, namespace, existingConfig)}
 

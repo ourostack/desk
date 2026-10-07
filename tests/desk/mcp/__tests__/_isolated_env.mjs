@@ -52,6 +52,8 @@ for (const [name, dir] of Object.entries(locations)) {
   originalMkdir(dir, { recursive: true, mode: 0o700 })
   process.env[name] = dir
 }
+// Desk commits only on the branch it expects (`main` unless the remote or the host says otherwise), so a fixture repository must start on `main`, whatever the machine's own default is.
+fs.writeFileSync(path.join(home, ".gitconfig"), "[init]\n\tdefaultBranch = main\n")
 // os.homedir() reads USERPROFILE on Windows.
 if (process.platform === "win32") process.env.USERPROFILE = home
 // Git for Windows commonly sets autocrlf and safecrlf in its system config.
@@ -161,7 +163,7 @@ if (!fs.__deskTestGuard) {
 
 // ---- this checkout's Git configuration stays untouched ----
 //
-// Admission marks the Git checkout of every desk root it binds as protected (desk-protected.config plus an includeIf in the shared config). A test that bound this repository's own folder once wrote that marker onto the real worktree, and the installed guard then refused Git commands there. Every process snapshots the repository and worktree configuration that applies to this checkout when it starts, and compares it when it exits: the top-level test runner, and a test file run on its own, fail the run when it changed; a test file's process under the runner names itself, so the log shows which files were running. Several worktrees can share one repository config file, and other work on the machine legitimately adds branch, remote and includeIf entries to it, so those keys are left out, as is desk.stateBranch, which Desk writes beside desk.protected; what an include sets for this checkout (such as desk.protected) still shows up.
+// A test that bound this repository's own folder as a desk root could write Desk's configuration onto the real worktree. Every process snapshots the repository and worktree configuration that applies to this checkout when it starts, and compares it when it exits: the top-level test runner, and a test file run on its own, fail the run when it changed; a test file's process under the runner names itself, so the log shows which files were running. Several worktrees can share one repository config file, and other work on the machine legitimately adds branch, remote and includeIf entries to it, so those keys are left out, as is desk.stateBranch, which Desk writes on purpose; what an include sets for this checkout still shows up.
 export const GUARDED_CHECKOUT = "DESK_TEST_GUARDED_CHECKOUT"
 
 /** The repository- and worktree-scope Git configuration that applies to `checkout`, one "scope key=value" line each, or null outside a Git checkout. */

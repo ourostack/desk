@@ -90,9 +90,32 @@ test("the brief carries the job, the session on the published clock, the rubric 
     session_log: LOG,
     clock_origin: LOCAL.session.started_at,
     facts: { duration_ms: PUBLISHED.session.duration_ms, ended: true, intervals: PUBLISHED.intervals, counts },
+    own_share: null,
     unavailable: [],
     output: OUTPUT,
   })
+})
+
+test("the brief names the job's own share of the session when its binding records segments, and none without facts", () => {
+  const shared = local()
+  const binding = shared.jobs.find((bound) => bound.job === JOB)
+  binding.agents = [0]
+  binding.segments = [{ start_ms: 0, end_ms: 1000 }, { start_ms: 5000, end_ms: 6000, shared: true }]
+  assert.deepEqual(brief({ localFacts: shared }).own_share, [{ start_ms: 0, end_ms: 1000 }, { start_ms: 5000, end_ms: 6000 }])
+  shared.session.started_at = "2020-01-01T00:00:00.000Z"
+  assert.equal(brief({ localFacts: shared }).own_share, null, "a session the store will never hold has no share to label")
+})
+
+test("the brief's share follows the store: a sole binding from before workers were recorded owns the session, a subagent-only one has none", () => {
+  const sole = local()
+  sole.jobs = sole.jobs.filter((bound) => bound.job === JOB)
+  assert.deepEqual(brief({ localFacts: sole }).own_share, [{ start_ms: 0, end_ms: PUBLISHED.session.duration_ms }])
+  sole.jobs[0].agents = [1]
+  assert.equal(brief({ localFacts: sole }).own_share, null)
+  assert.equal(brief().own_share, null, "one of several bindings without segments has no known share")
+  // With no share to credit, the evaluator writes no stretches, and that answer is accepted.
+  const empty = { ...labels(), stretches: [] }
+  assert.equal(acceptEvaluation(brief({ localFacts: sole }), bytes(empty)).ok, true)
 })
 
 test("the brief's intervals are exactly the published facts' intervals, so cited evidence matches the store", () => {
@@ -298,7 +321,7 @@ async function seed(env, { marker = true } = {}) {
     await fs.writeFile(log, "{}\n")
     await writeMarker(env, {
       schema_version: 1, host: "claude-code", session_id: SESSION, log_path: log, cwd: env.HOME, desk_root: null,
-      end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [], updated_at: new Date().toISOString(),
+      end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(),
     })
     return log
   }

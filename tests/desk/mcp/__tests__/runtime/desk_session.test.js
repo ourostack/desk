@@ -52,7 +52,6 @@ async function makeSession(t, overrides = {}) {
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: (error) => ({ status: "setup_required", mode: "setup", summary: "no desk", remediation: [{ action: "run_first_run_bootstrap", message: "bootstrap" }], paths_tried: error.tried }),
     hung: { probe: async () => ({ state: "refused" }) },
-    protect: async () => ({ protected: false }), // These session-state fixtures are not Git checkouts.
     ...overrides,
   })
   t.after(() => session.dispose())
@@ -703,6 +702,7 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   const slow = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.ok(Date.now() - started < 400, `desk_status took ${Date.now() - started} ms`)
   assert.match(slow.status_detail, /^unavailable: .*did not answer within this call's budget/u)
+  assert.equal(slow.detail_pending, true)
   assert.equal(slow.state, "ready")
   // While that computation runs, another call waits only its own budget for it and does not start a second one.
   const joinedStarted = Date.now()
@@ -718,6 +718,7 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   assert.equal(late.local_db.state, "late")
   assert.match(late.status_detail, /^cached: .*this detail is from \d{4}-/u)
   assert.ok(late.status_detail_from < beforeLate, "the detail is dated from when its computation started")
+  assert.equal(late.detail_pending, undefined, "a cached detail still has the root and the rest")
   assert.equal(late.state, "ready", "the admission fields are current, not cached")
 })
 
@@ -730,6 +731,7 @@ test("desk_status serves a fresh detail once no older computation is running, an
   assert.equal(fresh.local_db.state, "fresh")
   assert.equal(fresh.status_detail, undefined)
   assert.equal(fresh.status_detail_from, undefined)
+  assert.equal(fresh.detail_pending, undefined)
   runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
   const cachedStarted = Date.now()
   const cached = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
@@ -1028,4 +1030,53 @@ test("task_focus refuses with the existing message when admission does not finis
   assert.equal(refused.tool, "task_focus")
   assert.match(refused.summary, /the desk root and the Desk runtime/u)
   assert.ok(Date.now() - started < 2000)
+})
+
+// With no state branch configured, a write is still refused before any tool runs when HEAD is detached or off the branch the remote names as its default. Any named branch is fine when the remote names none.
+function branchGit(state) {
+  return ({ args }) => {
+    const key = args.join(" ")
+    if (key.startsWith("rev-parse --show-toplevel")) return { ok: true, stdout: "/repo\n/repo/.git" }
+    if (key.includes("refs/remotes/origin/HEAD")) return state.remoteDefault ? { ok: true, stdout: `origin/${state.remoteDefault}` } : { ok: false, stdout: "" }
+    if (key.startsWith("symbolic-ref")) return state.branch ? { ok: true, stdout: state.branch } : { ok: false, stdout: "" }
+    return { ok: false, stdout: "" }
+  }
+}
+
+test("with no state branch configured, a write is refused before any tool runs on a detached HEAD or off the remote's default branch", async (t) => {
+  const state = { branch: "main", remoteDefault: "main" }
+  const { session, runtime } = await makeSession(t, { git: branchGit(state), watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "ready")
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
+  assert.equal(runtime.calls.length, 1)
+
+  state.branch = "feature"
+  const off = await session.callTool({ name: "task_create" })
+  assert.equal(off.isError, true)
+  assert.equal(payload(off).code, "write_branch_mismatch")
+  assert.match(payload(off).fix, /on branch feature.*default branch is main.*wrote nothing/u)
+
+  state.branch = null
+  const detached = await session.callTool({ name: "task_create" })
+  assert.equal(payload(detached).code, "write_branch_detached")
+  assert.equal(runtime.calls.length, 1, "no refused write reached a tool")
+
+  state.branch = "master"
+  state.remoteDefault = null
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create", "no remote default: any named branch is allowed")
+  assert.equal(payload(await session.callTool({ name: "desk_search", input: { query: "x" } })).tool, "desk_search")
+})
+
+test("a checkout outside Git is not refused by the branch rule", async (t) => {
+  const { session } = await makeSession(t, { git: () => ({ ok: false, stdout: "" }), watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "ready")
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
+})
+
+test("with a state branch configured and HEAD on it, a write reaches the tool", async (t) => {
+  const state = { branch: "main", onRemote: true, upstream: true }
+  const { session, runtime } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "ready")
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
+  assert.equal(runtime.calls.length, 1)
 })

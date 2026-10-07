@@ -53,10 +53,20 @@
 //     recorded one (`/2`); the three always add up to `total_ms`. A row any
 //     `/1` label speaks to has no `confidence_ms`: its confidence was not
 //     recorded, and is never counted as high.
-//   - In the waste Pareto, each session's labeled waste counts once in any
-//     one total, even when the session is bound to several jobs: the labels of
-//     the first such job by job ID are used. Each Pareto reports how many
-//     labeled sessions it summed and how many of them several jobs share.
+//   - Labels count only inside the job's own share of each session
+//     (`resolveLabels`): its binding's segments. An evaluator may label the
+//     whole of a session several jobs share; cut to each job's share, each
+//     job's `muda_time` counts only its own part. A segment Desk marks
+//     `shared` is held by several jobs, and each holder's `muda_time` counts
+//     it. The Pareto counts each session's time once: where jobs' shares
+//     overlap, the first job by job ID that labeled a stretch of that time
+//     keeps it, whatever the stretch's class (value included), and a row's
+//     `jobs` are the jobs that add time to it. Labels whose job's
+//     share the facts do not record (`share_unknown`), or that have no
+//     stretch inside it (`outside_share`), are unused, so the job reads
+//     partial or not labeled, never the whole session and never a zero.
+//     Each Pareto reports how many labeled sessions it summed and how many
+//     of them several jobs share.
 //   - `search_waste` (milestone 4's organization signal) and the task card's
 //     `kind` are not in published facts (`desk.factory.published/1`), so
 //     `search_waste` is unavailable for every job (`not_in_published_facts`)
@@ -157,15 +167,71 @@ function countReasons(reasons, noun) {
   return sortedEntries(counts).map(([reason, count]) => ({ reason, [noun]: count }))
 }
 
+// The job's own share of a published session, as sorted, merged
+// `[start_ms, end_ms]` spans on the session clock: its binding's `segments`
+// (Desk writes them for every binding that holds the session's main
+// worker; a public desk publishes none). A binding with neither `segments`
+// nor `agents` (facts from before either was published) that is the session's only job
+// owns the whole session, as the timeline reads it. Anything else (a
+// subagent-only binding, or one of several bindings without segments) has
+// no known share: `null`, never the whole session.
+function ownShare(session, job) {
+  const binding = session.jobs.find((candidate) => candidate.job === job)
+  if (!Object.hasOwn(binding, "segments")) {
+    return !Object.hasOwn(binding, "agents") && session.jobs.length === 1 ? [[0, session.session.duration_ms]] : null
+  }
+  return mergeSpans(binding.segments.map((segment) => [segment.start_ms, segment.end_ms]))
+}
+
+// Spans sorted and merged where they overlap or touch.
+function mergeSpans(spans) {
+  const merged = []
+  for (const [start, end] of [...spans].sort((left, right) => left[0] - right[0])) {
+    const last = merged.at(-1)
+    if (last !== undefined && start <= last[1]) last[1] = Math.max(last[1], end)
+    else merged.push([start, end])
+  }
+  return merged
+}
+
+// The parts of a stretch outside the (merged) spans: the stretch itself when none overlaps it.
+function uncovered(stretch, spans) {
+  const pieces = []
+  let from = stretch.start_ms
+  for (const [start, end] of spans) {
+    if (end <= from || start >= stretch.end_ms) continue
+    if (start > from) pieces.push([from, start])
+    from = Math.max(from, end)
+  }
+  if (from === stretch.start_ms) return [stretch]
+  if (from < stretch.end_ms) pieces.push([from, stretch.end_ms])
+  return pieces.map(([start, end]) => ({ ...stretch, start_ms: start, end_ms: end }))
+}
+
+// The stretches cut to the spans: each keeps its labels on the part inside
+// the job's share, split at a gap, and a stretch wholly outside is dropped.
+function clipStretches(stretches, spans) {
+  return stretches.flatMap((stretch) => spans.flatMap(([start, end]) => {
+    const from = Math.max(stretch.start_ms, start)
+    const to = Math.min(stretch.end_ms, end)
+    return from < to ? [{ ...stretch, start_ms: from, end_ms: to }] : []
+  }))
+}
+
 /**
  * `resolveLabels(labels, sessions) -> { files, byJobSession, unused }`:
  * matches already-valid labels (`validateLabelsBytes`) with the store's
  * normalized sessions. Labels are used when exactly one facts file holds
  * their session and `checkLabelsAgainstFacts` passes; `byJobSession` maps
- * `<job>/<session id>` to them. Every other file is counted under one reason:
- * `facts_missing` (the labels declare it), `no_facts`, `facts_ambiguous`, or
- * the first cross-check code (a facts file re-derived after the labels
- * merged can leave them `evidence_unmatched`, for example).
+ * `<job>/<session id>` to them, cut to the job's own share of the session
+ * (an evaluator may label the whole of a session several jobs share, and
+ * each job's figures count only its own part). Every other file is counted
+ * under one reason: `facts_missing` (the labels declare it), `no_facts`,
+ * `facts_ambiguous`, the first cross-check code (a facts file re-derived
+ * after the labels merged can leave them `evidence_unmatched`, for example),
+ * `share_unknown` when the facts do not say which part of the session
+ * was the job's, or `outside_share` when the labels have stretches but none
+ * inside the job's share.
  */
 export function resolveLabels(labels, sessions) {
   const sessionsById = new Map()
@@ -182,8 +248,13 @@ export function resolveLabels(labels, sessions) {
     else if (matches.length > 1) reasons.push("facts_ambiguous")
     else {
       const check = checkLabelsAgainstFacts(entry, matches[0])
-      if (check.ok) byJobSession.set(`${entry.job}/${entry.session}`, entry)
-      else reasons.push(check.errors[0].code)
+      const share = check.ok ? ownShare(matches[0], entry.job) : null
+      const clipped = share === null ? [] : clipStretches(entry.stretches, share)
+      if (!check.ok) reasons.push(check.errors[0].code)
+      else if (share === null) reasons.push("share_unknown")
+      // Stretches, none inside the job's share: the evaluator labeled other jobs' time, which is no reading of this job, never a zero.
+      else if (entry.stretches.length > 0 && clipped.length === 0) reasons.push("outside_share")
+      else byJobSession.set(`${entry.job}/${entry.session}`, { ...entry, stretches: clipped })
     }
   }
   return { files: labels.length, byJobSession, unused: countReasons(reasons, "files") }
@@ -287,7 +358,10 @@ function mudaMeasures(timeline, labelsByJobSession) {
     if (entry === undefined) return []
     // The binding's own segments (absent for a legacy or subagent-only binding) say whether another job's time overlaps it.
     const binding = timeline.source_sessions[index].jobs.find((candidate) => candidate.job === timeline.job)
-    return [{ key: `${session.host}/${session.id}`, ...sessionWaste(entry), ...(Object.hasOwn(binding, "segments") ? { segments: binding.segments } : {}) }]
+    const summary = { key: `${session.host}/${session.id}`, ...sessionWaste(entry), ...(Object.hasOwn(binding, "segments") ? { segments: binding.segments } : {}) }
+    // The labels themselves, for the Pareto's once-per-session sum; kept out of the record's own fields.
+    Object.defineProperty(summary, "labels", { value: entry, enumerable: false })
+    return [summary]
   })
   if (labeled.length < timeline.sessions.length) {
     const excluded = { excluded: labeled.length === 0 ? "not_labeled" : "partial" }
@@ -382,13 +456,31 @@ function measureGroup(records) {
 function pareto(records) {
   const labeled = records.filter((record) => counted(record.measures.muda_time))
   const excluded = countReasons(records.flatMap((record) => leftOut(record.measures.muda_time) ?? []), "jobs")
-  // Each session once: the first labeled job by job ID supplies its totals.
-  const sessions = new Map()
+  // Each job's own share of each session: the labels are already cut to it. Where several jobs hold the same time (a `shared`
+  // segment), the first job by job ID keeps it, so each session's time counts once.
+  const summed = []
   const bindingsPerSession = new Map()
+  const covered = new Map()
+  const addedBy = new Map() // each summed summary -> the job that added it
   for (const record of [...labeled].sort((left, right) => compareText(left.job, right.job))) {
     for (const session of record.muda_sessions) {
-      if (!sessions.has(session.key)) sessions.set(session.key, session)
       bindingsPerSession.set(session.key, [...(bindingsPerSession.get(session.key) ?? []), session])
+      // A summary that carries no labels (built by hand, not by `jobRecord`) counts as it is.
+      if (session.labels === undefined) {
+        summed.push(session)
+        addedBy.set(session, record.job)
+        continue
+      }
+      const taken = covered.get(session.key) ?? []
+      const remaining = session.labels.stretches.flatMap((stretch) => uncovered(stretch, taken))
+      covered.set(session.key, mergeSpans([...taken, ...session.labels.stretches.map((stretch) => [stretch.start_ms, stretch.end_ms])]))
+      const added = remaining.length === session.labels.stretches.length && remaining.every((piece, index) => piece === session.labels.stretches[index])
+        ? session
+        : remaining.length > 0 ? sessionWaste({ ...session.labels, stretches: remaining }) : null
+      if (added !== null) {
+        summed.push(added)
+        addedBy.set(added, record.job)
+      }
     }
   }
   const base = {
@@ -398,11 +490,10 @@ function pareto(records) {
     N: records.length,
     state: countState(labeled.length, records.length),
     jobs_excluded: excluded,
-    sessions_labeled: sessions.size,
+    sessions_labeled: bindingsPerSession.size,
     sessions_shared: [...bindingsPerSession.values()].filter((bindings) => bindings.some((left, index) => bindings.slice(index + 1).some((right) => bindingsOverlap(left, right)))).length,
   }
   if (labeled.length === 0) return { ...base, muda_time_ms: null, wastes: [] }
-  const summed = [...sessions.values()]
   // Without a `/2` session nothing here could have said "unknown", so that row is left out rather than shown as a zero.
   const rowWastes = summed.some((session) => session.can_say_unknown) ? PARETO_WASTES : LABEL_WASTES
   const sums = Object.fromEntries(rowWastes.map((waste) => [waste, summed.reduce((sum, session) => sum + session.totals[waste], 0)]))
@@ -410,7 +501,8 @@ function pareto(records) {
   // Every row's share is of all labeled waste time, `unknown` included.
   const total = rowWastes.reduce((sum, waste) => sum + sums[waste], 0)
   const rows = rowWastes.map((waste) => {
-    const jobs = labeled.filter((record) => record.muda_sessions.reduce((sum, session) => sum + session.totals[waste], 0) > 0).length
+    // The jobs that add time to the row once each session's time is counted once.
+    const jobs = new Set(summed.filter((session) => session.totals[waste] > 0).map((session) => addedBy.get(session))).size
     return { waste, total_ms: sums[waste], jobs, ...rowEvidence(summed, waste, sums[waste]) }
   }).sort((left, right) => right.total_ms - left.total_ms || compareText(left.waste, right.waste))
   let running = 0
@@ -622,7 +714,7 @@ function paretoLines(summary) {
   const counted = `${summary.jobs_labeled} of ${summary.jobs} jobs fully labeled; excluded: ${reasonsText(summary.jobs_excluded, "jobs", "job")}.`
   if (summary.muda_time_ms === null) return [`No fully labeled finished job yet (${stateWord(summary.state)}): ${counted}`]
   return [
-    `Muda time: ${summary.muda_time_ms} ms (${stateWord(summary.state)}) across ${counted} Sessions summed: ${summary.sessions_labeled}, each once; shared by several jobs: ${summary.sessions_shared}.`,
+    `Muda time: ${summary.muda_time_ms} ms (${stateWord(summary.state)}) across ${counted} Sessions summed: ${summary.sessions_labeled}, each session's time once; shared by several jobs: ${summary.sessions_shared}.`,
     "",
     "| Waste | Time | Share | Cumulative | Jobs | Confidence (high / medium / low) | Evaluator versions |",
     "| --- | ---: | ---: | ---: | ---: | --- | --- |",
@@ -686,7 +778,7 @@ export function renderRollupsMarkdown(rollups) {
     "",
     "## Waste by type",
     "",
-    "Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each session's waste counts once in a total, even when several jobs share the session. The unknown row, once any label could say it, is time the evaluator looked at and could not tell: it is not counted in muda time, but each row's share is of all labeled waste time, unknown included. Confidence is the time in the row by how sure the evaluator was; it reads not recorded when a label that speaks to the row is from an evaluator that recorded none. Evaluator versions are the versions of those labels.",
+    "Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each job counts only its own part of a session, and where several jobs hold the same time, a total counts it once. The unknown row, once any label could say it, is time the evaluator looked at and could not tell: it is not counted in muda time, but each row's share is of all labeled waste time, unknown included. Confidence is the time in the row by how sure the evaluator was; it reads not recorded when a label that speaks to the row is from an evaluator that recorded none. Evaluator versions are the versions of those labels.",
     "",
     ...groupSections(rollups.muda.groupings, paretoLines),
     "## Measures",

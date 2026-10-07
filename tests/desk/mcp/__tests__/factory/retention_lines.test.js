@@ -2,7 +2,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { CHECK_UNAVAILABLE_ALARM, captureCheckLines, retentionLine } from "../../../../../plugins/desk/mcp/src/factory/retention.js"
+import { CHECK_UNAVAILABLE_ALARM, captureCheckFindings, captureCheckLines, retentionFinding, retentionLine } from "../../../../../plugins/desk/mcp/src/factory/retention.js"
 
 test("the retention line says what was pruned, that pruning failed, or that nothing has run", () => {
   for (const status of [undefined, null, {}, { retention: "x" }, { retention: [] }]) assert.equal(retentionLine(status), "retention: no sweep has pruned yet")
@@ -22,4 +22,16 @@ test("a store whose own check failed the alarm number of times in a row gets a l
   const lines = captureCheckLines({ capture: { "a/b": { check_unavailable: 3 } } })
   assert.equal(lines.length, 1)
   assert.match(lines[0], /3 times in a row \(a\/b\)/u)
+})
+
+test("a stopped pruning part is a finding: the sweep's tombstone pruning failed, or the last orphan pass counted a copy prune that threw", () => {
+  for (const status of [undefined, null, {}, { retention: "x" }, { retention: { ran_at: "t", tombstones_pruned: 0 } }, { orphans: "x" }, { orphans: { copies_prune_failed: 0 } }, { orphans: { copies_prune_failed: "2" } }]) assert.equal(retentionFinding(status), null)
+  assert.equal(retentionFinding({ retention: { ran_at: "t", failed: "prune_failed" } }), "prune_failed")
+  assert.equal(retentionFinding({ retention: { failed: "Not a code!" } }), "prune_failed", "a fixed code, never the recorded text")
+  assert.equal(retentionFinding({ retention: { ran_at: "t", tombstones_pruned: 1 }, orphans: { copies_prune_failed: 2 } }), "copies_prune_failed")
+})
+
+test("a store whose own check failed the alarm number of times in a row is a finding, by store and count", () => {
+  assert.deepEqual(captureCheckFindings(undefined), [])
+  assert.deepEqual(captureCheckFindings({ capture: { "a/b": { check_unavailable: 2 }, "c/d": { check_unavailable: 4 }, "e/f": 9 } }), [{ store: "c/d", times: 4 }])
 })

@@ -2,17 +2,7 @@
 model = "gpt-5.4"
 approval_policy = "on-request"
 
-# BEGIN desk activation: desk@3.2.0-alpha.197 mode=project-local owner=desk-activation
-[features]
-memories = false
-
-[[hooks.PreToolUse]]
-matcher = "*"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "node \"plugins/desk/hooks/host-enforcement.cjs\" codex"
-
+# BEGIN desk activation: desk@3.2.0-alpha.215 mode=project-local owner=desk-activation
 [[hooks.SessionEnd]]
 
 [[hooks.SessionEnd.hooks]]

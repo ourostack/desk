@@ -32,8 +32,13 @@ async function outboxFile(env, store, n) {
   facts.session.id = sessionId(n)
   const written = await writeLocalFacts(env, store, facts)
   assert.equal(written.written, true)
+  // The receipt a sweep of this Desk writes on a positive route: without a current marker, the session is here only on it.
+  await writeStatus(env, { derivations: { [written.name]: { store, checked_route: store } } })
   return written.name
 }
+
+// A live marker whose hook routed the session to the default store from `desk`: the session is here without any receipt.
+const markerHere = (env, desk, n) => writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: path.join(desk, `log-${n}.jsonl`), cwd: desk, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(), routing: { store: STORE, source: "default", warnings: [] } })
 
 async function cli(env, ...argv) {
   let out = ""
@@ -88,7 +93,7 @@ test("an outbox file whose session now routes to another store is route_changed,
   await json(path.join(away, "_meta", "factory.json"), { schema_version: 1, store: OTHER })
   const plain = path.join(base, "plain-desk")
   await fs.mkdir(plain)
-  const marker = (n, deskRoot, host = "claude-code") => writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: path.join(base, `log-${n}.jsonl`), cwd: base, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  const marker = (n, deskRoot, host = "claude-code") => writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: path.join(base, `log-${n}.jsonl`), cwd: base, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   // 1 and 2: routed to the other store, one delivered and one not. 3: routed here. 4: no marker, so its derive-time route (this store).
   // 5: a malformed marker says nothing new. 6: a Codex default route nothing proves keeps its derive-time route too.
   const names = []
@@ -100,7 +105,8 @@ test("an outbox file whose session now routes to another store is route_changed,
   const codex = structuredClone(GOLDEN)
   codex.session.id = sessionId(6)
   codex.session.host = "codex-cli"
-  assert.equal((await writeLocalFacts(env, STORE, codex)).written, true)
+  const codexName = (await writeLocalFacts(env, STORE, codex)).name
+  await writeStatus(env, { derivations: { [codexName]: { store: STORE, checked_route: STORE } } })
   await marker(6, plain, "codex-cli")
   await markDelivered(env, STORE, { name: names[0], publishedBlobSha: "a".repeat(40) })
   const status = factoryLocalStatus({ env, deskRoot: desk })
@@ -124,11 +130,49 @@ test("tombstoned, stale and stalled copies count as route_changed, never pending
   const retracting = path.join(root, "retracting", `${STORE.replace("/", "__")}.json`)
   await json(retracting, { [names[0]]: { path: `facts/${names[0]}`, blob, done: true }, [names[2]]: { path: `facts/${names[2]}`, blob }, junk: 7 })
   await writeStatus(env, { derivations: { [names[1]]: { store: OTHER }, [names[3]]: { store: STORE, desk_root: moved } } })
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(5), log_path: path.join(base, "log-5.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(5), log_path: path.join(base, "log-5.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 1, route_changed: 4, quarantined: 0, last_flush: null })
   // An unreadable retracting file reads as none: the tombstoned and stalled copies count as pending again.
   await fs.writeFile(retracting, "{ not json")
   assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 3, route_changed: 2, quarantined: 0, last_flush: null })
+}))
+
+test("a kept copy counts as pending only on a positive route here, as the flush reads it; without one it is route_changed", () => scratch(async ({ base, desk, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const root = await factoryStateRoot(env)
+  const kept = path.join(root, "retracted-copies", STORE.replace("/", "__"))
+  // 1: a kept copy whose marker routes here. 2: a kept copy with no marker, whose receipt names this store. 3: a live copy, the same receipt.
+  const names = []
+  for (const n of [1, 2, 3]) names.push(await outboxFile(env, STORE, n))
+  await fs.mkdir(kept, { recursive: true })
+  for (const name of names.slice(0, 2)) await fs.rename(path.join(root, "outbox", STORE.replace("/", "__"), name), path.join(kept, name))
+  await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: STORE })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: desk, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
+  // Session 2's receipt is an older Desk's (no checked route); session 3's is this Desk's.
+  await writeStatus(env, { derivations: { [names[1]]: { store: STORE }, [names[2]]: { store: STORE, checked_route: STORE } } })
+  // Session 2's kept copy has no positive route anywhere: frozen for good, counted with its age.
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 1, quarantined: 0, kept_frozen: 1, kept_frozen_oldest_days: 0, last_flush: null })
+}))
+
+test("a kept copy whose age cannot be read is still counted frozen, with no age; a desk folder that no longer resolves is never pending", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async ({ base, desk, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const root = await factoryStateRoot(env)
+  const slug = STORE.replace("/", "__")
+  const [kept, gone] = [await outboxFile(env, STORE, 1), await outboxFile(env, STORE, 2)]
+  const keptDir = path.join(root, "retracted-copies", slug)
+  await fs.mkdir(keptDir, { recursive: true })
+  await fs.rename(path.join(root, "outbox", slug, kept), path.join(keptDir, kept))
+  // Session 2's receipt records a desk folder that is gone (moved or renamed): it is not here.
+  // Session 1's receipt is an older Desk's, with no checked route.
+  await writeStatus(env, { derivations: { [kept]: { store: STORE }, [gone]: { store: STORE, checked_route: STORE, desk_root: path.join(base, "renamed-desk") } } })
+  await fs.chmod(keptDir, 0o600)
+  try {
+    assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).stores[0], { store: STORE, consent: "yes", pending: 0, route_changed: 2, quarantined: 0, kept_frozen: 1, kept_frozen_oldest_days: null, last_flush: null })
+  } finally {
+    await fs.chmod(keptDir, 0o700)
+  }
 }))
 
 test("the desk's declaration picks the store, and every other decided store is listed after it", () => scratch(async ({ desk, env }) => {
@@ -148,18 +192,24 @@ test("the desk's declaration picks the store, and every other decided store is l
   ])
 }))
 
-test("an overlay declaration beside Desk routes the desk, with manifest warnings as codes only", () => scratch(async ({ base, desk, env }) => {
+test("an overlay declaration beside Desk routes the desk, and a broken manifest ahead of it holds the route, named with its path and remedy", () => scratch(async ({ base, desk, env }) => {
   const { factoryLocalStatus } = await load()
   const broken = path.join(base, "plugins", "broken")
   const overlay = path.join(base, "plugins", "overlay")
   await fs.mkdir(broken, { recursive: true })
   await fs.writeFile(path.join(broken, "plugin.json"), "{ not json")
   await json(path.join(overlay, "plugin.json"), { name: "overlay", desk: { factory: { store: OTHER } } })
-  const status = factoryLocalStatus({ env, deskRoot: desk, pluginDirs: [broken, overlay] })
+  const status = factoryLocalStatus({ env, deskRoot: desk, pluginDirs: [overlay, broken] })
   assert.equal(status.store, OTHER)
   assert.equal(status.source, "overlay")
-  assert.deepEqual(status.warnings, ["manifest_unparseable"])
-  assert.doesNotMatch(JSON.stringify(status), new RegExp(base.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"))
+  assert.deepEqual(status.warnings, [])
+  // A broken manifest ahead of the overlay could itself declare a store, so it holds the route and is named by its code.
+  const held = factoryLocalStatus({ env, deskRoot: desk, pluginDirs: [broken, overlay] })
+  assert.equal(held.store, null)
+  assert.equal(held.source, "invalid_declaration")
+  assert.deepEqual(held.warnings, ["manifest_unparseable"])
+  assert.deepEqual(held.held_by.map(({ reason, path: file }) => [reason, file]), [["manifest_unparseable", path.join(broken, "plugin.json")]])
+  assert.match(held.held_by[0].remedy, /reinstall or remove that plugin/u)
 }))
 
 test("an invalid declaration or an incomplete plugin scan holds routing and names no store", () => scratch(async ({ desk, env }) => {
@@ -259,6 +309,7 @@ test("unsafe or malformed state files read as unreadable, never as a guess", () 
   const { factoryLocalStatus } = await load()
   await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
   await outboxFile(env, STORE, 7)
+  await markerHere(env, desk, 7)
   const root = await factoryStateRoot(env)
   await fs.writeFile(path.join(root, "status.json"), "\"not an object\"", { mode: 0o600 })
   await fs.mkdir(path.join(root, "delivered"), { recursive: true, mode: 0o700 })
@@ -317,6 +368,7 @@ test("an unparseable status or delivery record reads as no last flush and nothin
   const { factoryStateDir } = await import("../../../../../plugins/desk/mcp/src/factory/boot-check.js")
   await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
   const name = await outboxFile(env, STORE, 7)
+  await markerHere(env, desk, 7)
   const dir = factoryStateDir(env)
   await fs.writeFile(path.join(dir, "status.json"), "{ broken")
   await fs.mkdir(path.join(dir, "delivered"), { recursive: true })
@@ -337,7 +389,7 @@ test("an invalid declaration freezes the session: it counts as pending, never ro
   const one = await outboxFile(env, STORE, 1)
   const two = await outboxFile(env, STORE, 2)
   await writeStatus(env, { derivations: { [one]: { store: STORE, route: OTHER }, [two]: { store: STORE, route: OTHER, desk_root: broken } } })
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString() })
   assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 0, quarantined: 0, last_flush: null })
 }))
 

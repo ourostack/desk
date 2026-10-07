@@ -15,7 +15,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 function startParent(t, { prot, env }, { timeoutMs }) {
   const script = `
     import { readInspectionGit } from ${JSON.stringify(pathToFileURL(modulePath).href)}
-    readInspectionGit(${JSON.stringify(prot)}, ["symbolic-ref", "--quiet", "--short", "HEAD"], {}, { timeoutMs: ${timeoutMs} }).then(() => process.exit(0), () => process.exit(3))
+    readInspectionGit(${JSON.stringify(prot)}, ["symbolic-ref", "--quiet", "--short", "HEAD"], { timeoutMs: ${timeoutMs} }).then(() => process.exit(0), () => process.exit(3))
     process.stdout.write("started\\n")
     setInterval(() => {}, 1000)
   `
@@ -49,7 +49,7 @@ test("a parent that calls process.exit() mid-read leaves no Git process behind",
   const f = blockedRepo(t)
   const script = `
     import { readInspectionGit } from ${JSON.stringify(pathToFileURL(modulePath).href)}
-    readInspectionGit(${JSON.stringify(f.prot)}, ["symbolic-ref", "HEAD"], {}, { timeoutMs: 60000 }).catch(() => {})
+    readInspectionGit(${JSON.stringify(f.prot)}, ["symbolic-ref", "HEAD"], { timeoutMs: 60000 }).catch(() => {})
     setTimeout(() => process.exit(0), 700)
   `
   const parent = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: f.prot, env: { ...process.env, ...f.env }, stdio: "ignore" })
@@ -63,7 +63,7 @@ test("a signal handler registered by the host keeps the process alive: the reape
   const script = `
     import { readInspectionGit } from ${JSON.stringify(pathToFileURL(modulePath).href)}
     process.on("SIGTERM", () => { process.stdout.write("host handled\\n"); setTimeout(() => process.exit(0), 200) })
-    readInspectionGit(${JSON.stringify(f.prot)}, ["symbolic-ref", "HEAD"], {}, { timeoutMs: 60000 }).catch(() => {})
+    readInspectionGit(${JSON.stringify(f.prot)}, ["symbolic-ref", "HEAD"], { timeoutMs: 60000 }).catch(() => {})
     process.stdout.write("started\\n")
     setInterval(() => {}, 1000)
   `

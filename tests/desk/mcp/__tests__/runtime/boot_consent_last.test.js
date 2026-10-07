@@ -58,7 +58,7 @@ test("the consent block is built in one place and joined in one place: no produc
   }
 })
 
-test("with every producer active (a named task, a failed sync, a bad card, unsigned deliveries, improvement cards), consent is last in both boots", async () => {
+test("with every producer active (a named task, a failed sync, a bad card, unsigned deliveries, improvement cards, factory findings), consent is last in both boots", async () => {
   const root = await desk()
   await card(root, "shipped", delivered("Shipped thing", 9))
   await card(root, "broken", "title: no schema")
@@ -67,8 +67,11 @@ test("with every producer active (a named task, a failed sync, a bad card, unsig
     taskQuery: "flash-valves",
     improvementFn: OPEN_CARDS,
     syncFn: async () => ({ state: "failed", reason: "origin_unreachable" }),
+    factoryStatusFn: () => ({ ...UNDECIDED(), orphans: "pass_failed", retention: "prune_failed", capture_check_unavailable: [{ store: "ourostack/factory-intake", times: 3 }] }),
   })
   const json = result.instructions
+  assert.equal(json.filter((line) => /^Factory: (orphan pass|local retention|ourostack\/factory-intake: capture record)/u.test(line)).length, 3, "the three factory findings are body lines")
+  assert.equal(result.text_instructions.filter((line) => line.startsWith("Factory: ")).length, 3)
   const consentAt = json.findIndex(isConsent)
   assert.ok(consentAt !== -1)
   assert.ok(json.slice(consentAt).every(isConsent), "nothing follows the consent block in --json")

@@ -46,12 +46,7 @@
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
-//   6. host-enforcement: whether Claude Code's or Copilot's own deny hook
-//      (spec §5) is actually registered in this plugin's own hooks.json or
-//      copilot-hooks.json, reported as a Desk problem: block when it is not
-//      (mcp/src/runtime/host-enforcement-registration.js). A no-op on every
-//      other host -- Codex has no boot-check registry wired in Desk at all;
-//   7. improvement: the open improvement cards and the oldest one's age, or an
+//   6. improvement: the open improvement cards and the oldest one's age, or an
 //      unreadable card folder, as one status line, without a repair
 //      (mcp/src/factory/boot-check.js). The labels, andon and improvement
 //      checks say nothing in a noninteractive session and read the cards once.
@@ -92,7 +87,6 @@ const TOTAL_BUDGET_MS = 300;
 const TIDY_SOFT_MARGIN_MS = 20;
 const FACTORY_SCRIPT = path.join(__dirname, "..", "mcp", "scripts", "factory.js");
 const DESK_PROBLEM_SCRIPT = path.join(__dirname, "..", "mcp", "scripts", "file-desk-problem.js");
-const HOST_ENFORCEMENT_FIX_ATTEMPT = "not auto-repaired -- reinstall Desk to restore it.";
 const BOOT_CHECK_FIX_ATTEMPT = "not auto-repaired -- reinstall Desk or inspect this check's own code.";
 const INDEX_DRIFT_FIX_ATTEMPT = "not auto-repaired -- staged paths are left as-is for inspection.";
 const MIGRATIONS_FIX_ATTEMPT = "not auto-repaired -- the migration registry itself needs investigation.";
@@ -111,7 +105,7 @@ async function location(root) {
   const { readInspectionGit } = await runtime("runtime/git-inspection.js");
   const { TIDY_GIT_TIMEOUT_MS } = await runtime("runtime/workspace-tidy.js");
   // The report location serves the detached repair and the CLI, never the boot check's budget.
-  const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS });
+  const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { timeoutMs: TIDY_GIT_TIMEOUT_MS });
   if (!result.ok) throw new Error("bound desk is not an inspectable repository");
   const common = await fs.realpath(result.stdout);
   return { canonical, file: reportPath(canonical, common) };
@@ -386,14 +380,16 @@ const andonCheck = {
   id: "andon",
   budgetMs: 30,
   async run(ctx) {
-    const [{ isNoninteractive }, { andonBootCheck, andonLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
+    const [{ isNoninteractive }, { andonBootCheck, andonLine, andonUnknown, andonUnknownLine }] = await Promise.all([runtime("factory/session-kind.js"), runtime("factory/boot-check.js")]);
     if (isNoninteractive(ctx.env)) return {};
+    // An andon state that is not known is said out loud, never left to read as "no open andon".
+    const unknown = andonUnknown({ env: ctx.env }).map(andonUnknownLine);
     const found = andonBootCheck({ env: ctx.env });
-    if (found.length === 0) return {};
+    if (found.length === 0) return unknown.length === 0 ? {} : { line: unknown.join("; ") };
     const cards = await improvementCards(ctx);
     withinDeadline(ctx);
     const openKeys = cards === null || cards.status !== "ok" ? null : cards.open_keys;
-    return { line: found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true })).join("; ") };
+    return { line: [...unknown, ...found.map(({ store, issues }) => andonLine(store, issues, { openKeys, complete: cards?.truncated !== true }))].join("; ") };
   },
 };
 
@@ -430,73 +426,6 @@ const deskHealthCheck = {
 };
 
 const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorkspaceTidy };
-
-// Desk-only enforcement (spec §5) is only as good as its own registration:
-// this check confirms host-enforcement.cjs is actually wired into hooks.json
-// for the current host -- hooks.json (Claude Code) or copilot-hooks.json
-// (Copilot) -- and reports a missing registration as a `Desk problem:` block
-// rather than letting the gap stay silent. A no-op for every other host:
-// Codex has no boot-check or session-start hook wired in Desk at all today,
-// so `verifyHookRegistered` reports its own "registered but not active"
-// story directly through `desk_status` instead (Part 8, docs/host-
-// enforcement-live-proof.md).
-//
-// Filing is never awaited inline: a real filing attempt is an account lookup
-// and `gh` calls that can run for tens of seconds on a slow network, and this
-// check's own budget is 20 ms. Instead, when the hook is missing, `run` queues
-// the same kind of detached repair every other check here already uses --
-// `file-desk-problem.js` run through the compatible-Node launcher -- and the
-// block reports `file: filing in background`; the registry above launches it,
-// detached and unref'd, once every check has run (a fix round after this Part
-// first shipped: the inline filer's own process-spawn overhead alone was
-// enough to blow this budget on a loaded CI runner, and on a slow network it
-// risked losing the SessionStart hook's whole output past its own timeout).
-const hostEnforcementCheck = {
-  id: "host-enforcement",
-  budgetMs: 20,
-  async run(ctx) {
-    if (ctx.host !== "claude" && ctx.host !== "copilot") return {};
-    const { hookRegistrationDeskProblem } = await runtime("runtime/host-enforcement-registration.js");
-    const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
-    let repairCommand = null;
-    const fileProblem = async ({ host, reason }) => {
-      repairCommand = compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "host-enforcement", "--reason", reason || "unknown", "--host", host || "unknown", "--fix-attempt", HOST_ENFORCEMENT_FIX_ATTEMPT);
-      return { file: "filing in background" };
-    };
-    const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot, env: ctx.env, fileProblem });
-    if (registered !== false) return {};
-    return { line: block, repair: repairCommand ? { command: repairCommand } : undefined };
-  },
-};
-
-// A guard hook fails open, so one that could not restore its runtime dependencies (an unwritable cache, no pack for this machine) would stop guarding without a word. The hook leaves a marker
-// (mcp/src/runtime/hook-dependencies.js); this check turns it into a `Desk problem:` block and files it in the background, the same way the registration check above does.
-const HOOK_DEPENDENCIES_FIX_ATTEMPT = "not auto-repaired -- make the runtime cache folder writable, then start a new session.";
-const hookDependenciesCheck = {
-  id: "hook-dependencies",
-  budgetMs: 20,
-  async run(ctx) {
-    const [{ degradedHooks }, { formatDeskProblem }, { argvSafeReason }, { shouldLaunchFiler }] = await Promise.all([
-      runtime("runtime/hook-dependencies.js"), runtime("runtime/index-drift.js"), runtime("runtime/argv-safe-reason.js"), runtime("runtime/filer-throttle.js"),
-    ]);
-    const degraded = degradedHooks({ env: ctx.env });
-    if (degraded.length === 0) return {};
-    const names = degraded.map((entry) => entry.hook).join(", ");
-    const reason = degraded.map((entry) => `${entry.hook}: ${entry.reason}`).join("; ");
-    const safeReason = argvSafeReason(reason);
-    const launch = shouldLaunchFiler({ env: ctx.env, mechanism: "hook-dependencies", signature: safeReason });
-    const block = formatDeskProblem({
-      mechanism: "hook-dependencies",
-      symptom: `the ${names} guard could not restore its dependencies`,
-      broke: reason,
-      means: "that guard cannot read task cards, so it allows what it would have checked",
-      fix: HOOK_DEPENDENCIES_FIX_ATTEMPT,
-      file: launch ? "filing in background" : "filing already queued (within the last hour)",
-      tell: `Desk's ${names} guard is degraded: it could not restore its runtime dependencies (${reason}) and is not guarding. Filing this now so it gets fixed.`,
-    });
-    return { line: block, repair: launch ? { command: compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "hook-dependencies", "--reason", safeReason, "--host", ctx.host || "unknown", "--fix-attempt", HOOK_DEPENDENCIES_FIX_ATTEMPT) } : undefined };
-  },
-};
 
 // ---------------------------------------------------------------------------
 // The registry.
@@ -558,7 +487,7 @@ async function runBootChecks(options = {}) {
   // the fix this function exists for.
   const argvSafeReason = await loadArgvSafeReason().then((mod) => mod.argvSafeReason, () => () => "reason unavailable (redactor not loaded)");
   const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
-  // Queued the same way host-enforcement's own repair is: a fileProblem
+  // Queued the way every check's repair is: a fileProblem
   // closure that only builds the repair command (compatibleCommand,
   // synchronous), returns `file: "filing in background"`, and lets the
   // registry's own post-loop repair loop below do the actual, unawaited
@@ -664,7 +593,7 @@ async function runBootChecks(options = {}) {
  *
  * Migrated onto the failure contract (spec.md §1, Part 5): when the migration
  * registry itself fails internally, `startupMigrationLine` needs a real
- * filing step -- this wrapper supplies it the same way `hostEnforcementCheck`
+ * filing step -- this wrapper supplies it the same way the index-drift check
  * does its own: `launchRepair` (default `launchCommand`) starts the detached
  * `file-desk-problem.js` run and is never awaited past its own spawn; a
  * launcher that fails leaves the block honestly reporting `file: not filed:
@@ -833,8 +762,8 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 module.exports = {
-  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck, improvementCheck],
-  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck, hookDependenciesCheck, improvementCheck,
+  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck],
+  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck,
   runBootChecks, startFactory, boundRoot, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };

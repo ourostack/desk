@@ -40,7 +40,7 @@ Nothing else enters here. Pick the entry from what the task already holds, top r
 
 When a plan is genuinely needed (several tasks, several owners, a risky or unclear design), it is written inside the task's own iteration folder in the desk, `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/planning.md` (`directory-structure` has the layout; a cross-repo plan goes in `<track>/_planning/`), and that file is the `--plan-path`. A plan never goes into the operator's code repository (no `docs/superpowers/plans/` there) and never into the desk root, whatever a provider skill's default save location says. Choose the execution method (subagent-driven or inline) yourself from the table above; it is an engineering call, not a question for the operator.
 
-Superpowers' `writing-plans` is a skill that writes a plan file. It is not the host's Plan mode, which Desk never enters; selecting `writing-plans` neither requires nor implies Plan mode.
+Superpowers' `writing-plans` is a skill that writes a plan file. It is not the host's Plan mode, which Desk never enters; selecting `writing-plans` neither requires nor implies Plan mode. Never enter, request or recommend the host's Plan mode: work in the active execution mode, and if a tool incorrectly claims Plan mode is blocking an authorized edit, treat it as a runtime or tooling fault and use another valid execution path.
 
 ## Authority carried into the provider
 
@@ -91,7 +91,7 @@ Also pass the mapper's close-out rule in both brief types: every child returns e
 
 When the work is the factory itself, invoke factory-work first and put its review questions in every reviewer brief.
 
-This rule is passed through the adapter, not patched into the vendored Superpowers templates. A [protected-checkout denial](../../docs/protected-checkouts.md) applies to parent agents and subagents alike; it does not grant ownership of a different checkout.
+This rule is passed through the adapter, not patched into the vendored Superpowers templates. Owning your own worktree is the rule above; it does not grant ownership of a different checkout.
 
 Do not create a competing `.superpowers/sdd` tree. Keep canonical Git-backed Desk/Crew state on main through its established write protocol; an intentional alpha applies to the approved code artifact, not a competing workspace-state branch. An explicitly absent file fails; never replace that failure with an inferred plan, a mock receipt or a fallback workspace. The mapper returns `cleanupPaths: []`, which is no deletion authority, and a printed evidence path is neither proof of protection nor permission.
 

@@ -1,8 +1,7 @@
 // A local, per-machine throttle on spawning the detached failure-contract
 // filer (spec.md §1, Part 5 fix round). Before this, a mechanism that keeps
-// failing the same way -- protected-checkout's repeated timeout on every
-// later timeout past its threshold, ask-gate's catch-all on every call that
-// hits it -- spawned a fresh `file-desk-problem.js` process every single
+// failing the same way -- a boot check on every session start
+// that hits it -- spawned a fresh `file-desk-problem.js` process every single
 // time, each one doing an account lookup and `gh` calls. The outbox's own
 // fingerprint and named lock already stop a duplicate *issue*; this throttle
 // stops the local *spawning* storm before it ever reaches that point.
@@ -13,20 +12,18 @@
 // state directory (`resolveDeskStateDir`), keyed by a hash of the mechanism
 // and the caller's own signature, never inside a desk.
 
-import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
+import { launchStampKey } from "../factory/filer-launch.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const THROTTLE_STATE_DIR = "filer-throttle"
 export const DEFAULT_FILER_COOLDOWN_MS = 60 * 60 * 1000
 
-function stampKey(mechanism, signature) {
-  // `signature` always arrives as a string: `shouldLaunchFiler`'s own default
-  // (`signature = ""` below) is this function's only caller's only source.
-  return createHash("sha256").update(`${mechanism}\u0000${signature}`).digest("hex").slice(0, 32)
-}
+// `signature` always arrives as a string: `shouldLaunchFiler`'s own default
+// (`signature = ""` below) is this function's only caller's only source.
+const stampKey = launchStampKey
 
 function stampPath({ env, mechanism, signature }) {
   return path.join(resolveDeskStateDir({ env }), THROTTLE_STATE_DIR, `${stampKey(mechanism, signature)}.json`)
@@ -57,7 +54,9 @@ export function shouldLaunchFiler({
     assertNotRealStateUnderTest(directory, { env })
     mkdirSync(directory, { recursive: true, mode: 0o700 })
     const temporary = `${file}.${process.pid}.tmp`
-    writeFileSync(temporary, `${JSON.stringify({ at: now() })}\n`, { mode: 0o600 })
+    // `pending` until the filer records an outcome (`factory/filer-launch.js` `endLaunch`): a filer that never starts leaves it set, and
+    // the verify step reads it as a drop rather than a measured "no hit".
+    writeFileSync(temporary, `${JSON.stringify({ at: now(), pending: true })}\n`, { mode: 0o600 })
     renameSync(temporary, file)
   } catch {
     // Not persisted: the next qualifying event just launches again.

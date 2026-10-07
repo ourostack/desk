@@ -201,7 +201,7 @@ test("a genuine tracked-file conflict with no untracked paths is unresolved, fil
   assert.match(result.diagnostic, /conflicted: seed\.md/u)
   assert.match(result.diagnostic, /filing in background/u)
 
-  assert.deepEqual(filed, { root: cloneA, env, reason: "pull_rebase_failed", host: "unknown" })
+  assert.deepEqual(filed, { root: cloneA, env, reason: "pull_rebase_failed:conflict", host: "unknown" })
   // The abort actually ran: no rebase left mid-flight, and the working tree is restored to
   // cloneA's own (still-local, unpushed) commit, clean of conflict markers.
   assert.ok(!existsSync(path.join(cloneA, ".git", "rebase-apply")))
@@ -225,7 +225,7 @@ test("a quarantine retry that still fails is unresolved, reports the quarantined
   assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.length === 1)
   assert.match(result.diagnostic, /pull_rebase_failed_after_quarantine\)/u)
   assert.match(result.diagnostic, /conflicted: seed\.md/u)
-  assert.equal(filed.reason, "pull_rebase_failed_after_quarantine")
+  assert.equal(filed.reason, "pull_rebase_failed_after_quarantine:conflict")
   assert.ok(!existsSync(path.join(cloneA, ".git", "rebase-merge")))
 })
 
@@ -240,7 +240,7 @@ test("conflictedPaths and untrackedPaths degrade to empty when their own git com
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
   assert.doesNotMatch(result.diagnostic, /conflicted:/u)
-  assert.equal(filed.reason, "pull_rebase_failed")
+  assert.equal(filed.reason, "pull_rebase_failed:conflict")
 })
 
 // ---------------------------------------------------------------------------
@@ -397,7 +397,7 @@ test("syncWorkspace reports sync_deadline_exceeded and never attempts a pull whe
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
   assert.equal(clock.checkpoints(), 1, "the sequence stopped at its first budget checkpoint")
   assert.equal(pullCalled, false, "no real pull was ever attempted once the budget was already exhausted")
-  assert.equal(filed.reason, "sync_deadline_exceeded")
+  assert.equal(filed, null, "a deadline is not a Desk defect, so nothing is filed")
 })
 
 test("syncWorkspace reports sync_deadline_exceeded, without attempting a second pull, when the budget runs out after quarantining", async () => {
@@ -416,7 +416,7 @@ test("syncWorkspace reports sync_deadline_exceeded, without attempting a second 
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
   assert.equal(pullCalls, 1, "only the first pull attempt ran; the sequence gave up before a second")
   assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.some((p) => p.endsWith("stray.txt")), "the stray path was still quarantined before the budget ran out")
-  assert.equal(filed.reason, "sync_deadline_exceeded")
+  assert.equal(filed, null, "a deadline is not a Desk defect, so nothing is filed")
 })
 
 // The three lines a nondeterministic (real-clock) run can cover only by
@@ -446,7 +446,7 @@ test("run() itself refuses to spawn once the per-call budget is exhausted, never
   assert.equal(spawnGitCalled, false, "run()'s own budget-exhausted guard synthesized every remaining step's failure without ever spawning git for it")
   assert.equal(result.state, "unresolved")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
-  assert.equal(filed.reason, "sync_deadline_exceeded")
+  assert.equal(filed, null, "a deadline is not a Desk defect, so nothing is filed")
 })
 
 test("stashCount falls back to 0 when its own git stash list call fails, and again when it returns non-string stdout", async () => {
@@ -485,7 +485,7 @@ test("syncWorkspace reports sync_deadline_exceeded right after the first pull's 
   assert.equal(untrackedCalled, false, "untrackedPaths was never reached once this checkpoint gave up")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
   assert.match(result.diagnostic, /conflicted: seed\.md/u, "firstConflicted -- captured before the abort that cleared it -- was carried through into the diagnostic")
-  assert.equal(filed.reason, "sync_deadline_exceeded")
+  assert.equal(filed, null, "a deadline is not a Desk defect, so nothing is filed")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "the defensive abort still ran before this checkpoint gave up")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
 })

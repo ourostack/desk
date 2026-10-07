@@ -45,7 +45,12 @@ const iso = (ms) => new Date(ms).toISOString()
 
 async function setup(env, { facts = 0, coverage = coverageAt(iso(T0 - HOUR)), status = {} } = {}) {
   await setConsent(env, { store: STORE, contribute: true, account: ACCOUNT })
-  for (let n = 1; n <= facts; n += 1) assert.equal((await writeLocalFacts(env, STORE, localFacts(n))).written, true)
+  // With the receipt a sweep of this Desk writes on a positive route (`checked_route`).
+  for (let n = 1; n <= facts; n += 1) {
+    const written = await writeLocalFacts(env, STORE, localFacts(n))
+    assert.equal(written.written, true)
+    await writeStatus(env, { derivations: { [written.name]: { store: STORE, checked_route: STORE } } })
+  }
   await writeStatus(env, { ...(coverage === null ? {} : { coverage }), ...status })
   return (await readConsent(env)).stores[STORE].intake_id
 }

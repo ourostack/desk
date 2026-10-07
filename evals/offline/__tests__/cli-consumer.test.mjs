@@ -237,7 +237,8 @@ test("the public workflow reports relevant-revision status without carrying any 
   assert.doesNotMatch(job, /secrets\./);
   assert.doesNotMatch(workflow, /\/Users\/|\.local\/state|private-reports/);
   for (const trigger of ["evals/offline/**", "evals/*.json", "AGENTIC-ENGINEERING-V2.md"]) {
-    assert.equal(workflow.split(`- "${trigger}"`).length, 3, trigger);
+    // Only the push trigger filters paths; every pull request runs the workflow so main's required "CI gate" check always reports.
+    assert.equal(workflow.split(`- "${trigger}"`).length, 2, trigger);
   }
   // The single existing verified-pack upload stays last; the status step publishes no second artifact.
   assert.equal(job.split("uses: actions/upload-artifact@v4").length, 2);
@@ -341,7 +342,8 @@ test("the public status step refuses a forbidden evaluation state before it publ
 test("every path the status routing calls relevant also starts the public workflow", () => {
   const workflow = fs.readFileSync(path.join(repository, ".github/workflows/desk-mcp-tests.yml"), "utf8");
   const blocks = workflowPathFilters(workflow);
-  assert.equal(blocks.length, 2, "pull_request and push both declare path filters");
+  assert.match(workflow, /^on:\n  pull_request:\n  push:\n/mu, "every pull request starts the workflow, so no path can miss it");
+  assert.equal(blocks.length, 1, "only push declares path filters");
   const probes = [
     "AGENTIC-ENGINEERING-V2.md", "evals/offline/cases/v2-alpha-v1/dataset.json", "evals/engineering-v2-kernel.json",
     "evals/offline/checks.mjs", "evals/offline/fixed-controller.mjs", "evals/investigation-boundaries.json",
