@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.223 — 2026-10-07
+
+Desk's sync status file can no longer lose a freshly recorded failed pull to a push that finishes at the same moment. The boot's pull record and the push worker (and the session-end unpushed check) each read the status file, merged their own fields and renamed a new copy over it, so two of them running together could each drop the other's fields, and `desk_status` then said sync was healthy after a failed pull. Each write now holds a short-lived lock file beside the status file while it reads, merges and renames. The lock never stalls Desk: a writer waits at most 1.5 seconds, takes over a lock older than 5 seconds (its owner died) and, if the lock is still held after the wait, writes anyway rather than hang a boot or a tool call. No field Desk records or publishes changed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.222 — 2026-10-07
+
+`desk_status` no longer says the desk is in sync after a failed pull that nothing has succeeded since. It treated any newer `FETCH_HEAD` as proof the remote was reachable again, but a failed fetch or pull also rewrites that file, so a background fetch that failed just after the boot's failed pull hid the failure: the boot said `degraded` while `desk_status` said `ready` and "in sync". `desk_status` no longer reads `FETCH_HEAD`. A failed pull now clears only when Desk records a success: a later successful sync, a push, or a successful fetch by the session-start fast-forward check (recorded as `last_fetch_ok_at` in its own small file, stamped when the fetch started). A fetch proves only that the remote is reachable, so it clears a failure caused by reachability (`unreachable`, `auth_failed`, `deadline`) and not a `conflict`, `diverged` or `other` failure. A fetch you run by hand no longer clears it, and the failure otherwise expires after 24 hours.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.221 — 2026-10-07
 
 A capture record dropped from a rebuilt intake branch is no longer treated as sent. When a push leaves out the record an open pull request carried, the flush looks for it on the default branch: if it is there it is settled, and if not `status.capture[<store>]` records `dropped: "capture_dropped"` with `dropped_at` and forgets `sent_at`, so the record is due again at the next flush instead of 20 hours after the lost send. A record still dropped six hours later is raised in the doctor and boot status (`capture_dropped`). With no kept bytes the drop is recorded as `capture_drop_unconfirmed`, keeps `sent_at` and raises nothing. See [the local capture notes](docs/factory-local-capture.md).
