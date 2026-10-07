@@ -1,7 +1,6 @@
-// Native Windows ACL primitive, shared by every private and protected store
-// on this machine (the feedback SQLite store via
-// `src/protected/store.js`, the readiness journal via
-// `src/readiness/journal.js`, and the factory outbox via `factory/outbox.js`).
+// Native Windows ACL primitive, shared by every private state root on this
+// machine (the readiness journal via `src/readiness/journal.js` and the
+// factory outbox via `factory/outbox.js`).
 //
 // POSIX hosts protect a store with owner-only 0700/0600 modes. Windows has no
 // equivalent, so this module constrains the real NTFS DACL instead: exactly one
@@ -21,8 +20,8 @@
 // `src/factory/` — the one place every caller can import from, since
 // `src/factory/**` may only import `node:` built-ins and other
 // `src/factory/` files — with a one-line re-export left at the old
-// `src/feedback/windows-acl.js` path so `store.js`, `readiness/journal.js`
-// and their existing tests are unchanged.
+// `src/feedback/windows-acl.js` path so `readiness/journal.js`
+// and its existing tests are unchanged.
 
 import { spawn as nodeSpawn } from "node:child_process"
 import { statSync } from "node:fs"

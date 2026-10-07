@@ -62,10 +62,6 @@ async function inspectOwner(record, { kill = process.kill, uptimeSeconds = os.up
   return current === recorded ? { state, verified: true } : { state: "dead", verified: false }
 }
 
-export async function ownerLiveness(record, options) {
-  return (await inspectOwner(record, options)).state
-}
-
 /**
  * The owner of a root's controller, as far as taking it over goes: "live" (another process that runs: never take it over), "dead", "self", "missing" or "corrupt".
  * `record` is the parsed owner.json when there is one.

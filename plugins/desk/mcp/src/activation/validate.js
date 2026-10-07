@@ -127,26 +127,6 @@ export function resolveActivationChain(manifest, targetId = "desk:worker") {
   return chain
 }
 
-export function diagnoseHostSupport(manifest, { host }) {
-  const hostSupport = Array.isArray(manifest?.host_support) ? manifest.host_support : []
-  const match = hostSupport.find((entry) => isObject(entry) && entry.host === host)
-  if (!match) {
-    return {
-      host,
-      status: "unsupported",
-      unsupported_primitives: ["host-activation"],
-      fallback_behavior: "manual host configuration required",
-    }
-  }
-  return {
-    host,
-    status: match.status,
-    unsupported_primitives: match.unsupported_primitives ?? [],
-    fallback_behavior: match.fallback_behavior,
-    capabilities: match.capabilities ?? [],
-  }
-}
-
 function validateDependencies(dependencies, errors) {
   const ids = new Set()
   if (!Array.isArray(dependencies) || dependencies.length === 0) {

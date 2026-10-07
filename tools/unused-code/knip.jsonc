@@ -1,16 +1,22 @@
 // Finds code nothing uses: files no entry point reaches, exports nothing imports, unused dependencies and duplicate exports.
 // Run it locally with `cd tools/unused-code && npm ci && npm run knip`. The "Unused code" CI job runs the same command and is part of the required CI gate.
 //
-// Desk is plain JavaScript loaded in four ways, and each way is an entry point below:
-//   - the MCP server (plugins/desk/mcp/index.js and the bootstrap, web and proxy launchers it ships with),
-//   - hooks registered in plugins/desk/hooks/hooks.json and copilot-hooks.json, and scripts that package.json scripts or workflows run,
-//   - the Node test runner's test files, which are entry points by design: a module only a test reaches still counts as used,
-//   - modules those loaders pull in by a path string or a computed URL, which a static analyser cannot follow (listed under "dynamicallyLoaded").
+// Entry points are the files something outside the code starts: the MCP server and its launchers, the hooks the hosts run, scripts that workflows run, a skill's script, and the Node test runner's test files.
+// A module only a test reaches counts as used, because a test file is an entry point by design. Production-only reachability is a different question and is not checked here.
+// Exports that only a test imports are kept on purpose in three groups, because knip counts a test import as a use and so does not flag them:
+//   - drift guards: the *_FIELDS lists in src/tools, NO_INPUT_TOOLS in tool-schemas.js, the CAPTURE_*_KEYS in factory/capture-schema.js, LOOP_STEP_NAMES in factory/loop-worker.js and DEFERRED_TOOLS_HINT in util/deferred-tools.js. A test compares each with the schema, spec or doc it must match, so the two cannot drift apart;
+//   - resetOwnProcessStart in readiness/process-start.js, which tests call to clear a cache between cases;
+//   - labelsPathParts in factory/pipeline/validate-pr.js, which the validator itself uses and its test checks directly.
+// Any other export that only tests use should be deleted with its test, or made private.
+// Config hints (an entry or ignore that no longer matches anything) fail the check, so an entry cannot go stale unnoticed.
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  // Only unused code. Missing or unlisted dependencies, unresolved imports and binaries are a different question and stay out.
   // Class and enum members are left out because knip finds their uses through the types of installed dependencies, so the answer would change with what a machine has installed.
   "include": ["files", "dependencies", "unlisted", "unresolved", "exports", "types", "nsExports", "nsTypes", "duplicates"],
+  "ignoreIssues": {
+    // The unused exports are getActiveEmbeddingSpec, isActiveEmbeddingSpec, normalizeChunkText, chunkTextHash and computeChunkKey. They should be deleted, but this file is one of the artifact source paths (plugins/desk/mcp/config/artifact-source-scope.json): any change to its bytes changes the source-scope hash recorded in the published vector pack and snapshot, which would have to be rebuilt and republished. Delete them together with that rebuild.
+    "plugins/desk/mcp/src/indexer/spec.js": ["exports"]
+  },
   "workspaces": {
     ".": {
       "entry": [
@@ -26,14 +32,28 @@
       ],
       "project": ["scripts/**", ".github/scripts/**", "evals/**", "tests/**", "plugins/desk/hooks/**", "plugins/plain-language/hooks/**", "plugins/superpowers/skills/**/*.{js,cjs}"],
       // evals/offline/vendor is a TypeScript package copied in from upstream, and the fixtures and cases are inputs the tests feed to the code under test, not Desk code.
-      "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**"]
+      "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**"],
+      "ignoreDependencies": [
+        // Tests under tests/desk import the MCP server's packages. tests/desk/link-dependencies.mjs links them from plugins/desk/mcp/node_modules, so they resolve at run time but are declared only in that package.
+        "better-sqlite3", "sqlite-vec", "@modelcontextprotocol/sdk", "playwright-core", "gray-matter", "ws",
+        // The coverage helpers under evals/offline run nyc and its ESM loader from the MCP package's install.
+        "nyc", "@istanbuljs/esm-loader-hook",
+        // Resolved through the same link as transitive dependencies of the MCP package's own dependencies. Declaring them at the root would change the lockfile for no runtime effect.
+        "js-yaml", "process-on-spawn", "test-exclude", "signal-exit", "foreground-child"
+      ]
     },
     "plugins/desk/mcp": {
       "entry": [
         "bootstrap.cjs",
         "web.cjs",
         "web-proxy.cjs",
-        "scripts/*.{js,mjs}"
+        "scripts/*.{js,mjs}",
+        // Codex is a supported host and the adapter is its activation surface: the host manifests and tests drive it, and the files below are the parts of it that nothing in this package imports by a static path.
+        "src/activation/adapters/codex.js",
+        "src/activation/artifact-ledger.js",
+        "src/activation/codex-smoke.js",
+        // A superpowers skill runs this file directly; it is not imported by name.
+        "src/activation/superpowers-context.js"
       ],
       "project": ["**/*.{js,cjs,mjs}"],
       "ignoreDependencies": [

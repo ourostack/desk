@@ -1,7 +1,6 @@
 // Native proof that the factory outbox's Windows owner-only protection is
-// real: it uses the same `protectWindowsPaths` routine as the private
-// feedback store (`src/protected/store.js`), applied to
-// the factory state root, the machine secret and an outbox file, with no
+// real: it uses the same `protectWindowsPaths` routine as the readiness
+// journal, applied to the factory state root, the machine secret and an outbox file, with no
 // injected runner — the real NTFS DACL, read back with the same
 // `nativeProbe` helper `windows_acl.test.js` uses. Skipped everywhere but a
 // real Windows host; nothing on another platform substitutes for it.

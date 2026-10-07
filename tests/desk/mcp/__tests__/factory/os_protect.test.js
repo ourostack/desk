@@ -1,5 +1,4 @@
-// The shared path-protection primitives behind both `src/protected/store.js`
-// and `src/factory/outbox.js`. Every test runs against a throwaway temp
+// The shared path-protection primitives behind `src/factory/outbox.js`. Every test runs against a throwaway temp
 // directory and always cleans up.
 
 import { test } from "node:test"

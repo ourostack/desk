@@ -13,7 +13,6 @@ import { closeDb, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../../../../plugins/desk/mcp/src/artifacts/source-scope.js"
-import { validateVectorPackCompaction } from "../../../../../plugins/desk/mcp/src/indexer/vector-compaction.js"
 import {
   validateVectorPackFile,
   writeVectorPackArtifact,
@@ -243,28 +242,6 @@ function tombstoneRow(overrides = {}) {
     artifact_rotation_id: "rotation-2026-06-15",
     actor: "unit-test-reviewer",
     ...overrides,
-  }
-}
-
-function vectorRow({ key, hash, seed }) {
-  return {
-    chunk_key: `ck_${key.repeat(40).slice(0, 40)}`,
-    text_hash: `sha256:${hash.repeat(64).slice(0, 64)}`,
-    embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
-    dimension: ACTIVE_EMBEDDING_SPEC.dimension,
-    encoding: "float32-json",
-    vector: Array.from(
-      { length: ACTIVE_EMBEDDING_SPEC.dimension },
-      (_, index) => ((seed + index) % 31) / 31,
-    ),
-  }
-}
-
-function pack(packId, rows) {
-  return {
-    pack_id: packId,
-    embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
-    rows,
   }
 }
 
@@ -1077,7 +1054,6 @@ test("tombstone helpers handle defensive edge cases without leaking document det
   const {
     assertArtifactDoesNotRepresentTombstones,
     assertArtifactInputsDoNotContainTombstones,
-    cleanupRotatedArtifacts,
     loadTombstoneLedger,
     tombstoneDecisionForDoc,
   } = await loadTombstonesModule()
@@ -1136,66 +1112,6 @@ test("tombstone helpers handle defensive edge cases without leaking document det
       )
     }
   }
-
-  const noArtifactsRoot = await tmpRoot("desk-redaction-no-artifacts-plugin-")
-  assert.deepEqual(await cleanupRotatedArtifacts({ pluginRoot: noArtifactsRoot }), {
-    vector_packs_removed: 0,
-    snapshots_removed: 0,
-    sidecars_removed: 0,
-  })
-
-  const partialSidecarsRoot = await tmpRoot("desk-redaction-partial-sidecars-plugin-")
-  const partialPackDir = path.join(
-    partialSidecarsRoot,
-    "artifacts",
-    "vector-packs",
-    ACTIVE_EMBEDDING_SPEC.id,
-  )
-  const partialSnapshotDir = path.join(
-    partialSidecarsRoot,
-    "artifacts",
-    "snapshots",
-    ACTIVE_EMBEDDING_SPEC.id,
-  )
-  await fs.mkdir(partialPackDir, { recursive: true })
-  await fs.mkdir(partialSnapshotDir, { recursive: true })
-  await fs.writeFile(path.join(partialPackDir, "old-pack.jsonl"), "old vector bytes", "utf8")
-  await fs.writeFile(path.join(partialPackDir, "old-pack.manifest.json"), "{}", "utf8")
-  await fs.writeFile(
-    path.join(partialSnapshotDir, "old-snapshot.sqlite.zst"),
-    "old snapshot bytes",
-    "utf8",
-  )
-  assert.deepEqual(await cleanupRotatedArtifacts({ pluginRoot: partialSidecarsRoot }), {
-    vector_packs_removed: 1,
-    snapshots_removed: 1,
-    sidecars_removed: 1,
-  })
-
-  const brokenVectorDirRoot = await tmpRoot("desk-redaction-broken-vector-dir-plugin-")
-  const vectorRoot = path.join(brokenVectorDirRoot, "artifacts", "vector-packs")
-  await fs.mkdir(vectorRoot, { recursive: true })
-  await fs.writeFile(path.join(vectorRoot, ACTIVE_EMBEDDING_SPEC.id), "not a directory", "utf8")
-  await assert.rejects(
-    () => cleanupRotatedArtifacts({ pluginRoot: brokenVectorDirRoot }),
-    (error) => error.code === "ENOTDIR",
-  )
-
-  const brokenSidecarRoot = await tmpRoot("desk-redaction-broken-sidecar-plugin-")
-  const brokenSidecarPackDir = path.join(
-    brokenSidecarRoot,
-    "artifacts",
-    "vector-packs",
-    ACTIVE_EMBEDDING_SPEC.id,
-  )
-  await fs.mkdir(path.join(brokenSidecarPackDir, "old-pack.manifest.json"), {
-    recursive: true,
-  })
-  await fs.writeFile(path.join(brokenSidecarPackDir, "old-pack.jsonl"), "old vector bytes", "utf8")
-  await assert.rejects(
-    () => cleanupRotatedArtifacts({ pluginRoot: brokenSidecarRoot }),
-    (error) => error.code === "ERR_FS_EISDIR" || error.code === "EISDIR",
-  )
 })
 
 test("tombstones make fresh local indexes stale and prune redacted docs", async () => {
@@ -1399,196 +1315,5 @@ test("local index freshness fails closed for corrupt tombstones and schema drift
       vectors: 0,
       refs: 0,
     })
-  }
-})
-
-test("artifact rotation cleanup is gated by compaction validation and snapshot rotation", async () => {
-  const {
-    cleanupRotatedArtifacts,
-  } = await loadTombstonesModule()
-  const pluginRoot = await tmpRoot("desk-redaction-rotation-gates-plugin-")
-  const packDir = path.join(
-    pluginRoot,
-    "artifacts",
-    "vector-packs",
-    ACTIVE_EMBEDDING_SPEC.id,
-  )
-  const snapshotDir = path.join(
-    pluginRoot,
-    "artifacts",
-    "snapshots",
-    ACTIVE_EMBEDDING_SPEC.id,
-  )
-  await fs.mkdir(packDir, { recursive: true })
-  await fs.mkdir(snapshotDir, { recursive: true })
-
-  const rowA = vectorRow({ key: "a", hash: "1", seed: 1 })
-  const rowB = vectorRow({ key: "b", hash: "2", seed: 2 })
-  assert.deepEqual(validateVectorPackCompaction({
-    sourcePacks: [
-      pack("source-pack-a", [rowA]),
-      pack("source-pack-b", [rowB]),
-    ],
-    compactedPack: pack("compacted-pack", [rowA, rowB]),
-  }), {
-    equivalent: true,
-    source_pack_count: 2,
-    source_rows: 2,
-    compacted_rows: 2,
-    unique_chunk_keys: 2,
-    duplicate_rows_removed: 0,
-  })
-  assert.throws(
-    () => validateVectorPackCompaction({
-      sourcePacks: [pack("source-pack-a", [rowA])],
-      compactedPack: pack("broken-compacted-pack", []),
-    }),
-    /missing compacted row/u,
-  )
-
-  for (const file of [
-    path.join(packDir, "source-pack-a.jsonl"),
-    path.join(packDir, "source-pack-a.manifest.json"),
-    path.join(packDir, "source-pack-a.sha256"),
-    path.join(packDir, "source-pack-b.jsonl"),
-    path.join(packDir, "source-pack-b.manifest.json"),
-    path.join(packDir, "source-pack-b.sha256"),
-    path.join(packDir, "compacted-pack.jsonl"),
-    path.join(packDir, "compacted-pack.manifest.json"),
-    path.join(packDir, "compacted-pack.sha256"),
-  ]) {
-    await fs.writeFile(file, `artifact bytes for ${path.basename(file)}`, "utf8")
-  }
-
-  const olderSnapshot = await writeSnapshotValidationFixture({
-    pluginRoot,
-    snapshotId: "snapshot-old",
-    represented_documents: [],
-  })
-  const activeSnapshot = await writeSnapshotValidationFixture({
-    pluginRoot,
-    snapshotId: "snapshot-active",
-    represented_documents: [],
-  })
-  await assert.doesNotReject(() => validateSnapshotArtifact({
-    ...olderSnapshot,
-    pluginRoot,
-    expectedSpec: ACTIVE_EMBEDDING_SPEC,
-    expectedDbSchema: SNAPSHOT_DB_SCHEMA,
-    expectedSqliteVec: SNAPSHOT_SQLITE_VEC,
-    expectedRuntime: SNAPSHOT_RUNTIME,
-    expectedArtifactSourceScopeHash: SNAPSHOT_SOURCE_SCOPE_HASH,
-    expectedDocumentTreeHash: SNAPSHOT_DOCUMENT_TREE_HASH,
-  }))
-  await assert.doesNotReject(() => validateSnapshotArtifact({
-    ...activeSnapshot,
-    pluginRoot,
-    expectedSpec: ACTIVE_EMBEDDING_SPEC,
-    expectedDbSchema: SNAPSHOT_DB_SCHEMA,
-    expectedSqliteVec: SNAPSHOT_SQLITE_VEC,
-    expectedRuntime: SNAPSHOT_RUNTIME,
-    expectedArtifactSourceScopeHash: SNAPSHOT_SOURCE_SCOPE_HASH,
-    expectedDocumentTreeHash: SNAPSHOT_DOCUMENT_TREE_HASH,
-  }))
-
-  const summary = await cleanupRotatedArtifacts({
-    pluginRoot,
-    embeddingSpecId: ACTIVE_EMBEDDING_SPEC.id,
-    activeVectorPackIds: ["compacted-pack"],
-    activeSnapshotIds: ["snapshot-active"],
-  })
-  assert.deepEqual(summary, {
-    vector_packs_removed: 2,
-    snapshots_removed: 1,
-    sidecars_removed: 6,
-  })
-  await fs.stat(path.join(packDir, "compacted-pack.jsonl"))
-  await fs.stat(path.join(packDir, "compacted-pack.manifest.json"))
-  await fs.stat(path.join(packDir, "compacted-pack.sha256"))
-  await fs.stat(path.join(snapshotDir, "snapshot-active.sqlite.zst"))
-  await fs.stat(path.join(snapshotDir, "snapshot-active.manifest.json"))
-  await fs.stat(path.join(snapshotDir, "snapshot-active.sha256"))
-  for (const removed of [
-    path.join(packDir, "source-pack-a.jsonl"),
-    path.join(packDir, "source-pack-b.jsonl"),
-    path.join(snapshotDir, "snapshot-old.sqlite.zst"),
-  ]) {
-    await assert.rejects(() => fs.stat(removed), /ENOENT/u)
-  }
-})
-
-test("artifact rotation cleanup removes obsolete sidecars and keeps active artifacts", async () => {
-  const {
-    cleanupRotatedArtifacts,
-  } = await loadTombstonesModule()
-  const pluginRoot = await tmpRoot("desk-redaction-cleanup-plugin-")
-  const packDir = path.join(
-    pluginRoot,
-    "artifacts",
-    "vector-packs",
-    ACTIVE_EMBEDDING_SPEC.id,
-  )
-  const snapshotDir = path.join(
-    pluginRoot,
-    "artifacts",
-    "snapshots",
-    ACTIVE_EMBEDDING_SPEC.id,
-  )
-  for (const dir of [packDir, snapshotDir]) {
-    await fs.mkdir(dir, { recursive: true })
-  }
-  for (const file of [
-    path.join(packDir, "obsolete-pack.jsonl"),
-    path.join(packDir, "obsolete-pack.manifest.json"),
-    path.join(packDir, "obsolete-pack.sha256"),
-    path.join(packDir, "active-pack.jsonl"),
-    path.join(packDir, "active-pack.manifest.json"),
-    path.join(packDir, "active-pack.sha256"),
-    path.join(snapshotDir, "obsolete-snapshot.sqlite.zst"),
-    path.join(snapshotDir, "obsolete-snapshot.manifest.json"),
-    path.join(snapshotDir, "obsolete-snapshot.sha256"),
-    path.join(snapshotDir, "active-snapshot.sqlite.zst"),
-    path.join(snapshotDir, "active-snapshot.manifest.json"),
-    path.join(snapshotDir, "active-snapshot.sha256"),
-  ]) {
-    await fs.writeFile(file, `artifact bytes for ${path.basename(file)}`, "utf8")
-  }
-  const activeBefore = await fileHashes(pluginRoot)
-
-  const summary = await cleanupRotatedArtifacts({
-    pluginRoot,
-    embeddingSpecId: ACTIVE_EMBEDDING_SPEC.id,
-    activeVectorPackIds: ["active-pack"],
-    activeSnapshotIds: ["active-snapshot"],
-    artifact_rotation_id: "rotation-2026-06-15",
-  })
-
-  assert.deepEqual(summary, {
-    vector_packs_removed: 1,
-    snapshots_removed: 1,
-    sidecars_removed: 4,
-  })
-  await assert.rejects(() => fs.stat(path.join(packDir, "obsolete-pack.jsonl")), /ENOENT/u)
-  await assert.rejects(() => fs.stat(path.join(packDir, "obsolete-pack.manifest.json")), /ENOENT/u)
-  await assert.rejects(() => fs.stat(path.join(packDir, "obsolete-pack.sha256")), /ENOENT/u)
-  await assert.rejects(() => fs.stat(path.join(snapshotDir, "obsolete-snapshot.sqlite.zst")), /ENOENT/u)
-  await assert.rejects(() => fs.stat(path.join(snapshotDir, "obsolete-snapshot.manifest.json")), /ENOENT/u)
-  await assert.rejects(() => fs.stat(path.join(snapshotDir, "obsolete-snapshot.sha256")), /ENOENT/u)
-  await fs.stat(path.join(packDir, "active-pack.jsonl"))
-  await fs.stat(path.join(packDir, "active-pack.manifest.json"))
-  await fs.stat(path.join(packDir, "active-pack.sha256"))
-  await fs.stat(path.join(snapshotDir, "active-snapshot.sqlite.zst"))
-  await fs.stat(path.join(snapshotDir, "active-snapshot.manifest.json"))
-  await fs.stat(path.join(snapshotDir, "active-snapshot.sha256"))
-  const activeAfter = await fileHashes(pluginRoot)
-  for (const rel of [
-    `artifacts/vector-packs/${ACTIVE_EMBEDDING_SPEC.id}/active-pack.jsonl`,
-    `artifacts/vector-packs/${ACTIVE_EMBEDDING_SPEC.id}/active-pack.manifest.json`,
-    `artifacts/vector-packs/${ACTIVE_EMBEDDING_SPEC.id}/active-pack.sha256`,
-    `artifacts/snapshots/${ACTIVE_EMBEDDING_SPEC.id}/active-snapshot.sqlite.zst`,
-    `artifacts/snapshots/${ACTIVE_EMBEDDING_SPEC.id}/active-snapshot.manifest.json`,
-    `artifacts/snapshots/${ACTIVE_EMBEDDING_SPEC.id}/active-snapshot.sha256`,
-  ]) {
-    assert.equal(activeAfter[rel], activeBefore[rel])
   }
 })

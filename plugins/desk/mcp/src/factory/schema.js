@@ -450,7 +450,7 @@ const trueField = () => leaf((value, path, errors) => {
 
 const segmentFields = (value) => (Object.hasOwn(value, "shared") ? { ...SEGMENT_SPEC, shared: trueField() } : SEGMENT_SPEC)
 
-export function checkSegments(value, path, errors) {
+function checkSegments(value, path, errors) {
   if (!Array.isArray(value)) {
     addError(errors, "type", path)
     return false

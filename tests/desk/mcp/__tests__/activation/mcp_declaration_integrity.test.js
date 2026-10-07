@@ -19,7 +19,7 @@ import {
   hardCodedServerNames,
   launcherEntryFiles,
   validateMcpDeclarations,
-} from "../../../../../plugins/desk/mcp/src/activation/mcp-declarations.js"
+} from "./_contracts/mcp-declarations.js"
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 
 const require = createRequire(import.meta.url)

@@ -228,7 +228,6 @@ for (const kind of ["file", "unidentified socket", "owned socket"]) {
 test("identity helpers keep their defaults and a fallback folder that cannot be created fails closed", () => {
   assert.throws(() => endpoints.controllerIdentity(), TypeError)
   assert.throws(() => endpoints.deriveControllerEndpoint(), TypeError)
-  assert.equal(endpoints.semanticPartitionIdentity(undefined), endpoints.semanticPartitionIdentity(null))
   const fs = filesystem()
   fs.mkdirSync = () => { throw Object.assign(new Error("read-only file system"), { code: "EROFS" }) }
   assert.throws(() => endpoints.deriveControllerEndpoint({ identity, platform: "linux", uid: 501, fs }), /read-only file system/u)

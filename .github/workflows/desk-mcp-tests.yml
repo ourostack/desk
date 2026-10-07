@@ -581,8 +581,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  desk-feedback-windows:
-    name: desk private feedback on native Windows
+  desk-native-windows:
+    name: desk on native Windows
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -619,10 +619,10 @@ jobs:
       - name: Verify source-bound evaluation contracts on Windows
         run: node scripts/skill-evals.cjs validate
 
-      - name: Exercise real NTFS protection, private-store CRUD and the offline source mirror
+      - name: Exercise real NTFS protection, the factory outbox
         working-directory: plugins/desk/mcp
         run: |
-          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/feedback/windows_acl.test.js ../../../tests/desk/mcp/__tests__/feedback/windows_store.test.js ../../../tests/desk/mcp/__tests__/feedback/source_mirror.test.js ../../../tests/desk/mcp/__tests__/factory/outbox_windows.test.js
+          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/feedback/windows_acl.test.js ../../../tests/desk/mcp/__tests__/factory/outbox_windows.test.js
 
       # Both host MCP configs start Desk through mcp/bootstrap.cjs with whatever node the host has, so native Windows must complete a real MCP handshake through it.
       - name: Complete an MCP handshake through the Desk bootstrap on Windows
@@ -654,7 +654,7 @@ jobs:
       - release-dry-run
       - desk-mcp-tests
       - desk-runtime-packs
-      - desk-feedback-windows
+      - desk-native-windows
       - unused-code
     if: ${{ always() }}
     runs-on: ubuntu-latest

@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 
 const TOMBSTONE_LEDGER_PATH = path.join("artifacts", "tombstones", "tombstones.jsonl")
 const TOMBSTONE_FIELDS = new Set([
@@ -228,41 +227,6 @@ export async function assertArtifactInputsDoNotContainTombstones({
   throw error
 }
 
-export async function cleanupRotatedArtifacts({
-  pluginRoot,
-  embeddingSpecId = ACTIVE_EMBEDDING_SPEC.id,
-  activeVectorPackIds = [],
-  activeSnapshotIds = [],
-} = {}) {
-  const vectorDir = path.join(pluginRoot, "artifacts", "vector-packs", embeddingSpecId)
-  const snapshotDir = path.join(pluginRoot, "artifacts", "snapshots", embeddingSpecId)
-  const summary = {
-    vector_packs_removed: 0,
-    snapshots_removed: 0,
-    sidecars_removed: 0,
-  }
-
-  summary.sidecars_removed += await cleanupArtifactDir({
-    dir: vectorDir,
-    primarySuffix: ".jsonl",
-    activeIds: new Set(activeVectorPackIds),
-    sidecarSuffixes: [".manifest.json", ".sha256"],
-    onPrimaryRemoved: () => {
-      summary.vector_packs_removed += 1
-    },
-  })
-  summary.sidecars_removed += await cleanupArtifactDir({
-    dir: snapshotDir,
-    primarySuffix: ".sqlite.zst",
-    activeIds: new Set(activeSnapshotIds),
-    sidecarSuffixes: [".manifest.json", ".sha256"],
-    onPrimaryRemoved: () => {
-      summary.snapshots_removed += 1
-    },
-  })
-  return summary
-}
-
 async function validTombstoneLedger({ pluginRoot }) {
   const ledger = await loadTombstoneLedger({ pluginRoot })
   if (ledger.valid) return ledger
@@ -318,49 +282,6 @@ function validateRepresentedDocuments(docs) {
     }
   }
   return diagnostics
-}
-
-async function cleanupArtifactDir({
-  dir,
-  primarySuffix,
-  activeIds,
-  sidecarSuffixes,
-  onPrimaryRemoved,
-}) {
-  let entries
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch (error) {
-    if (error.code === "ENOENT") return 0
-    throw error
-  }
-
-  let sidecarsRemoved = 0
-  const primaryNames = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(primarySuffix))
-    .map((entry) => entry.name)
-    .sort()
-  for (const primaryName of primaryNames) {
-    const id = primaryName.slice(0, -primarySuffix.length)
-    if (activeIds.has(id)) continue
-    await fs.rm(path.join(dir, primaryName), { force: true })
-    onPrimaryRemoved()
-    for (const suffix of sidecarSuffixes) {
-      const sidecar = path.join(dir, `${id}${suffix}`)
-      if (await removeIfExists(sidecar)) sidecarsRemoved += 1
-    }
-  }
-  return sidecarsRemoved
-}
-
-async function removeIfExists(filePath) {
-  try {
-    await fs.rm(filePath)
-    return true
-  } catch (error) {
-    if (error.code === "ENOENT") return false
-    throw error
-  }
 }
 
 function isNormalizedRelativePath(value) {

@@ -1336,65 +1336,6 @@ test("activation dependency ranges support caret, tilde, and exact pins determin
   )
 })
 
-test("unsupported hosts produce host-native fallback diagnostics", async () => {
-  const { diagnoseHostSupport } = await loadActivationContract()
-  const diagnostics = diagnoseHostSupport(validManifest(), {
-    host: "generic-stdio",
-    requested_activation: "desk:worker",
-  })
-
-  assert.equal(diagnostics.status, "degraded")
-  assert.deepEqual(diagnostics.unsupported_primitives, ["agent-defaults"])
-  assert.match(diagnostics.fallback_behavior, /explicit root|no worker activation/i)
-
-  const unsupported = diagnoseHostSupport(validManifest(), {
-    host: "unknown-host",
-  })
-
-  assert.equal(unsupported.status, "unsupported")
-  assert.deepEqual(unsupported.unsupported_primitives, ["host-activation"])
-  assert.match(unsupported.fallback_behavior, /manual host configuration/i)
-
-  const noHostSupport = diagnoseHostSupport({}, {
-    host: "unknown-host",
-  })
-
-  assert.equal(noHostSupport.status, "unsupported")
-  assert.deepEqual(noHostSupport.unsupported_primitives, ["host-activation"])
-
-  const nullManifestHostSupport = diagnoseHostSupport(null, {
-    host: "codex",
-  })
-
-  assert.equal(nullManifestHostSupport.status, "unsupported")
-  assert.deepEqual(nullManifestHostSupport.unsupported_primitives, ["host-activation"])
-
-  const malformedHostSupport = diagnoseHostSupport({
-    host_support: {},
-  }, {
-    host: "codex",
-  })
-
-  assert.equal(malformedHostSupport.status, "unsupported")
-  assert.deepEqual(malformedHostSupport.unsupported_primitives, ["host-activation"])
-
-  const bareHost = diagnoseHostSupport({
-    host_support: [
-      {
-        host: "bare-host",
-        status: "experimental",
-        fallback_behavior: "bring your own stdio launch",
-      },
-    ],
-  }, {
-    host: "bare-host",
-  })
-
-  assert.equal(bareHost.status, "experimental")
-  assert.deepEqual(bareHost.unsupported_primitives, [])
-  assert.deepEqual(bareHost.capabilities, [])
-})
-
 test("terminal failure helpers produce stable non-retryable activation envelopes", async () => {
   const { ActivationFailure, terminalFailure } = await loadActivationFailures()
   const input = {
