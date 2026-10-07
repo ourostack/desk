@@ -30,7 +30,7 @@ on:
       - "**/package-lock.json"
       - "package.json"
       - "package-lock.json"
-      - "knip.jsonc"
+      - "tools/unused-code/**"
       - "plugins/desk/mcp/**"
       - "tests/**"
       - "plugins/desk/activation/**"
@@ -221,7 +221,7 @@ jobs:
         run: scripts/build-and-check-release.sh --dry-run
 
   # Unused code cannot accumulate: knip fails the pull request on a file no entry point reaches, an export nothing imports, an unused
-  # dependency or a duplicate export. Its entry points and every exception are in knip.jsonc, each with its reason.
+  # dependency or a duplicate export. Its entry points and every exception are in tools/unused-code/knip.jsonc, each with its reason.
   unused-code:
     name: Unused code
     runs-on: ubuntu-latest
@@ -239,12 +239,14 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: tools/unused-code/package-lock.json
 
       - name: Install dependencies
+        working-directory: tools/unused-code
         run: npm ci
 
       - name: Find unused code
+        working-directory: tools/unused-code
         run: npm run knip
 
   desk-mcp-tests:

@@ -59,7 +59,7 @@ export function resolveDeskRoot(explicit, options = {}) {
 // not be recognized, and the overlay's home desk would not be consulted.
 // "Loaded" means present in this Agency session's composition, not that the
 // session's selected agent belongs to the overlay.
-const AGENCY_SESSION_CONTAINER = /^agency-plugin-[A-Za-z0-9_-]+\.p[1-9][0-9]*$/u
+export const AGENCY_SESSION_CONTAINER = /^agency-plugin-[A-Za-z0-9_-]+\.p[1-9][0-9]*$/u
 
 // Work overlays whose home-folder desk Desk may bind when nothing else binds a
 // desk, and only while that overlay is loaded next to Desk.

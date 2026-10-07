@@ -1,5 +1,5 @@
 // Finds code nothing uses: files no entry point reaches, exports nothing imports, unused dependencies and duplicate exports.
-// Run it locally with `npm run knip` from the repository root. The "Unused code" CI job runs the same command and is part of the required CI gate.
+// Run it locally with `cd tools/unused-code && npm ci && npm run knip`. The "Unused code" CI job runs the same command and is part of the required CI gate.
 //
 // Desk is plain JavaScript loaded in four ways, and each way is an entry point below:
 //   - the MCP server (plugins/desk/mcp/index.js and the bootstrap, web and proxy launchers it ships with),
@@ -9,7 +9,8 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   // Only unused code. Missing or unlisted dependencies, unresolved imports and binaries are a different question and stay out.
-  "include": ["files", "dependencies", "exports", "types", "nsExports", "nsTypes", "duplicates", "classMembers", "enumMembers"],
+  // Class and enum members are left out because knip finds their uses through the types of installed dependencies, so the answer would change with what a machine has installed.
+  "include": ["files", "dependencies", "exports", "types", "nsExports", "nsTypes", "duplicates"],
   // Exports in files that the coverage gate holds to 100% only when a pull request touches them, and that the gate measured below 100% in CI when this change touched them (readiness/journal.js, readiness/protocol.js, runtime/node-selection.js, util/rank.js, artifacts/performance-budgets.js). Making these exports private edits the file, so the gate then fails the pull request for coverage that is unrelated to the edit. Delete each entry when its file's coverage is fixed and the export is made private.
   "ignoreIssues": {
     "plugins/desk/mcp/src/artifacts/performance-budgets.js": ["exports"],

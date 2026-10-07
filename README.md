@@ -31,11 +31,12 @@ plugins/crew/                     # Crew plugin
 tests/desk/                       # Desk tests and fixtures, mirroring plugins/desk; kept out of the plugin so installs never download them
 evals/                            # Offline evaluation contracts
 scripts/                          # Validation and release checks run in CI
+tools/unused-code/                # knip configuration and runner for the Unused code check
 ```
 
 ## Unused code
 
-All code has a purpose, so CI fails a pull request that leaves unused code behind. Run `npm ci && npm run knip` from the repository root to find unused files, exports, dependencies and duplicate exports before you push; [`knip.jsonc`](knip.jsonc) lists the entry points and gives the reason for every exception, and the CI job is named "Unused code".
+All code has a purpose, so CI fails a pull request that leaves unused code behind. Run `cd tools/unused-code && npm ci && npm run knip` to find unused files, exports, dependencies and duplicate exports before you push; [`tools/unused-code/knip.jsonc`](tools/unused-code/knip.jsonc) lists the entry points and gives the reason for every exception, and the CI job is named "Unused code".
 
 ## Releasing
 
