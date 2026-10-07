@@ -198,6 +198,11 @@ export function resolveLaunch({ cli, platform = process.platform, readFile = rea
     return null
   }
   const target = path.join(packageDir, bin)
+  // A `bin` that climbs out of the package (or is an absolute path elsewhere) names a program the package does not own.
+  const within = path.relative(packageDir, target)
+  if (within === "" || within.startsWith("..") || path.isAbsolute(within)) {
+    return null
+  }
   if (isScriptShim(target)) {
     return null
   }

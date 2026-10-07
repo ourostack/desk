@@ -660,6 +660,18 @@ test("findAgentCli on Windows finds an npm claude.cmd whose program it can start
   assert.equal(findAgentCli({ env, platform: "linux", readFile, exists: (p) => p === SHIM }), null, "off Windows no .cmd is looked for")
 })
 
+test("resolveLaunch starts .js, .mjs and .cjs bins through Node, takes only the claude key of a bin object, and refuses a bin outside the package", () => {
+  const node = "/node/bin/node"
+  for (const name of ["cli.js", "cli.mjs", "cli.cjs"]) {
+    assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith(name)) }), { cmd: node, prefix: [j(PKG, name)] }, name)
+  }
+  assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith({ other: "other.js" })) }), null, "a bin object without a claude key")
+  for (const bin of ["../../x", "../x.js", "bin/../../x.exe", "..", "."]) {
+    assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith(bin)) }), null, bin)
+  }
+  assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith("bin/../cli.js")) }), { cmd: node, prefix: [j(PKG, "cli.js")] }, "a path that stays inside is fine")
+})
+
 test("resolveLaunch never runs a .cmd: it starts the program the npm package names, directly", () => {
   const node = "/node/bin/node"
   assert.deepEqual(resolveLaunch({ cli: "/bin/claude", platform: "win32" }), { cmd: "/bin/claude", prefix: [] })
