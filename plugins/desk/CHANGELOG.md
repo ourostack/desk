@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.219 — 2026-10-07
+
+The factory flush now withdraws a delivered waste label when its session's facts no longer bind the label's job, so the store stops holding labels for sessions that are not on their task's timeline (the site's `labels_mismatch` alarm). A session bound to a job by an older binder and dropped from it by a later derivation left its label in the store for good, because nothing withdrew a label. Every flush now compares each delivered label with the session's local facts (`jobs` only, since the site builds a job's sessions from `jobs`, not from an outcome the session signed off) and sends the delete through the ordinary retraction, so the same consent, routing, refusal and "only what this machine delivered" rules apply. It fails closed: a session whose facts are missing, unreadable, linked or in a newer format is never withdrawn, and a delivered label with no recorded path is found by publishing it again and withdrawn only when the store holds exactly those bytes. Once the delete has merged, the label is held back locally as `job_unbound` (the local file stays) and is released if the session binds the job again. The label's session keeps its facts and its other files.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.218 — 2026-10-07
 
 Factory: a job's lead time is never shorter than the span of its own recorded segments. When the task card's dates give less (an adopted card created and closed at nearly the same moment, or a job that kept working after its first done), the lead time is raised to that span and published as partial with the reason `card_dates_shorter_than_work`.
