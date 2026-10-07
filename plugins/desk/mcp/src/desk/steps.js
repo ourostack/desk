@@ -13,6 +13,7 @@
 
 import { scan } from "../tools/task-body.js"
 import { isDerivable } from "./step-delivery.js"
+import { findPullRequests } from "../tools/delivery-gate.js"
 
 const STEP_STATES = ["pending", "in progress", "blocked", "in review", "merged", "delivered", "dropped"]
 const DERIVED_STATES = ["in review", "merged", "delivered"]
@@ -163,10 +164,10 @@ function withNewTable({ lines, fenced }, rows) {
 
 /**
  * The body with one step row added or changed, and what it said: `{ body, row, blocked, ready, declared }`, where `declared` says the state was set by the caller on evidence Desk cannot read, and `blocked` lists the
- * dependents a drop blocked and `ready` the steps this change made ready. `repos` is the card's repo names. Refuses, naming the row
+ * dependents a drop blocked and `ready` the steps this change made ready. `repos` is the card's repo names; `prVerdict(repo, prRepo)` says "match", "mismatch" or "unknown" for a PR's `owner/name` against a repo of the card. Refuses, naming the row
  * and changing nothing, for a step Desk cannot place (see the task_update schema for the rules).
  */
-export function applyStep(body, input, tool, repos) {
+export function applyStep(body, input, tool, repos, prVerdict) {
   const refuse = (message) => { throw new Error(`${tool}: ${message}; no step was changed.`) }
   const names = (value, field) => {
     if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) refuse(`step ${JSON.stringify(input.id)}: \`${field}\` must be a list of step names`)
@@ -203,6 +204,15 @@ export function applyStep(body, input, tool, repos) {
   let repo = existing?.repo ?? null
   if (input.repo !== undefined) repo = NONE.test(String(input.repo).trim()) ? null : String(input.repo).trim()
   if (repo !== null && !repos.includes(repo)) refuse(`${named} names repo ${JSON.stringify(repo)}, which is not one of the card's repos (${repos.join(", ") || "none"})`)
+  // A GitHub PR given as a step's new evidence must be in the step's repo (the match `done-evidence.js` makes for done evidence: the repo's recorded name or its clone's remotes). A step with no repo on a card that has repos cannot take one.
+  // A repo with no GitHub identity Desk can match (a plain name that is only a label, no clone remote on GitHub) accepts any PR. Evidence that is not used (a reason on a blocked or dropped step) is not checked.
+  const pathBack = `to give ${named} a PR as evidence, set it to pending (with \`expect\` when it is settled), then give \`repo\` and \`evidence\``
+  if (proof !== "" && !NEEDS_REASON.includes(state) && repos.length > 0) {
+    for (const pr of findPullRequests(proof)) {
+      if (repo === null) refuse(`${named} has no repo, so a GitHub PR (${pr.url}) cannot be its evidence; ${pathBack}, with one of the card's repos (${repos.join(", ")})`)
+      if (prVerdict(repo, pr.repo) === "mismatch") refuse(`${named} is in repo ${JSON.stringify(repo)}, but its PR ${pr.url} is in ${pr.repo}; give the PR in ${repo}, or if the repo is wrong, ${pathBack}`)
+    }
+  }
   // Evidence is kept unless the call gives new text; a blocked or dropped step keeps what it had behind its reason.
   const evidence = NEEDS_REASON.includes(state) ? (proof === "" ? existing.evidence : withReason(proof, evidenceBehind(existing))) : proof !== "" ? proof : evidenceBehind(existing)
   const row = { line: existing?.line, id, depends_on: depends, repo, state, evidence }
