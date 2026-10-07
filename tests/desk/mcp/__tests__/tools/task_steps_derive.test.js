@@ -361,12 +361,46 @@ test("a step the call adds and the refresh derives past pending is not called re
   assert.equal(unblocked.step_note, "now ready: c")
 })
 
-test("a step with no repo cannot take a GitHub PR as evidence, and says to give it a repo first", async () => {
-  const { root, file } = await newCard(`| a | — | — | pending | — |`)
-  await assert.rejects(update(root, { step: { id: "a", evidence: url(1) } }), /step "a" has no repo, so a GitHub PR cannot be its evidence.*no step was changed/u)
+test("a step with no repo cannot take a GitHub PR as evidence, and the refusal names the way back", async () => {
+  const { root, file } = await newCard(`| a | — | — | pending | — |\n| s | — | — | in progress | — |`)
+  await assert.rejects(update(root, { step: { id: "a", evidence: url(1) } }), /step "a" has no repo, so a GitHub PR .* cannot be its evidence; to give step "a" a PR as evidence, set it to pending \(with `expect` when it is settled\), then give `repo` and `evidence`.*no step was changed/u)
   await assert.rejects(update(root, { step: { id: "new", depends_on: [], repo: "—", evidence: url(1) } }), /has no repo/u)
-  assert.deepEqual(await rows(file), { a: "pending" })
+  assert.deepEqual(await rows(file), { a: "pending", s: "in progress" })
   const ok = await update(root, { step: { id: "a", repo: "widgets", evidence: url(1) } }, github({ 1: {} }))
-  assert.deepEqual(await rows(file), { a: "in review" })
+  assert.deepEqual(await rows(file), { a: "in review", s: "in progress" })
   assert.equal(ok.step.repo, "widgets")
+})
+
+test("only evidence that is used is checked: a reason on a dropped step, or an ignored field, is not refused", async () => {
+  const { root, file } = await newCard(`| a | — | — | pending | — |`)
+  await update(root, { step: { id: "a", state: "dropped", reason: `superseded by ${url(1)}` } })
+  assert.deepEqual(await rows(file), { a: "dropped" })
+  assert.match(await fs.readFile(file, "utf8"), /superseded by/u)
+})
+
+test("an existing row with no repo and a PR still refreshes", async () => {
+  const { root, file } = await newCard(`| a | — | — | pending | ${url(1)} |`)
+  const result = await update(root, note, github({ 1: { merged: true, labels: ["released"] } }))
+  assert.deepEqual(result.steps_refreshed, ["a: pending -> delivered"])
+  assert.deepEqual(await rows(file), { a: "delivered" })
+})
+
+test("a card with no repos accepts a PR on a step with no repo", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "bare", title: "T" } })
+  const result = await update(root, { step: { id: "a", depends_on: [], repo: "—", evidence: url(1) } }, github({ 1: {} }), "bare")
+  assert.equal(result.step.evidence, url(1))
+})
+
+test("a PR must be in the step's repo: a mismatch is refused, a match is accepted, and a repo Desk cannot match accepts any PR", async () => {
+  const { root } = await newCard(`| z | — | o/widgets | pending | — |`, { repos: [{ name: "o/widgets" }, { name: "label" }] })
+  await assert.rejects(update(root, { step: { id: "a", depends_on: [], repo: "o/widgets", evidence: "https://github.com/o/gadgets/pull/1" } }), /step "a" is in repo "o\/widgets", but its PR https:\/\/github.com\/o\/gadgets\/pull\/1 is in o\/gadgets; give the PR in o\/widgets, or if the repo is wrong, to give step "a" a PR as evidence, set it to pending/u)
+  await update(root, { step: { id: "b", depends_on: [], repo: "o/widgets", evidence: url(1) } }, github({ 1: {} }))
+  const loose = await update(root, { step: { id: "c", depends_on: [], repo: "label", evidence: "https://github.com/o/gadgets/pull/1" } })
+  assert.equal(loose.step.repo, "label")
+})
+
+test("task_create refuses a step whose PR is in another repo", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(task_create({ deskRoot: root, input: { track: "t", slug: "made", title: "T", repos: [{ name: "o/widgets" }], steps: [{ id: "a", depends_on: [], repo: "o/widgets", evidence: "https://github.com/o/gadgets/pull/1" }] } }), /task_create: step "a" is in repo "o\/widgets"/u)
 })

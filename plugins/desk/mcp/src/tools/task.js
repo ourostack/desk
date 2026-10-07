@@ -34,7 +34,7 @@ import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES, invalidStatusMessage } from "../desk/lifecycle.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
-import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
+import { assertCodeRepoEvidence, prRepoVerdict, recordedRepos } from "./done-evidence.js"
 import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState } from "./track-row.js"
@@ -432,6 +432,9 @@ function applyRefresh(body, derived) {
   }
 }
 
+// Whether a PR's repository is a card repo's, for `applyStep`: the card's recorded repos matched by name and by their clones' remotes.
+const stepVerdict = (repos, context) => (name, prRepo) => prRepoVerdict(recordedRepos(repos).find((item) => item.name === name), prRepo, context)
+
 // How a step input that arrives as a JSON string is read, and what the refusal says about it.
 const STEP_INPUT = { tool: "task_update", field: "step", effect: "no step was changed", example: '{"id": "api-change", "depends_on": [], "repo": "widgets"}' }
 
@@ -674,7 +677,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   let body = values.body ?? ""
   if (values.steps !== undefined) {
     if (!Array.isArray(values.steps)) throw new Error("task_create: `steps` must be a list of step objects; nothing was created")
-    for (const step of values.steps) body = applyStep(body, objectInput(step, { ...STEP_INPUT, tool: "task_create" }), "task_create", recordedRepos(values.repos).map((repo) => repo.name)).body
+    for (const step of values.steps) body = applyStep(body, objectInput(step, { ...STEP_INPUT, tool: "task_create" }), "task_create", recordedRepos(values.repos).map((repo) => repo.name), stepVerdict(values.repos, { spawnGit, homeDir: env.HOME, deskRoot })).body
   }
 
   const filePath = await resolveWriteTarget({
@@ -928,7 +931,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // (its frontmatter, its step, the refreshed cells, the done check) is built from that second read, so nothing another session wrote during the wait is overwritten.
   const seen = await readMarkdown(filePath)
   const seenRepos = recordedRepos({ ...seen.data, ...(frontmatter ?? {}) }.repos).map((repo) => repo.name)
-  const refresh = await refreshSteps(step === undefined ? seen.content : applyStep(seen.content, step, "task_update", seenRepos).body, { deskRoot, person, env, fetchFn, mode: frontmatter?.status === "done" ? "close" : "ordinary" })
+  const refresh = await refreshSteps(step === undefined ? seen.content : applyStep(seen.content, step, "task_update", seenRepos, stepVerdict({ ...seen.data, ...(frontmatter ?? {}) }.repos, { spawnGit, homeDir: env.HOME, deskRoot })).body, { deskRoot, person, env, fetchFn, mode: frontmatter?.status === "done" ? "close" : "ordinary" })
   // The delivery of a pull request given as done evidence is checked in this same phase, so nothing slow happens after the card is read again.
   const delivery = frontmatter?.status === "done" && seen.data.status !== "done" && evidence?.kind === "pr" && typeof evidence.ref === "string" && !readSteps(seen.content).found ? await checkDelivery({ toolName: "task_update", evidence, env, fetchFn }) : null
   const existing = await readMarkdown(filePath)
@@ -979,7 +982,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const dueBefore = dueResources(newBody, { status: existing.data.status }).map((item) => item.identity)
   const repoNames = recordedRepos(merged.repos).map((repo) => repo.name)
   if (step !== undefined) {
-    stepResult = applyStep(newBody, step, "task_update", repoNames)
+    stepResult = applyStep(newBody, step, "task_update", repoNames, stepVerdict(merged.repos, { spawnGit, homeDir: env.HOME, deskRoot }))
     newBody = stepResult.body
   }
   const applied = applyRefresh(newBody, refresh.derived)
