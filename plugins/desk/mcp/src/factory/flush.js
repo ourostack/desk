@@ -173,6 +173,8 @@ import {
   readStatus,
   readVisibilityCache,
   releaseQuarantined,
+  outdatedLabelRecords,
+  releaseOutdatedLabelQuarantines,
   releaseRefusedPluginNames,
   returnToDelivered,
   undeliver,
@@ -182,7 +184,7 @@ import {
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
 import { carriedAccountFault } from "./flush-health.js"
-import { CHECK_UNAVAILABLE, captureOnBranch, dropPending, judge, namesRecord, planCapture, saveCheckUnavailable, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
+import { CHECK_UNAVAILABLE, captureOnBranch, judge, namesRecord, planCapture, saveCheckUnavailable, saveDropped, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, sentRecord, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { labelBinding, releaseReboundLabels, withdrawLabels } from "./label-binding.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
@@ -746,7 +748,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
         unmatched += 1
         continue
       }
-      await quarantine(env, store, name, code, SHA.test(String(file.sha)) ? { blob: file.sha } : {})
+      await quarantine(env, store, name, code, { source: "store", ...(SHA.test(String(file.sha)) ? { blob: file.sha } : {}) })
       rejected.add(name)
     }
   }
@@ -913,10 +915,12 @@ async function deliver(env, context) {
   progress.newerFormat = newer.size
   // The kept copies of sessions that left this store, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
+  // Labels records an older Desk wrote that this Desk may judge again (local, no network): they keep the flush from ending early, and their sessions are placed below like any other.
+  const outdated = await outdatedLabelRecords(env, store)
   // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
   if (capture.invalid) await saveInvalid(env, store, now())
-  if (!capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0) return { result: "nothing_pending" }
+  if (!capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
   // route to another store, or a finished retraction's tombstone), `stalled` (a retraction open with no positive route), `unknown` (an
@@ -926,7 +930,7 @@ async function deliver(env, context) {
   const markerByName = new Map(markers.map((marker) => [`${marker.host}-${marker.session_id}.json`, marker]))
   const receipts = isPlainObject(status.derivations) ? status.derivations : {}
   const places = new Map()
-  const localNames = [...candidates.map(({ name }) => name), ...labelCandidates.map(({ name }) => name), ...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting), ...Object.keys(delivered.retracted)]
+  const localNames = [...candidates.map(({ name }) => name), ...labelCandidates.map(({ name }) => name), ...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting), ...Object.keys(delivered.retracted), ...outdated.map(({ key }) => key)]
   // Each session's retracting records and tombstones for this store.
   const recordsOf = new Map()
   for (const [name, item] of [...Object.entries(delivered.retracting), ...Object.entries(delivered.retracted)]) recordsOf.set(sessionOfName(name), [...(recordsOf.get(sessionOfName(name)) ?? []), item])
@@ -960,8 +964,13 @@ async function deliver(env, context) {
   const restored = await restoreRetractedCopies(env, store, retractedSessions.filter((session) => places.get(session) === "here"))
   // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so those of a session
   // that is here go again.
-  const refusedReleased = await releaseRefusedPluginNames(env, store, { sessions: new Set([...places].filter(([, place]) => place === "here").map(([session]) => session)) })
-  if (restored.length > 0 || refusedReleased.facts.length + refusedReleased.labels.length > 0) {
+  const hereSessions = new Set([...places].filter(([, place]) => place === "here").map(([session]) => session))
+  const refusedReleased = await releaseRefusedPluginNames(env, store, { sessions: hereSessions })
+  // A labels file an older Desk quarantined as invalid only because it predates what the file says is judged again by this Desk, for sessions routed here only:
+  // one that publishes now goes out with the listing below, one that still fails keeps its record.
+  let checkSecret
+  const outdatedReleased = await releaseOutdatedLabelQuarantines(env, store, { sessions: hereSessions, check: async (labels, key) => publishLabelsOne(labels, key, { known: new Map(), desks: new Map(), secret: (checkSecret ??= await readMachineSecret(env)) }).bytes !== undefined })
+  if (restored.length > 0 || refusedReleased.facts.length + refusedReleased.labels.length + outdatedReleased.length > 0) {
     candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed })
     labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed })
     delivered = await readDelivered(env, store)
@@ -1205,6 +1214,7 @@ async function deliver(env, context) {
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
   // The record goes when it is due, or its pull request is still open and must keep carrying it; a refusal naming it is bookkept and it waits a week.
   let captureItem = null
+  let captureHandled = false
   if (rejections.checkUnavailable) await saveCheckUnavailable(env, store)
   if (rejections.captureRefused !== null) await saveRefused(env, store, rejections.captureRefused, now())
   else if (capture.work) captureItem = capture.record
@@ -1214,6 +1224,7 @@ async function deliver(env, context) {
     const hasOpen = capture.carry && (await findOpenPr(client, store, head)) !== undefined
     let verdict = judge(captureItem, onMain(captureItem), { pending: hasOpen })
     let send = false
+    captureHandled = verdict === "settled" || verdict === "forget"
     if (verdict === "settled") await saveSettled(env, store, captureItem)
     else if (verdict === "forget") await saveForgotten(env, store)
     else if (!capture.due && !hasOpen) verdict = "waits"
@@ -1221,8 +1232,14 @@ async function deliver(env, context) {
     else await saveNotReady(env, store, now())
     if (!send) captureItem = null
   }
-  // This push rebuilds the branch without the record: nothing is pending for it, so a later refusal of that pull request is not the record's.
-  if (captureItem === null && rejections.captureRefused === null && Number.isSafeInteger(capture.cap.pr)) await dropPending(env, store)
+  // This push rebuilds the branch without the record, which the open pull request carried. If the default branch holds it, it was delivered (its pull
+  // request merged first). If not, it was not delivered: it is recorded as dropped and due again, never left to look sent for 20 hours.
+  if (captureItem === null && !captureHandled && rejections.captureRefused === null && Number.isSafeInteger(capture.cap.pr)) {
+    const sentItem = sentRecord(capture.cap, `capture/${record.intake_id}.json`)
+    const sentOnMain = sentItem === null ? false : (await treeLookup(client, store, base.tree, [{ ...sentItem, capture: true }]))({ ...sentItem, capture: true }) === sentItem.sha
+    if (sentOnMain) await saveSettled(env, store, sentItem)
+    else await saveDropped(env, store, now(), { confirmed: sentItem !== null })
+  }
   const remaining = []
   for (const item of pending) {
     if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path, localSha: item.localSha })

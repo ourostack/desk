@@ -13,6 +13,8 @@
 //   invalid      `capture_invalid`: the record failed its own gate (a bug in the caller or the coverage); nothing is sent
 //   check_unavailable  how many times in a row the store's own check could not read the record's commits (stale, not a refusal); cleared when a record settles
 //   retry_after  nothing is considered before it: +24 h for skipped, +7 days for refused, +1 day for invalid
+//   dropped      `capture_dropped`: a push rebuilt the intake branch without the record and the default branch does not hold it, so it was not delivered
+//                (`sent_at` is forgotten with it: the record is due again at the next flush, not after 20 hours); `dropped_at` is when that was seen
 // Keys this file does not know are kept as they are.
 //
 // Due, with no network: coverage whose `ran_at` is a parsable time not in the future and under three days old (a failed pass leaves the earlier
@@ -41,12 +43,14 @@ const INVALID_MS = 24 * 60 * 60 * 1000
 const REFUSED_MS = 7 * 24 * 60 * 60 * 1000
 const NOT_READY = "store_not_ready"
 const INVALID = "capture_invalid"
+const DROPPED = "capture_dropped"
+const DROP_UNCONFIRMED = "capture_drop_unconfirmed"
 
 const SHA = /^[0-9a-f]{40}$/u
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const timeOf = (value) => (typeof value === "string" ? Date.parse(value) : Number.NaN)
 const iso = (ms) => new Date(ms).toISOString()
-const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable"]
+const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable", "sent_bytes", "dropped", "dropped_at"]
 
 /** The coverage the record may be built from: parsable `ran_at`, not in the future, under three days old; else null. */
 function freshCoverage(status, nowMs) {
@@ -61,6 +65,13 @@ export function contributingStores(stores) {
   const merged = new Map()
   for (const [name, entry] of Object.entries(stores)) merged.set(name.toLowerCase(), (merged.get(name.toLowerCase()) ?? true) && isObject(entry) && entry.contribute === true)
   return [...merged.values()].filter(Boolean).length
+}
+
+/** The record `cap` says was pushed, as `{ path, bytes, sha, empty }`, or `null` when no bytes were kept (state older than `sent_bytes`). */
+export function sentRecord(cap, path) {
+  if (typeof cap.sent_bytes !== "string") return null
+  const bytes = Buffer.from(cap.sent_bytes, "utf8")
+  return { path, bytes, sha: gitBlobSha(bytes), empty: cap.sent_bytes === EMPTY_RECORD }
 }
 
 const bookkeeping = (status, store) => (isObject(status?.capture) && isObject(status.capture[store]) ? status.capture[store] : {})
@@ -86,8 +97,8 @@ export function planCapture({ status, consent, store, intakeId, nowMs, mayBeOpen
   const fresh = { path: made.path, bytes: Buffer.from(made.bytes, "utf8"), sha: made.sha, capture: true, empty: made.bytes === EMPTY_RECORD }
   if (due) return { work: true, due, carry, record: fresh, cap, invalid: false }
   // Not due: an open pull request carries exactly the bytes sent, never newer ones, so nothing is pushed to it inside the 20 hours.
-  const kept = typeof cap.sent_bytes === "string" ? Buffer.from(cap.sent_bytes, "utf8") : null
-  const record = carry && kept !== null ? { ...fresh, bytes: kept, sha: gitBlobSha(kept), empty: cap.sent_bytes === EMPTY_RECORD } : null
+  const kept = sentRecord(cap, made.path)
+  const record = carry && kept !== null ? { ...fresh, ...kept } : null
   return { work: record !== null, due, carry, record, cap, invalid: false }
 }
 
@@ -101,7 +112,7 @@ async function update(env, store, change) {
 }
 
 const without = (cap, keys) => Object.fromEntries(Object.entries(cap).filter(([key]) => !keys.includes(key)))
-const SIGNALS = ["pr", "sent_bytes", "refused", "skipped", "invalid", "retry_after"]
+const SIGNALS = ["pr", "sent_bytes", "refused", "skipped", "invalid", "retry_after", "dropped", "dropped_at"]
 const SETTLED_CLEARS = [...SIGNALS, "check_unavailable"]
 
 /**
@@ -114,7 +125,7 @@ export const saveCheckUnavailable = (env, store) => update(env, store, (cap) => 
 export const saveInvalid = (env, store, nowMs) => update(env, store, (cap) => ({ ...without(cap, ["refused", "skipped"]), invalid: INVALID, retry_after: iso(nowMs + INVALID_MS) }))
 
 /** The store's refusal named the record: the code and a week's wait; the pull request that carried it is closed. */
-export const saveRefused = (env, store, code, nowMs) => update(env, store, (cap) => ({ ...without(cap, ["pr", "sent_bytes", "skipped", "invalid"]), refused: code, retry_after: iso(nowMs + REFUSED_MS) }))
+export const saveRefused = (env, store, code, nowMs) => update(env, store, (cap) => ({ ...without(cap, ["pr", "sent_bytes", "skipped", "invalid", "dropped", "dropped_at"]), refused: code, retry_after: iso(nowMs + REFUSED_MS) }))
 
 /** The store's `capture.json` does not say `{"capture":1}`: nothing is sent, and it is asked again after a day. */
 export const saveNotReady = (env, store, nowMs) => update(env, store, (cap) => ({ ...without(cap, ["refused", "invalid"]), skipped: NOT_READY, retry_after: iso(nowMs + NOT_READY_MS) }))
@@ -125,8 +136,13 @@ export const saveSent = (env, store, item, pr, nowMs) => update(env, store, (cap
 /** The default branch holds the record's bytes (`sha`); an empty record that is there is forgotten, with everything else kept about the delivery. */
 export const saveSettled = (env, store, item) => update(env, store, (cap) => (item.empty ? without(cap, [...RECORD_KEYS]) : { ...without(cap, SETTLED_CLEARS), blob: item.sha }))
 
-/** A push left the record out of the pull request, so nothing is pending for it any more: a later refusal of that pull request is not the record's. */
-export const dropPending = (env, store) => update(env, store, (cap) => without(cap, ["pr", "sent_bytes"]))
+/**
+ * A push rebuilt the intake branch without the record, and the default branch does not hold it: the record was not delivered. Nothing is pending for it
+ * any more (a later refusal of that pull request is not the record's), the reason is kept (`dropped`, `dropped_at`), and `sent_at` is forgotten so the
+ * record is due at the next flush instead of 20 hours after it was lost. Without kept bytes (`confirmed: false`) the drop cannot be checked against what
+ * was sent (the record may have landed), so it is named `capture_drop_unconfirmed`, never raised as a finding, and `sent_at` stays so the 20 hours still apply.
+ */
+export const saveDropped = (env, store, nowMs, { confirmed }) => update(env, store, (cap) => ({ ...without(cap, confirmed ? ["pr", "sent_bytes", "sent_at"] : ["pr", "sent_bytes"]), dropped: confirmed ? DROPPED : DROP_UNCONFIRMED, dropped_at: iso(nowMs) }))
 
 /** An empty record with nothing on the default branch to retract: forgotten. */
 export const saveForgotten = (env, store) => update(env, store, (cap) => without(cap, RECORD_KEYS))

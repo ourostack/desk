@@ -2,7 +2,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { CHECK_UNAVAILABLE_ALARM, captureCheckFindings, captureCheckLines, retentionFinding, retentionLine } from "../../../../../plugins/desk/mcp/src/factory/retention.js"
+import { CHECK_UNAVAILABLE_ALARM, DROPPED_ALARM_MS, captureCheckFindings, captureDroppedFindings, captureCheckLines, retentionFinding, retentionLine } from "../../../../../plugins/desk/mcp/src/factory/retention.js"
 
 test("the retention line says what was pruned, that pruning failed, or that nothing has run", () => {
   for (const status of [undefined, null, {}, { retention: "x" }, { retention: [] }]) assert.equal(retentionLine(status), "retention: no sweep has pruned yet")
@@ -23,6 +23,17 @@ test("a store whose own check failed the alarm number of times in a row gets a l
   assert.equal(lines.length, 1)
   assert.match(lines[0], /3 times in a row \(a\/b\)/u)
 })
+
+test("a capture record dropped and still not sent after the alarm time is a finding, by store and since when", () => {
+  const T = Date.parse("2026-10-06T12:00:00.000Z")
+  const at = (ms) => new Date(T - ms).toISOString()
+  assert.deepEqual(captureDroppedFindings(undefined, T), [])
+  assert.deepEqual(captureDroppedFindings({ capture: "x" }, T), [])
+  const status = { capture: { "a/b": { dropped: "capture_dropped", dropped_at: at(DROPPED_ALARM_MS) }, "c/d": { dropped: "capture_dropped", dropped_at: at(DROPPED_ALARM_MS - 1) }, "e/f": { dropped: "other", dropped_at: at(DAY_MS) }, "g/h": { dropped: "capture_dropped" }, "i/j": 3, "k/l": { dropped: "capture_dropped", dropped_at: "not a time" }, "m/n": { dropped: "capture_drop_unconfirmed", dropped_at: at(DAY_MS) } } }
+  assert.deepEqual(captureDroppedFindings(status, T), [{ store: "a/b", since: at(DROPPED_ALARM_MS) }])
+})
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 test("a stopped pruning part is a finding: the sweep's tombstone pruning failed, or the last orphan pass counted a copy prune that threw", () => {
   for (const status of [undefined, null, {}, { retention: "x" }, { retention: { ran_at: "t", tombstones_pruned: 0 } }, { orphans: "x" }, { orphans: { copies_prune_failed: 0 } }, { orphans: { copies_prune_failed: "2" } }]) assert.equal(retentionFinding(status), null)

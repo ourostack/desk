@@ -38,6 +38,16 @@ export function captureCheckFindings(status) {
     .filter(({ times }) => times !== null && times >= CHECK_UNAVAILABLE_ALARM)
 }
 
+/** How long a capture record may stay dropped (`status.capture[store].dropped`) before it is a finding: it is due again at the next flush, so six hours without a send means it is not landing. */
+export const DROPPED_ALARM_MS = 6 * 60 * 60 * 1000
+
+/** `captureDroppedFindings(status, nowMs) -> { store, since }[]`: each store whose capture record has been dropped from a rebuilt intake branch, and not sent again, for `DROPPED_ALARM_MS` or more (`since` is when it was dropped). */
+export function captureDroppedFindings(status, nowMs) {
+  return Object.entries(isObject(status?.capture) ? status.capture : {})
+    .filter(([, entry]) => isObject(entry) && entry.dropped === "capture_dropped" && typeof entry.dropped_at === "string" && nowMs - Date.parse(entry.dropped_at) >= DROPPED_ALARM_MS)
+    .map(([store, entry]) => ({ store, since: entry.dropped_at }))
+}
+
 /** `captureCheckLines(status) -> string[]`: one line per store in `captureCheckFindings`. */
 export function captureCheckLines(status) {
   return captureCheckFindings(status).map(({ store, times }) => `capture: the store's own check could not read the record ${times} times in a row (${store}); the record is not blamed and goes again, but it is not landing`)

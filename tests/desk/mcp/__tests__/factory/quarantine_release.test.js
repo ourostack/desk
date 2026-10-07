@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url"
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
   factoryStateRoot, quarantine, readConsent, readMachineSecret, releaseRefusedPluginNames, setConsent, writeLocalFacts, writeLocalLabels, writeStatus,
+  ownDeskVersion,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
@@ -132,8 +133,8 @@ test("a flush sends again the facts and labels an older client quarantined for p
 test("quarantine records the refused blob sha when given", () => scratch(async ({ env }) => {
   const now = () => "2026-09-29T00:00:00.000Z"
   const blob = "a".repeat(40)
-  assert.deepEqual(await quarantine(env, STORE, nameOf(1), "plugin_not_public", { blob, now }), { reason: "plugin_not_public", blob, at: now() })
-  assert.deepEqual(await record(env, nameOf(1)), { reason: "plugin_not_public", blob, at: now() })
+  assert.deepEqual(await quarantine(env, STORE, nameOf(1), "plugin_not_public", { blob, now }), { reason: "plugin_not_public", blob, desk_version: ownDeskVersion(), at: now() })
+  assert.deepEqual(await record(env, nameOf(1)), { reason: "plugin_not_public", blob, desk_version: ownDeskVersion(), at: now() })
   await assert.rejects(quarantine(env, STORE, nameOf(2), "plugin_not_public", { blob: "nope", now }), /blob/u)
   assert.equal(await record(env, nameOf(2)), null)
 }))

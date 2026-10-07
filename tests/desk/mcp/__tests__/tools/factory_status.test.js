@@ -336,6 +336,14 @@ test("desk_doctor and desk_status raise a stopped pruning and a store check that
   assert.match(body.summary, /\n  local retention needs attention: prune_failed\. Run `node mcp\/scripts\/factory\.js status` from the Desk plugin folder and read its retention line; if pruning keeps failing, file a Desk problem\./u)
   assert.match(body.summary, /\n  ourostack\/factory: capture record not landing, the store's own check could not read it 3 times in a row\. The store's own check, not this machine, is failing: file a problem against ourostack\/factory's capture check/u)
   assert.equal((await desk_status({ deskRoot: desk, env: host.env })).factory.retention, "prune_failed")
+  // A capture record dropped from a rebuilt branch and still not sent after six hours is raised too; a fresh drop is not.
+  const droppedAt = (ago) => new Date(Date.now() - ago).toISOString()
+  await writeStatus(host.env, { capture: { [STORE]: { dropped: "capture_dropped", dropped_at: droppedAt(60 * 1000) } } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.capture_dropped, undefined)
+  await writeStatus(host.env, { capture: { [STORE]: { dropped: "capture_dropped", dropped_at: droppedAt(7 * 3600 * 1000) } } })
+  body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.deepEqual(body.factory.capture_dropped.map(({ store }) => store), [STORE])
+  assert.match(body.summary, /\n  ourostack\/factory: capture record dropped from a rebuilt intake branch and not delivered since /u)
   // A store this machine no longer contributes to never settles its count, so it is no finding.
   await setConsent(host.env, { store: STORE, contribute: false })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.capture_check_unavailable, undefined)

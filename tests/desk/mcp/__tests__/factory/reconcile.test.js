@@ -973,15 +973,75 @@ test("cards that record why they have no report link are counted desk-wide, live
     await writeFile(path.join(desk, relative), `---\nstatus: done\ncreated: 2026-09-20T00:00:00.000Z\nupdated: 2026-09-21T00:00:00.000Z\n${reason === null ? "" : `factory_report_unavailable: ${reason}\n`}---\n\n# Card\n`)
   }
   const before = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(before.counts.report_link_unavailable, { cards: 0, archived: 0, by_reason: {} })
+  assert.deepEqual(before.counts.report_link_unavailable, { cards: 0, archived: 0, by_reason: {}, jobs_missing: { cards: 0, archived: 0, by_reason: {}, named: [] }, not_checked: { cards: 0, by_reason: {} } })
   await write("t/live-one/task.md", "visibility_not_known")
   await write("t/live-two/task.md", "desk_not_private")
   await write("t/_archive/old-one/task.md", "job_identity_unavailable")
   await write("t/_archive/old-two/task.md", "a hand-written secret")
   await write("t/_archive/linked/task.md", null)
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(result.counts.report_link_unavailable, { cards: 4, archived: 2, by_reason: { visibility_not_known: 1, desk_not_private: 1, job_identity_unavailable: 1, unrecognized: 1 } })
+  assert.deepEqual(result.counts.report_link_unavailable, { cards: 4, archived: 2, by_reason: { visibility_not_known: 1, desk_not_private: 1, job_identity_unavailable: 1, unrecognized: 1 }, jobs_missing: { cards: 0, archived: 0, by_reason: {}, named: [] }, not_checked: { cards: 0, by_reason: {} } })
   assert.equal(JSON.stringify(result).includes("hand-written"), false)
+}))
+
+// A done card with a report link, the way the task tools write it: the long link folded onto its own line.
+const linkedCard = (job, { status = "done", updated = "2026-09-20T00:00:00.000Z", folded = true } = {}) => `---\ntitle: Linked\nstatus: ${status}\ncreated: 2026-09-19T00:00:00.000Z\nupdated: ${updated}\nfactory_report: ${folded ? ">-\n  " : ""}https://github.com/ourostack/factory/blob/reports/jobs/${job}.md\n---\n\nBody\n`
+
+test("a done card whose linked job is not in the store is counted and named; removed only on positive delivery evidence, and what was not judged is counted by why", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const repo = await makeDesk(desk, { remote: REMOTE })
+  const jobs = Object.fromEntries(["present", "never", "removed", "pruned", "fresh", "open", "plain", "archived", "noupdated"].map((slug) => [slug, jobOf(desk, "t", slug, REMOTE)]))
+  repo.commit("2026-09-20T00:00:00Z", {
+    "t/present/task.md": linkedCard(jobs.present),
+    "t/never/task.md": linkedCard(jobs.never),
+    "t/removed/task.md": linkedCard(jobs.removed),
+    "t/pruned/task.md": linkedCard(jobs.pruned),
+    "t/fresh/task.md": linkedCard(jobs.fresh, { updated: "2026-09-25T00:00:00.000Z" }),
+    "t/open/task.md": linkedCard(jobs.open, { status: "processing" }),
+    "t/plain/task.md": linkedCard(jobs.plain, { folded: false }),
+    "t/noupdated/task.md": linkedCard(jobs.noupdated).replace(/updated: .*\n/u, ""),
+    "t/_archive/archived/task.md": linkedCard(jobs.archived),
+    "t/nolink/task.md": cardText({ status: "done" }),
+  }, "seed")
+  await setVisibility(env, "private")
+  const store = path.join(base, "store")
+  await addSession(context, 1, "t", "present", { remote: REMOTE })
+  await addSession(context, 2, "t", "removed", { remote: REMOTE })
+  publishTo(store, localFor(1, jobs.present), { deskVisibility: "private" })
+  // The zz-focus-check-b shape: the jobs index names a delivered session for the job, but that session's facts hold other jobs only. A delivered job whose local
+  // copy was pruned has no evidence left either. Neither is `job_removed`: when in doubt, missing.
+  const root = await factoryStateRoot(env)
+  await writeFile(path.join(root, "jobs-index.json"), JSON.stringify({ [jobs.never]: [`claude-code-${sessionId(1)}.json`], [jobs.pruned]: [`claude-code-${sessionId(9)}.json`] }))
+  await markDelivered(env, STORE, { name: `claude-code-${sessionId(9)}.json`, publishedBlobSha: blob(9) })
+  const checked = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
+  assert.deepEqual(checked.counts.report_link_unavailable, {
+    cards: 0, archived: 0, by_reason: {},
+    jobs_missing: {
+      cards: 5, archived: 1, by_reason: { job_missing: 4, job_removed: 1 },
+      named: [
+        { track: "t", slug: "archived", reason: "job_missing" },
+        { track: "t", slug: "never", reason: "job_missing" },
+        { track: "t", slug: "plain", reason: "job_missing" },
+        { track: "t", slug: "pruned", reason: "job_missing" },
+        { track: "t", slug: "removed", reason: "job_removed" },
+      ],
+    },
+    not_checked: { cards: 2, by_reason: { too_fresh: 2 } },
+  })
+  // Without the store nothing can be said about a missing job: every card old enough is not checked, and none is missing.
+  const bare = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }).counts.report_link_unavailable
+  assert.deepEqual(bare.jobs_missing, { cards: 0, archived: 0, by_reason: {}, named: [] })
+  assert.deepEqual(bare.not_checked, { cards: 8, by_reason: { too_fresh: 2, no_store: 6 } })
+  // A store was given but the desk's visibility is not known: the job IDs cannot be compared, which is not the same as no store.
+  await writeFile(path.join(root, "visibility.json"), "{}")
+  const blind = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env }).counts.report_link_unavailable
+  assert.deepEqual(blind.not_checked, { cards: 8, by_reason: { too_fresh: 2, visibility_not_known: 6 } })
+  await setVisibility(env, "private")
+  // A store facts file this Desk cannot read may hold the missing jobs: they are not checked, while a job found is still fine.
+  writeFileSync(path.join(store, "facts", "future-schema.json"), "{}")
+  const unreadable = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env }).counts.report_link_unavailable
+  assert.deepEqual(unreadable.jobs_missing, { cards: 0, archived: 0, by_reason: {}, named: [] })
+  assert.deepEqual(unreadable.not_checked, { cards: 7, by_reason: { too_fresh: 2, store_file_unreadable: 5 } })
 }))
 
 test("focus_disagrees is copied from the receipt", () => scratch(async (context) => {
