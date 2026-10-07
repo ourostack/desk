@@ -1204,7 +1204,7 @@ test("clearFinalize surfaces an unexpected failure removing the request, rather 
 }))
 
 test("withLock propagates an unexpected failure creating the lock file itself", (t) => scratch(async (env) => {
-  const failure = Object.assign(new Error("denied"), { code: "EACCES" })
+  const failure = Object.assign(new Error("disk failure"), { code: "EIO" })
   const mocked = t.mock.method(fs, "open", async () => {
     throw failure
   })
@@ -1212,6 +1212,34 @@ test("withLock propagates an unexpected failure creating the lock file itself", 
     await assert.rejects(() => setConsent(env, { store: STORE, contribute: true }), (error) => error === failure)
   } finally {
     mocked.mock.restore()
+  }
+}))
+
+test("on Windows, a lock file whose deletion is still pending is waited for, and a refusal that lasts is surfaced", (t) => scratch(async (plain, base) => {
+  const env = fakeWindowsEnv(plain, base)
+  const options = { platform: "win32", runner: fakeWindowsRunner([]) }
+  const original = fs.open
+  let refusals = 2
+  const transient = t.mock.method(fs, "open", async (...args) => {
+    if (refusals > 0 && String(args[0]).endsWith(".lock")) {
+      refusals -= 1
+      throw Object.assign(new Error("pending delete"), { code: refusals === 1 ? "EPERM" : "EACCES" })
+    }
+    return original.apply(fs, args)
+  })
+  await setConsent(env, { store: STORE, contribute: true }, options)
+  assert.equal(refusals, 0)
+  transient.mock.restore()
+  const failure = Object.assign(new Error("denied for good"), { code: "EPERM" })
+  const lasting = t.mock.method(fs, "open", async (...args) => {
+    if (String(args[0]).endsWith(".lock")) throw failure
+    return original.apply(fs, args)
+  })
+  try {
+    await assert.rejects(() => setConsent(env, { store: STORE, contribute: false }, options), (error) => error === failure)
+    assert.ok(lasting.mock.callCount() > 100)
+  } finally {
+    lasting.mock.restore()
   }
 }))
 
