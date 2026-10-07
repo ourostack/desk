@@ -446,7 +446,8 @@ function runInstrumentedTests({
   const offline = resolveOfflineEvaluationScope({ repoRoot, requiredFiles })
   const configPath = writeProducerConfig({ repoRoot, requiredFiles, offline, reportDirectory, rawDirectory, silent: Boolean(testFiles), fsOps })
   const loader = pathToFileURL(require.resolve("@istanbuljs/esm-loader-hook")).href
-  const registration = `import { register } from "node:module"; register(${JSON.stringify(loader)});`
+  // The startup hook runs the migration Detect scripts as child processes with a fixed production budget (MIGRATION_BUDGET_MS). Instrumenting them makes their run time depend on how many files the change touches, so they stay uninstrumented here; the driver marks them with DESK_PLUGIN_ROOT and `--detect` (a direct run by their own tests sets neither alone), and those tests cover them. Production never loads this registration, so its budget is untouched.
+  const registration = `import { register } from "node:module"; if (!(process.argv.includes("--detect") && process.env.DESK_PLUGIN_ROOT)) register(${JSON.stringify(loader)});`
   // The repository's own offline registration helper is a superset of this registration: it installs the same maintained hook and additionally gives the source-pinned TypeScript leaves a module format that hook will instrument.
   const registrationUrl = offline.registrationPath
     ? pathToFileURL(offline.registrationPath).href
