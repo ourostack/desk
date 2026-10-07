@@ -1181,7 +1181,10 @@ test("concurrent flushes: exactly one delivers and the other is locked", () => s
     return github.runner(args, options)
   }
   const first = flush(env, { store: STORE, runner: slow, anonymousLookup: github.anonymousLookup })
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  // The first flush holds the lock once its file exists; how long that takes depends on the machine (on Windows each protected write starts PowerShell), so wait for the file, not a fixed time.
+  const lock = path.join(await factoryStateRoot(env), "flush.lock")
+  for (let waited = 0; !existsSync(lock) && waited < 60000; waited += 20) await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(existsSync(lock), true, "the first flush takes the lock")
   const second = await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
   release()
   assert.deepEqual(second, { result: "locked" })
