@@ -394,9 +394,10 @@ test("assertCodeRepoEvidence does nothing without repos, and survives odd git re
 
 test("resolveLocalPath expands ~, resolves a relative path against the desk root, and falls back to the working directory", async () => {
   const { resolveLocalPath } = await import("../../../../../plugins/desk/mcp/src/util/paths.js")
-  assert.equal(resolveLocalPath("a/b", { homeDir: "/h", deskRoot: "/desk" }), "/desk/a/b")
-  assert.equal(resolveLocalPath("~/a", { homeDir: "/h", deskRoot: "/desk" }), "/h/a")
-  assert.equal(resolveLocalPath("/abs", { homeDir: "/h", deskRoot: "/desk" }), "/abs")
+  // The answers are host paths: on Windows `/desk` is read against the current drive, so the expectations are built the same way.
+  assert.equal(resolveLocalPath("a/b", { homeDir: "/h", deskRoot: "/desk" }), path.resolve("/desk", "a/b"))
+  assert.equal(resolveLocalPath("~/a", { homeDir: "/h", deskRoot: "/desk" }), path.resolve("/h", "a"))
+  assert.equal(resolveLocalPath("/abs", { homeDir: "/h", deskRoot: "/desk" }), path.resolve("/abs"))
   assert.equal(resolveLocalPath("a"), path.resolve("a"))
 })
 

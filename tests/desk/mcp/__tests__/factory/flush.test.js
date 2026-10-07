@@ -10,6 +10,7 @@ import { createHmac } from "node:crypto"
 import { existsSync, promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { NO_SHEBANG_SCRIPTS } from "../_platform.js"
 
 import {
   factoryStateRoot, gitBlobSha, listFinalizeRequests, readConsent, readMachineSecret, readStatus, requestFinalize, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus, writeVisibilityCache,
@@ -1181,7 +1182,10 @@ test("concurrent flushes: exactly one delivers and the other is locked", () => s
     return github.runner(args, options)
   }
   const first = flush(env, { store: STORE, runner: slow, anonymousLookup: github.anonymousLookup })
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  // The first flush holds the lock once its file exists; how long that takes depends on the machine (on Windows each protected write starts PowerShell), so wait for the file, not a fixed time.
+  const lock = path.join(await factoryStateRoot(env), "flush.lock")
+  for (let waited = 0; !existsSync(lock) && waited < 60000; waited += 20) await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(existsSync(lock), true, "the first flush takes the lock")
   const second = await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
   release()
   assert.deepEqual(second, { result: "locked" })
@@ -1289,6 +1293,11 @@ test("the real runner reports a missing gh, a failed spawn and a timeout without
   const result = await missing(["--version"], { timeoutMs: 5000 })
   assert.equal(result.code, null)
   assert.equal(result.spawnError, "ENOENT")
+})
+
+// A fake gh written as a script with a shebang line, which Windows cannot execute.
+test("the real runner passes input and the token to gh, and reports a failed exit and a timeout", { skip: NO_SHEBANG_SCRIPTS }, async () => {
+  const { ghRunner } = await load()
   const node = process.execPath
   const bin = path.join(await fs.mkdtemp(path.join((await import("node:os")).tmpdir(), "desk-gh-")), "gh")
   await fs.writeFile(bin, `#!${node}\nconst [,, mode] = process.argv; if (mode === "sleep") setTimeout(() => {}, 10000); else { let input = ""; process.stdin.on("data", (c) => input += c); process.stdin.on("end", () => { process.stdout.write(input + ":" + (process.env.GH_TOKEN ? "token" : "none")); process.stderr.write("e"); process.exit(3) }) }\n`, { mode: 0o755 })

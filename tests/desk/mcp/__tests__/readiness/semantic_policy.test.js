@@ -196,11 +196,15 @@ test("background convergence helper returns null when no controller start was ad
 test("server controller connector works without an explicit state home and still converges", async (t) => {
   const root = fixture(t)
   // The default state home lives under HOME: point HOME at the fixture so the default path is exercised without touching the real ~/.cache.
-  const previousHome = process.env.HOME
-  process.env.HOME = path.join(root, "home")
+  // Node's os.homedir() reads USERPROFILE, not HOME, on Windows.
+  const homeVariables = process.platform === "win32" ? ["HOME", "USERPROFILE"] : ["HOME"]
+  const previousHomes = homeVariables.map((name) => [name, process.env[name]])
+  for (const name of homeVariables) process.env[name] = path.join(root, "home")
   t.after(() => {
-    if (previousHome === undefined) delete process.env.HOME
-    else process.env.HOME = previousHome
+    for (const [name, previous] of previousHomes) {
+      if (previous === undefined) delete process.env[name]
+      else process.env[name] = previous
+    }
   })
   writeFileSync(path.join(root, "task.md"), "# Lexical only\n\nNo explicit state home.\n")
   const controller = await connectOrStartController({

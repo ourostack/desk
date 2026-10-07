@@ -8,6 +8,7 @@ import { FRICTION_CLASSES, MAX_CARDS_PER_DAY, PUBLIC_PLUGINS, cardBlock, fileKai
 import { readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
 import { parseCard } from "../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
+import { osEnv } from "../_os_env.js"
 
 const TOKEN = "ghs_SENTINEL"
 const JOB = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
@@ -18,7 +19,7 @@ const sessionId = (n) => `${n.toString(16).padStart(8, "0")}-0000-4000-8000-${n.
 
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-kaizen-file-")))
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   const deskRoot = path.join(base, "desk")
   mkdirSync(path.join(deskRoot, "_meta"), { recursive: true })
   try {

@@ -648,7 +648,7 @@ function isRuntimeFilePath(filePath) {
   if (!existsSync(filePath) || !statSync(filePath).isFile()) {
     return false
   }
-  if (/\/package\.json$/u.test(filePath)) {
+  if (/\/package\.json$/u.test(filePath.replaceAll(path.sep, "/"))) {
     return false
   }
   return /\.(?:js|cjs|mjs|json|node|dylib|so|dll)$/u.test(filePath)
@@ -803,10 +803,15 @@ function scriptHelp(scriptName) {
   return `${result.stdout}${result.stderr}`
 }
 
+// On Windows npm is a .cmd file, which Node will not start without a shell; npm's own entry script runs under the same Node instead.
+const npmCommand = process.platform === "win32"
+  ? [process.execPath, path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")]
+  : ["npm"]
+
 function runNpmScript(scriptName, args = []) {
   return spawnSync(
-    "npm",
-    ["--prefix", "plugins/desk/mcp", "run", scriptName, "--", ...args],
+    npmCommand[0],
+    [...npmCommand.slice(1), "--prefix", "plugins/desk/mcp", "run", scriptName, "--", ...args],
     {
       cwd: repoRoot,
       encoding: "utf8",

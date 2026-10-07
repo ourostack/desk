@@ -87,7 +87,7 @@ test("bootOnce reads a crew desk's person folder, says an unreadable folder, and
   const reader = (summaryValue) => async (args) => { seen = args; return summaryValue }
   await boot(root, { env: { DESK: root, DESK_PERSON: "sam" }, improvementFn: reader(summary()) })
   assert.equal(seen.deskRoot, root)
-  assert.equal(seen.personPrefix, path.join("desks", "sam"))
+  assert.equal(seen.personPrefix, path.posix.join("desks", "sam"))
   assert.equal(seen.env.DESK_PERSON, "sam")
   assert.equal(typeof seen.now, "number")
   const unreadable = await boot(root, { improvementFn: reader(summary({ status: "unreadable", open: 0, oldest_days: null })) })
@@ -118,7 +118,7 @@ test("bootOnce never stops for a bad DESK_PERSON, and finds a crew desk's person
   await fs.writeFile(path.join(root, "_meta", "desks.md"), "| alias | identity | path |\n|---|---|---|\n| alex | agarcia | desks/alex |\n| bob | bsmith | desks/bob |\n")
   seen = []
   await boot(root, { env: { DESK: root, DESK_IDENTITY: "bsmith" }, improvementFn: reader })
-  assert.equal(seen[0].personPrefix, path.join("desks", "bob"))
+  assert.equal(seen[0].personPrefix, path.posix.join("desks", "bob"))
   // Nobody known without a network call: the boot says the cards were not checked, and does not read the solo folder.
   seen = []
   const unknown = await boot(root, { env: { DESK: root, HOME: root, XDG_STATE_HOME: path.join(root, "state") }, improvementFn: reader })

@@ -46,6 +46,9 @@ function removeFixture(t, root) {
 
 // ---- fixtures ----
 
+// These tests hand the bootstrap's macOS and Linux branch (platform "darwin" or "linux") a temporary desk under C:\\...: that branch splits PATH on ":" and so cuts a drive letter in two, and it looks for sh-script nodes that Windows cannot run. Windows never takes that branch; its own layouts are covered by "Windows discovery covers ..." and the "native:" tests.
+const posixBranchOnly = process.platform === "win32" ? "the macOS and Linux discovery branch splits PATH on ':', which cuts a Windows drive letter; Windows takes its own branch, covered by the Windows discovery test" : false
+
 const fixtureProbes = new Map()
 
 /** A fake `node` (a POSIX sh script, whatever its name) that answers the bootstrap's probe and, when run, prints its label and arguments. */
@@ -314,7 +317,7 @@ test("on a fake Windows layout the bootstrap picks the packed Node, not the newe
 
 // ---- selection ----
 
-test("selection prefers the newest Node whose ABI has a runtime pack, then the newest compatible one", async () => {
+test("selection prefers the newest Node whose ABI has a runtime pack, then the newest compatible one", { skip: posixBranchOnly }, async () => {
   const root = await mkTempRoot("desk-bootstrap-select-")
   const home = path.join(root, "home")
   const nvm = (version) => path.join(home, ".nvm", "versions", "node", `v${version}`, "bin", "node")
@@ -351,7 +354,7 @@ test("selection keeps the running Node on a tie and never probes it", async () =
   assert.deepEqual(probed, [])
 })
 
-test("the same binary reached through two paths is considered once, and a probe that fails drops it", async () => {
+test("the same binary reached through two paths is considered once, and a probe that fails drops it", { skip: posixBranchOnly }, async () => {
   const root = await mkTempRoot("desk-bootstrap-dedupe-")
   const real = fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
   mkdirSync(path.join(root, "link-bin"))
@@ -400,6 +403,13 @@ test("the install command installs the Node major Desk ships a runtime pack for,
     assert.doesNotMatch(command, /&&|nvm use/u)
   }
 
+})
+
+// The macOS and Linux half is skipped on Windows for the reason given at posixBranchOnly.
+test("the install command on macOS and Linux prefers an existing nvm, then Homebrew, then a fresh nvm", { skip: posixBranchOnly }, async () => {
+  const root = await mkTempRoot("desk-bootstrap-fix-")
+  const brewBin = path.join(root, "brew-bin")
+  fakeNode(path.join(brewBin, "brew"), "0.0.0", "0")
   // macOS and Linux: an existing nvm first, then Homebrew, then a fresh nvm.
   const nvmDir = path.join(root, "nvm dir")
   mkdirSync(nvmDir)
@@ -825,7 +835,7 @@ test("a spawn that throws synchronously is served as node_spawn_failed", async (
   assert.equal(toolPayload(read()[0]).state, "degraded:node_spawn_failed")
 })
 
-test("anything that throws while picking a Node is served as bootstrap_failed", async () => {
+test("anything that throws while picking a Node is served as bootstrap_failed", { skip: posixBranchOnly }, async () => {
   const root = await mkTempRoot("desk-bootstrap-throw-")
   fakeNode(path.join(root, "path-bin", "node"), "22.9.0", "127")
   const input = new PassThrough()
@@ -871,7 +881,7 @@ test("an error event from a child that did start never starts a second responder
   assert.deepEqual(exits, [0])
 })
 
-test("probes share a 3 s budget and version-manager shims on PATH are never run", async () => {
+test("probes share a 3 s budget and version-manager shims on PATH are never run", { skip: posixBranchOnly }, async () => {
   const root = await mkTempRoot("desk-bootstrap-budget-")
   // Unversioned PATH binaries have to be probed; the clock jumps 2 s per probe.
   for (const name of ["a", "b", "c"]) fakeNode(path.join(root, name, "node"), "22.9.0", "127")

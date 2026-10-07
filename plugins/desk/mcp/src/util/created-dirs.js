@@ -19,24 +19,39 @@ function release(directory) {
 
 const inUse = (folder) => [...inFlight.keys()].some((used) => used === folder || used.startsWith(`${folder}${path.sep}`))
 
+// The folders `directory` needs that do not exist yet, deepest first. Found by looking, not from what `fs.mkdir` returns:
+// on Windows the string `mkdir` returns for the first folder it made is not always spelled the way `directory` is, so it
+// cannot be compared with the paths this function walks.
+async function missingFolders(directory) {
+  const missing = []
+  let dir = directory
+  while (!(await fs.stat(dir).then(() => true, () => false))) {
+    missing.push(dir)
+    const parent = path.dirname(dir)
+    /* istanbul ignore next -- a path whose root does not exist (an unmounted drive); mkdir reports that error next. */
+    if (parent === dir) break
+    dir = parent
+  }
+  return missing
+}
+
 export async function withCreatedDirs(directory, work) {
   inFlight.set(directory, (inFlight.get(directory) ?? 0) + 1)
-  let first
+  let made = []
   try {
-    first = await fs.mkdir(directory, { recursive: true })
+    made = await missingFolders(directory)
+    await fs.mkdir(directory, { recursive: true })
     const result = await work()
     release(directory)
     return result
   } catch (error) {
     release(directory)
-    if (typeof first === "string") {
-      for (let dir = directory; dir.length >= first.length && !inUse(dir); dir = path.dirname(dir)) {
-        try {
-          await fs.rmdir(dir)
-        } catch {
-          break
-        }
-        if (dir === first) break
+    for (const dir of made) {
+      if (inUse(dir)) break
+      try {
+        await fs.rmdir(dir)
+      } catch {
+        break
       }
     }
     throw error

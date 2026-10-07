@@ -10,11 +10,14 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, realpathSync } from "node:f
 import { promises as fs } from "node:fs"
 import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { applyResource, canonicalIdentity, dueResources, openResources, readResources, shellQuote } from "../../../../../plugins/desk/mcp/src/desk/resources.js"
-import { cleanupIndexPath, readCleanupIndex } from "../../../../../plugins/desk/mcp/src/desk/cleanup-index.js"
+import { cleanupIndexPath, readCleanupIndex, recordCleanupCard } from "../../../../../plugins/desk/mcp/src/desk/cleanup-index.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { NO_POSIX_MODES } from "../_platform.js"
 
+// A path as a regular expression that matches it literally, whatever separator or characters it holds.
+const literal = (value) => value.replace(/[.*+?^${}()|[\]\\/]/gu, "\\$&")
 const REPOS = [{ name: "widgets" }]
 const PR = "https://github.com/o/widgets/pull/7"
 // A GitHub where pull request 7 is merged and released: Desk derives a step with that PR in Evidence as delivered.
@@ -49,7 +52,7 @@ test("the first resource creates the section right after Steps, and the same ide
   const first = await update(root, { resource: { identity: `worktree:${where}/`, step: "api", intended: "remove after merge" } })
   assert.deepEqual(first.resource, { identity: `worktree:${where}`, owner: "step api", intended: "remove after merge", disposition: "" })
   assert.equal(first.cleanup_due, undefined)
-  assert.match(await text(file), new RegExp(`\\| api \\| — \\| widgets \\| pending \\| — \\|\\n\\n## Resources\\n\\n${HEADER.replaceAll("|", "\\|").replaceAll("/", "\\/")}\\n${SEP.replaceAll("|", "\\|")}\\n\\| worktree:${where.replaceAll("/", "\\/")} \\| step api \\| — \\| remove after merge \\| — \\|  \\|\\n\\n## Progress log`, "u"))
+  assert.match(await text(file), new RegExp(`\\| api \\| — \\| widgets \\| pending \\| — \\|\\n\\n## Resources\\n\\n${HEADER.replaceAll("|", "\\|").replaceAll("/", "\\/")}\\n${SEP.replaceAll("|", "\\|")}\\n\\| worktree:${literal(where)} \\| step api \\| — \\| remove after merge \\| — \\|  \\|\\n\\n## Progress log`, "u"))
   await update(root, { resource: { identity: `branch:o/widgets#feat/api` } })
   const again = await update(root, { resource: { identity: `worktree:${where}`, intended: "keep for review" } })
   assert.equal(again.resource.intended, "keep for review")
@@ -115,7 +118,7 @@ test("a row is due when its step is delivered or dropped, the answer lists it wi
   await update(root, { resource: { identity: "branch:o/widgets#feat/ui", step: "ui" } })
   const answer = await update(root, { step: { id: "api", evidence: PR } })
   assert.deepEqual(answer.cleanup_due.map((item) => [item.identity, item.why]), [[`worktree:${where}`, "step api is delivered"], ["branch:o/widgets#feat/api", "step api is delivered"]])
-  assert.match(answer.cleanup_due[0].action, new RegExp(`git worktree remove '${where.replaceAll("/", "\\/")}'`, "u"))
+  assert.match(answer.cleanup_due[0].action, new RegExp(`git worktree remove '${literal(where)}'`, "u"))
   assert.match(answer.cleanup_due[1].action, /git branch -d 'feat\/api'/u)
   assert.match(answer.cleanup_note, /Desk removes nothing/u)
   assert.equal(existsSync(where), true)
@@ -159,7 +162,7 @@ test("boot counts due rows from the cards it reads, prints one line, and prints 
   const out = formatBootText({ status: "ready", active_tasks: activeTasks(root) })
   assert.match(out, /- t\/chain[^\n]*\n[^\n]*next:[^\n]*\n  Steps: 1 of 1 delivered\n  cleanup due: 2\n/u)
   assert.match(out, /\nCleanup due: 2 items on 1 card \(see the task lines\)\n/u)
-  assert.doesNotMatch(out, new RegExp(where.replaceAll("/", "\\/"), "u"))
+  assert.doesNotMatch(out, new RegExp(literal(where), "u"))
   await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
   await update(root, { resource: { identity: "branch:o/widgets#feat/boot", disposition: "named transfer", details: "ari took it, acknowledged" } })
   assert.doesNotMatch(formatBootText({ status: "ready", active_tasks: activeTasks(root) }), /Cleanup due/u)
@@ -272,6 +275,15 @@ test("the cleanup index is per desk root and per machine: only listed cards are 
   await fs.writeFile(file, "garbage")
   await update(root, { resource: { identity: "branch:o/widgets#feat/more2" } })
   assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+})
+
+test("recording a card keeps the desk spelling with `/` on every platform: an archived card is listed by its live folder, and a backslash spelling is never rewritten as the same card", () => {
+  const root = mkdtempSync(path.join(scratch, "cleanup-spelling-"))
+  recordCleanupCard(root, "t/_archive/chain", true)
+  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  // A folder spelled with `\` is not the `/` card: a posix split would have to treat it as one name, so it is listed as written, never merged into or replaced by `t/chain`.
+  recordCleanupCard(root, "t\\_archive\\other", true)
+  assert.deepEqual(readCleanupIndex(root), ["t\\_archive\\other"])
 })
 
 test("a state folder that cannot be written never fails the card write", async () => {
@@ -437,7 +449,7 @@ test("a step Desk derives as delivered from its PR on a later call makes its row
   assert.equal("cleanup_due" in (await later({ note: "again" })), false)
 })
 
-test("an archived card's disposition is written through a temporary file: its mode stays and no temporary file is left", async () => {
+test("an archived card's disposition is written through a temporary file: its mode stays and no temporary file is left", { skip: NO_POSIX_MODES }, async () => {
   const { root, where } = await unfinished((root) => update(root, DONE))
   await task_archive({ deskRoot: root, input: { track: "t", slug: "chain" } })
   const file = path.join(root, "t", "_archive", "chain", "task.md")

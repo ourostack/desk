@@ -23,7 +23,7 @@ import {
   writeFileAtomic,
 } from "../util/fm.js"
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
-import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
+import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
@@ -443,7 +443,7 @@ const RESOURCE_INPUT = { tool: "task_update", field: "resource", effect: "no res
 const asList = (value) => (Array.isArray(value) ? value : [])
 
 function relPath(deskRoot, absPath) {
-  return path.relative(deskRoot, absPath)
+  return deskRelativePath(deskRoot, absPath)
 }
 
 // On a Git desk, a task tool stages the task.md it writes (M4-5 fix round 4)
@@ -499,7 +499,7 @@ function headSha(dir, spawnGit) {
 // (person-scoped) desk root; `paths` are absolute.
 function stageAndCommitMove(root, paths, message, spawnGit) {
   if (!isGitRepository(root, spawnGit)) return undefined
-  const relPaths = paths.map((p) => path.relative(root, p))
+  const relPaths = paths.map((p) => deskRelativePath(root, p))
   const staged = stagePaths(root, relPaths, spawnGit)
   if (!staged.ok) return { status: "failed", reason: staged.stderr }
   const committed = commitPaths(root, relPaths, message, spawnGit)
@@ -533,8 +533,20 @@ async function assertArchiveSourceIsRelocationSafe({
     path.join(realArchiveDir, path.basename(srcFile)),
     { realSrcDir, realArchiveDir },
   )
-  if (relocatedReferent !== expectedReferent) {
+  // The walk above follows the link text as written; the real path is the operating system's own spelling (on Windows a
+  // link written with an 8.3 short name or other letter case), so a referent that already exists is compared by that.
+  const relocatedSpelling = relocatedReferent === null ? null : await realpathOrSame(relocatedReferent)
+  if (relocatedSpelling !== expectedReferent) {
     throw new Error(`task_archive: task.md symlink would change referent when archived: ${srcFile}`)
+  }
+}
+
+async function realpathOrSame(candidate) {
+  try {
+    return await fs.realpath(candidate)
+  } catch {
+    // A path that does not exist yet (inside the archive folder about to be created) has only the spelling it was given.
+    return candidate
   }
 }
 

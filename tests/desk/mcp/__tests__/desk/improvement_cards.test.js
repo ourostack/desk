@@ -4,6 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
+import { osEnv } from "../_os_env.js"
 import { createHash } from "node:crypto"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
@@ -50,7 +51,7 @@ const iso = (date) => date.toISOString()
 // A machine is a factory state folder: two state folders are two machines.
 async function machineEnv() {
   const base = await mkTempRoot("desk-cards-state-")
-  return { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  return osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
 }
 
 async function desk(prefix = "") {
@@ -509,10 +510,44 @@ test("the live claim and the day cap are per machine, and a card with another ma
 test("two simultaneous claimNext calls on one open card give exactly one claimed", async () => {
   const where = await desk()
   await open(where)
-  const results = await Promise.all([claim(where), claim(where), claim(where)])
-  assert.equal(results.filter((r) => r.result === "claimed").length, 1)
+  // A caller that cannot get the lock within the default 5 s answers `lock_busy`, which is the lock working, not a second claim. The Windows run failed once with a result that was not `claimed` or `claim_held`; the log did not show which result it was, so the cause (a slow holder, so `lock_busy`, is the likely one) is not shown. The wait is long here so the test sees the claim answers, and the message names every result.
+  const results = await Promise.all([claim(where, { lockWaitMs: 120000 }), claim(where, { lockWaitMs: 120000 }), claim(where, { lockWaitMs: 120000 })])
+  assert.equal(results.filter((r) => r.result === "claimed").length, 1, JSON.stringify(results.map((r) => r.result)))
   assert.equal(results.filter((r) => r.result === "claim_held").length, 2)
   assert.equal((await read(where))[0].claim_log.length, 1)
+})
+
+test("on Windows, a lock folder whose deletion is still pending is waited for, and a refusal that lasts is surfaced", async (t) => {
+  const where = await desk()
+  await open(where)
+  const mkdir = fs.mkdir
+  let refusals = 2
+  const transient = t.mock.method(fs, "mkdir", async (target, ...rest) => {
+    if (refusals > 0 && String(target).endsWith(".improvement.lock")) {
+      refusals -= 1
+      throw Object.assign(new Error("pending delete"), { code: refusals === 1 ? "EPERM" : "EACCES" })
+    }
+    return mkdir(target, ...rest)
+  })
+  assert.equal((await claim(where, { lockHooks: { platform: "win32" } })).result, "claimed")
+  assert.equal(refusals, 0)
+  transient.mock.restore()
+  // Off Windows the same refusal is a real fault and is thrown at once.
+  const failure = Object.assign(new Error("denied"), { code: "EPERM" })
+  const denied = t.mock.method(fs, "mkdir", async (target, ...rest) => {
+    if (String(target).endsWith(".improvement.lock")) throw failure
+    return mkdir(target, ...rest)
+  })
+  await assert.rejects(() => claim(where, { lockHooks: process.platform === "win32" ? { platform: "linux" } : {} }), (error) => error === failure)
+  // A refusal that lasts is surfaced once the 5 s bound is spent (a clock that jumps 3 s per reading reaches it after a few tries).
+  let clock = Date.now()
+  const jumping = t.mock.method(Date, "now", () => (clock += 3000))
+  try {
+    await assert.rejects(() => claim(where, { lockHooks: { platform: "win32" } }), (error) => error === failure)
+  } finally {
+    jumping.mock.restore()
+    denied.mock.restore()
+  }
 })
 
 test("claimNext refuses a bad machine, a bad session and a bad location", async () => {
@@ -909,7 +944,7 @@ test("a card file or folder the process cannot read is counted and left in place
   }
 })
 
-test("a meta folder that is a file is refused", async () => {
+test("a meta folder that is a file is refused", { skip: process.platform === "win32" && "Windows reports a path through a file (a folder under a file) as ENOENT, the same code as a missing folder, so a _meta that is a file cannot be told apart from a missing one" }, async () => {
   const asFile = await desk()
   await fs.writeFile(path.join(asFile.deskRoot, "_meta"), "a file")
   assert.equal((await readCards(asFile)).unreadable, true)
@@ -978,7 +1013,8 @@ test("an invalid entry that is not a folder is refused as unreadable_folder and 
   await fs.chmod(path.join(folderOf(where), SET_ASIDE_FOLDER), 0o000).catch(() => {})
   const listed = await readCards(where)
   await fs.chmod(path.join(folderOf(where), SET_ASIDE_FOLDER), 0o700)
-  assert.equal(listed.unreadable, process.getuid?.() === 0 ? false : true)
+  // A folder with no permission bits is unreadable only on POSIX and not for root; Windows ignores chmod.
+  assert.equal(listed.unreadable, process.getuid?.() === 0 || process.platform === "win32" ? false : true)
 })
 
 test("a claim_id never reaches a card that is no longer claimed by that claim", async () => {

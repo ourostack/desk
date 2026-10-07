@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { osEnv } from "../_os_env.js"
 
 import { claimNext, readCards, updateCard, cardKey } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { conditionOf } from "../../../../../plugins/desk/mcp/src/factory/loop-conditions.js"
@@ -25,7 +26,7 @@ async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-route-issues-")))
   const deskRoot = path.join(base, "desk")
   await fs.mkdir(deskRoot, { recursive: true })
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   try {
     return await run({ env, deskRoot, personPrefix: "", base })

@@ -48,8 +48,11 @@ test("the hook records the session folder and the saved binding it saw, and the 
   const wrote = recordCopilotSession({ sessionId: "s-1", folder, activationConfig: binding, env })
   assert.equal(wrote, true)
   const file = copilotSessionFile(stateDirOf(env), "s-1")
-  assert.equal((statSync(file).mode & 0o777), 0o600)
-  assert.equal((statSync(path.dirname(file)).mode & 0o777), 0o700)
+  // Windows keeps no POSIX permission bits (every file reads back as 0o666 or 0o444), so the owner-only mode is checked where it exists.
+  if (process.platform !== "win32") {
+    assert.equal((statSync(file).mode & 0o777), 0o600)
+    assert.equal((statSync(path.dirname(file)).mode & 0o777), 0o700)
+  }
   assert.deepEqual(readCopilotSession({ env: { ...env, COPILOT_AGENT_SESSION_ID: "s-1" } }), { folder, activationConfig: binding })
 })
 

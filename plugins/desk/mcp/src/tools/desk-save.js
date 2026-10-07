@@ -102,7 +102,7 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
       throw new Error(`desk_save: \`paths\` includes a path outside the resolved write prefix: ${relativePath}`)
     }
     // Desk's commit path is the one the desk's pre-commit hook trusts, so a card must not be able to ride through it.
-    if (!tidy && isLiveCardPath(path.relative(deskRoot, absolute))) {
+    if (!tidy && isLiveCardPath(path.relative(deskRoot, absolute).split(path.sep).join("/"))) {
       throw new Error(`desk_save: remove ${relativePath} from \`paths\` and write the task card with task_update, task_create, task_move or task_archive, which commit it; to commit a tidy that moved cards, pass tidy: true`)
     }
   }

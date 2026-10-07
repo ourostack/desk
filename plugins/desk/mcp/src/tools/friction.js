@@ -26,7 +26,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
-import { resolveWriteTarget, personPrefix } from "../util/paths.js"
+import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { stagingAllowed, stageAndCommitFile, writeCardCommitted, cardCommitMessage } from "./_card-commit.js"
 import { cardKey, openImprovement } from "../desk/improvement-cards.js"
@@ -55,7 +55,7 @@ export const FRICTION_ADD_FIELDS = [
 ]
 
 function relPath(deskRoot, absPath) {
-  return path.relative(deskRoot, absPath)
+  return deskRelativePath(deskRoot, absPath)
 }
 
 function trackFrictionIdentity(themeSlug) {
@@ -99,7 +99,7 @@ async function fingerprintIfReady(env, deskRoot, card) {
 // the evidence jobs as pointers, and nothing of the note.
 async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, spawnGit, schedulePush }) {
   if (fingerprint === null) return { improvement: "factory_state_unavailable" }
-  const prefix = path.relative(deskRoot, personPrefix(deskRoot, person))
+  const prefix = deskRelativePath(deskRoot, personPrefix(deskRoot, person))
   const key = cardKey("friction_candidate", fingerprint)
   const evidence = Array.isArray(card.evidenceJobs) ? card.evidenceJobs.map((job) => `job:${job}`) : []
   try {

@@ -234,8 +234,10 @@ test("unlinkIfUnchanged removes only the exact file judged stale", async () => {
   const file = path.join(root, "endpoint")
   writeFileSync(file, "")
   const stat = lstatSync(file)
-  unlinkIfUnchanged(file, { dev: stat.dev, ino: stat.ino + 1 })
-  unlinkIfUnchanged(file, { dev: stat.dev + 1, ino: stat.ino })
+  // A Windows file id can exceed 2^53, where adding one changes nothing, so a different number is built by halving instead.
+  const other = (n) => (n === 0 ? 1 : n / 2)
+  unlinkIfUnchanged(file, { dev: stat.dev, ino: other(stat.ino) })
+  unlinkIfUnchanged(file, { dev: other(stat.dev), ino: stat.ino })
   assert.equal(lstatSync(file).ino, stat.ino, "a replaced file is kept")
   unlinkIfUnchanged(file, stat)
   assert.throws(() => lstatSync(file), /ENOENT/u)

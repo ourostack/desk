@@ -51,6 +51,12 @@ test("the pre-commit card guard's refusal opens with the fix, naming the staged 
   assert.match(firstSentence(result.stderr), /^Run (?:git -C .* restore --staged .* and call task_update for it|the command below, then call task_update for the card)/u)
 })
 
+test("the pre-commit card guard puts the command in the first sentence only when the whole sentence stays within the 120-character rule", () => {
+  // The sentence is "Run <command> and call task_update for it." (33 characters around the command), so the command may be at most 87 long.
+  const limit = Number(/\$\{#unstage\}" -le (\d+)/u.exec(hookScript())?.[1])
+  assert.ok(limit + "Run  and call task_update for it.".length <= 120, `a command of ${limit} characters makes a first sentence of ${limit + 33}`)
+})
+
 test("the test-isolation refusals open with the fix", () => {
   for (const guard of [assertNotRealRuntimeState, assertNotRealFactoryState]) {
     assert.throws(() => guard("/home/someone/.local/state/ouroboros-skills/desk", { env: { NODE_TEST_CONTEXT: "child" }, platform: "linux" }), (error) => (assertActionable(assert, error.message, "test state"), true))

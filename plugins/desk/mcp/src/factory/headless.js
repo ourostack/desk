@@ -186,10 +186,10 @@ export function resolveLaunch({ cli, platform = process.platform, readFile = rea
   if (platform !== "win32" || !isScriptShim(cli)) {
     return { cmd: cli, prefix: [] }
   }
-  const packageDir = path.join(path.dirname(cli), "node_modules", "@anthropic-ai", "claude-code")
+  const packageDir = path.win32.join(path.win32.dirname(cli), "node_modules", "@anthropic-ai", "claude-code")
   let bin
   try {
-    const manifest = JSON.parse(readFile(path.join(packageDir, "package.json"), "utf8"))
+    const manifest = JSON.parse(readFile(path.win32.join(packageDir, "package.json"), "utf8"))
     bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.claude
   } catch {
     return null
@@ -197,10 +197,15 @@ export function resolveLaunch({ cli, platform = process.platform, readFile = rea
   if (typeof bin !== "string" || bin === "") {
     return null
   }
-  const target = path.join(packageDir, bin)
+  // A rooted path (`\x`, `\\server\share`) or a colon (a drive as in `C:x.exe`, or a stream) is not a file inside the package.
+  if (bin.includes(":") || path.win32.isAbsolute(bin)) {
+    return null
+  }
+  const target = path.win32.join(packageDir, bin)
+  // Only Windows reaches here, so the package folder is read in Windows spelling (backslashes, drive letters) on every host.
   // A `bin` that climbs out of the package (or is an absolute path elsewhere) names a program the package does not own.
-  const within = path.relative(packageDir, target)
-  if (within === "" || within.startsWith("..") || path.isAbsolute(within)) {
+  const within = path.win32.relative(packageDir, target)
+  if (within === "" || within.startsWith("..") || path.win32.isAbsolute(within)) {
     return null
   }
   if (isScriptShim(target)) {
@@ -219,6 +224,7 @@ export function resolveLaunch({ cli, platform = process.platform, readFile = rea
  */
 export function findAgentCli({ env, exists = isExecutableFile, platform = process.platform, homedir = osHomedir, readFile = readFileSync }) {
   const windows = platform === "win32"
+  const p = windows ? path.win32 : path
   const usable = (candidate) => exists(candidate) && (!isScriptShim(candidate) || resolveLaunch({ cli: candidate, platform, readFile }) !== null)
   const explicit = env.DESK_AGENT_CLI
   if (typeof explicit === "string" && explicit !== "" && usable(explicit)) {
@@ -226,13 +232,13 @@ export function findAgentCli({ env, exists = isExecutableFile, platform = proces
   }
   // The native Claude Code install is `claude.exe` on Windows, and the npm install is `claude.cmd`.
   const names = windows ? ["claude.exe", "claude.cmd"] : ["claude"]
-  const dirs = typeof env.PATH === "string" ? env.PATH.split(path.delimiter).filter((dir) => dir !== "") : []
-  const candidates = dirs.flatMap((dir) => names.map((name) => path.join(dir, name)))
+  const dirs = typeof env.PATH === "string" ? env.PATH.split(p.delimiter).filter((dir) => dir !== "") : []
+  const candidates = dirs.flatMap((dir) => names.map((name) => p.join(dir, name)))
   const home = [env.HOME, windows ? env.USERPROFILE : undefined, windows ? homedir() : undefined].find((value) => typeof value === "string" && value !== "")
   if (home !== undefined) {
-    const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude")
+    const configDir = env.CLAUDE_CONFIG_DIR || p.join(home, ".claude")
     for (const name of names) {
-      candidates.push(path.join(configDir, "local", name), path.join(home, ".local", "bin", name))
+      candidates.push(p.join(configDir, "local", name), p.join(home, ".local", "bin", name))
     }
   }
   return candidates.find((candidate) => usable(candidate)) ?? null

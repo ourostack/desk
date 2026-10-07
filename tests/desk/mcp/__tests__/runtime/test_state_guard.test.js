@@ -15,6 +15,7 @@ import {
   assertNotRealStateUnderTest,
   isUnderOsTmpdir,
   looksLikeNodeTestRunner,
+  tmpdirSpellingsOf,
 } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
 
 test("looksLikeNodeTestRunner is true whenever NODE_TEST_CONTEXT is a non-blank string", () => {
@@ -59,12 +60,23 @@ test("isUnderOsTmpdir recognizes the OS temp directory itself, a subdirectory, a
   assert.equal(isUnderOsTmpdir(path.join(path.dirname(realTmp), "definitely-not-tmp")), false, "a sibling of the temp directory")
 })
 
+test("tmpdirSpellingsOf keeps the operating system's long spelling of a short temp path (Windows 8.3 names) and survives a path that cannot be resolved", () => {
+  const spellings = tmpdirSpellingsOf("C:\\Users\\RUNNER~1\\Temp", {
+    realpath: (target) => target,
+    native: () => "C:\\Users\\runneradmin\\Temp",
+  })
+  assert.deepEqual([...spellings].sort(), ["C:\\Users\\RUNNER~1\\Temp", "C:\\Users\\runneradmin\\Temp"])
+  const unresolved = tmpdirSpellingsOf("/gone", { realpath: () => { throw new Error("ENOENT") }, native: () => { throw new Error("ENOENT") } })
+  assert.deepEqual([...unresolved], ["/gone"])
+})
+
 test("isUnderOsTmpdir folds path casing only under an injected win32 platform; every other platform stays case-sensitive", () => {
   const tmp = os.tmpdir()
   const swapped = tmp.toUpperCase() === tmp ? tmp.toLowerCase() : tmp.toUpperCase()
   assert.notEqual(swapped, tmp, "the OS temp directory must contain a letter for this to be a meaningful check")
   assert.equal(isUnderOsTmpdir(path.join(swapped, "x"), { platform: "win32" }), true)
-  assert.equal(isUnderOsTmpdir(path.join(swapped, "x"), { platform: "linux" }), false)
+  // On Windows node's own path.relative folds case whatever platform is injected, so the case-sensitive half can only be observed elsewhere.
+  if (process.platform !== "win32") assert.equal(isUnderOsTmpdir(path.join(swapped, "x"), { platform: "linux" }), false)
 })
 
 test("assertNotRealStateUnderTest is a no-op outside anything that looks like a node:test run", () => {

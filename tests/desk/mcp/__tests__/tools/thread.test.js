@@ -52,7 +52,7 @@ test("alpha thread waits for controller convergence and never reads an unproven 
   await convergence
   const result = await waiting
   assert.equal(result.chain.length, 2)
-  assert.equal(result.chain[1].path, path.join("track", "work", "task.md"))
+  assert.equal(result.chain[1].path, path.posix.join("track", "work", "task.md"))
 })
 
 test("alpha thread reports unavailable instead of fabricating a direct graph", async () => {
@@ -135,13 +135,13 @@ test("desk_thread — one hop forward: planning.md → task.md", async () => {
     input: { start_path: path.join("trackA", "my-task", "planning.md"), direction: "forward" },
   })
 
-  assert.equal(res.start.path, path.join("trackA", "my-task", "planning.md"))
+  assert.equal(res.start.path, path.posix.join("trackA", "my-task", "planning.md"))
   assert.equal(res.start.kind, "planning")
   // chain[0] is the start doc; chain[1] is the task.md (hop 1).
   assert.equal(res.chain.length, 2)
-  assert.equal(res.chain[0].path, path.join("trackA", "my-task", "planning.md"))
+  assert.equal(res.chain[0].path, path.posix.join("trackA", "my-task", "planning.md"))
   assert.equal(res.chain[0].hop_distance, 0)
-  assert.equal(res.chain[1].path, path.join("trackA", "my-task", "task.md"))
+  assert.equal(res.chain[1].path, path.posix.join("trackA", "my-task", "task.md"))
   assert.equal(res.chain[1].hop_distance, 1)
   assert.equal(res.chain[1].ref_kind, "planning_of")
   assert.match(res.chain[1].why_connected, /planning doc of my-task/)
@@ -187,10 +187,10 @@ test("desk_thread — 2-hop forward chain: doing.md → task.md → iteration en
   })
 
   const byPath = new Map(res.chain.map((r) => [r.path, r]))
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "planning.md")).hop_distance, 0)
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "task.md")).hop_distance, 1)
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "doing.md")).hop_distance, 2)
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "doing.md")).ref_kind, "doing_of")
+  assert.equal(byPath.get(path.posix.join("trackA", "hubbed", "planning.md")).hop_distance, 0)
+  assert.equal(byPath.get(path.posix.join("trackA", "hubbed", "task.md")).hop_distance, 1)
+  assert.equal(byPath.get(path.posix.join("trackA", "hubbed", "doing.md")).hop_distance, 2)
+  assert.equal(byPath.get(path.posix.join("trackA", "hubbed", "doing.md")).ref_kind, "doing_of")
 })
 
 // ---------------------------------------------------------------------------
@@ -227,20 +227,20 @@ test("desk_thread — backward from task.md surfaces planning + doing + feedback
   })
 
   const paths = res.chain.map((r) => r.path)
-  assert.ok(paths.includes(path.join("trackA", "full", "task.md")))
-  assert.ok(paths.includes(path.join("trackA", "full", "planning.md")))
-  assert.ok(paths.includes(path.join("trackA", "full", "doing.md")))
-  assert.ok(paths.includes(path.join("trackA", "full", "feedback.md")))
+  assert.ok(paths.includes(path.posix.join("trackA", "full", "task.md")))
+  assert.ok(paths.includes(path.posix.join("trackA", "full", "planning.md")))
+  assert.ok(paths.includes(path.posix.join("trackA", "full", "doing.md")))
+  assert.ok(paths.includes(path.posix.join("trackA", "full", "feedback.md")))
   // Start doc is first.
-  assert.equal(res.chain[0].path, path.join("trackA", "full", "task.md"))
+  assert.equal(res.chain[0].path, path.posix.join("trackA", "full", "task.md"))
   assert.equal(res.chain[0].hop_distance, 0)
 
   // why_connected references the task slug.
-  const planning = res.chain.find((r) => r.path === path.join("trackA", "full", "planning.md"))
+  const planning = res.chain.find((r) => r.path === path.posix.join("trackA", "full", "planning.md"))
   assert.match(planning.why_connected, /planning doc of full/)
-  const doing = res.chain.find((r) => r.path === path.join("trackA", "full", "doing.md"))
+  const doing = res.chain.find((r) => r.path === path.posix.join("trackA", "full", "doing.md"))
   assert.match(doing.why_connected, /doing iteration of full/)
-  const feedback = res.chain.find((r) => r.path === path.join("trackA", "full", "feedback.md"))
+  const feedback = res.chain.find((r) => r.path === path.posix.join("trackA", "full", "feedback.md"))
   assert.match(feedback.why_connected, /feedback on full/)
 })
 
@@ -515,8 +515,8 @@ test("desk_thread — absolute start_path is relativized to deskRoot", async () 
     deskRoot: root,
     input: { start_path: abs, direction: "forward" },
   })
-  assert.equal(res.start.path, path.join("trackA", "abs", "planning.md"))
-  assert.equal(res.chain[0].path, path.join("trackA", "abs", "planning.md"))
+  assert.equal(res.start.path, path.posix.join("trackA", "abs", "planning.md"))
+  assert.equal(res.chain[0].path, path.posix.join("trackA", "abs", "planning.md"))
 })
 
 // ---------------------------------------------------------------------------

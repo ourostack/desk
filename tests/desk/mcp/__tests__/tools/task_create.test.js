@@ -49,7 +49,7 @@ test("task_create writes a v1 task.md with required + default fields", async () 
   })
 
   assert.equal(result.status, "created")
-  assert.equal(result.path, path.join("europe-trip", "book-flights", "task.md"))
+  assert.equal(result.path, path.posix.join("europe-trip", "book-flights", "task.md"))
 
   const filePath = path.join(root, "europe-trip", "book-flights", "task.md")
   assert.ok(await exists(filePath), "task.md should exist on disk")
@@ -252,7 +252,7 @@ test("task_create stages and commits exactly the task.md it wrote", async () => 
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "task_create: europe-trip/book-flights")
-  assert.deepEqual(lastCommitFiles(root), [path.join("europe-trip", "book-flights", "task.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("europe-trip", "book-flights", "task.md")])
 })
 
 test("task_create calls schedulePush exactly once with { root: deskRoot } on a successful commit", async () => {
@@ -284,7 +284,7 @@ test("task_create commits only its own file, leaving another process's staged, u
   })
 
   assert.equal(result.commit, undefined, "task_create's own commit succeeded")
-  assert.deepEqual(lastCommitFiles(root), [path.join("europe-trip", "book-flights", "task.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("europe-trip", "book-flights", "task.md")])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })

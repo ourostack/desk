@@ -3,6 +3,7 @@
 import { test, mock } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { promises as fs, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
@@ -15,12 +16,13 @@ import { TOOL_IMPLS, callTool } from "../../../../../plugins/desk/mcp/src/server
 import { deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 import { toolKind } from "../../../../../plugins/desk/mcp/src/factory/tool-kinds.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { osEnv } from "../_os_env.js"
 
 const SENTINEL = "SENTINEL-card-body-text"
 const PR_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/7" }
 const FUTURE = Date.now() + 3_600_000
 const AT = new Date(FUTURE).toISOString()
-const REPO = path.resolve(new URL("../../../../../", import.meta.url).pathname)
+const REPO = path.resolve(fileURLToPath(new URL("../../../../../", import.meta.url)))
 
 const now = () => FUTURE
 const spy = () => {
@@ -97,7 +99,7 @@ test("an acceptance of a delivered task writes accepted", async () => {
   const before = (await readFront(file)).data
   const result = await sign(root, "ship-fix", { outcome: "accepted" })
   assert.equal(result.status, "signed")
-  assert.equal(result.path, path.join("t", "ship-fix", "task.md"))
+  assert.equal(result.path, "t/ship-fix/task.md")
   assert.deepEqual(result.signoff, { state: "accepted", at: AT, reason: null })
   assert.equal(result.say, "Recorded: ship-fix accepted.")
   for (const key of ["verified", "unverified_because", "unverified_note"]) assert.equal(key in result, false, key)
@@ -239,7 +241,7 @@ test("a refusal of an archived task brings it back to the live tree", async () =
   const archived = path.join(root, "t", "_archive", "from-the-shelf")
   const live = path.join(root, "t", "from-the-shelf", "task.md")
   const result = await sign(root, "from-the-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" })
-  assert.equal(result.path, path.join("t", "from-the-shelf", "task.md"))
+  assert.equal(result.path, "t/from-the-shelf/task.md")
   await assert.rejects(fs.access(archived))
   const { data } = await readFront(live)
   assert.equal(data.status, "processing")
@@ -268,7 +270,7 @@ test("an acceptance of an archived task leaves it archived", async () => {
   initGit(root)
   const file = await delivered(root, "kept-on-shelf", { archive: true })
   const result = await sign(root, "kept-on-shelf", { outcome: "accepted" })
-  assert.equal(result.path, path.join("t", "_archive", "kept-on-shelf", "task.md"))
+  assert.equal(result.path, "t/_archive/kept-on-shelf/task.md")
   const { data } = await readFront(file)
   assert.equal(data.signoff.state, "accepted")
   assert.equal(data.status, "done")
@@ -289,7 +291,7 @@ test("repeating an acceptance changes nothing and says so", async () => {
   const result = await sign(root, "said-twice", { outcome: "accepted" }, { finalize: finalize.fn, refreshSignoff: refresh.fn })
   assert.equal(result.status, "unchanged")
   assert.equal(result.say, "Already recorded: said-twice accepted.")
-  assert.equal(result.path, path.join("t", "said-twice", "task.md"))
+  assert.equal(result.path, "t/said-twice/task.md")
   assert.equal(await body(file), before)
   assert.equal(headOf(root), head)
   assert.equal(finalize.calls.length, 0)
@@ -577,7 +579,7 @@ test("with nothing injected, a sign-off refreshes status.json.signoff from the d
   await delivered(root, "counted-one")
   await delivered(root, "counted-two")
   const stateHome = await fs.mkdtemp(path.join(path.dirname(root), "signoff-state-"))
-  const env = { HOME: stateHome, XDG_STATE_HOME: stateHome }
+  const env = osEnv({ HOME: stateHome, XDG_STATE_HOME: stateHome })
   const result = await taskSignoff({ deskRoot: root, input: { track: "t", slug: "counted-one", outcome: "accepted" }, env, now, finalize: async () => {}, schedulePush: () => {} })
   assert.equal(result.status, "signed")
   const { signoff } = await readStatus(env)

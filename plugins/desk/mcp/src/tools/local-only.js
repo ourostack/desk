@@ -15,7 +15,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths, commitBranchRefusal } from "../util/git-stage.js"
-import { resolveLocalPath, isPathContained } from "../util/paths.js"
+import { deskRelativePath, resolveLocalPath, isPathContained } from "../util/paths.js"
 
 const GIT_TIMEOUT_MS = 5000
 
@@ -101,7 +101,7 @@ export async function recordLocalOnlyOnCards({ cards, deskRoot, spawnGit = spawn
       // On a git desk the write is committed the way every other card write is (`commitPaths`), so boot never leaves a modified card behind for a
       // hand commit; a card another session has edited and not staged is left unrecorded rather than adopted.
       const git = isGitRepository(deskRoot, spawnGit)
-      const rel = path.relative(deskRoot, card.file)
+      const rel = deskRelativePath(deskRoot, card.file)
       if (git && hasUnstagedWork(deskRoot, [rel], spawnGit)) continue
       // Off the desk's branch, Desk writes nothing: the card stays unrecorded.
       if (git && commitBranchRefusal(deskRoot, spawnGit, stateBranch) !== null) continue

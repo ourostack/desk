@@ -78,17 +78,17 @@ test("discover finds _shared/landscape facts AND person desk tasks together", as
   const root = await mkRoot()
   await writeFile(
     root,
-    path.join("desks", "ari", "t", "s", "task.md"),
+    path.posix.join("desks", "ari", "t", "s", "task.md"),
     "---\ntitle: A\n---\nbody",
   )
   await writeFile(
     root,
-    path.join("_shared", "landscape", "glossary.md"),
+    path.posix.join("_shared", "landscape", "glossary.md"),
     "---\ntitle: Glossary\n---\nCCA = Customer Connect Agent",
   )
   await writeFile(
     root,
-    path.join("_shared", "landscape", "nova-and-twa.md"),
+    path.posix.join("_shared", "landscape", "nova-and-twa.md"),
     "Nova control flow is a model-driven loop",
   )
 
@@ -96,20 +96,20 @@ test("discover finds _shared/landscape facts AND person desk tasks together", as
   const paths = new Set(docs.map((d) => d.path))
 
   assert.ok(
-    paths.has(path.join("desks", "ari", "t", "s", "task.md")),
+    paths.has(path.posix.join("desks", "ari", "t", "s", "task.md")),
     "person task must be discovered",
   )
   assert.ok(
-    paths.has(path.join("_shared", "landscape", "glossary.md")),
+    paths.has(path.posix.join("_shared", "landscape", "glossary.md")),
     "_shared/landscape glossary must be discovered (read-across)",
   )
   assert.ok(
-    paths.has(path.join("_shared", "landscape", "nova-and-twa.md")),
+    paths.has(path.posix.join("_shared", "landscape", "nova-and-twa.md")),
     "_shared/landscape facts must be discovered",
   )
 
   const glossary = docs.find(
-    (d) => d.path === path.join("_shared", "landscape", "glossary.md"),
+    (d) => d.path === path.posix.join("_shared", "landscape", "glossary.md"),
   )
   assert.equal(glossary.kind, "shared")
 })
@@ -120,7 +120,7 @@ test("discover unchanged when no _shared/ dir present (single-desk)", async () =
   const root = await mkRoot()
   await writeFile(
     root,
-    path.join("legacy-track", "legacy-slug", "task.md"),
+    path.posix.join("legacy-track", "legacy-slug", "task.md"),
     "---\ntitle: L\n---\nx",
   )
   const docs = await discover(root)

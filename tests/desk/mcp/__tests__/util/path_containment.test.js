@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import * as paths from "../../../../../plugins/desk/mcp/src/util/paths.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { NO_POSIX_MODES } from "../_platform.js"
 
 async function makeRoot(prefix = "desk-containment-") {
   return mkTempRoot(prefix)
@@ -240,7 +241,7 @@ test("resolveWriteTarget rejects a symlink to the effective root parent", async 
   )
 })
 
-test("resolveWriteTarget propagates non-missing filesystem errors", async () => {
+test("resolveWriteTarget propagates non-missing filesystem errors", { skip: NO_POSIX_MODES }, async () => {
   const root = await makeRoot()
   const blocked = path.join(root, "blocked")
   await fs.mkdir(blocked)

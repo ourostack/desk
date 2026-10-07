@@ -103,7 +103,7 @@ desk_card_guard() {
   {
     first=$(echo "$refused" | head -n 1)
     unstage="git -C \\"$top\\" restore --staged \\"$first\\""
-    if [ "\${#unstage}" -le 100 ]; then echo "Run $unstage and call task_update for it."; else echo "Run the command below, then call task_update for the card."; echo "$unstage"; fi
+    if [ "\${#unstage}" -le 87 ]; then echo "Run $unstage and call task_update for it."; else echo "Run the command below, then call task_update for the card."; echo "$unstage"; fi
     echo "Desk refused this commit because it changes a task card, and a card is written only through Desk's tools, which commit it for you:"
     echo "$refused" | sed 's/^/  /'
     echo "Use task_update (status, repos, a progress note, the next step, more body text), task_create, task_move or task_archive: each writes the card and commits it for you."

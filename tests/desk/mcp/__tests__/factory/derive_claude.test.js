@@ -26,6 +26,10 @@ import {
   padded,
 } from "./fixtures/claude/make.js"
 
+// A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
+const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
+const spellCommit = ({ cwd, paths }) => ({ cwd: posixSpelling(cwd), paths: paths.map(posixSpelling) })
+
 const here = path.dirname(fileURLToPath(import.meta.url))
 const fixturesDir = path.join(here, "fixtures", "claude")
 const transcriptPath = (sessionId) => path.join(fixturesDir, `${sessionId}.jsonl`)
@@ -537,8 +541,8 @@ test("only a successful Bash git commit call becomes a shellGitCommits event, wi
   const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd, paths: [], agent: 0 })
   assert.deepEqual(events.shellGitCommits, [
     span("01", "02", base),
-    span("03", "04", `/tmp/${SENTINEL}-desk`),
-    span("05", "06", `/tmp/${SENTINEL}-other`),
+    span("03", "04", path.normalize(`/tmp/${SENTINEL}-desk`)),
+    span("05", "06", path.normalize(`/tmp/${SENTINEL}-other`)),
     span("09", "10", null),
     span("23", "24", base),
     span("25", "26", base),
@@ -1234,11 +1238,11 @@ test("a Bash git add and commit gives shellGitCommits paths, and a Bash redirect
     call("g4", "Bash", { command: "git commit -m x" }),
     result("g4"),
   ])
-  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+  assert.deepEqual(events.shellGitCommits.map(spellCommit), [
     { cwd: "/w", paths: ["/w/t/s/task.md"] },
     { cwd: "/w", paths: [] },
   ])
-  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: posixSpelling(written), agent })), [
     { at: "2026-09-25T08:00:03.000Z", path: "/w/out.txt", agent: 0 },
   ])
   assert.equal(JSON.stringify(facts).includes("task.md"), false)
@@ -1255,7 +1259,7 @@ test("desk_save paths become fileWrites when the call succeeded, and a failed or
     call("d3", SAVE_TOOL, { content: "x" }),
     result("d3"),
   ])
-  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at, path: written, agent }) => ({ at, path: posixSpelling(written), agent })), [
     { at: "2026-09-25T08:00:01.000Z", path: "notes/a.md", agent: 0 },
     { at: "2026-09-25T08:00:01.000Z", path: "notes/b.md", agent: 0 },
   ])
@@ -1304,7 +1308,7 @@ test("two commits in one directory give one shellGitCommits entry with every pat
     call("m1", "Bash", { command: "git add a.md && git commit -qm x && git add b.md a.md && git commit -qm y && git -C /elsewhere commit -qm z" }),
     result("m1"),
   ])
-  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+  assert.deepEqual(events.shellGitCommits.map(spellCommit), [
     { cwd: "/w", paths: ["/w/a.md", "/w/b.md"] },
     { cwd: "/elsewhere", paths: [] },
   ])
@@ -1368,7 +1372,7 @@ test("a session with no assistant usage flags models, tokens and requests field_
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 })
 
-test("an unreadable subagents folder flags agents source_unreadable, and a missing folder does not", async () => {
+test("an unreadable subagents folder flags agents source_unreadable, and a missing folder does not", { skip: process.platform === "win32" && "Windows reports a file read as a folder (readdir) as ENOENT, the same code as a missing folder, so a file in place of the folder cannot be told apart from a missing one" }, async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-nosub-"))
   try {
     const root = path.join(dir, `${SUB_SESSION_ID}.jsonl`)

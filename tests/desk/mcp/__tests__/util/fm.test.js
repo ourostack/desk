@@ -143,14 +143,14 @@ test("Unicode slugs reach lesson and track-friction file paths", async () => {
     deskRoot: root,
     input: { topic: "日本語の教訓", body: "Lesson body." },
   })
-  assert.equal(lesson.path, path.join("_meta", "tips", "日本語の教訓.md"))
+  assert.equal(lesson.path, "_meta/tips/日本語の教訓.md")
   assert.match(await fs.readFile(path.join(root, lesson.path), "utf8"), /Lesson body/)
 
   const friction = await friction_add({
     deskRoot: root,
     input: { track: "t1", theme: "安全/路径", body: "Friction body." },
   })
-  assert.equal(path.dirname(friction.path), path.join("t1", "_friction"))
+  assert.equal(path.posix.dirname(friction.path), "t1/_friction")
   assert.match(path.basename(friction.path), /^\d{4}-\d{2}-\d{2}-安全-路径\.md$/)
   assert.match(await fs.readFile(path.join(root, friction.path), "utf8"), /Friction body/)
 
@@ -158,7 +158,7 @@ test("Unicode slugs reach lesson and track-friction file paths", async () => {
     deskRoot: root,
     input: { topic: "COM¹", body: "Windows-safe lesson." },
   })
-  assert.equal(reservedLesson.path, path.join("_meta", "tips", "_com¹.md"))
+  assert.equal(reservedLesson.path, "_meta/tips/_com¹.md")
 })
 
 test("reserved-name escaping stays distinct for both write orders", async () => {
@@ -222,7 +222,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: root,
     input: { topic: "cafe\u0301", body: "Updated lesson." },
   })
-  assert.equal(lesson.path, path.join("_meta", "tips", `${lessonSlug}.md`))
+  assert.equal(lesson.path, `_meta/tips/${lessonSlug}.md`)
   assert.match(await fs.readFile(lessonPath, "utf8"), /Updated lesson/)
 
   const collisionRoot = await mkTempDeskRoot()
@@ -233,7 +233,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: collisionRoot,
     input: { topic: "café", body: "Specific lesson." },
   })
-  assert.equal(collision.path, path.join("_meta", "tips", "café.md"))
+  assert.equal(collision.path, "_meta/tips/café.md")
   assert.equal(await fs.readFile(collisionPath, "utf8"), "# caf\n\nDifferent lesson.\n")
 
   const occupiedRoot = await mkTempDeskRoot()
@@ -245,7 +245,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: occupiedRoot,
     input: { topic: "caf", body: "Distinct ASCII lesson." },
   })
-  assert.equal(occupied.path, path.join("_meta", "tips", "__caf.md"))
+  assert.equal(occupied.path, "_meta/tips/__caf.md")
   const occupiedAgain = await lesson_add({
     deskRoot: occupiedRoot,
     input: { topic: "caf", body: "Second ASCII update." },
@@ -262,7 +262,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: reservedRoot,
     input: { topic: "CON", body: "Updated reserved lesson." },
   })
-  assert.equal(reserved.path, path.join("_meta", "tips", "__con.md"))
+  assert.equal(reserved.path, "_meta/tips/__con.md")
   await assert.rejects(() => fs.access(reservedLegacyPath), { code: "ENOENT" })
   assert.match(await fs.readFile(path.join(reservedRoot, reserved.path), "utf8"), /Original reserved lesson/)
   assert.equal(await fs.readFile(occupiedReservedPath, "utf8"), "# Different topic\n\nMust survive.\n")
@@ -276,7 +276,7 @@ test("legacy paths are reused only when their identity is provable", async () =>
     deskRoot: root,
     input: { track: "t1", theme: "mañana notes", body: "Updated friction." },
   })
-  assert.equal(friction.path, path.join("t1", "_friction", `${today()}-mañana-notes.md`))
+  assert.equal(friction.path, `t1/_friction/${today()}-mañana-notes.md`)
   assert.equal(await fs.readFile(frictionPath, "utf8"), "Original friction.\n")
   assert.match(await fs.readFile(path.join(root, friction.path), "utf8"), /Updated friction/)
 

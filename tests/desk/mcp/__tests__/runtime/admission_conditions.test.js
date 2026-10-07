@@ -704,8 +704,13 @@ test("--degraded with a crew-state code serves reads and refuses writes; with --
 
 // ---- nothing blocks the thread that answers the host ----
 
-// Send tools/list, ping and desk_status every `intervalMs` for `forMs`, or, with `untilState`, until desk_status reports that state and then `afterMs` more; every answer must come within `budgetMs`.
-async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200, intervalMs = 100, untilState = null, afterMs = 0, deadlineMs = 60000 } = {}) {
+// Send tools/list, ping and desk_status every `intervalMs` for `forMs`, or, with `untilState`, until desk_status reports that state and then `afterMs` more.
+// A blocked thread stalls the answers, and the test says so two ways: the median answer must come within `budgetMs` (the same 200 ms on every platform: one slow answer on a shared runner is jitter, a slow median is a busy thread),
+// and no single answer may take longer than `hardCapMs`, which a thread blocked for a second or more exceeds and jitter (the slowest Windows sample seen so far was 506 ms) does not. A single 1.5 s block fails the cap even though the median stays low. The measured values go to the test's diagnostics.
+const ANSWER_BUDGET_MS = 200
+const ANSWER_HARD_CAP_MS = 750
+const median = (values) => [...values].sort((x, y) => x - y)[Math.floor(values.length / 2)]
+async function assertAnswersFast(session, t, { forMs = 4000, budgetMs = ANSWER_BUDGET_MS, hardCapMs = ANSWER_HARD_CAP_MS, intervalMs = 100, untilState = null, afterMs = 0, deadlineMs = 60000 } = {}) {
   const started = Date.now()
   let until = untilState === null ? started + forMs : Infinity
   const timings = []
@@ -715,7 +720,7 @@ async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200, interv
       const { ms, response } = await session.timed(method, params)
       assert.equal(response.error, undefined)
       timings.push([method, ms])
-      assert.ok(ms < budgetMs, `${method} took ${ms} ms while admission was busy`)
+      assert.ok(ms < hardCapMs, `${method} took ${ms} ms while admission was busy, over the ${hardCapMs} ms cap`)
       if (method !== "tools/call") continue
       const state = JSON.parse(response.result.content[0].text).state
       if (states.at(-1) !== state) states.push(state)
@@ -724,6 +729,9 @@ async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200, interv
     assert.ok(Date.now() - started < deadlineMs, `desk_status never reported ${untilState}; states: ${states.join(" → ")}`)
     await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
+  const middle = median(timings.map(([, ms]) => ms))
+  t.diagnostic(`answer times while admission was busy: median ${middle} ms, slowest ${Math.max(...timings.map(([, ms]) => ms))} ms, over ${timings.length} requests`)
+  assert.ok(middle < budgetMs, `the median answer took ${middle} ms while admission was busy (budget ${budgetMs} ms); times: ${timings.map(([, ms]) => ms).join(" ")}`)
   return { timings, states }
 }
 
@@ -734,7 +742,7 @@ test("a 30 s restore on the admission worker never delays tools/list, ping or de
   const session = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload], env: { DESK_TEST_SLOW_RESTORE_MS: "30000" } })
   t.after(() => session.close())
   assert.ok(session.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${session.handshakeMs} ms`)
-  const { timings } = await assertAnswersFast(session)
+  const { timings } = await assertAnswersFast(session, t)
   t.diagnostic(`slowest answer during the stalled restore: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
   assert.equal((await session.call("desk_status", { detail: true })).payload.state, "admitting", "the restore is still stalled")
 })
@@ -746,7 +754,7 @@ test("the transition to ready never delays tools/list, ping or desk_status: the 
   // A short stall, so the requests are already flowing when the restore finishes and admission reaches ready.
   const session = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload], env: { DESK_TEST_SLOW_RESTORE_MS: "1500" } })
   t.after(() => session.close())
-  const { timings, states } = await assertAnswersFast(session, { intervalMs: 20, untilState: "ready", afterMs: 3000 })
+  const { timings, states } = await assertAnswersFast(session, t, { intervalMs: 20, untilState: "ready", afterMs: 3000 })
   assert.deepEqual(states, ["admitting", "ready"])
   const slowest = Object.fromEntries(["tools/list", "ping", "tools/call"].map((method) => [method, Math.max(...timings.filter(([name]) => name === method).map(([, ms]) => ms))]))
   t.diagnostic(`slowest answers across the transition to ready: ${JSON.stringify(slowest)} ms over ${timings.length} requests`)
@@ -761,7 +769,7 @@ test("a runtime publication lock held by another process never delays tools/list
   t.after(() => rmSync(lockDir, { recursive: true, force: true }))
   const session = await startDesk(fixture, { args: ["--activation-config", configPath] })
   t.after(() => session.close())
-  const { timings } = await assertAnswersFast(session)
+  const { timings } = await assertAnswersFast(session, t)
   t.diagnostic(`slowest answer while the lock was held: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
   assert.equal((await session.call("desk_status", { detail: true })).payload.state, "admitting")
   rmSync(lockDir, { recursive: true, force: true })

@@ -459,38 +459,41 @@ assert.throws(
       stdout: { write() {} },
     }), 1);
 
-    const fakeBin = path.join(tempRoot, "bin");
-    fs.mkdirSync(fakeBin);
-    const fakeGh = path.join(fakeBin, "gh");
-    fs.writeFileSync(fakeGh, `#!/usr/bin/env node
-const endpoint = process.argv[3];
-const locked = "${lockedCommit}";
-let value;
-if (endpoint === "repos/owner/repo") {
-  value = { full_name: "owner/repo", default_branch: "main", html_url: "https://github.com/owner/repo", license: { spdx_id: "MIT" } };
-} else if (endpoint === "repos/owner/repo/releases?per_page=100") {
-  value = [];
-} else if (endpoint === "repos/owner/repo/commits/main") {
-  value = { sha: locked };
-} else if (endpoint.startsWith("repos/owner/repo/contents/skills/example/SKILL.md?ref=")) {
-  value = { type: "file", encoding: "base64", content: Buffer.from("locked").toString("base64") };
-} else {
-  process.stderr.write("gh: Not Found (HTTP 404)");
-  process.exit(1);
-}
-process.stdout.write(JSON.stringify(value));
-`);
-    fs.chmodSync(fakeGh, 0o755);
-    const cliSuccess = spawnSync(process.execPath, [
-      path.join(__dirname, "check-upstream-sources.cjs"),
-      "--lock",
-      lockPath,
-    ], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` },
-    });
-    assert.equal(cliSuccess.status, 0, cliSuccess.stderr);
-    assert.equal(JSON.parse(cliSuccess.stdout).summary.current, 1);
+    // The stand-in `gh` is an extensionless #!/usr/bin/env node script. Windows cannot run it by name (a child process looks `gh` up as gh.exe only), so this one end-to-end check against the real command line runs off Windows.
+    if (process.platform !== "win32") {
+      const fakeBin = path.join(tempRoot, "bin");
+      fs.mkdirSync(fakeBin);
+      const fakeGh = path.join(fakeBin, "gh");
+      fs.writeFileSync(fakeGh, `#!/usr/bin/env node
+  const endpoint = process.argv[3];
+  const locked = "${lockedCommit}";
+  let value;
+  if (endpoint === "repos/owner/repo") {
+    value = { full_name: "owner/repo", default_branch: "main", html_url: "https://github.com/owner/repo", license: { spdx_id: "MIT" } };
+  } else if (endpoint === "repos/owner/repo/releases?per_page=100") {
+    value = [];
+  } else if (endpoint === "repos/owner/repo/commits/main") {
+    value = { sha: locked };
+  } else if (endpoint.startsWith("repos/owner/repo/contents/skills/example/SKILL.md?ref=")) {
+    value = { type: "file", encoding: "base64", content: Buffer.from("locked").toString("base64") };
+  } else {
+    process.stderr.write("gh: Not Found (HTTP 404)");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify(value));
+  `);
+      fs.chmodSync(fakeGh, 0o755);
+      const cliSuccess = spawnSync(process.execPath, [
+        path.join(__dirname, "check-upstream-sources.cjs"),
+        "--lock",
+        lockPath,
+      ], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` },
+      });
+      assert.equal(cliSuccess.status, 0, cliSuccess.stderr);
+      assert.equal(JSON.parse(cliSuccess.stdout).summary.current, 1);
+    }
 
     assert.throws(
       () => main(["--unknown"], { github: github(), stdout: { write() {} } }),
@@ -716,7 +719,8 @@ function writeFixtureRoot(root, lock) {
   return text;
 }
 
-{
+// The refresh compares each vendored file's executable bit on disk with the upstream tree's mode, and a Windows working tree has no executable bit (every file reads as mode 666), so a refresh on Windows could neither see a mode change nor settle to "nothing changed". Maintainers refresh on macOS or Linux; this end-to-end refresh check runs there.
+if (process.platform !== "win32") {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-source-update-"));
   try {
     const upstreamDir = path.join(tempRoot, "upstream");

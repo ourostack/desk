@@ -178,7 +178,7 @@ test("startup handles unavailable runtime through diagnostics and guarded compat
       }),
       nodeReexecutor: async (options) => {
         assert.equal(options.executable, "/node-22")
-        assert.equal(options.entrypointPath, "/plugin/index.js")
+        assert.equal(options.entrypointPath, path.join("/plugin", "index.js"))
         return handoff
       },
     })

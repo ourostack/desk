@@ -117,25 +117,44 @@ test("the argv is the pinned list exactly", () => {
   ])
 })
 
+// Fixture paths are built the way the platform builds them, and the program is named the way the platform names it.
+const CLI_NAME = process.platform === "win32" ? "claude.exe" : "claude"
+const at = (...parts) => path.join(...parts)
+
 test("findAgentCli prefers DESK_AGENT_CLI, then PATH, then the fixed locations, else null", () => {
   const present = new Set()
   const exists = (p) => present.has(p)
-  const env = { DESK_AGENT_CLI: "/x/agent", PATH: "/u/bin:/v/bin", HOME: "/home/me" }
-  present.add("/x/agent").add("/v/bin/claude").add("/home/me/.local/bin/claude").add("/home/me/.claude/local/claude")
-  assert.equal(findAgentCli({ env, exists }), "/x/agent")
-  present.delete("/x/agent")
-  assert.equal(findAgentCli({ env, exists }), "/v/bin/claude")
-  present.delete("/v/bin/claude")
-  assert.equal(findAgentCli({ env, exists }), "/home/me/.claude/local/claude")
-  present.add("/cfg/claude/local/claude")
-  assert.equal(findAgentCli({ env: { ...env, CLAUDE_CONFIG_DIR: "/cfg/claude" }, exists }), "/cfg/claude/local/claude", "the Claude config directory moves the fixed location")
-  present.delete("/cfg/claude/local/claude")
-  present.delete("/home/me/.claude/local/claude")
-  assert.equal(findAgentCli({ env, exists }), "/home/me/.local/bin/claude")
+  const explicit = at("/x", "agent")
+  const onPath = at("/v/bin", CLI_NAME)
+  const local = at("/home/me/.local/bin", CLI_NAME)
+  const claudeLocal = at("/home/me/.claude/local", CLI_NAME)
+  const configured = at("/cfg/claude/local", CLI_NAME)
+  const env = { DESK_AGENT_CLI: explicit, PATH: [at("/u/bin"), at("/v/bin")].join(path.delimiter), HOME: "/home/me" }
+  present.add(explicit).add(onPath).add(local).add(claudeLocal)
+  assert.equal(findAgentCli({ env, exists }), explicit)
+  present.delete(explicit)
+  assert.equal(findAgentCli({ env, exists }), onPath)
+  present.delete(onPath)
+  assert.equal(findAgentCli({ env, exists }), claudeLocal)
+  present.add(configured)
+  assert.equal(findAgentCli({ env: { ...env, CLAUDE_CONFIG_DIR: "/cfg/claude" }, exists }), configured, "the Claude config directory moves the fixed location")
+  present.delete(configured)
+  present.delete(claudeLocal)
+  assert.equal(findAgentCli({ env, exists }), local)
   present.clear()
   assert.equal(findAgentCli({ env, exists }), null)
   assert.equal(findAgentCli({ env: {}, exists }), null)
-  assert.equal(findAgentCli({ env: { PATH: "/u/bin::" }, exists }), null)
+  assert.equal(findAgentCli({ env: { PATH: `/u/bin${path.delimiter}${path.delimiter}` }, exists }), null)
+})
+
+test("findAgentCli looks for claude.exe, then claude.cmd, on Windows, where a program started without a shell must be named in full", () => {
+  const seen = []
+  const exists = (candidate) => { seen.push(candidate); return false }
+  findAgentCli({ env: { PATH: "/u/bin", HOME: "/home/me" }, exists, platform: "win32" })
+  assert.deepEqual(seen.map((candidate) => path.win32.basename(candidate)), ["claude.exe", "claude.cmd", "claude.exe", "claude.exe", "claude.cmd", "claude.cmd"])
+  seen.length = 0
+  findAgentCli({ env: { PATH: "/u/bin", HOME: "/home/me" }, exists, platform: "linux" })
+  assert.deepEqual(seen.map((candidate) => path.basename(candidate)), ["claude", "claude", "claude"])
 })
 
 test("findAgentCli defaults to the real file check", () => {
@@ -398,9 +417,9 @@ test("no CLI gives no_agent_cli and starts nothing", async () => {
 
 test("the CLI is found with findAgentCli when none is passed", async () => {
   const spawn = fakeSpawn(status(okRun))
-  const out = await runHeadless(baseOpts({ cli: undefined, exists: (p) => p === "/bin/claude", spawn }))
+  const out = await runHeadless(baseOpts({ cli: undefined, exists: (p) => p === at("/bin", CLI_NAME), spawn }))
   assert.equal(out.state, "ran")
-  assert.equal(spawn.calls[0].cmd, "/bin/claude")
+  assert.equal(spawn.calls[0].cmd, at("/bin", CLI_NAME))
 })
 
 test("a non-zero exit is failed and stderr text is never returned", async () => {
@@ -580,7 +599,7 @@ test("the streams are released on timeout, error and normal end", async () => {
   }
 })
 
-test("findAgentCli's default check accepts an executable file and refuses a folder or a plain file", () => {
+test("findAgentCli's default check accepts an executable file and refuses a folder or a plain file", { skip: process.platform === "win32" ? "Windows has no execute permission bit: fs.access X_OK succeeds for any file, so a plain file cannot be refused" : false }, () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "headless-cli-"))
   try {
     for (const name of ["dir", "plain", "exe"]) {
@@ -619,7 +638,7 @@ test("non-string environment values are not passed to the child", async () => {
 })
 
 // Windows behavior, exercised on any host through the platform, home-folder and file-reading seams.
-const j = (...parts) => path.join(...parts)
+const j = (...parts) => path.win32.join(...parts)
 const NPM = j("/npm")
 const SHIM = j(NPM, "claude.cmd")
 const PKG = j(NPM, "node_modules", "@anthropic-ai", "claude-code")
@@ -669,6 +688,12 @@ test("resolveLaunch starts .js, .mjs and .cjs bins through Node, takes only the 
   for (const bin of ["../../x", "../x.js", "bin/../../x.exe", "..", "."]) {
     assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith(bin)) }), null, bin)
   }
+  // Windows spelling is read as Windows on any host: backslashes and drive letters cannot climb out either.
+  for (const bin of ["..\\..\\x.exe", "bin\\..\\..\\x.js", "C:\\x.exe", "C:x.exe", "\\\\server\\share\\x.exe"]) {
+    assert.equal(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith(bin)) }), null, bin)
+  }
+  assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith("bin\\..\\cli.js")) }), { cmd: node, prefix: [j(PKG, "cli.js")] }, "a backslash path that stays inside is fine")
+  assert.deepEqual(resolveLaunch({ cli: "C:\\npm\\claude.cmd", platform: "win32", execPath: node, readFile: manifestReader({ "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\package.json": JSON.stringify({ bin: "cli.js" }) }) }), { cmd: node, prefix: ["C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"] }, "a drive-letter shim")
   assert.deepEqual(resolveLaunch({ cli: SHIM, platform: "win32", execPath: node, readFile: manifestReader(pkgWith("bin/../cli.js")) }), { cmd: node, prefix: [j(PKG, "cli.js")] }, "a path that stays inside is fine")
 })
 
@@ -686,7 +711,11 @@ test("resolveLaunch never runs a .cmd: it starts the program the npm package nam
   assert.equal(resolveLaunch({ cli: j(NPM, "claude.BAT"), platform: "win32", readFile: manifestReader({}) }), null, ".bat is treated like .cmd")
 })
 
-test("resolveLaunch's default readers use the real file system and this process's Node", () => {
+test("resolveLaunch's default platform is this process's", () => {
+  assert.deepEqual(resolveLaunch({ cli: "/bin/claude" }), { cmd: "/bin/claude", prefix: [] })
+})
+
+test("resolveLaunch's default readers use the real file system and this process's Node", { skip: process.platform !== "win32" ? "resolveLaunch reads a folder in Windows spelling, so only Windows can point it at a real one" : false }, () => {
   assert.deepEqual(resolveLaunch({ cli: "/bin/claude" }), { cmd: "/bin/claude", prefix: [] })
   const root = mkdtempSync(path.join(os.tmpdir(), "desk-launch-"))
   try {

@@ -138,9 +138,9 @@ test("routed timeline serves hybrid query results and temporal no-query results"
     input: { from: "2026-01-01", query: "quartz" },
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
-  assert.deepEqual(temporal.results.map((r) => r.path), [path.join("track", "new", "task.md")])
+  assert.deepEqual(temporal.results.map((r) => r.path), [path.posix.join("track", "new", "task.md")])
   assert.equal(temporal.search_mode, "temporal")
-  assert.deepEqual(hybrid.results.map((r) => r.path), [path.join("track", "new", "task.md")])
+  assert.deepEqual(hybrid.results.map((r) => r.path), [path.posix.join("track", "new", "task.md")])
   assert.equal(hybrid.search_mode, "hybrid", JSON.stringify(hybrid))
   assert.equal(hybrid.semantic_unavailable, false)
 })
@@ -449,17 +449,17 @@ test("search internals cover defensive helper branches", async () => {
     },
   }
   const prefixes = helpers.computePinPrefixes(fakeDb, "trackA")
-  assert.equal(prefixes.has(path.join("trackA", "pinned", "repo", "iter")), true)
+  assert.equal(prefixes.has(path.posix.join("trackA", "pinned", "repo", "iter")), true)
   assert.equal(helpers.computePinPrefixes(fakeDb, null).size, 0)
   assert.equal(helpers.isPinned("anything.md", new Set()), false)
   assert.equal(
     helpers.isPinned(
-      path.join("trackA", "pinned", "repo", "iter", "doing.md"),
+      path.posix.join("trackA", "pinned", "repo", "iter", "doing.md"),
       prefixes,
     ),
     true,
   )
-  assert.equal(helpers.isPinned(path.join("trackA", "pinned", "repo", "iter"), prefixes), true)
+  assert.equal(helpers.isPinned(path.posix.join("trackA", "pinned", "repo", "iter"), prefixes), true)
   assert.equal(helpers.isPinned("trackA/other/doing.md", prefixes), false)
 })
 
@@ -938,7 +938,7 @@ test("desk_search — long snippets handle start and end query-term boundaries",
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   const endResult = end.results.find((result) =>
-    result.path.includes(path.join("task-end", "task.md")),
+    result.path.includes(path.posix.join("task-end", "task.md")),
   )
   assert.ok(endResult, "end-boundary result surfaced")
   assert.match(endResult.snippet, /^\.\.\./u)
@@ -992,10 +992,10 @@ alpha pinned body summary
 
   // The pinned doing.md should rank top — its pin breakdown should be 0.3.
   const pinned = res.results.find((r) =>
-    r.path.includes(path.join("2026-05-01-impl", "doing.md")),
+    r.path.includes(path.posix.join("2026-05-01-impl", "doing.md")),
   )
   const control = res.results.find((r) =>
-    r.path.includes(path.join("trackQ", "task-other", "doing.md")),
+    r.path.includes(path.posix.join("trackQ", "task-other", "doing.md")),
   )
   assert.ok(pinned, "pinned doc surfaced in results")
   assert.ok(control, "control doc surfaced in results")

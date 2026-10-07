@@ -403,6 +403,8 @@ function gitNamedPaths(subcommand, operands, directory, options) {
 // literal path (`/dev/...`, a variable, a command substitution).
 function writeTarget(current, word, options) {
   if (word === undefined || word.op || word.scope) return null
+  // `/dev/null` as written, before it is resolved: Git Bash on Windows turns it into `D:\dev\null`, which no longer starts with `/dev/`.
+  if (word.text.startsWith("/dev/")) return null
   const resolved = applyStep(current, word, options)
   if (resolved === null || resolved.startsWith("/dev/")) return null
   return resolved

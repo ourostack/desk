@@ -67,8 +67,8 @@ test("discover finds task docs across multiple persons' desks", async () => {
   const docs = await discover(root)
   const byPath = new Map(docs.map((d) => [d.path, d]))
 
-  const ariPath = path.join("desks", "ari", "t", "s", "task.md")
-  const bobPath = path.join("desks", "bob", "t2", "s2", "task.md")
+  const ariPath = path.posix.join("desks", "ari", "t", "s", "task.md")
+  const bobPath = path.posix.join("desks", "bob", "t2", "s2", "task.md")
   assert.ok(byPath.has(ariPath), "ari's task.md must be discovered")
   assert.ok(byPath.has(bobPath), "bob's task.md must be discovered")
 
@@ -83,7 +83,7 @@ test("discover still finds + attributes OFF-mode (top-level) task docs unchanged
   const root = await mkRoot()
   await writeFile(root, path.join("legacy-track", "legacy-slug", "task.md"), "---\ntitle: L\n---\nx")
   const docs = await discover(root)
-  const d = docs.find((x) => x.path === path.join("legacy-track", "legacy-slug", "task.md"))
+  const d = docs.find((x) => x.path === path.posix.join("legacy-track", "legacy-slug", "task.md"))
   assert.ok(d)
   assert.equal(d.track, "legacy-track")
   assert.equal(d.task_slug, "legacy-slug")

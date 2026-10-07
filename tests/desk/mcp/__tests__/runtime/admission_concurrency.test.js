@@ -11,7 +11,8 @@ import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/se
 import { makeGitDesk, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-const ROUNDS = Number(process.env.DESK_CONCURRENCY_ROUNDS ?? 20)
+// Each round starts five Node servers and their PowerShell-backed protected writes; on a shared Windows runner a round takes about 15 s, so twenty of them used 300 to 400 s of the file's 420 s budget. Ten rounds still put 50 handshakes through the five-way race.
+const ROUNDS = Number(process.env.DESK_CONCURRENCY_ROUNDS ?? (process.platform === "win32" ? 10 : 20))
 const SERVERS = 5
 const WINDOW_MS = 200
 // Five Node processes starting at once on a machine already running the rest of the suite: the handshake must complete well inside the hosts' startup timeout (30 s), and the slowest per round is recorded. The single-start 3 s budget is asserted in admission_conditions.test.js.

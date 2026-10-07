@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process"
 import { chmodSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import processOnSpawn from "process-on-spawn"
 import {
   collectCoverageTestFiles,
@@ -240,7 +240,7 @@ test("a shard runs only its own files, serially, and records raw coverage, timin
   assert.ok(args.includes("--test-concurrency=1"), "instrumented files stay serial inside a shard")
   assert.ok(args.includes("--test-reporter=tap") && args.includes("--test-reporter-destination=stdout"), "the shard keeps its TAP log")
   assert.ok(args.includes(`--test-reporter-destination=${path.join(output, "timings.json")}`))
-  assert.ok(args.includes(`--test-reporter=${path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/_file_timing_reporter.mjs")}`))
+  assert.ok(args.includes(`--test-reporter=${pathToFileURL(path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/_file_timing_reporter.mjs")).href}`))
   assert.equal(config.tempDir, path.join(output, "raw"))
   assert.equal(config.silent, true, "a shard reports nothing on its own")
   assert.deepEqual(config.include, [sourceFile])

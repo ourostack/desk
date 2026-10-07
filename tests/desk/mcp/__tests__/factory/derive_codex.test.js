@@ -34,6 +34,10 @@ import {
   rolloutRelPath,
 } from "./fixtures/codex/make.js"
 
+// A POSIX-looking path that Desk resolves with the host's own rules comes back as `D:\\w\\a.md` on Windows; this reads it back as `/w/a.md` so the fixtures can state paths one way. Off Windows it changes nothing.
+const posixSpelling = (value) => (process.platform === "win32" && typeof value === "string" ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/") : value)
+const spellCommit = ({ cwd, paths }) => ({ cwd: posixSpelling(cwd), paths: paths.map(posixSpelling) })
+
 const here = path.dirname(fileURLToPath(import.meta.url))
 const fixtureHome = path.join(here, "fixtures", "codex")
 const fixtureRollout = (threadId, startIso) => path.join(fixtureHome, rolloutRelPath(startIso, threadId))
@@ -501,7 +505,7 @@ test("shell outcomes, retries, commits, MCP names, patches and PRs", () => withH
   assert.deepEqual(events.shellGitCommits.map(({ cwd }) => cwd), ["/work/other", "/work/repo", "/work/lsh"])
   assert.equal(facts.counts.tool_retries, 4, "a later same-kind call after a failed one is one retry per failure: c3, c6, r7 and d3")
   assert.deepEqual(facts.counts.tool_failures, { shell: 3, edit: 1, desk: 1 }, "c2, c5 and r6; the failed patch; the failed desk call")
-  assert.deepEqual(events.fileWrites.map(({ path: file }) => file), ["/work/repo/rel/new.md", "/abs/moved.md", "/work/repo/a.md", "/abs/shell.md"])
+  assert.deepEqual(events.fileWrites.map(({ path: file }) => file), [path.resolve("/work/repo/rel/new.md"), "/abs/moved.md", path.resolve("/work/repo/a.md"), "/abs/shell.md"])
   assert.deepEqual(events.deskToolCalls, [
     { at: at(33), name: "mcp__desk__task_create", track: "trk", slug: "one", person: "pat", status: "drafting", statusOnly: false, agent: 0, ok: true },
     { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, statusOnly: false, agent: 0, ok: false },
@@ -946,11 +950,11 @@ test("a shell git add and commit gives shellGitCommits paths, a redirect gives f
     output(14, "d3", "saved"),
   ]
   const { events, facts } = await deriveRoot(home, lines)
-  assert.deepEqual(events.shellGitCommits.map(({ cwd, paths }) => ({ cwd, paths })), [
+  assert.deepEqual(events.shellGitCommits.map(spellCommit), [
     { cwd: "/w", paths: ["/w/t/s/task.md"] },
     { cwd: "/w", paths: [] },
   ])
-  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: written, agent })), [
+  assert.deepEqual(events.fileWrites.map(({ at: when, path: written, agent }) => ({ at: when, path: posixSpelling(written), agent })), [
     { at: at(3), path: "/w/out.txt", agent: 0 },
     { at: at(9), path: "notes/a.md", agent: 0 },
     { at: at(9), path: "notes/b.md", agent: 0 },

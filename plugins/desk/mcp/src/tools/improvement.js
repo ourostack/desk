@@ -7,7 +7,7 @@
 // read-only list.
 
 import * as path from "node:path"
-import { personPrefix } from "../util/paths.js"
+import { deskRelativePath, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isNoninteractive } from "../runtime/boot.js"
 import { isHeadlessFactorySession } from "../factory/headless-flag.js"
@@ -39,7 +39,7 @@ const OPENED = new Set(["opened", "duplicate", "reopened"])
 
 // The card library takes the person prefix relative to the desk root: "" or desks/<alias>.
 function prefixOf(deskRoot, person) {
-  return path.relative(deskRoot, personPrefix(deskRoot, person))
+  return deskRelativePath(deskRoot, personPrefix(deskRoot, person))
 }
 
 function withCommit(answer, commit, setAside, leftAlone) {

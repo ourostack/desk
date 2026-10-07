@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { today } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
+import { osEnv } from "../_os_env.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fingerprintOf } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
 import { cardFile, claimNext, readCards, updateCard } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
@@ -47,7 +48,7 @@ test("friction_add (no track) writes to _meta/friction.md", async () => {
     input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
   })
   assert.equal(result.status, "added")
-  assert.equal(result.path, path.join("_meta", "friction.md"))
+  assert.equal(result.path, path.posix.join("_meta", "friction.md"))
 
   const filePath = path.join(root, "_meta", "friction.md")
   assert.ok(await exists(filePath))
@@ -63,7 +64,7 @@ test("friction_add treats null, empty, undefined, and non-string track values as
       input: { track, body: `cross-cutting ${String(track)}` },
     })
 
-    assert.equal(result.path, path.join("_meta", "friction.md"))
+    assert.equal(result.path, path.posix.join("_meta", "friction.md"))
     assert.match(
       await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"),
       /cross-cutting/,
@@ -158,7 +159,7 @@ test("friction_add requires a body", async () => {
 // An isolated factory state folder for each call, so no test reaches the real one.
 async function stateEnv({ ready = true } = {}) {
   const base = await mkTempDeskRoot()
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   if (ready) await factoryStateRoot(env)
   return env
 }
@@ -186,7 +187,7 @@ test("friction_add about system records a kaizen candidate on the desk and files
     env,
   })
   const fp = await fingerprintOf(env, { plugin: "desk", frictionClass: "mcp_tool", title: "Shell tool calls fail often" })
-  assert.deepEqual(result, { status: "added", path: path.join("_meta", "friction.md"), kaizen: "candidate", improvement: "opened", improvement_commit: "not_git" })
+  assert.deepEqual(result, { status: "added", path: path.posix.join("_meta", "friction.md"), kaizen: "candidate", improvement: "opened", improvement_commit: "not_git" })
   assert.equal(calls.length, 0)
   const content = await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8")
   assert.equal(content, `Most tool failures are shell calls.\n\nSystem friction: "Shell tool calls fail often"; plugin \`desk\`, class \`mcp_tool\`, measure \`tool_failures\`, evidence jobs ${JOB}.\n\nImprovement card key: \`friction_candidate:${fp}\`.\n`)
@@ -216,7 +217,7 @@ test("friction_add with file_card keeps the candidate on the desk with the reaso
   const root = await mkTempDeskRoot()
   const { calls, fileCard } = cardFiler({ result: "route_unknown" })
   const result = await friction_add({ deskRoot: root, input: { about: "system", file_card: true, title: "A generic title", body: "The friction." }, env: await stateEnv(), fileCard })
-  assert.deepEqual(result, { status: "added", path: path.join("_meta", "friction.md"), kaizen: "route_unknown", improvement: "opened", improvement_commit: "not_git" })
+  assert.deepEqual(result, { status: "added", path: path.posix.join("_meta", "friction.md"), kaizen: "route_unknown", improvement: "opened", improvement_commit: "not_git" })
   assert.deepEqual(calls[0].options, { deskRoot: root, title: "A generic title", body: "The friction.", plugin: "desk", frictionClass: "other", signal: null, evidenceJobs: [] })
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /^Kaizen card for "A generic title": not filed \(route_unknown\); it stays a candidate\.\n\nImprovement card key: `friction_candidate:[0-9a-f]{32}`\.\n$/u)
 })
@@ -232,7 +233,7 @@ test("friction_add files nothing when the desk write target cannot be prepared",
 test("friction_add about setup, or with no about, stays on the desk and files nothing", async () => {
   const root = await mkTempDeskRoot()
   const { calls, fileCard } = cardFiler({ result: "filed", url: URL })
-  assert.deepEqual(await friction_add({ deskRoot: root, input: { about: "setup", body: "Local setup." }, fileCard }), { status: "added", path: path.join("_meta", "friction.md") })
+  assert.deepEqual(await friction_add({ deskRoot: root, input: { about: "setup", body: "Local setup." }, fileCard }), { status: "added", path: path.posix.join("_meta", "friction.md") })
   assert.equal((await friction_add({ deskRoot: root, input: { body: "Also local.", file_card: false }, fileCard })).status, "added")
   assert.equal(calls.length, 0)
 })
@@ -271,7 +272,7 @@ test("friction_add stages and commits exactly the friction file it wrote", async
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "friction_add: desk-plugin")
-  assert.deepEqual(lastCommitFiles(root), [path.join("_meta", "friction.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("_meta", "friction.md")])
 })
 
 test("friction_add names the commit after the given plugin for system friction", async () => {
@@ -307,7 +308,7 @@ test("friction_add commits only its own file, leaving another process's staged, 
   })
 
   assert.equal(result.commit, undefined, "friction_add's own commit succeeded")
-  assert.deepEqual(lastCommitFiles(root), [path.join("_meta", "friction.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("_meta", "friction.md")])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })
@@ -407,7 +408,7 @@ test("friction_add retries with an underscore-prefixed slug when a same-named fi
 
   const result = await friction_add({ deskRoot: root, input: { track: "t1", theme: "tools", body: "New entry." } })
 
-  assert.equal(result.path, path.join("t1", "_friction", `${date}-_tools.md`))
+  assert.equal(result.path, path.posix.join("t1", "_friction", `${date}-_tools.md`))
   assert.match(await fs.readFile(path.join(root, result.path), "utf8"), /New entry\./)
 })
 
@@ -598,7 +599,7 @@ test("the card write goes through the injected commit seam, in the person's fold
   assert.equal(calls[0].message({ file_name: "x.md" }), "improvement: friction x.md")
   assert.equal(calls[0].message({}), "improvement: friction set_aside")
   await friction_add({ deskRoot: root, person: "ari", input: sysInput({ title: "Another shell failure" }), env, commitCard })
-  assert.equal(calls[1].personPrefix, path.join("desks", "ari"))
+  assert.equal(calls[1].personPrefix, path.posix.join("desks", "ari"))
 })
 
 test("a card write that throws never loses the friction entry", async () => {

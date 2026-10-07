@@ -228,7 +228,7 @@ test("support smoke: process restart replays durable mutations and discovers ext
     const db = openDb(root)
     try {
       const docs = db.prepare("SELECT path FROM docs ORDER BY path").all().map((row) => row.path)
-      assert.deepEqual(docs, [path.join("track", "durable-task", "doing.md"), path.join("track", "durable-task", "task.md")])
+      assert.deepEqual(docs, [path.posix.join("track", "durable-task", "doing.md"), path.posix.join("track", "durable-task", "task.md")])
       assert.equal(JSON.parse(getMeta(db, "covered_event_cursor")).sequence, 1)
     } finally { closeDb(db) }
     assert.equal(fs.readFileSync(path.join(root, "track", "durable-task", "task.md"), "utf8"), canonicalBefore)

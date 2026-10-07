@@ -853,7 +853,7 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
   }
 })
 
-test("source mirror admission rejects Windows and backslash paths on POSIX hosts", async () => {
+test("source mirror admission rejects Windows and backslash paths on POSIX hosts", { skip: process.platform === "win32" ? "the fixture files named C:\\payload.js and \\\\server\\share\\payload.js cannot exist on Windows, where the colon and the backslash are path syntax" : false }, async () => {
   const {
     resolveAdmittedSourceMirror,
     syncSourceMirror,
@@ -873,9 +873,11 @@ test("source mirror admission rejects Windows and backslash paths on POSIX hosts
       "\\\\server\\share\\payload.js",
       "config\\artifact-source-scope.json",
     ]) {
-      writeText(path.join(mirrorPath, file), "payload\n")
+      // A drive-letter or UNC name cannot be a file under the mirror on Windows, so there the marker names a file that does not exist; the admission check refuses it from the spelling alone, before it reads anything.
+      const materializable = !(process.platform === "win32" && /^(?:[A-Za-z]:|\\\\)/u.test(file))
+      if (materializable) writeText(path.join(mirrorPath, file), "payload\n")
       const sourceFiles = [file]
-      const sourceHash = sourceFilesHash(mirrorPath, sourceFiles)
+      const sourceHash = materializable ? sourceFilesHash(mirrorPath, sourceFiles) : createHash("sha256").update(file).digest("hex")
       const sourceIdentity = `sha256:${sourceHash}`
       writeJson(markerPath, {
         schema_version: 1,

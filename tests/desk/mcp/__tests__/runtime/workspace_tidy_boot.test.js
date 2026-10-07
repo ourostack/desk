@@ -126,7 +126,7 @@ test("boot failure degrades in one bounded line and never blocks session start",
 
 test("both actual startup hooks include exactly one boot line without changing their host envelope", async () => {
   const f = await fixture()
-  const plugin = path.resolve(hookPath.pathname, "../..")
+  const plugin = path.resolve(fileURLToPath(hookPath), "../..")
   // Generous budgets: this test is about the envelope and the single line, not about a loaded host's timing.
   const overrides = path.join(f.root, "relax-budgets.cjs")
   await fs.writeFile(overrides, `module.exports = { options: { totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } } };\n`)
@@ -157,7 +157,7 @@ test("the complete boot check has a deadline even when launching repair stalls",
   // copy-pasteable repair command an agent can run sooner, rather than leaving "the repair" unnamed.
   assert.match(line, /no agent action needed/)
   assert.match(line, /deferred to the next session start automatically/)
-  assert.equal(line, `Desk boot pre-checks: workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${hookPath.pathname} --repair <desk_status root>`)
+  assert.equal(line, `Desk boot pre-checks: workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${fileURLToPath(hookPath)} --repair <desk_status root>`)
 
   // Mocked time: the check ends exactly at the budget it was given, not at the 500 ms default, once the launch has begun and stalled.
   t.mock.timers.enable({ apis: ["setTimeout"] })

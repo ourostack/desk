@@ -46,12 +46,16 @@ function inside(child, parent, platform) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
-function spellings(target) {
+// `realpathSync.native` asks the operating system, so on Windows it expands an 8.3 short name such as C:\\Users\\RUNNER~1
+// to the long spelling a test's own `fs.promises.realpath` returns. The JavaScript `realpathSync` leaves the short name alone.
+export function tmpdirSpellingsOf(target, { realpath = realpathSync, native = realpathSync.native } = {}) {
   const out = new Set([target])
-  try {
-    out.add(realpathSync(target))
-  } catch {
-    // istanbul ignore next -- os.tmpdir() always exists on a real machine; nothing further to add if it somehow did not.
+  for (const resolve of [realpath, native]) {
+    try {
+      out.add(resolve(target))
+    } catch {
+      // A temp directory that cannot be resolved adds no further spelling.
+    }
   }
   return out
 }
@@ -63,7 +67,7 @@ function spellings(target) {
 // syscall there was measurable on a loaded CI runner (ourostack/desk PR #101, 2026-09-29).
 let cachedTmpdirSpellings
 function tmpdirSpellings() {
-  if (!cachedTmpdirSpellings) cachedTmpdirSpellings = spellings(os.tmpdir())
+  if (!cachedTmpdirSpellings) cachedTmpdirSpellings = tmpdirSpellingsOf(os.tmpdir())
   return cachedTmpdirSpellings
 }
 

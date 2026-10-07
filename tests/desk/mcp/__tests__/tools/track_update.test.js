@@ -267,7 +267,7 @@ test("track_update stages and commits exactly the track.md it updated", async ()
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "track_update: billing-disputes")
-  assert.deepEqual(lastCommitFiles(root), [path.join("billing-disputes", "track.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("billing-disputes", "track.md")])
 })
 
 test("track_update commits only its own file, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
@@ -291,7 +291,7 @@ test("track_update commits only its own file, leaving another process's staged, 
   })
 
   assert.equal(result.commit, undefined, "track_update's own commit succeeded")
-  assert.deepEqual(lastCommitFiles(root), [path.join("billing-disputes", "track.md")])
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("billing-disputes", "track.md")])
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })

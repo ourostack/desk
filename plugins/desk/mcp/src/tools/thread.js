@@ -26,6 +26,7 @@
 // — consistent with other search-tool error shapes.
 
 import * as path from "node:path"
+import { deskRelativePath, toDeskPath } from "../util/paths.js"
 import Database from "better-sqlite3"
 import { indexDbPath, closeDb } from "../db/init.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
@@ -55,13 +56,13 @@ function clampDepth(depth) {
 export function normalizeStartPath(deskRoot, startPath) {
   if (!startPath) return ""
   if (path.isAbsolute(startPath)) {
-    const rel = path.relative(deskRoot, startPath)
+    const rel = deskRelativePath(deskRoot, startPath)
     // Don't accept paths that escape deskRoot.
     if (rel.startsWith("..")) return startPath
     return rel
   }
-  // Strip leading ./ if present.
-  return startPath.replace(/^\.\//, "")
+  // Strip leading ./ if present, and spell the path with `/` the way the index stores it.
+  return toDeskPath(startPath).replace(/^\.\//, "")
 }
 
 /**

@@ -85,6 +85,109 @@ test("assertWindowsAclAvailable resolves the fixed provider under SystemRoot", a
   }
 })
 
+test("assertWindowsAclAvailable finds SystemRoot under any capitalization, as a Git Bash child's copied environment spells it", async () => {
+  const base = await mkBase()
+  try {
+    const providerPath = await mkProvider(base, ECHO_PROVIDER)
+    for (const name of ["SYSTEMROOT", "systemroot", "SystemRoot"]) {
+      assert.equal(assertWindowsAclAvailable({ env: { [name]: base } }), providerPath, name)
+    }
+    assert.throws(() => assertWindowsAclAvailable({ env: { SystemRoot: 5, SYSTEMROOT: undefined } }), /%SystemRoot% to locate/u, "a value that is not text is not a SystemRoot")
+  } finally {
+    await fs.rm(base, { recursive: true, force: true })
+  }
+})
+
+test("a verified path is not protected again until its identity or change time moves, and a path created in this call always is", async () => {
+  const base = await mkBase()
+  try {
+    const dir = path.join(base, "state")
+    await fs.mkdir(dir)
+    const entry = { path: dir, kind: "directory", created: false }
+    const ok = (paths) => ({ status: "ok", results: paths.map((e) => ({ path: e.path, kind: e.kind, owner_sid: "S-1-5-21-1-2-3-1001", owner_reassigned: false, protected: true, rule_count: 1 })) })
+    const runner = runnerReturning(ok([entry]))
+    const env = { SystemRoot: base }
+    await mkProvider(base, ECHO_PROVIDER)
+    const first = await protectWindowsPaths([entry], { env, runner, memoize: true })
+    const second = await protectWindowsPaths([entry], { env, runner, memoize: true })
+    assert.equal(runner.calls.length, 1, "the second call is answered from what was verified")
+    assert.deepEqual(second, first)
+    // A change to the folder moves its change time, so it is protected again.
+    await fs.rm(dir, { recursive: true })
+    await fs.mkdir(dir)
+    const recreated = runnerReturning(ok([entry]))
+    await protectWindowsPaths([entry], { env, runner: recreated, memoize: true })
+    assert.equal(recreated.calls.length, 1, "a replaced folder is protected again")
+    // created: true is never skipped, and a mixed batch asks only for what is stale.
+    const fresh = path.join(base, "fresh")
+    await fs.mkdir(fresh)
+    const mixed = runnerReturning(ok([{ path: fresh, kind: "directory" }]))
+    const results = await protectWindowsPaths([entry, { path: fresh, kind: "directory", created: true }], { env, runner: mixed, memoize: true })
+    assert.equal(mixed.calls.length, 1)
+    assert.deepEqual(results.map((r) => r.path), [dir, fresh])
+    const again = runnerReturning(ok([{ path: fresh, kind: "directory" }]))
+    await protectWindowsPaths([{ path: fresh, kind: "directory", created: true }], { env, runner: again, memoize: true })
+    assert.equal(again.calls.length, 1, "created: true always runs")
+    await fs.rm(fresh, { recursive: true })
+    await fs.rm(dir, { recursive: true })
+    const gone = runnerReturning(ok([entry]))
+    await protectWindowsPaths([entry], { env, runner: gone, memoize: true })
+    assert.equal(gone.calls.length, 1, "a path that no longer exists is never answered from memory")
+  } finally {
+      await fs.rm(base, { recursive: true, force: true })
+  }
+})
+
+test("a verified file is remembered like a verified folder", async () => {
+  const base = await mkBase()
+  try {
+    const file = path.join(base, "status.json")
+    await fs.writeFile(file, "{}")
+    const entry = { path: file, kind: "file", created: false }
+    const okResult = { status: "ok", results: [{ path: file, kind: "file", owner_sid: "S-1-5-21-1-2-3-1001", owner_reassigned: false, protected: true, rule_count: 1 }] }
+    const runner = runnerReturning(okResult)
+    const env = { SystemRoot: base }
+    await mkProvider(base, ECHO_PROVIDER)
+    await protectWindowsPaths([entry], { env, runner, memoize: true })
+    await protectWindowsPaths([entry], { env, runner, memoize: true })
+    assert.equal(runner.calls.length, 1)
+  } finally {
+      await fs.rm(base, { recursive: true, force: true })
+  }
+})
+
+test("identical protection requests made at the same time share one run, and a failed run is not remembered", async () => {
+  const base = await mkBase()
+  try {
+    const dir = path.join(base, "state")
+    await fs.mkdir(dir)
+    const entry = { path: dir, kind: "directory", created: false }
+    const okResult = { status: "ok", results: [{ path: dir, kind: "directory", owner_sid: "S-1-5-21-1-2-3-1001", owner_reassigned: false, protected: true, rule_count: 1 }] }
+    const env = { SystemRoot: base }
+    await mkProvider(base, ECHO_PROVIDER)
+    let calls = 0
+    const slow = async () => {
+      calls += 1
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return { code: 0, stdout: JSON.stringify(okResult), stderr: "", timedOut: false }
+    }
+    const both = await Promise.all([1, 2, 3].map(() => protectWindowsPaths([entry], { env, runner: slow, memoize: true })))
+    assert.equal(calls, 1, "three concurrent requests started one run")
+    assert.deepEqual(both[1], both[0])
+    // A second folder, because the first is now remembered as verified.
+    const other = path.join(base, "other")
+    await fs.mkdir(other)
+    const otherEntry = { path: other, kind: "directory", created: false }
+    const failing = async () => ({ code: 1, stdout: "", stderr: "boom", timedOut: false })
+    await assert.rejects(protectWindowsPaths([otherEntry], { env, runner: failing, memoize: true }))
+    const after = runnerReturning({ status: "ok", results: [{ ...okResult.results[0], path: other }] })
+    await protectWindowsPaths([otherEntry], { env, runner: after, memoize: true })
+    assert.equal(after.calls.length, 1, "a later request runs again after a failed one")
+  } finally {
+      await fs.rm(base, { recursive: true, force: true })
+  }
+})
+
 test("assertWindowsAclAvailable fails when SystemRoot is absent or blank", () => {
   for (const env of [{}, { SystemRoot: "" }, { SystemRoot: "   " }]) {
     assert.throws(() => assertWindowsAclAvailable({ env }), /SystemRoot/u)

@@ -3,9 +3,10 @@
 //
 // Entry points are the files something outside the code starts: the MCP server and its launchers, the hooks the hosts run, scripts that workflows run, a skill's script, and the Node test runner's test files.
 // A module only a test reaches counts as used, because a test file is an entry point by design. Production-only reachability is a different question and is not checked here.
-// Exports that only a test imports are kept on purpose in three groups, because knip counts a test import as a use and so does not flag them:
+// Exports that only a test imports are kept on purpose in four groups, because knip counts a test import as a use and so does not flag them:
 //   - drift guards: the *_FIELDS lists in src/tools, NO_INPUT_TOOLS in tool-schemas.js, the CAPTURE_*_KEYS in factory/capture-schema.js, LOOP_STEP_NAMES in factory/loop-worker.js and DEFERRED_TOOLS_HINT in util/deferred-tools.js. A test compares each with the schema, spec or doc it must match, so the two cannot drift apart;
 //   - resetOwnProcessStart in readiness/process-start.js, which tests call to clear a cache between cases;
+//   - tmpdirSpellingsOf in runtime/test-state-guard.js and factory/test-state-guard.js, which the guard uses and its tests call with injected file-system functions, because the failure branches (a temp path that cannot be resolved) cannot be reached with the real one;
 //   - labelsPathParts in factory/pipeline/validate-pr.js, which the validator itself uses and its test checks directly.
 // Any other export that only tests use should be deleted with its test, or made private.
 // Config hints (an entry or ignore that no longer matches anything) fail the check, so an entry cannot go stale unnoticed.

@@ -51,6 +51,8 @@ import {
   ownDeskVersion,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeRealPath } from "../_fake_real_root.js"
+import { osEnv } from "../_os_env.js"
+import { isWindows } from "../_platform.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
 
@@ -89,7 +91,7 @@ async function scratch(run) {
   // `factoryStateRoot`'s own realpath resolution returns.
   const rawBase = mkdtempSync(path.join(os.tmpdir(), "desk-factory-outbox-"))
   const base = await fs.realpath(rawBase)
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   try {
     return await run(env, base)
   } finally {
@@ -153,7 +155,7 @@ test("factoryStateRoot creates an owner-only directory chain ending in ouroboros
   let cursor = env.XDG_STATE_HOME
   for (const segment of ["ouroboros-skills", "desk", "factory"]) {
     cursor = path.join(cursor, segment)
-    assert.equal((await fs.stat(cursor)).mode & 0o777, 0o700)
+    if (!isWindows) assert.equal((await fs.stat(cursor)).mode & 0o777, 0o700)
   }
 }))
 
@@ -173,14 +175,14 @@ test("factoryStateRoot defaults to process.env when no env is given", () => scra
 }))
 
 test("factoryStateRoot falls back to os.homedir() when HOME itself is unset or blank, as long as XDG_STATE_HOME is explicit", () => scratch(async (env) => {
-  assert.equal(await factoryStateRoot({ XDG_STATE_HOME: env.XDG_STATE_HOME }), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
-  assert.equal(await factoryStateRoot({ HOME: "   ", XDG_STATE_HOME: env.XDG_STATE_HOME }), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
+  assert.equal(await factoryStateRoot(osEnv({ XDG_STATE_HOME: env.XDG_STATE_HOME })), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
+  assert.equal(await factoryStateRoot(osEnv({ HOME: "   ", XDG_STATE_HOME: env.XDG_STATE_HOME })), path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory"))
 }))
 
 test("factoryStateRoot expands a ~ XDG_STATE_HOME against HOME, and ignores a blank one", () => scratch(async (env) => {
-  const expanded = await factoryStateRoot({ HOME: env.HOME, XDG_STATE_HOME: "~/custom-state" })
+  const expanded = await factoryStateRoot(osEnv({ HOME: env.HOME, XDG_STATE_HOME: "~/custom-state" }))
   assert.equal(expanded, path.join(env.HOME, "custom-state", "ouroboros-skills", "desk", "factory"))
-  const blank = await factoryStateRoot({ HOME: env.HOME, XDG_STATE_HOME: "   " })
+  const blank = await factoryStateRoot(osEnv({ HOME: env.HOME, XDG_STATE_HOME: "   " }))
   assert.equal(blank, path.join(env.HOME, ".local", "state", "ouroboros-skills", "desk", "factory"))
 }))
 
@@ -188,7 +190,7 @@ test("factoryStateRoot is idempotent and repairs a mode that drifted", () => scr
   const root = await factoryStateRoot(env)
   await fs.chmod(root, 0o755)
   assert.equal(await factoryStateRoot(env), root)
-  assert.equal((await fs.stat(root)).mode & 0o777, 0o700)
+  if (!isWindows) assert.equal((await fs.stat(root)).mode & 0o777, 0o700)
 }))
 
 test("factoryStateRoot refuses a state root inside a Git checkout", () => scratch(async (env) => {
@@ -204,7 +206,7 @@ test("factoryStateRoot refuses a symlinked ancestor of XDG_STATE_HOME before cre
   const linkedStateHome = path.join(base, "linked-state")
   symlinkSync(realTarget, linkedStateHome)
   await assert.rejects(
-    () => factoryStateRoot({ HOME: env.HOME, XDG_STATE_HOME: path.join(linkedStateHome, "sub") }),
+    () => factoryStateRoot(osEnv({ HOME: env.HOME, XDG_STATE_HOME: path.join(linkedStateHome, "sub") })),
     /Git checkout/u,
   )
   // Nothing was created inside the checkout by the refused call.
@@ -241,7 +243,7 @@ test("factoryStateRoot refuses a temp-directory desk root paired with a state ho
   const deskRoot = mkdtempSync(path.join(os.tmpdir(), "desk-outbox-consistency-"))
   const outsideTemp = fakeRealPath("desk-outbox-consistency-state-")
   await assert.rejects(
-    () => factoryStateRoot({ HOME: outsideTemp }, { deskRoot }),
+    () => factoryStateRoot(osEnv({ HOME: outsideTemp }), { deskRoot }),
     /refused a temp-directory desk root paired with a factory state home outside the OS temp directory/u,
   )
   assert.equal(existsSync(outsideTemp), false, "the refused call created nothing")
@@ -356,10 +358,14 @@ test("withNamedLock refuses a name that isn't a safe path segment", () => scratc
 
 test("two differently named locks never block each other", () => scratch(async (env) => {
   let concurrent = 0, maximum = 0
+  let bothInside
+  const overlapped = new Promise((resolve) => { bothInside = resolve })
+  // Each lock first protects its own folder, which can take about a second on Windows, so a fixed short sleep would let one body finish before the other starts. Each body waits (bounded) until both are inside.
   const body = async () => {
     concurrent += 1
     maximum = Math.max(maximum, concurrent)
-    await new Promise((resolve) => setTimeout(resolve, 15))
+    if (concurrent === 2) bothInside()
+    await Promise.race([overlapped, new Promise((resolve) => setTimeout(resolve, 20000))])
     concurrent -= 1
   }
   await Promise.all([withNamedLock(env, "lock-a", body), withNamedLock(env, "lock-b", body)])
@@ -384,7 +390,9 @@ test("factoryStateRoot protects its own three segments with one batched Windows 
   assert.equal(calls[0][0].path, path.join(env.XDG_STATE_HOME, "ouroboros-skills"))
 }))
 
-test("factoryStateRoot refuses on win32 before creating anything when the Windows ACL provider is unavailable", () => scratch(async (env) => {
+test("factoryStateRoot refuses on win32 before creating anything when the Windows ACL provider is unavailable", () => scratch(async (scratchEnv) => {
+  // Deliberately without SystemRoot, which the refusal names (a Windows host always has it).
+  const { SystemRoot, ...env } = scratchEnv
   await assert.rejects(
     () => factoryStateRoot(env, { platform: "win32", runner: () => assert.fail("must not run without an available provider") }),
     /desk_factory: Windows ACL protection needs %SystemRoot%/u,
@@ -523,7 +531,7 @@ test("setConsent writes are atomic: two writes leave no temp files and the final
   const leftovers = readdirSync(root).filter((name) => name.startsWith(".tmp-"))
   assert.deepEqual(leftovers, [])
   assert.equal((await readConsent(env)).stores[STORE].contribute, false)
-  assert.equal((await fs.stat(path.join(root, "consent.json"))).mode & 0o777, 0o600)
+  if (!isWindows) assert.equal((await fs.stat(path.join(root, "consent.json"))).mode & 0o777, 0o600)
 }))
 
 test("setConsent serializes 16 concurrent decisions for different stores so all 16 survive", () => scratch(async (env) => {
@@ -643,7 +651,7 @@ test("writeLocalFacts writes valid facts to the outbox, owner-only, canonical by
   const file = path.join(await factoryStateRoot(env), "outbox", "ourostack__factory", result.name)
   const bytes = await fs.readFile(file)
   assert.equal(bytes.toString("utf8"), `${JSON.stringify(facts)}\n`)
-  assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+  if (!isWindows) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
 }))
 
 test("storeSlug rejects a store that is not owner/repo", () => scratch(async (env) => {
@@ -959,7 +967,7 @@ test("readMachineSecret creates 32 owner-only bytes once and returns the same by
   const second = await readMachineSecret(env)
   assert.deepEqual(first, second)
   const file = path.join(await factoryStateRoot(env), "machine-secret")
-  assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+  if (!isWindows) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
 }))
 
 test("16 concurrent first callers all return the identical machine secret", () => scratch(async (env) => {
@@ -1197,7 +1205,7 @@ test("clearFinalize surfaces an unexpected failure removing the request, rather 
 }))
 
 test("withLock propagates an unexpected failure creating the lock file itself", (t) => scratch(async (env) => {
-  const failure = Object.assign(new Error("denied"), { code: "EACCES" })
+  const failure = Object.assign(new Error("disk failure"), { code: "EIO" })
   const mocked = t.mock.method(fs, "open", async () => {
     throw failure
   })
@@ -1205,6 +1213,39 @@ test("withLock propagates an unexpected failure creating the lock file itself", 
     await assert.rejects(() => setConsent(env, { store: STORE, contribute: true }), (error) => error === failure)
   } finally {
     mocked.mock.restore()
+  }
+}))
+
+test("on Windows, a lock file whose deletion is still pending is waited for, and a refusal that lasts is surfaced", (t) => scratch(async (plain, base) => {
+  const env = fakeWindowsEnv(plain, base)
+  const options = { platform: "win32", runner: fakeWindowsRunner([]) }
+  const original = fs.open
+  let refusals = 2
+  const transient = t.mock.method(fs, "open", async (...args) => {
+    if (refusals > 0 && String(args[0]).endsWith(".lock")) {
+      refusals -= 1
+      throw Object.assign(new Error("pending delete"), { code: refusals === 1 ? "EPERM" : "EACCES" })
+    }
+    return original.apply(fs, args)
+  })
+  await setConsent(env, { store: STORE, contribute: true }, options)
+  assert.equal(refusals, 0)
+  transient.mock.restore()
+  const failure = Object.assign(new Error("denied for good"), { code: "EPERM" })
+  const lasting = t.mock.method(fs, "open", async (...args) => {
+    if (String(args[0]).endsWith(".lock")) throw failure
+    return original.apply(fs, args)
+  })
+  // The wait is bounded by time (about 5 s), so a clock that jumps 3 s per reading reaches the bound after a few tries.
+  const realNow = Date.now
+  let clock = realNow()
+  const jumping = t.mock.method(Date, "now", () => (clock += 3000))
+  try {
+    await assert.rejects(() => setConsent(env, { store: STORE, contribute: false }, options), (error) => error === failure)
+    assert.ok(lasting.mock.callCount() >= 2)
+  } finally {
+    jumping.mock.restore()
+    lasting.mock.restore()
   }
 }))
 

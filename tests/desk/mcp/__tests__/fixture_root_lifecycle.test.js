@@ -98,7 +98,7 @@ for (const [relPath, prefix] of FIXTURE_OWNERS) {
     try {
       const sameKind = plantSentinel(sandbox, prefix)
       const unrelated = plantSentinel(sandbox, "unrelated-keep-")
-      const result = runInPrivateTemp(["--test", relPath], sandbox, 300000)
+      const result = runInPrivateTemp(["--test", "--test-reporter=tap", relPath], sandbox, 300000)
 
       assert.equal(result.error, undefined, result.error?.message)
       assert.equal(result.signal, null, result.stderr)
@@ -188,7 +188,7 @@ for (const outcome of ["failure", "abort"]) {
         "utf8",
       )
 
-      const result = runInPrivateTemp(["--test", script], sandbox, 30000)
+      const result = runInPrivateTemp(["--test", "--test-reporter=tap", script], sandbox, 30000)
       assert.equal(result.error, undefined, result.error?.message)
       assert.equal(result.signal, null, result.stderr)
       assert.equal(result.status, 1, result.stderr || result.stdout)

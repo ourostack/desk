@@ -73,7 +73,7 @@ test("a scope-line write, then a rename in the same track, both go through", asy
   assert.equal(unstaged(root), "", "track_update staged its own write")
 
   const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "fix-it-now", to_slug: "invoice-retry-fix" } })
-  assert.equal(result.to, path.join("track-a", "invoice-retry-fix"))
+  assert.equal(result.to, path.posix.join("track-a", "invoice-retry-fix"))
   assert.equal(unstaged(root), "", "task_move staged the moved card and the edited track.md")
 })
 
@@ -81,7 +81,7 @@ test("two renames in the same track, back to back, both go through", async () =>
   const root = await committedDesk({ "track-a": ["task-one", "task-two"] })
   await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-one", to_slug: "first-outcome" } })
   const second = await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-two", to_slug: "second-outcome" } })
-  assert.equal(second.to, path.join("track-a", "second-outcome"))
+  assert.equal(second.to, path.posix.join("track-a", "second-outcome"))
   const table = await fs.readFile(path.join(root, "track-a", "track.md"), "utf8")
   assert.match(table, /`first-outcome`[\s\S]*`second-outcome`/)
   assert.equal(unstaged(root), "")
@@ -100,7 +100,7 @@ test("a new track, then a re-file into it, then a track rename, all go through",
   await track_create({ deskRoot: root, input: { slug: "billing-work", title: "Billing", scope: SCOPE, body: tasksBody([]) } })
   assert.equal(unstaged(root), "", "track_create staged the new track.md")
   const moved = await task_move({ deskRoot: root, input: { track: "old-bucket", slug: "loose-job", to_track: "billing-work" } })
-  assert.equal(moved.to, path.join("billing-work", "loose-job"))
+  assert.equal(moved.to, path.posix.join("billing-work", "loose-job"))
   await task_move({ deskRoot: root, input: { track: "track-a", slug: "kept-task", to_slug: "kept-outcome" } })
   const renamed = await track_rename({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } })
   assert.equal(renamed.to, "invoice-work")

@@ -63,7 +63,21 @@ export async function reapProcessesUnder(root) {
 export function removeFixtureAfter(t, root) {
   t.after(async () => {
     await reapProcessesUnder(root)
-    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    try {
+      // Windows holds a folder for a moment after the last process in it exits (virus scan, indexer), so retry longer there.
+      rmSync(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 40 : 5, retryDelay: process.platform === "win32" ? 250 : 100 })
+    } catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code)) throw error
+      // Windows refuses to remove a folder that a process still has as its working folder or open, even once every file in it is gone: the runner's scanner and a Git child that has not yet released a repository do this. Remove what can be removed one entry at a time; a fixture that is left holding only empty folders (or is gone) is cleaned up for every purpose it has, and only a leftover file is a failure.
+      let left
+      try { left = readdirSync(root) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
+      for (const name of left) { try { rmSync(path.join(root, name), { recursive: true, force: true }) } catch { /* judged below */ } }
+      let remaining
+      try { remaining = readdirSync(root, { recursive: true, withFileTypes: true }) } catch (listError) { if (listError.code === "ENOENT") return; throw error }
+      const files = remaining.filter((entry) => !entry.isDirectory()).map((entry) => path.join(entry.parentPath ?? entry.path, entry.name))
+      if (files.length === 0) return
+      throw new Error(`${error.message}; files still in the folder: ${files.slice(0, 20).join(", ")}`)
+    }
   })
 }
 

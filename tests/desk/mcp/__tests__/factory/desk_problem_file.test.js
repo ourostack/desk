@@ -13,6 +13,7 @@ import { FINGERPRINT_PREFIX } from "../../../../../plugins/desk/mcp/src/factory/
 import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
 import { DROPPED_KEY, KNOWN_KEY, PENDING_KEY, knownHitsSince } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { osEnv } from "../_os_env.js"
 import { LAUNCH_STAMP_DIR, MAX_LAUNCH_STAMPS, endLaunch, launchStampKey, pendingLaunchTimes } from "../../../../../plugins/desk/mcp/src/factory/filer-launch.js"
 import { shouldLaunchFiler } from "../../../../../plugins/desk/mcp/src/runtime/filer-throttle.js"
 
@@ -22,7 +23,7 @@ const VERSION = "gh version 2.54.0 (2024-07-31)\n"
 
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-problem-file-")))
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   try {
     return await run({ env, base })
   } finally {
@@ -363,7 +364,8 @@ test("a runner that never resolves still returns not_filed: deadline within the 
   assert.equal(result.result, "not_filed")
   assert.equal(result.reason, "deadline")
   assert.match(result.body, /desk-problem-fingerprint/u)
-  assert.ok(Date.now() - startedAt < 2000, "must resolve near its own bound, never hang")
+  // The 20 ms bound is the attempt's own; the allowance covers the work around it (on Windows each protected write starts PowerShell).
+  assert.ok(Date.now() - startedAt < 15000, "must resolve near its own bound, never hang")
 }))
 
 test("a deadline that is already spent by the time the account is chosen is also reported as not_filed: deadline", () => scratch(async ({ env }) => {

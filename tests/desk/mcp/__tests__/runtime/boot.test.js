@@ -38,6 +38,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { setRuntimeResolver, setRuntimeResolverFailure } from "../../../../../plugins/desk/mcp/src/desk/runtime-resolver.js"
 import { REDACTED_SEGMENT } from "../../../../../plugins/desk/mcp/src/util/redact.js"
+import { osEnv } from "../_os_env.js"
 
 // Every collaborator that reaches outside the process (migration Detect
 // blocks, `git fetch`, `gh pr list`) is faked unless a test says otherwise;
@@ -1408,25 +1409,27 @@ test("resolveTaskQuery: a phrase that holds exactly one open task's slug or trac
 // ── repoStates, openPullRequests ─────────────────────────────────────────
 
 test("repoStates: fetches and reports branch and dirty state for each local repo of an open task, skipping everything else", () => {
+  // A card path is resolved to an absolute path, which on Windows gains a drive letter.
+  const clone = (name) => path.resolve("/clones", name)
   const calls = []
   const spawnGit = (cmd, args) => {
     calls.push(args.join(" "))
-    if (args.includes("fetch")) return { status: args[1] === "/clones/stale" ? 1 : 0, stdout: "" }
-    if (args[1] === "/clones/gone") return { status: 128, stdout: "" }
-    if (args[1] === "/clones/empty") return { status: 0, stdout: "" }
-    return { status: 0, stdout: args[1] === "/clones/dirty" ? "## feature...origin/feature\n M file\n" : "## main...origin/main\n" }
+    if (args.includes("fetch")) return { status: args[1] === clone("stale") ? 1 : 0, stdout: "" }
+    if (args[1] === clone("gone")) return { status: 128, stdout: "" }
+    if (args[1] === clone("empty")) return { status: 0, stdout: "" }
+    return { status: 0, stdout: args[1] === clone("dirty") ? "## feature...origin/feature\n M file\n" : "## main...origin/main\n" }
   }
   const open = (repos) => ({ track: "t", slug: "s", desk: null, data: { status: "processing", repos } })
   const local = (name, dir) => ({ name, local_path: dir, mode: "local" })
   const cards = [
-    open([local("clean", "/clones/clean"), local("dirty", "/clones/dirty"), local("stale", "/clones/stale"), local("gone", "/clones/gone"), local("empty", "/clones/empty")]),
+    open([local("clean", clone("clean")), local("dirty", clone("dirty")), local("stale", clone("stale")), local("gone", clone("gone")), local("empty", clone("empty"))]),
     open([{ name: "remote-only", local_path: "", mode: "remote" }, { name: "no-path", mode: "local" }, null]),
-    { track: "t", slug: "done", desk: null, data: { status: "done", repos: [local("finished", "/clones/clean")] } },
+    { track: "t", slug: "done", desk: null, data: { status: "done", repos: [local("finished", clone("clean"))] } },
     { track: "t", slug: "no-repos", desk: null, data: { status: "processing" } },
   ]
   const { states, pending } = repoStates({ cards, spawnGit, now: () => 0, deadline: 60000 })
   assert.deepEqual(pending, [])
-  assert.equal(states.find((state) => state.repo === "gone").local_path, "/clones/gone")
+  assert.equal(states.find((state) => state.repo === "gone").local_path, clone("gone"))
   assert.deepEqual(states.map((state) => [state.repo, state.present, state.branch, state.dirty, state.fetched]), [
     ["clean", true, "main", false, true],
     ["dirty", true, "feature", true, true],
@@ -1434,7 +1437,7 @@ test("repoStates: fetches and reports branch and dirty state for each local repo
     ["gone", false, undefined, undefined, undefined],
     ["empty", true, null, false, true],
   ])
-  assert.ok(calls.includes("-C /clones/clean fetch --quiet origin"))
+  assert.ok(calls.includes(`-C ${clone("clean")} fetch --quiet origin`))
 })
 
 test("repoStates: a repo past the wall-clock deadline is pending, not fetched", () => {
@@ -1483,7 +1486,7 @@ test("openPullRequests: past the deadline nothing is asked", async () => {
 function healthyBoot(root, extra = {}) {
   const { gh, jq } = okPrereqRunners()
   return bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+    env: osEnv({ DESK: root }), cwd: root, homeDir: root, gh, jq,
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
     ...extra,
@@ -1787,11 +1790,11 @@ test("a relative local_path resolves against the desk root in repoStates and res
   const repos = [{ name: "w", local_path: "clones/w", mode: "local" }, { name: "h", local_path: "~/h", mode: "local" }]
   const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos } }]
   repoStates({ cards, root: deskRoot, spawnGit, homeDir: "/home/x", now: () => 0, deadline: 60000 })
-  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), "/home/x/h"])
+  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), path.resolve(deskRoot, "/home/x/h")])
   seen.length = 0
   const runner = async () => ({ code: 1, stdout: "", stderr: "" })
   await resolvePushAccounts({ root: deskRoot, cards, runner, spawnGit, homeDir: "/home/x" })
-  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), "/home/x/h"])
+  assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), path.resolve(deskRoot, "/home/x/h")])
 })
 
 const DELIVERED_CARD = (title, deliveredAt) => [
@@ -1815,7 +1818,7 @@ test("bootOnce: delivered tasks that await sign-off are listed, the one instruct
   const printed = formatBootText(result)
   assert.match(printed, /Delivered, awaiting sign-off:\n- track-a\/shipped, 9 days, pr https:\/\/example\.test\/pr\/7, overdue\n/u)
   const { readStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
-  const { signoff } = await readStatus({ DESK: root })
+  const { signoff } = await readStatus(osEnv({ DESK: root }))
   assert.deepEqual(signoff.unsigned, { state: "measured", value: 1 })
   assert.deepEqual(signoff.overdue, { state: "measured", value: 1 })
   assert.deepEqual(signoff.not_recorded, { state: "measured", value: 1 })
@@ -1862,7 +1865,7 @@ test("bootOnce: a card that cannot be read is counted in the boot result, shown 
   assert.equal(result.unsigned_deliveries.unreadable, 1)
   assert.match(formatBootText(result), /1 task card could not be read, so this list may be short\./u)
   const { readStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
-  const { signoff } = await readStatus({ DESK: root })
+  const { signoff } = await readStatus(osEnv({ DESK: root }))
   assert.deepEqual(signoff.unsigned, { state: "partial", value: 1, reason: "cards_unreadable" })
   assert.equal(JSON.stringify(signoff).includes("broken"), false)
 })

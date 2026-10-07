@@ -424,7 +424,7 @@ test("tilde paths, remote-only repos and duplicate common directories stay scope
   assert.equal(result.complete, true)
   assert.equal(result.worktrees.length, 1)
   assert.deepEqual(result.repositories, [f.desk, f.repo, w.directory])
-  assert.deepEqual(tidy.parseWorktrees("worktree /a\0HEAD abc\0unknown future\0\0", "/repo"), [{ repository: "/repo", path: "/a", head: "abc" }])
+  assert.deepEqual(tidy.parseWorktrees("worktree /a\0HEAD abc\0unknown future\0\0", "/repo"), [{ repository: "/repo", path: tidy.nativeGitPath("/a"), head: "abc" }])
 })
 
 test("malformed release and delivery proof never authorizes deletion", async () => {
@@ -609,7 +609,7 @@ test("R4 symlinked task card stops traversal into code and evidence", async () =
 
 test("R6 real canonical serializer supports nested paths and long folded tilde paths", async () => {
   const f = await fixture()
-  const long = path.join(f.root, "long portable workspace ".repeat(5), "repo")
+  const long = path.join(f.root, Array(5).fill("long portable workspace").join(" "), "repo")
   await fs.mkdir(path.dirname(long), { recursive: true })
   await fs.rename(f.repo, long)
   for (const value of [
@@ -1058,4 +1058,23 @@ test("the unreadable-repos issue names the first three cards in order and counts
   }
   const { issues } = await tidy.inspectWorkspace({ deskRoot: f.desk, homeDir: f.root, budgetMs: 5000 })
   assert.deepEqual(issues, ["5 task cards with unreadable repos: track/a/task.md (repo ~/missing-a not found), track/b/task.md (repo ~/missing-b not found), track/c/task.md (repo ~/missing-c not found), and 2 more; their repositories were not inspected"])
+})
+
+test("Windows paths from Git match the same folder spelled natively or in another case, and only that", () => {
+  const { nativeGitPath, foldPath, samePath, insidePath } = tidy
+  assert.equal(nativeGitPath("C:/Users/me/repo", "win32"), "C:\\Users\\me\\repo")
+  assert.equal(nativeGitPath("/home/me/repo", "linux"), "/home/me/repo")
+  assert.equal(nativeGitPath(undefined, "win32"), undefined)
+  assert.equal(foldPath("C:/Users/Me", "win32"), "c:\\users\\me")
+  assert.equal(foldPath("/Home/Me", "linux"), "/Home/Me")
+  assert.equal(samePath("C:/Users/me/repo", "C:\\Users\\Me\\repo", "win32"), true)
+  assert.equal(samePath("C:\\Users\\a", "C:\\Users\\b", "win32"), false)
+  assert.equal(samePath("C:\\Users\\RUNNER~1\\w", "C:/Users/runneradmin/w", "win32"), false, "a short name is a different spelling and is not guessed")
+  assert.equal(samePath("/a/Repo", "/a/repo", "linux"), false)
+  assert.equal(samePath("/a/repo", "/a/repo", "linux"), true)
+  assert.equal(insidePath("C:/r/.git/worktrees", "C:\\R\\.git\\worktrees\\t", "win32"), true)
+  assert.equal(insidePath("C:\\r", "C:\\rr", "win32"), false)
+  assert.equal(insidePath("/r/w", "/r/w/t", "linux"), true)
+  assert.equal(insidePath("/r/w", "/r/wx", "linux"), false)
+  assert.equal(tidy.parseWorktrees("worktree C:/a/b\0HEAD x\0branch refs/heads/t\0\0", "r").length, 1)
 })

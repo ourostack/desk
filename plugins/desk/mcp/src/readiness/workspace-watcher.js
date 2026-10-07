@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto"
-import { lstatSync, readdirSync, watch as watchNative } from "node:fs"
+import { lstatSync, readdirSync, realpathSync, watch as watchNative } from "node:fs"
 import { mkdir, unlink, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { ensureStateIgnored } from "../util/state-ignore.js"
 
 const IGNORED_ROOTS = new Set([".git", ".state", "node_modules"])
+
+// On Windows a desk root spelled with an 8.3 short name (C:\Users\RUNNER~1, as a user's TEMP often is) makes libuv abort the
+// whole process ("Assertion failed: !_wcsnicmp(filename, dir, dirlen)", src\win\fs-event.c) when a recursive watch reports
+// events under the long name. The operating system's own spelling is watched instead. Other platforms watch the root as given.
+function watchedRoot(root) {
+  /* istanbul ignore next -- the platform split: the native lookup is taken on Windows only, so macOS and Linux keep their current behavior. */
+  return process.platform === "win32" ? realpathSync.native(root) : root
+}
 
 export async function createWorkspaceWatcher({
   root,
@@ -27,7 +35,7 @@ export async function createWorkspaceWatcher({
     .filter((candidate) => candidate && candidate !== "." && !candidate.startsWith("../"))
   let baseline = scanWorkspace(root, ignoredRelativePaths)
 
-  const watcher = watchFactory(root, { recursive: true, persistent: false }, (eventType, filename) => {
+  const watcher = watchFactory(watchedRoot(root), { recursive: true, persistent: false }, (eventType, filename) => {
     if (filename === null || filename === undefined) {
       failureReason = "lost_history"
       return

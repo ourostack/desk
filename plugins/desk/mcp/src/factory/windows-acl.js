@@ -21,7 +21,7 @@
 // caller (the readiness journal and the factory outbox) can import it.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { statSync } from "node:fs"
+import { lstatSync, statSync } from "node:fs"
 import * as path from "node:path"
 
 // Resolved from %SystemRoot%, never from PATH: the provider must be the one
@@ -144,11 +144,22 @@ function fail(label, message) {
 }
 
 /**
+ * One environment variable by name, ignoring case. Windows names variables without regard to case, but a plain object
+ * copy of `process.env` does not, and Git Bash hands a child `SYSTEMROOT` where the Windows shell hands `SystemRoot`.
+ */
+function windowsEnvironmentValue(env, name) {
+  if (typeof env[name] === "string") return env[name]
+  const wanted = name.toLowerCase()
+  const found = Object.keys(env).find((key) => key.toLowerCase() === wanted && typeof env[key] === "string")
+  return found === undefined ? undefined : env[found]
+}
+
+/**
  * Resolve the operating system's own ACL provider, or fail before the caller
  * creates anything. Returns the absolute provider path.
  */
 export function assertWindowsAclAvailable({ env = process.env, label = DEFAULT_LABEL } = {}) {
-  const systemRoot = typeof env.SystemRoot === "string" ? env.SystemRoot.trim() : ""
+  const systemRoot = (windowsEnvironmentValue(env, "SystemRoot") ?? "").trim()
   if (systemRoot === "") {
     fail(
       label,
@@ -343,17 +354,67 @@ export async function protectWindowsPaths(
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
     label = DEFAULT_LABEL,
+    memoize = runner === defaultRunner,
   } = {},
 ) {
   const requested = validateBatch(paths, label)
   const executable = assertWindowsAclAvailable({ env, label })
-  const completed = await runner({
-    executable,
-    args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_PROGRAM],
-    payload: JSON.stringify({ paths: requested }),
-    timeoutMs,
-    maxOutputBytes,
-    label,
-  })
-  return verify(requested, readResponse(completed, label), label)
+  // Starting Windows PowerShell costs a few hundred milliseconds, and a factory operation protects the same folders
+  // many times. A path this process already protected and verified is skipped while its identity and its change time
+  // are unchanged: Windows moves the change time on any security change, so a loosened ACL is protected again.
+  // Only the real provider is skipped by default; an injected runner always runs unless the caller asks to memoize.
+  const memoized = memoize
+  const stale = memoized ? requested.filter((entry) => entry.created || !isStillVerified(entry, verifiedPaths)) : requested
+  if (stale.length === 0) return requested.map((entry) => verifiedPaths.get(entry.path).result)
+  if (stale.length !== requested.length) {
+    const done = await protectWindowsPaths(stale, { env, runner, timeoutMs, maxOutputBytes, label, memoize })
+    return requested.map((entry) => done.find((item) => item.path === entry.path) ?? verifiedPaths.get(entry.path).result)
+  }
+  // Sixteen callers protecting the same folders at once would start sixteen PowerShell processes that each rewrite the same ACLs, and
+  // concurrent rewrites of one folder can read each other's half-applied state. Identical requests in flight share one run.
+  const key = memoized ? requested.map((entry) => `${entry.kind}:${entry.created}:${entry.path}`).join("\n") : null
+  if (key !== null && inFlight.has(key)) return inFlight.get(key)
+  const run = (async () => {
+    const completed = await runner({
+      executable,
+      args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_PROGRAM],
+      payload: JSON.stringify({ paths: requested }),
+      timeoutMs,
+      maxOutputBytes,
+      label,
+    })
+    const verified = verify(requested, readResponse(completed, label), label)
+    if (memoized) for (const result of verified) rememberVerified(result, verifiedPaths)
+    return verified
+  })()
+  if (key === null) return run
+  inFlight.set(key, run)
+  const release = () => inFlight.delete(key)
+  run.then(release, release)
+  return run
+}
+
+const inFlight = new Map()
+const verifiedPaths = new Map()
+
+function identityOf(target) {
+  try {
+    const stats = lstatSync(target)
+    return `${stats.dev}:${stats.ino}:${stats.ctimeMs}:${stats.isDirectory() ? "d" : "f"}`
+  } catch {
+    return null
+  }
+}
+
+function isStillVerified(entry, known) {
+  const seen = known.get(entry.path)
+  if (seen === undefined) return false
+  const now = identityOf(entry.path)
+  return now !== null && now === seen.identity && seen.result.kind === entry.kind
+}
+
+function rememberVerified(result, known) {
+  const identity = identityOf(result.path)
+  if (identity === null) known.delete(result.path)
+  else known.set(result.path, { identity, result })
 }

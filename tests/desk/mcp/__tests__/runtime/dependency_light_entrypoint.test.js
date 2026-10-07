@@ -1021,7 +1021,7 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
       JSON.parse(result.mutation.result.content[0].text),
       {
         status: "created",
-        path: path.join("diagnostic-probe", "must-not-write", "task.md"),
+        path: "diagnostic-probe/must-not-write/task.md",
         // A session that has declared no task gets the no-focus hint on every task tool call; the entry point serves it like any other server.
         focus_note: "If you are the session's main agent: no task in focus; call task_focus with the task you are working on, or with clear: true for none.",
       },

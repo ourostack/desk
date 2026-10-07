@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { osEnv } from "../_os_env.js"
 
 import "../_isolated_env.mjs"
 import { LOOP_BUDGET_MS, LOOP_STEP_NAMES, LATER_STEPS_RESERVE_MS, runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
@@ -21,7 +22,7 @@ const MINUTE = 60 * 1000
 
 async function scratch(run, { consent = true } = {}) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-loop-worker-")))
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin") })
   const desk = path.join(base, "desk-for-test")
   await fs.mkdir(desk)
   if (consent) await setConsent(env, { store: STORE, contribute: true, account: "someone" })

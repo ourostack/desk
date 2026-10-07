@@ -95,7 +95,7 @@ test("server.callTool routes task_create to the real implementation", async () =
   assert.ok(!res.isError)
   const body = parseResult(res)
   assert.equal(body.status, "created")
-  assert.equal(body.path, path.join("t", "book-flights", "task.md"))
+  assert.equal(body.path, path.posix.join("t", "book-flights", "task.md"))
 })
 
 test("server.callTool routes task_move to the real implementation", async () => {
@@ -112,7 +112,7 @@ test("server.callTool routes task_move to the real implementation", async () => 
   })
   assert.ok(!res.isError)
   const body = parseResult(res)
-  assert.equal(body.to, path.join("some-track", "book-flights-now"))
+  assert.equal(body.to, path.posix.join("some-track", "book-flights-now"))
 })
 
 test("server.callTool routes track_rename to the real implementation", async () => {
@@ -293,7 +293,7 @@ test("server.callTool routes a person-scoped write end-to-end (path shows desks/
   assert.ok(!res.isError)
   const body = JSON.parse(res.content[0].text)
   assert.equal(body.status, "created")
-  assert.equal(body.path, path.join("desks", "ari", "t", "book-flights", "task.md"))
+  assert.equal(body.path, path.posix.join("desks", "ari", "t", "book-flights", "task.md"))
 })
 
 test("server.callTool surfaces an invalid-alias throw as isError", async () => {
@@ -489,7 +489,7 @@ test("person scoping survives both private-tool retirements", async () => {
       params: { name: "task_create", arguments: { track: "t", slug: "book-flights", title: "T" } },
     })
     assert.equal(written.isError, undefined)
-    assert.equal(parseResult(written).path, path.join("desks", "rowan", "t", "book-flights", "task.md"))
+    assert.equal(parseResult(written).path, path.posix.join("desks", "rowan", "t", "book-flights", "task.md"))
   } finally {
     restore()
     await cleanup(fixture.base)

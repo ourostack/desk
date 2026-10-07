@@ -6,6 +6,8 @@ import { isCredentialLike } from "../desk/naming.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { readProcessStart } from "../readiness/process-start.js"
 import { withWorkspaceClaim } from "./workspace-claim.js"
+import { nativeGitPath, foldPath, samePath, insidePath } from "./native-path.js"
+export { nativeGitPath, foldPath, samePath, insidePath }
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dispositionRecord } from "./workspace-evidence.js"
 import { TERMINAL_STATES } from "../desk/lifecycle.js"
@@ -15,7 +17,6 @@ const MAX_BYTES = 64 * 1024
 const SHA = /^[0-9a-f]{40,64}$/u
 const REF = /^refs\/(?:heads|remotes)\/[^\s~^:?*[\\]+$/u
 const text = (value) => typeof value === "string" && value.length > 0
-const inside = (root, target) => target === root || target.startsWith(`${root}${path.sep}`)
 const cleanLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ")
 // Workspace tidy's Git calls run in the detached repair, the CLI and the boot check's inspection. Only the boot check answers a host, and its whole-check budget aborts its calls through their signal, so each call may take far longer than a hook's 2 s: under load the 2 s limit killed repairs' ls-remote and rev-parse calls and left worktrees retained.
 export const TIDY_GIT_TIMEOUT_MS = 20_000
@@ -200,7 +201,7 @@ export function parseWorktrees(output, repository) {
       const space = line.indexOf(" ")
       const key = space < 0 ? line : line.slice(0, space)
       const value = space < 0 ? true : line.slice(space + 1)
-      if (key === "worktree") item.path = value
+      if (key === "worktree") item.path = nativeGitPath(value)
       else if (key === "HEAD") item.head = value
       else if (["branch", "locked", "prunable", "detached", "bare"].includes(key)) item[key] = value
     }
@@ -300,7 +301,7 @@ export async function inspectWorkspace({
       if (!listing.ok) throw new Error(`cannot list worktrees: ${repo}`)
       const worktrees = parseWorktrees(listing.stdout, repo)
       // The first entry is the primary checkout, which is never a cleanup target.
-      result.worktrees.push(...worktrees.slice(1).filter((item) => item.path !== root))
+      result.worktrees.push(...worktrees.slice(1).filter((item) => !samePath(item.path, root)))
       if (result.worktrees.length > maxWorktrees) throw new Error("workspace-tidy worktree budget exceeded")
     }
     return result
@@ -370,10 +371,10 @@ async function candidate(item, inventory, options) {
   if (item.locked) throw new Error("locked worktree")
   if (item.prunable || item.bare) throw new Error("missing or bare worktree")
   if (!item.branch || item.detached) throw new Error("detached worktree")
-  if (await fs.realpath(cwd) !== cwd) throw new Error("worktree identity is symlinked")
-  const common = await mustGit(git, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
-  const admin = await mustGit(git, cwd, ["rev-parse", "--absolute-git-dir"])
-  if (admin === common || !inside(path.join(common, "worktrees"), admin)) throw new Error("worktree ownership unverified")
+  if (foldPath(await fs.realpath(cwd)) !== foldPath(cwd)) throw new Error("worktree identity is symlinked")
+  const common = nativeGitPath(await mustGit(git, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]))
+  const admin = nativeGitPath(await mustGit(git, cwd, ["rev-parse", "--absolute-git-dir"]))
+  if (samePath(admin, common) || !insidePath(path.join(common, "worktrees"), admin)) throw new Error("worktree ownership unverified")
   for (const marker of ["index.lock", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_LOG"]) {
     if (!await absent(path.join(admin, marker))) throw new Error("git operation in progress")
   }
@@ -382,7 +383,7 @@ async function candidate(item, inventory, options) {
   try { raw = await smallFile(receiptPath); record = JSON.parse(raw) } catch { throw new Error("exact ownership receipt missing or unreadable") }
   const info = await fs.stat(cwd)
   const card = path.resolve(options.deskRoot, record.task ?? "")
-  if (record.version !== 2 || !text(record.owner) || record.worktree !== cwd || record.repository !== common || record.branch !== item.branch ||
+  if (record.version !== 2 || !text(record.owner) || !samePath(String(record.worktree), cwd) || !samePath(String(record.repository), common) || record.branch !== item.branch ||
       !inventory.cardRecords[card]?.repositories.includes(item.repository)) throw new Error("exact ownership mismatch")
   if (await cardFrontmatter(card) !== inventory.cardRecords[card].body) throw new Error("task ownership changed")
   if (record.disposition !== "remove") throw new Error("intentionally retained worktree")
@@ -422,11 +423,11 @@ async function candidate(item, inventory, options) {
 
 export async function revokeWorkspaceRelease(resource) {
   return withWorkspaceClaim(resource, async (assertHeld) => {
-    const admin = await mustGit(gitDefault, resource.worktree, ["rev-parse", "--absolute-git-dir"])
+    const admin = nativeGitPath(await mustGit(gitDefault, resource.worktree, ["rev-parse", "--absolute-git-dir"]))
     const file = path.join(admin, "desk-closeout.json")
     const record = JSON.parse(await smallFile(file))
     for (const key of ["repository", "worktree", "branch", "owner"]) {
-      if (record[key] !== resource[key]) throw new Error("release revocation ownership mismatch")
+      if (!(["repository", "worktree"].includes(key) ? samePath(String(record[key]), String(resource[key])) : record[key] === resource[key])) throw new Error("release revocation ownership mismatch")
     }
     await assertHeld()
     await fs.unlink(file)

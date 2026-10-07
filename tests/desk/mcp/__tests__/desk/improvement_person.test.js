@@ -22,7 +22,7 @@ async function crewDesk() {
 test("DESK_PERSON names the person, a bad alias is the solo folder, and a solo desk has no person", async () => {
   const root = await mkTempRoot("desk-improvement-person-solo-")
   assert.deepEqual(await improvementPerson({ deskRoot: root, env: {} }), { status: "ok", personPrefix: "" })
-  assert.deepEqual(await improvementPerson({ deskRoot: root, env: { DESK_PERSON: " sam " } }), { status: "ok", personPrefix: path.join("desks", "sam") })
+  assert.deepEqual(await improvementPerson({ deskRoot: root, env: { DESK_PERSON: " sam " } }), { status: "ok", personPrefix: path.posix.join("desks", "sam") })
   for (const bad of ["a/b", "..", "x..y", "."]) assert.deepEqual(await improvementPerson({ deskRoot: root, env: { DESK_PERSON: bad } }), { status: "ok", personPrefix: "" }, bad)
   assert.deepEqual(await improvementPerson({ deskRoot: root, env: { DESK_PERSON: "   " } }), { status: "ok", personPrefix: "" })
 })
@@ -31,7 +31,7 @@ test("a crew desk's person comes from the roster and DESK_IDENTITY, or the cache
   const root = await crewDesk()
   const state = await mkTempRoot("desk-improvement-person-state-")
   const env = { HOME: state, XDG_STATE_HOME: path.join(state, "state") }
-  assert.deepEqual(await improvementPerson({ deskRoot: root, env: { ...env, DESK_IDENTITY: "BSmith" } }), { status: "ok", personPrefix: path.join("desks", "bob") })
+  assert.deepEqual(await improvementPerson({ deskRoot: root, env: { ...env, DESK_IDENTITY: "BSmith" } }), { status: "ok", personPrefix: path.posix.join("desks", "bob") })
   assert.deepEqual(await improvementPerson({ deskRoot: root, env: { ...env, DESK_IDENTITY: "nobody" } }), { status: "unresolved", reason: "no_matching_member" })
   // Nothing cached and no identity: no lookup is started, and the answer says so.
   assert.deepEqual(await improvementPerson({ deskRoot: root, env }), { status: "unresolved", reason: "login_not_cached" })
@@ -41,9 +41,9 @@ test("a crew desk's person comes from the roster and DESK_IDENTITY, or the cache
   const cache = path.join(state, "state", "ouroboros-skills", "desk", "identity-cache.json")
   await fs.mkdir(path.dirname(cache), { recursive: true })
   await fs.writeFile(cache, JSON.stringify({ [await fs.realpath(root)]: { identity: "agarcia", checked_at: now } }))
-  assert.deepEqual(await improvementPerson({ deskRoot: root, env, now }), { status: "ok", personPrefix: path.join("desks", "alex") })
+  assert.deepEqual(await improvementPerson({ deskRoot: root, env, now }), { status: "ok", personPrefix: path.posix.join("desks", "alex") })
   // DESK_PERSON still wins on a crew desk.
-  assert.deepEqual(await improvementPerson({ deskRoot: root, env: { ...env, DESK_PERSON: "bob" }, now }), { status: "ok", personPrefix: path.join("desks", "bob") })
+  assert.deepEqual(await improvementPerson({ deskRoot: root, env: { ...env, DESK_PERSON: "bob" }, now }), { status: "ok", personPrefix: path.posix.join("desks", "bob") })
 })
 
 test("a roster alias that is not a valid folder name is unresolved, not a crash", async () => {

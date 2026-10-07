@@ -114,10 +114,15 @@ test("successful convergence advances the lexical barrier to ready", async () =>
 test("controller uses the default state home under the current HOME when stateHome is omitted", async (t) => {
   const root = tempFixture("desk-controller-root-")
   const home = tempFixture("desk-controller-home-")
+  // os.homedir() reads USERPROFILE on Windows and HOME elsewhere.
   const previousHome = process.env.HOME
+  const previousProfile = process.env.USERPROFILE
   process.env.HOME = home
+  process.env.USERPROFILE = home
   t.after(() => {
     process.env.HOME = previousHome
+    if (previousProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = previousProfile
     rmSync(root, { recursive: true, force: true })
     rmSync(home, { recursive: true, force: true })
   })
@@ -200,7 +205,8 @@ test("connectOrStartController accepts a real (non-temp) state home when the cal
 test("controller server startup without options fails before opening a listener", async () => {
   await assert.rejects(
     () => startReadinessController(),
-    /absolute POSIX path/u,
+    // Windows takes a named-pipe name and does not check the shape; the missing endpoint still fails before any listener opens.
+    process.platform === "win32" ? /ERR_INVALID_ARG_TYPE/u : /absolute POSIX path/u,
   )
 })
 
@@ -707,6 +713,8 @@ test("controller returns to lexical ready from RECOVERING and reports semantic c
     rmSync(root, { recursive: true, force: true })
   })
   await client.markUncertain({ reason: "pending_change" })
+  // markUncertain schedules its own reconciliation, which can start before this call arrives (on a slow host it does); wait for it so the call below starts a convergence of its own.
+  await client.barrier({ capability: "lexical", wait: true })
   const result = await client.beginConvergence()
   assert.deepEqual(result.semantic.query_embedding, { available: true })
   const status = await client.status()
@@ -852,7 +860,7 @@ test("controller serializes null ids and string errors, and tolerates destroyed 
   })
 })
 
-test("controller owner publication and cleanup use win32 fallbacks when platform detection says win32", async (t) => {
+test("controller owner publication and cleanup use win32 fallbacks when platform detection says win32", { skip: process.platform === "win32" ? "the test fakes win32 on a POSIX host to reach the Windows branches with a unix-socket path; a real Windows host cannot listen on a file path, and its named-pipe path is covered by the other controller tests" : false }, async (t) => {
   const root = tempFixture("desk-owner-win32-")
   const stateHome = path.join(root, "state")
   const identity = endpoints.controllerIdentity({ root, protocolVersion: 1, lexicalContract: {}, semanticContract: null })
@@ -999,7 +1007,7 @@ test("direct controller close clears queued reconciliation and tolerates ENOTEMP
   assert.equal(existsSync(path.join(stateDir, "extra.txt")), true)
 })
 
-test("direct controller close propagates unexpected state-dir removal errors", async (t) => {
+test("direct controller close propagates unexpected state-dir removal errors", { skip: process.platform === "win32" ? "removal is made to fail with a read-only parent folder (chmod 0500), which Windows does not enforce for folders" : false }, async (t) => {
   const root = tempFixture("desk-owner-direct-error-")
   const stateHome = path.join(root, "state")
   const identity = endpoints.controllerIdentity({ root, protocolVersion: 1, lexicalContract: {}, semanticContract: null })

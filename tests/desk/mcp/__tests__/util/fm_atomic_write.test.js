@@ -6,6 +6,7 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
+import { NO_POSIX_MODES } from "../_platform.js"
 
 test("an atomic write replaces the file, following a symlink, and leaves nothing beside it", async () => {
   const root = await mkTempDeskRoot()
@@ -36,7 +37,7 @@ test("many concurrent atomic writes to one card all succeed and leave one whole 
   assert.deepEqual(await fs.readdir(root), ["card.md"])
 })
 
-test("an atomic write keeps the card's file mode", async () => {
+test("an atomic write keeps the card's file mode", { skip: NO_POSIX_MODES }, async () => {
   const root = await mkTempDeskRoot()
   const file = path.join(root, "card.md")
   await fs.writeFile(file, "old")

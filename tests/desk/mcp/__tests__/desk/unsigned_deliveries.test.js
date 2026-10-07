@@ -186,6 +186,8 @@ test("a card the scan cannot read is counted as unreadable, never dropped silent
   await put(desk, ["alpha", "broken-yaml"], "---\ntitle: [unclosed\nstatus: done\n---\n")
   const locked = await put(desk, ["alpha", "locked"], card())
   await fs.chmod(locked, 0)
+  // Windows has no permission bits: chmod 0 leaves the card readable, so it is counted as an unsigned delivery instead of an unreadable card.
+  const lockHolds = process.platform !== "win32"
   await put(desk, ["alpha", "_hidden", "x"], card())
   await put(desk, [".dot", "x"], card())
   await fs.mkdir(path.join(desk, "alpha", "empty-folder"), { recursive: true })
@@ -194,9 +196,10 @@ test("a card the scan cannot read is counted as unreadable, never dropped silent
   await put(desk, ["alpha", "no-status"], "---\ntitle: x\n---\n")
   const found = unsignedDeliveries(desk, { now: NOW })
   await fs.chmod(locked, 0o644)
-  assert.equal(found.count, 1)
-  assert.equal(found.unreadable, 3)
-  assert.equal(unsignedLines(found).at(-1), "3 task cards could not be read, so this list may be short.")
+  const unreadable = lockHolds ? 3 : 2
+  assert.equal(found.count, lockHolds ? 1 : 2)
+  assert.equal(found.unreadable, unreadable)
+  assert.equal(unsignedLines(found).at(-1), `${unreadable} task cards could not be read, so this list may be short.`)
 }))
 
 test("a byte-order mark before the frontmatter is accepted and the card is read", () => withDesk(async (desk) => {

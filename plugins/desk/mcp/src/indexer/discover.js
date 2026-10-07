@@ -24,6 +24,7 @@ import { promises as fs } from "node:fs"
 import { createHash } from "node:crypto"
 import * as path from "node:path"
 import matter from "gray-matter"
+import { toDeskPath } from "../util/paths.js"
 import {
   exclusionForPath,
   hasGitignoreNegation,
@@ -64,11 +65,11 @@ const SKIP_DIRS = new Set([
  * Exposed for tests.
  */
 function stripPersonPrefix(relPath) {
-  const segments = relPath.split(path.sep)
+  const segments = toDeskPath(relPath).split("/")
   if (segments.length > 2 && segments[0] === "desks") {
-    return segments.slice(2).join(path.sep)
+    return segments.slice(2).join("/")
   }
-  return relPath
+  return toDeskPath(relPath)
 }
 
 /**
@@ -111,7 +112,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
       // is_archived=true in describeDoc and per-tool search defaults
       // decide whether to include them.
       const sub = path.join(dir, name)
-      const relDir = path.relative(deskRoot, sub)
+      const relDir = toDeskPath(path.relative(deskRoot, sub))
       if (shouldSkipDirectory(relDir, exclusionRules)) continue
       await walk(deskRoot, sub, out, signal, exclusionRules)
       continue
@@ -121,7 +122,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
     if (!name.endsWith(".md")) continue
 
     const abs = path.join(dir, name)
-    const rel = path.relative(deskRoot, abs)
+    const rel = toDeskPath(path.relative(deskRoot, abs))
     if (isExcluded(rel, exclusionRules)) continue
     if (!isIndexable(rel)) continue
 
@@ -160,7 +161,7 @@ export function isIndexable(relPath) {
   // workspaces have no `_shared/` dir, so this is purely additive. Checked
   // against the raw relPath (NOT the person-stripped remainder) because
   // `_shared/` always lives at the repo root, never under `desks/<alias>/`.
-  const rawSegments = relPath.split(path.sep)
+  const rawSegments = toDeskPath(relPath).split("/")
   if (
     rawSegments[0] === "_shared" &&
     rawSegments.length > 1 &&
@@ -171,7 +172,7 @@ export function isIndexable(relPath) {
 
   // Remap-transparency: classify the desk-relative remainder, ignoring any
   // leading `desks/<alias>/` write-prefix.
-  const segments = stripPersonPrefix(relPath).split(path.sep)
+  const segments = stripPersonPrefix(relPath).split("/")
   const base = segments[segments.length - 1]
   if (TASK_DOC_BASENAMES.has(base)) return true
 
@@ -216,7 +217,7 @@ export function classify(relPath) {
   // (read by everyone, owned by no single desk). Report kind=shared,
   // track-less. Checked against the raw relPath because `_shared/` lives at
   // the repo root, not under any `desks/<alias>/` prefix.
-  const rawSegments = relPath.split(path.sep)
+  const rawSegments = toDeskPath(relPath).split("/")
   if (rawSegments[0] === "_shared" && rawSegments.length > 1) {
     return { kind: "shared", track: null, task_slug: null }
   }
@@ -224,7 +225,7 @@ export function classify(relPath) {
   // Remap-transparency: attribute against the desk-relative remainder, so a
   // doc at `desks/<alias>/<track>/<slug>/task.md` reports track=<track>, not
   // "desks". OFF-mode top-level paths pass through unchanged.
-  const segments = stripPersonPrefix(relPath).split(path.sep)
+  const segments = stripPersonPrefix(relPath).split("/")
   const base = segments[segments.length - 1]
 
   if (TASK_DOC_BASENAMES.has(base)) {
@@ -298,7 +299,7 @@ async function describeDoc(deskRoot, abs, rel, signal) {
   // is_archived: any ancestor directory in the path is named `_archive`
   // (or starts with `_archive`). Matches the v1.0 skip predicate but
   // now stored as a flag instead of an exclusion.
-  const segments = rel.split(path.sep)
+  const segments = rel.split("/")
   const is_archived = segments
     .slice(0, -1) // exclude the filename itself
     .some((s) => s === "_archive" || s.startsWith("_archive"))

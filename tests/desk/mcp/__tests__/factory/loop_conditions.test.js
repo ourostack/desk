@@ -7,13 +7,14 @@ import assert from "node:assert/strict"
 import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { osEnv } from "../_os_env.js"
 
 import { readStatus, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { MAX_CONDITIONS, MIN_OBSERVATION_GAP_HOURS, conditionOf, observeConditions } from "../../../../../plugins/desk/mcp/src/factory/loop-conditions.js"
 
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-loop-conditions-")))
-  const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   try {
     return await run(env)
   } finally {

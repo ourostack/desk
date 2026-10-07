@@ -48,9 +48,9 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeepi
     // (and everything below them) whose evidence cannot be read; anything else is a true none.
     repoLookup(absPath) {
       calls.repoLookup.push(absPath)
-      const root = Object.keys(repos).sort((a, b) => b.length - a.length).find((directory) => absPath === directory || absPath.startsWith(`${directory}/`))
+      const root = Object.keys(repos).sort((a, b) => b.length - a.length).find((directory) => absPath === directory || absPath.startsWith(`${directory}${path.sep}`))
       if (root !== undefined) return { repo: repos[root] }
-      return unavailable.some((prefix) => absPath === prefix || absPath.startsWith(`${prefix}/`)) ? { unavailable: true } : { none: true }
+      return unavailable.some((prefix) => absPath === prefix || absPath.startsWith(`${prefix}${path.sep}`)) ? { unavailable: true } : { none: true }
     },
     gitCommitTaskPaths(sha) {
       calls.native.push(sha)
@@ -203,8 +203,8 @@ test("the remote binding hashed the jobs with comes back, and is local:<desk> fo
   const events = { fileWrites: [1, 2, 3].map((n) => ({ at: minute(n), path: `${DESK}/${TRACK}/${SLUG}/a.md` })) }
   assert.equal(bind(events).remote, REMOTE)
   const none = bind(events, { deskRemote: null })
-  assert.equal(none.remote, `local:${DESK}`)
-  assert.equal(none.jobs[0].job, expectedId(`local:${DESK}`, "", TRACK, SLUG))
+  assert.equal(none.remote, `local:${path.resolve(DESK)}`)
+  assert.equal(none.jobs[0].job, expectedId(`local:${path.resolve(DESK)}`, "", TRACK, SLUG))
 })
 
 test("the bound tasks come back with their birth path beside the jobs", () => {
@@ -593,7 +593,7 @@ test("remote normalization reaches the job: scp-style and credentialed https giv
   const https = bind(events, { deskRemote: "https://user:tok@github.com/owner/desk/" }).jobs[0].job
   assert.equal(scp, https)
   for (const deskRemote of [null, ""]) {
-    assert.equal(bind(events, { deskRemote }).jobs[0].job, expectedId(`local:${DESK}`, "", TRACK, SLUG))
+    assert.equal(bind(events, { deskRemote }).jobs[0].job, expectedId(`local:${path.resolve(DESK)}`, "", TRACK, SLUG))
   }
   // Through a symlink or its real path, an unpublished desk has one job ID: the real path's.
   const scratch = mkdtempSync(path.join(os.tmpdir(), "desk-binding-local-"))
@@ -1015,7 +1015,9 @@ test("own activity is the session's desk commit windows and its task-tool calls 
 
 // --- Work in a code repository ---------------------------------------------------
 
-const CODE = "/work/code"
+// Fixture paths outside the desk are spelled the way the platform spells an absolute path, because Desk resolves them.
+const abs = (value) => path.resolve(value)
+const CODE = abs("/work/code")
 const codeWrite = (n, file = "src/a.js", agent = 0) => ({ at: minute(n), path: `${CODE}/${file}`, agent })
 const listing = (...slugs) => Object.fromEntries(slugs.map((slug) => [`${TRACK}/${slug}`, { ...CARD, repos: ["ourostack/desk"] }]))
 
@@ -1054,39 +1056,39 @@ test("a path outside the desk that resolves to no repository binds nothing, and 
   const events = {
     fileWrites: [
       writeAt(1, X), writeAt(2, X), writeAt(3, Y),
-      ...Array.from({ length: 10 }, (_, index) => ({ at: minute(10 + index), path: `/tmp/scratch-${SENTINEL}/${index % 2}/out.txt`, agent: 0 })),
-      { at: minute(30), path: `/tmp/scratch-${SENTINEL}/0/other.txt`, agent: 0 },
+      ...Array.from({ length: 10 }, (_, index) => ({ at: minute(10 + index), path: abs(`/tmp/scratch-${SENTINEL}/${index % 2}/out.txt`), agent: 0 })),
+      { at: minute(30), path: abs(`/tmp/scratch-${SENTINEL}/0/other.txt`), agent: 0 },
       // A subagent `agents` does not list is no evidence, and is not counted either.
-      { at: minute(31), path: "/tmp/unlisted/out.txt", agent: 9 },
+      { at: minute(31), path: abs("/tmp/unlisted/out.txt"), agent: 9 },
     ],
     shellGitCommits: [
-      { start: minute(40), end: minute(41), cwd: "/tmp/not-a-repo", paths: ["/tmp/not-a-repo/a/b.txt", "/tmp/not-a-repo/a/c.txt", 7], agent: 0 },
+      { start: minute(40), end: minute(41), cwd: abs("/tmp/not-a-repo"), paths: [abs("/tmp/not-a-repo/a/b.txt"), abs("/tmp/not-a-repo/a/c.txt"), 7], agent: 0 },
       // No directory, or one that is not absolute, is nothing to resolve.
       { start: minute(42), end: minute(43), cwd: null, paths: [], agent: 0 },
       { start: minute(44), end: minute(45), cwd: "relative/dir", paths: [], agent: 0 },
       // An unlisted worker's commit call is no evidence, and its directory is not counted.
-      { start: minute(46), end: minute(47), cwd: "/tmp/unlisted", paths: ["/tmp/unlisted/a.txt"], agent: 9 },
+      { start: minute(46), end: minute(47), cwd: abs("/tmp/unlisted"), paths: [abs("/tmp/unlisted/a.txt")], agent: 9 },
     ],
   }
-  const result = bind(events, { agents: tree(), cards: listing(X), unavailable: ["/tmp"] })
+  const result = bind(events, { agents: tree(), cards: listing(X), unavailable: [abs("/tmp")] })
   assert.deepEqual(result.jobs, [], "two desk writes beside another task's are not enough, and an unresolved path is never guessed")
   // Two write directories, the commit's directory and the directory of the paths it named.
   assert.equal(result.repoUnresolved, 4)
   assert.equal(typeof result.repoUnresolved, "number")
   // A reader that answers with something other than one of its three answers is not available evidence either.
-  const odd = bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...fakes({ cards: listing(X), unavailable: ["/tmp"] }), repoLookup: () => ({ repo: "" }) })
+  const odd = bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...fakes({ cards: listing(X), unavailable: [abs("/tmp")] }), repoLookup: () => ({ repo: "" }) })
   assert.deepEqual([odd.jobs, odd.repoUnresolved], [[], 4])
   // Directories that exist and are in no repository are a true none: nothing was lost, so nothing is counted.
   assert.equal(bind(events, { agents: tree(), cards: listing(X) }).repoUnresolved, 0)
   // A repository that resolves is never counted, available or not.
-  assert.equal(bind(events, { agents: tree(), cards: listing(X), unavailable: ["/tmp"], repos: { "/tmp": "someone/else" } }).repoUnresolved, 0)
+  assert.equal(bind(events, { agents: tree(), cards: listing(X), unavailable: [abs("/tmp")], repos: { [abs("/tmp")]: "someone/else" } }).repoUnresolved, 0)
   // A caller that omits the reader is an error, never a silent zero.
   const { repoLookup, ...blind } = fakes({ cards: listing(X) })
   assert.throws(() => bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...blind }), TypeError)
 })
 
 test("a commit call in a repository is one event per repository it touches, at the call's start, and paths inside the desk are never asked about", () => {
-  const OTHER_CODE = "/work/other"
+  const OTHER_CODE = abs("/work/other")
   const commit = (n, cwd, paths = []) => ({ start: minute(n), end: minute(n + 1), cwd, paths, agent: 0 })
   const events = {
     fileWrites: [writeAt(1, X)],
@@ -1106,7 +1108,7 @@ test("a commit call in a repository is one event per repository it touches, at t
 })
 
 test("a commit path that is itself a nested repository root credits the nested repository, not its parent's", () => {
-  const nested = `${CODE}/nested`
+  const nested = path.join(CODE, "nested")
   const events = {
     fileWrites: [writeAt(1, X), writeAt(2, X), writeAt(3, Y), writeAt(4, Y), writeAt(5, Y)],
     shellGitCommits: [10, 20, 30].map((n) => ({ start: minute(n), end: minute(n + 1), cwd: DESK, paths: [nested], agent: 0 })),
@@ -1119,12 +1121,12 @@ test("a commit path that is itself a nested repository root credits the nested r
 test("only a commit path entry may be a file: writes and the commit's directory are asked about as folders", () => {
   const asked = []
   const events = {
-    fileWrites: [{ at: minute(1), path: "/tmp/w/out.txt", agent: 0 }],
-    shellGitCommits: [{ start: minute(10), end: minute(11), cwd: "/tmp/c", paths: ["/tmp/c/gone.txt"], agent: 0 }],
+    fileWrites: [{ at: minute(1), path: abs("/tmp/w/out.txt"), agent: 0 }],
+    shellGitCommits: [{ start: minute(10), end: minute(11), cwd: abs("/tmp/c"), paths: [abs("/tmp/c/gone.txt")], agent: 0 }],
   }
   const deps = fakes({ cards: listing(X) })
   bindSession({ events, agents: tree(), session: SESSION, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, repoLookup: (p, o) => { asked.push([p, o?.maybeFile === true]); return { none: true } } })
-  assert.deepEqual(asked.sort(), [["/tmp/c", false], ["/tmp/c/gone.txt", true], ["/tmp/w", false]])
+  assert.deepEqual(asked.sort(), [[abs("/tmp/c"), false], [abs("/tmp/c/gone.txt"), true], [abs("/tmp/w"), false]])
 })
 
 test("task_create with focus declares the new card: the session is bound by declaration, not as one that never declared", () => {

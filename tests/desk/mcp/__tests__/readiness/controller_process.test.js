@@ -107,8 +107,8 @@ test("closing a dead client cannot evict the replacement's local ownership or st
 test("supervisor addresses are child-specific and Windows uses a named pipe", () => {
   const one = supervisorEndpoint("/tmp/desk/a.sock", "darwin")
   const two = supervisorEndpoint("/tmp/desk/a.sock", "linux")
-  assert.equal(path.dirname(one), "/tmp/desk")
-  assert.equal(path.dirname(two), "/tmp/desk")
+  assert.equal(path.dirname(one), path.join("/tmp/desk"))
+  assert.equal(path.dirname(two), path.join("/tmp/desk"))
   assert.notEqual(one, two)
   assert.match(supervisorEndpoint("unused", "win32"), /^\\\\\.\\pipe\\desk-supervisor-[a-f0-9-]{36}$/u)
   assert.equal(controllerSocketIdentity("unused", "win32"), null)
@@ -360,9 +360,11 @@ test("supervisor cleanup preserves replacement files and reports non-ENOENT fail
   writeFileSync(endpoint, "fixture")
   const stat = lstatSync(endpoint)
   const supervisor = { endpoint, socket: { dev: stat.dev, ino: stat.ino } }
+  // Windows file IDs can exceed 2^53, where adding 1 changes nothing; halving always gives a different number.
+  const other = (value) => (value > 1 ? Math.floor(value / 2) : value + 1)
   releaseSupervisor({})
-  releaseSupervisor({ ...supervisor, socket: { dev: stat.dev + 1, ino: stat.ino } })
-  releaseSupervisor({ ...supervisor, socket: { dev: stat.dev, ino: stat.ino + 1 } })
+  releaseSupervisor({ ...supervisor, socket: { dev: other(stat.dev), ino: stat.ino } })
+  releaseSupervisor({ ...supervisor, socket: { dev: stat.dev, ino: other(stat.ino) } })
   assert.equal(existsSync(endpoint), true)
   const logs = []
   releaseSupervisor(supervisor, {

@@ -416,8 +416,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // directory, and the creator retries when its lock directory was removed between the two `mkdir` calls. A lock whose token
 // directory is older than two minutes is taken over by removing exactly that token directory (a second taker, or a
 // holder releasing at the same time, finds it gone and starts again).
+// Windows refuses to create a folder whose deletion is still pending (EPERM, sometimes EACCES), and a lock another caller has just released is such a folder for a moment, so it is contention for about this long, not a fault.
+const LOCK_PENDING_DELETE_MS = 5000
 async function acquire(lock, token, wait, hooks) {
   const deadline = Date.now() + wait
+  const pendingDeadline = Date.now() + LOCK_PENDING_DELETE_MS
   for (;;) {
     try {
       await fs.mkdir(lock)
@@ -426,6 +429,10 @@ async function acquire(lock, token, wait, hooks) {
       return true
     } catch (error) {
       if (error.code === "ENOENT") continue
+      if ((error.code === "EPERM" || error.code === "EACCES") && (hooks.platform ?? process.platform) === "win32" && Date.now() < pendingDeadline) {
+        await sleep(LOCK_POLL_MS)
+        continue
+      }
       if (error.code !== "EEXIST") throw error
     }
     const children = await fs.readdir(lock).catch(() => null)

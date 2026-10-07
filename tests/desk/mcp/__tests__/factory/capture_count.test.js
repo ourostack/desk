@@ -138,7 +138,7 @@ test("a host folder that does not exist is absent, one that cannot be listed is 
   await put(path.join(base, ".codex", "sessions"), "a file where a folder should be")
   assert.equal((await listRootSessions(env)).hosts["codex-cli"].state, "unreadable")
   // A project folder the process may not list makes the whole host unreadable, never a smaller number.
-  if (process.getuid?.() !== 0) {
+  if (process.getuid?.() !== 0 && process.platform !== "win32") {
     await chmod(path.join(base, ".claude", "projects", "-f"), 0)
     try {
       assert.deepEqual((await listRootSessions(env)).hosts["claude-code"], { state: "unreadable", sessions: [] })
@@ -251,7 +251,7 @@ test("an entry that is a file where a Codex year, month or day folder should be 
   assert.equal(codex.undetermined, 1)
 }))
 
-test("a rollout that cannot be opened is undetermined, not a root", { skip: process.getuid?.() === 0 }, () => home(async (base, env) => {
+test("a rollout that cannot be opened is undetermined, not a root", { skip: process.getuid?.() === 0 ? "root can open any file" : process.platform === "win32" ? "chmod 0 does not make a file unreadable on Windows: it has no read permission bit" : false }, () => home(async (base, env) => {
   await put(rollout(base, A), codexMeta(A, null))
   await chmod(rollout(base, A), 0)
   const codex = (await listRootSessions(env)).hosts["codex-cli"]

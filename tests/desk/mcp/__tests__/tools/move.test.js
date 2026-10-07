@@ -122,11 +122,11 @@ test("task_move renames a task within the same track (Git desk) and renames its 
     schedulePush: () => {},
   })
 
-  assert.equal(result.from, path.join("main-track", "old-name"))
-  assert.equal(result.to, path.join("main-track", "new-name"))
+  assert.equal(result.from, path.posix.join("main-track", "old-name"))
+  assert.equal(result.to, path.posix.join("main-track", "new-name"))
   assert.deepEqual(result.mentions, [])
-  assert.ok(result.updated_files.includes(path.join("main-track", "new-name", "task.md")))
-  assert.ok(result.updated_files.includes(path.join("main-track", "track.md")))
+  assert.ok(result.updated_files.includes(path.posix.join("main-track", "new-name", "task.md")))
+  assert.ok(result.updated_files.includes(path.posix.join("main-track", "track.md")))
 
   assert.equal(await exists(path.join(root, "main-track", "old-name")), false)
   const { data } = await readFront(path.join(root, "main-track", "new-name", "task.md"))
@@ -157,8 +157,8 @@ test("task_move renames a task under a track that has no track.md, leaving the m
     schedulePush: () => {},
   })
 
-  assert.equal(result.to, path.join("lonely-track", "new-name"))
-  assert.deepEqual(result.updated_files, [path.join("lonely-track", "new-name", "task.md")])
+  assert.equal(result.to, path.posix.join("lonely-track", "new-name"))
+  assert.deepEqual(result.updated_files, [path.posix.join("lonely-track", "new-name", "task.md")])
   assert.equal(await exists(path.join(root, "lonely-track", "track.md")), false)
 })
 
@@ -251,11 +251,11 @@ test("task_move moves a task across tracks, keeping the slug, and moves its task
     schedulePush: () => {},
   })
 
-  assert.equal(result.from, path.join("track-a", "shared-task"))
-  assert.equal(result.to, path.join("track-b", "shared-task"))
-  assert.ok(result.updated_files.includes(path.join("track-b", "shared-task", "task.md")))
-  assert.ok(result.updated_files.includes(path.join("track-a", "track.md")))
-  assert.ok(result.updated_files.includes(path.join("track-b", "track.md")))
+  assert.equal(result.from, path.posix.join("track-a", "shared-task"))
+  assert.equal(result.to, path.posix.join("track-b", "shared-task"))
+  assert.ok(result.updated_files.includes(path.posix.join("track-b", "shared-task", "task.md")))
+  assert.ok(result.updated_files.includes(path.posix.join("track-a", "track.md")))
+  assert.ok(result.updated_files.includes(path.posix.join("track-b", "track.md")))
 
   const { data } = await readFront(path.join(root, "track-b", "shared-task", "task.md"))
   assert.equal(data.track, "track-b")
@@ -278,7 +278,7 @@ test("task_move moves and renames simultaneously across tracks", async () => {
     schedulePush: () => {},
   })
 
-  assert.equal(result.to, path.join("track-b", "new-name"))
+  assert.equal(result.to, path.posix.join("track-b", "new-name"))
   assert.ok(await exists(path.join(root, "track-b", "new-name", "task.md")))
   assert.match(await trackBody(root, "track-b"), /`new-name`/)
   assert.doesNotMatch(await trackBody(root, "track-a"), /`old-name`/)
@@ -372,7 +372,7 @@ test("task_move moves into a valid, already-existing destination track", async (
     schedulePush: () => {},
   })
 
-  assert.equal(result.to, path.join("track-b", "solo-task"))
+  assert.equal(result.to, path.posix.join("track-b", "solo-task"))
   assert.ok(await exists(path.join(root, "track-b", "solo-task", "task.md")))
 })
 
@@ -390,8 +390,8 @@ test("task_move across tracks leaves both tables alone when the source table has
     schedulePush: () => {},
   })
 
-  assert.equal(result.updated_files.includes(path.join("track-a", "track.md")), false)
-  assert.equal(result.updated_files.includes(path.join("track-b", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("track-a", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("track-b", "track.md")), false)
   assert.match(await trackBody(root, "track-a"), /`unrelated-row`/)
   assert.doesNotMatch(await trackBody(root, "track-b"), /`untracked-in-table`/)
 })
@@ -415,8 +415,8 @@ test("task_move across tracks leaves the destination table alone when it exists 
   })
 
   assert.ok(await exists(path.join(root, "track-b", "moving-task", "task.md")))
-  assert.ok(result.updated_files.includes(path.join("track-a", "track.md")))
-  assert.equal(result.updated_files.includes(path.join("track-b", "track.md")), false)
+  assert.ok(result.updated_files.includes(path.posix.join("track-a", "track.md")))
+  assert.equal(result.updated_files.includes(path.posix.join("track-b", "track.md")), false)
   assert.equal(await trackBody(root, "track-b"), before)
 })
 
@@ -433,7 +433,7 @@ test("task_move within the same track leaves the table alone when it has no row 
     schedulePush: () => {},
   })
 
-  assert.equal(result.updated_files.includes(path.join("track-a", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("track-a", "track.md")), false)
   assert.match(await trackBody(root, "track-a"), /`unrelated-row`/)
   assert.doesNotMatch(await trackBody(root, "track-a"), /still-untracked/)
 })
@@ -463,7 +463,7 @@ test("task_move leaves a track.md with no Tasks table alone", async () => {
     schedulePush: () => {},
   })
 
-  assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("main-track", "track.md")), false)
   assert.equal(await trackBody(root, "main-track"), before)
 })
 
@@ -487,7 +487,7 @@ test("task_move leaves a track.md alone when the Tasks heading has no table unde
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
     schedulePush: () => {},
   })
-  assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("main-track", "track.md")), false)
 })
 
 test("task_move leaves a track.md alone when the Tasks heading is the last line of the body", async () => {
@@ -505,7 +505,7 @@ test("task_move leaves a track.md alone when the Tasks heading is the last line 
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
     schedulePush: () => {},
   })
-  assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("main-track", "track.md")), false)
 })
 
 test("task_move leaves a track.md alone when the header row has no separator row under it", async () => {
@@ -528,7 +528,7 @@ test("task_move leaves a track.md alone when the header row has no separator row
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
     schedulePush: () => {},
   })
-  assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("main-track", "track.md")), false)
 })
 
 test("task_move leaves a track.md alone when the row after the header isn't a valid separator", async () => {
@@ -551,7 +551,7 @@ test("task_move leaves a track.md alone when the row after the header isn't a va
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
     schedulePush: () => {},
   })
-  assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
+  assert.equal(result.updated_files.includes(path.posix.join("main-track", "track.md")), false)
 })
 
 // ── task_move: archived tasks ────────────────────────────────────────────────
@@ -571,8 +571,8 @@ test("task_move relocates an archived task and keeps it archived", async () => {
     schedulePush: () => {},
   })
 
-  assert.equal(result.from, path.join("track-a", "_archive", "old-task"))
-  assert.equal(result.to, path.join("track-b", "_archive", "renamed-task"))
+  assert.equal(result.from, path.posix.join("track-a", "_archive", "old-task"))
+  assert.equal(result.to, path.posix.join("track-b", "_archive", "renamed-task"))
   assert.equal(await exists(path.join(root, "track-a", "_archive", "old-task")), false)
   const { data } = await readFront(path.join(root, "track-b", "_archive", "renamed-task", "task.md"))
   assert.equal(data.track, "track-b")
@@ -756,7 +756,7 @@ test("task_move reports mentions elsewhere but never rewrites them", async () =>
     schedulePush: () => {},
   })
 
-  assert.deepEqual(result.mentions, [path.join("_meta", "notes.md")])
+  assert.deepEqual(result.mentions, [path.posix.join("_meta", "notes.md")])
   assert.equal(await fs.readFile(notePath, "utf8"), noteText, "mentions are reported, never rewritten")
 })
 
@@ -793,7 +793,7 @@ test("task_move works on a non-Git desk via a plain rename", async () => {
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
   })
 
-  assert.equal(result.to, path.join("main-track", "new-name"))
+  assert.equal(result.to, path.posix.join("main-track", "new-name"))
   assert.equal(await exists(path.join(root, "main-track", "old-name")), false)
   assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
   assert.match(await trackBody(root, "main-track"), /`new-name`/)
@@ -820,7 +820,7 @@ test("task_move honors the --person write prefix", async () => {
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
   })
 
-  assert.equal(result.to, path.join("desks", "ari", "main-track", "new-name"))
+  assert.equal(result.to, path.posix.join("desks", "ari", "main-track", "new-name"))
   assert.ok(await exists(path.join(root, "desks", "ari", "main-track", "new-name", "task.md")))
 })
 
@@ -916,7 +916,7 @@ test("task_move reports a commit failure without losing the move", async () => {
     spawnGit,
   })
 
-  assert.equal(result.to, path.join("main-track", "new-name"), "the move itself is never lost to a commit failure")
+  assert.equal(result.to, path.posix.join("main-track", "new-name"), "the move itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
 })
@@ -939,7 +939,7 @@ test("task_move commits only its own paths, leaving another process's staged, un
     schedulePush: () => {},
   })
 
-  assert.equal(result.to, path.join("main-track", "new-name"))
+  assert.equal(result.to, path.posix.join("main-track", "new-name"))
   assert.equal(result.commit, undefined, "the move's own commit succeeded")
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
@@ -960,7 +960,7 @@ test("task_move treats a spawnGit throw as a non-Git desk", async () => {
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
     spawnGit,
   })
-  assert.equal(result.to, path.join("main-track", "new-name"))
+  assert.equal(result.to, path.posix.join("main-track", "new-name"))
   assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
 })
 
@@ -988,7 +988,7 @@ test("task_move schedules a push exactly once, keyed on the plain deskRoot, afte
     schedulePush: (opts) => calls.push(opts),
   })
 
-  assert.equal(result.to, path.join("main-track", "new-name"))
+  assert.equal(result.to, path.posix.join("main-track", "new-name"))
   assert.deepEqual(calls, [{ root }])
 })
 
@@ -1051,8 +1051,8 @@ test("task_move unarchive moves an archived task back to a live folder and resto
     schedulePush: () => {},
   })
 
-  assert.equal(result.from, path.join("main-track", "_archive", "old-task"))
-  assert.equal(result.to, path.join("main-track", "old-task"))
+  assert.equal(result.from, path.posix.join("main-track", "_archive", "old-task"))
+  assert.equal(result.to, path.posix.join("main-track", "old-task"))
   assert.equal(await exists(path.join(root, "main-track", "_archive", "old-task")), false)
   const { data } = await readFront(path.join(root, "main-track", "old-task", "task.md"))
   assert.equal(data.track, "main-track")
@@ -1060,7 +1060,7 @@ test("task_move unarchive moves an archived task back to a live folder and resto
   const body = await trackBody(root, "main-track")
   assert.match(body, /^\| `old-task` \| done \|  \|  \|  \|$/m)
   assert.match(body, /`other-task`/)
-  assert.ok(result.updated_files.includes(path.join("main-track", "track.md")))
+  assert.ok(result.updated_files.includes(path.posix.join("main-track", "track.md")))
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "task_move: old-task → main-track")
 })
@@ -1076,7 +1076,7 @@ test("task_move unarchive leaves a row that is still in the table alone", async 
   })
 
   assert.equal(await trackBody(root, "main-track"), before)
-  assert.deepEqual(result.updated_files, [path.join("main-track", "old-task", "task.md")])
+  assert.deepEqual(result.updated_files, [path.posix.join("main-track", "old-task", "task.md")])
 })
 
 test("task_move unarchive with a new name renames the row that is still in the table", async () => {
@@ -1128,7 +1128,7 @@ test("task_move unarchive into another track builds a row when the source table 
   })
 
   assert.match(await trackBody(root, "track-b"), /^\| `old-task` \|$/m, "a one-column table gets just the slug")
-  assert.ok(result.updated_files.includes(path.join("track-b", "track.md")))
+  assert.ok(result.updated_files.includes(path.posix.join("track-b", "track.md")))
 })
 
 test("task_move unarchive leaves a track.md with no Tasks table alone", async () => {
@@ -1141,7 +1141,7 @@ test("task_move unarchive leaves a track.md with no Tasks table alone", async ()
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true },
   })
-  assert.deepEqual(result.updated_files, [path.join("main-track", "old-task", "task.md")])
+  assert.deepEqual(result.updated_files, [path.posix.join("main-track", "old-task", "task.md")])
 })
 
 test("task_move unarchive refuses a task that isn't archived", async () => {
@@ -1193,7 +1193,7 @@ test("task_move with unarchive false behaves like a plain move", async () => {
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: false, to_slug: "renamed-task" },
   })
-  assert.equal(result.to, path.join("main-track", "_archive", "renamed-task"))
+  assert.equal(result.to, path.posix.join("main-track", "_archive", "renamed-task"))
 })
 
 // ── task_move: into_task (M4-5 duplicate merge) ──────────────────────────────
@@ -1216,8 +1216,8 @@ test("task_move into_task moves a duplicate into the kept task as a dated iterat
     schedulePush: () => {},
   })
 
-  const iteration = path.join("main-track", "keep-task", "_iterations", `${day}-dup-task`)
-  assert.equal(result.from, path.join("main-track", "dup-task"))
+  const iteration = path.posix.join("main-track", "keep-task", "_iterations", `${day}-dup-task`)
+  assert.equal(result.from, path.posix.join("main-track", "dup-task"))
   assert.equal(result.to, iteration)
   assert.equal(await exists(path.join(root, "main-track", "dup-task")), false)
   assert.equal(await exists(path.join(root, iteration, "task.md")), false, "the merged card is no longer a task card")
@@ -1233,7 +1233,7 @@ test("task_move into_task moves a duplicate into the kept task as a dated iterat
   const body = await trackBody(root, "main-track")
   assert.doesNotMatch(body, /`dup-task`/)
   assert.match(body, /`keep-task`/)
-  assert.deepEqual(result.updated_files, [path.join(iteration, "merged-task.md"), path.join("main-track", "track.md")])
+  assert.deepEqual(result.updated_files, [path.posix.join(iteration, "merged-task.md"), path.posix.join("main-track", "track.md")])
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "task_move: dup-task → main-track")
 })
@@ -1253,11 +1253,11 @@ test("task_move into_task across tracks leaves the destination table alone", asy
     input: { track: "track-a", slug: "dup-task", to_track: "track-b", into_task: "keep-task" },
   })
 
-  assert.equal(result.to, path.join("track-b", "keep-task", "_iterations", "2026-03-04-dup-task"))
+  assert.equal(result.to, path.posix.join("track-b", "keep-task", "_iterations", "2026-03-04-dup-task"))
   const { data } = await readFront(path.join(root, result.to, "merged-task.md"))
   assert.equal(data.track, "track-b")
   assert.equal(await trackBody(root, "track-b"), before)
-  assert.deepEqual(result.updated_files, [path.join(result.to, "merged-task.md")])
+  assert.deepEqual(result.updated_files, [path.posix.join(result.to, "merged-task.md")])
 })
 
 test("task_move into_task names the iteration after today when the card has no usable created date", async () => {
@@ -1352,7 +1352,7 @@ test("task_move ignores ignored files, and moves a dirty task when allow_dirty i
   commitAll(root)
   await fs.writeFile(path.join(root, "main-track", "moved-task", "doing.md"), "in progress\n")
   const result = await task_move({ deskRoot: root, input: { track: "main-track", slug: "moved-task", to_slug: "final-task", allow_dirty: true }, schedulePush: () => {} })
-  assert.equal(result.to, path.join("main-track", "final-task"))
+  assert.equal(result.to, path.posix.join("main-track", "final-task"))
   // allow_dirty sweeps the dirty file along with the move (existing `git add
   // -A` + `git mv` behavior); the move's own commit picks it up too, since it
   // is part of the moved directory, not an unrelated path (M4-6 Part 2).
@@ -1398,7 +1398,7 @@ test("task_move refuses to edit a track.md that holds another session's uncommit
   await assert.rejects(task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_slug: "renamed-task" } }), /a track\.md this move would edit has unstaged changes or untracked files/)
 
   const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b", allow_dirty: true }, schedulePush: () => {} })
-  assert.equal(result.to, path.join("track-b", "clean-task"))
+  assert.equal(result.to, path.posix.join("track-b", "clean-task"))
 })
 
 test("task_move into_task refuses to hide a live task inside a done one, and merges a done one into a live one", async () => {
@@ -1466,7 +1466,7 @@ test("track_rename renames a track and rewrites track: on every live task card",
   }
   assert.deepEqual(
     result.updated_files.sort(),
-    [path.join("new-track", "task-one", "task.md"), path.join("new-track", "task-two", "task.md")].sort(),
+    [path.posix.join("new-track", "task-one", "task.md"), path.posix.join("new-track", "task-two", "task.md")].sort(),
   )
 
   // Staged and committed (M4-6 Part 2): the tree is clean afterward, and the
@@ -1542,8 +1542,8 @@ test("track_rename with archived tasks rewrites both live and archived task card
   assert.deepEqual(
     result.updated_files.sort(),
     [
-      path.join("new-track", "live-one", "task.md"),
-      path.join("new-track", "_archive", "task-gone", "task.md"),
+      path.posix.join("new-track", "live-one", "task.md"),
+      path.posix.join("new-track", "_archive", "task-gone", "task.md"),
     ].sort(),
   )
 })
@@ -1654,7 +1654,7 @@ test("track_rename reports mentions elsewhere but never rewrites them", async ()
 
   commitAll(root)
   const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
-  assert.deepEqual(result.mentions, [path.join("_meta", "notes.md")])
+  assert.deepEqual(result.mentions, [path.posix.join("_meta", "notes.md")])
   assert.equal(await fs.readFile(notePath, "utf8"), noteText)
 })
 
@@ -1798,7 +1798,7 @@ test("track_rename honors the --person write prefix", async () => {
     person: "ari",
     input: { track: "old-track", to: "new-track" },
   })
-  assert.equal(result.to, path.join("desks", "ari", "new-track"))
+  assert.equal(result.to, path.posix.join("desks", "ari", "new-track"))
   assert.ok(await exists(path.join(root, "desks", "ari", "new-track", "track.md")))
 })
 

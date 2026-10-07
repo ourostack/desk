@@ -77,21 +77,23 @@ test("warmNativeModules loads better-sqlite3 and sqlite-vec from the source mirr
       return { load: () => events.push(["load"]) }
     }
   }
-  assert.equal(warmNativeModules("/mirror", { requireFrom: fakeRequire }), true)
+  assert.equal(warmNativeModules("/mirror", { requireFrom: fakeRequire, platform: "linux" }), true)
   assert.deepEqual(events, [["from", path.join("/mirror", "src", "db", "init.js")], ["require", "better-sqlite3"], ["open", ":memory:"], ["require", "sqlite-vec"], ["load"], ["close"]])
   events.length = 0
   const failingVec = (from) => (name) => {
     if (name === "better-sqlite3") return class { close() { events.push(["close"]) } }
     throw new Error("no extension")
   }
-  assert.equal(warmNativeModules("/mirror", { requireFrom: failingVec }), false)
+  assert.equal(warmNativeModules("/mirror", { requireFrom: failingVec, platform: "linux" }), false)
   assert.deepEqual(events, [["close"]], "the database is closed even when the extension fails")
   const mirror = await mkTempRoot("desk-worker-missing-native-")
   const moduleRoot = path.join(mirror, "node_modules", "better-sqlite3")
   mkdirSync(moduleRoot, { recursive: true })
   writeFileSync(path.join(moduleRoot, "package.json"), JSON.stringify({ exports: "./missing.cjs" }))
   assert.equal(warmNativeModules(mirror), false, "a missing mirror module fails even when NODE_PATH supplies checkout dependencies")
-  assert.equal(warmNativeModules(path.join(mcpRoot)), true, "this checkout's own modules load")
+  // Windows skips the warm-up (see warmNativeModules), so the real load is only expected elsewhere.
+  assert.equal(warmNativeModules(path.join(mcpRoot)), process.platform !== "win32", "this checkout's own modules load")
+  assert.equal(warmNativeModules("/mirror", { requireFrom: () => assert.fail("nothing is loaded on Windows"), platform: "win32" }), false)
 })
 
 test("runtime job with the shipped inspector and restore defaults", async () => {

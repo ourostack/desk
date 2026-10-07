@@ -19,6 +19,7 @@ import {
   protectLeafFile,
   realpathExistingPrefix,
 } from "../../../../../plugins/desk/mcp/src/factory/os-protect.js"
+import { NO_ENOTDIR, NO_POSIX_MODES } from "../_platform.js"
 
 const NAMING = { label: "desk_test", subject: "test thing" }
 const nativeMac = { skip: process.platform !== "darwin" }
@@ -47,7 +48,7 @@ test("lstatIfPresent returns null for a missing path and the stat for an existin
   })
 })
 
-test("lstatIfPresent rethrows a non-ENOENT failure as a labeled error, rather than treating it as absent", async () => {
+test("lstatIfPresent rethrows a non-ENOENT failure as a labeled error, rather than treating it as absent", { skip: NO_ENOTDIR }, async () => {
   await scratch(async (base) => {
     // A path with a plain-file ancestor produces ENOTDIR, not ENOENT.
     const file = path.join(base, "blocker")
@@ -181,7 +182,7 @@ test("clearExtendedAcl accepts a path whose listing shows no ACL entry", (t) => 
   }
 })
 
-test("ensureOwnerOnlyDirectory creates, then re-verifies, an owner-only 0700 directory", async () => {
+test("ensureOwnerOnlyDirectory creates, then re-verifies, an owner-only 0700 directory", { skip: NO_POSIX_MODES }, async () => {
   await scratch(async (base) => {
     const dir = path.join(base, "sub")
     const created = await ensureOwnerOnlyDirectory(dir, "linux", NAMING)
@@ -208,7 +209,7 @@ test("ensureOwnerOnlyDirectory refuses a symlink and a plain file in the directo
   })
 })
 
-test("ensureOwnerOnlyDirectory handles a racing creator (EEXIST from mkdir)", async (t) => {
+test("ensureOwnerOnlyDirectory handles a racing creator (EEXIST from mkdir)", { skip: NO_POSIX_MODES }, async (t) => {
   await scratch(async (base) => {
     const dir = path.join(base, "raced")
     const mkdir = fs.mkdir.bind(fs)
@@ -249,7 +250,7 @@ test("ensureOwnerOnlyDirectory skips the POSIX mode/ACL step on win32", async ()
   })
 })
 
-test("protectLeafFile refuses a symlink, a non-regular file and a hard link, and repairs a drifted mode", async () => {
+test("protectLeafFile refuses a symlink, a non-regular file and a hard link, and repairs a drifted mode", { skip: NO_POSIX_MODES }, async () => {
   await scratch(async (base) => {
     const real = path.join(base, "real.json")
     await fs.writeFile(real, "{}")

@@ -15,6 +15,7 @@ import {
 import { factoryLocalStatus } from "../../../../../plugins/desk/mcp/src/factory/local-status.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { isWindows } from "../_platform.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
 const LABELS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/labels-golden.json", import.meta.url)), "utf8"))
@@ -69,7 +70,7 @@ test("a pushed delete moves the local copies to retracted-copies, so an older De
   assert.equal(await exists(path.join(kept, nameOf(1))), true)
   assert.equal(await exists(path.join(kept, "labels", LABELS.job, `${sessionId(1)}.json`)), true)
   assert.equal(await exists(path.join(root, "labels", SLUG, LABELS.job, `${sessionId(1)}.json`)), false)
-  assert.equal(((await fs.stat(path.join(kept, nameOf(1)))).mode & 0o777), 0o600)
+  if (!isWindows) assert.equal(((await fs.stat(path.join(kept, nameOf(1)))).mode & 0o777), 0o600)
   // The older Desk's own listing, with nothing delivered for it, publishes nothing of the retracted session.
   assert.deepEqual((await pendingFiles(ctx.env, STORE, { publishedBytesFor: () => Buffer.from("x") })).map(({ name }) => name), [nameOf(2)])
   github.mergeOpenPr()
@@ -108,7 +109,7 @@ test("the flush migrates a retracting session's copy left in the outbox, and ado
   github.mergeOpenPr()
   assert.deepEqual(await run(ctx.env, github), { result: "nothing_pending" })
   assert.deepEqual(await olderListing(ctx), [nameOf(3)])
-  assert.equal(((await fs.stat(path.join(kept, nameOf(2)))).mode & 0o777), 0o600)
+  if (!isWindows) assert.equal(((await fs.stat(path.join(kept, nameOf(2)))).mode & 0o777), 0o600)
   assert.deepEqual((await fs.readdir(kept)).filter((name) => name.startsWith(nameOf(2))).length, 2)
   assert.equal(await exists(path.join(kept, nameOf(1))), true)
   // A folder under labels that is not a job is ignored on both sides.
