@@ -128,8 +128,16 @@ export const LABEL_LIMITS = Object.freeze({
   evidence: 1000,
 })
 
+/**
+ * The reason codes this Desk's own check gives a labels file: `invalid` (the publishing transform refused it) and the schema walker's codes. They are
+ * the one list of what a quarantine record may say when this Desk, and not the store, condemned the file. A Desk older than the file can give them for
+ * a file that is fine (it predates the file's schema), which is why a newer Desk judges such a record again; every other reason (a store's refusal, a
+ * hold behind quarantined facts, `too_large`, which a store also gives) is never judged again here.
+ */
+export const LABEL_CHECK_CODES = Object.freeze(new Set(["invalid", "type", "missing", "unknown_key", "enum", "pattern", "integer", "range", "order", "overlap", "duplicate", "empty", "too_many", "inconsistent"]))
+
 const LABELS_SCHEMA_PATTERN = /^desk\.factory\.labels\/[12]$/u
-const DESK_VERSION = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?:-(alpha|beta|rc)\.([0-9]{1,4}))?$/u
+export const DESK_VERSION = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?:-(alpha|beta|rc)\.([0-9]{1,4}))?$/u
 const RUBRIC = /^[1-9][0-9]{0,2}$/u
 const STAGES = Object.freeze(["alpha", "beta", "rc"])
 
