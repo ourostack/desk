@@ -70,7 +70,10 @@
 //     intervals more whole than the formulas do. The job file says so for
 //     its bursts and gaps in `bursts_state`. A task's `flow_efficiency` is
 //     working time over lead time, stated as both are, so it agrees with
-//     the working and idle figures. The formulas' own ratio (recorded
+//     the working and idle figures. When the card's dates are shorter than
+//     the work and the job is closed, the floored lead time makes it an
+//     upper bound (`bound: "upper"`) and the idle time a lower bound
+//     (`bound: "lower"`); an open job's has no bound. The formulas' own ratio (recorded
 //     active time in the card's lead window over the lead time, none when
 //     the lead time is floored to the work) is kept beside it as
 //     `active_share_recorded`.
@@ -536,6 +539,11 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
   const lead = window.end_ms - window.start_ms
   if (lead === 0) row.flow_efficiency = figure("unavailable", null, ["zero_lead_time"])
   else row.flow_efficiency = row.working_ms.state === "unavailable" ? row.working_ms : known(row.working_ms.value / lead, row.working_ms.reasons)
+  // A lead time floored to the work is a lower bound, so on a closed job the ratio is at most this and the idle time at least this. An
+  // open job's lead time is censored too, so neither direction holds and no bound is given.
+  if (window.lead.reasons.includes("card_dates_shorter_than_work") && !window.lead.reasons.includes("censored")) {
+    for (const [key, bound] of [["flow_efficiency", "upper"], ["idle_ms", "lower"]]) if (row[key].state !== "unavailable") row[key] = { ...row[key], bound }
+  }
   row.waiting_by_waited_on_ms = idleFigures(idle, { base, coverage, intervals, placement })
   row.agents_working_unlabeled_ms = labeledFigure(segments.times.agents_working)
   row.top_causes = labeledFigure(jobCauses(walk).slice(0, TOP_CAUSES).map(({ cause, total_ms: total }) => ({ cause, total_ms: total, hours: total / MS_PER_HOUR })))

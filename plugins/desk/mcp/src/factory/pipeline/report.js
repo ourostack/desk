@@ -47,6 +47,7 @@ const REPORT_REASON_TEXT = {
   wait_fields_unavailable: "the wait records were not available",
   job_offsets_unavailable: "the job clock could not be read",
   zero_lead_time: "the job's lead time is zero",
+  over_budget_after_binning: "the swimlane file is still larger than its size budget after every run of intervals was merged, because the intervals its stretches cite do not fit",
   labels_from_shared_session: "the labels come from a session several jobs share, so they may count another job's time",
   card_dates_shorter_than_work: "the task card's dates are shorter than the work its sessions recorded, so the lead time is at least that recorded span",
   no_wait_intervals: "no wait was recorded",

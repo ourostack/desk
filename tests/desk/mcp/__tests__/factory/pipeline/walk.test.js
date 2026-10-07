@@ -408,7 +408,9 @@ test("a lead time floored to the recorded work measures its window from where th
   // The card's dates are shorter than the work: the formulas' recorded-active ratio has no window the card's clock measures over, while
   // flow efficiency is working time over the floored lead time, partial with the lead time's reason.
   assert.deepEqual(walk.task.active_share_recorded, { class: "unavailable", state: "unavailable", reasons: ["card_dates_shorter_than_work"] })
-  assert.deepEqual(walk.task.flow_efficiency, { class: "inferred", state: "partial", value: 1, reasons: ["card_dates_shorter_than_work"] })
+  // The job is closed and its lead time floored to the work, so the ratio is at most this and the idle time at least this.
+  assert.deepEqual(walk.task.flow_efficiency, { class: "inferred", state: "partial", value: 1, reasons: ["card_dates_shorter_than_work"], bound: "upper" })
+  assert.equal(walk.task.idle_ms.bound, "lower")
   assert.equal(walk.stackup.idle.queue_before_start.state, "partial")
   assert.equal(sumOf(walk.stackup), walk.stackup.lead_time_ms.value)
 })
@@ -627,8 +629,12 @@ test("a session at the facts' interval cap (100,000 intervals) is binned into th
     const named = detail.intervals[entry.evidence[0]]
     assert.deepEqual([named.start_ms, named.end_ms, named.tool, named.outcome], [cited[index].start_ms, cited[index].end_ms, cited[index].tool, cited[index].outcome])
   })
+  assert.equal(Object.hasOwn(detail, "over_budget"), false)
   const small = sessionDetail(timeline, 0, labels, 1)
   assert.ok(small.intervals.length <= 3 * 2 + cited.length + 1, "a budget no file can meet merges every run")
+  // Still over budget with every run merged: the file says so, never silently.
+  assert.equal(small.over_budget, true)
+  assert.deepEqual(small.reasons, ["over_budget_after_binning"])
 })
 
 test("waiting is idle time only: a labeled wait inside a turn is idle with its cause, short waits inside a burst count, and working plus idle is the lead time", () => {
@@ -674,4 +680,19 @@ test("an unlabeled job counts all its recorded work as working, its idle causes 
   assert.equal(walk.stackup.working.class_ms.value.state, "unavailable")
   assert.deepEqual(walk.stackup.working.not_labeled_ms, { class: "inferred", state: "measured", value: 20 * MIN, reasons: [] })
   assert.equal(sumOf(walk.stackup), walk.stackup.lead_time_ms.value)
+})
+
+test("an open job whose card dates are shorter than the work gives its flow efficiency no bound", () => {
+  const session = facts({
+    id: S(42),
+    duration: 40 * MIN,
+    intervals: [span("turn", 0, 0, 40 * MIN)],
+    // The card was created after the work began and the job is still open.
+    jobs: [{ ...binding(J("a"), -10 * MIN), transitions: [{ to: "processing", offset_ms: 0 }], observed: null }],
+  })
+  const { walk } = walkOf([session], [], J("a"))
+  assert.deepEqual(walk.window.lead.reasons, ["card_dates_shorter_than_work", "censored"])
+  assert.equal(walk.task.flow_efficiency.state, "partial")
+  assert.equal(Object.hasOwn(walk.task.flow_efficiency, "bound"), false)
+  assert.equal(Object.hasOwn(walk.task.idle_ms, "bound"), false)
 })

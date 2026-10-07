@@ -60,6 +60,9 @@ export const AGENTS_WORKING = "agents_working"
 /** The finest bin a swimlane file's intervals are merged at when the file would pass its size budget; it doubles until the file fits. */
 const FIRST_BIN_MS = 1000
 
+/** Why a swimlane file is larger than its budget: binning merged every run, and the intervals its stretches cite still do not fit. */
+const OVER_BUDGET = "over_budget_after_binning"
+
 /** How many stretch references each cause in `rollups/causes.json` lists, largest first. */
 export const CAUSE_REFERENCES = 10
 
@@ -266,7 +269,8 @@ export function jobStretches(timeline, labels) {
  *   - When the file would be larger than `budgetBytes`, its intervals are binned: each run of a worker's intervals of one kind whose gaps
  *     are under the bin is merged into one entry `{ kind, worker, start_ms, end_ms, binned: <count> }` (no tool or outcome), the bin
  *     starting at `FIRST_BIN_MS` and doubling until the file fits or every run is merged. An interval a stretch cites is never merged, so
- *     evidence still names it exactly. A binned file says `intervals_binned: true` and `bin_resolution_ms`.
+ *     evidence still names it exactly. A binned file says `intervals_binned: true` and `bin_resolution_ms`; one still over budget once
+ *     every run is merged also says `over_budget: true` with `reasons: ["over_budget_after_binning"]`.
  */
 export function sessionDetail(timeline, index, labels, budgetBytes = Infinity) {
   const session = timeline.source_sessions[index]
@@ -324,7 +328,9 @@ export function sessionDetail(timeline, index, labels, budgetBytes = Infinity) {
     resolution *= 2
     binned = binLane(lane, cited, resolution)
   }
-  return { ...document(binned), intervals_binned: true, bin_resolution_ms: resolution }
+  const result = { ...document(binned), intervals_binned: true, bin_resolution_ms: resolution }
+  // Cited intervals are never merged, so a file can stay over budget with every run merged: it says so rather than pass silently.
+  return sizeOf(result) <= budgetBytes ? result : { ...result, over_budget: true, reasons: [OVER_BUDGET] }
 }
 
 // The bytes a document takes as a file.
