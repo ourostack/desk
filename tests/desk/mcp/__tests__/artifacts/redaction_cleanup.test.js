@@ -1317,3 +1317,47 @@ test("local index freshness fails closed for corrupt tombstones and schema drift
     })
   }
 })
+
+test("tombstone helpers cover unreadable ledgers, missing arguments and documents that are kept", async () => {
+  const {
+    assertArtifactDoesNotRepresentTombstones,
+    assertArtifactInputsDoNotContainTombstones,
+    filterTombstonedDocuments,
+    loadTombstoneLedger,
+    tombstoneDecisionForDoc,
+    tombstoneStatusForDocuments,
+  } = await loadTombstonesModule()
+
+  // A ledger path that is a directory cannot be read, and is invalid rather than absent.
+  const unreadableRoot = await tmpRoot("desk-redaction-unreadable-ledger-plugin-")
+  await fs.mkdir(path.join(unreadableRoot, "artifacts", "tombstones", "tombstones.jsonl"), { recursive: true })
+  const unreadable = await loadTombstoneLedger({ pluginRoot: unreadableRoot })
+  assert.equal(unreadable.valid, false)
+  assert.equal(unreadable.present, true)
+  assert.deepEqual(unreadable.diagnostics, ["tombstone ledger file could not be read"])
+
+  // With no plugin root there is no ledger, so every helper allows everything and each default argument applies.
+  assert.deepEqual(await filterTombstonedDocuments(), { docs: [], tombstoned_count: 0 })
+  assert.deepEqual(await tombstoneStatusForDocuments(), { tombstoned: false, tombstoned_count: 0 })
+  assert.deepEqual(await assertArtifactDoesNotRepresentTombstones(), { allowed: true, redacted_count: 0 })
+  assert.deepEqual(await assertArtifactInputsDoNotContainTombstones(), { allowed: true, redacted_count: 0 })
+  assert.deepEqual(await filterTombstonedDocuments({ pluginRoot: await tmpRoot("desk-redaction-no-ledger-plugin-") }), {
+    docs: [],
+    tombstoned_count: 0,
+  })
+
+  // With a ledger, a document it names is dropped and any other is kept.
+  const pluginRoot = await tmpRoot("desk-redaction-kept-docs-plugin-")
+  await writeTombstoneLedger(pluginRoot, [tombstoneRow()])
+  const redacted = { path: "trackA/task-1/task.md", hash: sha256("public body") }
+  const kept = { path: "trackA/task-1/other.md", hash: sha256("other body") }
+  assert.deepEqual(await filterTombstonedDocuments({ pluginRoot, docs: [redacted, kept] }), {
+    docs: [kept],
+    tombstoned_count: 1,
+  })
+  assert.deepEqual(await tombstoneStatusForDocuments({ pluginRoot, docs: [kept] }), { tombstoned: false, tombstoned_count: 0 })
+
+  // A document whose path is not text never matches a row.
+  const ledger = await loadTombstoneLedger({ pluginRoot })
+  assert.deepEqual(tombstoneDecisionForDoc({ ledger, doc: { path: 7, hash: sha256("public body") } }), { tombstoned: false })
+})

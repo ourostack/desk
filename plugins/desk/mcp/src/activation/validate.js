@@ -241,17 +241,8 @@ function validateDeskRuntime(deskRuntime, errors) {
     normalizeReadinessPolicy(deskRuntime, { path: "desk_runtime", phase: "VERIFYING" })
   } catch (error) {
     if (error?.code !== "activation_policy_invalid") throw error
-    if (Array.isArray(error.diagnostics) && error.diagnostics.length > 0) {
-      for (const diagnosticEntry of error.diagnostics) {
-        errors.push(diagnostic(
-          diagnosticEntry.path ?? "desk_runtime",
-          diagnosticEntry.code ?? "activation_policy_invalid",
-          diagnosticEntry.message ?? error.summary,
-        ))
-      }
-      return
-    }
-    errors.push(diagnostic("desk_runtime", error.code, error.summary ?? "Desk readiness policy is invalid"))
+    // A readiness policy failure always carries a path, a code and a message for each diagnostic.
+    for (const { path, code, message } of error.diagnostics) errors.push(diagnostic(path, code, message))
   }
 }
 

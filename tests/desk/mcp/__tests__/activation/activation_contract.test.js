@@ -1486,3 +1486,13 @@ test("canonical Desk activation manifest exists and validates", async () => {
     semantic: "background",
   })
 })
+
+test("a readiness policy that fails for a reason other than its content is not reported as a diagnostic", async () => {
+  const { validateActivationManifest } = await loadActivationContract()
+  const manifest = validManifest()
+  manifest.desk_runtime = {
+    ...manifest.desk_runtime,
+    get authority_provider() { throw new Error("provider lookup failed") },
+  }
+  assert.throws(() => validateActivationManifest(manifest), /provider lookup failed/)
+})

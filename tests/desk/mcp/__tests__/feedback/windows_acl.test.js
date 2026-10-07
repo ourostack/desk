@@ -600,3 +600,8 @@ test(
     }
   },
 )
+
+test("protectWindowsPaths uses the ambient environment and the real runner when given no options", async () => {
+  // An empty batch is refused before either default is used to start a process.
+  await assert.rejects(() => protectWindowsPaths([]), /at least one path/u)
+})
