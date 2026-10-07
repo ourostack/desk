@@ -147,3 +147,22 @@ test("a relative card path is taken from the folder the session started in", () 
   assert.deepEqual(cardEdits([rel], { deskRoot: DESK, sessionFolder: `${RUN}/plain-project` }), [])
   assert.equal(cardEdits([{ ...rel, input: { file_path: `../fixture/desk/greenhouse-ops/watering-schedule-api/task.md`, new_string: "x" } }], { deskRoot: DESK, sessionFolder: `${RUN}/plain-project` }).length, 1)
 })
+
+test("the restatement exemption: one verb, boot facts as whole words, only filler left, and any clone attempt removes it", () => {
+  // Fail: a second claim in the same sentence, or text beyond the boot's facts.
+  assert.equal(clones("Repo is cloned locally on branch `feature/rain-delay`, and the claude-code repo is cloned too.").length, 1)
+  assert.equal(clones("Repo is cloned on branch `feature/rain-delay`, and the valve-firmware repo is here as well.").length, 1)
+  assert.equal(clones("Repo is cloned on branch `feature/rain-delay` and I verified it.").length, 1)
+  // Boot facts match on word boundaries: a listed branch `main` is not found in "remains".
+  const mainBoot = { ...boot, result: "Desk boot: ready\n\nRepos of open tasks:\n- greenhouse-irrigation (greenhouse-ops/watering-schedule-api): /h/code/greenhouse-irrigation (~/code/greenhouse-irrigation), branch main, clean\n" }
+  assert.equal(clones("Repo is cloned and remains ready.", [mainBoot]).length, 1)
+  assert.equal(clones("Repo is cloned and ready, with changes remaining.", [mainBoot]).length, 1)
+  assert.deepEqual(clones("Repo is cloned on branch `main`.", [mainBoot]), [])
+  // A fork clone is an attempt.
+  const fork = { name: "Bash", input: { command: "gh repo fork anthropics/claude-code --clone" }, isError: true, result: "failed" }
+  assert.equal(clones("Repo is cloned locally on branch `feature/rain-delay`.", [boot, fork]).length, 1)
+  assert.equal(clones("Repo is cloned locally on branch `feature/rain-delay`.", [boot, { ...fork, input: { command: "gh repo fork a/b --remote=false" } }]).length, 0, "a fork with no --clone is no clone attempt")
+  // Pass: "there too" and the usual filler beside a listed branch.
+  assert.deepEqual(clones("Repo is cloned there too, on branch `feature/rain-delay`."), [])
+  assert.deepEqual(clones("The repo is cloned locally and clean on branch `feature/rain-delay`."), [])
+})
