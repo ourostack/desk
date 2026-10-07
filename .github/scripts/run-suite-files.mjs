@@ -1,12 +1,13 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--tests-root <folder>]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--tests-root <folder>] [--durations <table.json>]
 // Exit code: 1 when any file failed, timed out or reported a failed test, so a job that runs this script is red whenever the suite is. 0 only when every file passed.
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
+import { assignShards, loadDurations } from "./suite-shards.mjs"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -19,11 +20,15 @@ const isolatedEnv = path.join(repoRoot, "tests", "desk", "mcp", "__tests__", "_i
 const testsRoot = path.resolve(arg("--tests-root", path.join(repoRoot, "tests", "desk", "mcp", "__tests__")))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
-// The same file list the verdict job checks against (suite-files.mjs). Round-robin keeps a slow directory's files spread over the shards.
+// The same file list the verdict job checks against (suite-files.mjs). Which shard runs which file comes from suite-shards.mjs: longest first by the measured times in suite-durations.json, so the shards finish together.
 // --only <regex> narrows the run to matching files (relative to the tests folder, forward slashes) for quick investigation runs.
 const only = String(arg("--only", "") ?? "")
-const wanted = suiteFiles(testsRoot, only).map((file) => path.join(testsRoot, ...file.split("/")))
-const mine = wanted.filter((_, i) => i % total === index - 1)
+const durations = loadDurations(arg("--durations", undefined))
+const plan = assignShards(suiteFiles(testsRoot, only), total, durations)
+const mine = (plan[index - 1]?.files ?? []).map((file) => path.join(testsRoot, ...file.split("/")))
+console.log(`shard ${index}/${total}: ${mine.length} files, predicted ${Math.round(plan[index - 1].seconds / 60)} min; all shards predicted (min): ${plan.map((s) => Math.round(s.seconds / 60)).join(" ")}`)
+const unlisted = plan.flatMap((s) => s.files).filter((file) => !(file in durations.files))
+if (unlisted.length > 0) console.log(`::warning::${unlisted.length} test files are not in suite-durations.json and use the default weight of ${durations.defaultSeconds}s; refresh the table: ${unlisted.slice(0, 5).join(", ")}`)
 
 // What is still running under the test process when it hit its time limit, so a hang names the stuck command.
 const describeDescendants = (rootPid) => {

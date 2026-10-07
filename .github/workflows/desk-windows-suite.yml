@@ -2,18 +2,13 @@ name: desk MCP tests on Windows
 
 # Runs the whole Desk unit suite (plugins/desk/mcp `npm test`) on a Windows runner as a standard user: a new local user outside
 # the Administrators group, which is what a managed Windows machine gives a person. The main desk MCP tests workflow covers Linux only.
-# Pull requests that touch the Desk server, its tests or this workflow run it, and the scheduled Superpowers refresh dispatches it with the
+# It runs on every pull request, with no path filter: the tests read plugins/, scripts/, evals/ and the workflows, so no short list of paths is a safe stand-in for "can change a Windows result", and a required check that a filter skips never reports and blocks the pull request. The scheduled Superpowers refresh dispatches it with the
 # other pull-request workflows (CI_WORKFLOWS in superpowers-upstream.yml; scripts/test-refresh-superpowers.cjs checks that the two lists match).
 # A manual dispatch can add the elevated (administrator) mode with `elevated: true`. That mode is a diagnostic and is not gated: Desk refuses to
 # reuse a path owned by the Administrators group, which is what an elevated user's own existing files are.
 
 on:
   pull_request:
-    paths:
-      - "plugins/desk/mcp/**"
-      - "tests/desk/mcp/**"
-      - ".github/scripts/**"
-      - ".github/workflows/desk-windows-suite.yml"
   workflow_dispatch:
     inputs:
       only:
@@ -35,7 +30,7 @@ concurrency:
 
 jobs:
   windows-suite:
-    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/6)
+    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/8)
     runs-on: windows-latest
     timeout-minutes: 90
     # The elevated mode is a diagnostic that fails by policy (see the comment at the top), so it never turns the run red; the standard mode does.
@@ -46,7 +41,8 @@ jobs:
       max-parallel: 3
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
-        shard: [1, 2, 3, 4, 5, 6]
+        # Eight shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 213 minutes of test time in all, so six shards cannot get under 34 minutes each). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments and the verdict agree.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -79,7 +75,7 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --probe-acl --only "$env:ONLY_FILES"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "$env:ONLY_FILES"
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
@@ -88,7 +84,7 @@ jobs:
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/6 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '"'
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '"'
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
@@ -97,7 +93,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/6" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/8" | Add-Content $env:GITHUB_STEP_SUMMARY
           if (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }
 
       - name: Keep the per-file results
@@ -113,8 +109,7 @@ jobs:
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
   # standard-user shards uploaded (not the shards' job conclusions), so a shard that never ran, was cancelled or reported a failed test
   # fails it. The elevated diagnostic is not counted. It is separate from "CI gate" (desk-mcp-tests.yml) because a job's `needs` cannot
-  # reach another workflow, and this workflow only runs on pull requests that touch the paths above: requiring it before that filter is
-  # removed would block every other pull request on a check that never reports.
+  # reach another workflow. This workflow has no path filter, so the check reports on every pull request and can be required.
   windows-suite-result:
     name: Windows suite
     needs: windows-suite
@@ -140,6 +135,6 @@ jobs:
           path: shard-results
 
       - name: Fail unless every shard reported and every file passed
-        run: node .github/scripts/windows-suite-verdict.mjs shard-results 6 tests/desk/mcp/__tests__ "$ONLY_FILES"
+        run: node .github/scripts/windows-suite-verdict.mjs shard-results 8 tests/desk/mcp/__tests__ "$ONLY_FILES"
         env:
           ONLY_FILES: ${{ inputs.only }}

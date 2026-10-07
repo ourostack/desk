@@ -134,5 +134,5 @@ test("with an only filter, the suite is the files the filter selects", () => {
 test("the workflow has a single job named Windows suite that needs the shards and runs the verdict script", () => {
   const workflow = readFileSync(path.resolve(path.dirname(runner), "..", "workflows", "desk-windows-suite.yml"), "utf8")
   assert.match(workflow, /name: Windows suite\n\s+needs: windows-suite\n\s+if: \$\{\{ always\(\) \}\}/u)
-  assert.match(workflow, /windows-suite-verdict\.mjs shard-results 6/u)
+  assert.match(workflow, /windows-suite-verdict\.mjs shard-results 8/u)
 })
