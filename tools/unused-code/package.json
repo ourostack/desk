@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Runs knip over the whole repository. Kept apart from the repository root so a root package.json does not change how Node loads the evals and tests below it.",
   "scripts": {
-    "knip": "node run.mjs"
+    "knip": "node run.mjs && node hook-exports.mjs"
   },
   "devDependencies": {
     "knip": "^5"

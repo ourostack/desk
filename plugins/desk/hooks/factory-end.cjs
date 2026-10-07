@@ -365,7 +365,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
   }
 }
 
-module.exports = { readInput, runHook, launch, metadata, claudeSources, copilotSources, agencySources, ABSENT, CONFLICT };
+module.exports = { readInput, runHook, launch, metadata, copilotSources, agencySources };
 
 async function runBoundedHook(host, input) {
   if (headless(process.env)) return;

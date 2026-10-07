@@ -42,6 +42,7 @@
       ]
     },
     // Hooks and skill scripts are their own workspaces so that an export nothing imports is reported even though the file is an entry point (includeEntryExports).
+    // knip cannot tell which member of a CommonJS hook is unused when tests load the whole module as one object, so tools/unused-code/hook-exports.mjs (run by the same `npm run knip`) checks every export of a hook that has `module.exports`.
     // The entries are listed by name, not by glob, so a hook file that is not listed (and not reached from a listed one) is reported as unused. tests/desk/mcp/__tests__/runtime/hook_registration.test.js checks that this list matches hooks.json and copilot-hooks.json.
     "plugins/desk/hooks": {
       "entry": [
