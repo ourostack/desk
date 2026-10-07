@@ -3,7 +3,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, statSync, writeFileSync } from "node:fs"
+import { promises as fs, readFileSync, statSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -11,7 +11,7 @@ import { healthWord, pullStillFailing, syncDegradation } from "../../../../../pl
 import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
 import { fastForwardStateBranch } from "../../../../../plugins/desk/mcp/src/runtime/desk-health.js"
 import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
-import { readSyncStatus, recordFetchOk, recordPullOutcome, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { readFetchOkAt, readSyncStatus, recordFetchOk, syncStatusPath, recordPullOutcome, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 
 const env = process.env
@@ -85,7 +85,7 @@ test("a recorded sync outcome never throws when the state folder is unwritable",
   const unwritable = { ...env, XDG_STATE_HOME: blocker }
   assert.doesNotThrow(() => recordPullOutcome({ root, env: unwritable, result: { state: "unresolved" } }))
   assert.doesNotThrow(() => recordPullOutcome({ root, env: unwritable, result: undefined }))
-  assert.doesNotThrow(() => recordFetchOk({ root, env: unwritable }))
+  assert.doesNotThrow(() => recordFetchOk({ root, env: unwritable, at: new Date().toISOString() }))
 })
 
 test("a successful push clears a failed-pull record: the remote is reachable again", async () => {
@@ -145,6 +145,11 @@ test("a failed pull stops counting once a later push or fetch proves the remote 
   assert.equal(pullStillFailing({ lastPull, lastPushAt: "2026-09-30T09:00:00Z", fetchedAt: Date.parse("2026-09-30T09:59:00Z"), now: NOW }), true, "earlier ones do not clear it")
   assert.equal(pullStillFailing({ lastPull, lastPushAt: "2026-09-30T11:00:00Z", now: NOW }), false)
   assert.equal(pullStillFailing({ lastPull, fetchedAt: Date.parse("2026-09-30T11:00:00Z"), now: NOW }), false)
+  for (const cause of ["unreachable", "auth_failed", "deadline"]) assert.equal(pullStillFailing({ lastPull: { ...lastPull, cause }, fetchedAt: "2026-09-30T11:00:00Z", now: NOW }), false, `${cause}: a fetch proves reachability`)
+  for (const cause of ["conflict", "diverged", "other", null]) {
+    assert.equal(pullStillFailing({ lastPull: { ...lastPull, cause }, fetchedAt: "2026-09-30T11:00:00Z", now: NOW }), true, `${cause}: a fetch proves reachability only`)
+    assert.equal(pullStillFailing({ lastPull: { ...lastPull, cause }, lastPushAt: "2026-09-30T11:00:00Z", now: NOW }), false, `${cause}: a push still clears it`)
+  }
   assert.equal(pullStillFailing({ lastPull, lastPushAt: "not a date", now: NOW }), true)
   assert.equal(pullStillFailing({ lastPull: failedAt("2026-09-29T11:00:00Z"), now: NOW }), false, "older than 24 hours")
   assert.equal(pullStillFailing({ lastPull: failedAt("garbage"), now: NOW }), false)
@@ -171,6 +176,29 @@ test("desk_status keeps a failed pull when Desk's own later fetch also fails, an
   git(root, ["remote", "set-url", "origin", origin])
   assert.deepEqual(await fastForwardStateBranch({ env, root }), { result: "up_to_date" })
   assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false, "Desk's own successful fetch cleared it")
+})
+
+test("a successful Desk fetch does not clear a diverged failure", async () => {
+  const { origin, root } = await mkDeskWithOrigin()
+  recordPullOutcome({ root, env, result: { state: "unresolved", reason: "pull_rebase_failed", cause: "diverged" } })
+  await later()
+  git(root, ["remote", "set-url", "origin", origin])
+  assert.deepEqual(await fastForwardStateBranch({ env, root }), { result: "up_to_date" })
+  assert.equal(typeof readFetchOkAt({ root, env }), "string", "the fetch was recorded")
+  assert.equal((await desk_status({ deskRoot: root, env })).sync.last_pull.cause, "diverged")
+})
+
+test("recording a fetch never rewrites the pull record, whatever order the two writers run in", async () => {
+  const { root } = await mkDeskWithOrigin()
+  recordPullOutcome({ root, env, result: { state: "unresolved", reason: "r", cause: "unreachable" } })
+  const before = readFileSync(syncStatusPath({ root, env }), "utf8")
+  recordFetchOk({ root, env, at: new Date().toISOString() })
+  assert.equal(readFileSync(syncStatusPath({ root, env }), "utf8"), before, "the sync status file is untouched")
+  // The fast-forward check read nothing from the sync status file, so a pull recorded while it ran survives its write.
+  recordPullOutcome({ root, env, result: { state: "unresolved", reason: "r2", cause: "unreachable" } })
+  recordFetchOk({ root, env, at: new Date(Date.now() - 60_000).toISOString() })
+  assert.equal(readSyncStatus({ root, env }).last_pull.reason, "r2")
+  assert.equal(readFetchOkAt({ root: "/nonexistent/other", env }), null)
 })
 
 test("desk_status never reads FETCH_HEAD: a fetch run by hand, even one that wrote it, does not clear a failed pull", async () => {

@@ -23,6 +23,7 @@ export function healthWord(degraded) {
   return degraded.length > 0 ? "degraded" : "ready"
 }
 
+const REACHABILITY_CAUSES = new Set(["unreachable", "auth_failed", "deadline"])
 const LAST_PULL_TTL_MS = 24 * 60 * 60 * 1000
 
 /**
@@ -35,9 +36,12 @@ export function pullStillFailing({ lastPull, lastPushAt = null, fetchedAt = null
   if (lastPull?.state !== "unresolved") return false
   const failedAt = Date.parse(lastPull.at)
   if (Number.isNaN(failedAt) || now - failedAt > LAST_PULL_TTL_MS) return false
+  // A fetch proves reachability only, so it clears only a failure caused by reachability; a conflict, a divergence or an
+  // unknown failure stays until a pull succeeds (or a push, or 24 hours).
+  const fetchCounts = REACHABILITY_CAUSES.has(lastPull.cause)
   const after = (when) => {
     const at = typeof when === "number" ? when : Date.parse(when)
     return !Number.isNaN(at) && at >= failedAt
   }
-  return !(after(lastPushAt) || after(fetchedAt))
+  return !(after(lastPushAt) || (fetchCounts && after(fetchedAt)))
 }
