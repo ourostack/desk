@@ -12,6 +12,6 @@ Desk no longer starts a separate PowerShell for each of several identical folder
 
 Desk now watches the long spelling of the desk folder on Windows so a path with 8.3 short names no longer aborts the index process, closes an unreadable index database before moving it aside so the rebuild works, and no longer preloads its native database modules on a worker thread on Windows, which could end the server with an access violation.
 
-The Windows test suite now runs on pull requests that touch the Desk server, its tests or its workflow, as a standard user, and its job fails whenever any test file fails or times out. Before, it reported the results and always passed.
+The Windows test suite now runs on pull requests that touch the Desk server, its tests or its workflow, as a standard user, and its job fails whenever any test file fails or times out. Before, it reported the results and always passed. A single `Windows suite` job counts the uploaded per-file results of every standard-user shard, so one required check can stand for the whole suite.
 
 On Windows, a crew desk can open and claim improvement cards and file friction improvement cards, the headless evaluator finds the Claude CLI as `claude.exe`, and shell commands that redirect to `/dev/null` are no longer recorded as file writes. The desk save tool checks a card path in its forward-slash spelling so a backslash path cannot slip past the card guard.

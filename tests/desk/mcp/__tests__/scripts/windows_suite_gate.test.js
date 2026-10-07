@@ -48,3 +48,44 @@ test("a file that hangs past its time limit makes the job exit non-zero", () => 
   assert.equal(status, 1)
   assert.equal(results[0].timedOut, true)
 })
+
+// The aggregate "Windows suite" job counts the uploaded per-file results, so it is red for a failure the shard jobs did not report.
+const verdictScript = path.resolve(path.dirname(runner), "windows-suite-verdict.mjs")
+
+function verdictOf(shards, expected) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-suite-verdict-"))
+  try {
+    for (const [name, results] of Object.entries(shards)) {
+      mkdirSync(path.join(dir, name))
+      writeFileSync(path.join(dir, name, "results.json"), JSON.stringify({ results }))
+    }
+    const result = spawnSync(process.execPath, [verdictScript, dir, String(expected)], { encoding: "utf8" })
+    return { status: result.status, out: result.stdout }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const OK = { file: "a.test.js", exitCode: 0, timedOut: false, fail: 0 }
+
+test("the aggregate verdict is zero only when every shard reported and every file passed", () => {
+  assert.equal(verdictOf({ "windows-standard-shard-1": [OK], "windows-standard-shard-2": [OK] }, 2).status, 0)
+})
+
+test("the aggregate verdict fails for a failed file, a failed test, a timeout and a missing shard", () => {
+  const shards = (extra) => ({ "windows-standard-shard-1": [OK], "windows-standard-shard-2": [extra] })
+  assert.equal(verdictOf(shards({ ...OK, exitCode: 1 }), 2).status, 1)
+  assert.equal(verdictOf(shards({ ...OK, fail: 1 }), 2).status, 1)
+  const timeout = verdictOf(shards({ ...OK, exitCode: null, timedOut: true }), 2)
+  assert.equal(timeout.status, 1)
+  assert.match(timeout.out, /a\.test\.js timed out/u)
+  const missing = verdictOf({ "windows-standard-shard-1": [OK] }, 2)
+  assert.equal(missing.status, 1)
+  assert.match(missing.out, /1 of 2 shards reported/u)
+})
+
+test("the workflow has a single job named Windows suite that needs the shards and runs the verdict script", () => {
+  const workflow = readFileSync(path.resolve(path.dirname(runner), "..", "workflows", "desk-windows-suite.yml"), "utf8")
+  assert.match(workflow, /name: Windows suite\n\s+needs: windows-suite\n\s+if: \$\{\{ always\(\) \}\}/u)
+  assert.match(workflow, /windows-suite-verdict\.mjs shard-results 6/u)
+})

@@ -105,3 +105,32 @@ jobs:
           name: windows-${{ matrix.mode }}-shard-${{ matrix.shard }}
           path: results.json
           if-no-files-found: warn
+
+  # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
+  # standard-user shards uploaded (not the shards' job conclusions), so a shard that never ran, was cancelled or reported a failed test
+  # fails it. The elevated diagnostic is not counted. It is separate from "CI gate" (desk-mcp-tests.yml) because a job's `needs` cannot
+  # reach another workflow, and this workflow only runs on pull requests that touch the paths above: requiring it before that filter is
+  # removed would block every other pull request on a check that never reports.
+  windows-suite-result:
+    name: Windows suite
+    needs: windows-suite
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the verdict script
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Download every standard-user shard's results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: windows-standard-shard-*
+          path: shard-results
+
+      - name: Fail unless every shard reported and every file passed
+        run: node .github/scripts/windows-suite-verdict.mjs shard-results 6
