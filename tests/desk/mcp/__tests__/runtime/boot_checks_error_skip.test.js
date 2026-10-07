@@ -10,7 +10,7 @@
 // launcher -- never inline, never awaited on this check's own budget. Every
 // desk and process here is a throwaway fixture; nothing reaches the real
 // HOME or the network -- `launchRepair` is the same test seam
-// `boot_checks_host_enforcement.test.js` already uses.
+// `index_drift` boot checks already use.
 import { test, after } from "node:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

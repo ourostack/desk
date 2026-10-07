@@ -285,26 +285,22 @@ function validateFactoryHooks(claude, copilot) {
     const factoryEnd = { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/factory-end.cjs" claude', timeout }] };
     const expected = event === "SessionEnd"
       ? [factoryEnd, { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/sync-end.cjs" claude', timeout: 5 }] }]
-      // The done-claim gate (round 13) is the one other Stop hook: it blocks a "Done." reply over a task that is not done.
-      // The sign-off witness records the main agent's stop after it.
-      : [factoryEnd, { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/done-claim-gate.cjs" claude stop', timeout: 5 }] }, { hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/signoff-witness.cjs" stop', timeout: 5 }] }];
+      : [factoryEnd];
     if (!sameJson(claude.hooks?.[event], expected)) {
       errors.push(event === "SessionEnd"
         ? "factory-hooks SessionEnd must register the bounded, silent factory end hook and sync-end.cjs (M4-6 Part 3), and nothing else"
-        : `factory-hooks ${event} must register the bounded, silent factory end hook and the done-claim gate, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
+        : `factory-hooks ${event} must register only the bounded, silent factory end hook, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
     }
   }
   for (const event of ["sessionEnd", "agentStop"]) {
     const factoryEnd = { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', timeoutSec: 3 };
     const expected = event === "sessionEnd"
       ? [factoryEnd, { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/sync-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/sync-end.cjs" copilot', timeoutSec: 3 }]
-      // agentStop also carries the done-claim gate, which blocks a "Done." reply over a task that is not done.
-      // The sign-off witness records the main agent's stop after it.
-      : [factoryEnd, { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot stop', powershell: 'node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot stop', timeoutSec: 5 }, { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/signoff-witness.cjs" stop', powershell: 'node "${PLUGIN_ROOT}/hooks/signoff-witness.cjs" stop', timeoutSec: 5 }];
+      : [factoryEnd];
     if (!sameJson(copilot.hooks?.[event], expected)) {
       errors.push(event === "sessionEnd"
         ? "factory-hooks sessionEnd must register the bounded, silent factory end hook and sync-end.cjs (M4-6 Part 3), and nothing else"
-        : `factory-hooks ${event} must register the bounded, silent factory end hook and the done-claim gate, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
+        : `factory-hooks ${event} must register only the bounded, silent factory end hook, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
     }
   }
   return errors;

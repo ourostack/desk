@@ -20,12 +20,10 @@ import { DOCTOR_REPAIRS } from "./front-door.js"
 import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
-import { inspectStateBranch, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
+import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
-import { protectCheckout } from "./protected-checkout.js"
-import { isDeskWorkspace } from "../util/paths.js"
 
 const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
 const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
@@ -112,7 +110,6 @@ export function createDeskSession(deps) {
     readinessStateHome,
     deskStateDir,
     git = runGit,
-    protect = protectCheckout,
     watch = watchFileSystem,
     timers,
     stderr = process.stderr,
@@ -241,12 +238,6 @@ export function createDeskSession(deps) {
     // The root's own start record begins with the state it is in now (admitting, on the first attempt), not only with the next change.
     if (newRoot) recordLastStart(admission.snapshot())
     const deskRoot = inputs.root.root
-    // Only a real desk is protected: a folder with the desk layout, or the root a saved desk binding names. A root bound
-    // any other way ($DESK, --root or a host root at a code checkout, as a test once did) is served but never marked,
-    // because the marker would make the installed guard refuse ordinary work in that checkout.
-    if (isDeskWorkspace(deskRoot) || inputs.root.source === "activation-config") {
-      await protect({ root: deskRoot, stateBranch: inputs.activation?.stateBranch ?? null })
-    }
     if (inputs.activationError) return activationOutcome(inputs.activationError)
     const activation = inputs.activation
     const policyKey = JSON.stringify(activation.readinessPolicy)
@@ -550,6 +541,11 @@ export function createDeskSession(deps) {
       context.headTriggered = true
       admission.refresh({ force: true, waitMs: 0 })
       return refusal(name, "write")
+    }
+    // With no state branch configured, the checkout still has to be on a branch Desk may write on: refuse before any tool touches a file.
+    const branch = await inspectWriteBranch({ root: context.root.root, branch: context.stateBranchName, git })
+    if (!branch.ok) {
+      return degradedResult(name, { ...admission.snapshot().diagnostic, state: admission.snapshot().state, ...writeBranchProblem(branch) }, REQUIREMENT_TEXT.write)
     }
     const controller = context.admission?.controller
     if (controller && await controllerAnswers(controller)) return runtimeCall(name, input, signal, context.admission)

@@ -33,7 +33,7 @@
 // status.js`'s `syncStatus`) and queues the detached Desk-problem filer
 // (`mcp/scripts/file-desk-problem.js`, mechanism `desk-sync`) — never
 // `--force`, and filing is queued, never awaited inline, the same shape
-// `boot-checks.cjs`'s own `hostEnforcementCheck` already uses. The loop's
+// `boot-checks.cjs`'s detached repair launcher already uses. The loop's
 // own re-check of what is ahead, each time through, is what makes the
 // holder re-check for new commits before it ever releases the lock, so a
 // commit that lands while it is pushing is never left behind.
@@ -327,7 +327,7 @@ function text(value) {
 /**
  * Queues the detached Desk-problem filer (mechanism `desk-sync`) — the same
  * "launch it, never await it inline" shape `boot-checks.cjs`'s own
- * `hostEnforcementCheck` uses for the identical reason: a real filing
+ * detached repair launcher uses for the identical reason: a real filing
  * attempt is an account lookup plus `gh` calls that can run for tens of
  * seconds, and this worker has already done its job by the time a push is
  * blocked. Never throws — a failure to even launch the filer must never
@@ -372,12 +372,11 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
 
 /**
  * The host to name when filing a Desk problem: `CLAUDE_PLUGIN_ROOT`, set only
- * by Claude Code's own launcher, or `"unknown"` otherwise. Mirrors `tools/
- * status.js`'s own `hostEnforcementStatus`, not `factory-context.js`'s
- * `factoryPluginScan`: `DESK_PLUGIN_ROOT` locates a plugin root on every host
+ * by Claude Code's own launcher, or `"unknown"` otherwise. Unlike `factory-context.js`'s
+ * `factoryPluginScan`, `DESK_PLUGIN_ROOT` locates a plugin root on every host
  * (Claude included), so it is not a reliable "this is Copilot" signal, and a
  * filed problem naming the wrong host is worse than one that says it does
- * not know (`status.js`'s own comment on the same choice).
+ * not know.
  */
 export function hostFromEnv(env) {
   return text(env.CLAUDE_PLUGIN_ROOT) !== null ? "claude" : "unknown"
@@ -535,8 +534,7 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
  * running, independent of this process's exit — so this only records the
  * fact for `desk_status`'s `syncStatus` to surface next time (never
  * clobbering a more specific reason the worker itself already recorded) and
- * returns the same honest, unfiled `Desk problem:` block shape `runtime/
- * host-enforcement-registration.js` already uses for a filer its own callers
+ * returns an honest, unfiled `Desk problem:` block for a filer its callers
  * can't afford to reach synchronously. Never throws.
  */
 export function finalUnpushedCheck({ root, env, spawnGit = spawnSync }) {

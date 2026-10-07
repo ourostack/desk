@@ -274,6 +274,35 @@ test("recordLocalOnlyOnCards commits the card it records through Desk's commit p
   assert.equal((await readFront(second)).data.repos[0].local_only, undefined)
 })
 
+test("recordLocalOnlyOnCards commits on the configured state branch even when the remote's default is another branch, and writes nothing off it", async () => {
+  const clone = await makeRepo()
+  const root = await mkTempDeskRoot()
+  git(root, "init", "-q", "-b", "main")
+  git(root, "config", "user.email", "t@example.com")
+  git(root, "config", "user.name", "T")
+  const dir = path.join(root, "t", "ship-it")
+  await fs.mkdir(dir, { recursive: true })
+  const file = path.join(dir, "task.md")
+  const text = `---\ntitle: T\nstatus: processing\nrepos:\n  - name: greenhouse\n    local_path: ${clone}\n    mode: local\n---\nbody\n`
+  await fs.writeFile(file, text)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "seed", "--no-verify")
+  git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+  git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+  git(root, "switch", "-q", "-c", "desk-state")
+  const cards = [{ file, track: "t", slug: "ship-it", data: { status: "processing", repos: [{ name: "greenhouse", local_path: clone, mode: "local" }] } }]
+  const { installCardGuard } = await import("../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js")
+  assert.equal(installCardGuard(root).state, "installed")
+  // No state branch configured: the remote's default is main, HEAD is on desk-state, so nothing is written.
+  assert.deepEqual(await recordLocalOnlyOnCards({ cards, deskRoot: root, stateBranch: null }), [])
+  assert.equal(await fs.readFile(file, "utf8"), text)
+  assert.equal(git(root, "status", "--porcelain"), "")
+  // The configured state branch is where Desk writes.
+  assert.deepEqual(await recordLocalOnlyOnCards({ cards, deskRoot: root, stateBranch: "desk-state" }), ["t/ship-it"])
+  assert.equal(git(root, "log", "-1", "--format=%s"), "boot: record local-only clone on t/ship-it")
+  assert.equal(git(root, "status", "--porcelain"), "")
+})
+
 test("task_archive also applies the rule: an old commit is refused, a new one in a recorded clone passes", async () => {
   const clone = await makeRepo({ date: "2020-01-01T00:00:00Z" })
   const old = git(clone, "rev-parse", "HEAD")

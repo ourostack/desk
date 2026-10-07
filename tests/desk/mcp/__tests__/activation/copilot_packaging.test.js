@@ -369,26 +369,6 @@ test("Copilot root package docs avoid healthy-path manual dependency setup", () 
   assert.doesNotMatch(agentDocs, /Copilot CLI doesn't auto-resolve transitive plugin deps/u)
 })
 
-test("Copilot preToolUse hooks include Desk-only host enforcement (Part 8, spec §5) alongside the protected-checkout guard", () => {
-  const copilotHooks = loadJson("plugins", "desk", "hooks", "copilot-hooks.json")
-  const preToolUse = copilotHooks.hooks.preToolUse
-  assert.ok(Array.isArray(preToolUse) && preToolUse.length >= 2, "preToolUse must keep protected-checkout and add host-enforcement")
-  const commands = preToolUse.map((entry) => entry.bash)
-  assert.ok(
-    commands.some((command) => command === "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot"),
-    "the existing protected-checkout guard must stay wired",
-  )
-  assert.ok(
-    commands.some((command) => command === "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot"),
-    "host-enforcement.cjs must be wired for Copilot, passing its own host id",
-  )
-  for (const entry of preToolUse) {
-    assert.equal(entry.type, "command")
-    assert.equal(entry.powershell, entry.bash, "bash and powershell commands must match")
-    assert.equal(typeof entry.timeoutSec, "number")
-  }
-})
-
 test("Copilot registers sync-end.cjs under sessionEnd, not agentStop (M4-6 Part 3, Review Focus: never raise on every turn)", () => {
   const copilotHooks = loadJson("plugins", "desk", "hooks", "copilot-hooks.json")
   const registeredUnder = (event) => copilotHooks.hooks[event].some((entry) => entry.bash.includes("sync-end.cjs"))

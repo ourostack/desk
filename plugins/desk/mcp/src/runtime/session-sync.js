@@ -167,7 +167,7 @@ async function quarantine(root, paths) {
  * Queues the detached Desk-problem filer (mechanism `session-sync`) -- the
  * same "launch it, never await it inline" shape `runtime/sync-worker.js`'s
  * own `queueDeskProblemFiling` and `boot-checks.cjs`'s
- * `hostEnforcementCheck` both already use, for the identical reason: a real
+ * detached repair launcher both already use, for the identical reason: a real
  * filing attempt is an account lookup plus `gh` calls that can run for tens
  * of seconds, and session-start cannot afford to block on it. Never throws.
  * `reason` and `host` are always supplied by this module's own one caller

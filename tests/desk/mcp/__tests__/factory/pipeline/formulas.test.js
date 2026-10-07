@@ -785,7 +785,7 @@ test("the first-pass and rework formulas read the job's returns and give a verdi
   recorded[0].outcomes = [{ job: CLOSED, rev: 2, state: "accepted", verified: true, reason: null, deliveries: 1, wait: null, since: "created", returns }]
   const formulas = calculateFormulas(buildJobTimeline(CLOSED, recorded))
   assert.deepEqual(formulas.first_pass_yield, { class: "declared", state: "measured", value: 0, reasons: [], returns: { counting: 1, changed_ask: 0 }, changed_ask_only: false })
-  assert.deepEqual(formulas.rework, { class: "declared", state: "measured", value: { in_task: 0, at_review: 1, after_delivery: 0 }, reasons: [], reason_check: { compared: 0, disagree: 0, compared_verified: 0 } })
+  assert.deepEqual(formulas.rework, { class: "declared", state: "measured", value: { in_task: 0, at_review: 1, after_delivery: 0 }, reasons: [], reason_check: { compared: 0, disagree: 0 } })
   recorded[0].outcomes[0].since = "adopted"
   assert.equal(calculateFormulas(buildJobTimeline(CLOSED, recorded)).first_pass_yield.reason, "history_not_recorded")
 })

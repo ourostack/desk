@@ -25,7 +25,7 @@ const GENERIC_HINT =
 const REPAIR = " If a Desk tool is still absent after that, repair first (see the session-start skill) and never continue silently in local-only mode."
 
 /** The one line that tells an agent on `host` how to find and call Desk's tools. */
-export function deferredToolsLoadHint(host) {
+function deferredToolsLoadHint(host) {
   if (host === "claude") return CLAUDE_HINT
   if (host === "copilot") return COPILOT_HINT
   return GENERIC_HINT

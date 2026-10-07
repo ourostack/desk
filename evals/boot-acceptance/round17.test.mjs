@@ -1,4 +1,4 @@
-// Round AD harness checks: the missing-clone rule and the elsewhere-clone denial. No model calls.
+// Round AD harness checks: the missing-clone rule. No model calls.
 // Run: node --test evals/boot-acceptance/round17.test.mjs
 
 import assert from "node:assert/strict"

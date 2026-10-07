@@ -52,12 +52,10 @@ function readSignoff(value) {
   if (!isObject(value)) return null
   const state = oneOf(SIGNOFF_STATES, value.state)
   if (state === null) return null
-  return {
-    state,
-    at: timeOf(value.at),
-    verified: value.verified === true || value.verified === false ? value.verified : null,
-    reason: oneOf(REFUSAL_REASONS, value.reason),
-  }
+  const signoff = { state, at: timeOf(value.at), reason: oneOf(REFUSAL_REASONS, value.reason) }
+  // Desk no longer writes `verified`; a card written before that keeps its flag.
+  if (value.verified === true || value.verified === false) signoff.verified = value.verified
+  return signoff
 }
 
 function readFlow(value) {
@@ -182,12 +180,6 @@ function topLevel(lines, key, block, flow) {
   return key === "returns" ? block(following) : flow(following)
 }
 
-// One top-level scalar from raw frontmatter lines (`status`, say), read the way `recordFromLines` reads its keys: quotes and trailing comments are dropped. Null when the key is absent or holds anything but a scalar.
-export function topLevelScalar(lines, key) {
-  const value = topLevel(Array.isArray(lines) ? lines : [], key, blockList, blockMap)
-  return typeof value === "string" ? scalar(value) : null
-}
-
 // `{ signoff, flow, returns, returns_damaged }` from raw frontmatter lines (the text between the two `---` lines), block or flow form. A line under `returns:` that is not a list item counts as damaged.
 export function recordFromLines(lines) {
   const rows = Array.isArray(lines) ? lines : []
@@ -225,7 +217,7 @@ export function deliver(record, { at }) {
   const { flow, returns } = readRecord(record)
   const base = flow ?? startFlow("done")
   return {
-    signoff: { state: "delivered_unsigned", at: null, verified: null, reason: null },
+    signoff: { state: "delivered_unsigned", at: null, reason: null },
     flow: {
       ...base,
       rev: (base.rev ?? 0) + 1,
@@ -254,26 +246,19 @@ function checkReasons(outcome, reason, returnReason) {
   if (!RETURN_REASONS.includes(returnReason)) throw fail("unknown_return_reason", "the return reason is not one of the listed reasons")
 }
 
-// The human's answer to a delivery. Evidence may only go up: a call that was
-// not witnessed never replaces a witnessed record, and a witnessed call can
-// replace one that was not. Saying the same thing again at the same or lower
-// evidence changes nothing.
-export function sign(record, { status, outcome, reason, returnReason, verified, at }) {
+// The human's answer to a delivery. Saying the same thing again changes nothing; a different answer replaces the one held. The record carries no `verified` flag: a call is the answer. A card written before that still carries the flag, and readSignoff reads it.
+export function sign(record, { status, outcome, reason, returnReason, at }) {
   if (status !== "done") throw fail("not_delivered", "only a delivered task can be signed")
   if (outcome !== "accepted" && outcome !== "refused") throw fail("unknown_outcome", "the outcome is accepted or refused")
   checkReasons(outcome, reason, returnReason)
   const when = requireTime(at)
-  const witnessed = verified === true
   const current = readRecord(record)
   const held = current.signoff
-  if (held && held.state !== "delivered_unsigned") {
-    if (held.state === outcome && (held.verified === true || !witnessed)) return { record: { signoff: current.signoff, flow: current.flow, returns: current.returns }, changed: false }
-    if (held.verified === true && !witnessed) throw fail("evidence_lower", "a witnessed record is not replaced by one that was not witnessed")
-  }
+  if (held && held.state !== "delivered_unsigned" && held.state === outcome) return { record: { signoff: current.signoff, flow: current.flow, returns: current.returns }, changed: false }
   const flow = current.flow ?? startFlow("done", 1)
   return {
     record: {
-      signoff: { state: outcome, at: when, verified: witnessed, reason: outcome === "refused" ? reason : null },
+      signoff: { state: outcome, at: when, reason: outcome === "refused" ? reason : null },
       flow: { ...flow, rev: (flow.rev ?? 0) + 1 },
       returns: current.returns,
     },
@@ -312,11 +297,11 @@ export function catchPoint({ from, reached }) {
 
 const HUMAN_VERIFIED = { verified: true, unverified: false }
 
-// One line of the `returns` list: `<time> <from> <to> <agent reason> <catch point>`, then ` refused=<human reason> <verified|unverified>` for a human refusal. Throws `invalid_return` for an entry that would not read back.
+// One line of the `returns` list: `<time> <from> <to> <agent reason> <catch point>`, then ` refused=<human reason>` for a human refusal. A line written before Desk dropped the witness ends with ` verified` or ` unverified` after the refusal, and still reads. Throws `invalid_return` for an entry that would not read back.
 export function formatReturn(entry) {
   const e = isObject(entry) ? entry : {}
   const base = `${e.at} ${e.from} ${e.to} ${e.reason} ${e.caught}`
-  const line = e.refusal === null || e.refusal === undefined ? base : `${base} refused=${e.refusal} ${e.refusal_verified === true ? "verified" : "unverified"}`
+  const line = e.refusal === null || e.refusal === undefined ? base : `${base} refused=${e.refusal}`
   if (parseReturn(line) === null) throw fail("invalid_return", "the return entry is not in the listed form")
   return line
 }
@@ -325,7 +310,7 @@ export function formatReturn(entry) {
 export function parseReturn(line) {
   if (typeof line !== "string") return null
   const parts = line.split(" ")
-  if (parts.length !== 5 && parts.length !== 7) return null
+  if (parts.length < 5 || parts.length > 7 || (parts.length === 6 && !parts[5].startsWith("refused="))) return null
   const [at, from, to, reason, caught, refused, verdict] = parts
   if (typeof timeOf(at) !== "string" || !STATUSES.includes(from) || !STATUSES.includes(to)) return null
   if (!RETURN_REASONS.includes(reason) || !CATCH_POINTS.includes(caught)) return null
@@ -333,8 +318,8 @@ export function parseReturn(line) {
   const entry = { at, from, to, reason, caught, refusal: null, refusal_verified: null }
   if (parts.length === 5) return entry
   const human = /^refused=(\S+)$/u.exec(refused)?.[1]
-  if (!REFUSAL_REASONS.includes(human) || !Object.hasOwn(HUMAN_VERIFIED, verdict) || from !== "done" || to !== "processing") return null
-  return { ...entry, refusal: human, refusal_verified: HUMAN_VERIFIED[verdict] }
+  if (!REFUSAL_REASONS.includes(human) || (verdict !== undefined && !Object.hasOwn(HUMAN_VERIFIED, verdict)) || from !== "done" || to !== "processing") return null
+  return { ...entry, refusal: human, refusal_verified: verdict === undefined ? null : HUMAN_VERIFIED[verdict] }
 }
 
 const knownStatus = (status) => {
@@ -374,13 +359,13 @@ export function move(record, { from, to, at, returnReason }) {
 }
 
 // The return a human refusal makes. `task_signoff` calls it after `sign` has written the refusal (without one it throws `not_refused`); `signoff` stays as `sign` left it.
-export function refuse(record, { at, reason, returnReason, verified }) {
+export function refuse(record, { at, reason, returnReason }) {
   checkReasons("refused", reason, returnReason)
   const when = requireTime(at)
   const current = readRecord(record)
   if (current.signoff?.state !== "refused") throw fail("not_refused", "no refusal is recorded on this card")
   const flow = current.flow ?? startFlow("done", 1)
-  const line = formatReturn({ at: when, from: "done", to: "processing", reason: returnReason, caught: "after_delivery", refusal: reason, refusal_verified: verified === true })
+  const line = formatReturn({ at: when, from: "done", to: "processing", reason: returnReason, caught: "after_delivery", refusal: reason, refusal_verified: null })
   return {
     signoff: current.signoff,
     flow: { ...flow, rev: (flow.rev ?? 0) + 1, reached: "processing" },

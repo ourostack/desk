@@ -5,11 +5,10 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { SCRIPT_WRITE_PATTERNS as PLUGIN_SCRIPT_WRITE_PATTERNS } from "../../plugins/desk/mcp/src/runtime/shell-card-writes.js"
 import { cardWrites, inventedClones, mislabeledClones, standInRemotes } from "./claims.mjs"
 import { buildContext, parseStreamJson } from "./run.mjs"
 import { findScenario } from "./scenarios.mjs"
-import { SCRIPT_WRITE_PATTERNS, cardCommits, cardShellWrites, gitClones, isLiveCardFile, simulatedRemotes } from "./shell.mjs"
+import { cardCommits, cardShellWrites, gitClones, isLiveCardFile, simulatedRemotes } from "./shell.mjs"
 
 const line = (event) => JSON.stringify(event)
 const stream = (...lines) => `${lines.join("\n")}\n`
@@ -27,11 +26,6 @@ const CARD = "greenhouse-ops/watering-schedule-api/task.md"
 const bash = (command, result = "ok", extra = {}) => ({ name: "Bash", input: { command }, result, ...extra })
 const ctx = { deskRoot: DESK, homeDir: HOME, runTmp: RUN, toolCalls: [] }
 const where = { cwd: DESK, home: HOME, deskRoot: DESK }
-
-test("the harness's script write forms are the plugin guard's", () => {
-  assert.deepEqual(SCRIPT_WRITE_PATTERNS.map((pattern) => pattern.source), PLUGIN_SCRIPT_WRITE_PATTERNS.map((pattern) => pattern.source))
-  assert.deepEqual(SCRIPT_WRITE_PATTERNS.map((pattern) => pattern.flags), PLUGIN_SCRIPT_WRITE_PATTERNS.map((pattern) => pattern.flags))
-})
 
 test("isLiveCardFile: <track>/<slug>/task.md and the desks/<alias> form of the given desk, not archives, other folders or other files", () => {
   assert.equal(isLiveCardFile(`${DESK}/${CARD}`, DESK), true)
