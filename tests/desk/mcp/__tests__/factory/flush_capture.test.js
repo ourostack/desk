@@ -841,3 +841,53 @@ test("coverageNow answers a fixed code, never throws, when it is given no option
   const result = await coverageNow(ctx.env)
   assert.equal(typeof result.ok, "boolean")
 }))
+
+// A corrected record: a captured share that moves by 0.15 or more is sent at once, inside the 20 hours; a small move waits.
+test("a corrected record is sent as a new pull request at once when the last one settled, and a small change still waits", () => scratch(async ({ env }) => {
+  const id = await setup(env)
+  const github = fakeGitHub({ captureJson: READY })
+  const clock = { t: T0 }
+  assert.equal((await run(env, github, clock)).result, "delivered_pr_open")
+  github.mergeOpenPr()
+  clock.t = T0 + HOUR
+  assert.equal((await run(env, github, clock)).result, "nothing_pending")
+  const before = github.calls.length
+  // 3 of 5 captured (0.6) to 3 of 6 (0.5): a move of 0.1 waits.
+  await writeStatus(env, { coverage: coverageAt(iso(clock.t), { mine: { derived: 3, not_seen: 3 } }) })
+  assert.equal((await run(env, github, clock)).result, "nothing_pending")
+  assert.equal(github.calls.length, before, "a small change makes no call")
+  // 3 of 5 to 1 of 32: the share fell by far more than 0.15, so it goes now.
+  clock.t = T0 + 2 * HOUR
+  const corrected = coverageAt(iso(clock.t), { mine: { derived: 1, not_seen: 31 } })
+  await writeStatus(env, { coverage: corrected })
+  assert.equal((await run(env, github, clock)).result, "delivered_pr_open")
+  assert.equal(github.headFiles(STORE, `intake/${id}`).get(`capture/${id}.json`), expected(corrected, id).sha)
+  assert.equal((await capture(env)).sent_at, iso(clock.t))
+  assert.deepEqual((await capture(env)).sent_share, sharesOf(expected(corrected, id).bytes))
+}))
+
+test("a corrected record replaces the bytes an open pull request carries, at once", () => scratch(async ({ env }) => {
+  const id = await setup(env)
+  const github = fakeGitHub({ captureJson: READY })
+  const clock = { t: T0 }
+  assert.equal((await run(env, github, clock)).result, "delivered_pr_open")
+  clock.t = T0 + HOUR
+  const corrected = coverageAt(iso(clock.t), { mine: { derived: 30, not_seen: 2 } })
+  await writeStatus(env, { coverage: corrected })
+  assert.equal((await run(env, github, clock)).result, "delivered_pr_open")
+  assert.equal(github.pulls.length, 1, "the open pull request is updated, not a second one opened")
+  assert.equal(github.headFiles(STORE, `intake/${id}`).get(`capture/${id}.json`), expected(corrected, id).sha)
+  assert.equal((await capture(env)).sent_at, iso(clock.t))
+}))
+
+test("a refusal keeps the share of the record last sent, and a confirmed drop forgets it", () => scratch(async ({ env }) => {
+  const outbox = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  const flushLib = await import("../../../../../plugins/desk/mcp/src/factory/capture-flush.js")
+  const shares = { "claude-code": 0.6 }
+  await outbox.writeStatus(env, { capture: { [STORE]: { pr: 5, sent_at: iso(T0), sent_bytes: EMPTY_RECORD, sent_share: shares } } })
+  await flushLib.saveRefused(env, STORE, "capture_keys", T0)
+  assert.deepEqual((await capture(env)).sent_share, shares)
+  await outbox.writeStatus(env, { capture: { [STORE]: { pr: 5, sent_at: iso(T0), sent_bytes: EMPTY_RECORD, sent_share: shares } } })
+  await flushLib.saveDropped(env, STORE, T0, { confirmed: true })
+  assert.equal((await capture(env)).sent_share, undefined)
+}))

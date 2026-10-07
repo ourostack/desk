@@ -2,15 +2,15 @@
 // recorded, and a host that cannot tell a non-desk session from a miss does not charge its unowned sessions to a store as misses. Every fixture is synthetic.
 import assert from "node:assert/strict"
 import { utimesSync } from "node:fs"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, rm, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import test from "node:test"
 import { SHARE_JUMP, planCapture, saveSent, saveSettled, sharesOf } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
 import { captureFor } from "../../../../../plugins/desk/mcp/src/factory/capture-publish.js"
-import { HELD_MAJORITY, QUARANTINE_SETTLE_MS, recordCoverage } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
+import { HELD_MAJORITY, KEEP_LIMIT_MS, QUARANTINE_SETTLE_MS, recordCoverage } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
 import { BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
-import { factoryStateRoot, readStatus, setConsent, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { STORE, scratch } from "./_session_helpers.js"
+import { factoryStateRoot, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { STORE, recent, scratch, session } from "./_session_helpers.js"
 
 const HOUR = 60 * 60 * 1000
 const T0 = Date.parse("2026-10-05T12:00:00.000Z")
@@ -100,10 +100,17 @@ test("sharesOf reads only counted hosts with something capturable", () => {
 // A host with no desk to tell: Copilot CLI and Codex.
 const copilot = (unowned, mine = {}) => host({ [owner]: row(mine), "-": row(unowned) }, { withDesk: false })
 
-test("unowned sessions of a host that cannot say 'not in a desk' are not counted as misses", () => {
-  const got = JSON.parse(record({ method: 1, ran_at: "2026-10-05T12:00:00Z", hosts: { "copilot-cli": copilot({ not_seen: 124, held: 1 }, { derived: 1 }) } }).bytes)
-  // The unowned misses are out; the unowned held session stays, as before.
-  assert.deepEqual(got.hosts["copilot-cli"], { on_disk: 2, derived: 1, held: 1, frozen: 0, pending: 0, not_seen: 0, not_in_a_desk: null, unverified: false })
+test("unowned sessions of a host that cannot say 'not in a desk' are withheld, and the host keeps not_in_a_desk null so the store can tell", () => {
+  for (const name of ["copilot-cli", "codex-cli"]) {
+    const got = JSON.parse(record({ method: 1, ran_at: "2026-10-05T12:00:00Z", hosts: { [name]: copilot({ not_seen: 124, held: 1 }, { derived: 1 }) } }).bytes)
+    // The unowned misses are out of every count; the unowned held session stays, as before. The record never turns them into a zero it presents as a measure:
+    // `not_in_a_desk: null` is what tells the store this host cannot say, so the store reads its shares as unavailable (`host_does_not_say_desk`).
+    assert.deepEqual(got.hosts[name], { on_disk: 2, derived: 1, held: 1, frozen: 0, pending: 0, not_seen: 0, not_in_a_desk: null, unverified: false })
+    assert.equal(got.hosts[name].not_in_a_desk, null)
+  }
+  // A host that can say keeps a number there.
+  const claude = JSON.parse(record({ method: 1, ran_at: "2026-10-05T12:00:00Z", hosts: { "claude-code": host({ [owner]: row({ derived: 1 }), "-": row({ not_in_a_desk: 3 }) }) } }).bytes)
+  assert.equal(claude.hosts["claude-code"].not_in_a_desk, 3)
 })
 
 test("a host with only unowned misses is left out, never written as a zero", () => {
@@ -131,6 +138,7 @@ const PREVIOUS = { method: 1, ran_at: "2026-10-01T00:00:00.000Z", hosts: {} }
 const options = { bindingVersion: BINDING_VERSION }
 
 async function quarantine(ctx, { names, ageMs }) {
+  // `ageMs` may be negative: a folder dated in the future.
   const root = await factoryStateRoot(ctx.env)
   const slug = path.join(root, "quarantine", "ourostack__factory")
   await mkdir(slug, { recursive: true })
@@ -203,4 +211,81 @@ test("a settled quarantine that is empty is recorded", () => scratch(async (ctx)
 test("a machine with no quarantine folder records as before", () => scratch(async (ctx) => {
   await seed(ctx)
   assert.equal(await recordCoverage(ctx.env, options), "written")
+}))
+
+async function outboxCopies(ctx, ns) {
+  const root = await factoryStateRoot(ctx.env)
+  await mkdir(path.join(root, "outbox", "ourostack__factory"), { recursive: true })
+  for (const n of ns) {
+    await putTranscript(ctx, n)
+    await writeFile(path.join(root, "outbox", "ourostack__factory", NAME(n)), "{}")
+  }
+}
+const SETTLED = QUARANTINE_SETTLE_MS + 60 * 1000
+
+test("sessions held for a reason other than quarantine do not make a quarantine majority", () => scratch(async (ctx) => {
+  // A session whose marker names a store with no consent is held, and one old unrelated file sits in quarantine.
+  await seed(ctx)
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: false })
+  await writeMarker(ctx.env, { ...marker, end_reason: "complete", ended_at: recent(-3600000), updated_at: recent(-3600000) })
+  await quarantine(ctx, { names: [NAME(9)], ageMs: 7 * 24 * 60 * 60 * 1000 })
+  assert.equal(await recordCoverage(ctx.env, options), "written")
+  const claude = (await readStatus(ctx.env)).coverage.hosts["claude-code"]
+  assert.equal(claude.held, 1)
+  assert.equal(claude.held / claude.on_disk, 1, "the host is entirely held, and it is recorded as it is")
+}))
+
+test("exactly half of a host's sessions in quarantine is recorded, more than half is kept", () => scratch(async (ctx) => {
+  await seed(ctx)
+  await outboxCopies(ctx, [1, 2, 3, 4])
+  await quarantine(ctx, { names: [NAME(1), NAME(2)], ageMs: SETTLED })
+  assert.equal(await recordCoverage(ctx.env, options), "written")
+  await quarantine(ctx, { names: [NAME(3)], ageMs: SETTLED })
+  assert.equal(await recordCoverage(ctx.env, options), "kept")
+}))
+
+test("a quarantine folder dated in the future is settled, not kept", () => scratch(async (ctx) => {
+  await seed(ctx)
+  await quarantine(ctx, { names: [], ageMs: -3 * 24 * 60 * 60 * 1000 })
+  assert.equal(await recordCoverage(ctx.env, options), "written")
+}))
+
+test("the keep has a time limit: after an hour the pass is recorded anyway and the status says so, and it clears when the quarantine settles", () => scratch(async (ctx) => {
+  assert.equal(KEEP_LIMIT_MS, 60 * 60 * 1000)
+  await seed(ctx)
+  await outboxCopies(ctx, [1, 2, 3, 4])
+  await quarantine(ctx, { names: [NAME(1), NAME(2), NAME(3)], ageMs: SETTLED })
+  const t0 = Date.now()
+  assert.equal(await recordCoverage(ctx.env, { ...options, now: () => t0 }), "kept")
+  const kept = (await readStatus(ctx.env)).coverage_kept
+  assert.equal(kept.code, "quarantine_in_flux")
+  assert.equal(kept.since, new Date(t0).toISOString())
+  // Still in flux 59 minutes later: kept, and `since` does not move.
+  assert.equal(await recordCoverage(ctx.env, { ...options, now: () => t0 + KEEP_LIMIT_MS - 60000 }), "kept")
+  assert.equal((await readStatus(ctx.env)).coverage_kept.since, kept.since)
+  assert.deepEqual((await readStatus(ctx.env)).coverage, PREVIOUS)
+  // At the limit the pass is recorded as it is, held and all, and says why.
+  assert.equal(await recordCoverage(ctx.env, { ...options, now: () => t0 + KEEP_LIMIT_MS }), "written")
+  const status = await readStatus(ctx.env)
+  assert.equal(status.coverage_kept.code, "quarantine_not_settling")
+  assert.equal(status.coverage_kept.since, kept.since)
+  assert.equal(status.coverage.hosts["claude-code"].held, 3)
+  // Once nothing is in flux the note clears.
+  await quarantine(ctx, { names: [], ageMs: SETTLED })
+  for (const n of [1, 2, 3]) await rm(path.join(await factoryStateRoot(ctx.env), "quarantine", "ourostack__factory", NAME(n)))
+  utimesSync(path.join(await factoryStateRoot(ctx.env), "quarantine", "ourostack__factory"), new Date(Date.now() - SETTLED), new Date(Date.now() - SETTLED))
+  assert.equal(await recordCoverage(ctx.env, { ...options, now: () => t0 + 2 * KEEP_LIMIT_MS }), "written")
+  assert.equal((await readStatus(ctx.env)).coverage_kept, undefined)
+}))
+
+test("a kept pass clears coverage_failed, stores the Codex cache and leaves the coverage", () => scratch(async (ctx) => {
+  await seed(ctx)
+  await writeStatus(ctx.env, { coverage_failed: "count_failed" })
+  await quarantine(ctx, { names: [], ageMs: 1000 })
+  assert.equal(await recordCoverage(ctx.env, options), "kept")
+  const status = await readStatus(ctx.env)
+  assert.equal(status.coverage_failed, undefined)
+  assert.deepEqual(status.coverage_cache, {})
+  assert.deepEqual(status.coverage, PREVIOUS)
 }))

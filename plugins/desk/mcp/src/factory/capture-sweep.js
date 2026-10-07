@@ -10,7 +10,12 @@
 // writes `coverage_failed: <code>` and leaves the previous `coverage` and `coverage_cache` where they were; a success clears `coverage_failed`.
 // `"kept"` is a success that does not replace `coverage`: a pass taken while the quarantine folder is in flux measures a transient state (copies sitting
 // in quarantine count as `held`, not `derived`), so the previous `coverage` stays and a record is never built from it. It is in flux when a quarantine
-// folder changed within `QUARANTINE_SETTLE_MS`, or when quarantine holds files and a host's `held` is more than `HELD_MAJORITY` of its sessions on disk.
+// folder changed within `QUARANTINE_SETTLE_MS` (a folder dated in the future counts as settled), or when the sessions of a host whose facts copy is in
+// quarantine are more than `HELD_MAJORITY` of its sessions on disk. Only sessions held in quarantine count: a session held for another reason (a marker
+// naming no store, a store without consent, an unproven Codex route) is a steady state and is recorded as `held`. The keep has a time limit,
+// `KEEP_LIMIT_MS`: `status.coverage_kept` is `{ code: "quarantine_in_flux", since, at }` while passes are kept; once the first kept pass is `KEEP_LIMIT_MS` old the
+// pass is recorded anyway and `coverage_kept` becomes `{ code: "quarantine_not_settling", since, at }`, which the status and the doctor show, so a quarantine that
+// does not settle is published as `held` and not hidden. A pass with nothing in flux clears `coverage_kept`.
 //
 // Store names are compared exactly in the classifier, so this file turns every store name into lower case first, in consent, copies, receipts and markers:
 // GitHub names are not case sensitive, and `session-route.js` (`sessionPlace`) and the flush (`sameRepo`) already compare them that way. Folders in the
@@ -34,6 +39,8 @@ export const COVERAGE_FAILED = Object.freeze(["state_unreadable", "count_failed"
 export const QUARANTINE_SETTLE_MS = 5 * 60 * 1000
 /** With quarantine non-empty, a host whose `held` is more than this share of its sessions on disk is read as a transient quarantine, not a measurement. */
 export const HELD_MAJORITY = 0.5
+/** The longest a coverage pass is kept back for a quarantine in flux; after it the pass is recorded anyway and says so. */
+export const KEEP_LIMIT_MS = 60 * 60 * 1000
 
 const FACTS_NAME = new RegExp(`^(?:${ENUMS.host.join("|")})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.json$`, "u")
 const lower = (store) => (typeof store === "string" ? store.toLowerCase() : store)
@@ -140,7 +147,10 @@ export async function coverageNow(env, { now = Date.now, bindingVersion, orphans
       folderOf: claudeFolderOf,
     })
     for (const host of Object.values(hosts)) assertPartition(host)
-    return { ok: true, coverage: { method: 1, ran_at: new Date(now()).toISOString(), hosts }, cache: counted.cache }
+    // Per host, the sessions whose facts copy is in quarantine: the only kind of `held` that is a transient state.
+    const inQuarantine = new Set(state.copies.map(({ name }) => name).filter((name) => state.quarantined.includes(name)))
+    const quarantined = Object.fromEntries(Object.entries(counted.hosts).map(([host, entry]) => [host, (entry?.sessions ?? []).filter(({ name }) => inQuarantine.has(name)).length]))
+    return { ok: true, coverage: { method: 1, ran_at: new Date(now()).toISOString(), hosts }, cache: counted.cache, quarantined }
   } catch {
     return { ok: false, code: stage }
   }
@@ -177,28 +187,38 @@ function quarantineState(root) {
   return { changedAt, held }
 }
 
-/** Whether `coverage` was taken in a transient quarantine state; see the header. Fails open to recording only when the state folder cannot be read at all. */
-async function quarantineInFlux(env, coverage, nowMs) {
+/** Whether the coverage pass was taken in a transient quarantine state; see the header. Records anyway only when the state folder cannot be read at all. */
+async function quarantineInFlux(env, result, nowMs) {
   let state
   try {
     state = quarantineState(await factoryStateRoot(env, { create: false }))
   } catch {
     return false
   }
-  if (state.changedAt !== null && nowMs - state.changedAt < QUARANTINE_SETTLE_MS) return true
-  if (!state.held) return false
-  return Object.values(coverage.hosts).some((host) => host.state === "counted" && host.on_disk > 0 && host.held / host.on_disk > HELD_MAJORITY)
+  if (state.changedAt !== null && state.changedAt <= nowMs && nowMs - state.changedAt < QUARANTINE_SETTLE_MS) return true
+  return Object.entries(result.coverage.hosts).some(([host, entry]) => entry.state === "counted" && entry.on_disk > 0 && (result.quarantined?.[host] ?? 0) / entry.on_disk > HELD_MAJORITY)
 }
 
 /** See the header. */
 export async function recordCoverage(env, options) {
   const result = await coverageNow(env, options)
   try {
-    if (result.ok && (await quarantineInFlux(env, result.coverage, (options?.now ?? Date.now)()))) {
-      await writeStatus(env, { coverage_cache: result.cache, coverage_failed: undefined })
-      return "kept"
+    let kept
+    if (result.ok) {
+      const nowMs = (options?.now ?? Date.now)()
+      if (await quarantineInFlux(env, result, nowMs)) {
+        const before = (await readStatus(env)).coverage_kept
+        const first = isPlainObject(before) && typeof before.since === "string" ? Date.parse(before.since) : Number.NaN
+        const since = Number.isFinite(first) && first <= nowMs ? first : nowMs
+        const holding = nowMs - since < KEEP_LIMIT_MS
+        kept = { code: holding ? "quarantine_in_flux" : "quarantine_not_settling", since: new Date(since).toISOString(), at: new Date(nowMs).toISOString() }
+        if (holding) {
+          await writeStatus(env, { coverage_cache: result.cache, coverage_failed: undefined, coverage_kept: kept })
+          return "kept"
+        }
+      }
     }
-    await writeStatus(env, result.ok ? { coverage: result.coverage, coverage_cache: result.cache, coverage_failed: undefined } : { coverage_failed: result.code })
+    await writeStatus(env, result.ok ? { coverage: result.coverage, coverage_cache: result.cache, coverage_failed: undefined, coverage_kept: kept } : { coverage_failed: result.code })
     return result.ok ? "written" : "failed"
   } catch {
     // The status file could not be written; the sweep goes on and the next one tries again.

@@ -345,6 +345,14 @@ test("desk_doctor and desk_status raise a stopped pruning and a store check that
   body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.deepEqual(body.factory.capture_dropped.map(({ store }) => store), [STORE])
   assert.match(body.summary, /\n  ourostack\/factory: capture record dropped from a rebuilt intake branch and not delivered since /u)
+  // A coverage pass kept back for a quarantine is no finding while it is being kept, and is one once the keep hit its limit and the pass was recorded anyway.
+  await writeStatus(host.env, { coverage_kept: { code: "quarantine_in_flux", since: droppedAt(60 * 1000), at: droppedAt(1000) } })
+  assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.coverage_kept, undefined)
+  await writeStatus(host.env, { coverage_kept: { code: "quarantine_not_settling", since: droppedAt(2 * 3600 * 1000), at: droppedAt(1000) } })
+  body = doctorRuntime({ deskRoot: desk, env: host.env })
+  assert.equal(typeof body.factory.coverage_kept.since, "string")
+  assert.match(body.summary, /\n  the quarantine did not settle since /u)
+  await writeStatus(host.env, { coverage_kept: undefined })
   // A store this machine no longer contributes to never settles its count, so it is no finding.
   await setConsent(host.env, { store: STORE, contribute: false })
   assert.equal(doctorRuntime({ deskRoot: desk, env: host.env }).factory.capture_check_unavailable, undefined)

@@ -48,6 +48,12 @@ export function captureDroppedFindings(status, nowMs) {
     .map(([store, entry]) => ({ store, since: entry.dropped_at }))
 }
 
+/** `coverageKeptFinding(status) -> { since } | null`: set when the coverage pass was kept back for a quarantine that did not settle for `KEEP_LIMIT_MS` and was recorded anyway (`status.coverage_kept.code` is `quarantine_not_settling`; `since` is when the keeping began). */
+export function coverageKeptFinding(status) {
+  const kept = status?.coverage_kept
+  return isObject(kept) && kept.code === "quarantine_not_settling" && typeof kept.since === "string" ? { since: kept.since } : null
+}
+
 /** `captureCheckLines(status) -> string[]`: one line per store in `captureCheckFindings`. */
 export function captureCheckLines(status) {
   return captureCheckFindings(status).map(({ store, times }) => `capture: the store's own check could not read the record ${times} times in a row (${store}); the record is not blamed and goes again, but it is not landing`)

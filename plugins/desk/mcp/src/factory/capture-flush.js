@@ -21,7 +21,8 @@
 //
 // Due, with no network: coverage whose `ran_at` is a parsable time not in the future and under three days old (a failed pass leaves the earlier
 // coverage in place, so it is used only while that holds; none, or a stale one, sends nothing and retracts nothing), now past `retry_after`, a record
-// (or the empty record that retracts one sent before) whose blob differs from `blob`, and 20 hours since `sent_at`. A record whose pull request is
+// (or the empty record that retracts one sent before) whose blob differs from `blob`, and either 20 hours since `sent_at` or a captured share (derived over derived + frozen + pending + not_seen) of any host named by both
+// this record and the last one sent that differs by `SHARE_JUMP` (0.15) or more from the last one's (`sent_share`), so a corrected record replaces a wrong one at once. A record whose pull request is
 // still open (`pr` is set while the flush has a batch it has not seen settled) is carried in every rebuild of the branch, so it is never dropped
 // from the open pull request by an unrelated rebuild.
 //
