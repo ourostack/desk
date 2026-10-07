@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import WebSocket from 'ws';
 
-import { acquireContext } from '../../../../plugins/desk/browser-context-broker/src/broker.mjs';
+import { acquireLease } from '../../../../plugins/desk/browser-context-broker/src/broker.mjs';
 import { startLeaseProxy } from '../../../../plugins/desk/browser-context-broker/src/cdp-proxy.mjs';
 import {
   addOwnedTarget,
@@ -20,6 +20,9 @@ import {
 import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
 import { REQUEST_TIMEOUT_LIMIT_MS, settlesWithin } from './fixtures/settle.mjs';
+
+// The broker's production entry point is `acquireLease`. These tests exercise the context acquisition it wraps, so they pass a lease creator that makes no lease and read `acquired`.
+const acquireContext = async (options) => (await acquireLease({ ...options, owner: 'test', leaseCreator: async () => null })).acquired;
 
 const scratchRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '.lease-state');
 const holdLeaseLockFixture = new URL('./fixtures/hold-lease-lock.mjs', import.meta.url);

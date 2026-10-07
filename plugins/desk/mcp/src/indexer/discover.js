@@ -63,7 +63,7 @@ const SKIP_DIRS = new Set([
  *
  * Exposed for tests.
  */
-export function stripPersonPrefix(relPath) {
+function stripPersonPrefix(relPath) {
   const segments = relPath.split(path.sep)
   if (segments.length > 2 && segments[0] === "desks") {
     return segments.slice(2).join(path.sep)

@@ -20,7 +20,7 @@ const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 
 async function loadVectorPackModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "vector-packs.js")))
+  return import("../../../../../plugins/desk/mcp/src/indexer/vector-packs.js")
 }
 
 async function tmpRoot() {

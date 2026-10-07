@@ -11,14 +11,14 @@ const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
 async function loadActivationContract() {
   const [schema, validator] = await Promise.all([
-    import(pathToFileURL(path.join(mcpRoot, "src", "activation", "schema.js"))),
-    import(pathToFileURL(path.join(mcpRoot, "src", "activation", "validate.js"))),
+    import("../../../../../plugins/desk/mcp/src/activation/schema.js"),
+    import("../../../../../plugins/desk/mcp/src/activation/validate.js"),
   ])
   return { ...schema, ...validator }
 }
 
 async function loadActivationFailures() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "failures.js")))
+  return import("../../../../../plugins/desk/mcp/src/activation/failures.js")
 }
 
 function validManifest(overrides = {}) {
@@ -1336,65 +1336,6 @@ test("activation dependency ranges support caret, tilde, and exact pins determin
   )
 })
 
-test("unsupported hosts produce host-native fallback diagnostics", async () => {
-  const { diagnoseHostSupport } = await loadActivationContract()
-  const diagnostics = diagnoseHostSupport(validManifest(), {
-    host: "generic-stdio",
-    requested_activation: "desk:worker",
-  })
-
-  assert.equal(diagnostics.status, "degraded")
-  assert.deepEqual(diagnostics.unsupported_primitives, ["agent-defaults"])
-  assert.match(diagnostics.fallback_behavior, /explicit root|no worker activation/i)
-
-  const unsupported = diagnoseHostSupport(validManifest(), {
-    host: "unknown-host",
-  })
-
-  assert.equal(unsupported.status, "unsupported")
-  assert.deepEqual(unsupported.unsupported_primitives, ["host-activation"])
-  assert.match(unsupported.fallback_behavior, /manual host configuration/i)
-
-  const noHostSupport = diagnoseHostSupport({}, {
-    host: "unknown-host",
-  })
-
-  assert.equal(noHostSupport.status, "unsupported")
-  assert.deepEqual(noHostSupport.unsupported_primitives, ["host-activation"])
-
-  const nullManifestHostSupport = diagnoseHostSupport(null, {
-    host: "codex",
-  })
-
-  assert.equal(nullManifestHostSupport.status, "unsupported")
-  assert.deepEqual(nullManifestHostSupport.unsupported_primitives, ["host-activation"])
-
-  const malformedHostSupport = diagnoseHostSupport({
-    host_support: {},
-  }, {
-    host: "codex",
-  })
-
-  assert.equal(malformedHostSupport.status, "unsupported")
-  assert.deepEqual(malformedHostSupport.unsupported_primitives, ["host-activation"])
-
-  const bareHost = diagnoseHostSupport({
-    host_support: [
-      {
-        host: "bare-host",
-        status: "experimental",
-        fallback_behavior: "bring your own stdio launch",
-      },
-    ],
-  }, {
-    host: "bare-host",
-  })
-
-  assert.equal(bareHost.status, "experimental")
-  assert.deepEqual(bareHost.unsupported_primitives, [])
-  assert.deepEqual(bareHost.capabilities, [])
-})
-
 test("terminal failure helpers produce stable non-retryable activation envelopes", async () => {
   const { ActivationFailure, terminalFailure } = await loadActivationFailures()
   const input = {
@@ -1544,4 +1485,14 @@ test("canonical Desk activation manifest exists and validates", async () => {
     lexical: "required",
     semantic: "background",
   })
+})
+
+test("a readiness policy that fails for a reason other than its content is not reported as a diagnostic", async () => {
+  const { validateActivationManifest } = await loadActivationContract()
+  const manifest = validManifest()
+  manifest.desk_runtime = {
+    ...manifest.desk_runtime,
+    get authority_provider() { throw new Error("provider lookup failed") },
+  }
+  assert.throws(() => validateActivationManifest(manifest), /provider lookup failed/)
 })

@@ -15,7 +15,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.met
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
 async function loadRuntimeDeps() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "runtime-deps.js")))
+  return import("../../../../../plugins/desk/mcp/src/runtime/runtime-deps.js")
 }
 
 function loadJson(file) {

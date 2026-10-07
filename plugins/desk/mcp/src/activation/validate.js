@@ -127,26 +127,6 @@ export function resolveActivationChain(manifest, targetId = "desk:worker") {
   return chain
 }
 
-export function diagnoseHostSupport(manifest, { host }) {
-  const hostSupport = Array.isArray(manifest?.host_support) ? manifest.host_support : []
-  const match = hostSupport.find((entry) => isObject(entry) && entry.host === host)
-  if (!match) {
-    return {
-      host,
-      status: "unsupported",
-      unsupported_primitives: ["host-activation"],
-      fallback_behavior: "manual host configuration required",
-    }
-  }
-  return {
-    host,
-    status: match.status,
-    unsupported_primitives: match.unsupported_primitives ?? [],
-    fallback_behavior: match.fallback_behavior,
-    capabilities: match.capabilities ?? [],
-  }
-}
-
 function validateDependencies(dependencies, errors) {
   const ids = new Set()
   if (!Array.isArray(dependencies) || dependencies.length === 0) {
@@ -261,17 +241,8 @@ function validateDeskRuntime(deskRuntime, errors) {
     normalizeReadinessPolicy(deskRuntime, { path: "desk_runtime", phase: "VERIFYING" })
   } catch (error) {
     if (error?.code !== "activation_policy_invalid") throw error
-    if (Array.isArray(error.diagnostics) && error.diagnostics.length > 0) {
-      for (const diagnosticEntry of error.diagnostics) {
-        errors.push(diagnostic(
-          diagnosticEntry.path ?? "desk_runtime",
-          diagnosticEntry.code ?? "activation_policy_invalid",
-          diagnosticEntry.message ?? error.summary,
-        ))
-      }
-      return
-    }
-    errors.push(diagnostic("desk_runtime", error.code, error.summary ?? "Desk readiness policy is invalid"))
+    // A readiness policy failure always carries a path, a code and a message for each diagnostic.
+    for (const { path, code, message } of error.diagnostics) errors.push(diagnostic(path, code, message))
   }
 }
 

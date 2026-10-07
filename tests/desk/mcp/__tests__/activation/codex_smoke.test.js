@@ -41,7 +41,7 @@ const expectedGlobalMarker = new RegExp(
 )
 
 async function loadCodexSmokeHarness() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "codex-smoke.js")))
+  return import("../../../../../plugins/desk/mcp/src/activation/codex-smoke.js")
 }
 
 function loadJson(filePath) {

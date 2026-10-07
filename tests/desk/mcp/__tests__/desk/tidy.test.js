@@ -21,7 +21,6 @@ import {
   heldReason,
   identityCachePath,
   organizationRecord,
-  parseDeskRegistry,
   readOrganizationRecord,
   resolvePerson,
   runTidyStatusCli,
@@ -565,14 +564,7 @@ test("a person whose desk does not exist yet is never tidied", () => {
   assert.match(result.reason, /does not exist yet/)
 })
 
-test("the registry parser reads alias and identity from the table and skips rows without an alias", () => {
-  assert.deepEqual(parseDeskRegistry("# Desks\n\n| alias | identity |\n|:--|--:|\n| alex | agarcia |\n| | nobody |\n| sam |\nnot a row\n"), [
-    { alias: "alex", identity: "agarcia" },
-    { alias: "sam", identity: "" },
-  ])
-  assert.deepEqual(parseDeskRegistry("| name | login |\n|---|---|\n| a | b |\n"), [])
-  assert.deepEqual(parseDeskRegistry(HUB_REGISTRY), [], "a hub's routing registry has no crew roster")
-  assert.deepEqual(parseDeskRegistry("| alias | path |\n|---|---|\n| alex | desks/alex |\n"), [], "a roster needs its identity column")
+test("a person resolves from the registry, a hub or solo desk has none, and a given roster is used as is", () => {
   assert.equal(resolvePerson(null, { env: {} }), null)
   assert.equal(resolvePerson(soloDesk(), { env: {} }), null, "a solo desk has no person and asks no one")
   assert.equal(resolvePerson(registryDesk(HUB_REGISTRY), { env: {}, spawnGh: noGh }), null, "a hub has no person and asks no one")

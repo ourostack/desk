@@ -436,15 +436,6 @@ async function acquireContextLocked({
   });
 }
 
-export async function acquireContext(options) {
-  const declaration = matchContext(options.config, options.request);
-  return withBrokerLock(
-    options.stateDir,
-    () => acquireContextLocked(options),
-    { name: contextLockName(declaration.id) },
-  );
-}
-
 export async function acquireLease({
   leaseCreator = createLease,
   owner,

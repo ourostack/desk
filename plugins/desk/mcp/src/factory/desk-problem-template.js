@@ -24,7 +24,7 @@ import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-
 export const FINGERPRINT_PREFIX = "<!-- desk-problem-fingerprint: "
 // Desk's own fixed structural names: present on every desk, so naming one
 // reveals nothing about a specific operator's project or task.
-export const RESERVED_DESK_NAMES = Object.freeze(["_meta", "_friction", "_planning", ".gitignore"])
+const RESERVED_DESK_NAMES = Object.freeze(["_meta", "_friction", "_planning", ".gitignore"])
 const GENERIC_PLACEHOLDER = "(error text withheld -- it carried a credential- or machine-path-shaped string that did not clear the public-safe scrub)"
 
 // A relative, slash-separated path shape: two or more segments of ordinary

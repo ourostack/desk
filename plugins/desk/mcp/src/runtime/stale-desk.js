@@ -13,19 +13,19 @@ import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 
 export const LATEST_PLUGIN_URL = "https://raw.githubusercontent.com/ourostack/desk/main/plugins/desk/plugin.json"
-export const VERSION_FETCH_BUDGET_MS = 1500
+const VERSION_FETCH_BUDGET_MS = 1500
 export const VERSION_CACHE_TTL_MS = 60 * 60 * 1000
 // A failed lookup is remembered briefly, so an offline machine does not retry on every boot.
 export const VERSION_FAILURE_TTL_MS = 10 * 60 * 1000
 export const VERSION_CACHE_FILE = "latest-version.json"
-export const VERSION_CHECK_SWITCH = "DESK_BOOT_VERSION_CHECK"
+const VERSION_CHECK_SWITCH = "DESK_BOOT_VERSION_CHECK"
 
 export const AGENCY_CACHE_COMMAND = 'agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@main"'
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/u
 
-export const MAX_VERSION_LENGTH = 64
-export const MAX_RESPONSE_BYTES = 4096
+const MAX_VERSION_LENGTH = 64
+const MAX_RESPONSE_BYTES = 4096
 
 const isNumeric = (id) => /^\d+$/u.test(id)
 

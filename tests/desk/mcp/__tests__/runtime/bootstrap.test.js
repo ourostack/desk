@@ -27,11 +27,11 @@ const fixtureNodeAbi = "999"
 const embeddedArchiveShaMarker = "<archive-sha256-recorded-in-sidecar>"
 
 async function loadBootstrap() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "bootstrap.js")))
+  return import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js")
 }
 
 async function loadRuntimeDeps() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "runtime-deps.js")))
+  return import("../../../../../plugins/desk/mcp/src/runtime/runtime-deps.js")
 }
 
 function makeTempDir() {

@@ -44,7 +44,7 @@ export function readOwnerRecord(stateDir, identity = null) {
  * Whether a valid record's owner runs: "self" (this process), "dead" (no such process, the owner started before this boot, or the PID now names a process that started at another time) or "alive".
  * A PID that exists but belongs to another user (EPERM) is alive unless its start time differs: Desk cannot tell it apart from its owner otherwise, so it never takes it over. A start time that cannot be read keeps the owner alive too.
  */
-async function inspectOwner(record, { kill = process.kill, uptimeSeconds = os.uptime, now = Date.now, selfPid = process.pid, processStart = readProcessStart } = {}) {
+async function inspectOwner(record, { kill = process.kill, uptimeSeconds = os.uptime, now = Date.now, selfPid = process.pid, processStart = readProcessStart }) {
   const pid = record.owner.pid
   const state = pid === selfPid ? "self" : "alive"
   if (state !== "self") {
@@ -60,10 +60,6 @@ async function inspectOwner(record, { kill = process.kill, uptimeSeconds = os.up
   const current = await processStart(pid)
   if (current === null) return { state, verified: false }
   return current === recorded ? { state, verified: true } : { state: "dead", verified: false }
-}
-
-export async function ownerLiveness(record, options) {
-  return (await inspectOwner(record, options)).state
 }
 
 /**

@@ -22,7 +22,7 @@ const SQLITE_VEC = { package: "sqlite-vec", version: "0.1.6", table: "vec0" }
 const RUNTIME = { platform: "darwin", arch: "arm64", node_abi: "node-127" }
 
 async function loadRestoreModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "snapshots", "restore.js")))
+  return import("../../../../../plugins/desk/mcp/src/snapshots/restore.js")
 }
 
 async function tmpRoot(prefix) {

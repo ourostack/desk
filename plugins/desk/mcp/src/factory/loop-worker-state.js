@@ -51,7 +51,7 @@ export function validWorker(value) {
 }
 
 /** The record for a run that ended with `result` at `at` (ISO): `since` stays while the result stays the same. */
-export function nextWorker(previous, result, at) {
+function nextWorker(previous, result, at) {
   const before = validWorker(previous)
   return { at, result, since: before !== null && before.result === result && Date.parse(before.since) <= Date.parse(at) ? before.since : at }
 }

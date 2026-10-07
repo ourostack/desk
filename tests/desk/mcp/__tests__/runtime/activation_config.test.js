@@ -18,9 +18,9 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
-const pathsModule = await import(pathToFileURL(path.join(mcpRoot, "src", "util", "paths.js")))
-const entrypoint = await import(pathToFileURL(path.join(mcpRoot, "index.js")))
-const runtimeDeps = await import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "runtime-deps.js")))
+const pathsModule = await import("../../../../../plugins/desk/mcp/src/util/paths.js")
+const entrypoint = await import("../../../../../plugins/desk/mcp/index.js")
+const runtimeDeps = await import("../../../../../plugins/desk/mcp/src/runtime/runtime-deps.js")
 const packageJson = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8"))
 const packageLock = JSON.parse(readFileSync(path.join(mcpRoot, "package-lock.json"), "utf8"))
 const hostPackPaths = runtimeDeps.deriveRuntimeDependencyPackPaths({

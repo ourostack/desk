@@ -121,7 +121,7 @@ export const LABEL_WASTES = Object.freeze([
 export const LABEL_UNAVAILABLE = Object.freeze(["session_log_missing", "facts_missing"])
 
 /** Where a defect was caught, placed by Desk (`catch-point.js`), never written by the evaluator. */
-export const LABEL_CAUGHT = Object.freeze(["in_task", "at_review", "after_delivery"])
+const LABEL_CAUGHT = Object.freeze(["in_task", "at_review", "after_delivery"])
 
 export const LABEL_LIMITS = Object.freeze({
   stretches: 10000,

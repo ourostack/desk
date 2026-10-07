@@ -56,10 +56,6 @@ export function semanticContractDiagnostic(expected, observed) {
   }
 }
 
-export function semanticPartitionIdentity(embeddingSpec) {
-  return digest(stableStringify(embeddingSpec ?? null))
-}
-
 export function validateControllerEndpoint(endpoint, platform = process.platform) {
   if (platform === "win32") return
   if (typeof endpoint !== "string" || !path.posix.isAbsolute(endpoint)

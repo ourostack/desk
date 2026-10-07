@@ -6,7 +6,6 @@ import * as path from "node:path"
 
 import {
   controllerIdentity,
-  semanticPartitionIdentity,
 } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 
 test("controller identity canonicalizes path aliases and compatibility contracts", () => {
@@ -54,13 +53,3 @@ test("controller identity canonicalizes path aliases and compatibility contracts
   }
 })
 
-test("semantic partitions isolate embedding specifications deterministically", () => {
-  assert.equal(
-    semanticPartitionIdentity({ provider: "local", model: "a", dimensions: 3 }),
-    semanticPartitionIdentity({ dimensions: 3, model: "a", provider: "local" }),
-  )
-  assert.notEqual(
-    semanticPartitionIdentity({ provider: "local", model: "a", dimensions: 3 }),
-    semanticPartitionIdentity({ provider: "local", model: "b", dimensions: 3 }),
-  )
-})

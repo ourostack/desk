@@ -16,6 +16,7 @@ import { promises as fs } from "node:fs"
 import { factoryStateRoot, readStatus, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { main as loopMain, HARD_STOP_MS as loopHardStopMs } from "../../../../../plugins/desk/hooks/loop-start.cjs"
 
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
@@ -23,7 +24,7 @@ const LAUNCHER = path.join(HOOKS, "loop-start.cjs")
 const BOOT = path.join(HOOKS, "boot-checks.cjs")
 const FACTORY_START = path.join(HOOKS, "factory-start.cjs")
 const FACTORY_CLI = path.join(path.dirname(HOOKS), "mcp", "scripts", "factory.js")
-const launcher = () => require(LAUNCHER)
+const launcher = () => ({ main: loopMain, HARD_STOP_MS: loopHardStopMs })
 
 function fakeChild() {
   const child = new EventEmitter()

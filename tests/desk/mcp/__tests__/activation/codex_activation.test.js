@@ -34,7 +34,7 @@ Keep repo-local rules intact.
 `
 
 async function loadCodexAdapter() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "adapters", "codex.js")))
+  return import("../../../../../plugins/desk/mcp/src/activation/adapters/codex.js")
 }
 
 function loadJson(...segments) {
