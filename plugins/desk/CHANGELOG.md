@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.226 — 2026-10-07
+
+The headless evaluator now finds the Claude CLI on Windows. It looked in its fixed locations only through `HOME`, which Windows normally leaves unset, so it never searched them. On Windows it now uses `HOME` when set, then `USERPROFILE`, then the operating system's home folder. It also now finds the npm install's `claude.cmd`, which Node cannot start without a shell, and a shell would read the prompt's file paths as commands. Desk never runs the `.cmd`: it finds the program the npm package names (`node_modules/@anthropic-ai/claude-code`, field `bin`) and starts that directly, through its own Node when it is a script. A `.cmd` whose program cannot be found is skipped, and a run that is handed one starts nothing and reports `no_agent_cli`. Other systems are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.225 — 2026-10-07
 
 Pull requests now fail when they leave unused code behind. A new required check, "Unused code", runs [knip](https://knip.dev) over the repository and fails on a file no entry point reaches, an export nothing imports, an unused or unlisted dependency, an unresolved import, a duplicate export or a stale configuration entry. Hooks and skill scripts are checked as their own workspace, so an unused export in one, or a hook file that is neither registered nor reached from a registered one, fails too, as does a hook export that no other file uses. The entry points (the MCP server, the hooks, scripts and tests) and every exception, each with its reason, are in `tools/unused-code/knip.jsonc`; run it locally with `cd tools/unused-code && npm ci && npm run knip`.

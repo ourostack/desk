@@ -21,7 +21,8 @@
 // desk, and tools limited to read, search and write.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { accessSync, constants as fsConstants, statSync } from "node:fs"
+import { accessSync, constants as fsConstants, readFileSync, statSync } from "node:fs"
+import { homedir as osHomedir } from "node:os"
 import * as path from "node:path"
 
 import { isHeadlessFactorySession } from "./headless-flag.js"
@@ -167,22 +168,74 @@ export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs }) {
   ]
 }
 
+const isScriptShim = (cli) => /\.(cmd|bat)$/i.test(cli)
+const isNodeScript = (file) => /\.(c|m)?js$/i.test(file)
+
 /**
- * `findAgentCli({ env, exists }) -> string | null`: `DESK_AGENT_CLI`, else
- * `claude` on PATH, else `local/claude` in the Claude config directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`), else `~/.local/bin/claude`.
+ * `resolveLaunch({ cli, platform, readFile, execPath }) -> { cmd, prefix } | null`:
+ * how to start the agent CLI without a shell. Node refuses to start a `.cmd`
+ * or `.bat` without one (`EINVAL`), and a shell would parse the prompt's text,
+ * which carries file paths, as commands. So an npm shim is never run: on
+ * Windows its underlying program is found from the package the shim belongs to
+ * (`node_modules/@anthropic-ai/claude-code/package.json`, field `bin`) and
+ * started directly, through this process's own Node when it is a script.
+ * Anything else starts as itself. A shim whose program cannot be found gives
+ * `null`, and nothing is started.
  */
-export function findAgentCli({ env, exists = isExecutableFile }) {
+export function resolveLaunch({ cli, platform = process.platform, readFile = readFileSync, execPath = process.execPath }) {
+  if (platform !== "win32" || !isScriptShim(cli)) {
+    return { cmd: cli, prefix: [] }
+  }
+  const packageDir = path.join(path.dirname(cli), "node_modules", "@anthropic-ai", "claude-code")
+  let bin
+  try {
+    const manifest = JSON.parse(readFile(path.join(packageDir, "package.json"), "utf8"))
+    bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.claude
+  } catch {
+    return null
+  }
+  if (typeof bin !== "string" || bin === "") {
+    return null
+  }
+  const target = path.join(packageDir, bin)
+  // A `bin` that climbs out of the package (or is an absolute path elsewhere) names a program the package does not own.
+  const within = path.relative(packageDir, target)
+  if (within === "" || within.startsWith("..") || path.isAbsolute(within)) {
+    return null
+  }
+  if (isScriptShim(target)) {
+    return null
+  }
+  return isNodeScript(target) ? { cmd: execPath, prefix: [target] } : { cmd: target, prefix: [] }
+}
+
+/**
+ * `findAgentCli({ env, exists, platform, homedir, readFile }) -> string | null`: `DESK_AGENT_CLI`, else
+ * `claude` on PATH, else `local/claude` in the Claude config directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`), else `~/.local/bin/claude`.
+ * On Windows the names are `claude.exe`, then an npm `claude.cmd` (kept only
+ * when `resolveLaunch` can start its program), and the home folder is `HOME`,
+ * else `USERPROFILE`, else the operating system's answer, because `HOME` is
+ * normally unset there. Elsewhere only `HOME` counts.
+ */
+export function findAgentCli({ env, exists = isExecutableFile, platform = process.platform, homedir = osHomedir, readFile = readFileSync }) {
+  const windows = platform === "win32"
+  const usable = (candidate) => exists(candidate) && (!isScriptShim(candidate) || resolveLaunch({ cli: candidate, platform, readFile }) !== null)
   const explicit = env.DESK_AGENT_CLI
-  if (typeof explicit === "string" && explicit !== "" && exists(explicit)) {
+  if (typeof explicit === "string" && explicit !== "" && usable(explicit)) {
     return explicit
   }
+  // The native Claude Code install is `claude.exe` on Windows, and the npm install is `claude.cmd`.
+  const names = windows ? ["claude.exe", "claude.cmd"] : ["claude"]
   const dirs = typeof env.PATH === "string" ? env.PATH.split(path.delimiter).filter((dir) => dir !== "") : []
-  const candidates = dirs.map((dir) => path.join(dir, "claude"))
-  if (typeof env.HOME === "string" && env.HOME !== "") {
-    const configDir = env.CLAUDE_CONFIG_DIR || path.join(env.HOME, ".claude")
-    candidates.push(path.join(configDir, "local", "claude"), path.join(env.HOME, ".local", "bin", "claude"))
+  const candidates = dirs.flatMap((dir) => names.map((name) => path.join(dir, name)))
+  const home = [env.HOME, windows ? env.USERPROFILE : undefined, windows ? homedir() : undefined].find((value) => typeof value === "string" && value !== "")
+  if (home !== undefined) {
+    const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude")
+    for (const name of names) {
+      candidates.push(path.join(configDir, "local", name), path.join(home, ".local", "bin", name))
+    }
   }
-  return candidates.find((candidate) => exists(candidate)) ?? null
+  return candidates.find((candidate) => usable(candidate)) ?? null
 }
 
 const EXIT_GRACE_MS = 2000
@@ -290,14 +343,18 @@ const nonEmptyString = (value) => typeof value === "string" && value !== ""
  * reads only `loggedIn`, `authMethod`, `apiProvider` and `subscriptionType`;
  * nothing else of its output is kept or returned.
  */
-export async function probeSignIn({ cli, env, spawn = nodeSpawn, timeoutMs = PROBE_TIMEOUT_MS, onChild, onChildExit }) {
+export async function probeSignIn({ cli, env, spawn = nodeSpawn, timeoutMs = PROBE_TIMEOUT_MS, onChild, onChildExit, platform = process.platform, readFile = readFileSync, execPath = process.execPath }) {
   if (billingVariableBlocks(env)) {
     return { state: "disabled_would_bill" }
   }
+  const launch = resolveLaunch({ cli, platform, readFile, execPath })
+  if (launch === null) {
+    return { state: "sign_in_unknown" }
+  }
   const run = await runChild({
     spawn,
-    cmd: cli,
-    args: ["auth", "status"],
+    cmd: launch.cmd,
+    args: [...launch.prefix, "auth", "status"],
     opts: { env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] },
     timeoutMs,
     maxBytes: PROBE_MAX_BYTES,
@@ -357,6 +414,10 @@ export async function runHeadless({
   timeoutMs = HEADLESS_TIMEOUT_MS,
   onChild,
   onChildExit,
+  platform = process.platform,
+  homedir = osHomedir,
+  readFile = readFileSync,
+  execPath = process.execPath,
 }) {
   if (isHeadlessSession(env)) {
     return result("headless_session")
@@ -367,22 +428,26 @@ export async function runHeadless({
   if (billingVariableBlocks(env)) {
     return result("disabled_would_bill")
   }
-  const agentCli = cli ?? findAgentCli({ env, exists })
+  const agentCli = cli ?? findAgentCli({ env, exists, platform, homedir, readFile })
   if (agentCli === null) {
+    return result("no_agent_cli")
+  }
+  const launch = resolveLaunch({ cli: agentCli, platform, readFile, execPath })
+  if (launch === null) {
     return result("no_agent_cli")
   }
   if (typeof workDir !== "string" || !dirExists(workDir)) {
     return result("failed", null, "work_dir_missing")
   }
-  const signedIn = signIn ?? (await probeSignIn({ cli: agentCli, env, spawn, onChild, onChildExit }))
+  const signedIn = signIn ?? (await probeSignIn({ cli: agentCli, env, spawn, onChild, onChildExit, platform, readFile, execPath }))
   const signInState = SIGN_IN_STATES.includes(signedIn?.state) ? signedIn.state : "sign_in_unknown"
   if (signInState !== "subscription") {
     return result(signInState)
   }
   const run = await runChild({
     spawn,
-    cmd: agentCli,
-    args: HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs }),
+    cmd: launch.cmd,
+    args: [...launch.prefix, ...HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs })],
     opts: { cwd: workDir, env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] },
     timeoutMs,
     maxBytes: RUN_MAX_BYTES,
