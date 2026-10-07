@@ -1,9 +1,10 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files, with one exception: `../desk/crew-roster.js` (the one crew rule),
 // which itself imports only `node:` modules and says so in its header.
 import { createHash } from "node:crypto"
-import { readFileSync, realpathSync, statSync, promises as fs } from "node:fs"
+import { realpathSync, statSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { deskVersion } from "../package-metadata.js"
 import { setTimeout as sleep } from "node:timers/promises"
 import { bindSession, isTaskSegment, jobId } from "./binding.js"
 import { recordCoverage } from "./capture-sweep.js"
@@ -102,14 +103,11 @@ function markerHash(marker) {
   return createHash("sha256").update(JSON.stringify(content)).digest("hex")
 }
 
-// The version of Desk actually running this code, read from the plugin.json
-// that ships beside it. A long-lived session's own plugin metadata can name a
+// The version of Desk actually running this code (package-metadata.js's one
+// resolver, which reads plugin.json). A long-lived session's own plugin metadata can name a
 // newer Desk than the one still executing (its hook stays pinned to whatever
 // was on disk when the session started), so this is never taken from a
 // marker or an installed-plugins registry.
-function ownDeskVersion() {
-  return JSON.parse(readFileSync(new URL("../../../plugin.json", import.meta.url), "utf8")).version
-}
 
 // How long a stale-deriver hold (below) is honored before this deriver stops
 // waiting for a fresher process and derives with the code it is actually
@@ -158,7 +156,7 @@ function newerDeskRecorded(ownVersion, plugins) {
   return isVersion(own) && compareVersions(own, declared) < 0
 }
 
-export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = ownDeskVersion, now = Date.now, siblings = lazyProofIndex(() => listMarkers(env)), admit = null } = {}) {
+export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = deskVersion, now = Date.now, siblings = lazyProofIndex(() => listMarkers(env)), admit = null } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
   try {
@@ -410,7 +408,7 @@ const zeroReasons = () => Object.fromEntries(ORPHAN_REASONS.map((reason) => [rea
  * `derive_failed` without another derive, so one orphan whose derive never finishes cannot hold up every sweep; a newer Desk starts again. An orphan
  * whose receipt is current, or that is rebuilt, is never frozen by a strike and loses its strikes.
  */
-export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = ownDeskVersion, write = writeStatus, derive = deriveMarker, pruneCopy = pruneDeliveredCopy } = {}) {
+export async function rebuildOrphans(env, { now = Date.now, quietMs = 0, markers = null, cap = ORPHAN_EXAMINE_CAP, budgetMs = ORPHAN_BUDGET_MS, clock = Date.now, retractions = retractionNames, ownVersion = deskVersion, write = writeStatus, derive = deriveMarker, pruneCopy = pruneDeliveredCopy } = {}) {
   const startedAt = new Date(now()).toISOString()
   // Where the walk stands, from the last record: the cursor, when it last wrapped (null: not yet) and how many sweeps this walk has taken.
   let walk = { cursor: null, last_wrap_at: null, sweeps_in_walk: 0 }

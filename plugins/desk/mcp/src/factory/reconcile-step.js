@@ -8,7 +8,8 @@
 //   status.reconcile = { at: <UTC time of the last completed run> | null, window_days: 7,
 //     desks_known: <desks the last completed run knew of>, desks: <desks reconciled in it>, desks_failed: <desks that failed in it>,
 //     runs: { <reason code | "unknown_reason">: { consecutive, count, clear } }, warnings: [<code>], last_result: <code>,
-//     report_link_unavailable: { cards, archived, by_reason: { <reason code | "unrecognized">: n } } | null }
+//     report_link_unavailable: { cards, archived, by_reason: { <reason code | "unrecognized">: n }, jobs_missing?: { cards, archived, by_reason: { job_removed | job_missing: n } },
+//       not_checked?: { cards, by_reason: { too_fresh | no_store | store_file_unreadable: n } } } | null }
 // `report_link_unavailable` sums each tracked desk's latest `counts.report_link_unavailable` (its cards, live or archived, that record
 // why they have no factory report link), so the health record shows cards still waiting for a link; `null` when no tracked desk has one
 // recorded (a run before this field, or no completed run).
@@ -28,7 +29,7 @@ import path from "node:path"
 
 import { readStatus, updateStatus } from "./outbox.js"
 import { recordStep } from "./loop-status.js"
-import { reconcile } from "./reconcile.js"
+import { MISSING_JOB_REASONS, NOT_CHECKED_REASONS, reconcile } from "./reconcile.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
 
 export const RECONCILE_WINDOW_DAYS = 7
@@ -51,23 +52,46 @@ const reasonCode = (reason) => (RECONCILE_REASONS.includes(reason) ? reason : UN
 const deskKey = (root) => createHash("sha256").update(root).digest("hex").slice(0, 16)
 const LINK_REASONS = new Set(["desk_not_private", "visibility_not_known", "job_identity_unavailable", "unrecognized"])
 
-/** A reconcile result's `counts.report_link_unavailable` read field by field: `{ cards, archived, by_reason }` with counts only and known reason keys, or `null` when it is absent or damaged. */
-function linkCounts(value) {
-  if (!isObject(value) || !isCount(value.cards) || !isCount(value.archived) || !isObject(value.by_reason)) return null
+/** A `{ cards, by_reason }` (and `archived` when `archived` is true) read field by field with only the `known` reason keys, or `null` when it is absent or damaged. */
+function countsOf(value, known, archived) {
+  if (!isObject(value) || !isCount(value.cards) || (archived && !isCount(value.archived)) || !isObject(value.by_reason)) return null
   const entries = Object.entries(value.by_reason)
-  if (!entries.every(([reason, n]) => LINK_REASONS.has(reason) && isCount(n))) return null
-  return { cards: value.cards, archived: value.archived, by_reason: Object.fromEntries(entries) }
+  if (!entries.every(([reason, n]) => known.has(reason) && isCount(n))) return null
+  return { cards: value.cards, ...(archived ? { archived: value.archived } : {}), by_reason: Object.fromEntries(entries) }
+}
+const MISSING_REASONS = new Set(MISSING_JOB_REASONS)
+const NOT_CHECKED = new Set(NOT_CHECKED_REASONS)
+
+/**
+ * A reconcile result's `counts.report_link_unavailable` read field by field: `{ cards, archived, by_reason }` with counts only and known reason keys, or `null`
+ * when it is absent or damaged. Its two newer parts, `jobs_missing` (`{ cards, archived, by_reason }`, the names are never kept) and `not_checked` (`{ cards,
+ * by_reason }`), are kept when they read cleanly and left out when they do not: a part that is absent or damaged never discards the rest.
+ */
+function linkCounts(value) {
+  const base = countsOf(value, LINK_REASONS, true)
+  if (base === null) return null
+  const missing = countsOf(value.jobs_missing, MISSING_REASONS, true)
+  const notChecked = countsOf(value.not_checked, NOT_CHECKED, false)
+  return { ...base, ...(missing === null ? {} : { jobs_missing: missing }), ...(notChecked === null ? {} : { not_checked: notChecked }) }
 }
 
-/** The summary's `report_link_unavailable`: the sum over tracked desks that recorded one, or `null` when none did. */
+const addInto = (total, part) => {
+  total.cards += part.cards
+  if (part.archived !== undefined) total.archived += part.archived
+  for (const [reason, n] of Object.entries(part.by_reason)) total.by_reason[reason] = (total.by_reason[reason] ?? 0) + n
+}
+
+/** The summary's `report_link_unavailable`: the sum over tracked desks that recorded one, or `null` when none did. A part (`jobs_missing`, `not_checked`) is summed over the desks that recorded it, and absent when none did. */
 function deriveLinks(trackedDesks) {
   const recorded = Object.values(trackedDesks).map((desk) => desk.links).filter((links) => links !== null)
   if (recorded.length === 0) return null
   const total = { cards: 0, archived: 0, by_reason: {} }
-  for (const links of recorded) {
-    total.cards += links.cards
-    total.archived += links.archived
-    for (const [reason, n] of Object.entries(links.by_reason)) total.by_reason[reason] = (total.by_reason[reason] ?? 0) + n
+  for (const links of recorded) addInto(total, links)
+  for (const part of ["jobs_missing", "not_checked"]) {
+    const held = recorded.map((links) => links[part]).filter((entry) => entry !== undefined)
+    if (held.length === 0) continue
+    total[part] = { cards: 0, ...(part === "jobs_missing" ? { archived: 0 } : {}), by_reason: {} }
+    for (const entry of held) addInto(total[part], entry)
   }
   return total
 }

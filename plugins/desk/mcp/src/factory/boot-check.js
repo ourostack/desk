@@ -513,10 +513,17 @@ export function finishedTasks({ deskRoot, personPrefix = "", now = Date.now(), d
   return tasks
 }
 
+// The job ID in the card's `factory_report` link (`.../reports/jobs/<id>.md`), or `null`: the field's own line and its indented continuation,
+// since a long link is folded onto the next line.
+function reportJobOf(head) {
+  const field = /^factory_report:[^\n]*(?:\n[ \t]+[^\n]*)*/mu.exec(head)
+  return field === null ? null : /\/reports\/jobs\/([0-9a-f]{32})\.md/u.exec(field[0])?.[1] ?? null
+}
+
 /**
- * `[{ track, slug, archived, status, created, updated, report_unavailable }]`: every readable card of the desk, live or archived, with
+ * `[{ track, slug, archived, status, created, updated, report_unavailable, report_job }]`: every readable card of the desk, live or archived, with
  * no status or age filter (`finishedTasks` is this walk with one). `status` is the card's raw text, `created` and `updated`
- * are exact UTC timestamps or `null`, and `report_unavailable` is the card's `factory_report_unavailable` text or `null`. A person
+ * are exact UTC timestamps or `null`, `report_unavailable` is the card's `factory_report_unavailable` text or `null`, and `report_job` is the job ID its `factory_report` link names or `null`. A person
  * prefix reads `desks/<alias>`.
  */
 export function allTasks({ deskRoot, personPrefix = "" }) {
@@ -526,7 +533,7 @@ export function allTasks({ deskRoot, personPrefix = "" }) {
     const head = readCardHead(file)
     if (head === null) continue
     const fields = frontmatter(head)
-    tasks.push({ track, slug, archived, status: fields.status ?? null, created: normalizeTimestamp(fields.created), updated: normalizeTimestamp(fields.updated), report_unavailable: fields.factory_report_unavailable ?? null })
+    tasks.push({ track, slug, archived, status: fields.status ?? null, created: normalizeTimestamp(fields.created), updated: normalizeTimestamp(fields.updated), report_unavailable: fields.factory_report_unavailable ?? null, report_job: reportJobOf(head) })
   }
   return tasks
 }

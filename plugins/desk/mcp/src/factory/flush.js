@@ -173,6 +173,8 @@ import {
   readStatus,
   readVisibilityCache,
   releaseQuarantined,
+  outdatedLabelRecords,
+  releaseOutdatedLabelQuarantines,
   releaseRefusedPluginNames,
   returnToDelivered,
   undeliver,
@@ -182,8 +184,9 @@ import {
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
 import { carriedAccountFault } from "./flush-health.js"
-import { CHECK_UNAVAILABLE, captureOnBranch, dropPending, judge, namesRecord, planCapture, saveCheckUnavailable, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, storeAcceptsCapture } from "./capture-flush.js"
+import { CHECK_UNAVAILABLE, captureOnBranch, judge, namesRecord, planCapture, saveCheckUnavailable, saveDropped, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, sentRecord, storeAcceptsCapture } from "./capture-flush.js"
 import { validateLabelsBytes } from "./label-schema.js"
+import { labelBinding, releaseReboundLabels, withdrawLabels } from "./label-binding.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
 import { isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
@@ -745,7 +748,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
         unmatched += 1
         continue
       }
-      await quarantine(env, store, name, code, SHA.test(String(file.sha)) ? { blob: file.sha } : {})
+      await quarantine(env, store, name, code, { source: "store", ...(SHA.test(String(file.sha)) ? { blob: file.sha } : {}) })
       rejected.add(name)
     }
   }
@@ -905,15 +908,19 @@ async function deliver(env, context) {
   // A file a newer Desk wrote (unknown keys, a newer schema or binding version) is left where it is and counted: that Desk publishes it.
   const newer = new Set()
   const listed = (name) => newer.add(name)
+  // A label withdrawn because its session stopped binding its job comes back when the session binds the job again.
+  if ((await releaseReboundLabels(env, store)).length > 0) delivered = await readDelivered(env, store)
   let candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed })
   let labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed })
   progress.newerFormat = newer.size
   // The kept copies of sessions that left this store, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
+  // Labels records an older Desk wrote that this Desk may judge again (local, no network): they keep the flush from ending early, and their sessions are placed below like any other.
+  const outdated = await outdatedLabelRecords(env, store)
   // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
   if (capture.invalid) await saveInvalid(env, store, now())
-  if (!capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0) return { result: "nothing_pending" }
+  if (!capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
   // route to another store, or a finished retraction's tombstone), `stalled` (a retraction open with no positive route), `unknown` (an
@@ -923,7 +930,7 @@ async function deliver(env, context) {
   const markerByName = new Map(markers.map((marker) => [`${marker.host}-${marker.session_id}.json`, marker]))
   const receipts = isPlainObject(status.derivations) ? status.derivations : {}
   const places = new Map()
-  const localNames = [...candidates.map(({ name }) => name), ...labelCandidates.map(({ name }) => name), ...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting), ...Object.keys(delivered.retracted)]
+  const localNames = [...candidates.map(({ name }) => name), ...labelCandidates.map(({ name }) => name), ...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting), ...Object.keys(delivered.retracted), ...outdated.map(({ key }) => key)]
   // Each session's retracting records and tombstones for this store.
   const recordsOf = new Map()
   for (const [name, item] of [...Object.entries(delivered.retracting), ...Object.entries(delivered.retracted)]) recordsOf.set(sessionOfName(name), [...(recordsOf.get(sessionOfName(name)) ?? []), item])
@@ -957,8 +964,13 @@ async function deliver(env, context) {
   const restored = await restoreRetractedCopies(env, store, retractedSessions.filter((session) => places.get(session) === "here"))
   // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so those of a session
   // that is here go again.
-  const refusedReleased = await releaseRefusedPluginNames(env, store, { sessions: new Set([...places].filter(([, place]) => place === "here").map(([session]) => session)) })
-  if (restored.length > 0 || refusedReleased.facts.length + refusedReleased.labels.length > 0) {
+  const hereSessions = new Set([...places].filter(([, place]) => place === "here").map(([session]) => session))
+  const refusedReleased = await releaseRefusedPluginNames(env, store, { sessions: hereSessions })
+  // A labels file an older Desk quarantined as invalid only because it predates what the file says is judged again by this Desk, for sessions routed here only:
+  // one that publishes now goes out with the listing below, one that still fails keeps its record.
+  let checkSecret
+  const outdatedReleased = await releaseOutdatedLabelQuarantines(env, store, { sessions: hereSessions, check: async (labels, key) => publishLabelsOne(labels, key, { known: new Map(), desks: new Map(), secret: (checkSecret ??= await readMachineSecret(env)) }).bytes !== undefined })
+  if (restored.length > 0 || refusedReleased.facts.length + refusedReleased.labels.length + outdatedReleased.length > 0) {
     candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed })
     labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed })
     delivered = await readDelivered(env, store)
@@ -983,8 +995,15 @@ async function deliver(env, context) {
     const valid = (labels === null ? isFactsPath(where) : labelsPathParts(where)?.session === labels[2]) && (typeof item === "string" || item?.blob === delivered.blobs[name])
     return valid ? where : undefined
   }
+  // A delivered label of a session that is here is withdrawn like one of an away session when the session's facts, read from this store's outbox,
+  // certainly no longer bind its job (`label-binding.js`); a doubt is never withdrawn. Every flush looks, so a label an older Desk left behind goes too.
+  const unbound = new Set()
+  for (const name of Object.keys(delivered.blobs)) {
+    if (LABELS_KEY.test(name) && placeOf(name) === "here" && !heldSessions.has(sessionOfName(name)) && (await labelBinding(env, store, name)) === "unbound") unbound.add(name)
+  }
+  const withdrawn = (name) => placeOf(name) === "away" || unbound.has(name)
   // A delivered file of an away session whose record names no trusted path is found by publishing it again: an older Desk's record, trusted only when the blob matches.
-  const needsPath = new Set(Object.keys(delivered.blobs).filter((name) => placeOf(name) === "away" && !heldSessions.has(sessionOfName(name)) && recordedPath(name) === undefined))
+  const needsPath = new Set(Object.keys(delivered.blobs).filter((name) => withdrawn(name) && !heldSessions.has(sessionOfName(name)) && recordedPath(name) === undefined))
   const here = (name) => placeOf(name) === "here" && !(receipts[name]?.binding_version > BINDING_VERSION)
 
   // `pendingFiles` already quarantined every file that does not parse, and `pendingLabels` lists only labels that parse.
@@ -1122,9 +1141,9 @@ async function deliver(env, context) {
   // Retraction. Every delivered or retracting file of an away session is a delete candidate, at its recorded path (or the republished one when the blob matches).
   const away = []
   for (const name of Object.keys(delivered.blobs)) {
-    if (placeOf(name) !== "away") continue
+    if (!withdrawn(name)) continue
     const where = recordedPath(name) ?? (republished.get(name)?.sha === delivered.blobs[name] ? republished.get(name).path : undefined)
-    if (where !== undefined) away.push({ name, path: where, blob: delivered.blobs[name], labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "delivered" })
+    if (where !== undefined) away.push({ name, path: where, blob: delivered.blobs[name], labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "delivered", unbound: unbound.has(name) })
   }
   for (const [name, item] of Object.entries(delivered.retracting)) {
     if (placeOf(name) === "away") away.push({ name, path: item.path, blob: item.blob, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "retracting" })
@@ -1195,6 +1214,7 @@ async function deliver(env, context) {
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
   // The record goes when it is due, or its pull request is still open and must keep carrying it; a refusal naming it is bookkept and it waits a week.
   let captureItem = null
+  let captureHandled = false
   if (rejections.checkUnavailable) await saveCheckUnavailable(env, store)
   if (rejections.captureRefused !== null) await saveRefused(env, store, rejections.captureRefused, now())
   else if (capture.work) captureItem = capture.record
@@ -1204,6 +1224,7 @@ async function deliver(env, context) {
     const hasOpen = capture.carry && (await findOpenPr(client, store, head)) !== undefined
     let verdict = judge(captureItem, onMain(captureItem), { pending: hasOpen })
     let send = false
+    captureHandled = verdict === "settled" || verdict === "forget"
     if (verdict === "settled") await saveSettled(env, store, captureItem)
     else if (verdict === "forget") await saveForgotten(env, store)
     else if (!capture.due && !hasOpen) verdict = "waits"
@@ -1211,8 +1232,14 @@ async function deliver(env, context) {
     else await saveNotReady(env, store, now())
     if (!send) captureItem = null
   }
-  // This push rebuilds the branch without the record: nothing is pending for it, so a later refusal of that pull request is not the record's.
-  if (captureItem === null && rejections.captureRefused === null && Number.isSafeInteger(capture.cap.pr)) await dropPending(env, store)
+  // This push rebuilds the branch without the record, which the open pull request carried. If the default branch holds it, it was delivered (its pull
+  // request merged first). If not, it was not delivered: it is recorded as dropped and due again, never left to look sent for 20 hours.
+  if (captureItem === null && !captureHandled && rejections.captureRefused === null && Number.isSafeInteger(capture.cap.pr)) {
+    const sentItem = sentRecord(capture.cap, `capture/${record.intake_id}.json`)
+    const sentOnMain = sentItem === null ? false : (await treeLookup(client, store, base.tree, [{ ...sentItem, capture: true }]))({ ...sentItem, capture: true }) === sentItem.sha
+    if (sentOnMain) await saveSettled(env, store, sentItem)
+    else await saveDropped(env, store, now(), { confirmed: sentItem !== null })
+  }
   const remaining = []
   for (const item of pending) {
     if (onMain(item) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path, localSha: item.localSha })
@@ -1228,8 +1255,10 @@ async function deliver(env, context) {
     else if (current !== UNKNOWN && item.from !== "orphan") ended.push(item)
   }
   // A tombstone keeps the session away from this store once the delete is done, so losing `status.json` never publishes it again.
-  await finishRetracting(env, store, ended)
-  await keepRetractedCopies(env, store, ended.map((item) => item.session))
+  await finishRetracting(env, store, ended.filter((item) => !item.unbound))
+  await keepRetractedCopies(env, store, ended.filter((item) => !item.unbound).map((item) => item.session))
+  // A withdrawn label's session is still here: only that label is held back, and its session's other files stay where they are.
+  await withdrawLabels(env, store, ended.filter((item) => item.unbound).map((item) => item.name))
   progress.pending = remaining.map((item) => item.name)
 
   // The intake branch is always rebuilt from the change set this flush computed, so it never carries a delete or a file the current state does not want.
@@ -1264,8 +1293,8 @@ async function deliver(env, context) {
   progress.intakePrs = [...leftOpen, { number: pr.number, head: head.label }]
   if (captureItem !== null) await saveSent(env, store, { bytes: captureItem.bytes, fresh: capture.due }, pr.number, now())
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
-  await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting"))
-  await keepRetractedCopies(env, store, takenDeletes.map((item) => item.session))
+  await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting" && !item.unbound))
+  await keepRetractedCopies(env, store, takenDeletes.filter((item) => !item.unbound).map((item) => item.session))
   // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.
   if (rejections.stale > 0) return settle({ result: "intake_stale_retried", pr, stale_retries: rejections.stale })
   return settle({ result: "delivered_pr_open", pr })

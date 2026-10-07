@@ -76,7 +76,7 @@
 // Nothing here ever prints or logs the machine secret.
 
 import { randomBytes, createHash } from "node:crypto"
-import { promises as fsp } from "node:fs"
+import { promises as fsp, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -91,7 +91,7 @@ import {
 } from "./os-protect.js"
 import { freshVisibility } from "./desk-visibility.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
-import { LABELS_SCHEMA, validateLabels } from "./label-schema.js"
+import { DESK_VERSION, LABELS_SCHEMA, LABEL_CHECK_CODES, compareVersions, validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
 import { RETRACTED_COPIES, markerRoute, recordedHeld } from "./session-route.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
@@ -133,7 +133,35 @@ function isNewerFormat(value, schema, validate) {
   return !ok && errors.every((error) => error.code === "unknown_key")
 }
 const newerFacts = (value) => isNewerFormat(value, LOCAL_SCHEMA, validateLocalFacts)
-const newerLabels = (value) => isNewerFormat(value, LABELS_SCHEMA, validateLabels)
+
+// The version of the Desk running this code, read from the plugin.json beside it (never from a marker or a registry, which can name a newer Desk
+// than the one still executing); `null` when it cannot be read or is not a Desk version.
+const readPluginManifest = () => readFileSync(new URL("../../../plugin.json", import.meta.url), "utf8")
+const readOwnVersion = (read) => {
+  try {
+    const { version } = JSON.parse(read())
+    return DESK_VERSION.test(version) ? version : null
+  } catch {
+    return null
+  }
+}
+let ownVersionKept = null
+// Read once per process: the plugin.json beside this code cannot change under the Desk running it. With a reader (tests), it is read each time.
+export function ownDeskVersion(read = undefined) {
+  if (read !== undefined) return readOwnVersion(read)
+  ownVersionKept ??= readOwnVersion(readPluginManifest)
+  return ownVersionKept
+}
+const isDeskVersion = (value) => typeof value === "string" && DESK_VERSION.test(value)
+
+// A labels file is also a newer Desk's when it fails this Desk's gate and its evaluator, the Desk that wrote it, is newer than this one: a rubric
+// or enum this Desk predates fails with codes other than `unknown_key`, and that is the writer being ahead, not the file being bad.
+const writtenByNewerDesk = (value, ownVersion) => {
+  const written = value?.evaluator?.plugin_version
+  const own = ownVersion()
+  return isDeskVersion(written) && own !== null && compareVersions(written, own) > 0 && !validateLabels(value).ok
+}
+const newerLabels = (value, ownVersion = ownDeskVersion) => isNewerFormat(value, LABELS_SCHEMA, validateLabels) || writtenByNewerDesk(value, ownVersion)
 
 // `store.js` uses one `naming` per caller (`desk_feedback`); this is the
 // factory outbox's, also passed as `protectWindowsPaths`'s `label`.
@@ -979,16 +1007,18 @@ export async function returnToDelivered(env, store, items, { platform = process.
  * file name, is recorded beside the reason when given: the quarantined facts
  * a labels key is held back for. `blob`, the git blob sha the store refused,
  * is recorded when given, so a later flush can tell whether the published
- * file has changed since.
+ * file has changed since. The record names the Desk that wrote it (`desk_version`), so a newer Desk can judge a decision an older one made again
+ * (`releaseOutdatedLabelQuarantines`).
  */
-export async function quarantine(env, store, name, reason, { facts = undefined, blob = undefined, now = defaultNow, platform = process.platform, runner = undefined } = {}) {
+export async function quarantine(env, store, name, reason, { facts = undefined, blob = undefined, now = defaultNow, platform = process.platform, runner = undefined, ownVersion = ownDeskVersion, source = undefined } = {}) {
   if (!LABELS_KEY_PATTERN.test(String(name))) requirePattern(name, OUTBOX_NAME_PATTERN, "name")
   requirePattern(reason, REASON_PATTERN, "reason")
   if (facts !== undefined) requirePattern(facts, OUTBOX_NAME_PATTERN, "facts")
   if (blob !== undefined) requirePattern(blob, SHA1, "blob")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
-  const record = { reason, ...(facts === undefined ? {} : { facts }), ...(blob === undefined ? {} : { blob }), at: now() }
+  const version = ownVersion()
+  const record = { reason, ...(facts === undefined ? {} : { facts }), ...(blob === undefined ? {} : { blob }), ...(version === null ? {} : { desk_version: version }), ...(source === undefined ? {} : { source }), at: now() }
   await writeJsonAtomic(root, path.join(root, "quarantine", slug, name), record, { platform, env, runner })
   return record
 }
@@ -1634,6 +1664,59 @@ export async function releaseQuarantined(env, store, names) {
     }
   }
   return { facts: facts.sort(), labels: labels.sort() }
+}
+
+/**
+ * `outdatedLabelRecords(env, store, { ownVersion }) -> [{ key, session, labels, record }]`: the labels quarantine records this Desk may judge again, with their
+ * local files. Only a record whose `reason` is one of this Desk's own check codes (`LABEL_CHECK_CODES`, `invalid` among them) and that names no `blob` (a
+ * store's refusal does, and one the flush wrote for a store's refusal is marked `source: "store"` even when no blob was known) qualifies; any other reason, a hold behind quarantined facts included, never does. A valid `desk_version` at or above this Desk's
+ * keeps its record, and a missing or malformed one does not stop the re-check: records written before Desks named themselves cannot be told from an older
+ * Desk's decision, and the check that follows is the same gate that would publish the file. A file that is missing, does not parse or is newer than this
+ * Desk is left out. Nothing is changed.
+ */
+export async function outdatedLabelRecords(env, store, { ownVersion = ownDeskVersion } = {}) {
+  const own = ownVersion()
+  if (own === null) return []
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "quarantine", slug, "labels")
+  const found = []
+  for (const job of await listDirSafe(dir)) {
+    const jobDir = path.join(dir, job)
+    if (!PATTERNS.jobId.test(job) || !(await lstatIfPresent(jobDir, NAMING)).isDirectory()) continue
+    for (const file of await listRegularFiles(jobDir, LABELS_NAME_PATTERN)) {
+      const record = await quarantineReason(path.join(jobDir, file))
+      if (record === null || record.blob !== undefined || record.source === "store" || !LABEL_CHECK_CODES.has(record.reason)) continue
+      if (isDeskVersion(record.desk_version) && compareVersions(record.desk_version, own) >= 0) continue
+      let labels
+      try {
+        labels = JSON.parse((await readProtectedBytes(path.join(root, "labels", slug, job, file))).toString("utf8"))
+      } catch {
+        continue
+      }
+      if (newerLabels(labels, ownVersion)) continue
+      found.push({ key: `labels/${job}/${file}`, session: file.slice(0, -".json".length), labels, record: path.join(jobDir, file) })
+    }
+  }
+  return found.sort((a, b) => a.key.localeCompare(b.key))
+}
+
+/**
+ * `releaseOutdatedLabelQuarantines(env, store, { check, sessions, ownVersion }) -> Array<labels key>`: judges again the records `outdatedLabelRecords` lists.
+ * When `check(labels, key)` (the caller's full publishing check, `true` when the file would publish now) accepts the local file, the record is removed and
+ * the file is listed again; a file that still fails keeps its record. With `sessions` (a set of session ids), only those sessions' records are judged: the
+ * flush passes the sessions routed to this store, because a frozen session's records stay as they are. Returns the released keys, sorted.
+ */
+export async function releaseOutdatedLabelQuarantines(env, store, { check, sessions = null, ownVersion = ownDeskVersion } = {}) {
+  if (typeof check !== "function") fail("check", "must be a function")
+  const released = []
+  for (const { key, session, labels, record } of await outdatedLabelRecords(env, store, { ownVersion })) {
+    if (sessions !== null && !sessions.has(session)) continue
+    if (!(await check(labels, key))) continue
+    await fsp.unlink(record)
+    released.push(key)
+  }
+  return released
 }
 
 /**

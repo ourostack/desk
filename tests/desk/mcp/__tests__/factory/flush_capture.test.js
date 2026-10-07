@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
-import { captureOnBranch, contributingStores, judge } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
+import { captureOnBranch, contributingStores, judge, sentRecord } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
 import { CAPTURE_INVALID, EMPTY_RECORD, captureFor } from "../../../../../plugins/desk/mcp/src/factory/capture-publish.js"
 import { coverageNow } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
@@ -261,9 +261,11 @@ test("a flush with a hostile status.capture key delivers facts as before and kee
   const result = await run(env, github, { t: T0 })
   assert.equal(result.result, "delivered_pr_open")
   assert.equal(github.pulls[0].body, "2")
-  // Every other key is kept as it was; only the pending pull request number goes, because this push rebuilt the branch without a record.
+  // Every other key is kept as it was; the pending pull request goes, because this push rebuilt the branch without a record, and a record the default
+  // branch does not hold was not delivered: it is named as dropped and `sent_at` is forgotten, so it is due again.
+  // Its bookkeeping kept no bytes, so the drop cannot be checked against what was sent and `sent_at` stays.
   const { pr: _pr, ...rest } = keep
-  assert.deepEqual((await readStatus(env)).capture[STORE], rest)
+  assert.deepEqual((await readStatus(env)).capture[STORE], { ...rest, dropped: "capture_drop_unconfirmed", dropped_at: iso(T0) })
   // And the other direction: an older flush wrote last_flush only, so a status without `capture` is a status like any other.
   assert.equal((await readStatus(env)).last_flush[STORE].result, "delivered_pr_open")
 }))
@@ -744,6 +746,80 @@ test("a push that leaves the record out clears the pending pull request, so a fa
   assert.equal((await outbox.readDelivered(env, STORE)).quarantined.size, 1)
   assert.equal((await capture(env))?.refused, undefined)
 }))
+
+// The open pull request still held a record when the push rebuilt its branch without it, as happened at the first live record: nothing may say it was sent.
+const openedAndRebuilt = async (env, github, clock) => {
+  await run(env, github, clock)
+  assert.equal((await capture(env)).pr, 101)
+  clock.t = T0 + 4 * DAY
+  return run(env, github, clock)
+}
+
+test("a record dropped from a rebuilt branch and not on the default branch is recorded as not delivered and is due again at the next flush", () => scratch(async ({ env }) => {
+  const id = await setup(env, { facts: 1 })
+  const github = fakeGitHub({ captureJson: READY })
+  const clock = { t: T0 }
+  await openedAndRebuilt(env, github, clock)
+  // The coverage went stale, so the push left the record out; the default branch never held it.
+  const dropped = await capture(env)
+  assert.deepEqual(Object.keys(dropped).sort(), ["dropped", "dropped_at"])
+  assert.equal(dropped.dropped, "capture_dropped")
+  assert.equal(dropped.dropped_at, iso(clock.t))
+  assert.equal(github.headFiles(STORE, `intake/${id}`).has(`capture/${id}.json`), false)
+  // Coverage is fresh again a minute later: the record is due now, not 20 hours after the first send, and the reason is gone once it is sent.
+  clock.t += 60 * 1000
+  await writeStatus(env, { coverage: coverageAt(iso(clock.t - HOUR)) })
+  assert.equal((await run(env, github, clock)).result, "delivered_pr_open")
+  assert.equal(github.headFiles(STORE, `intake/${id}`).has(`capture/${id}.json`), true)
+  const resent = await capture(env)
+  assert.deepEqual(Object.keys(resent).sort(), ["pr", "sent_at", "sent_bytes"])
+  assert.equal(resent.sent_at, iso(clock.t))
+}))
+
+test("a record that reached the default branch before its branch was rebuilt is settled, not dropped", () => scratch(async ({ env }) => {
+  const id = await setup(env)
+  const github = fakeGitHub({ captureJson: READY })
+  const clock = { t: T0 }
+  await run(env, github, clock)
+  const want = expected((await readStatus(env)).coverage, id)
+  github.mergeOpenPr()
+  clock.t = T0 + 4 * DAY
+  await run(env, github, clock)
+  assert.deepEqual(await capture(env), { blob: want.sha, sent_at: iso(T0) })
+}))
+
+test("an empty record that reached the default branch is forgotten, and a pull request with no kept bytes is recorded as dropped", () => scratch(async ({ env }) => {
+  const id = await setup(env, { status: { last_flush: { [STORE]: { at: iso(T0 - HOUR), result: "delivered_pr_open", intake_pushed: true } }, capture: { [STORE]: { pr: 101, sent_at: iso(T0 - HOUR), sent_bytes: EMPTY_RECORD } } }, coverage: null })
+  const github = fakeGitHub({ captureJson: READY, mainCapture: { [`${id}.json`]: EMPTY_RECORD } })
+  await run(env, github, { t: T0 })
+  assert.equal(await capture(env), undefined)
+  await writeStatus(env, { last_flush: { [STORE]: { at: iso(T0), result: "delivered_pr_open", intake_pushed: true } }, capture: { [STORE]: { pr: 102, sent_at: iso(T0 - HOUR) } } })
+  await run(env, github, { t: T0 + HOUR })
+  assert.deepEqual(Object.keys(await capture(env)).sort(), ["dropped", "dropped_at", "sent_at"], "with no kept bytes the drop is unconfirmed: sent_at stays and the 20 hours still apply")
+  assert.equal((await capture(env)).dropped, "capture_drop_unconfirmed")
+}))
+
+test("a record is dropped, not lost, when its branch is rebuilt while the store is not ready or a wait is still running", () => scratch(async ({ env }) => {
+  const id = await setup(env)
+  const sentBytes = expected((await readStatus(env)).coverage, id).bytes
+  const open = { last_flush: { [STORE]: { at: iso(T0 - HOUR), result: "delivered_pr_open", intake_pushed: true } } }
+  // Due again, but the store's capture.json does not say {"capture":1}: nothing is sent, and the earlier record is not on the default branch.
+  await writeStatus(env, { ...open, capture: { [STORE]: { pr: 101, sent_at: iso(T0 - 21 * HOUR), sent_bytes: sentBytes } } })
+  await run(env, fakeGitHub({ captureJson: NOT_READY }), { t: T0 })
+  const notReady = await capture(env)
+  assert.deepEqual(Object.keys(notReady).sort(), ["dropped", "dropped_at", "retry_after", "skipped"])
+  // A wait still running (retry_after) leaves the record out of the rebuilt branch too.
+  await writeStatus(env, { ...open, capture: { [STORE]: { pr: 102, sent_at: iso(T0 - HOUR), retry_after: iso(T0 + DAY), sent_bytes: sentBytes } } })
+  await run(env, fakeGitHub({ captureJson: READY }), { t: T0 })
+  assert.deepEqual(Object.keys(await capture(env)).sort(), ["dropped", "dropped_at", "retry_after"])
+}))
+
+test("sentRecord says what was pushed, or null when no bytes were kept", () => {
+  assert.equal(sentRecord({}, "capture/x.json"), null)
+  const item = sentRecord({ sent_bytes: EMPTY_RECORD }, "capture/x.json")
+  assert.deepEqual([item.path, item.empty, item.sha === gitBlobSha(Buffer.from(EMPTY_RECORD, "utf8"))], ["capture/x.json", true, true])
+  assert.equal(sentRecord({ sent_bytes: "{}" }, "capture/x.json").empty, false)
+})
 
 test("judge needs no options, and a capture folder keeps only blobs with a record's file name", async () => {
   assert.equal(judge({ sha: "a", empty: true }, undefined), "forget")

@@ -16,6 +16,7 @@ import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish
 import { checkLabelsAgainstFacts, validateLabelsBytes } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import {
   factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus, writeVisibilityCache,
+  ownDeskVersion,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
@@ -255,7 +256,7 @@ test("labels waiting behind a rejected PR that held only their facts are quarant
   const root = await factoryStateRoot(env)
   const reason = async (key) => JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", key), "utf8"))
   assert.equal((await reason(nameOf(1))).reason, "evidence_unmatched")
-  assert.deepEqual(await reason(keyOf(1)), { reason: "facts_quarantined", facts: nameOf(1), at: (await reason(keyOf(1))).at })
+  assert.deepEqual(await reason(keyOf(1)), { reason: "facts_quarantined", facts: nameOf(1), desk_version: ownDeskVersion(), at: (await reason(keyOf(1))).at })
 }))
 
 test("holdLabels answers the quarantined facts, keeps an earlier labels record and checks its arguments", () => scratch(async ({ env }) => {

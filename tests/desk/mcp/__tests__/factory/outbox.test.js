@@ -48,6 +48,7 @@ import {
   writeVisibilityCache,
   withDerivationLock,
   withNamedLock,
+  ownDeskVersion,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeRealPath } from "../_fake_real_root.js"
 import { osEnv } from "../_os_env.js"
@@ -781,7 +782,7 @@ test("quarantine rejects a name that isn't a real outbox file name (including ..
 test("quarantine writes { reason, at } under the outbox file's own name", () => scratch(async (env) => {
   const validName = "claude-code-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60.json"
   const record = await quarantine(env, STORE, validName, "session_id_not_v4", { now: () => "2026-01-01T00:00:00.000Z" })
-  assert.deepEqual(record, { reason: "session_id_not_v4", at: "2026-01-01T00:00:00.000Z" })
+  assert.deepEqual(record, { reason: "session_id_not_v4", desk_version: ownDeskVersion(), at: "2026-01-01T00:00:00.000Z" })
   const file = path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory", validName)
   assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), record)
 }))

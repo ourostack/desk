@@ -17,12 +17,11 @@
 
 import { createRequire } from "node:module"
 import { validWorker } from "./loop-worker-state.js"
-import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 import { MAX_CARD_FILES, SOURCES, cardKey, isClaimLive, openImprovement, readCards as readCardsDefault } from "../desk/improvement-cards.js"
 import { cardCommitMessage, writeCardCommitted as writeCardCommittedDefault } from "../tools/_card-commit.js"
-import { pluginRootFor } from "./end-hook.js"
+import { deskVersion } from "../package-metadata.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
 import { conditionOf, observeConditions } from "./loop-conditions.js"
@@ -84,14 +83,7 @@ function storedCount(value) {
   return typeof reason === "string" && REASON.test(reason) ? unavailable(reason) : null
 }
 
-async function pluginVersion(env) {
-  try {
-    const version = JSON.parse(await fs.readFile(path.join(pluginRootFor(env), "plugin.json"), "utf8")).version
-    return typeof version === "string" && VERSION.test(version) ? version : "unknown"
-  } catch {
-    return "unknown"
-  }
-}
+const pluginVersion = (env) => deskVersion(env) ?? "unknown"
 
 // ---------------------------------------------------------------------------
 // Improvement cards
@@ -329,7 +321,7 @@ async function gather({ env, deskRoot, personPrefix = "", now = new Date(), read
   } catch {
     read = null
   }
-  const version = given === undefined ? await pluginVersion(env) : typeof given === "string" && VERSION.test(given) ? given : "unknown"
+  const version = given === undefined ? pluginVersion(env) : typeof given === "string" && VERSION.test(given) ? given : "unknown"
   return { ...assembleLoop({ status: isObject(status) ? status : {}, read, nowMs, version }), status }
 }
 

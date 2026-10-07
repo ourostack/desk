@@ -20,10 +20,14 @@
 // `{ state, value, sessions, sessions_not_recorded }`: `sessions` were measured, `sessions_not_recorded` were not, and `value` (in its own unit:
 // milliseconds, directories or commits, never sessions) is a floor when `sessions_not_recorded` is above zero.
 //
-// `counts.report_link_unavailable` is desk-wide, not limited to the window: `{ cards, archived, by_reason }` over every card, live or archived,
-// that records why it has no report link (`factory_report_unavailable`), `by_reason` keyed by the three reason codes and `unrecognized` for
-// any other text, which is never echoed. A live card fills its link on its next task_update; an archived one when task_archive is called for
-// it again. `desk_not_private` is meant to last.
+// `counts.report_link_unavailable` is desk-wide, not limited to the window: `{ cards, archived, by_reason, jobs_missing, not_checked }`. `cards`,
+// `archived` and `by_reason` count every card, live or archived, that records why it has no report link (`factory_report_unavailable`), `by_reason`
+// keyed by the three reason codes and `unrecognized` for any other text, which is never echoed. A live card fills its link on its next task_update; an
+// archived one when task_archive is called for it again. `desk_not_private` is meant to last. `jobs_missing` is `{ cards, archived, by_reason, named }`
+// for the done cards whose `factory_report` link names a job the store does not hold, only with `--store`: `job_removed` when a delivery record shows the
+// job's facts (a local copy that binds the job) went from this machine, else `job_missing` (the store lacks it; the cause is not known: when in doubt, missing), and `named` lists `{ track, slug, reason }`.
+// `not_checked` is `{ cards, by_reason }` for the done cards with a link that were not judged: `too_fresh` (finished less than a day ago), `no_store`
+// (the store was not read), `visibility_not_known` (a store was given but the desk's visibility is not known, so its job IDs cannot be compared) or `store_file_unreadable` (a facts file in the store could not be read, so a job may be absent from what was read).
 //
 // Story. Each listed task carries `story`: its bound sessions by start, each with `active_ms` (a measure: the session's turn, tool and subagent
 // time cut to the job exactly as the pipeline publishes it, `jobActiveMs`, never a segment's wall span; `not_recorded` where the pipeline would
@@ -227,16 +231,34 @@ function activeMsOf(facts, binding, startedMs, created) {
 }
 
 const REPORT_REASONS = new Set(["desk_not_private", "visibility_not_known", "job_identity_unavailable"])
+/** Why a done card's linked job is not in the store: `job_removed` only with positive evidence that it was delivered from this machine, else `job_missing` (the cause is not known). */
+export const MISSING_JOB_REASONS = Object.freeze(["job_removed", "job_missing"])
+/** Why a done card's link was not judged: it finished less than a day ago, the store was not read, or a facts file in it could not be read (a job in it could be missing from the count). */
+export const NOT_CHECKED_REASONS = Object.freeze(["too_fresh", "no_store", "visibility_not_known", "store_file_unreadable"])
+// A card finished less than a day ago may still be waiting for its first delivery.
+const REPORT_GRACE_MS = 24 * 60 * 60 * 1000
 
-// The desk's cards that record why they have no report link: how many, how many are archived, and how many by reason code.
-function reportLinkUnavailable(cards) {
-  const missing = cards.filter((card) => card.report_unavailable !== null)
+// The desk's cards that record why they have no report link: how many, how many are archived, and how many by reason code (the shape older Desks read).
+// Beside it, `jobs_missing` counts and names the done cards whose link points at a job the store does not hold (`{ track, slug, reason }`), and `not_checked`
+// counts the done cards with a link that were not judged, by why, so a zero never stands for unchecked.
+function reportLinkUnavailable(cards, { missing, notChecked }) {
+  const recorded = cards.filter((card) => card.report_unavailable !== null)
   const byReason = {}
-  for (const card of missing) {
+  for (const card of recorded) {
     const reason = REPORT_REASONS.has(card.report_unavailable) ? card.report_unavailable : "unrecognized"
     byReason[reason] = (byReason[reason] ?? 0) + 1
   }
-  return { cards: missing.length, archived: missing.filter((card) => card.archived).length, by_reason: byReason }
+  const missingByReason = {}
+  for (const { reason } of missing) missingByReason[reason] = (missingByReason[reason] ?? 0) + 1
+  const checkedByReason = {}
+  for (const reason of notChecked) checkedByReason[reason] = (checkedByReason[reason] ?? 0) + 1
+  return {
+    cards: recorded.length,
+    archived: recorded.filter((card) => card.archived).length,
+    by_reason: byReason,
+    jobs_missing: { cards: missing.length, archived: missing.filter((card) => card.archived).length, by_reason: missingByReason, named: missing.map(({ track, slug, reason }) => ({ track, slug, reason })) },
+    not_checked: { cards: notChecked.length, by_reason: checkedByReason },
+  }
 }
 
 /**
@@ -468,6 +490,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   const storeCompared = storeDir !== null && visibilityKnown
   if (storeDir !== null && !visibilityKnown) warn("visibility_not_known")
   let secret = null
+  let storeUnreadable = false
   if (storeCompared) {
     if (!deskPrivate) {
       try {
@@ -491,6 +514,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       }
       if (published === null) {
         warn("store_file_unreadable")
+        storeUnreadable = true
         continue
       }
       for (const job of published.jobs) {
@@ -703,6 +727,28 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     })
   }
 
+  // A done card links to its job's report. Only the store can say whether that job is there, so without it (or when a store facts file could not be read, so its
+  // jobs may be absent from what was read) the card is `not_checked`, never missing. With the store compared and no job of that ID in it, the link is dead:
+  // `job_removed` when a local copy whose facts bind the job has a delivery record, else `job_missing`: the store lacks it and the cause is not known. A card finished less than a day ago is `not_checked` (`too_fresh`).
+  function missingReportJobs() {
+    const nowMs = Date.parse(now())
+    // Positive evidence that this store accepted the job: a local or kept copy whose facts bind the job (`sessionsByJob`) has a delivery record. The jobs index
+    // is not evidence: it names the sessions that ever held the job's focus, and a session's facts can leave a job out (a focus with no time in it).
+    const delivered = (plain) => (sessionsByJob.get(plain) ?? []).some(({ name }) => deliveredSlugs.some((slug) => Object.hasOwn(deliveredOf(slug), name)))
+    const missing = []
+    const notChecked = []
+    for (const card of cardList) {
+      if (card.status !== "done" || card.report_job === null) continue
+      const updated = card.updated === null ? Number.NaN : Date.parse(card.updated)
+      if (!(nowMs - updated >= REPORT_GRACE_MS)) notChecked.push("too_fresh")
+      else if (!storeCompared) notChecked.push(storeDir === null ? "no_store" : "visibility_not_known")
+      else if (storeFacts.has(card.report_job)) continue
+      else if (storeUnreadable) notChecked.push("store_file_unreadable")
+      else missing.push({ track: card.track, slug: card.slug, archived: card.archived, reason: delivered(jobOfKey(`${card.track}/${card.slug}`).job) ? "job_removed" : "job_missing" })
+    }
+    return { missing: missing.sort((a, b) => byKey(`${a.track}/${a.slug}`, `${b.track}/${b.slug}`)), notChecked }
+  }
+
   // Store jobs in the window that no task above covers.
   for (const [storeId, sessions] of storeFacts) {
     const plain = storeToPlain.get(storeId) ?? null
@@ -752,7 +798,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
       status_unobserved: storeCompared ? measure("measured", byReason.status_unobserved ?? 0, unordered > 0 ? { not_checked: unordered, reason: "observations_unordered" } : {}) : measure("not_checked", undefined, storeDir === null ? {} : { reason: "visibility_not_known" }),
       bound_by: boundBy, segments_capped_ms: totalOf(sessions.map((session) => session.segments_capped_ms)),
       repository_evidence_unavailable: totalOf(sessions.map((session) => session.repository_evidence_unavailable)),
-      report_link_unavailable: reportLinkUnavailable(cardList),
+      report_link_unavailable: reportLinkUnavailable(cardList, missingReportJobs()),
     },
     ...(warnings.size > 0 ? { warnings: [...warnings] } : {}),
   }

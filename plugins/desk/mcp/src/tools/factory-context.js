@@ -127,6 +127,7 @@ export function factoryFindingLines(status) {
   if (status.orphans !== undefined) lines.push(`orphan pass needs attention: ${status.orphans}${status.orphans_hung > 0 ? ` (${status.orphans_hung} orphans hung)` : ""}. ${ORPHAN_FINDING_ADVICE}`)
   if (status.retention !== undefined) lines.push(`local retention needs attention: ${status.retention}. ${RETENTION_FINDING_ADVICE}`)
   for (const { store, times } of status.capture_check_unavailable ?? []) lines.push(`${store}: capture record not landing, the store's own check could not read it ${times} times in a row. ${CAPTURE_CHECK_ADVICE(store)}`)
+  for (const { store, since } of status.capture_dropped ?? []) lines.push(`${store}: capture record dropped from a rebuilt intake branch and not delivered since ${since.slice(0, 16)}Z; it is due at every flush, so it is not landing (check the coverage pass and the store's capture.json).`)
   for (const hold of status.held_by ?? []) lines.push(`this desk's route is held, so its sessions are never published: ${holdText(hold)}`)
   if (status.route_holds !== undefined) {
     lines.push(`${status.route_holds.count} ended ${status.route_holds.count === 1 ? "session is" : "sessions are"} held because the store they route to cannot be read; they are never published until it can.`)
