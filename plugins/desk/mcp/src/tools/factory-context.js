@@ -33,7 +33,7 @@ export function factoryPluginScan(env) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
   const pluginRoot = pluginRootFor(env)
   try {
-    const { dirs, incomplete, reason = null } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
+    const { dirs, incomplete, reason } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
     return { dirs, incomplete, reason }
   } catch {
     return { dirs: [], incomplete: true, reason: null }
