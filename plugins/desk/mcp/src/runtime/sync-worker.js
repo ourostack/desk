@@ -93,6 +93,11 @@ export function resolveSyncLockPath({ root, env }) {
   return path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.lock`)
 }
 
+/** Where Desk's last successful fetch time for this root is recorded: its own file, so that write never rewrites the pull record. */
+export function fetchOkPath({ root, env }) {
+  return path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.fetch-ok.json`)
+}
+
 /** Where this root's last sync outcome is recorded, for `desk_status` to read (never a network call — see status.js). */
 export function syncStatusPath({ root, env }) {
   return path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.status.json`)
@@ -276,9 +281,10 @@ function pushWithRetry(root, spawnGit) {
 //
 // The read-merge-write is not locked: the file is replaced atomically (a temp file, then a rename), so a reader never
 // sees a half-written record, but two writers racing (a push worker and a boot sync) are last-writer-wins and one
-// patch can be lost. That is accepted: every field here is a hint that the next sync or push rewrites.
-function updateSyncStatus(root, env, patch) {
-  const file = syncStatusPath({ root, env })
+// patch can be lost. Losing a push-side patch is accepted (the next push rewrites it), but a failed pull's record is
+// the one a reader must not lose, so a writer that is not the sync or the push worker never shares this file: the
+// fast-forward check's fetch time has its own (`fetchOkPath`).
+function updateSyncStatus(root, env, patch, file = syncStatusPath({ root, env })) {
   try {
     assertNotRealStateUnderTest(path.dirname(file), { env })
   } catch (error) {
@@ -313,6 +319,26 @@ export function recordPullOutcome({ root, env, result }) {
   } catch {
     // The record is a convenience for the next reader, never a reason to fail a sync.
   }
+}
+
+/**
+ * Records that Desk's own fetch of the desk's remote succeeded (`fastForwardStateBranch`), as `last_fetch_ok_at`, in its
+ * own file (`fetchOkPath`) so it can never overwrite the pull record with a stale copy. `at` is when the fetch STARTED
+ * (ISO text): a pull that failed after the fetch began is not proven reachable by it. `desk_status` counts it as
+ * proof of reachability only for a failure caused by reachability. It is Desk's own record, not Git's `FETCH_HEAD`,
+ * which a failed fetch rewrites too. Best effort, never throws.
+ */
+export function recordFetchOk({ root, env, at }) {
+  try {
+    updateSyncStatus(root, env, { last_fetch_ok_at: at }, fetchOkPath({ root, env }))
+  } catch {
+    // The record is a convenience for the next reader, never a reason to fail a fetch.
+  }
+}
+
+/** When Desk's last successful fetch started (ISO text), or `null`. Never throws. */
+export function readFetchOkAt({ root, env }) {
+  return readJsonIfPresent(fetchOkPath({ root, env }))?.last_fetch_ok_at ?? null
 }
 
 /** `desk_status`'s own read of the worker's last recorded outcome, or `null` when nothing has run yet. Never throws. */

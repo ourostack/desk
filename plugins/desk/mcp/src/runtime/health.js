@@ -23,11 +23,12 @@ export function healthWord(degraded) {
   return degraded.length > 0 ? "degraded" : "ready"
 }
 
+const REACHABILITY_CAUSES = new Set(["unreachable", "auth_failed", "deadline"])
 const LAST_PULL_TTL_MS = 24 * 60 * 60 * 1000
 
 /**
  * Whether a recorded failed pull still counts. It stops counting once something proves the remote reachable again
- * (a push or a fetch that finished after the failure) and in any case after 24 hours, because `desk_status` does not
+ * (a push, or Desk's own fetch, that finished after the failure; both are recorded by Desk, never read from Git's `FETCH_HEAD`, which a failed fetch rewrites too) and in any case after 24 hours, because `desk_status` does not
  * re-run the pull: the record is a note from the last boot, not a live probe. `lastPull.at` is when it failed;
  * `lastPushAt` and `fetchedAt` are ISO text or epoch milliseconds, either may be null.
  */
@@ -35,9 +36,12 @@ export function pullStillFailing({ lastPull, lastPushAt = null, fetchedAt = null
   if (lastPull?.state !== "unresolved") return false
   const failedAt = Date.parse(lastPull.at)
   if (Number.isNaN(failedAt) || now - failedAt > LAST_PULL_TTL_MS) return false
+  // A fetch proves reachability only, so it clears only a failure caused by reachability; a conflict, a divergence or an
+  // unknown failure stays until a pull succeeds (or a push, or 24 hours).
+  const fetchCounts = REACHABILITY_CAUSES.has(lastPull.cause)
   const after = (when) => {
     const at = typeof when === "number" ? when : Date.parse(when)
     return !Number.isNaN(at) && at >= failedAt
   }
-  return !(after(lastPushAt) || after(fetchedAt))
+  return !(after(lastPushAt) || (fetchCounts && after(fetchedAt)))
 }
