@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { promises as fsp, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { EXACT, lstatExactIfPresent, matchesRecordedFile, sameFile } from "../../../../../plugins/desk/mcp/src/util/file-identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -38,7 +38,7 @@ test("a recorded identity is matched exactly when it holds a string or a BigInt,
   }
 })
 
-test("lstatExactIfPresent reads a BigInt stat, answers null for a missing path and names any other failure", async () => {
+test("lstatExactIfPresent reads a BigInt stat, answers null for a missing path and names any other failure", async (t) => {
   const root = await mkTempRoot("desk-file-identity-")
   const present = path.join(root, "present")
   writeFileSync(present, "x")
@@ -47,7 +47,8 @@ test("lstatExactIfPresent reads a BigInt stat, answers null for a missing path a
   assert.equal(typeof stat.ino, "bigint")
   assert.equal(sameFile(stat, await lstatExactIfPresent(present, naming)), true)
   assert.equal(await lstatExactIfPresent(path.join(root, "missing"), naming), null)
-  mkdirSync(path.join(root, "dir"))
-  await assert.rejects(lstatExactIfPresent(path.join(present, "below-a-file"), naming), /^Error: outbox: private state path .* could not be inspected \(ENOTDIR\)$/u)
-  assert.equal(typeof EXACT.bigint, "boolean")
+  // Which error a path below a file gives differs by platform (ENOTDIR, or ENOENT on Windows), so the failure is injected.
+  t.mock.method(fsp, "lstat", async () => { throw Object.assign(new Error("denied"), { code: "EACCES" }) })
+  await assert.rejects(lstatExactIfPresent(present, naming), /^Error: outbox: private state path .* could not be inspected \(EACCES\)$/u)
+  assert.equal(EXACT.bigint, true)
 })
