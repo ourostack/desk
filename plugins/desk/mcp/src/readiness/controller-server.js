@@ -1,3 +1,4 @@
+import { dtrace } from "./zz-trace.js"
 import { randomUUID } from "node:crypto"
 import { lstatSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
@@ -34,7 +35,9 @@ export async function startReadinessController({
     ...(supervisor ? { kind: "controller_child", parent_pid: process.ppid } : {}),
   }
   // The owner's start time makes the record name this process, not just its PID, which a later process may reuse (owner-record.js).
+  dtrace("srv start")
   const processStart = await ownProcessStart()
+  dtrace("srv process start read")
   if (processStart !== null) owner.process_start = processStart
   let state = "CONTROL_READY"
   let convergence = null
@@ -269,6 +272,7 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
+  dtrace("srv listening")
   // listen() drops its one-shot error listener once bound; without a lasting one, a later server error would be an unhandled 'error' event that ends the whole Desk process.
   server.on("error", (error) => {
     process.stderr.write(`[desk-mcp] readiness controller server error: ${error?.message ?? String(error)}\n`)

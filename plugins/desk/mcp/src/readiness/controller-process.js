@@ -1,3 +1,4 @@
+import { dtrace } from "./zz-trace.js"
 import { fork } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { EventEmitter } from "node:events"
@@ -21,6 +22,7 @@ export function supervisorEndpoint(endpoint, platform = process.platform) {
 /** The only process that can terminate a controller is the parent holding its actual child handle. */
 export async function startControllerProcess(options, { spawn = fork, timeoutMs = 10000, createServer = net.createServer, socketTimeoutMs = 10000 } = {}) {
   const { identity, endpoint, stateDir } = options
+  dtrace("scp begin")
   const supervisor = { endpoint: supervisorEndpoint(endpoint), token: randomUUID() }
   validateControllerEndpoint(supervisor.endpoint)
   const events = new EventEmitter()
@@ -83,14 +85,16 @@ export async function startControllerProcess(options, { spawn = fork, timeoutMs 
 
   try {
     // Host execArgv may contain a session-only preload or --test. The runtime and its dependency mirror are already selected.
+    dtrace("scp fork")
     child = spawn(childEntry, [], { execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true })
     child.once("exit", onExit)
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("readiness controller child startup timed out")), timeoutMs)
+      const timeout = setTimeout(() => dtrace("scp child startup TIMEOUT") || reject(new Error("readiness controller child startup timed out")), timeoutMs)
       const failed = (error) => { clearTimeout(timeout); reject(error) }
       child.once("error", failed)
       child.once("exit", () => failed(new Error("readiness controller child exited before admission")))
       child.once("message", (message) => {
+        dtrace(`scp child message ${message?.type}`)
         clearTimeout(timeout)
         if (message?.type !== "ready") {
           reject(Object.assign(new Error(message?.message ?? "readiness controller child sent an invalid startup message"), { code: message?.code }))

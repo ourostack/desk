@@ -1,0 +1,46 @@
+name: controller probe
+on:
+  push:
+    branches: [controller-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    name: probe rep ${{ matrix.rep }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+      - working-directory: plugins/desk/mcp
+        run: npm ci
+      - name: Run the two start-up tests as the standard user
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $command = 'node .github\scripts\run-suite-files.mjs --shard 1/1 --out results.json --only "runtime/admission_concurrency|readiness/generations"'
+          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
+      - name: Collect traces
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force diag-out | Out-Null
+          if (Test-Path C:\deskstd-tmp\diag-ctl.txt) { Copy-Item C:\deskstd-tmp\diag-ctl.txt diag-out\ }
+          if (Test-Path results.json) { Copy-Item results.json diag-out\ }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diag-${{ matrix.rep }}
+          path: diag-out
+          if-no-files-found: warn

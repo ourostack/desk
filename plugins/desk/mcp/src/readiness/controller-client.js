@@ -1,3 +1,4 @@
+import { dtrace } from "./zz-trace.js"
 import { randomUUID } from "node:crypto"
 import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
 import * as net from "node:net"
@@ -62,11 +63,13 @@ export async function connectOrStartController({
   // `exceptionOutcome` for a code this specific). Matching that existing contract means throwing normally, not
   // inventing a new local return shape.
   assertNotRealStateUnderTest(stateDir, { env })
+  dtrace(`cooc enter ${identity.id.slice(0, 8)}`)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   privateDirectoryTighteners[process.platform](stateDir, onRepair)
   privateDirectoryValidators[process.platform](stateDir)
   const endpoint = await rendezvousEndpoint({ derived: deriveControllerEndpoint({ identity }), identity, stateDir })
 
+  dtrace("cooc endpoint resolved")
   let local = localControllers.get(identity.id)
   if (!local) {
     let start = controllerStarts.get(identity.id)
@@ -93,12 +96,14 @@ export async function connectOrStartController({
   }
   local = localControllers.get(identity.id)
   const token = readControllerToken({ identity, stateDir })
+  dtrace("cooc final handshake begin")
   const handshake = await request({
     endpoint,
     identity,
     method: "handshake",
     params: { token },
   })
+  dtrace("cooc final handshake ok")
   requireCompatibleHandshake(handshake, identity)
   if (local) local.clients += 1
   return createClient({ endpoint, ephemeral, identity, local, token })
@@ -114,7 +119,9 @@ async function startOrReuseController({
   stateDir,
   startController,
 }) {
+  dtrace("sor begin")
   const existing = await tryHandshake({ endpoint, identity, stateDir })
+  dtrace(`sor first handshake ${existing ? "answered" : "none"}`)
   if (existing) {
     requireCompatibleHandshake(existing, identity)
     return
@@ -123,6 +130,7 @@ async function startOrReuseController({
   let ownedWatcher = watcher
   try {
     ownedWatcher ??= await watcherFactory?.({ root: identity.root })
+    dtrace("sor startController begin")
     const controller = await startController({
       identity,
       endpoint,
@@ -131,23 +139,28 @@ async function startOrReuseController({
       watcher: ownedWatcher,
       ephemeral,
     })
+    dtrace("sor startController done")
     const local = { controller, clients: 0 }
     localControllers.set(identity.id, local)
     controller.onExit?.(() => {
       if (localControllers.get(identity.id) === local) localControllers.delete(identity.id)
     })
   } catch (error) {
+    dtrace(`sor startController failed ${error?.code} ${error?.message}`)
     ownedWatcher?.close?.()
     if (!isControllerElectionCollision(error)) {
       throw error
     }
-    await waitForHandshake({ endpoint, identity, stateDir })
+    dtrace("sor waitForHandshake begin")
+    try { await waitForHandshake({ endpoint, identity, stateDir }); dtrace("sor waitForHandshake ok") } catch (e) { dtrace(`sor waitForHandshake failed ${e.message}`); throw e }
   }
 }
 
 // Before binding: a controller whose owner runs is never taken over, even when it does not answer (no unlink, no second controller; the session stays controller-free and its hung-controller checks report it). Otherwise a stale socket of ours is removed. Resolves true when the running owner answered, so the session joins it instead of binding.
 async function guardSocketTakeover({ endpoint, identity, stateDir }) {
+  dtrace("guard begin")
   const owner = await ownerState({ stateDir, identity })
+  dtrace(`guard owner ${owner.state}`)
   if (owner.state === "live") {
     const answered = await tryHandshake({ endpoint, identity, stateDir, timeoutMs: LIVE_OWNER_HANDSHAKE_MS })
     if (answered) {

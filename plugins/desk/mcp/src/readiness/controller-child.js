@@ -1,3 +1,5 @@
+import { dtrace } from "./zz-trace.js"
+
 import { pathToFileURL } from "node:url"
 import { releaseRendezvous } from "./controller-server.js"
 import { releaseSupervisor } from "./controller-process.js"
@@ -31,9 +33,12 @@ export function runControllerChild(proc = process, load = () => import("../serve
     if (message.type === "close") { void close(); return }
     if (message.type !== "start" || options !== null) return
     options = message.options
+    dtrace("child got start")
     try {
       const runtime = await load()
+      dtrace("child runtime loaded")
       controller = await runtime.startControllerRuntime(options)
+      dtrace("child controller started")
       if (closing || !proc.connected) {
         await controller.close()
         proc.exit(0)

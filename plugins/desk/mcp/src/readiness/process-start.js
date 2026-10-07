@@ -1,3 +1,4 @@
+import { dtrace } from "./zz-trace.js"
 // When a process started, as the operating system reports it: together with its PID this names one process, so a PID that a later process reuses is never mistaken for the process that recorded it.
 //
 // Desk records its own start time in a readiness controller's owner.json when it is elected. Another session compares it with the start time of whatever process now has that PID: a different start time means the recorded owner has ended (see owner-record.js).
@@ -18,7 +19,9 @@ const EXEC_TIMEOUT_MS = { darwin: 5_000, win32: 15_000 }
 /** Run `file args` and resolve with its stdout, or null when it fails, times out or cannot run. */
 export function runForText(file, args, { timeout, env }) {
   return new Promise((resolve) => {
+    const t0 = Date.now(); dtrace(`runForText start ${file} ${String(args.at(-1)).slice(0, 60)}`)
     execFile(file, args, { encoding: "utf8", timeout, env, maxBuffer: 16_384, windowsHide: true }, (error, stdout) => {
+      dtrace(`runForText end ${Date.now() - t0}ms ${error ? "ERR " + error.message.slice(0, 80) : "ok"}`)
       resolve(error ? null : stdout)
     })
   })
