@@ -950,7 +950,175 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
       "conflicting DESK root must not receive writes when activation config is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }) } catch (error) { diag(fixture.root); throw error }
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep1", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep2", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep3", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep4", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep5", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep6", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
+  }
+})
+
+test("entrypoint stdio startup uses activation config root for real MCP tool calls rep7", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
+}, async () => {
+  const fixture = makeFixture()
+  try {
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const result = await runTaskCreateThroughEntrypoint(fixture)
+    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.created.error, undefined, result.stderr || result.stdout)
+    assert.equal(
+      existsSync(path.join(fixture.activationRoot, "activation-check", "from-server", "task.md")),
+      true,
+      "real MCP startup must write through the activation-config root",
+    )
+    assert.equal(
+      existsSync(path.join(fixture.envRoot, "activation-check", "from-server", "task.md")),
+      false,
+      "conflicting DESK root must not receive writes when activation config is present",
+    )
+  } finally {
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
   }
 })
 
@@ -987,7 +1155,7 @@ test("entrypoint stdio startup lets host/session root override activation config
       "conflicting DESK root must not receive writes when host/session root is present",
     )
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }) } catch (error) { diag(fixture.root); throw error }
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
   }
 })
 
@@ -1027,7 +1195,7 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")
     assert.equal(sourceMirrorCount(activationCache), 1, "repeated startup should reuse the same source mirror for unchanged MCP source")
   } finally {
-    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }) } catch (error) { diag(fixture.root); throw error }
+    try { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 0 }) } catch (error) { diag(fixture.root); throw error }
   }
 })
 
