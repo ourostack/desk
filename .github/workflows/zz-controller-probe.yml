@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,7 +29,7 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard 1/1 --out results.json --only "runtime/admission_concurrency|readiness/generations"'
+          $command = 'node .github\scripts\run-suite-files.mjs --shard 1/1 --out results.json --only "runtime/admission_concurrency"; node .github\\scripts\\run-suite-files.mjs --shard 1/1 --out results2.json --only "runtime/admission_concurrency"'
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
       - name: Collect traces
         if: always()
@@ -38,6 +38,7 @@ jobs:
           New-Item -ItemType Directory -Force diag-out | Out-Null
           if (Test-Path C:\deskstd-tmp\diag-ctl.txt) { Copy-Item C:\deskstd-tmp\diag-ctl.txt diag-out\ }
           if (Test-Path results.json) { Copy-Item results.json diag-out\ }
+          if (Test-Path results2.json) { Copy-Item results2.json diag-out\ }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
