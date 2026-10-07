@@ -696,3 +696,81 @@ test("an open job whose card dates are shorter than the work gives its flow effi
   assert.equal(Object.hasOwn(walk.task.flow_efficiency, "bound"), false)
   assert.equal(Object.hasOwn(walk.task.idle_ms, "bound"), false)
 })
+
+test("the stack-up bounds a floored closed job's idle time the same way the task row does, and an open job's not at all", () => {
+  const closed = facts({
+    id: S(43),
+    duration: 40 * MIN,
+    intervals: [span("turn", 0, 0, 20 * MIN), span("human_wait", 0, 20 * MIN, 30 * MIN), span("turn", 0, 30 * MIN, 40 * MIN)],
+    // The card is created after the work began and closed before it ended.
+    jobs: [binding(J("a"), -10 * MIN, { done: 5 * MIN, fields: { agents: [0], segments: [{ start_ms: 0, end_ms: 40 * MIN }] } })],
+  })
+  const { walk } = walkOf([closed], [], J("a"))
+  assert.deepEqual(walk.window.lead.reasons, ["card_dates_shorter_than_work"])
+  assert.equal(walk.stackup.idle_ms.value, 10 * MIN)
+  assert.deepEqual(walk.stackup.idle_ms, walk.task.idle_ms)
+  assert.equal(walk.stackup.idle_ms.bound, "lower")
+  assert.equal(Object.hasOwn(walk.stackup.working_ms, "bound"), false, "working time is recorded, not floored")
+  const open = facts({
+    id: S(44),
+    duration: 40 * MIN,
+    intervals: [span("turn", 0, 0, 40 * MIN)],
+    jobs: [{ ...binding(J("b"), -10 * MIN), transitions: [{ to: "processing", offset_ms: 0 }], observed: null }],
+  })
+  const { walk: openWalk } = walkOf([open], [], J("b"))
+  assert.deepEqual(openWalk.window.lead.reasons, ["card_dates_shorter_than_work", "censored"])
+  assert.equal(Object.hasOwn(openWalk.stackup.idle_ms, "bound"), false)
+})
+
+test("the causes rollup leaves out a labeled job whose intervals are unreadable or that has no lead window, and names the reason", () => {
+  const readable = facts({ id: S(45), duration: 10 * MIN, intervals: [span("turn", 0, 0, 5 * MIN), span("human_wait", 0, 5 * MIN, 10 * MIN)], jobs: [binding(J("a"), 0, { done: 10 * MIN })] })
+  const unreadable = facts({
+    id: S(46),
+    duration: 10 * MIN,
+    intervals: [span("turn", 0, 0, 5 * MIN), span("human_wait", 0, 5 * MIN, 10 * MIN)],
+    unavailable: [{ field: "turns", reason: "source_unreadable" }],
+    jobs: [binding(J("b"), 0, { done: 10 * MIN })],
+  })
+  // A third job's intervals are readable but its closing has no time, so it has no lead window to walk.
+  const unplaced = facts({ id: S(47), duration: 10 * MIN, intervals: [span("turn", 0, 0, 5 * MIN), span("human_wait", 0, 5 * MIN, 10 * MIN)], jobs: [{ ...binding(J("c"), 0), transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: null }] }] })
+  const wait = [stretch(5 * MIN, 10 * MIN, "muda", "waiting", [[5 * MIN, 10 * MIN]])]
+  const sessions = [readable, unreadable, unplaced]
+  const labels = resolveLabels([labelsFile(J("a"), S(45), wait), labelsFile(J("b"), S(46), wait), labelsFile(J("c"), S(47), wait)], sessions)
+  const walks = walksOf(sessions, labels)
+  const byJob = new Map(walks.map((entry) => [entry.walk.job, entry]))
+  // The first two jobs are finished and fully labeled; only the first has intervals the walk can read.
+  for (const job of [J("a"), J("b")]) assert.equal(byJob.get(job).record.measures.muda_time.state, "measured")
+  assert.equal(Object.hasOwn(byJob.get(J("b")).walk.intervals, "unavailable"), true)
+  const causes = causesRollup({ records: walks.map(({ record }) => record), walks: walks.map(({ walk }) => walk), labels })
+  assert.equal(causes.n, 1)
+  assert.equal(causes.N, 3)
+  assert.equal(causes.state, "partial")
+  assert.equal(byJob.get(J("c")).record.measures.muda_time.state, "measured")
+  assert.equal(Object.hasOwn(byJob.get(J("c")).walk.intervals, "unavailable"), false)
+  assert.equal(Object.hasOwn(byJob.get(J("c")).walk.window, "start_ms"), false)
+  // Each left-out job names why: unreadable intervals, or no lead window.
+  assert.deepEqual(causes.reasons, ["job_offsets_unavailable", "source_unreadable"])
+  for (const row of causes.causes) assert.deepEqual(row.jobs, [J("a")])
+  assert.deepEqual(causes.causes.map((row) => [row.cause, row.total_ms / MIN]), [["waiting:next_prompt", 5]])
+})
+
+test("each burst splits its inner idle time by the task's seven causes, as envelopes that add up to its idle_ms", () => {
+  const session = facts({
+    id: S(48),
+    duration: 90 * MIN,
+    intervals: [span("turn", 0, 0, 20 * MIN), span("api_retry", 0, 20 * MIN, 23 * MIN), span("turn", 0, 23 * MIN, 40 * MIN), span("human_wait", 0, 40 * MIN, 45 * MIN), span("turn", 0, 45 * MIN, 60 * MIN)],
+    jobs: [binding(J("a"), 0, { done: 90 * MIN })],
+  })
+  const { walk } = walkOf([session], [labelsFile(J("a"), S(48), [stretch(0, 60 * MIN, "value", null, [[0, 20 * MIN]])])], J("a"))
+  assert.equal(walk.bursts.length, 1)
+  const [burst] = walk.bursts
+  assert.deepEqual(Object.keys(burst.idle_by_waited_on_ms), IDLE_WAITED_ON)
+  for (const entry of Object.values(burst.idle_by_waited_on_ms)) assert.equal(entry.state, "measured")
+  assert.equal(burst.idle_ms, 8 * MIN)
+  assert.equal(burst.idle_by_waited_on_ms.api_retry.value, 3 * MIN)
+  assert.equal(burst.idle_by_waited_on_ms.next_prompt.value, 5 * MIN)
+  assert.equal(valueSum(Object.values(burst.idle_by_waited_on_ms)), burst.idle_ms)
+  // The bursts' split and the gaps' time together are the task's split.
+  const gapTime = walk.gaps.reduce((sum, gap) => sum + gap.end_ms - gap.start_ms, 0)
+  assert.equal(gapTime + valueSum(Object.values(burst.idle_by_waited_on_ms)), walk.task.idle_ms.value)
+})

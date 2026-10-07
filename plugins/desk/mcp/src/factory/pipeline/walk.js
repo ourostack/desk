@@ -39,7 +39,8 @@
 //     burst. The gaps are the rest of the window: the time before the first
 //     burst, between bursts and after the last one. Bursts and gaps add up
 //     to the lead time exactly, and each burst's `idle_ms` is the idle time
-//     inside it: the gaps plus every burst's idle time are the idle time. A
+//     inside it, split by cause in `idle_by_waited_on_ms`: the gaps plus
+//     every burst's idle time are the idle time. A
 //     gap's `waited_on` is the cause holding most of it, ties to the first
 //     in `IDLE_WAITED_ON`; the totals count short waits inside bursts too,
 //     each with its own cause.
@@ -73,7 +74,7 @@
 //     the working and idle figures. When the card's dates are shorter than
 //     the work and the job is closed, the floored lead time makes it an
 //     upper bound (`bound: "upper"`) and the idle time a lower bound
-//     (`bound: "lower"`); an open job's has no bound. The formulas' own ratio (recorded
+//     (`bound: "lower"`, in the stack-up too); an open job's has no bound. The formulas' own ratio (recorded
 //     active time in the card's lead window over the lead time, none when
 //     the lead time is floored to the work) is kept beside it as
 //     `active_share_recorded`.
@@ -327,7 +328,7 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
   const idle = idleCauses(start, end, working, sessions, stretches, timeline.intervals)
   const walk = { job: timeline.job, window, stretches, coverage, intervals, working, idle }
   const counts = burstCounts(raw, timeline, turns, additions)
-  const context = { timeline, stretches, coverage, labels, formulas, additions }
+  const context = { timeline, stretches, coverage, labels, formulas, additions, idle, intervals, placement }
   walk.bursts = raw.map((burst, index) => burstEntry(burst, counts[index], context))
   walk.bursts_state = { state: Object.hasOwn(intervals, "unavailable") ? "unavailable" : intervals.reasons.length === 0 ? "measured" : "partial", reasons: sortedUnique(intervals.unavailable ?? intervals.reasons) }
   const edges = [start, ...raw.flatMap((burst) => [burst.start_ms, burst.end_ms]), end]
@@ -411,6 +412,8 @@ function burstEntry(burst, count, context) {
     end_ms: burst.end_ms,
     working_ms: working,
     idle_ms: burst.end_ms - burst.start_ms - working,
+    // The idle time inside the burst by the same causes as the task's split, stated as the task's are.
+    idle_by_waited_on_ms: idleFigures(Object.fromEntries(IDLE_WAITED_ON.map((cause) => [cause, clip(context.idle[cause], burst.start_ms, burst.end_ms)])), { base: [], coverage: context.coverage, intervals: context.intervals, placement: context.placement }),
     sessions,
     agents: count.agents.size,
     tool_calls: count.tools,
@@ -482,8 +485,17 @@ function stackupRow({ timeline, formulas, window, stretches, coverage, placement
     agents_working_unlabeled_ms: labeledFigure(segments.times.agents_working),
     not_labeled_ms: covered(segments.not_labeled, base, intervals),
   }
+  boundByFloor(row, window, [["idle_ms", "lower"]])
   row.idle = idleFigures(idle, { base, coverage, intervals, placement })
   return row
+}
+
+// A lead time floored to the work is a lower bound, so on a closed job the flow efficiency is at most its figure and the idle time at
+// least its figure. An open job's lead time is censored too, so neither direction holds and no bound is given. The stack-up and the
+// task row bound the same figures the same way.
+function boundByFloor(row, window, bounds) {
+  if (!window.lead.reasons.includes("card_dates_shorter_than_work") || window.lead.reasons.includes("censored")) return
+  for (const [key, bound] of bounds) if (row[key].state !== "unavailable") row[key] = { ...row[key], bound }
 }
 
 function statusFigure(formulas) {
@@ -539,11 +551,7 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
   const lead = window.end_ms - window.start_ms
   if (lead === 0) row.flow_efficiency = figure("unavailable", null, ["zero_lead_time"])
   else row.flow_efficiency = row.working_ms.state === "unavailable" ? row.working_ms : known(row.working_ms.value / lead, row.working_ms.reasons)
-  // A lead time floored to the work is a lower bound, so on a closed job the ratio is at most this and the idle time at least this. An
-  // open job's lead time is censored too, so neither direction holds and no bound is given.
-  if (window.lead.reasons.includes("card_dates_shorter_than_work") && !window.lead.reasons.includes("censored")) {
-    for (const [key, bound] of [["flow_efficiency", "upper"], ["idle_ms", "lower"]]) if (row[key].state !== "unavailable") row[key] = { ...row[key], bound }
-  }
+  boundByFloor(row, window, [["flow_efficiency", "upper"], ["idle_ms", "lower"]])
   row.waiting_by_waited_on_ms = idleFigures(idle, { base, coverage, intervals, placement })
   row.agents_working_unlabeled_ms = labeledFigure(segments.times.agents_working)
   row.top_causes = labeledFigure(jobCauses(walk).slice(0, TOP_CAUSES).map(({ cause, total_ms: total }) => ({ cause, total_ms: total, hours: total / MS_PER_HOUR })))
