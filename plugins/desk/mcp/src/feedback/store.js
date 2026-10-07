@@ -41,9 +41,9 @@ CREATE TABLE IF NOT EXISTS feedback_entries (
 );
 `
 
-/** The preview build the participant is giving feedback about. */
+/** The preview build the participant is giving feedback about; "unknown" when the Desk version cannot be read, so the note is still kept. */
 function previewVersion(pluginRoot) {
-  return deskVersion(pluginRoot === undefined ? process.env : { DESK_PLUGIN_ROOT: pluginRoot })
+  return deskVersion(pluginRoot === undefined ? process.env : { DESK_PLUGIN_ROOT: pluginRoot }) ?? "unknown"
 }
 
 /**

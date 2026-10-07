@@ -99,3 +99,15 @@ test("with no explicit plugin root the preview version follows DESK_PLUGIN_ROOT"
     else process.env.DESK_PLUGIN_ROOT = saved
   }
 })
+
+test("a note is kept with preview version unknown when the Desk version cannot be read", async (t) => {
+  const fixture = await mkFeedbackFixture()
+  t.after(() => cleanup(fixture.base))
+  const pluginRoot = path.join(fixture.base, "unreadable-desk-plugin")
+  await fs.mkdir(pluginRoot, { recursive: true })
+  const captured = await withPrivateStore(
+    { deskRoot: fixture.deskRoot, person: "rowan", pluginRoot, env: { XDG_STATE_HOME: fixture.stateHome } },
+    (store) => store.capture({ text: "a note when plugin.json is missing", taskRef: null }),
+  )
+  assert.equal(captured.preview_version, "unknown")
+})

@@ -66,3 +66,12 @@ test("DESK_PLUGIN_ROOT pointing elsewhere moves every in-process reader of the D
     else process.env.DESK_PLUGIN_ROOT = saved
   }
 })
+
+test("a host that sets only CLAUDE_PLUGIN_ROOT still resolves the version, and DESK_PLUGIN_ROOT wins when both are set", () => {
+  const claude = mkdtempSync(path.join(tmpdir(), "desk-version-claude-"))
+  const desk = mkdtempSync(path.join(tmpdir(), "desk-version-desk-"))
+  writeFileSync(path.join(claude, "plugin.json"), JSON.stringify({ version: "4.5.6" }))
+  writeFileSync(path.join(desk, "plugin.json"), JSON.stringify({ version: "7.8.9" }))
+  assert.equal(deskVersion({ CLAUDE_PLUGIN_ROOT: claude }), "4.5.6")
+  assert.equal(deskVersion({ CLAUDE_PLUGIN_ROOT: claude, DESK_PLUGIN_ROOT: desk }), "7.8.9")
+})
