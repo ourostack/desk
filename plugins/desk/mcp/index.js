@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { dtrace } from "./src/readiness/zz-trace.js"
 // desk MCP server entry point.
 //
 // Spawned by consumers as a stdio MCP server. Hosts may pass `--root <path>`
@@ -294,10 +295,12 @@ async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runti
   let inspection = null
   let prepared = null
   if (runtimeImporter === importRuntimeServer) {
+    dtrace("lr offload begin")
     const job = await offload({
       kind: "runtime",
       input: { mcpRoot, env, runtimeCacheDir, sourceIdentity, inspect: runtimeInspector === inspectRuntimeDependencyPack },
     })
+    dtrace(`lr offload done insErr=${!!job.inspectionError} resErr=${!!job.restoreError}`)
     if (job.inspectionError) return inspectionFailedOutcome({ mcpRoot, runtimeCacheDir, env })
     inspection = job.inspection ?? null
     if (inspection !== null && !inspection.ok) return runtimeOutcome(runtimeDiagnostic({ inspection, runtimeCacheDir, env }))
@@ -345,7 +348,9 @@ async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runti
 // The last step of the shipped importer, after the worker restored the runtime: load the server from the source mirror, next to its native dependencies.
 export async function importPreparedRuntime({ mcpRoot, prepared, load = (url) => importInChunks(url) }) {
   const pluginRoot = path.resolve(mcpRoot, "..")
+  dtrace("lr import begin")
   const runtimeServer = await load(pathToFileURL(path.join(prepared.sourceMirrorPath, "src", "server.js")).href)
+  dtrace("lr import done")
   runtimeServer.configureRuntimeArtifacts?.({ pluginRoot })
   return {
     ...runtimeServer,

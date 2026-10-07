@@ -1,3 +1,4 @@
+import { dtrace } from "../readiness/zz-trace.js"
 // Admission work that can block, run on a worker thread so the thread that answers the host never waits for it.
 //
 // Two jobs: "resolve" (the desk root, the activation config, the readiness policy and the state branch, all synchronous file reads) and "runtime" (inspecting the offline runtime pack, which hashes and unpacks its archive, restoring it into the runtime cache, which can wait up to 30 s on another process's publication lock, and loading the restored native modules once so their first load never runs on the thread that answers the host). Each job runs in a fresh worker; its result is plain data, and errors come back as plain objects with their code and fields.
@@ -75,6 +76,7 @@ export function prepareRuntimeInputs({
   mcpRoot, env, runtimeCacheDir, sourceIdentity, inspect,
   inspector = inspectRuntimeDependencyPack, prepare = prepareRuntime, warm = warmNativeModules,
 }) {
+  dtrace(`pri begin inspect=${inspect}`)
   let inspection = null
   if (inspect) {
     try {
@@ -86,12 +88,14 @@ export function prepareRuntimeInputs({
     }
     if (!inspection.ok) return { inspection }
   }
+  dtrace("pri inspected")
   let prepared
   try {
     prepared = prepare({ mcpRoot, env, runtimeCacheDir, sourceIdentity })
   } catch (error) {
     return { inspection, restoreError: { ...serializeError(error), ...publicationLock(error) } }
   }
+  dtrace("pri prepared")
   warm(prepared.sourceMirrorPath)
   return { inspection, prepared }
 }

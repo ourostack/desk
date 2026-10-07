@@ -1,3 +1,4 @@
+import { dtrace } from "../readiness/zz-trace.js"
 import { createHash, randomUUID } from "node:crypto"
 import {
   cpSync,
@@ -396,6 +397,7 @@ export function publishDirectoryAtomically({
   sleep = sleepSynchronously,
   writeLockOwner = writeFileSync,
 }) {
+  dtrace(`pub begin ${path.basename(destinationDir)}`)
   if (!existsSync(stagingDir)) {
     throw new Error(`atomic publication staging directory is missing: ${stagingDir}`)
   }
@@ -421,6 +423,7 @@ export function publishDirectoryAtomically({
     rmSync(stagingDir, { recursive: true, force: true })
     throw error
   }
+  dtrace(`pub lock acquired owned=${publicationLock.owned}`)
   if (!publicationLock.owned) {
     rmSync(stagingDir, { recursive: true, force: true })
     return {
@@ -476,6 +479,7 @@ export function publishDirectoryAtomically({
       }
       throw new Error(`atomic publication produced an incomplete directory: ${destinationDir}`)
     }
+    dtrace("pub published")
     rmSync(backupDir, { recursive: true, force: true })
     return {
       destinationDir,
@@ -551,6 +555,7 @@ function acquirePublicationLock({
     if (elapsedMs >= lockTimeoutMs) {
       throw new Error(`atomic publication lock timed out: ${lockDir}`)
     }
+    if (elapsedMs % 5 === 0) dtrace(`pub lock waiting ${elapsedMs}ms`)
     sleep(Math.min(publicationLockPollMs, lockTimeoutMs - elapsedMs))
   }
 }
@@ -968,14 +973,18 @@ export function syncSourceMirror({
   publishDirectory = publishDirectoryAtomically,
   sourceIdentity = null,
 }) {
+  dtrace("ssm begin")
   const sourceHash = hashCurrentSource(mcpRoot)
+  dtrace("ssm hashed")
   if (sourceIdentity?.startsWith("sha256:") && sourceIdentity.slice("sha256:".length) !== sourceHash) {
     throw new Error(
       `Desk source identity ${sourceIdentity} does not match the current source sha256:${sourceHash}.`,
     )
   }
   const mirrorPath = path.join(runtimeCacheDir, sourceMirrorDir, sourceHash)
-  if (sourceMirrorIsCurrent({ mirrorPath, sourceHash })) {
+  const cur = sourceMirrorIsCurrent({ mirrorPath, sourceHash })
+  dtrace(`ssm current=${cur}`)
+  if (cur) {
     writeSourceMirrorAdmission({
       mirrorPath,
       runtimeCacheDir,
@@ -1018,6 +1027,7 @@ export function syncSourceMirror({
       sourceHash,
       sourceIdentity,
     })
+    dtrace("ssm done")
     return mirrorPath
   } finally {
     rmSync(stagingPath, { recursive: true, force: true })

@@ -1,3 +1,4 @@
+import { dtrace } from "../readiness/zz-trace.js"
 // One Desk MCP session after the handshake: the admission pipeline, the tool gates, desk_status and desk_doctor.
 //
 // index.js answers the handshake through the front door first, then hands every tools/call here. Admission runs in the background (see admission.js) and fills a context as it goes: the desk root, activation, the runtime (restored from the offline pack), the state-branch check, admitted write authority and the readiness controller. Nothing here blocks the thread that answers the host: file reads and the runtime restore run on a worker thread (admission-worker.js), Git and the controller are asynchronous, and desk_status answers within a bounded time whatever admission is doing.
@@ -227,7 +228,9 @@ export function createDeskSession(deps) {
     context.headTriggered = false
     if (launcher?.mode === "refuse") return launcherRefusedOutcome(launcher)
 
+    dtrace("as resolveInputs begin")
     const inputs = await deps.resolveInputs()
+    dtrace("as resolveInputs done")
     if (inputs.rootError) {
       forgetDesk()
       return rootOutcome(inputs.rootError, deps)
@@ -248,7 +251,9 @@ export function createDeskSession(deps) {
     const policy = activation.readinessPolicy
 
     if (!context.runtimeServer) {
+      dtrace("as loadRuntime begin")
       const loaded = await deps.loadRuntime(activation)
+      dtrace(`as loadRuntime done ${loaded.outcome ? "OUTCOME" : "ok"}`)
       if (loaded.outcome) return loaded.outcome
       context.runtimeServer = loaded.runtimeServer
       context.runtime = loaded.runtimeStatus
@@ -257,7 +262,9 @@ export function createDeskSession(deps) {
     // The automatic switch runs only during the first admission attempt, and never for a HEAD change the watch saw.
     const startup = !context.startupDone && !headTriggered
     let branchProblem = null
+    dtrace("as inspectStateBranch begin")
     let inspection = await inspectStateBranch({ root: deskRoot, branch: activation.stateBranch, git })
+    dtrace("as inspectStateBranch done")
     if (!inspection.ok && inspection.automatic && startup) {
       const repaired = await repairStateBranch({ inspection, git })
       if (repaired.repaired) {
@@ -274,7 +281,9 @@ export function createDeskSession(deps) {
     const onRepair = (repair) => repairs.push(recordRepair(`repaired: readiness state directory mode ${repair.from} → 700 (${repair.path})`))
     let controllerProblem = null
     if (!context.authorityAdmitted) {
+      dtrace("as admitAuthority begin")
       const admitted = await admitAuthority({ deskRoot, policy, onRepair })
+      dtrace("as admitAuthority done")
       if (admitted.outcome) return { ...admitted.outcome, repair: repairs.at(-1) }
       controllerProblem = admitted.controllerProblem
     } else if (context.controllerLost) {
