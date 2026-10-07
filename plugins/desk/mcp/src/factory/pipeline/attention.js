@@ -66,7 +66,7 @@ const flagReasons = (session) => session.unavailable.filter((entry) => entry.fie
 const isPublicDesk = (session) => session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")
 
 // The job whose segment holds `atMs` (segments are half-open); when several do, the one whose segment started last, and for equal starts the job that sorts first, so the answer never depends on the order of the bindings.
-function ownerOf(bindings, atMs) {
+export function ownerOf(bindings, atMs) {
   let best = null
   for (const binding of bindings) {
     for (const segment of binding.segments) {

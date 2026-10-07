@@ -243,7 +243,7 @@ function leadTime(timeline, status) {
 // The job's own recorded work on the job clock, as [start, end] pairs: the spans of
 // each session that belong to the job (its binding's segments) and its recorded intervals. A
 // session whose share or offset is unknown adds nothing, so unknown data never moves a figure.
-function recordedSpans(timeline) {
+export function recordedSpans(timeline) {
   const spans = timeline.intervals.map((interval) => [interval.start_ms, interval.end_ms])
   timeline.source_sessions.forEach((source, index) => {
     const offset = timeline.sessions[index].offset_ms
@@ -441,6 +441,17 @@ function ownsPullRequest(session, binding, pr) {
     && !session.jobs.some((other) => other !== binding && Object.hasOwn(other, "agents") && other.agents.includes(pr.agent))
 }
 
+// The binding a controller PR's time gives it to, only for a binding that lists its workers; `undefined` when the time decides nothing.
+function prOwnerByTime(session, binding, pr) {
+  return Object.hasOwn(binding, "agents") ? segmentOwner(session, pr) : undefined
+}
+
+/** Whether `binding`'s job owns `pr` of `session`: its controller time decides when it can (`segmentOwner`), otherwise the worker that opened it does (`ownsPullRequest`). */
+export function jobOwnsPullRequest(session, binding, pr) {
+  const owner = prOwnerByTime(session, binding, pr)
+  return owner === undefined ? ownsPullRequest(session, binding, pr) : owner === binding
+}
+
 // Public commits carry no worker, so a per-worker session credits them only
 // to the one job it binds.
 function ownsCommits(session, binding) {
@@ -456,9 +467,8 @@ function uniqueReferences(timeline) {
     let held = false
     for (const pr of session.refs.prs) {
       // A PR its time gives to another job is that job's, not one held back from this one.
-      const owner = Object.hasOwn(binding, "agents") ? segmentOwner(session, pr) : undefined
-      if (owner === undefined ? ownsPullRequest(session, binding, pr) : owner === binding) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
-      else if (owner === undefined) held = true
+      if (jobOwnsPullRequest(session, binding, pr)) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
+      else if (prOwnerByTime(session, binding, pr) === undefined) held = true
     }
     if (ownsCommits(session, binding)) {
       for (const commit of session.refs.commits) commits.set(`${commit.repo}@${commit.sha}`, commit)

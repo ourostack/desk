@@ -56,7 +56,7 @@ test("build turns the golden rollup store's facts and labels into every golden o
   assert.deepEqual(Object.keys(actual), Object.keys(expected))
   for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
   assert.deepEqual(Object.keys(actual).filter((relative) => relative.startsWith("rollups/")), [
-    "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/outcomes.json", "rollups/tool-kinds.json", "rollups/totals.json",
+    "rollups/causes.json", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/outcomes.json", "rollups/stackup.json", "rollups/tasks.json", "rollups/tool-kinds.json", "rollups/totals.json",
   ])
 }))
 
@@ -196,7 +196,7 @@ test("a store with no facts directory, or only dotfiles in it, publishes an empt
   const out = path.join(root, "out")
   assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 0, sessions: 0 })
   const empty = bytesByPath(out)
-  assert.deepEqual(Object.keys(empty), ["README.md", "index.md", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/outcomes.json", "rollups/tool-kinds.json", "rollups/totals.json"])
+  assert.deepEqual(Object.keys(empty), ["README.md", "index.md", "rollups/causes.json", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/outcomes.json", "rollups/stackup.json", "rollups/tasks.json", "rollups/tool-kinds.json", "rollups/totals.json"])
   assert.match(empty["index.md"].toString("utf8"), /No job has published facts yet\./u)
   assert.match(empty["rollups/index.md"].toString("utf8"), /No job has published facts yet\./u)
   assert.equal(JSON.parse(empty["rollups/coverage.json"]).jobs, 0)

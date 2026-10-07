@@ -159,7 +159,7 @@ test("jobRecord takes each measure from the formulas, excludes censored, partial
   assert.equal(open.muda_sessions, null)
   for (const id of MEASURE_IDS) assert.deepEqual(open.measures[id], { excluded: "open_job" }, id)
   assert.equal(one.finished, true)
-  assert.deepEqual(one.muda_sessions, [legacySession(`claude-code/${S(1)}`, { waiting: 2000, defects: 2000 }, "3.1.1")])
+  assert.deepEqual(one.muda_sessions, [{ ...legacySession(`claude-code/${S(1)}`, { waiting: 2000, defects: 2000 }, "3.1.1"), waiting_corrected_ms: 2000, agents_working_ms: 0 }])
 
   const cancelled = byJob[J("5")]
   assert.equal(cancelled.finished, true, "a cancelled job is finished")
@@ -319,7 +319,15 @@ test("the muda Pareto sums labeled waste largest first, breaks ties by waste nam
   assert.equal(rollups.muda.groupings.host, undefined)
 
   const unlabeled = computeRollups({ records: [record(J("a"))], sessions: [], labels: { files: 0, byJobSession: new Map(), unused: [] } })
-  assert.deepEqual(unlabeled.muda.groupings.overall.all, { jobs: 1, jobs_labeled: 0, n: 0, N: 1, state: "unavailable", jobs_excluded: [{ reason: "not_in_published_facts", jobs: 1 }], sessions_labeled: 0, sessions_shared: 0, muda_time_ms: null, wastes: [] })
+  assert.deepEqual(unlabeled.muda.groupings.overall.all, { jobs: 1, jobs_labeled: 0, n: 0, N: 1, state: "unavailable", jobs_excluded: [{ reason: "not_in_published_facts", jobs: 1 }], sessions_labeled: 0, sessions_shared: 0, muda_time_ms: null, wastes: [],
+    waiting_corrected_ms: { state: "unavailable", n: 0, N: 1, reasons: ["not_in_published_facts"] },
+    agents_working_unlabeled_ms: { state: "unavailable", n: 0, N: 1, reasons: ["not_in_published_facts"] },
+  })
+  // Labeled sessions summed without corrected stretches (built by hand) give no corrected figure, never a zero.
+  assert.deepEqual(overall.waiting_corrected_ms, { state: "partial", value: 8000, n: 4, N: 6, reasons: ["open_job", "partial"] })
+  assert.equal(overall.agents_working_unlabeled_ms.value, 0)
+  const handBuilt = computeRollups({ records: [record(J("a"), { measures: { muda_time: { value: 1, state: "measured" }, ...Object.fromEntries(LABEL_WASTES.map((waste) => [`muda_time.${waste}`, { value: waste === "waiting" ? 1 : 0, state: "measured" }])) } })], sessions: [], labels: { files: 0, byJobSession: new Map(), unused: [] } })
+  assert.deepEqual(handBuilt.muda.groupings.overall.all.waiting_corrected_ms, { state: "unavailable", n: 1, N: 1, reasons: ["not_recorded"] })
 })
 
 // Session 1 bound to job 1 and a second job (8), each with the given binding fields, and labeled whole and identically for both.

@@ -78,6 +78,14 @@ export const ACTIVE_KINDS = new Set(["turn", "tool", "subagent"])
 // segments. The timeline and `jobActiveMs` both take their intervals from here.
 function jobIntervals(session, binding) {
   if (binding.session_offset_ms === null) return []
+  return boundIntervals(session, binding)
+}
+
+/**
+ * `boundIntervals({ intervals }, binding)`: the intervals of the session that `binding` holds, on the session's own clock, whether or not
+ * the binding has a session offset: only the binding's workers when it lists them, and worker 0's cut to its segments.
+ */
+export function boundIntervals(session, binding) {
   return session.intervals
     .filter((interval) => !Object.hasOwn(binding, "agents") || binding.agents.includes(interval.agent))
     .flatMap((interval) => jobParts(interval, binding))
