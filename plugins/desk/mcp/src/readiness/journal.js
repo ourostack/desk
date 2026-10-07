@@ -3,6 +3,7 @@ import * as filesystem from "node:fs"
 import * as path from "node:path"
 import { protectWindowsPaths } from "../factory/windows-acl.js"
 import { withActiveLexicalGeneration } from "./generations.js"
+import { EXACT, sameFile } from "../util/file-identity.js"
 
 // The elected controller is the sole writer. No journal operation elects another owner.
 export async function openChangeJournal({
@@ -83,13 +84,13 @@ export async function openChangeJournal({
     let fd
     try {
       const before = assertSafeFile(io, logPath)
-      if (!sameFile(before, persistedFile)) throw new Error("journal file was replaced")
+      if (!sameJournalFile(before, persistedFile)) throw new Error("journal file was replaced")
       fd = io.openSync(logPath, io.constants.O_RDONLY | (io.constants.O_NOFOLLOW ?? 0))
-      if (!sameFile(io.fstatSync(fd), persistedFile)) throw new Error("journal file was replaced")
+      if (!sameJournalFile(io.fstatSync(fd, EXACT), persistedFile)) throw new Error("journal file was replaced")
       const bytes = io.readFileSync(fd)
       const after = assertSafeFile(io, logPath)
-      if (!sameFile(after, persistedFile)) throw new Error("journal file was replaced")
-      if (!bytes.equals(persistedBytes) || after.size !== persistedBytes.length) {
+      if (!sameJournalFile(after, persistedFile)) throw new Error("journal file was replaced")
+      if (!bytes.equals(persistedBytes) || Number(after.size) !== persistedBytes.length) {
         poisoned = true
         reason = "journal_corrupt"
         integrityError = new JournalIntegrityError(new Error("journal bytes changed"), reason)
@@ -121,8 +122,8 @@ export async function openChangeJournal({
         try {
           const before = assertSafeFile(io, logPath)
           fd = io.openSync(logPath, io.constants.O_WRONLY | io.constants.O_APPEND | (io.constants.O_NOFOLLOW ?? 0))
-          const opened = io.fstatSync(fd)
-          if (opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1) {
+          const opened = io.fstatSync(fd, EXACT)
+          if (!sameJournalFile(opened, before)) {
             throw new Error("journal has unsafe replaced file")
           }
           const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
@@ -341,14 +342,15 @@ function statIfPresent(io, file) {
   }
 }
 
-function sameFile(actual, expected) {
-  return actual.dev === expected.dev && actual.ino === expected.ino && actual.nlink === 1
+// Identity is compared as BigInts: a Windows file id can exceed 2^53, where two Numbers cannot tell neighboring files apart.
+function sameJournalFile(actual, expected) {
+  return sameFile(actual, expected) && actual.nlink === 1n
 }
 
 function assertSafeFile(io, file) {
-  const stat = io.lstatSync(file)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 ||
-      (process.platform !== "win32" && (stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600))) {
+  const stat = io.lstatSync(file, EXACT)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n ||
+      (process.platform !== "win32" && (Number(stat.uid) !== process.getuid() || (Number(stat.mode) & 0o777) !== 0o600))) {
     throw new Error("journal has unsafe file ownership, type or permissions")
   }
   return stat

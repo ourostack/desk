@@ -9,9 +9,6 @@ import { different, otherFile } from "../_file_identity.js"
 
 const testsRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 
-// Left alone for now because two open pull requests (#226 and #227) both change it; drop this entry when they land and the file uses `different`.
-const EXEMPT = new Set(["readiness/journal_integrity.test.js"])
-
 // An operator directly before or after `ino` or `dev` (through any `a.b.` prefix, and closing or opening parentheses such as `Number(s.ino)+1`), arithmetic or bitwise. Arithmetic on a variable that merely holds a copy (`const n = s.ino; n + 1`) is a known limit. A `/` counts only with a space on each side, so a regular expression such as /\/dev\/null/ is not division.
 const OPERATOR = String.raw`(?:\+\+|--|\+=|-=|\*=?|%=?|\+(?![+=])|-(?![-=>])|\s/\s|<<=?|>>>?=?|(?<![|])\|(?![|=])|(?<![&])&(?![&=])|\^=?)`
 const ARITHMETIC = new RegExp(String.raw`(?<![\w.$/\\])(?:\w+\.)*(?:ino|dev)\b\)*\s*${OPERATOR}|${OPERATOR}\s*\(*(?:\w+\.)*(?:ino|dev)\b(?!\s*:)`, "u")
@@ -41,7 +38,7 @@ test("no test does arithmetic on a file identity", () => {
   const offenders = []
   for (const file of testFiles(testsRoot)) {
     const relative = path.relative(testsRoot, file).split(path.sep).join("/")
-    if (EXEMPT.has(relative) || relative === "_file_identity.js" || relative === "ci/file_identity_arithmetic.test.js") continue
+    if (relative === "_file_identity.js" || relative === "ci/file_identity_arithmetic.test.js") continue
     for (const hit of arithmeticOnIdentity(readFileSync(file, "utf8"))) offenders.push(`${relative}:${hit.line}: ${hit.text}`)
   }
   assert.deepEqual(offenders, [], "use different() or otherFile() from _file_identity.js instead of arithmetic on ino or dev")
