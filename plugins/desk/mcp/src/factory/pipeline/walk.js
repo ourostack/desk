@@ -68,10 +68,12 @@
 //     intervals with each session's completeness flags (`source_unreadable`,
 //     `log_truncated`, `session_open`, ...): the walk never states those
 //     intervals more whole than the formulas do. The job file says so for
-//     its bursts and gaps in `bursts_state`. Flow efficiency is the formulas'
-//     own `flow_efficiency` (recorded active time in the card's lead window
-//     over the lead time), so a lead time floored to the work
-//     (`card_dates_shorter_than_work`) has none.
+//     its bursts and gaps in `bursts_state`. A task's `flow_efficiency` is
+//     working time over lead time, stated as both are, so it agrees with
+//     the working and idle figures. The formulas' own ratio (recorded
+//     active time in the card's lead window over the lead time, none when
+//     the lead time is floored to the work) is kept beside it as
+//     `active_share_recorded`.
 //   - A burst's counts publish as envelopes, never a zero for no data: its
 //     labeled time is unavailable (`not_labeled`) when none of its sessions
 //     has labels, its operator turns take the formulas' `attention` state
@@ -110,6 +112,8 @@ const WORKING_WASTES = Object.freeze([...LABEL_WASTES.filter((waste) => waste !=
 
 // What a stack-up segment measures (see the header).
 const STACKUP_BASIS = "wall_clock_in_lead_window"
+// What a cause's time in `rollups/causes.json` measures (see `causesRollup`).
+const CAUSES_BASIS = "job_hours"
 const MS_PER_HOUR = 3_600_000
 const TOP_CAUSES = 3
 const SHARED = "labels_from_shared_session"
@@ -506,7 +510,13 @@ function jobCauses(walk) {
 }
 
 function taskRow({ timeline, formulas, window, coverage, placement, intervals, working, idle, labels, walk }) {
-  const row = { job: timeline.job, status: statusFigure(formulas), lead_time_ms: window.lead, labels_from_shared_session: timeline.sessions.some((session) => labels.sharedLabels?.has(`${timeline.job}/${session.id}`)) }
+  const row = {
+    job: timeline.job,
+    status: statusFigure(formulas),
+    lead_time_ms: window.lead,
+    labels_from_shared_session: timeline.sessions.some((session) => labels.sharedLabels?.has(`${timeline.job}/${session.id}`)),
+    active_share_recorded: fromResult(formulas.flow_efficiency),
+  }
   const keys = ["working_ms", "idle_ms", "value_in_working_ms", "flow_efficiency", "agents_working_unlabeled_ms", "top_causes", "longest_gap", "bursts"]
   if (!Object.hasOwn(window, "start_ms")) {
     const none = figure("unavailable", null, window.reasons)
@@ -522,7 +532,10 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
   row.working_ms = covered(workingTime, base, intervals, refinedBy(coverage))
   row.idle_ms = covered(window.end_ms - window.start_ms - workingTime, base, intervals, refinedBy(coverage))
   row.value_in_working_ms = labeledFigure(segments.times.value)
-  row.flow_efficiency = fromResult(formulas.flow_efficiency)
+  // Working time over lead time; `working_ms` already carries the lead time's reasons.
+  const lead = window.end_ms - window.start_ms
+  if (lead === 0) row.flow_efficiency = figure("unavailable", null, ["zero_lead_time"])
+  else row.flow_efficiency = row.working_ms.state === "unavailable" ? row.working_ms : known(row.working_ms.value / lead, row.working_ms.reasons)
   row.waiting_by_waited_on_ms = idleFigures(idle, { base, coverage, intervals, placement })
   row.agents_working_unlabeled_ms = labeledFigure(segments.times.agents_working)
   row.top_causes = labeledFigure(jobCauses(walk).slice(0, TOP_CAUSES).map(({ cause, total_ms: total }) => ({ cause, total_ms: total, hours: total / MS_PER_HOUR })))
@@ -585,6 +598,8 @@ export function causesRollup({ records, walks, labels }) {
   const reasons = state === "measured" ? [] : counted.length === 0 && excluded.length === 0 ? ["no_finished_jobs"] : sortedUnique([...excluded, ...partly, ...(shared ? [SHARED] : [])])
   return {
     schema: ROLLUPS_SCHEMA,
+    // Each job's causes are summed as that job's own time, so a moment two jobs share counts once for each.
+    basis: CAUSES_BASIS,
     state,
     reasons,
     n: counted.length,

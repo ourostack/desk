@@ -372,6 +372,7 @@ test("the causes rollup ranks idle time by waited_on and labeled wastes of worki
   assert.deepEqual(causes.causes.map((row) => [row.cause, row.total_ms / MIN, row.jobs]), [["waiting:next_prompt", 80, [J("a"), J("b")]], ["defects:shell", 40, [J("a"), J("b")]]])
   assert.deepEqual(causes.causes[0].spans, [{ job: J("a"), start_ms: 20 * MIN, end_ms: 60 * MIN }, { job: J("b"), start_ms: 20 * MIN, end_ms: 60 * MIN }])
   assert.equal(causes.total_ms, 120 * MIN)
+  assert.equal(causes.basis, "job_hours")
   for (const { walk } of walks) assert.equal(walk.stackup.idle_ms.value + walk.stackup.working.waste_ms.defects.value, 60 * MIN)
   assert.equal(stackupRollup([]).jobs.length, 0)
   // The stack-up says its totals are wall-clock time inside the lead window, so no reader expects them to match the muda rollup.
@@ -404,8 +405,10 @@ test("a lead time floored to the recorded work measures its window from where th
   assert.deepEqual(walk.window.lead.reasons, ["card_dates_shorter_than_work"])
   assert.equal(walk.bursts.length, 1)
   assert.equal(walk.bursts[0].prs.value, 1)
-  // The card's dates are shorter than the work: there is no lead window the card's clock measures over, so no flow efficiency.
-  assert.deepEqual(walk.task.flow_efficiency, { class: "unavailable", state: "unavailable", reasons: ["card_dates_shorter_than_work"] })
+  // The card's dates are shorter than the work: the formulas' recorded-active ratio has no window the card's clock measures over, while
+  // flow efficiency is working time over the floored lead time, partial with the lead time's reason.
+  assert.deepEqual(walk.task.active_share_recorded, { class: "unavailable", state: "unavailable", reasons: ["card_dates_shorter_than_work"] })
+  assert.deepEqual(walk.task.flow_efficiency, { class: "inferred", state: "partial", value: 1, reasons: ["card_dates_shorter_than_work"] })
   assert.equal(walk.stackup.idle.queue_before_start.state, "partial")
   assert.equal(sumOf(walk.stackup), walk.stackup.lead_time_ms.value)
 })
@@ -510,7 +513,8 @@ test("figures read from intervals take the formulas' completeness: a shared sess
   for (const key of ["working_ms", "value_in_working_ms", "agents_working_unlabeled_ms", "top_causes", "longest_gap", "bursts"]) {
     assert.deepEqual(walk.task[key], { class: "unavailable", state: "unavailable", reasons: ["source_unreadable"] }, key)
   }
-  assert.deepEqual(walk.task.flow_efficiency, { class: formulas.flow_efficiency.class, state: formulas.flow_efficiency.state, reasons: formulas.flow_efficiency.reasons })
+  assert.deepEqual(walk.task.flow_efficiency, walk.task.working_ms, "unreadable working time has no flow efficiency either")
+  assert.deepEqual(walk.task.active_share_recorded, { class: formulas.flow_efficiency.class, state: formulas.flow_efficiency.state, reasons: formulas.flow_efficiency.reasons })
   assert.equal(walk.task.waiting_by_waited_on_ms.next_prompt.state, "unavailable")
   assert.deepEqual(walk.bursts_state, { state: "unavailable", reasons: ["source_unreadable"] })
   for (const entry of [walk.stackup.working_ms, walk.stackup.idle_ms, walk.stackup.working.class_ms.value, walk.stackup.working.agents_working_unlabeled_ms, ...Object.values(walk.stackup.idle)]) {
@@ -586,7 +590,8 @@ test("a subagent blocked on a failing call keeps its wait: its parent's turn and
   const alone = facts({ id: S(35), duration: 300_000, agents, intervals: base, jobs: [binding(J("a"), 0)] })
   const kept = correctStretches(wait, alone, alone.jobs[0])
   assert.deepEqual(kept.map((part) => [part.start_ms, part.end_ms, part.class, part.waited_on ?? null]), [[start, end, "muda", "tool_failure"]])
-  // In the real session sibling subagents were working all through the wait, so the rule still moves that time to agent work.
+  // In the real session (job 690331dd, session c40554c3) sibling subagents 2, 3 and 7 were working all through the wait: their turns
+  // cover all 120,654 ms of it. A sibling's turn counts as working (ruled), so the job was not idle and that time is agent work.
   const sibling = facts({ id: S(36), duration: 300_000, agents, intervals: [...base, span("turn", 2, 0, 250_000)], jobs: [binding(J("a"), 0)] })
   const split = correctStretches(wait, sibling, sibling.jobs[0])
   assert.deepEqual(split.map((part) => [part.start_ms, part.end_ms, part.class]), [[start, end, UNLABELED_CLASS]])
@@ -644,6 +649,7 @@ test("waiting is idle time only: a labeled wait inside a turn is idle with its c
   assert.equal(walk.task.idle_ms.value, 75 * MIN)
   assert.deepEqual(minutes(walk.task.waiting_by_waited_on_ms), { next_prompt: 5, api_retry: 0, tool_failure: 30, long_tool_call: 0, queue_before_start: 0, no_session: 30, unknown: 10 })
   assert.equal(walk.task.working_ms.value + valueSum(Object.values(walk.task.waiting_by_waited_on_ms)), walk.task.lead_time_ms.value)
+  assert.equal(walk.task.flow_efficiency.value, 45 / 120, "flow efficiency is working time over lead time")
   assert.equal(walk.stackup.working.class_ms.value.value, 0)
   assert.equal(sumOf(walk.stackup), walk.stackup.lead_time_ms.value)
   // The 30-minute labeled wait ends a burst; the 5-minute wait for the next prompt stays inside one and counts as its idle time.
