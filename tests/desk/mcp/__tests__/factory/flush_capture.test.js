@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
-import { captureOnBranch, contributingStores, judge, sentRecord } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
+import { captureOnBranch, contributingStores, judge, sentRecord, sharesOf } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
 import { CAPTURE_INVALID, EMPTY_RECORD, captureFor } from "../../../../../plugins/desk/mcp/src/factory/capture-publish.js"
 import { coverageNow } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
@@ -74,7 +74,7 @@ test("a changed record is sent in the same intake pull request as facts and unde
   assert.equal([...files.keys()].filter((name) => name.startsWith("facts/")).length, 2)
   assert.equal(github.pulls[0].body, "3", "the file count includes the record")
   const saved = await capture(env)
-  assert.deepEqual(Object.keys(saved).sort(), ["pr", "sent_at", "sent_bytes"])
+  assert.deepEqual(Object.keys(saved).sort(), ["pr", "sent_at", "sent_bytes", "sent_share"])
   assert.equal(saved.pr, 101)
   assert.equal(saved.sent_at, iso(T0))
   // The default branch's capture.json is the only handshake read, and it names the default branch.
@@ -111,7 +111,7 @@ test("a record is not re-sent within 20 hours or when its bytes are unchanged", 
   clock.t = T0 + HOUR
   assert.equal((await run(env, github, clock)).result, "nothing_pending")
   const want = expected((await readStatus(env)).coverage, id)
-  assert.deepEqual(await capture(env), { blob: want.sha, sent_at: iso(T0) })
+  assert.deepEqual(await capture(env), { blob: want.sha, sent_at: iso(T0), sent_share: sharesOf(want.bytes) })
   const before = github.calls.length
   clock.t = T0 + 2 * DAY
   assert.equal((await run(env, github, clock)).result, "nothing_pending")
@@ -195,7 +195,7 @@ test("a refusal naming the record leaves facts unquarantined, sends them again w
   const files = github.headFiles(STORE, `intake/${id}`)
   assert.equal(files.has(path), false, "the record is not in the retried batch")
   assert.equal([...files.keys()].filter((name) => name.startsWith("facts/")).length, 2, "both facts go again")
-  assert.deepEqual(await capture(env), { sent_at: iso(T0), refused: "capture_keys", retry_after: iso(clock.t + 7 * DAY) })
+  assert.deepEqual(await capture(env), { sent_at: iso(T0), sent_share: { "claude-code": 0.6 }, refused: "capture_keys", retry_after: iso(clock.t + 7 * DAY) })
   assert.equal((await readStatus(env)).last_flush[STORE].rejections_unmatched, undefined, "the record's file is not an unmatched file")
   // No quarantine anywhere.
   const delivered = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js").then((m) => m.readDelivered(env, STORE))
@@ -519,7 +519,7 @@ test("nothing from the machine's wider coverage, the cache or another store reac
   assert.doesNotMatch(everything, /sentinel/iu)
   assert.ok(id)
   // The bookkeeping holds only blob, sent_at, pr, refused, retry_after, skipped and invalid.
-  for (const key of Object.keys((await capture(env)) ?? {})) assert.ok(["blob", "sent_at", "pr", "sent_bytes", "refused", "retry_after", "skipped", "invalid"].includes(key), key)
+  for (const key of Object.keys((await capture(env)) ?? {})) assert.ok(["blob", "sent_at", "pr", "sent_bytes", "sent_share", "refused", "retry_after", "skipped", "invalid"].includes(key), key)
 }))
 
 test("a full batch leaves room for the record: at most maxFiles paths, every fact there or still pending", () => scratch(async ({ env }) => {
@@ -551,7 +551,7 @@ test("a data code on the pull request that carried the record is a refusal of th
   clock.t = T0 + HOUR
   const again = await run(env, github, clock)
   assert.equal(again.result, "intake_stale_retried")
-  assert.deepEqual(await capture(env), { sent_at: iso(T0), refused: "unknown_key", retry_after: iso(clock.t + 7 * DAY) })
+  assert.deepEqual(await capture(env), { sent_at: iso(T0), sent_share: { "claude-code": 0.6 }, refused: "unknown_key", retry_after: iso(clock.t + 7 * DAY) })
   const outbox = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   assert.equal((await outbox.readDelivered(env, STORE)).quarantined.size, 0)
   const files = github.headFiles(STORE, `intake/${id}`)
@@ -588,7 +588,7 @@ test("an open pull request keeps carrying the bytes sent, and newer bytes wait f
   const sentAt = (await capture(env)).sent_at
   for (const hours of [1, 2, 3]) {
     clock.t = T0 + hours * HOUR
-    await writeStatus(env, { coverage: coverageAt(iso(clock.t - HOUR), { mine: { derived: 3 + hours, not_seen: 2 } }) })
+    await writeStatus(env, { coverage: coverageAt(iso(clock.t - HOUR), { mine: { derived: 3, not_seen: 2, held: hours } }) })
     assert.equal((await run(env, github, clock)).result, "delivered_pr_open")
     assert.equal(github.headFiles(STORE, `intake/${id}`).get(`capture/${id}.json`), first)
     assert.equal((await capture(env)).sent_at, sentAt)
@@ -772,7 +772,7 @@ test("a record dropped from a rebuilt branch and not on the default branch is re
   assert.equal((await run(env, github, clock)).result, "delivered_pr_open")
   assert.equal(github.headFiles(STORE, `intake/${id}`).has(`capture/${id}.json`), true)
   const resent = await capture(env)
-  assert.deepEqual(Object.keys(resent).sort(), ["pr", "sent_at", "sent_bytes"])
+  assert.deepEqual(Object.keys(resent).sort(), ["pr", "sent_at", "sent_bytes", "sent_share"])
   assert.equal(resent.sent_at, iso(clock.t))
 }))
 
@@ -785,7 +785,7 @@ test("a record that reached the default branch before its branch was rebuilt is 
   github.mergeOpenPr()
   clock.t = T0 + 4 * DAY
   await run(env, github, clock)
-  assert.deepEqual(await capture(env), { blob: want.sha, sent_at: iso(T0) })
+  assert.deepEqual(await capture(env), { blob: want.sha, sent_at: iso(T0), sent_share: sharesOf(want.bytes) })
 }))
 
 test("an empty record that reached the default branch is forgotten, and a pull request with no kept bytes is recorded as dropped", () => scratch(async ({ env }) => {

@@ -20,6 +20,9 @@
 // belong to any store, so it is never read for Codex: the Codex entry is verified only when this
 // store's scope holds a derived Codex session, the host's `undetermined` count is absent or
 // exactly 0, and `fallback` is not true. The other hosts' flag comes from the listing itself.
+// A host that cannot tell a non-desk session from a miss (its `not_in_a_desk` is null: Copilot CLI, Codex) cannot say that an unowned session was missed
+// either, so an unowned `not_seen` session of such a host is left out of the record: it is not counted as a miss, and it is not a zero. When nothing else of that host
+// is in scope the host is omitted, which the store reads as no records, never as a low share. Owned sessions are counted as before.
 // The optional `loop` is a pass-through: the caller owns per-store scoping of it, and the sibling
 // that defines it must use enums only. This module never makes one.
 //
@@ -73,7 +76,8 @@ function hostEntry(name, host, owners) {
     for (const key of keys) {
       if (!isCount(buckets[key])) return undefined
       all[key] += buckets[key]
-      if (owners.has(owner)) sums[key] += buckets[key]
+      // An unowned `not_seen` of a host that cannot say "not in a desk" is unknown, not missed.
+      if (owners.has(owner) && !(!withDesk && owner === OWNER_NONE && key === "not_seen")) sums[key] += buckets[key]
     }
     // A bucket the host cannot tell (null `not_in_a_desk`) must not be filled in an owner row.
     if (!withDesk && buckets.not_in_a_desk !== undefined && buckets.not_in_a_desk !== null && buckets.not_in_a_desk !== 0) return undefined
