@@ -381,10 +381,13 @@ test("factory-start.cjs runs sweep and flush for consented stores, prints nothin
 async function preloadFor(dir, { lines = null, calls }) {
   const file = path.join(dir, `preload-${Math.random().toString(16).slice(2)}.cjs`)
   await fs.writeFile(file, `
-const fs = require("node:fs");
-const boot = require(${JSON.stringify(BOOT)});
-boot.checks.splice(0, boot.checks.length, ...${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })));
-boot.startFactory = async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; };
+// NODE_OPTIONS reaches every Node process the hook starts, including each migration's Detect, which has a two-second budget; only the hook itself needs the fixture checks.
+if (/(copilot-session-start\\.cjs|resolve-desk-root\\.js)$/u.test(process.argv[1] ?? "")) {
+  const fs = require("node:fs");
+  const boot = require(${JSON.stringify(BOOT)});
+  boot.checks.splice(0, boot.checks.length, ...${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })));
+  boot.startFactory = async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; };
+}
 `)
   return file
 }
