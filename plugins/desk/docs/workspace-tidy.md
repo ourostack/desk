@@ -44,7 +44,7 @@ A listed repository is discovery scope, not removal authority. By default, an ol
   "head": "<released-full-commit-id>",
   "base": "refs/remotes/origin/main",
   "delivered": "<verified-delivery-commit-id>",
-  "identity": { "dev": 0, "ino": 0 },
+  "identity": { "dev": "0", "ino": "0" },
   "release": {
     "complete": true,
     "host": "<owning-host>",

@@ -12,9 +12,9 @@ const testsRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 // Left alone for now because two open pull requests (#226 and #227) both change it; drop this entry when they land and the file uses `different`.
 const EXEMPT = new Set(["readiness/journal_integrity.test.js"])
 
-// An operator directly before or after `ino` or `dev` (through any `a.b.` prefix). A `/` counts only with a space on each side, so a regular expression such as /\/dev\/null/ is not division.
-const OPERATOR = String.raw`(?:\+\+|--|\+=|-=|\*=?|%=?|\+(?![+=])|-(?![-=>])|\s/\s)`
-const ARITHMETIC = new RegExp(String.raw`(?<![\w.$/\\])(?:\w+\.)*(?:ino|dev)\b\s*${OPERATOR}|${OPERATOR}\s*(?:\w+\.)*(?:ino|dev)\b(?!\s*:)`, "u")
+// An operator directly before or after `ino` or `dev` (through any `a.b.` prefix, and closing or opening parentheses such as `Number(s.ino)+1`), arithmetic or bitwise. Arithmetic on a variable that merely holds a copy (`const n = s.ino; n + 1`) is a known limit. A `/` counts only with a space on each side, so a regular expression such as /\/dev\/null/ is not division.
+const OPERATOR = String.raw`(?:\+\+|--|\+=|-=|\*=?|%=?|\+(?![+=])|-(?![-=>])|\s/\s|<<=?|>>>?=?|(?<![|])\|(?![|=])|(?<![&])&(?![&=])|\^=?)`
+const ARITHMETIC = new RegExp(String.raw`(?<![\w.$/\\])(?:\w+\.)*(?:ino|dev)\b\)*\s*${OPERATOR}|${OPERATOR}\s*\(*(?:\w+\.)*(?:ino|dev)\b(?!\s*:)`, "u")
 
 // Strings and comments are blanked first, so "/dev/null", "dev.azure.com" and prose such as "dev-only" never match.
 function codeOnly(source) {
@@ -48,10 +48,10 @@ test("no test does arithmetic on a file identity", () => {
 })
 
 test("the guard sees arithmetic on ino and dev but not paths, prose or object keys", () => {
-  for (const code of ["ino + 1", "stat.ino - 1", "{ ino: stat.ino + 1 }", "x.ino += 1", "ino / 2", "dev * 2", "Math.floor(stat.dev / 2)", "1 + stat.ino", "n - stat.dev"]) {
+  for (const code of ["ino + 1", "stat.ino - 1", "{ ino: stat.ino + 1 }", "x.ino += 1", "ino / 2", "dev * 2", "Math.floor(stat.dev / 2)", "1 + stat.ino", "n - stat.dev", "Number(ino)+1", "Number(s.ino) + 1", "BigInt(s.ino)+1n", "(s.ino) + 1", "s.ino<<1", "s.ino|1", "s.dev & 1", "s.ino >> 2", "s.ino ^ 1", "x | s.ino"]) {
     assert.equal(arithmeticOnIdentity(code).length, 1, code)
   }
-  for (const code of ['"/dev/null"', "// ino + 1", "/* dev - 1 */", "const { dev, ino } = stat", "{ dev: stat.dev, ino: stat.ino }", "ino: -1", "stat.ino === other.ino", "a.dev !== b.dev", "https://dev.azure.com/x", '"unit-6d-dev-only"', "ino => ino"]) {
+  for (const code of ['"/dev/null"', "// ino + 1", "/* dev - 1 */", "const { dev, ino } = stat", "{ dev: stat.dev, ino: stat.ino }", "ino: -1", "stat.ino === other.ino", "a.dev !== b.dev", "https://dev.azure.com/x", '"unit-6d-dev-only"', "ino => ino", "ino === other.ino", "inode + 1", "a || stat.ino", "a && stat.dev", "s.ino ?? 0", "Number(s.ino) === 1"]) {
     assert.equal(arithmeticOnIdentity(code).length, 0, code)
   }
 })
