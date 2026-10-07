@@ -95,6 +95,10 @@ test("sharesOf reads only counted hosts with something capturable", () => {
   const bytes = JSON.stringify({ hosts: { "claude-code": { derived: 1, frozen: 1, pending: 0, not_seen: 2 }, "codex-cli": { not_counted: true }, "copilot-cli": { derived: 0, frozen: 0, pending: 0, not_seen: 0 } } })
   assert.deepEqual(sharesOf(bytes), { "claude-code": 0.25 })
   assert.deepEqual(sharesOf("not json"), {})
+  // A record whose hosts are not an object, or whose host entry is not an object, has no share.
+  assert.deepEqual(sharesOf(JSON.stringify({ hosts: [] })), {})
+  assert.deepEqual(sharesOf(JSON.stringify({})), {})
+  assert.deepEqual(sharesOf(JSON.stringify({ hosts: { "claude-code": null, "codex-cli": 5, "copilot-cli": [] } })), {})
 })
 
 // A host with no desk to tell: Copilot CLI and Codex.

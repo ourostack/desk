@@ -149,18 +149,17 @@ export async function coverageNow(env, { now = Date.now, bindingVersion, orphans
     for (const host of Object.values(hosts)) assertPartition(host)
     // Per host, the sessions whose facts copy is in quarantine: the only kind of `held` that is a transient state.
     const inQuarantine = new Set(state.copies.map(({ name }) => name).filter((name) => state.quarantined.includes(name)))
-    const quarantined = Object.fromEntries(Object.entries(counted.hosts).map(([host, entry]) => [host, (entry?.sessions ?? []).filter(({ name }) => inQuarantine.has(name)).length]))
+    const quarantined = Object.fromEntries(Object.entries(counted.hosts).map(([host, entry]) => [host, entry.sessions.filter(({ name }) => inQuarantine.has(name)).length]))
     return { ok: true, coverage: { method: 1, ran_at: new Date(now()).toISOString(), hosts }, cache: counted.cache, quarantined }
   } catch {
     return { ok: false, code: stage }
   }
 }
 
-// The quarantine folder and its store folders: when the newest of them changed (ms, or null), and whether any facts file is in them. Names and times only; unreadable is "nothing".
+// The quarantine folder and its store folders: when the newest of them changed (ms, or null). Times only; an unreadable folder has not changed.
 function quarantineState(root) {
   const top = path.join(root, "quarantine")
   let changedAt = null
-  let held = false
   const touch = (folder) => {
     try {
       const at = statSync(folder).mtimeMs
@@ -178,25 +177,16 @@ function quarantineState(root) {
   }
   for (const slug of slugs) {
     touch(path.join(top, slug))
-    try {
-      if (readdirSync(path.join(top, slug)).some((name) => FACTS_NAME.test(name))) held = true
-    } catch {
-      // Unreadable: not counted as held.
-    }
   }
-  return { changedAt, held }
+  return { changedAt }
 }
 
-/** Whether the coverage pass was taken in a transient quarantine state; see the header. Records anyway only when the state folder cannot be read at all. */
+/** Whether the coverage pass was taken in a transient quarantine state; see the header.  */
 async function quarantineInFlux(env, result, nowMs) {
-  let state
-  try {
-    state = quarantineState(await factoryStateRoot(env, { create: false }))
-  } catch {
-    return false
-  }
+  // An unreadable state folder throws here and the caller reports the pass as failed, keeping the earlier coverage.
+  const state = quarantineState(await factoryStateRoot(env, { create: false }))
   if (state.changedAt !== null && state.changedAt <= nowMs && nowMs - state.changedAt < QUARANTINE_SETTLE_MS) return true
-  return Object.entries(result.coverage.hosts).some(([host, entry]) => entry.state === "counted" && entry.on_disk > 0 && (result.quarantined?.[host] ?? 0) / entry.on_disk > HELD_MAJORITY)
+  return Object.entries(result.coverage.hosts).some(([host, entry]) => entry.state === "counted" && entry.on_disk > 0 && result.quarantined[host] / entry.on_disk > HELD_MAJORITY)
 }
 
 /** See the header. */
