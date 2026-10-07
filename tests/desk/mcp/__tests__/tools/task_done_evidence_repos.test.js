@@ -147,29 +147,37 @@ test("a commit in a recorded clone that no remote-tracking branch contains is re
   )
 })
 
-// A clone with no remote at all (never pushed anywhere, nowhere to push): a commit that exists in it is the finished work.
-async function makeLocalOnlyClone() {
+// A clone with no remote at all (never pushed anywhere, nowhere to push), before any work is committed in it.
+async function makeLocalOnlyRepo() {
   const dir = await mkTempRoot("desk-done-local-")
   const clone = path.join(dir, "clone")
   await fs.mkdir(clone)
   git(clone, "init", "-q", "-b", "main")
   identity(clone)
-  await fs.writeFile(path.join(clone, "a.txt"), "a\n")
-  git(clone, "add", ".")
-  git(clone, "commit", "-q", "-m", "work")
-  return { clone, sha: git(clone, "rev-parse", "HEAD") }
+  return clone
 }
 
+async function commitWork(clone, name = "a") {
+  await fs.writeFile(path.join(clone, `${name}.txt`), `${name}\n`)
+  git(clone, "add", ".")
+  git(clone, "commit", "-q", "-m", "work")
+  return git(clone, "rev-parse", "HEAD")
+}
+
+// A commit that exists in it is the finished work, but only a commit made after the card was created: the rule compares
+// the commit's whole-second time with the card's `created`, so the work is committed after `codeTask`, never before it.
 test("a commit in a recorded clone that has no remote configured at all is valid done evidence", async () => {
-  const { clone, sha } = await makeLocalOnlyClone()
+  const clone = await makeLocalOnlyRepo()
   const root = await codeTask([{ name: "greenhouse", local_path: clone, mode: "local" }])
+  const sha = await commitWork(clone)
   assert.equal((await done(root, { kind: "commit", ref: sha })).status, "updated")
   const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
   assert.equal(data.evidence.ref, sha)
 })
 
 test("a local-only clone still has to contain the commit, and one with a remote still needs it pushed", async () => {
-  const { clone } = await makeLocalOnlyClone()
+  const clone = await makeLocalOnlyRepo()
+  await commitWork(clone)
   const root = await codeTask([{ name: "greenhouse", local_path: clone, mode: "local" }])
   await assert.rejects(done(root, { kind: "commit", ref: "a1b2c3d4" }), /does not resolve in any of this task's repo clones/)
   git(clone, "remote", "add", "origin", "https://github.com/acme/widgets.git")
