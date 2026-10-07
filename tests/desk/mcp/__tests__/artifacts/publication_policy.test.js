@@ -29,15 +29,15 @@ const REQUIRED_POLICY_FIELDS = [
 ]
 
 async function loadPolicyModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "artifacts", "policy.js")))
+  return import("../../../../../plugins/desk/mcp/src/artifacts/policy.js")
 }
 
 async function loadVectorPackModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "vector-packs.js")))
+  return import("../../../../../plugins/desk/mcp/src/indexer/vector-packs.js")
 }
 
 async function loadSnapshotManifestModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "snapshots", "manifest.js")))
+  return import("../../../../../plugins/desk/mcp/src/snapshots/manifest.js")
 }
 
 async function readJson(filePath) {

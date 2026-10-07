@@ -1,4 +1,4 @@
-// Shared scaffolding for private-feedback tests.
+// Shared scaffolding for the private-state tests (Windows ACL, factory outbox, retired private feedback).
 //
 // Every test gets its own temp desk root plus its own private state home so
 // no test ever touches the developer's real feedback store.

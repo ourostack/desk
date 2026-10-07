@@ -51,7 +51,7 @@ import { compareVersions, isVersion } from "./versions.js"
 export const KAIZEN_LABEL = "kaizen"
 export const KAIZEN_MARKER = "<!-- desk-kaizen-check -->"
 export const VERDICT_LABELS = Object.freeze({ confirmed: "confirmed", not_confirmed: "not-confirmed" })
-export const BOT_LOGIN = "github-actions[bot]"
+const BOT_LOGIN = "github-actions[bot]"
 
 const MAX_BLOCK_CHARS = 4096
 const MAX_EVIDENCE_JOBS = 100

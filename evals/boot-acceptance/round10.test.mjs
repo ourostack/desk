@@ -205,7 +205,7 @@ const RUN = "/private/var/folders/xx/T/boot-acceptance-x-AbCdEf"
 const ctxFor = (extra = {}) => ({ deskRoot: `${RUN}/fixture/desk`, toolCalls: [], ...extra })
 
 test("runnerFolders: from the context, or from the desk path in a saved transcript, or null", () => {
-  assert.deepEqual(runnerFolders(ctxFor()), { deskRoot: `/var/folders/xx/T/boot-acceptance-x-AbCdEf/fixture/desk`, runTmp: "/var/folders/xx/T/boot-acceptance-x-AbCdEf", homeDir: "/var/folders/xx/T/boot-acceptance-x-AbCdEf/home" })
+  assert.deepEqual(runnerFolders(ctxFor()), { deskRoot: `/var/folders/xx/T/boot-acceptance-x-AbCdEf/fixture/desk`, runTmp: "/var/folders/xx/T/boot-acceptance-x-AbCdEf", homeDir: "/var/folders/xx/T/boot-acceptance-x-AbCdEf/home", cwd: `/var/folders/xx/T/boot-acceptance-x-AbCdEf/fixture/desk` })
   assert.equal(runnerFolders(ctxFor({ homeDir: "/h", runTmp: "/r" })).homeDir, "/h")
   assert.equal(runnerFolders({ toolCalls: [{ name: "Bash", input: { command: "ls" }, result: `Desk: ${RUN}/fixture/desk (bound by host-project)\n` }] }).deskRoot, `/var/folders/xx/T/boot-acceptance-x-AbCdEf/fixture/desk`)
   assert.equal(runnerFolders({ toolCalls: [{ name: "Read", input: { file_path: `${RUN}/fixture/desk/a.md` } }] }).runTmp, "/var/folders/xx/T/boot-acceptance-x-AbCdEf")

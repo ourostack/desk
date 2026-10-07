@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
-import { writePosixNodeProvider } from "./_helpers.js"
+import { writePosixNodeProvider } from "./_private_state_helpers.js"
 
 test("POSIX provider shim retains Node options, literal arguments, stdin, diagnostics and exit status", {
   skip: process.platform === "win32" ? "POSIX stand-in contract; native Windows uses the actual provider" : false,

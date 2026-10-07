@@ -120,8 +120,6 @@ export function deriveRuntimeSupportMatrixPath({ mcpRoot = defaultMcpRoot, packa
   )
 }
 
-export const runtimeSupportMatrixPath = deriveRuntimeSupportMatrixPath
-
 export function buildRuntimeSupportMatrix({
   mcpRoot = defaultMcpRoot,
   packageJson,
@@ -166,8 +164,6 @@ export function buildRuntimeSupportMatrix({
     targets: targets.sort((left, right) => left.id.localeCompare(right.id)),
   }
 }
-
-export const generateRuntimeSupportMatrix = buildRuntimeSupportMatrix
 
 export function validateRuntimeSupportMatrix({
   matrix,
@@ -700,7 +696,7 @@ export function runRuntimeDependencyPackVerifyCli({ argv = process.argv.slice(2)
   return 1
 }
 
-export function buildHelpText() {
+function buildHelpText() {
   return [
     "Build a runtime dependency pack for the desk MCP server.",
     "",
@@ -709,7 +705,7 @@ export function buildHelpText() {
   ].join("\n")
 }
 
-export function verifyHelpText() {
+function verifyHelpText() {
   return [
     "Verify a runtime dependency pack for the desk MCP server.",
     "",

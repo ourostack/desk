@@ -9,8 +9,7 @@ import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempDeskRoot } from "./_helpers.js"
-import { withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
-import { cleanup, mkFeedbackFixture, useStateHome } from "../feedback/_helpers.js"
+import { cleanup, mkFeedbackFixture, useStateHome } from "../factory/_private_state_helpers.js"
 
 // The surface as it was advertised while the private feedback API was still
 // registered. Retiring that API has to remove exactly one name from this list
@@ -435,12 +434,10 @@ test("calling desk_feedback is refused without opening or creating feedback stor
   const preserved = await mkFeedbackFixture()
   const restore = useStateHome(preserved.stateHome)
   try {
-    // Preserved private bytes: recorded through the retained storage primitive,
-    // never migrated anywhere by this change.
-    const seeded = await withPrivateStore(
-      { deskRoot: preserved.deskRoot, person: "ari" },
-      (store) => store.capture({ text: "preserved private preview feedback", taskRef: null }),
-    )
+    // Preserved private bytes from the retired store: never migrated anywhere by this change.
+    const retained = path.join(preserved.stateHome, "ouroboros-skills", "desk", "feedback", "0123456789abcdef0123456789abcdef")
+    await fs.mkdir(retained, { recursive: true, mode: 0o700 })
+    await fs.writeFile(path.join(retained, "feedback.sqlite"), "retained private bytes", { mode: 0o600 })
     const beforePrivateFiles = await hashedTree(preserved.stateHome)
     assert.ok(
       Object.keys(beforePrivateFiles).length > 0,
@@ -451,7 +448,7 @@ test("calling desk_feedback is refused without opening or creating feedback stor
     for (const args of [
       { action: "list" },
       { action: "capture", text: "written after retirement" },
-      { action: "delete", entry_id: seeded.entry_id },
+      { action: "delete", entry_id: "entry-1" },
     ]) {
       const refused = await call({ params: { name: "desk_feedback", arguments: args } })
       assert.equal(refused.isError, true)

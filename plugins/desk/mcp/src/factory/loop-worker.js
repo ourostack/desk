@@ -48,7 +48,7 @@ export const LOOP_BUDGET_MS = 20 * 60 * 1000
 // What the evaluator step leaves for the steps after it: it starts no run that could end later than this before the budget.
 export const LATER_STEPS_RESERVE_MS = 3 * 60 * 1000
 // The process ends itself this long after the budget if a step is still running.
-export const CEILING_GRACE_MS = 60 * 1000
+const CEILING_GRACE_MS = 60 * 1000
 const LOCK_NAME = "loop-worker.running"
 const CODE = /^[a-z0-9][a-z0-9_:-]{0,63}$/u
 

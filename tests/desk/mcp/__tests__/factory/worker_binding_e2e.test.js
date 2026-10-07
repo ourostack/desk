@@ -11,12 +11,12 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 const FACTORY = "../../../../../plugins/desk/mcp/src/factory/"
-const { deriveClaudeSession } = await import(`${FACTORY}derive-claude.js`)
-const { bindSession, jobId } = await import(`${FACTORY}binding.js`)
-const { validateLocalFacts } = await import(`${FACTORY}schema.js`)
-const { toPublished, serializePublished } = await import(`${FACTORY}publish.js`)
-const { validatePublishedBytes } = await import(`${FACTORY}published-schema.js`)
-const { build } = await import(`${FACTORY}pipeline/build.js`)
+const { deriveClaudeSession } = await import("../../../../../plugins/desk/mcp/src/factory/derive-claude.js")
+const { bindSession, jobId } = await import("../../../../../plugins/desk/mcp/src/factory/binding.js")
+const { validateLocalFacts } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
+const { toPublished, serializePublished } = await import("../../../../../plugins/desk/mcp/src/factory/publish.js")
+const { validatePublishedBytes } = await import("../../../../../plugins/desk/mcp/src/factory/published-schema.js")
+const { build } = await import("../../../../../plugins/desk/mcp/src/factory/pipeline/build.js")
 
 const SID = "2a3b4c5d-6e7f-4809-9a0b-1c2d3e4f5a6b"
 const REMOTE = "https://github.com/o/desk"

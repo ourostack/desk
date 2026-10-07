@@ -14,15 +14,15 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const FACTORY = "../../../../../plugins/desk/mcp/src/factory/"
-const { bindSession, jobId } = await import(`${FACTORY}binding.js`)
-const { applyLimits, dedupePrRefs } = await import(`${FACTORY}derive-common.js`)
-const { deriveClaudeSession } = await import(`${FACTORY}derive-claude.js`)
-const { LIMITS, validateLocalFacts } = await import(`${FACTORY}schema.js`)
-const { validatePublished, validatePublishedBytes } = await import(`${FACTORY}published-schema.js`)
-const { serializePublished, toPublished } = await import(`${FACTORY}publish.js`)
-const { build } = await import(`${FACTORY}pipeline/build.js`)
-const { buildJobTimeline } = await import(`${FACTORY}pipeline/timeline.js`)
-const { calculateFormulas, sharedSessions } = await import(`${FACTORY}pipeline/formulas.js`)
+const { bindSession, jobId } = await import("../../../../../plugins/desk/mcp/src/factory/binding.js")
+const { applyLimits, dedupePrRefs } = await import("../../../../../plugins/desk/mcp/src/factory/derive-common.js")
+const { deriveClaudeSession } = await import("../../../../../plugins/desk/mcp/src/factory/derive-claude.js")
+const { LIMITS, validateLocalFacts } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
+const { validatePublished, validatePublishedBytes } = await import("../../../../../plugins/desk/mcp/src/factory/published-schema.js")
+const { serializePublished, toPublished } = await import("../../../../../plugins/desk/mcp/src/factory/publish.js")
+const { build } = await import("../../../../../plugins/desk/mcp/src/factory/pipeline/build.js")
+const { buildJobTimeline } = await import("../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js")
+const { calculateFormulas, sharedSessions } = await import("../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js")
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const REMOTE = "https://github.com/o/desk"

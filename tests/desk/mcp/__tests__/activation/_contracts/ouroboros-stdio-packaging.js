@@ -359,4 +359,4 @@ function sameList(left, right) {
     && left.length === right.length
     && left.every((value, index) => value === right[index])
 }
-import { selectEngineeringMethod } from "./validate.js"
+import { selectEngineeringMethod } from "../../../../../../plugins/desk/mcp/src/activation/validate.js"

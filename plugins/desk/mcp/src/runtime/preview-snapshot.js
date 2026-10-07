@@ -1,4 +1,4 @@
-import { packageMetadata } from "../package-metadata.js"
+import { deskVersion } from "../package-metadata.js"
 
 export function diagnosticFormat(input) {
   const format = input?.format
@@ -13,7 +13,7 @@ export function previewRuntimeSnapshot(runtimeState) {
     schema_version: 1,
     purpose: "preview-runtime-diagnostics",
     collection: "local-on-demand",
-    mcp_version: packageMetadata.version,
+    desk_version: deskVersion(),
     runtime_state: runtimeState,
     platform: process.platform,
     architecture: process.arch,

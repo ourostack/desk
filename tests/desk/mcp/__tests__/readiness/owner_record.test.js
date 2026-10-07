@@ -5,7 +5,7 @@ import { strict as assert } from "node:assert"
 import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { controllerIdentity } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
-import { ownerLiveness, ownerState, readOwnerRecord } from "../../../../../plugins/desk/mcp/src/readiness/owner-record.js"
+import { ownerState, readOwnerRecord } from "../../../../../plugins/desk/mcp/src/readiness/owner-record.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const NOW = Date.parse("2026-09-26T12:00:00.000Z")
@@ -14,6 +14,17 @@ const clock = { now: () => NOW, uptimeSeconds: () => 3600, selfPid: 100 }
 
 function record(identity, owner) {
   return { schema_version: 1, identity, endpoint: "/tmp/x.sock", socket: { dev: 1, ino: 2 }, owner }
+}
+
+// Judges an owner through `ownerState`, the one function production calls, from a real owner.json.
+async function ownerLiveness({ owner }, options) {
+  const root = await mkTempRoot("desk-owner-liveness-")
+  const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
+  const stateDir = path.join(root, "state")
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify(record(identity, owner)))
+  const { state } = await ownerState({ stateDir, identity, ...options })
+  return state === "live" ? "alive" : state
 }
 
 test("owner.json is missing, corrupt (unreadable, malformed, incomplete or another identity) or valid", async () => {

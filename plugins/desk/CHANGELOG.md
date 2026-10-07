@@ -1,5 +1,115 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.225 — 2026-10-07
+
+Pull requests now fail when they leave unused code behind. A new required check, "Unused code", runs [knip](https://knip.dev) over the repository and fails on a file no entry point reaches, an export nothing imports, an unused or unlisted dependency, an unresolved import, a duplicate export or a stale configuration entry. Hooks and skill scripts are checked as their own workspace, so an unused export in one, or a hook file that is neither registered nor reached from a registered one, fails too, as does a hook export that no other file uses. The entry points (the MCP server, the hooks, scripts and tests) and every exception, each with its reason, are in `tools/unused-code/knip.jsonc`; run it locally with `cd tools/unused-code && npm ci && npm run knip`.
+
+### Deleted, with the code left without purpose
+
+- The retired private feedback store (`src/feedback/store.js`, `src/protected/store.js`) and its tests and offline source-mirror witness. Nothing on a participant's disk is read, changed or deleted; `docs/private-feedback.md` now says what is left there. The native Windows job that exercised the store is now `desk on native Windows` and keeps its other native steps.
+- The `src/feedback/windows-acl.js` re-export; `readiness/journal.js` imports `src/factory/windows-acl.js` directly, and the Windows ACL tests moved to `tests/desk/mcp/__tests__/factory/`.
+- The vector-pack compaction validator (`src/indexer/vector-compaction.js`) and `cleanupRotatedArtifacts`, with their tests.
+- Test-only exports and their tests: `unionIntervals` and `intervalUnion`, `diagnoseHostSupport`, `parseDeskRegistry`, `semanticPartitionIdentity`, `ownerLiveness`, `isLabelsPath` and the broker's `acquireContext` (its production path is `acquireLease`).
+- `READINESS_PROTOCOL_VERSION`, a dead branch in the ranking score and the `reexecuteWithCompatibleNode` alias.
+- Exports that nothing outside their own file imported are now private to that file. Their values and behaviour are unchanged.
+
+### Moved
+
+The Claude, Ouroboros stdio and MCP-declaration contract validators are CI checks, not shipped code, so they moved under `tests/desk/mcp/__tests__/activation/_contracts/`.
+
+### Coverage
+
+The five source files that had coverage gaps (`util/rank.js`, `readiness/protocol.js`, `readiness/journal.js`, `runtime/node-selection.js`, `artifacts/performance-budgets.js`) now have the tests they were missing. `openChangeJournal` takes optional `platform` and `protect` so the Windows path can be tested on any host.
+
+No record Desk writes or publishes changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.224 — 2026-10-07
+
+The coverage gate no longer instruments the migration Detect scripts that the session-start hook runs as child processes. Instrumentation slowed those children with the number of files a pull request changes, so on a large change a Detect run could pass its fixed 2 second startup budget and add a "could not be checked in time" line that broke the session-start output tests. The gate, including its offline-evaluation registration, now skips only a process run with `--detect` under `DESK_PLUGIN_ROOT`, as the migration driver runs it, through one shared predicate. The gate strips `DESK_PLUGIN_ROOT` from the environment it gives the tests, and a test pins the driver and Detect-block side of the contract. Their own tests still measure them. Production never loads the gate's registration, so the startup budget is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.223 — 2026-10-07
+
+Desk's sync status file can no longer lose a freshly recorded failed pull to a push that finishes at the same moment. The boot's pull record and the push worker (and the session-end unpushed check) each read the status file, merged their own fields and renamed a new copy over it, so two of them running together could each drop the other's fields, and `desk_status` then said sync was healthy after a failed pull. Each write now holds a short-lived lock file beside the status file while it reads, merges and renames. The lock never stalls Desk: a writer waits at most 1.5 seconds, takes over a lock older than 5 seconds (its owner died) and, if the lock is still held after the wait, writes anyway rather than hang a boot or a tool call. No field Desk records or publishes changed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.222 — 2026-10-07
+
+`desk_status` no longer says the desk is in sync after a failed pull that nothing has succeeded since. It treated any newer `FETCH_HEAD` as proof the remote was reachable again, but a failed fetch or pull also rewrites that file, so a background fetch that failed just after the boot's failed pull hid the failure: the boot said `degraded` while `desk_status` said `ready` and "in sync". `desk_status` no longer reads `FETCH_HEAD`. A failed pull now clears only when Desk records a success: a later successful sync, a push, or a successful fetch by the session-start fast-forward check (recorded as `last_fetch_ok_at` in its own small file, stamped when the fetch started). A fetch proves only that the remote is reachable, so it clears a failure caused by reachability (`unreachable`, `auth_failed`, `deadline`) and not a `conflict`, `diverged` or `other` failure. A fetch you run by hand no longer clears it, and the failure otherwise expires after 24 hours.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.221 — 2026-10-07
+
+A capture record dropped from a rebuilt intake branch is no longer treated as sent. When a push leaves out the record an open pull request carried, the flush looks for it on the default branch: if it is there it is settled, and if not `status.capture[<store>]` records `dropped: "capture_dropped"` with `dropped_at` and forgets `sent_at`, so the record is due again at the next flush instead of 20 hours after the lost send. A record still dropped six hours later is raised in the doctor and boot status (`capture_dropped`). With no kept bytes the drop is recorded as `capture_drop_unconfirmed`, keeps `sent_at` and raises nothing. See [the local capture notes](docs/factory-local-capture.md).
+
+`factory reconcile` now counts and names a done card whose `factory_report` link points at a job the store does not hold, so a dead link no longer reads as zero cards without a report. With `--store`, `counts.report_link_unavailable` gains `jobs_missing` (`job_removed` only with positive evidence the job was delivered from this machine, otherwise `job_missing`; a jobs-index entry alone is not evidence) and `not_checked`, which counts the cards it could not judge by reason (`too_fresh`, `no_store`, `visibility_not_known`, `store_file_unreadable`) so a zero never stands for unchecked; the loop's daily reconcile sums both into the health summary. `allTasks` now reports each card's `report_job`. See [the local capture notes](docs/factory-local-capture.md).
+
+An older Desk no longer condemns waste labels it cannot read, and a newer one releases what an older one condemned. A labels file written by a newer Desk (its `evaluator.plugin_version` is ahead of the Desk running, and it fails that Desk's schema) is skipped and counted as newer, like facts a newer Desk wrote, instead of quarantined as `invalid`. Every quarantine record now names the Desk that wrote it (`desk_version`), and each flush judges again a labels record whose reason is one of this Desk's own check codes and that names no store blob: when the session is routed to this store and the file now passes the full publishing check, the record is removed and the file goes out with its facts. A record the flush wrote for a store's refusal is marked `source: "store"` and, like any other reason, is never released this way, and a file that still fails stays quarantined. This is the cause of the 14 valid label files quarantined as `invalid` on one machine whose state folder an older Desk shared; see [the local capture notes](docs/factory-local-capture.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.220 — 2026-10-07
+
+Desk now reports one version everywhere an agent can see one: the Desk plugin release, such as `3.2.0-alpha.100`. Before, an agent that asked for "the Desk version" could be told the MCP runtime package's version (`1.4.0-alpha.6`), which does not change with each release. The MCP handshake, `desk_status` (`runtime.plugin.version` and the compact `plugin_version`) and `desk_doctor`'s preview answer (`mcp_version` is now `desk_version`) all say the release. The runtime package's own version stays an internal detail for the runtime pack and is no longer reported to agents.
+
+The factory reads the same version. In the MCP server, which runs from a source mirror, the factory's own version used to be unreadable (null); it is now the real release. So orphan-pass findings become version-aware, and `orphan_derive_failed` can now appear in status. The factory's loop health, the stale-Desk check, the problem filer and the feedback store all use the one resolver, which reads `DESK_PLUGIN_ROOT`, then `CLAUDE_PLUGIN_ROOT`. A feedback note keeps `unknown` as its preview version when the release cannot be read, so the participant's note is kept.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.219 — 2026-10-07
+
+The factory flush now withdraws a delivered waste label when its session's facts no longer bind the label's job, so the store stops holding labels for sessions that are not on their task's timeline (the site's `labels_mismatch` alarm). A session bound to a job by an older binder and dropped from it by a later derivation left its label in the store for good, because nothing withdrew a label. Every flush now compares each delivered label with the session's local facts (`jobs` only, since the site builds a job's sessions from `jobs`, not from an outcome the session signed off) and sends the delete through the ordinary retraction, so the same consent, routing, refusal and "only what this machine delivered" rules apply. It fails closed: a session whose facts are missing, unreadable, linked or in a newer format is never withdrawn, and a delivered label with no recorded path is found by publishing it again and withdrawn only when the store holds exactly those bytes. Once the delete has merged, the label is held back locally as `job_unbound` (the local file stays) and is released if the session binds the job again. The label's session keeps its facts and its other files.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.218 — 2026-10-07
+
+Factory: a job's lead time is never shorter than the span of its own recorded segments. When the task card's dates give less (an adopted card created and closed at nearly the same moment, or a job that kept working after its first done), the lead time is raised to that span and published as partial with the reason `card_dates_shorter_than_work`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.217 — 2026-10-07
+
+Two fixes to the steps in `task_update`. The `step_note` that says which steps are "now ready" is now read from the card after the refresh, so a step the call added and the refresh then found already delivered is no longer called ready, and a step the refresh unblocked still is.
+
+A GitHub PR given as a step's new evidence must now be in that step's repo, matched the way Desk matches done evidence: by the repo's recorded name or the remotes of its local clone. A repo with no GitHub identity Desk can match (a plain name that only labels it) accepts any PR, and a card with no repos is unaffected. A step with no repo (`—`) on a card that has repos can no longer take a PR. The refusal names the way back: set the step to pending (with `expect` when it is settled), then give `repo` and `evidence`. Only evidence that is used is checked, so a reason on a dropped or blocked step is not refused. Rows already on a card are not rechecked.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.216 — 2026-10-07
+
+Desk no longer watches the harness or the shell. It acts only at its own boundaries: its MCP tools, the desk repository it owns, and its own session start and end. The harness provides and supervises its tools, and Desk neither intercepts them nor substitutes for them.
+
+### Deleted, with their tests, docs, skill text, registrations and the code left without purpose
+
+- The protected-checkout guard and the `desk.protected` marker.
+- The process-kill guard, the credential-probe guard, the task-status guard (the card pre-commit Git hook stays), and the elsewhere-clone check.
+- Host enforcement on every host, including the Codex adapter block. The Codex adapter no longer pins `memories = false` or registers a `PreToolUse` hook. Re-activation replaces an older generated block that did either.
+- The brief task-line hook, entirely: its deny, its rewrite, its record mode and its brief-focus state. The task-line writer and the binding stay, and a brief still carries its `Desk-Task:` line, now written by the agent.
+- The done-claim gate on every host, and the signoff witness with its ticket store.
+- The ask gate, which inspected the harness's Write, Edit, Bash and PowerShell calls. Protecting the activation file in an unattended session is the harness's permission system's job.
+- `desk_status` and `desk_doctor` lose the host-enforcement and gate-health sections, and the boot checks for host enforcement and hook dependencies are gone.
+
+### Behaviour changes
+
+- Desk now refuses every write, before it touches any file, when the desk checkout is detached or not on the branch it expects. With a configured state branch, that is the state branch. With none, it is the branch the remote's default (`origin/HEAD`) names when the remote has one, and any named branch is allowed otherwise, so a `master` desk, a fetched-but-not-cloned remote and a local-only desk all keep working. The session's write gate makes the check before any write tool runs, and the staging and commit helpers repeat the detached-HEAD check as a backstop for paths that skip the gate. Boot's local-only recording follows the same rule, using the state branch from the same activation config the session reads. The refusal is an ordinary tool answer that names the branch it found and the one it expected (`write_branch_mismatch` or `write_branch_detached`), and nothing is written or staged.
+- `task_signoff` records the sign-off without any human-channel verification, so a sign-off recorded through the tool counts as accepted. The sign-off block is now `{state, at, reason}`: Desk no longer writes `verified` or any witness or ticket field. Return lines for new refusals no longer end with a `verified` or `unverified` token. Existing cards keep their fields, and Desk readers accept both shapes.
+- A later, different `task_signoff` answer now replaces the one held. Repeating the same answer changes nothing.
+- The factory pipeline's sign-off, yield and rework rollups no longer emit `accepted_unverified`, `refused_unverified`, `signoff_unverified` or `compared_verified`, which were fixed at 0 and which nothing in this repository reads.
+
+### Safe to delete
+
+A leftover `desk.protected` Git config and the old state folders (`brief-focus/`, `host-enforcement-naming/` and the sign-off tickets) are inert now. Delete them whenever convenient.
+
+The boot-acceptance evals keep their done-claim measurement patterns in the harness itself, as measurement only.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.215 — 2026-10-06
 
 Desk now derives a step's `in review`, `merged` and `delivered` states from its pull request, and a card with a `## Steps` table closes only on its steps. Callers can no longer set those three states where Desk can read them (a GitHub PR or a `task:` card in Evidence); for a PR elsewhere (Azure DevOps, GHE) or a commit the agent still declares them with evidence and the answer says so. A step whose Evidence holds a GitHub PR URL is derived with the repository's own delivery rule: an open PR is `in review`, a merged PR not yet delivered is `merged`, a delivered one is `delivered`. A PR closed without a merge leaves the declared state and the answer says `PR closed without merge`; an answer GitHub cannot give leaves the cell and says it was not verified. A step whose Evidence is `task:<track>/<slug>` follows that card (done is delivered, blocked is blocked, anything else is in progress). Every `task_update` on a card with steps refreshes its steps once and writes the changed cells in the same write; boot and `desk_status` make no network call, and the answer carries `steps_refreshed` and `steps_notes`.

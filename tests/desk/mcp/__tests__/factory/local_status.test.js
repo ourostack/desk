@@ -421,8 +421,6 @@ test("the orphan pass reads as one line, and a failed, interrupted or stalled pa
   assert.equal(orphansHung(undefined, "1.0.0"), 0)
   assert.match(orphanPassLine(hung, now, v1), /frozen 4 \(1 hung\), last full walk/u)
   assert.equal(typeof ownVersion(), "string")
-  assert.equal(ownVersion(() => { throw new Error("gone") }), null)
-  assert.equal(ownVersion(() => "{}"), null)
   assert.match(ORPHAN_FINDING_ADVICE, /`node mcp\/scripts\/factory\.js status`/u)
   const failed = { started_at: ran.started_at, ran_at: ran.ran_at, cursor: null, last_wrap_at: null, sweeps_in_walk: 0, failed: "pass_failed" }
   assert.equal(orphanPassFinding(failed, now), "pass_failed")

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -19,29 +19,18 @@ function makeRoot(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix))
 }
 
-test("startup reads the diagnostic server version without making metadata failure fatal", () => {
-  assert.equal(resolveMcpServerVersion({
-    mcpRoot: "/plugin",
-    readFile: () => JSON.stringify({ version: "7.8.9" }),
-  }), "7.8.9")
-  assert.equal(resolveMcpServerVersion({
-    mcpRoot: "/plugin",
-    readFile: () => JSON.stringify({ version: "" }),
-  }), "0.0.0")
-  assert.equal(resolveMcpServerVersion({
-    mcpRoot: "/plugin",
-    readFile: () => JSON.stringify({ version: "not-semver" }),
-  }), "0.0.0")
-  assert.equal(resolveMcpServerVersion({
-    mcpRoot: "/plugin",
-    readFile: () => JSON.stringify({ version: "7.8.9-beta.1+build.2" }),
-  }), "7.8.9-beta.1+build.2")
-  assert.equal(resolveMcpServerVersion({
-    mcpRoot: "/plugin",
-    readFile: () => {
-      throw new Error("package metadata unavailable")
-    },
-  }), "0.0.0")
+test("startup reads the diagnostic server version from plugin.json without making metadata failure fatal", () => {
+  const versionOf = (content) => {
+    const root = makeRoot("desk-startup-version-")
+    if (content !== undefined) writeFileSync(path.join(root, "plugin.json"), content)
+    return resolveMcpServerVersion({ env: { DESK_PLUGIN_ROOT: root } })
+  }
+  assert.equal(versionOf(JSON.stringify({ version: "7.8.9" })), "7.8.9")
+  assert.equal(versionOf(JSON.stringify({ version: "" })), "0.0.0")
+  assert.equal(versionOf(JSON.stringify({ version: "not-semver" })), "0.0.0")
+  assert.equal(versionOf(JSON.stringify({ version: "7.8.9-beta.1+build.2" })), "7.8.9-beta.1+build.2")
+  assert.equal(versionOf("not json"), "0.0.0")
+  assert.equal(versionOf(undefined), "0.0.0")
 })
 
 test("startup assembles inspected runtime status and falls back to diagnostics when restoration fails", async () => {

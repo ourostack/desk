@@ -45,7 +45,7 @@ import { ANDON_LABEL } from "./pipeline/andon.js"
 import { issuesClient } from "./store-issues.js"
 
 export const MAX_ISSUES_PER_KIND = 50
-export const BUILD_FAILING_LABEL = "build-failing"
+const BUILD_FAILING_LABEL = "build-failing"
 
 const KINDS = Object.freeze([
   { kind: "andon", source: "andon", health: "andon_open" },

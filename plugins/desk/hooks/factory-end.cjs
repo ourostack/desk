@@ -5,12 +5,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { pathToFileURL } = require("node:url");
 // Loaded only when a worker starts: the Stop hook runs after every turn.
 const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
 const ownRoot = path.resolve(__dirname, "..");
 const headless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
-const runtime = (file) => import(pathToFileURL(path.join(ownRoot, "mcp", file)).href);
 const MAX_INPUT = 1024 * 1024;
 
 async function readInput(stream, timeoutMs = 150) {
@@ -312,7 +310,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     // A headless evaluator session is never captured: no marker, no derive.
     if (headless(env)) return "headless";
     const [{ absolutePath, readSmallText, validMarker }, { ENUMS, PATTERNS, isPlainObject }] = await Promise.all([
-      runtime("src/factory/marker.js"), runtime("src/factory/schema.js"),
+      import("../mcp/src/factory/marker.js"), import("../mcp/src/factory/schema.js"),
     ]);
     if (!["claude", "copilot", "codex"].includes(host) || !isPlainObject(payload)) return "invalid";
     const claude = host === "claude";
@@ -327,7 +325,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     if (!absolutePath(log)) return "invalid";
     if (codex && childThread(payload, log)) return "invalid";
     const [{ resolveHookDeskRoot }, outbox, { resolveStore }, cli] = await Promise.all([
-      runtime("scripts/resolve-desk-root.js"), runtime("src/factory/outbox.js"), runtime("src/factory/store-route.js"), runtime("scripts/factory.js"),
+      import("../mcp/scripts/resolve-desk-root.js"), import("../mcp/src/factory/outbox.js"), import("../mcp/src/factory/store-route.js"), import("../mcp/scripts/factory.js"),
     ]);
     const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd });
     if (deskRoot === null) return "unavailable";

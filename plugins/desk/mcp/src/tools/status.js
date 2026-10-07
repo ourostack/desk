@@ -1,17 +1,17 @@
-import { existsSync, statSync } from "node:fs"
-import { execFileSync, spawnSync } from "node:child_process"
+import { existsSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "../db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
-import { packageMetadata as packageJson } from "../package-metadata.js"
+import { deskVersion } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
-import { aheadBehindCounts, hasRemoteConfigured, readSyncStatus } from "../runtime/sync-worker.js"
+import { aheadBehindCounts, hasRemoteConfigured, readFetchOkAt, readSyncStatus } from "../runtime/sync-worker.js"
 
 
 // desk_status's one input, `detail`, is read where the answer is shaped for the caller (runtime/desk-session.js, which
@@ -32,21 +32,11 @@ export const DESK_STATUS_FIELDS = ["detail"]
  * itself (`runtime/sync-worker.js`) and the SessionEnd safety net
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
-// When the desk's last fetch finished (FETCH_HEAD's modified time), or null: a later fetch proves the remote was reachable.
-function lastFetchMs(deskRoot) {
-  try {
-    const gitDir = execFileSync("git", ["-C", deskRoot, "rev-parse", "--absolute-git-dir"], { encoding: "utf8", timeout: 5000 }).trim()
-    return statSync(path.join(gitDir, "FETCH_HEAD")).mtimeMs
-  } catch {
-    return null
-  }
-}
-
 function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
   if (!hasRemoteConfigured(deskRoot, spawnGit)) return "no remote configured"
   const recorded = readSyncStatus({ root: deskRoot, env })
   // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
-  const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: lastFetchMs(deskRoot) })
+  const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: readFetchOkAt({ root: deskRoot, env }) })
     ? { last_pull: recorded.last_pull }
     : {}
   if (recorded?.blocked) {
@@ -84,7 +74,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
         relative_path: path.posix.join("desks", path.basename(effectiveRoot)),
       }
   const root = rootStatus(deskRoot, statusContext.root)
-  const runtime = runtimeStatus(statusContext.runtime ?? {})
+  const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
   const localDb = root.valid
     ? inspectLocalDb(root.path)
     : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
@@ -469,12 +459,12 @@ function rootStatus(deskRoot, rootContext = {}) {
   }
 }
 
-function runtimeStatus(runtime) {
+function runtimeStatus(runtime, env) {
   const sourceMirrorPath = runtime.source_mirror_path ?? runtime.sourceMirrorPath ?? null
   return {
     plugin: {
-      name: packageJson.name,
-      version: packageJson.version,
+      name: "desk",
+      version: deskVersion(env),
     },
     node: {
       platform: process.platform,

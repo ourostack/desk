@@ -36,7 +36,7 @@ const newSessionBeforeFix = () => log(
   end("a2", "agentStop", {}),
 )
 
-test("a Copilot log from before the fix: no pointer on the first prompt, sessionStart ran after it, one denial and one stop block", () => {
+test("a Copilot log from before the fix: no pointer on the first prompt, sessionStart ran after it, and the report no longer counts denials or stop blocks", () => {
   const gates = copilotGates(parseEventLines(newSessionBeforeFix()))
   assert.equal(gates.events_saved, true)
   assert.equal(gates.session_start.fired, 1)
@@ -44,46 +44,10 @@ test("a Copilot log from before the fix: no pointer on the first prompt, session
   assert.equal(gates.session_start.context_chars, "foundation ".repeat(100).length)
   assert.equal(gates.session_start.after_first_prompt_hook, true)
   assert.deepEqual(gates.first_prompt_pointer, { prompts: 1, injected_on_first_prompt: false, reached_model: false, injected_count: 0 })
-  assert.equal(gates.pre_tool_use_denials, 1)
-  assert.equal(gates.agent_stop_blocks, 1)
+  assert.equal(gates.pre_tool_use_denials, undefined)
+  assert.equal(gates.agent_stop_blocks, undefined)
   assert.equal(gates.hook_failures, 0)
   assert.deepEqual(gates.hook_order, ["userPromptSubmitted", "sessionStart", "preToolUse", "agentStop"])
-})
-
-// Copilot 1.0.x logs a denied preToolUse call as `{ "<tool call id>": "Denied by preToolUse hook: <reason>" }` in the hook's output (round I, resume-named-task runs 1 and 2),
-// not as `permissionDecision`. An agentStop block is logged as `{ decision: "block", reason }` (probe session 2c7404f2), which the counter already reads.
-test("a Copilot denial logged as a tool-call-id map counts as a preToolUse denial, alongside the permissionDecision shape", () => {
-  const text = log(
-    start("t1", "preToolUse", { toolCalls: [{ name: "bash", command: "node - << 'EOF'" }] }),
-    end("t1", "preToolUse", { toolu_01C1r4tsLkj5V2uN27B2YwM8: "Denied by preToolUse hook: Desk denies a shell command that writes an existing task card" }),
-    start("t2", "preToolUse", { toolCalls: [{ name: "desk-task_update" }] }),
-    end("t2", "preToolUse", {}),
-    start("t3", "preToolUse", { toolCalls: [{ name: "edit" }] }),
-    end("t3", "preToolUse", { toolu_01846KpY6suzkZLXUv4YWy7r: "Denied by preToolUse hook: Desk denies a direct edit of an existing task card" }),
-    start("t4", "preToolUse", { toolCalls: [{ name: "bash" }] }),
-    end("t4", "preToolUse", { permissionDecision: "deny", permissionDecisionReason: "x" }),
-    start("t5", "preToolUse", { toolCalls: [{ name: "view" }] }),
-    end("t5", "preToolUse", { toolu_x: "Allowed" }),
-    start("a1", "agentStop", { stopReason: "end_turn", stop_hook_active: false }),
-    end("a1", "agentStop", { decision: "block", reason: "PROBE-CONTINUE" }),
-    start("a2", "agentStop", { stopReason: "end_turn", stop_hook_active: true }),
-    end("a2", "agentStop", {}),
-  )
-  const gates = copilotGates(parseEventLines(text))
-  assert.equal(gates.pre_tool_use_denials, 3)
-  assert.equal(gates.agent_stop_blocks, 1)
-})
-
-test("a preToolUse hook.end whose output is null, a string or absent is not a denial and does not throw", () => {
-  const text = log(
-    start("t1", "preToolUse", {}),
-    line("hook.end", { hookInvocationId: "t1", hookType: "preToolUse", success: true, output: null }),
-    start("t2", "preToolUse", {}),
-    line("hook.end", { hookInvocationId: "t2", hookType: "preToolUse", success: true, output: "ok" }),
-    start("t3", "preToolUse", {}),
-    end("t3", "preToolUse", { permissionDecision: "deny" }),
-  )
-  assert.equal(copilotGates(parseEventLines(text)).pre_tool_use_denials, 1)
 })
 
 test("a Copilot log with the pointer on the first prompt records that it was injected and that it reached the model", () => {
@@ -122,7 +86,6 @@ test("an empty log, failed hooks, an unmatched hook and a log with no user messa
   assert.equal(gates.hook_failures, 1)
   assert.equal(gates.session_start.fired, 1)
   assert.equal(gates.session_start.injected, false)
-  assert.equal(gates.pre_tool_use_denials, 0)
 })
 
 test("the hook order collapses repeats and stops at twelve entries", () => {
@@ -199,30 +162,25 @@ test("the session log is read from the profile: every session folder's events, o
 const hook = (hookEvent, output) => ({ type: "system", subtype: "hook_response", hook_event: hookEvent, output })
 const user = (...content) => ({ type: "user", message: { content } })
 
-test("Claude gates count Stop-hook feedback, Desk PreToolUse denials and SessionStart context", () => {
+test("Claude gates report SessionStart hooks only: Desk has no PreToolUse or Stop-blocking hook left to count", () => {
   const events = [
     { type: "system", subtype: "init" },
     hook("SessionStart", JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "foundation" } })),
     hook("SessionStart", "{}"),
     hook("Stop", "{}"),
-    { type: "assistant", message: { content: [{ type: "text", text: "Stop hook feedback:\nnot from the user" }, { type: "tool_use", id: "a", name: "Bash", input: {} }] } },
-    user({ type: "tool_result", tool_use_id: "a", is_error: true, content: "PreToolUse:Bash hook error: Commit only your own paths with git commit <paths>. Desk protects this checkout: /desk" }),
-    user({ type: "tool_result", tool_use_id: "b", is_error: true, content: [{ type: "text", text: "PreToolUse:Edit hook error: card writes go through task_update" }] }),
-    user({ type: "tool_result", tool_use_id: "c", is_error: true, content: "Permission to use Bash has been denied." }),
-    user({ type: "tool_result", tool_use_id: "d", is_error: false, content: "PreToolUse:Bash hook error: quoted in a successful result" }),
-    user({ type: "text", text: "Stop hook feedback:\nYour reply says the work is done" }),
+    user({ type: "tool_result", tool_use_id: "a", is_error: true, content: "Permission to use Bash has been denied." }),
     user({ type: "text", text: "an ordinary message" }),
     { type: "user", message: { content: "a bare string message" } },
     { type: "result" },
   ]
-  assert.deepEqual(claudeGates(events), { events_saved: true, session_start: { fired: 2, injected: true, cancelled: 0, desk_delivered: false }, stop_hook_feedback: 1, pre_tool_use_denials: 2 })
-  assert.deepEqual(claudeGates([]), { events_saved: true, session_start: { fired: 0, injected: false, cancelled: 0, desk_delivered: false }, stop_hook_feedback: 0, pre_tool_use_denials: 0 })
+  assert.deepEqual(claudeGates(events), { events_saved: true, session_start: { fired: 2, injected: true, cancelled: 0, desk_delivered: false } })
+  assert.deepEqual(claudeGates([]), { events_saved: true, session_start: { fired: 0, injected: false, cancelled: 0, desk_delivered: false } })
 })
 
 test("gateReport picks the host's counter and says so when a Copilot run has no log", () => {
   assert.deepEqual(gateReport({ host: "claude", claudeEvents: [] }), claudeGates([]))
   assert.deepEqual(gateReport({ host: "claude" }), claudeGates([]))
-  assert.equal(gateReport({ host: "copilot", copilotEventsText: newSessionBeforeFix() }).agent_stop_blocks, 1)
+  assert.equal(gateReport({ host: "copilot", copilotEventsText: newSessionBeforeFix() }).session_start.fired, 1)
   const missing = gateReport({ host: "copilot", copilotEventsText: null })
   assert.deepEqual(missing, copilotGatesUnavailable)
   assert.equal(missing.events_saved, false)

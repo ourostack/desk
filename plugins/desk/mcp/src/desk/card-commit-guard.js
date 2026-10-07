@@ -43,12 +43,12 @@ import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
 export const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 /** The first marker line of the hook Desk writes. */
 export const HOOK_MARKER = "# desk-card-commit-guard"
-export const HOOK_VERSION = 5
+const HOOK_VERSION = 5
 export const CHAINED_NAME = "pre-commit.desk-chained"
 /** Set by the hook while it runs; a second entry (the pre-commit framework's `pre-commit.legacy` chain) exits 0 instead of looping. */
-export const RUNNING_ENV = "DESK_CARD_GUARD_RUNNING"
+const RUNNING_ENV = "DESK_CARD_GUARD_RUNNING"
 /** The name the pre-commit framework gives the hook it found when it installed itself. */
-export const LEGACY_NAME = "pre-commit.legacy"
+const LEGACY_NAME = "pre-commit.legacy"
 
 const GIT_TIMEOUT_MS = 5000
 

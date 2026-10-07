@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -10,7 +10,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.met
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 
 async function loadNodeSelection() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "node-selection.js")))
+  return import("../../../../../plugins/desk/mcp/src/runtime/node-selection.js")
 }
 
 function writeExecutable(file) {
@@ -429,4 +429,45 @@ test("compatible-Node re-exec rejects child process errors", async () => {
     },
   })
   await assert.rejects(failed, /spawn failed/u)
+})
+
+test("Node selection runs with its defaults: the real process, environment and probe", async () => {
+  const { discoverNodeCandidates, probeNodeRuntime, reexecWithCompatibleNode, selectCompatibleNode } = await loadNodeSelection()
+  assert.ok(discoverNodeCandidates().includes(process.execPath))
+  const probed = probeNodeRuntime({ executable: process.execPath })
+  assert.equal(probed.ok, true)
+  assert.equal(selectCompatibleNode().reason, "no_compatible_node")
+  // With no arguments at all there is nothing to run, so both refuse.
+  assert.throws(() => probeNodeRuntime(), TypeError)
+  await assert.rejects(reexecWithCompatibleNode(), TypeError)
+
+  const root = mkdtempSync(path.join(tmpdir(), "desk-node-reexec-defaults-"))
+  try {
+    const entrypointPath = path.join(root, "entry.mjs")
+    writeFileSync(entrypointPath, "process.exit(0)\n")
+    const result = await reexecWithCompatibleNode({ executable: process.execPath, entrypointPath })
+    assert.deepEqual(result, { code: 0, signal: null, forwardedSignal: null })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a path the user cannot search is not a Node candidate", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const { discoverNodeCandidates } = await loadNodeSelection()
+  const root = mkdtempSync(path.join(tmpdir(), "desk-node-unreadable-"))
+  const homeDir = path.join(root, "home")
+  const locked = path.join(homeDir, ".nvm")
+  try {
+    mkdirSync(path.join(locked, "versions", "node"), { recursive: true })
+    const lockedBin = path.join(root, "locked-bin")
+    mkdirSync(lockedBin)
+    writeExecutable(path.join(lockedBin, "node"))
+    chmodSync(locked, 0o000)
+    chmodSync(lockedBin, 0o000)
+    assert.deepEqual(discoverNodeCandidates({ currentExecutable: path.join(root, "absent"), env: { PATH: lockedBin }, homeDir }), [])
+  } finally {
+    chmodSync(locked, 0o700)
+    chmodSync(path.join(root, "locked-bin"), 0o700)
+    rmSync(root, { recursive: true, force: true })
+  }
 })

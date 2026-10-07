@@ -47,6 +47,7 @@ const REPORT_REASON_TEXT = {
   wait_fields_unavailable: "the wait records were not available",
   job_offsets_unavailable: "the job clock could not be read",
   zero_lead_time: "the job's lead time is zero",
+  card_dates_shorter_than_work: "the task card's dates are shorter than the work its sessions recorded, so the lead time is at least that recorded span",
   no_wait_intervals: "no wait was recorded",
   no_active_intervals: "no active time was recorded",
   not_reported_to_store: "the store only receives published facts, so it cannot count sessions that never published any",

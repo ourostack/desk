@@ -4,9 +4,12 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 
-import { acquireContext, acquireLease } from '../../../../plugins/desk/browser-context-broker/src/broker.mjs';
+import { acquireLease } from '../../../../plugins/desk/browser-context-broker/src/broker.mjs';
 import { invokeProvider } from '../../../../plugins/desk/browser-context-broker/src/provider.mjs';
 import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
+
+// The broker's production entry point is `acquireLease`. These tests exercise the context acquisition it wraps, so they pass a lease creator that makes no lease and read `acquired`.
+const acquireContext = async (options) => (await acquireLease({ ...options, owner: 'test', leaseCreator: async () => null })).acquired;
 
 const providerFixture = new URL('./fixtures/json-provider.mjs', import.meta.url);
 const scratchRoot = path.resolve(

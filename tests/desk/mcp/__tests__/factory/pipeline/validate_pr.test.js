@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { factsPathsForSession, isCapturePath, isFactsPath, isLabelsPath, validatePr } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
+import { factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "..", "fixtures", "published-golden.json"))
@@ -226,6 +226,8 @@ test("validatePr accepts an added or modified labels file whose evidence matches
     ],
   }), { ok: true, errors: [] })
 })
+
+const isLabelsPath = (value) => labelsPathParts(value) !== null
 
 test("isLabelsPath and factsPathsForSession recognize only the exact contracts", () => {
   assert.equal(isLabelsPath(LABEL_PATH), true)

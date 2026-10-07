@@ -1,4 +1,4 @@
-// Windows ACL primitive for the private feedback store.
+// Windows ACL primitive for private state (the readiness journal and the factory outbox).
 //
 // Two layers of proof live here:
 //
@@ -21,8 +21,8 @@ import { spawnSync } from "node:child_process"
 import {
   assertWindowsAclAvailable,
   protectWindowsPaths,
-} from "../../../../../plugins/desk/mcp/src/feedback/windows-acl.js"
-import { nativeProbe, writePosixNodeProvider } from "./_helpers.js"
+} from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
+import { nativeProbe, writePosixNodeProvider } from "./_private_state_helpers.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
 const isWindows = process.platform === "win32"
@@ -600,3 +600,8 @@ test(
     }
   },
 )
+
+test("protectWindowsPaths uses the ambient environment and the real runner when given no options", async () => {
+  // An empty batch is refused before either default is used to start a process.
+  await assert.rejects(() => protectWindowsPaths([]), /at least one path/u)
+})

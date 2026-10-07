@@ -367,13 +367,29 @@ test("the summary sums each desk's latest report-link count, keeps a skipped des
   const counts = {
     "/d/a": { cards: 2, archived: 1, by_reason: { visibility_not_known: 1, desk_not_private: 1 } },
     "/d/b": { cards: 1, archived: 1, by_reason: { visibility_not_known: 1 } },
-    "/d/c": { cards: 0, archived: 0, by_reason: {} },
+    "/d/c": { cards: 0, archived: 0, by_reason: {}, jobs_missing: { cards: 2, archived: 1, by_reason: { job_missing: 1, job_removed: 1 }, named: [{ track: "t", slug: "a", reason: "job_missing" }] }, not_checked: { cards: 3, by_reason: { too_fresh: 1, no_store: 2 } } },
   }
   await runReconcileStep(env, { now: NOW, reconcileImpl: (options) => withLinks(counts[options.deskRoot]), desks })
-  assert.deepEqual((await readStatus(env)).reconcile.report_link_unavailable, { cards: 3, archived: 2, by_reason: { visibility_not_known: 2, desk_not_private: 1 } })
+  assert.deepEqual((await readStatus(env)).reconcile.report_link_unavailable, { cards: 3, archived: 2, by_reason: { visibility_not_known: 2, desk_not_private: 1 }, jobs_missing: { cards: 2, archived: 1, by_reason: { job_missing: 1, job_removed: 1 } }, not_checked: { cards: 3, by_reason: { too_fresh: 1, no_store: 2 } } })
   // Two hours later only the fourth desk is due; the other three keep their latest counts, and a desk with none adds nothing.
   await runReconcileStep(env, { now: later(2), reconcileImpl: () => clean, desks })
   const status = await readStatus(env)
-  assert.deepEqual(status.reconcile.report_link_unavailable, { cards: 3, archived: 2, by_reason: { visibility_not_known: 2, desk_not_private: 1 } })
+  assert.deepEqual(status.reconcile.report_link_unavailable, { cards: 3, archived: 2, by_reason: { visibility_not_known: 2, desk_not_private: 1 }, jobs_missing: { cards: 2, archived: 1, by_reason: { job_missing: 1, job_removed: 1 } }, not_checked: { cards: 3, by_reason: { too_fresh: 1, no_store: 2 } } })
   assert.deepEqual(status.loop.reconcile_desks[keyOf("/d/a")].links, counts["/d/a"])
+  // The names of missing jobs are never kept in the summary or the per-desk record.
+  assert.equal(JSON.stringify(status.loop.reconcile_desks[keyOf("/d/c")].links).includes("\"slug\""), false)
 }))
+
+test("desks that recorded none of the newer parts leave them out of the sum", () => scratch(async (env) => {
+  await runReconcileStep(env, { now: NOW, reconcileImpl: () => withLinks({ cards: 1, archived: 0, by_reason: { desk_not_private: 1 } }), desks: ["/d/a"] })
+  assert.deepEqual((await readStatus(env)).reconcile.report_link_unavailable, { cards: 1, archived: 0, by_reason: { desk_not_private: 1 } })
+}))
+
+test("a damaged newer part of the link counts is left out and never discards the rest; the parts read cleanly are kept without their names", () => {
+  const base = { cards: 1, archived: 0, by_reason: { desk_not_private: 1 } }
+  const good = { jobs_missing: { cards: 1, archived: 0, by_reason: { job_missing: 1 }, named: [{ track: "t", slug: "s", reason: "job_missing" }] }, not_checked: { cards: 2, by_reason: { no_store: 2 } } }
+  assert.deepEqual(summarizeReconcile(withLinks({ ...base, ...good })).links, { ...base, jobs_missing: { cards: 1, archived: 0, by_reason: { job_missing: 1 } }, not_checked: { cards: 2, by_reason: { no_store: 2 } } })
+  for (const damaged of [{ jobs_missing: { cards: 1, archived: 0, by_reason: { job_unknown_future: 1 } }, not_checked: { cards: "x", by_reason: {} } }, { not_checked: { cards: 1, by_reason: { future_reason: 1 } }, jobs_missing: "x" }, { jobs_missing: { cards: 1, by_reason: {} } }]) {
+    assert.deepEqual(summarizeReconcile(withLinks({ ...base, ...damaged })).links, base, JSON.stringify(damaged))
+  }
+})

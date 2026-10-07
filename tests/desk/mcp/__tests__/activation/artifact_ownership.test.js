@@ -21,7 +21,7 @@ const fixturesRoot = path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/fixtu
 const ledgerPath = ".codex/desk-activation-ledger.json"
 
 async function loadArtifactLedger() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "artifact-ledger.js")))
+  return import("../../../../../plugins/desk/mcp/src/activation/artifact-ledger.js")
 }
 
 function fixture(fileName) {

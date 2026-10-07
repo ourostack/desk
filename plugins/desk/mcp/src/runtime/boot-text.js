@@ -125,12 +125,6 @@ export function ceiling(text, limit = TEXT_CEILING) {
   return `${cut.trimEnd()} ... (see card)`
 }
 
-// A task's next step or blocker is printed whole: a cut line made agents guess the rest or open the card. A blocked
-// task shows the card's blocker reason (falling back to its next step); a card that records neither says so, so no
-// agent invents filler.
-// A next step or blocker that says the thing lives only on another machine gets ELSEWHERE_NOTE (elsewhere-note.js, shared with the clone guard).
-export { ELSEWHERE_NOTE }
-
 // A card with no step ready or moving and one blocked is blocked work whatever its status says; a card with a step still moving is not.
 const stepsBlocked = (task) => task.steps !== undefined && task.steps.ready.length === 0 && task.steps.moving === 0 && task.steps.blocked.length > 0
 const stepsLine = ({ delivered, total, ready }) => `  Steps: ${delivered} of ${total} delivered${ready.length > 0 ? `; ready: ${ready.join(", ")}` : ""}`
@@ -223,6 +217,7 @@ function taskLines(track, task, pushNotes) {
   const hidden = /redacted/u.test(named) ? ` (handle ${task.handle})` : ""
   const updated = typeof task.updated === "string" ? ` (updated ${task.updated.slice(0, 10)})` : ""
   const push = [...(pushNotes.get(taskKey(track.desk, track.track, task.slug)) ?? [])].map((note) => `  push: ${note}`)
+  // A next step or blocker that says the thing lives only on another machine gets ELSEWHERE_NOTE (elsewhere-note.js, shared with the clone guard).
   const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
   const cleanup = task.cleanup_due_count > 0 ? [`  cleanup due: ${task.cleanup_due_count}`] : []
   return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...cleanup, ...elsewhere, ...push]

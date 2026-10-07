@@ -30,6 +30,3 @@ export function transitionReadiness(current, next) {
   return next
 }
 
-export function readinessStates() {
-  return Object.freeze([...NEXT.keys(), "TERMINAL"])
-}

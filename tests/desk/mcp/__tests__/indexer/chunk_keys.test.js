@@ -2,55 +2,39 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import * as path from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
+import { createHash } from "node:crypto"
 
 import { chunkBody } from "../../../../../plugins/desk/mcp/src/indexer/chunk.js"
+import { ACTIVE_EMBEDDING_SPEC, chunkIdentity } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 
-const mcpRoot = path.resolve(
-  fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)),
-)
+const sha256 = (value) => createHash("sha256").update(value).digest("hex")
+const keyOf = (options) => chunkIdentity(options).chunk_key
 
-async function loadSpecModule() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "spec.js")))
-}
-
-test("active embedding spec is versioned, path-safe, and tied to chunker identity", async () => {
-  const { ACTIVE_EMBEDDING_SPEC, getActiveEmbeddingSpec } = await loadSpecModule()
-  const active = getActiveEmbeddingSpec()
-
-  assert.deepEqual(active, ACTIVE_EMBEDDING_SPEC)
-  assert.equal(active.model, "nomic-embed-text")
-  assert.equal(active.model_revision, "nomic-embed-text-v1.5")
-  assert.equal(active.dimension, 768)
-  assert.equal(active.chunker_id, "desk-md-h2-paragraph-v2")
-  assert.equal(active.normalization_id, "unicode-whitespace-v1")
-  assert.match(active.id, /nomic-embed-text-v1_5/u)
-  assert.doesNotMatch(active.id, /[\\/: \t\r\n]/u)
+test("active embedding spec is versioned, path-safe, and tied to chunker identity", () => {
+  assert.equal(ACTIVE_EMBEDDING_SPEC.model, "nomic-embed-text")
+  assert.equal(ACTIVE_EMBEDDING_SPEC.model_revision, "nomic-embed-text-v1.5")
+  assert.equal(ACTIVE_EMBEDDING_SPEC.dimension, 768)
+  assert.equal(ACTIVE_EMBEDDING_SPEC.chunker_id, "desk-md-h2-paragraph-v2")
+  assert.equal(ACTIVE_EMBEDDING_SPEC.normalization_id, "unicode-whitespace-v1")
+  assert.match(ACTIVE_EMBEDDING_SPEC.id, /nomic-embed-text-v1_5/u)
+  assert.doesNotMatch(ACTIVE_EMBEDDING_SPEC.id, /[\\/: \t\r\n]/u)
 })
 
-test("normalized text identity is stable across line endings and insignificant whitespace", async () => {
-  const { normalizeChunkText, chunkTextHash } = await loadSpecModule()
-  const left = "## Heading\r\nAlpha\u00a0beta  \r\n\r\n"
-  const right = "## Heading\nAlpha beta\n"
+test("normalized text identity is stable across line endings and insignificant whitespace", () => {
+  const docPath = "trackA/task-1/doing.md"
+  const left = chunkIdentity({ docPath, chunk: { text: "## Heading\r\nAlpha\u00a0beta  \r\n\r\n" } })
+  const right = chunkIdentity({ docPath, chunk: { text: "## Heading\nAlpha beta\n" } })
+  const changed = chunkIdentity({ docPath, chunk: { text: "## Heading\nAlpha beta\nchanged\n" } })
 
-  assert.equal(normalizeChunkText(left), "## Heading\nAlpha beta")
-  assert.equal(normalizeChunkText(left), normalizeChunkText(right))
-  assert.equal(chunkTextHash(left), chunkTextHash(right))
-  assert.notEqual(chunkTextHash(right), chunkTextHash(`${right}changed\n`))
+  assert.equal(left.text_hash, `sha256:${sha256("## Heading\nAlpha beta")}`)
+  assert.equal(left.text_hash, right.text_hash)
+  assert.equal(left.chunk_key, right.chunk_key)
+  assert.notEqual(changed.text_hash, right.text_hash)
 })
 
-test("chunk identity handles empty text and custom embedding specs", async () => {
-  const {
-    ACTIVE_EMBEDDING_SPEC,
-    chunkIdentity,
-    chunkTextHash,
-    computeChunkKey,
-    normalizeChunkText,
-  } = await loadSpecModule()
+test("chunk identity handles empty text and custom embedding specs", () => {
   const docPath = "trackA/task-1/empty.md"
   const defaultIdentity = chunkIdentity({ docPath, chunk: null })
-  const missingTextKey = computeChunkKey({ docPath, chunk: { heading: "No Text" } })
   const customSpec = {
     ...ACTIVE_EMBEDDING_SPEC,
     id: "custom-embedding-spec",
@@ -63,10 +47,9 @@ test("chunk identity handles empty text and custom embedding specs", async () =>
     embeddingSpec: customSpec,
   })
 
-  assert.equal(normalizeChunkText(null), "")
-  assert.equal(normalizeChunkText(undefined), "")
-  assert.equal(defaultIdentity.text_hash, chunkTextHash(""))
-  assert.equal(missingTextKey, defaultIdentity.chunk_key)
+  assert.equal(defaultIdentity.text_hash, `sha256:${sha256("")}`)
+  assert.equal(chunkIdentity({ docPath, chunk: { text: undefined } }).text_hash, defaultIdentity.text_hash)
+  assert.equal(keyOf({ docPath, chunk: { heading: "No Text" } }), defaultIdentity.chunk_key)
   assert.equal(defaultIdentity.embedding_spec_id, ACTIVE_EMBEDDING_SPEC.id)
   assert.equal(customIdentity.embedding_spec_id, customSpec.id)
   assert.equal(customIdentity.chunker_id, customSpec.chunker_id)
@@ -74,8 +57,7 @@ test("chunk identity handles empty text and custom embedding specs", async () =>
   assert.notEqual(customIdentity.chunk_key, defaultIdentity.chunk_key)
 })
 
-test("chunk keys are stable when unchanged text moves within a document", async () => {
-  const { ACTIVE_EMBEDDING_SPEC, computeChunkKey } = await loadSpecModule()
+test("chunk keys are stable when unchanged text moves within a document", () => {
   const docPath = "trackA/task-1/doing.md"
   const before = chunkBody(["## Stable", "same body"].join("\n"))[0]
   const after = chunkBody([
@@ -86,9 +68,9 @@ test("chunk keys are stable when unchanged text moves within a document", async 
     "same body",
   ].join("\n")).find((chunk) => chunk.heading === "Stable")
 
-  const beforeKey = computeChunkKey({ docPath, chunk: before, embeddingSpec: ACTIVE_EMBEDDING_SPEC })
-  const afterKey = computeChunkKey({ docPath, chunk: after, embeddingSpec: ACTIVE_EMBEDDING_SPEC })
-  const changedKey = computeChunkKey({
+  const beforeKey = keyOf({ docPath, chunk: before, embeddingSpec: ACTIVE_EMBEDDING_SPEC })
+  const afterKey = keyOf({ docPath, chunk: after, embeddingSpec: ACTIVE_EMBEDDING_SPEC })
+  const changedKey = keyOf({
     docPath,
     chunk: { ...after, text: `${after.text}\nchanged` },
     embeddingSpec: ACTIVE_EMBEDDING_SPEC,
@@ -98,8 +80,7 @@ test("chunk keys are stable when unchanged text moves within a document", async 
   assert.notEqual(changedKey, beforeKey)
 })
 
-test("heading and spec identity changes produce distinct chunk keys", async () => {
-  const { ACTIVE_EMBEDDING_SPEC, computeChunkKey } = await loadSpecModule()
+test("heading and spec identity changes produce distinct chunk keys", () => {
   const docPath = "trackA/task-1/doing.md"
   const original = chunkBody("## Original\n\nsame body")[0]
   const renamedHeading = chunkBody("## Renamed\n\nsame body")[0]
@@ -109,22 +90,10 @@ test("heading and spec identity changes produce distinct chunk keys", async () =
     normalization_id: `${ACTIVE_EMBEDDING_SPEC.normalization_id}-next`,
   }
 
-  const originalKey = computeChunkKey({ docPath, chunk: original })
-  const headingKey = computeChunkKey({ docPath, chunk: renamedHeading })
-  const specKey = computeChunkKey({
-    docPath,
-    chunk: original,
-    embeddingSpec: nextSpec,
-  })
+  const originalKey = keyOf({ docPath, chunk: original })
+  const headingKey = keyOf({ docPath, chunk: renamedHeading })
+  const specKey = keyOf({ docPath, chunk: original, embeddingSpec: nextSpec })
 
   assert.notEqual(headingKey, originalKey)
   assert.notEqual(specKey, originalKey)
-})
-
-test("inactive embedding specs are rejected by spec identity helpers", async () => {
-  const { ACTIVE_EMBEDDING_SPEC, isActiveEmbeddingSpec } = await loadSpecModule()
-
-  assert.equal(isActiveEmbeddingSpec(ACTIVE_EMBEDDING_SPEC.id), true)
-  assert.equal(isActiveEmbeddingSpec(`${ACTIVE_EMBEDDING_SPEC.id}-old`), false)
-  assert.equal(isActiveEmbeddingSpec(null), false)
 })

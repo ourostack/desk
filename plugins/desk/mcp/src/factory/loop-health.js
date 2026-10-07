@@ -17,12 +17,11 @@
 
 import { createRequire } from "node:module"
 import { validWorker } from "./loop-worker-state.js"
-import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 import { MAX_CARD_FILES, SOURCES, cardKey, isClaimLive, openImprovement, readCards as readCardsDefault } from "../desk/improvement-cards.js"
 import { cardCommitMessage, writeCardCommitted as writeCardCommittedDefault } from "../tools/_card-commit.js"
-import { pluginRootFor } from "./end-hook.js"
+import { deskVersion } from "../package-metadata.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
 import { conditionOf, observeConditions } from "./loop-conditions.js"
@@ -36,14 +35,14 @@ export const AGE_ALARM_DAYS = 7
 export const STUCK_ALARM_DAYS = 21
 export const STALE_AFTER_HOURS = 72
 /** A stored time this far ahead of the clock is clock skew, not a fresh reading. */
-export const FUTURE_ALLOWANCE_MINUTES = 5
-export const RECORD_SCHEMA = "desk.factory.loop/1"
+const FUTURE_ALLOWANCE_MINUTES = 5
+const RECORD_SCHEMA = "desk.factory.loop/1"
 
 /** Every state code the evaluator step writes; a stored state outside the list reads `unavailable` in the record. */
 export const HEADLESS_STATES = Object.freeze(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host"])
 /** The states an agent can fix; only these open `loop_alarm:headless_blocked` (a spent cap, a switch and per-token billing are shown, never carded). */
 export const BLOCKING_STATES = Object.freeze(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
-export const BLOCKED_DAYS_FOR_ALARM = 2
+const BLOCKED_DAYS_FOR_ALARM = 2
 
 const HOUR_MS = 3600 * 1000
 const DAY_MS = 24 * HOUR_MS
@@ -84,14 +83,7 @@ function storedCount(value) {
   return typeof reason === "string" && REASON.test(reason) ? unavailable(reason) : null
 }
 
-async function pluginVersion(env) {
-  try {
-    const version = JSON.parse(await fs.readFile(path.join(pluginRootFor(env), "plugin.json"), "utf8")).version
-    return typeof version === "string" && VERSION.test(version) ? version : "unknown"
-  } catch {
-    return "unknown"
-  }
-}
+const pluginVersion = (env) => deskVersion(env) ?? "unknown"
 
 // ---------------------------------------------------------------------------
 // Improvement cards
@@ -329,7 +321,7 @@ async function gather({ env, deskRoot, personPrefix = "", now = new Date(), read
   } catch {
     read = null
   }
-  const version = given === undefined ? await pluginVersion(env) : typeof given === "string" && VERSION.test(given) ? given : "unknown"
+  const version = given === undefined ? pluginVersion(env) : typeof given === "string" && VERSION.test(given) ? given : "unknown"
   return { ...assembleLoop({ status: isObject(status) ? status : {}, read, nowMs, version }), status }
 }
 

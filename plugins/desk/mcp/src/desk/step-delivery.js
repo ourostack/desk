@@ -17,7 +17,7 @@
 import { findPullRequests, prDelivery } from "../tools/delivery-gate.js"
 import { looksLikeNodeTestRunner } from "../runtime/test-state-guard.js"
 
-export const TOTAL_BUDGET_MS = 10000
+const TOTAL_BUDGET_MS = 10000
 const CONCURRENCY = 4
 const ADVANCE = ["in review", "merged", "delivered"]
 const TASK_EVIDENCE = /^task:([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*)$/u
