@@ -22,6 +22,7 @@ const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
 const LAUNCHER = path.join(HOOKS, "loop-start.cjs")
 const BOOT = path.join(HOOKS, "boot-checks.cjs")
+const BOOT_LIB = path.join(HOOKS, "lib", "boot-checks.cjs")
 const FACTORY_START = path.join(HOOKS, "factory-start.cjs")
 const FACTORY_CLI = path.join(path.dirname(HOOKS), "mcp", "scripts", "factory.js")
 const launcher = () => ({ main: loopMain, HARD_STOP_MS: loopHardStopMs })
@@ -144,7 +145,7 @@ test("a child that cannot start, or a handle that cannot be stopped, still ends 
 })
 
 test("session start launches the loop launcher through the compatible-Node launcher right after the delivery worker, only with a consenting store", () => scratch(async ({ env }) => {
-  const { startFactory, compatibleCommand } = require(BOOT)
+  const { startFactory, compatibleCommand } = require(BOOT_LIB)
   const launched = []
   const launch = async (command, childEnv) => launched.push({ command, childEnv })
   const clean = { ...env }
@@ -162,7 +163,7 @@ test("session start launches the loop launcher through the compatible-Node launc
 }))
 
 test("a loop launcher that cannot start does not stop delivery, and a delivery that cannot start does not stop the loop", () => scratch(async ({ env }) => {
-  const { startFactory } = require(BOOT)
+  const { startFactory } = require(BOOT_LIB)
   const clean = { ...env }
   for (const name of ["CI", "GITHUB_ACTIONS", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED", "DESK_FACTORY_HEADLESS"]) delete clean[name]
   await setConsent(clean, { store: STORE, contribute: true, account: "contributor" })
@@ -183,7 +184,7 @@ const clean = (env, extra = {}) => {
 }
 
 test("with the loop switched off, session start launches delivery and not the loop launcher", () => scratch(async ({ env }) => {
-  const { startFactory } = require(BOOT)
+  const { startFactory } = require(BOOT_LIB)
   const base = clean(env)
   await setConsent(base, { store: STORE, contribute: true, account: "contributor" })
   const launched = []
@@ -199,7 +200,7 @@ test("with the loop switched off, session start launches delivery and not the lo
 }))
 
 test("with the loop off, startFactory launches no loop and touches no state: no folder, no file, no lock", () => scratch(async ({ env }) => {
-  const { startFactory } = require(BOOT)
+  const { startFactory } = require(BOOT_LIB)
   const base = clean(env, { DESK_FACTORY_LOOP: "off" })
   await setConsent(base, { store: STORE, contribute: true, account: "contributor" })
   const root = await factoryStateRoot(base)
@@ -262,10 +263,11 @@ test("the session-start line says when the loop did not run normally, in a code-
   assert.match(loopWorkerLine({ env: base, now: NOW - 3600 * 1000 }), /for 0 hours/, "a clock that is behind never gives a negative age")
   // The same line reaches the session start through the labels check, even when no label waits.
   await recordWorker(base, root, "status_reset", new Date(NOW + 60000).toISOString(), async () => { throw new Error("status not writable") })
-  const spoken = await require(BOOT).labelsCheck.run({ env: base, shared: {}, deadline: Infinity, host: "claude" })
+  const { labelsCheck } = require(BOOT_LIB)
+  const spoken = await labelsCheck.run({ env: base, shared: {}, deadline: Infinity, host: "claude" })
   assert.match(spoken.line, /status file was damaged/)
-  assert.match((await require(BOOT).labelsCheck.run({ env: { ...base, DESK_FACTORY_LOOP: "off" }, shared: {}, deadline: Infinity, host: "claude" })).line, /switched off on this machine/, "the off switch is read from the environment")
-  assert.equal(await require(BOOT).labelsCheck.run({ env: { ...base, CI: "1" }, shared: {}, deadline: Infinity, host: "claude" }).then((r) => JSON.stringify(r)), "{}", "a noninteractive session hears nothing")
+  assert.match((await labelsCheck.run({ env: { ...base, DESK_FACTORY_LOOP: "off" }, shared: {}, deadline: Infinity, host: "claude" })).line, /switched off on this machine/, "the off switch is read from the environment")
+  assert.equal(await labelsCheck.run({ env: { ...base, CI: "1" }, shared: {}, deadline: Infinity, host: "claude" }).then((r) => JSON.stringify(r)), "{}", "a noninteractive session hears nothing")
 }))
 
 test("the health record carries the worker's last result and time, and nothing else about it", () => {

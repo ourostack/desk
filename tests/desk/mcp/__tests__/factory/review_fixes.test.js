@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import hook from "../../../../../plugins/desk/hooks/factory-end.cjs"
+import { runHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
 import { resolveHookDeskRoot } from "../../../../../plugins/desk/mcp/scripts/resolve-desk-root.js"
 import { factoryStateRoot, listMarkers, readMarker, requestFinalize, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { deriveFile, deriveMarker, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
@@ -83,10 +83,10 @@ for (const shape of ["one-key", "aggregate"]) {
     const plugins = shape === "one-key" ? { "fixture@local": records } : { "first@local": records.slice(0, 32), "second@local": records.slice(32) }
     await json(path.join(ctx.base, ".claude/plugins/installed_plugins.json"), { version: 2, plugins })
     const options = { host: "claude", env: ctx.env, payload: { session_id: ID, cwd: ctx.desk, transcript_path: marker.log_path, hook_event_name: "Stop" } }
-    assert.equal(await hook.runHook(options), "written")
+    assert.equal(await runHook(options), "written")
     assert.equal((await listMarkers(ctx.env))[0].routing.store, null)
     await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: "example/declared" })
-    assert.equal(await hook.runHook(options), "written")
+    assert.equal(await runHook(options), "written")
     assert.equal((await listMarkers(ctx.env))[0].routing.store, "example/declared")
   }))
 }
@@ -111,7 +111,7 @@ for (const alias of ["none", "state", "desk", "equal"]) {
     await assert.rejects(writeMarker(env, marker), /bound desk/u)
     await assert.rejects(requestFinalize(env, { job: "1".repeat(32), deskRoot: desk }), /bound desk/u)
     assert.equal((await deriveMarker(env, marker)).result, "source_unreadable")
-    assert.equal(await hook.runHook({ host: "claude", env, payload: { session_id: ID, cwd: desk, transcript_path: marker.log_path, hook_event_name: "Stop" } }), "unavailable")
+    assert.equal(await runHook({ host: "claude", env, payload: { session_id: ID, cwd: desk, transcript_path: marker.log_path, hook_event_name: "Stop" } }), "unavailable")
     await assert.rejects(fs.stat(path.join(root, "markers")), { code: "ENOENT" })
     await assert.rejects(fs.stat(path.join(root, "deriving")), { code: "ENOENT" })
     await assert.rejects(fs.stat(path.join(root, "finalize")), { code: "ENOENT" })

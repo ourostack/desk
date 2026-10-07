@@ -29,7 +29,7 @@ const FACTORY_CLI = path.join(__dirname, "..", "mcp", "scripts", "factory.js");
 const isHeadless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
 const isEnabled = (env) => require("../mcp/src/factory/loop-switch.cjs").isLoopEnabled(env);
 
-const resolveRoot = (env) => require("./boot-checks.cjs").boundRoot({ env, host: "claude", shared: {} });
+const resolveRoot = (env) => { const { boundRoot } = require("./lib/boot-checks.cjs"); return boundRoot({ env, host: "claude", shared: {} }); };
 async function resolvePerson({ deskRoot, env }) {
   const { improvementPerson } = await import("../mcp/src/desk/improvement-person.js");
   return improvementPerson({ deskRoot, env, now: Date.now() });

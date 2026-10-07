@@ -60,7 +60,7 @@ async function startupDirection() {
     await recordSession(session);
     const direction = copilotStartupDirection({ env: process.env, sessionFolder });
     // The boot checks add one agent line only when one of them has something to say.
-    const { runBootChecks, migrationLine } = require("./boot-checks.cjs");
+    const { runBootChecks, migrationLine } = require("./lib/boot-checks.cjs");
     // Desk's own migration Detect blocks run alongside the boot checks, and
     // add one line only when a migration is pending.
     const pending = migrationLine({ host: "copilot", env: process.env, sessionFolder });
@@ -74,7 +74,8 @@ async function startupDirection() {
 
 async function startFactory() {
   try {
-    await require("./boot-checks.cjs").startFactory({ env: process.env });
+    const { startFactory: start } = require("./lib/boot-checks.cjs");
+    await start({ env: process.env });
   } catch {
     // Delivery retries at the next session start.
   }

@@ -7,7 +7,6 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, promises as fs, readFileSync } from "node:fs"
-import { createRequire } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -16,18 +15,16 @@ import { indexJob } from "./_index_helper.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
+import { bootFixtureEnv } from "../_boot_fixture.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { TOTAL_BUDGET_MS, andonCheck, checks, deskHealthCheck, factoryCheck, labelsCheck, launchCommand, recordSkipped, runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 import { main as factoryStartMain, DEADLINE_MS as factoryDeadlineMs } from "../../../../../plugins/desk/hooks/factory-start.cjs"
 
-const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
 const PLUGIN = path.dirname(HOOKS)
-const BOOT = path.join(HOOKS, "boot-checks.cjs")
+const BOOT = path.join(HOOKS, "boot-checks.cjs") // the command-line entry; the registry is in lib/
 const START = path.join(HOOKS, "factory-start.cjs")
-const boot = () => {
-  assert.ok(existsSync(BOOT), "the boot-check registry must exist")
-  return require(BOOT)
-}
 const DAY = 24 * 60 * 60 * 1000
 
 // A session start in an ordinary interactive session, whatever runs the tests (a CI runner sets CI; a headless Claude run sets the entry point).
@@ -44,13 +41,12 @@ const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 // ---------------------------------------------------------------------------
 
 test("the registry runs its checks in order: factory, then labels, then desk-health, then workspace-tidy, then improvement", () => {
-  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy", "improvement"])
-  assert.equal(boot().TOTAL_BUDGET_MS, 300)
-  assert.ok(boot().checks.every((entry) => entry.budgetMs <= 300))
+  assert.deepEqual(checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy", "improvement"])
+  assert.equal(TOTAL_BUDGET_MS, 300)
+  assert.ok(checks.every((entry) => entry.budgetMs <= 300))
 })
 
 test("no line from any check means no output at all; lines join into exactly one Desk boot line", async () => {
-  const { runBootChecks } = boot()
   const order = []
   const silent = await runBootChecks({ ...quiet, checks: [check("a", async () => { order.push("a"); return {} }), check("b", async () => { order.push("b"); return { line: "   " } })] })
   assert.equal(silent, "")
@@ -61,7 +57,6 @@ test("no line from any check means no output at all; lines join into exactly one
 })
 
 test("repairs start detached after every check has run, and a repair that cannot start is ignored", async () => {
-  const { runBootChecks } = boot()
   const events = []
   const launchRepair = async (command) => {
     events.push(["repair", command])
@@ -83,7 +78,6 @@ test("repairs start detached after every check has run, and a repair that cannot
 })
 
 test("a check that overruns its budget is skipped silently, but a check that throws is skipped, recorded and reported as a Desk problem: block; the rest still run", async () => {
-  const { runBootChecks } = boot()
   const recorded = []
   let aborted = false
   const line = await runBootChecks({
@@ -120,7 +114,6 @@ const useVirtualClock = (t) => {
 
 test("checks that block synchronously past their budgets are skipped with their real time, and that time counts against the total", async (t) => {
   useVirtualClock(t)
-  const { runBootChecks } = boot()
   const recorded = []
   const repairs = []
   const line = await runBootChecks({
@@ -146,7 +139,6 @@ test("checks that block synchronously past their budgets are skipped with their 
 
 test("the real elapsed time of each check is charged, so a total spent by blocking skips the rest without running them", async (t) => {
   useVirtualClock(t)
-  const { runBootChecks } = boot()
   const recorded = []
   let ran = false
   const line = await runBootChecks({
@@ -163,7 +155,6 @@ test("the real elapsed time of each check is charged, so a total spent by blocki
 })
 
 test("the total budget caps every check, and checks after it are skipped", async () => {
-  const { runBootChecks } = boot()
   const recorded = []
   const budgets = []
   const line = await runBootChecks({
@@ -184,7 +175,6 @@ test("the total budget caps every check, and checks after it are skipped", async
 })
 
 test("skips are recorded in the protected factory status only when factory state already exists", () => scratch(async ({ env, base }) => {
-  const { recordSkipped, runBootChecks } = boot()
   assert.equal(await recordSkipped(env, [{ id: "x", reason: "budget" }]), false)
   assert.equal(existsSync(path.join(base, "state")), false)
   await setConsent(env, { store: STORE, contribute: false })
@@ -196,7 +186,6 @@ test("skips are recorded in the protected factory status only when factory state
 }))
 
 test("launchCommand starts detached with ignored stdio and never waits for the child", async () => {
-  const { launchCommand } = boot()
   const seen = []
   const spawnImpl = (file, args, options) => {
     const handlers = {}
@@ -225,7 +214,6 @@ test("launchCommand starts detached with ignored stdio and never waits for the c
 // ---------------------------------------------------------------------------
 
 test("the factory check says nothing when the bound desk's store has no decision (the boot script owns the question), and is silent without a desk", () => scratch(async ({ env, desk }) => {
-  const { runBootChecks, factoryCheck } = boot()
   const run = (options) => runBootChecks({ ...quiet, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, ...options })
   assert.equal(await run({ host: "claude", env }), "")
   assert.equal(await run({ host: "copilot", env, sessionFolder: desk }), "")
@@ -235,7 +223,6 @@ test("the factory check says nothing when the bound desk's store has no decision
 }))
 
 test("the factory check starts one detached finalize for finished jobs whose facts are not delivered", () => scratch(async ({ env, desk }) => {
-  const { runBootChecks, factoryCheck } = boot()
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   const folder = path.join(desk, "alpha", "shipped")
   await fs.mkdir(folder, { recursive: true })
@@ -258,7 +245,6 @@ test("the factory check starts one detached finalize for finished jobs whose fac
 }))
 
 test("the labels check names how many finished jobs wait for labels and what the plugin is doing, and starts nothing", () => scratch(async ({ env, desk }) => {
-  const { runBootChecks, labelsCheck } = boot()
   const repairs = []
   env = interactive(env)
   const run = (options = {}) => runBootChecks({ ...quiet, host: "claude", env, checks: [labelsCheck], checkBudgets: { labels: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command), ...options })
@@ -288,7 +274,6 @@ test("the labels check names how many finished jobs wait for labels and what the
 }))
 
 test("the desk-health check reports a degraded last start and otherwise asks for the fast-forward", () => scratch(async ({ env, desk, base }) => {
-  const { runBootChecks, deskHealthCheck } = boot()
   const run = (options) => runBootChecks({ ...quiet, checks: [deskHealthCheck], checkBudgets: { "desk-health": 2000 }, totalBudgetMs: 2000, ...options })
   assert.equal(await run({ host: "claude", env }), "")
   execFileSync("git", ["init", "-q", "-b", "main", desk])
@@ -324,7 +309,6 @@ test("the fast-forward repair entry point runs the detached fast-forward and rep
 // ---------------------------------------------------------------------------
 
 test("startFactory starts factory-start.cjs detached only when a store has contribute: true", () => scratch(async ({ env }) => {
-  const { startFactory } = boot()
   const launched = []
   const launch = async (command, childEnv) => launched.push({ command, childEnv })
   assert.equal(await startFactory({ env, launch }), false)
@@ -339,7 +323,6 @@ test("startFactory starts factory-start.cjs detached only when a store has contr
 
 test("the andon check names each contributing store's open andon issues in one line, with no repair", () => scratch(async ({ env: raw }) => {
   const env = interactive(raw)
-  const { runBootChecks, andonCheck } = boot()
   const repairs = []
   const run = () => runBootChecks({ ...quiet, host: "claude", env, checks: [andonCheck], checkBudgets: { andon: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
   assert.equal(await run(), "")
@@ -378,16 +361,15 @@ test("factory-start.cjs runs sweep and flush for consented stores, prints nothin
 // Startup output, byte for byte.
 // ---------------------------------------------------------------------------
 
-async function preloadFor(dir, { lines = null, calls }) {
-  const file = path.join(dir, `preload-${Math.random().toString(16).slice(2)}.cjs`)
+// The fixture checks and factory start, through the test-only preload (`_boot_fixture_preload.cjs`), for the hook itself only.
+async function overridesFor(dir, { lines = null, calls }) {
+  const file = path.join(dir, `overrides-${Math.random().toString(16).slice(2)}.cjs`)
   await fs.writeFile(file, `
-// NODE_OPTIONS reaches every Node process the hook starts, including each migration's Detect, which has a two-second budget; only the hook itself needs the fixture checks.
-if (/(copilot-session-start\\.cjs|resolve-desk-root\\.js)$/u.test(process.argv[1] ?? "")) {
-  const fs = require("node:fs");
-  const boot = require(${JSON.stringify(BOOT)});
-  boot.checks.splice(0, boot.checks.length, ...${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })));
-  boot.startFactory = async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; };
-}
+const fs = require("node:fs");
+module.exports = {
+  checks: ${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })),
+  startFactory: async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; },
+};
 `)
   return file
 }
@@ -417,8 +399,8 @@ for (const host of ["claude", "copilot"]) {
   test(`${host} session-start output is byte-identical when no boot check speaks, and gains exactly one line when they do`, () => scratch(async ({ env, desk, base }) => {
     const calls = path.join(base, "calls.txt")
     const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }
-    const silent = await preloadFor(base, { calls })
-    const quietRun = runHook(host, { ...hookEnv, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${silent}`.trim() }, desk)
+    const silent = await overridesFor(base, { calls })
+    const quietRun = runHook(host, bootFixtureEnv(hookEnv, silent), desk)
     assert.equal(quietRun.status, 0, quietRun.stderr)
     const context = expectedContext(host, hookEnv, desk)
     const hasJq = spawnSync("jq", ["--version"]).status === 0
@@ -427,8 +409,8 @@ for (const host of ["claude", "copilot"]) {
     assert.equal(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, context)
     assert.doesNotMatch(quietRun.stdout, /Desk boot pre-checks:/u)
 
-    const speaking = await preloadFor(base, { lines: ["one", "two"], calls })
-    const spokenRun = runHook(host, { ...hookEnv, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${speaking}`.trim() }, desk)
+    const speaking = await overridesFor(base, { lines: ["one", "two"], calls })
+    const spokenRun = runHook(host, bootFixtureEnv(hookEnv, speaking), desk)
     assert.equal(spokenRun.status, 0, spokenRun.stderr)
     const spoken = JSON.parse(spokenRun.stdout)
     assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, expectedContext(host, hookEnv, desk, "\n\nDesk boot pre-checks: one; two"))
@@ -438,9 +420,9 @@ for (const host of ["claude", "copilot"]) {
 }
 
 test("the real hooks with a bound desk and no decision add no factory boot line and never ask for consent", () => scratch(async ({ env, desk, base }) => {
-  const preload = path.join(base, "relax.cjs")
-  await fs.writeFile(preload, `const boot = require(${JSON.stringify(BOOT)}); const run = boot.runBootChecks; boot.runBootChecks = (options) => run({ ...options, launch: async () => {}, launchRepair: async () => {}, totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } });\n`)
-  const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() }
+  const overrides = path.join(base, "relax.cjs")
+  await fs.writeFile(overrides, `module.exports = { options: { launch: async () => {}, launchRepair: async () => {}, totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } } };\n`)
+  const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }, overrides)
   for (const host of ["claude", "copilot"]) {
     const result = runHook(host, hookEnv, desk)
     assert.equal(result.status, 0, result.stderr)
@@ -456,23 +438,22 @@ test("the real hooks with a bound desk and no decision add no factory boot line 
 test("the Claude resolver appends the boot line only when there is one and starts delivery afterwards", async () => {
   const { main } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "scripts", "resolve-desk-root.js")).href)
   const events = []
-  const loadBoot = async () => ({ default: { migrationLine: async () => { events.push("migrations"); return "" }, runBootChecks: async () => { events.push("checks"); return "" }, startFactory: async () => { events.push("factory") } } })
+  const loadBoot = async () => ({ migrationLine: async () => { events.push("migrations"); return "" }, runBootChecks: async () => { events.push("checks"); return "" }, startFactory: async () => { events.push("factory") } })
   let output = ""
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text; events.push("write") }, loadBoot })
   assert.deepEqual(events, ["migrations", "checks", "factory", "write"], "the migration check starts before the boot checks and runs alongside them")
   assert.doesNotMatch(output, /\n\n$/u)
   assert.doesNotMatch(output, /Desk boot|Desk migrations/u)
-  const speaking = async () => ({ default: { migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "Desk boot pre-checks: x", startFactory: async () => {} } })
+  const speaking = async () => ({ migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "Desk boot pre-checks: x", startFactory: async () => {} })
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: speaking })
   assert.match(output, /\n\nDesk boot pre-checks: x\n\nDesk migrations: y$/u)
-  const migrationsOnly = async () => ({ default: { migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "", startFactory: async () => {} } })
+  const migrationsOnly = async () => ({ migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "", startFactory: async () => {} })
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: migrationsOnly })
   assert.match(output, /[^\n]\n\nDesk migrations: y$/u)
   assert.doesNotMatch(output, /Desk boot/u)
 })
 
 test("the plugin scan stops at the check's deadline and the factory check is then skipped, never guessed", () => scratch(async ({ env, desk }) => {
-  const { metadata } = require(path.join(HOOKS, "factory-end.cjs"))
   const { readSmallText } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "src", "factory", "marker.js")).href)
   const { PATTERNS } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "src", "factory", "schema.js")).href)
   const home = env.HOME
@@ -485,7 +466,6 @@ test("the plugin scan stops at the check's deadline and the factory check is the
     const fine = metadata({ host, pluginRoot: path.join(PLUGIN), home, env, readSmallText, PATTERNS })
     assert.equal(fine.timedOut, false)
   }
-  const { runBootChecks, factoryCheck } = boot()
   const recorded = []
   const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [{ ...factoryCheck, run: (ctx) => factoryCheck.run({ ...ctx, deadline: 0 }) }], record: async (_env, skipped) => recorded.push(...skipped) })
   assert.equal(line, "")
@@ -512,14 +492,15 @@ for (const [host, pending] of [["claude", 1], ["copilot", 1], ["claude", 3], ["c
     const { migrationLine } = await import("../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js")
     const migration = migrationLine(["02-tidy", "03-move", "04-more"].slice(0, pending).map((id) => ({ id, state: "agent_work" })), root)
     const precheck = "workspace-tidy deferred (0 listed); 1 task card with unreadable repos: greenhouse-ops/valve-firmware-flasher/task.md (repo ~/code/valve-firmware not found); their repositories were not inspected"
-    const preload = path.join(base, "budget-preload.cjs")
-    await fs.writeFile(preload, `
-const boot = require(${JSON.stringify(BOOT)});
-boot.checks.splice(0, boot.checks.length, { id: "fixture", budgetMs: 100, run: async () => ({ line: ${JSON.stringify(precheck)} }) });
-boot.migrationLine = async () => ${JSON.stringify(migration)};
-boot.startFactory = async () => true;
+    const overrides = path.join(base, "budget-overrides.cjs")
+    await fs.writeFile(overrides, `
+module.exports = {
+  checks: [{ id: "fixture", budgetMs: 100, run: async () => ({ line: ${JSON.stringify(precheck)} }) }],
+  migrationLine: async () => ${JSON.stringify(migration)},
+  startFactory: async () => true,
+};
 `)
-    const hookEnv = { ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() }
+    const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk }, overrides)
     const run = host === "copilot"
       ? spawnSync(process.execPath, [path.join(root, "hooks", "copilot-session-start.cjs")], { env: hookEnv, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
       : spawnSync("bash", [path.join(root, "hooks", "session-start.sh"), path.join(root, "skills", "using-desk", "SKILL.md")], { env: hookEnv, encoding: "utf8" })

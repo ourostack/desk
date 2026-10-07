@@ -9,11 +9,8 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { createRequire } from "node:module"
-import { fileURLToPath } from "node:url"
 
-const require = createRequire(import.meta.url)
-const BOOT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/boot-checks.cjs", import.meta.url))
+import { checks, runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
 
 function fixture(t) {
@@ -38,7 +35,6 @@ function fixture(t) {
 }
 
 test("a check that stages a file mid-run produces a Desk problem: index-drift block, without accusing the check of it", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
   const line = await runBootChecks({
@@ -56,7 +52,6 @@ test("a check that stages a file mid-run produces a Desk problem: index-drift bl
 // ── index-drift is migrated onto real filing too (spec.md §1, Part 5) ──────
 
 test("an index-drift block queues the detached filer, never awaiting it, and reports filing in background", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { repo, env, git } = fixture(t)
   const launched = []
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
@@ -78,7 +73,6 @@ test("an index-drift block queues the detached filer, never awaiting it, and rep
 })
 
 test("an index-drift block still renders, with 'not filed', when the launcher itself fails to start", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
   const line = await runBootChecks({
@@ -92,7 +86,6 @@ test("an index-drift block still renders, with 'not filed', when the launcher it
 })
 
 test("a check with no index change adds no index-drift block, and the usual line still comes through", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { env } = fixture(t)
   const line = await runBootChecks({ ...quiet, env, checks: [{ id: "quiet-check", budgetMs: 50, run: async () => ({ line: "fine" }) }] })
   assert.equal(line, "Desk boot pre-checks: fine")
@@ -100,7 +93,6 @@ test("a check with no index change adds no index-drift block, and the usual line
 })
 
 test("with no bound desk, index tracing never runs and never touches Git", async () => {
-  const { runBootChecks } = require(BOOT)
   const line = await runBootChecks({
     ...quiet,
     env: { HOME: "/nonexistent-desk-drift-home" },
@@ -110,7 +102,6 @@ test("with no bound desk, index tracing never runs and never touches Git", async
 })
 
 test("a bound desk that resolves but is not itself a Git repository is never watched for drift", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const notGit = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-boot-drift-not-git-")))
   t.after(() => rmSync(notGit, { recursive: true, force: true, maxRetries: 5 }))
   const line = await runBootChecks({
@@ -122,7 +113,6 @@ test("a bound desk that resolves but is not itself a Git repository is never wat
 })
 
 test("a check that stages several files mid-run names every one of them, in the plural", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray-a.txt"), "a\n")
   writeFileSync(path.join(repo, "stray-b.txt"), "b\n")
@@ -138,7 +128,6 @@ test("a check that stages several files mid-run names every one of them, in the 
 })
 
 test("the five real boot checks produce zero false-positive drift blocks against a synthetic bound desk", async (t) => {
-  const { runBootChecks, checks } = require(BOOT)
   const { env } = fixture(t)
   const line = await runBootChecks({ ...quiet, host: "claude", env, checks, checkBudgets: Object.fromEntries(checks.map((c) => [c.id, 2000])), totalBudgetMs: 10000 })
   assert.doesNotMatch(line, /Desk problem: index-drift/)
@@ -155,7 +144,6 @@ test("the five real boot checks produce zero false-positive drift blocks against
 // deliberately slow git call bounded well under the check's own budget.
 
 test("a git call that reports a timeout mid-snapshot never drops the check's line, and adds no drift block", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { env } = fixture(t)
   const timedOutSpawnGit = (command, args) => (args.includes("rev-parse")
     ? { status: 0, stdout: "true\n", stderr: "" }
@@ -170,7 +158,6 @@ test("a git call that reports a timeout mid-snapshot never drops the check's lin
 })
 
 test("a before-snapshot that fails skips the after-snapshot entirely — it never turns its own failure into a false-positive drift", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { env } = fixture(t)
   let diffCalls = 0
   const spawnGit = (command, args) => {
@@ -185,7 +172,6 @@ test("a before-snapshot that fails skips the after-snapshot entirely — it neve
 })
 
 test("a snapshot slower than the check's own tiny budget never drops the check's line — its cost is never charged to it", async (t) => {
-  const { runBootChecks } = require(BOOT)
   const { env } = fixture(t)
   // Every snapshot call (before and after) actually takes real wall-clock
   // time, well past the check's own 20 ms budget, then reports "nothing

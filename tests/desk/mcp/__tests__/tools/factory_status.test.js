@@ -56,15 +56,16 @@ test("the plugin scan follows the host: Copilot reads Desk's siblings, Claude re
 }))
 
 // Live proof finding: the MCP server runs from a source mirror in the cache, where `hooks/` is not beside its code, so the
-// scan must load the end hook from the plugin root the launcher names in DESK_PLUGIN_ROOT, falling back to its own checkout.
-test("the plugin scan loads the end hook from the launcher's plugin root, not from where the server's code runs", () => scratch(async ({ base, env }) => {
+// scan must read the plugin root the launcher names in DESK_PLUGIN_ROOT, falling back to its own checkout.
+test("the plugin scan reads the launcher's plugin root, not where the server's code runs", () => scratch(async ({ base, env }) => {
   const { factoryPluginScan } = await load()
   const host = await plugins(base, env)
-  await fs.mkdir(path.join(host.desk, "hooks"), { recursive: true })
-  await fs.writeFile(path.join(host.desk, "hooks", "factory-end.cjs"), `module.exports = { metadata: ({ pluginRoot }) => ({ plugins: [], dirs: [pluginRoot + "#from-launcher-root"], incomplete: false }) }\n`)
-  assert.deepEqual(factoryPluginScan(host.env), { dirs: [`${host.desk}#from-launcher-root`], incomplete: false, reason: null })
-  await fs.rm(path.join(host.desk, "hooks"), { recursive: true })
-  assert.equal(factoryPluginScan(host.env).incomplete, false, "a plugin root without hooks falls back to this checkout's own end hook")
+  const elsewhere = path.join(base, "elsewhere")
+  await json(path.join(elsewhere, "desk", "plugin.json"), { name: "desk", version: "3.2.0" })
+  assert.deepEqual(factoryPluginScan({ ...host.env, DESK_PLUGIN_ROOT: path.join(elsewhere, "desk") }), { dirs: [path.join(elsewhere, "desk")], incomplete: false, reason: null })
+  const own = { ...host.env }
+  delete own.DESK_PLUGIN_ROOT
+  assert.equal(factoryPluginScan(own).incomplete, false, "with no named root the scan reads this checkout's own plugin root")
 }))
 
 test("desk_status reports the factory for the bound desk, routed by the overlay the host installed", () => scratch(async ({ base, desk, env }) => {
