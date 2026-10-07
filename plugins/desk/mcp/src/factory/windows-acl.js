@@ -14,14 +14,11 @@
 // directories, resolves no store location, and picks no namespace — every path
 // it touches is one the caller handed it.
 //
-// `label` prefixes every error message (default `desk_feedback`, this
-// module's original and still most common caller); the factory outbox passes
-// `desk_factory` so its own refusals read as its own. This lives under
-// `src/factory/` — the one place every caller can import from, since
-// `src/factory/**` may only import `node:` built-ins and other
-// `src/factory/` files — with a one-line re-export left at the old
-// `src/feedback/windows-acl.js` path so `readiness/journal.js`
-// and its existing tests are unchanged.
+// `label` prefixes every error message (default `desk_feedback`, the name of
+// this module's original caller); the factory outbox passes `desk_factory`
+// so its own refusals read as its own. This lives under `src/factory/`, which
+// may only import `node:` built-ins and other `src/factory/` files, so every
+// caller (the readiness journal and the factory outbox) can import it.
 
 import { spawn as nodeSpawn } from "node:child_process"
 import { statSync } from "node:fs"

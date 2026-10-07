@@ -12,7 +12,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { listMarkers, readMachineSecret, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { nativeProbe } from "../feedback/_helpers.js"
+import { nativeProbe } from "./_private_state_helpers.js"
 
 const isWindows = process.platform === "win32"
 

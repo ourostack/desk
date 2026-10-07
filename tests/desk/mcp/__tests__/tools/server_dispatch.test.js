@@ -9,7 +9,7 @@ import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempDeskRoot } from "./_helpers.js"
-import { cleanup, mkFeedbackFixture, useStateHome } from "../feedback/_helpers.js"
+import { cleanup, mkFeedbackFixture, useStateHome } from "../factory/_private_state_helpers.js"
 
 // The surface as it was advertised while the private feedback API was still
 // registered. Retiring that API has to remove exactly one name from this list

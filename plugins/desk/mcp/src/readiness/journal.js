@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import * as filesystem from "node:fs"
 import * as path from "node:path"
-import { protectWindowsPaths } from "../feedback/windows-acl.js"
+import { protectWindowsPaths } from "../factory/windows-acl.js"
 import { withActiveLexicalGeneration } from "./generations.js"
 
 // The elected controller is the sole writer. No journal operation elects another owner.

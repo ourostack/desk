@@ -19,7 +19,7 @@ async function main({ env = process.env, deadlineMs = DEADLINE_MS } = {}) {
   return flushConsented(env, { runner: ghRunner({ env }), deadlineMs });
 }
 
-module.exports = { main, DEADLINE_MS, GRACE_MS };
+module.exports = { main, DEADLINE_MS };
 
 if (require.main === module) {
   setTimeout(() => process.exit(0), DEADLINE_MS + GRACE_MS).unref();

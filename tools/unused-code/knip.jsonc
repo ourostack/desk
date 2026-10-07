@@ -15,7 +15,9 @@
   "include": ["files", "dependencies", "unlisted", "unresolved", "exports", "types", "nsExports", "nsTypes", "duplicates"],
   "ignoreIssues": {
     // The unused exports are getActiveEmbeddingSpec, isActiveEmbeddingSpec, normalizeChunkText, chunkTextHash and computeChunkKey. They should be deleted, but this file is one of the artifact source paths (plugins/desk/mcp/config/artifact-source-scope.json): any change to its bytes changes the source-scope hash recorded in the published vector pack and snapshot, which would have to be rebuilt and republished. Delete them together with that rebuild.
-    "plugins/desk/mcp/src/indexer/spec.js": ["exports"]
+    "plugins/desk/mcp/src/indexer/spec.js": ["exports"],
+    // plugins/superpowers is the unmodified upstream payload, locked by SHA-256 in upstream-sources.lock.json, so its exports (the frame and key helpers upstream's own tests use) cannot be removed here.
+    "plugins/superpowers/skills/brainstorming/scripts/server.cjs": ["exports"]
   },
   "workspaces": {
     ".": {
@@ -25,12 +27,9 @@
         "evals/boot-acceptance/*.mjs",
         "evals/offline/*.mjs",
         "evals/**/__tests__/**/*.{js,cjs,mjs}",
-        "tests/**/*.{js,cjs,mjs}",
-        "plugins/desk/hooks/*.cjs",
-        "plugins/plain-language/hooks/*.cjs",
-        "plugins/superpowers/skills/**/*.{js,cjs}"
+        "tests/**/*.{js,cjs,mjs}"
       ],
-      "project": ["scripts/**", ".github/scripts/**", "evals/**", "tests/**", "plugins/desk/hooks/**", "plugins/plain-language/hooks/**", "plugins/superpowers/skills/**/*.{js,cjs}"],
+      "project": ["scripts/**", ".github/scripts/**", "evals/**", "tests/**"],
       // evals/offline/vendor is a TypeScript package copied in from upstream, and the fixtures and cases are inputs the tests feed to the code under test, not Desk code.
       "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**"],
       "ignoreDependencies": [
@@ -41,6 +40,37 @@
         // Resolved through the same link as transitive dependencies of the MCP package's own dependencies. Declaring them at the root would change the lockfile for no runtime effect.
         "js-yaml", "process-on-spawn", "test-exclude", "signal-exit", "foreground-child"
       ]
+    },
+    // Hooks and skill scripts are their own workspaces so that an export nothing imports is reported even though the file is an entry point (includeEntryExports).
+    // The entries are listed by name, not by glob, so a hook file that is not listed (and not reached from a listed one) is reported as unused. tests/desk/mcp/__tests__/runtime/hook_registration.test.js checks that this list matches hooks.json and copilot-hooks.json.
+    "plugins/desk/hooks": {
+      "entry": [
+        // Registered in hooks.json and copilot-hooks.json.
+        "factory-end.cjs",
+        "sync-end.cjs",
+        "copilot-session-start.cjs",
+        "copilot-boot-prompt.cjs",
+        // Started detached by boot-checks.cjs `startFactory`, by a path string.
+        "factory-start.cjs",
+        "loop-start.cjs"
+      ],
+      "project": ["*.cjs"],
+      "includeEntryExports": true
+    },
+    "plugins/plain-language/hooks": {
+      "entry": ["inject.cjs"],
+      "project": ["*.cjs"],
+      "includeEntryExports": true
+    },
+    "plugins/superpowers/skills": {
+      "entry": [
+        // Each script is run by a skill's instructions, or served by one of them (helper.js is the page script that server.cjs serves).
+        "brainstorming/scripts/server.cjs",
+        "brainstorming/scripts/helper.js",
+        "writing-skills/render-graphs.js"
+      ],
+      "project": ["**/*.{js,cjs}"],
+      "includeEntryExports": true
     },
     "plugins/desk/mcp": {
       "entry": [

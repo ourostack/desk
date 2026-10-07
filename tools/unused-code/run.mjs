@@ -25,8 +25,12 @@ try {
     cpSync(source, join(copy, file), { verbatimSymlinks: true })
   }
   writeFileSync(join(copy, "package.json"), `${JSON.stringify({ name: "desk-repository", private: true })}\n`)
+  // knip reads a workspace from its package.json, and the hook and skill-script folders have none.
+  for (const folder of ["plugins/desk/hooks", "plugins/plain-language/hooks", "plugins/superpowers/skills"]) {
+    writeFileSync(join(copy, folder, "package.json"), `${JSON.stringify({ name: `desk-unused-code-${folder.replaceAll("/", "-")}`, private: true })}\n`)
+  }
   const knip = join(here, "node_modules", "knip", "bin", "knip.js")
-  status = spawnSync(process.execPath, [knip, "--config", "tools/unused-code/knip.jsonc"], { cwd: copy, stdio: "inherit" }).status ?? 2
+  status = spawnSync(process.execPath, [knip, "--config", "tools/unused-code/knip.jsonc", "--treat-config-hints-as-errors"], { cwd: copy, stdio: "inherit" }).status ?? 2
 } finally {
   rmSync(copy, { recursive: true, force: true })
 }

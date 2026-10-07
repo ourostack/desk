@@ -17,6 +17,7 @@ import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 import { STORE, scratch } from "./_session_helpers.js"
+import { main as factoryStartMain, DEADLINE_MS as factoryDeadlineMs } from "../../../../../plugins/desk/hooks/factory-start.cjs"
 
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
@@ -357,7 +358,7 @@ test("the andon check names each contributing store's open andon issues in one l
 }))
 
 test("factory-start.cjs runs sweep and flush for consented stores, prints nothing and exits 0", () => scratch(async ({ env }) => {
-  const start = require(START)
+  const start = { main: factoryStartMain, DEADLINE_MS: factoryDeadlineMs }
   assert.equal(start.DEADLINE_MS, 120000)
   assert.deepEqual(await start.main({ env }), { stores: {} })
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })

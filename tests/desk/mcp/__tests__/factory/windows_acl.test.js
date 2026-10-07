@@ -22,7 +22,7 @@ import {
   assertWindowsAclAvailable,
   protectWindowsPaths,
 } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
-import { nativeProbe, writePosixNodeProvider } from "./_helpers.js"
+import { nativeProbe, writePosixNodeProvider } from "./_private_state_helpers.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
 const isWindows = process.platform === "win32"
