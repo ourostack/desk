@@ -510,8 +510,9 @@ test("the live claim and the day cap are per machine, and a card with another ma
 test("two simultaneous claimNext calls on one open card give exactly one claimed", async () => {
   const where = await desk()
   await open(where)
-  const results = await Promise.all([claim(where), claim(where), claim(where)])
-  assert.equal(results.filter((r) => r.result === "claimed").length, 1)
+  // Each claim writes the card, and on Windows every protected write starts PowerShell, so the one that holds the lock can keep the others waiting past the default 5 s: they then answer `lock_busy`, which is the lock working, not a second claim. The wait is long here so the test sees the claim answers.
+  const results = await Promise.all([claim(where, { lockWaitMs: 120000 }), claim(where, { lockWaitMs: 120000 }), claim(where, { lockWaitMs: 120000 })])
+  assert.equal(results.filter((r) => r.result === "claimed").length, 1, JSON.stringify(results.map((r) => r.result)))
   assert.equal(results.filter((r) => r.result === "claim_held").length, 2)
   assert.equal((await read(where))[0].claim_log.length, 1)
 })
