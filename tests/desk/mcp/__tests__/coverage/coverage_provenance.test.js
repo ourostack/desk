@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import TestExclude from "test-exclude"
-import { isMigrationDetectChild } from "../../../../../plugins/desk/mcp/src/coverage/detect-child.js"
+import { DETECT_CHILD_SOURCE } from "../../../../../plugins/desk/mcp/src/coverage/detect-child.js"
 import { parseMigration, pendingMigrations } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
 import { runCoverageCommand } from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
 
@@ -291,7 +291,7 @@ test("the actual producer invocation binds the maintained loader, dependency cwd
   assert.equal(args[importIndex - 1], process.execPath)
   const registration = decodeURIComponent(args[importIndex + 1].replace("data:text/javascript,", ""))
   const loader = pathToFileURL(path.join(mcpRoot, "node_modules", "@istanbuljs", "esm-loader-hook", "index.js")).href
-  assert.equal(registration, `import { register } from "node:module"; const isMigrationDetectChild = ${String(isMigrationDetectChild)}; if (!isMigrationDetectChild(process.argv, process.env)) register(${JSON.stringify(loader)});`)
+  assert.equal(registration, `import { register } from "node:module"; const isMigrationDetectChild = ${DETECT_CHILD_SOURCE}; if (!isMigrationDetectChild(process.argv, process.env)) register(${JSON.stringify(loader)});`)
   assert.equal(options.env.NODE_OPTIONS, `--import=${args[importIndex + 1]}`)
   assert.equal(options.env.NODE_PATH, path.join(mcpRoot, "node_modules"))
   // The second preload is the global test setup: a temporary HOME and XDG folders for every test process.

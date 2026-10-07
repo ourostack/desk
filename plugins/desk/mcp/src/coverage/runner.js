@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { isMigrationDetectChild } from "./detect-child.js"
+import { DETECT_CHILD_SOURCE } from "./detect-child.js"
 import {
   copyFileSync,
   existsSync,
@@ -448,7 +448,7 @@ function runInstrumentedTests({
   const configPath = writeProducerConfig({ repoRoot, requiredFiles, offline, reportDirectory, rawDirectory, silent: Boolean(testFiles), fsOps })
   const loader = pathToFileURL(require.resolve("@istanbuljs/esm-loader-hook")).href
   // Migration Detect children stay uninstrumented (see detect-child.js); the registration inlines the one shared predicate.
-  const registration = `import { register } from "node:module"; const isMigrationDetectChild = ${String(isMigrationDetectChild)}; if (!isMigrationDetectChild(process.argv, process.env)) register(${JSON.stringify(loader)});`
+  const registration = `import { register } from "node:module"; const isMigrationDetectChild = ${DETECT_CHILD_SOURCE}; if (!isMigrationDetectChild(process.argv, process.env)) register(${JSON.stringify(loader)});`
   // The repository's own offline registration helper is a superset of this registration: it installs the same maintained hook and additionally gives the source-pinned TypeScript leaves a module format that hook will instrument.
   const registrationUrl = offline.registrationPath
     ? pathToFileURL(offline.registrationPath).href
