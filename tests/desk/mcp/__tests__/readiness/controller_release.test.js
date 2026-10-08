@@ -6,7 +6,7 @@ import { spawn } from "node:child_process"
 import { EventEmitter } from "node:events"
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { releaseRendezvous, startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
 import { createExitRelease } from "../../../../../plugins/desk/mcp/src/readiness/exit-release.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
@@ -119,7 +119,7 @@ test("a rendezvous that is no longer this controller's is left alone", { skip: p
 // A real process that elects a controller the way Desk does (not ephemeral, so it never holds the process open) and then ends one way or another.
 function spawnOwner({ endpoint, stateDir, identity }, { keepAlive }) {
   const script = `
-    const { startReadinessController } = await import(${JSON.stringify(serverModule)})
+    const { startReadinessController } = await import(${JSON.stringify(pathToFileURL(serverModule).href)})
     await startReadinessController({ identity: ${JSON.stringify(identity)}, endpoint: ${JSON.stringify(endpoint)}, stateDir: ${JSON.stringify(stateDir)} })
     process.stdout.write("up")
     ${keepAlive ? "setInterval(() => {}, 1000)" : ""}
