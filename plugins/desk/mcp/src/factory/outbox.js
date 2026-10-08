@@ -107,6 +107,8 @@ const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
 // Windows refuses to create a file whose deletion is still pending (EPERM, sometimes EACCES), and a lock another writer has just released is such a file for a moment, so it is contention for a bounded time (the delete finishes within milliseconds unless a scanner holds the file), not a fault.
 const LOCK_PENDING_DELETE_MS = 5000
+// Windows also refuses to rename a file over one that another process has open at that instant (EPERM, EACCES or EBUSY): a reader, a virus scanner, the search indexer. The other process lets go within milliseconds, so this too is contention for a bounded time, not a fault.
+const RENAME_BUSY_MS = 5000
 // A GitHub login: letters, digits and hyphens, and for an Enterprise Managed User the enterprise short code after `_`, the account a work store needs.
 const ACCOUNT_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?(?:_[A-Za-z0-9]{1,20})?$/u
 const REASON_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u
@@ -392,11 +394,24 @@ async function writeAtomic(root, file, data, { platform, env, runner }) {
   } finally {
     await handle.close()
   }
-  await fsp.rename(tmp, file)
+  await renameOverBusyFile(tmp, file, platform)
   await protectLeafFile(file, platform, NAMING)
   if (platform === "win32") {
     windowsBatch.push({ path: file, kind: "file", created: !existedBefore })
     await protectWindowsPaths(windowsBatch, { env, runner, label: NAMING.label })
+  }
+}
+
+// `rename(tmp, file)`, waiting out a Windows refusal because `file` is open elsewhere for a moment. Without the wait, a writer that lost the race gave up: the detached derivation behind a session end then wrote nothing, and nothing retried it.
+async function renameOverBusyFile(tmp, file, platform) {
+  const deadline = Date.now() + RENAME_BUSY_MS
+  while (true) {
+    try {
+      return await fsp.rename(tmp, file)
+    } catch (error) {
+      if (platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error.code) || Date.now() >= deadline) throw error
+      await sleep(LOCK_RETRY_DELAY_MS)
+    }
   }
 }
 
