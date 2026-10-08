@@ -522,6 +522,7 @@ function acquirePublicationLock({
 }) {
   const lockDir = `${destinationDir}.publish-lock`
   const startedAt = now()
+  let retriedPastDeadline = false
   while (true) {
     if (directoryIsValid(validateDestination, destinationDir)) {
       return { lockDir, owned: false }
@@ -553,19 +554,24 @@ function acquirePublicationLock({
       }
       return { lockDir, owned: true, token }
     }
-    if (reclaimAbandonedPublicationLock({
+    const reclaimed = reclaimAbandonedPublicationLock({
       lockDir,
       lockTimeoutMs,
       createLockDirectory,
       now,
       processAlive,
       lockIo,
-    })) {
-      continue
-    }
+    })
+    // The deadline applies to every pass, a reclaim included: a lock folder that cannot be created (a persistent EPERM or EACCES on Windows) must end in the timeout, not in a loop that reclaims nothing and tries again at once.
     const elapsedMs = now() - startedAt
-    if (elapsedMs >= lockTimeoutMs) {
+    const pastDeadline = elapsedMs >= lockTimeoutMs
+    // A reclaim that finishes at the deadline still gets one more attempt at the lock; a second pass past the deadline times out.
+    if (pastDeadline && !(reclaimed && !retriedPastDeadline)) {
       throw new Error(publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }))
+    }
+    if (reclaimed) {
+      retriedPastDeadline = pastDeadline
+      continue
     }
     sleep(Math.min(publicationLockPollMs, lockTimeoutMs - elapsedMs))
   }
