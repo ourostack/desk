@@ -44,6 +44,8 @@
 //                                      stamps its one-time rebuild)
 //   machine-secret                     32 random bytes, created once
 //   labels/<store-slug>/<job>/<session_id>.json   local waste labels
+//   labels-basis/<store-slug>/<job>/<session_id>.json   { basis }: the evidence the
+//                                      session's accepted labels were made against
 //   evaluations/<job>/<store-slug>/<host>-<session_id>.brief.json
 //                                      the waste evaluator's brief
 //   evaluations/<job>/<store-slug>/<host>-<session_id>.labels.json
@@ -1877,6 +1879,31 @@ export async function localLabelsRubric(env, store, job, session) {
   }
 }
 
+const BASIS_PATTERN = /^[0-9a-f]{64}$/u
+
+/**
+ * `writeLabelsBasis(env, store, { job, session, basis })`: records the fingerprint of the evidence (`evaluate-run.js` `labelsBasis`, 64 hex)
+ * that `store`'s accepted labels for `job`'s session were made against, in `labels-basis/<store>/<job>/<session>.json` (`{ basis }`).
+ */
+export async function writeLabelsBasis(env, store, { job, session, basis }) {
+  const slug = storeSlug(store)
+  requirePattern(job, PATTERNS.jobId, "job")
+  requirePattern(session, SESSION_ID_PATTERN, "session")
+  requirePattern(basis, BASIS_PATTERN, "basis")
+  const root = await factoryStateRoot(env)
+  await writeJsonAtomic(root, path.join(root, "labels-basis", slug, job, `${session}.json`), { basis }, { platform: process.platform, env })
+}
+
+/** `readLabelsBasis(env, store, job, session) -> string | null`: the recorded basis, `null` when none is recorded or the record does not read. */
+export async function readLabelsBasis(env, store, job, session) {
+  const slug = storeSlug(store)
+  requirePattern(job, PATTERNS.jobId, "job")
+  requirePattern(session, SESSION_ID_PATTERN, "session")
+  const root = await factoryStateRoot(env)
+  const record = await readJsonFileSafe(path.join(root, "labels-basis", slug, job, `${session}.json`), null, process.platform)
+  return typeof record?.basis === "string" && BASIS_PATTERN.test(record.basis) ? record.basis : null
+}
+
 /** `settledEvaluationRequests(env) -> Set<job>`: the jobs whose evaluation request was moved to `expired/` or `quarantine/`; nothing asks for them again by itself. */
 export async function settledEvaluationRequests(env) {
   const root = await factoryStateRoot(env)
@@ -1893,16 +1920,19 @@ export async function settledEvaluationRequests(env) {
  * the request is quarantined, like a finalize request. `finishedAt` (an ISO
  * time) is when the job finished, when the caller knows it better than the
  * request's own time; a request already recorded keeps its times.
+ * `requestedAt` (an ISO time) stands in for the clock as the request's own
+ * time.
  */
-export async function requestEvaluation(env, { job, deskRoot, finishedAt = null }) {
+export async function requestEvaluation(env, { job, deskRoot, finishedAt = null, requestedAt = null }) {
   requirePattern(job, PATTERNS.jobId, "job")
   requireAbsolutePath(deskRoot, "deskRoot")
   if (finishedAt !== null && !PATTERNS.timestamp.test(finishedAt)) fail("finishedAt", "must be an ISO time")
+  if (requestedAt !== null && !PATTERNS.timestamp.test(requestedAt)) fail("requestedAt", "must be an ISO time")
   const root = await factoryStateRoot(env, { deskRoot })
   const file = path.join(root, "evaluate-requests", `${job}.json`)
   const existing = await readJsonFileSafe(file, null, process.platform)
   const finished = existing === null ? finishedAt : PATTERNS.timestamp.test(existing.finished_at ?? "") ? existing.finished_at : null
-  const record = { schema_version: 1, job, desk_root: deskRoot, requested_at: existing?.requested_at ?? defaultNow(), ...(finished === null ? {} : { finished_at: finished }) }
+  const record = { schema_version: 1, job, desk_root: deskRoot, requested_at: existing?.requested_at ?? requestedAt ?? defaultNow(), ...(finished === null ? {} : { finished_at: finished }) }
   await writeJsonAtomic(root, file, record, { platform: process.platform, env })
   return record
 }

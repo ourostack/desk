@@ -40,13 +40,17 @@
 //     lifts by itself if the session binds the job again;
 //   - `oldest_days`: whole days since the oldest counted request was made
 //     (the first 200 are read), or null when there is none to read;
-//   - `evaluator`: `{ state, expired_total, gave_up, lag_minutes }` from
+//   - `evaluator`: `{ state, expired_total, gave_up, lag_minutes,
+//     unsupported_jobs, gave_up_jobs }` from
 //     `status.json`'s `evaluator` record, each null when it is not recorded
 //     (never 0), or null when there is no record. `lag_minutes` is the age, in
 //     whole minutes, of the oldest finished job whose labelable session has
 //     no labels yet, from the evaluator step's lag record (`lag`), 0 when it
 //     recorded none, and null when the record is missing, damaged, dated in
-//     the future or older than 72 hours.
+//     the future or older than 72 hours. `unsupported_jobs` and `gave_up_jobs`
+//     are the first 8 characters of the job IDs the lag leaves out (a session
+//     on a host the runner does not support, or the attempt limit reached),
+//     from the same fresh lag record, and empty otherwise.
 //
 // The lines come from stored numbers only and never tell the agent to start
 // the evaluator: the plugin runs it. `labelsLine(summary, { cardOpen })` is the
@@ -262,16 +266,18 @@ export function labelsLine({ count, oldest_days: oldest = null, evaluator = null
   const lag = typeof evaluator?.lag_minutes === "number" && evaluator.lag_minutes > 0 ? `, and the oldest unlabeled one finished ${lagText(evaluator.lag_minutes)} ago${evaluator.lag_minutes > LAG_TARGET_MINUTES ? ", past the 1-hour target" : ""}` : ""
   const age = `${oldest === null ? "" : ` (oldest ${days(oldest)})`}${lag}`
   const waits = `${count} finished ${count === 1 ? "job waits" : "jobs wait"}`
-  const gaveUp = evaluator?.gave_up > 0 ? [`${evaluator.gave_up} ${evaluator.gave_up === 1 ? "has" : "have"} been tried three times without an accepted result`] : []
+  const named = (list) => (list?.length > 0 ? ` (${list.join(", ")})` : "")
+  const gaveUp = evaluator?.gave_up > 0 ? [`${evaluator.gave_up} ${evaluator.gave_up === 1 ? "has" : "have"} been tried three times without an accepted result${named(evaluator.gave_up_jobs)}`] : []
+  const unsupported = evaluator?.unsupported_jobs?.length > 0 ? [`${evaluator.unsupported_jobs.length} ${evaluator.unsupported_jobs.length === 1 ? "has a session" : "have sessions"} the plugin cannot label on this machine (a Copilot or Codex host)${named(evaluator.unsupported_jobs)}`] : []
   const expired = evaluator?.expired_total > 0 ? [`${evaluator.expired_total} evaluation ${evaluator.expired_total === 1 ? "request expired and is" : "requests expired and are"} counted`] : []
-  if (state === "disabled_would_bill") return ["Factory evaluator: does not run because this sign-in would be billed per token, and nothing is spent", `${waits}${age}`, ...gaveUp, ...expired].join("; ")
+  if (state === "disabled_would_bill") return ["Factory evaluator: does not run because this sign-in would be billed per token, and nothing is spent", `${waits}${age}`, ...gaveUp, ...unsupported, ...expired].join("; ")
   if (CARD_STATES.has(state)) {
-    return [`Factory evaluator: cannot run (${state})`, `${waits}${age}`, ...gaveUp, cardOpen === true ? "a card is open for it" : "the state is shown on the health record", ...expired].join("; ")
+    return [`Factory evaluator: cannot run (${state})`, `${waits}${age}`, ...gaveUp, ...unsupported, cardOpen === true ? "a card is open for it" : "the state is shown on the health record", ...expired].join("; ")
   }
   const waiting = `${count} finished ${count === 1 ? "job waits" : "jobs wait"} for labels${age}`
-  if (state === "disabled") return ["Factory evaluator: switched off on this machine", waiting, ...gaveUp, ...expired].join("; ")
+  if (state === "disabled") return ["Factory evaluator: switched off on this machine", waiting, ...gaveUp, ...unsupported, ...expired].join("; ")
   const last = state === null ? "no result recorded yet" : state === "unrecognized" ? "last result not recognised by this version" : `last result ${state}`
-  return [`Factory evaluator: ${waiting}`, `the plugin labels them in the background, ${last}`, ...gaveUp, ...expired].join("; ")
+  return [`Factory evaluator: ${waiting}`, `the plugin labels them in the background, ${last}`, ...gaveUp, ...unsupported, ...expired].join("; ")
 }
 
 /** The agent line for `count` finished jobs whose waste labels are quarantined; `cardOpen` is true, false, or null when the cards could not be read. */
@@ -426,7 +432,9 @@ function evaluatorRecord(dir, now) {
   // A state this version does not know is said as not recognised, never as no result.
   const recorded = isPlainObject(record.headless) ? record.headless.state : undefined
   const state = EVALUATOR_STATES.has(recorded) ? recorded : typeof recorded === "string" ? "unrecognized" : null
-  return { state, expired_total: count(record.expired_total), gave_up: count(record.gave_up), lag_minutes: lagMinutes(record.lag, now) }
+  const lag = lagMinutes(record.lag, now)
+  const names = (list) => (lag !== null && Array.isArray(list) ? list.filter((job) => typeof job === "string" && /^[0-9a-f]{32}$/u.test(job)).map((job) => job.slice(0, 8)) : [])
+  return { state, expired_total: count(record.expired_total), gave_up: count(record.gave_up), lag_minutes: lag, unsupported_jobs: names(record.lag?.unsupported_jobs), gave_up_jobs: names(record.lag?.gave_up_jobs) }
 }
 
 // The lag record's age of the oldest unlabeled finished job, in whole minutes; 0 with none recorded; null when it says nothing about now.

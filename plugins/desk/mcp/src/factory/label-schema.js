@@ -116,7 +116,7 @@ import {
 export const LABELS_SCHEMA = "desk.factory.labels/3"
 
 /** The labels form before stops: confidence, versions and "could not tell" on stretches only. */
-export const LABELS_SCHEMA_V2 = "desk.factory.labels/2"
+const LABELS_SCHEMA_V2 = "desk.factory.labels/2"
 
 /** Every labels schema value a reader accepts: the legacy `/1` and `/2`, and the current one. */
 export const LABELS_SCHEMAS = Object.freeze(["desk.factory.labels/1", LABELS_SCHEMA_V2, LABELS_SCHEMA])

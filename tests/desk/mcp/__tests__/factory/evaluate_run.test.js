@@ -16,10 +16,12 @@ import {
   BRIEF_SCHEMA,
   EVALUATOR_SKILL,
   RUBRIC_VERSION,
+  STOP_FACTS_BINDING_VERSION,
   acceptEvaluation,
   acceptEvaluations,
   buildEvaluatorBrief,
   evaluatePending,
+  labelsBasis,
   evaluateTask,
   prepareEvaluation,
   requestFinishedJobs,
@@ -31,12 +33,14 @@ import {
   listEvaluationRequests,
   localLabelsRubric,
   quarantine,
+  readLabelsBasis,
   requestEvaluation,
   setConsent,
   settledEvaluationRequests,
   writeLocalFacts,
   writeLocalLabels,
   writeMarker,
+  writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
 import { osEnv } from "../_os_env.js"
@@ -66,10 +70,18 @@ const LOG = "/tmp/m5-2-session.jsonl"
 const OUTPUT = "/tmp/m5-2-output.labels.json"
 
 const local = () => structuredClone(LOCAL)
+// The golden session with the job as its only binding from before workers were recorded: the job owns the whole session, so its wait is in its share.
+const sole = () => {
+  const value = local()
+  value.jobs = value.jobs.filter((bound) => bound.job === JOB)
+  return value
+}
 const labels = () => structuredClone(LABELS)
 // What Desk accepts when it cannot place a stretch: the evaluator's own `caught` is never kept.
 const UNSTAMPED = structuredClone(LABELS)
 for (const stretch of UNSTAMPED.stretches) delete stretch.caught
+// What Desk keeps of the golden answer in the golden session, where the job's share is unknown: no stop counts there, so none is kept.
+const UNSTAMPED_NO_SHARE = { ...structuredClone(UNSTAMPED), stops: [] }
 const bytes = (value) => Buffer.from(JSON.stringify(value))
 
 function brief(overrides = {}) {
@@ -106,7 +118,7 @@ test("the brief carries the job, the session on the published clock, the rubric 
     clock_origin: LOCAL.session.started_at,
     facts: { duration_ms: PUBLISHED.session.duration_ms, ended: true, intervals: PUBLISHED.intervals, counts },
     own_share: null,
-    stops: [{ wait: [250000, 600000], stop: null, rule: null }],
+    stops: [],
     unavailable: [],
     output: OUTPUT,
   })
@@ -126,8 +138,10 @@ test("the brief's share follows the store: a sole binding from before workers we
   const sole = local()
   sole.jobs = sole.jobs.filter((bound) => bound.job === JOB)
   assert.deepEqual(brief({ localFacts: sole }).own_share, [{ start_ms: 0, end_ms: PUBLISHED.session.duration_ms }])
+  assert.deepEqual(brief({ localFacts: sole }).stops, [{ wait: [250000, 600000], stop: null, rule: null }], "a wait in the job's share gets a hint")
   sole.jobs[0].agents = [1]
   assert.equal(brief({ localFacts: sole }).own_share, null)
+  assert.deepEqual(brief({ localFacts: sole }).stops, [], "with no share known, no wait counts for the job, so none gets a hint")
   assert.equal(brief().own_share, null, "one of several bindings without segments has no known share")
   // With no share to credit, the evaluator writes no stretches, and that answer is accepted.
   const empty = { ...labels(), stretches: [] }
@@ -197,10 +211,12 @@ test("the rubric the skill states is the rubric version labels carry", () => {
 // ---------------------------------------------------------------------------
 
 test("labels that match the brief are accepted and returned as a canonical copy", () => {
-  const result = acceptEvaluation(brief(), bytes(labels()))
+  const result = acceptEvaluation(brief({ localFacts: sole() }), bytes(labels()))
   assert.deepEqual(result, { ok: true, errors: [], labels: UNSTAMPED })
-  const pretty = acceptEvaluation(brief(), Buffer.from(`${JSON.stringify(labels(), null, 2)}\n`))
+  const pretty = acceptEvaluation(brief({ localFacts: sole() }), Buffer.from(`${JSON.stringify(labels(), null, 2)}\n`))
   assert.deepEqual(pretty, { ok: true, errors: [], labels: UNSTAMPED })
+  // A stop on a wait outside the job's share passes the checks but counts for nothing, so it is not kept.
+  assert.deepEqual(acceptEvaluation(brief(), bytes(labels())), { ok: true, errors: [], labels: UNSTAMPED_NO_SHARE })
   assert.deepEqual(acceptEvaluation(brief(), JSON.stringify(labels())).ok, true)
 })
 
@@ -361,7 +377,8 @@ test("prepareEvaluation writes one brief per session, pointing at the host log w
   const prepared = await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
   const root = await factoryStateRoot(env)
   const dir = path.join(root, "evaluations", JOB, "ourostack__factory")
-  assert.deepEqual(prepared, { result: "ready", job: JOB, briefs: [path.join(dir, `claude-code-${SESSION}.brief.json`)], unlabeled: 1 })
+  const file = path.join(dir, `claude-code-${SESSION}.brief.json`)
+  assert.deepEqual(prepared, { result: "ready", job: JOB, briefs: [file], unlabeled: 1, unlabeled_briefs: [file] })
   const written = JSON.parse(await fs.readFile(prepared.briefs[0], "utf8"))
   assert.deepEqual(written, brief({ logPath: log, outputPath: path.join(dir, `claude-code-${SESSION}.labels.json`) }))
 
@@ -395,7 +412,10 @@ test("acceptEvaluations turns a valid answer into local labels and clears the br
   await fs.writeFile(output, JSON.stringify(labels(), null, 2))
   assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "accepted" }], request: "cleared" })
   const stored = path.join(root, "labels", "ourostack__factory", JOB, `${SESSION}.json`)
-  assert.equal(await fs.readFile(stored, "utf8"), `${JSON.stringify(UNSTAMPED)}\n`)
+  assert.equal(await fs.readFile(stored, "utf8"), `${JSON.stringify(UNSTAMPED_NO_SHARE)}\n`)
+  // The evidence the labels were made against is recorded beside them.
+  const facts = local()
+  assert.equal(await readLabelsBasis(env, STORE, JOB, SESSION), labelsBasis(brief({ localFacts: facts })))
   assert.deepEqual(await fs.readdir(dir), [])
   assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [], request: "cleared" })
   assert.deepEqual(await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION }), { result: "complete", job: JOB, briefs: [] })
@@ -520,14 +540,14 @@ test("the done step creates nothing without factory state or consent", () => scr
   assert.deepEqual(await listEvaluationRequests(env), [])
 }))
 
-test("the done step keeps the job's request until every session has ended and has labels", () => scratch(async (env, base) => {
+test("a job that finished in a session still open is labeled once, and again only when its facts are derived again with other evidence", () => scratch(async (env, base) => {
   const deskRoot = path.join(base, "desk")
   await setConsent(env, { store: STORE, contribute: true })
   assert.deepEqual(await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION }), { result: "no_sessions", job: JOB, briefs: [] })
   assert.deepEqual((await listEvaluationRequests(env)).map((request) => request.job), [JOB])
 
-  // The finishing session is derived later, still open.
-  const open = local()
+  // The finishing session is derived at the finish, still open; the job owns the whole session.
+  const open = sole()
   open.session.ended_at = null
   open.session.end_reason = null
   await writeLocalFacts(env, STORE, open)
@@ -537,17 +557,61 @@ test("the done step keeps the job's request until every session has ended and ha
   const [pending] = (await evaluatePending(env, { pluginVersion: VERSION })).jobs
   assert.equal(pending.result, "ready")
   await answer(env, labelsOpen)
-  assert.equal((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).request, "kept")
-  assert.equal((await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION })).result, "ready")
-
-  // Once the session has ended and its labels are accepted, the request is cleared.
-  await writeLocalFacts(env, STORE, local())
-  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
-  await answer(env, labelsOpen)
-  assert.equal((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).request, "cleared")
-  assert.deepEqual(await listEvaluationRequests(env), [])
+  assert.equal((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).request, "cleared", "labels of the open session are settled while its evidence stands")
   assert.deepEqual(await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION }), { result: "complete", job: JOB, briefs: [] })
   assert.deepEqual(await listEvaluationRequests(env), [])
+
+  // The session ends and is derived again with the same evidence in the job's share: nothing is asked for.
+  const ended = sole()
+  await writeLocalFacts(env, STORE, ended)
+  assert.deepEqual(await requestFinishedJobs(env, { deskRoot }), { requested: [] })
+
+  // Derived again with other evidence (a wait that ended later): the labels are unsettled and a relabel is asked for.
+  const moved = sole()
+  const wait = moved.intervals.find((interval) => interval.kind === "human_wait")
+  wait.end = new Date(Date.parse(wait.end) - 1000).toISOString()
+  await writeLocalFacts(env, STORE, moved)
+  assert.deepEqual(await requestFinishedJobs(env, { deskRoot }), { requested: [JOB] })
+  const again = await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  assert.deepEqual([again.result, again.unlabeled], ["ready", 0], "a relabel is not an unlabeled session")
+}))
+
+test("labels kept from before their evidence was recorded follow the old rule: an open session is labeled again, an ended one stands", () => scratch(async (env) => {
+  await seed(env)
+  await writeLocalLabels(env, STORE, labels())
+  assert.equal(await readLabelsBasis(env, STORE, JOB, SESSION), null)
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "complete")
+  const open = local()
+  open.session.ended_at = null
+  open.session.end_reason = null
+  await writeLocalFacts(env, STORE, open)
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "ready")
+  // A basis record that does not read counts as none.
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "labels-basis", "ourostack__factory", JOB, `${SESSION}.json`)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, JSON.stringify({ basis: SENTINEL }))
+  assert.equal(await readLabelsBasis(env, STORE, JOB, SESSION), null)
+}))
+
+test("the labels basis covers only the job's own share, and a session the store will never hold has one fixed basis", () => {
+  const whole = brief({ localFacts: sole() })
+  const moved = sole()
+  moved.intervals.find((interval) => interval.kind === "human_wait").end = new Date(Date.parse(LOCAL.intervals.find((interval) => interval.kind === "human_wait").end) - 1000).toISOString()
+  assert.notEqual(labelsBasis(brief({ localFacts: moved })), labelsBasis(whole), "evidence in the share changes the basis")
+  assert.match(labelsBasis(whole), /^[0-9a-f]{64}$/u)
+  // With no share known, nothing in the session is the job's: its basis does not follow the session's other work.
+  const unshared = local()
+  unshared.intervals.find((interval) => interval.kind === "human_wait").end = moved.intervals.find((interval) => interval.kind === "human_wait").end
+  assert.equal(labelsBasis(brief({ localFacts: unshared })), labelsBasis(brief()))
+  const early = local()
+  early.session.started_at = "2020-01-01T00:00:00.000Z"
+  assert.equal(labelsBasis(brief({ localFacts: early })), labelsBasis({ facts: null, own_share: null, stops: [] }))
+})
+
+test("a request records the caller's time only when it reads as a time", () => scratch(async (env, base) => {
+  await assert.rejects(requestEvaluation(env, { job: JOB, deskRoot: path.join(base, "desk"), requestedAt: `soon ${SENTINEL}` }), (error) => !error.message.includes("SENTINEL"))
+  assert.equal((await requestEvaluation(env, { job: JOB, deskRoot: path.join(base, "desk"), requestedAt: "2026-10-08T12:00:00.000Z" })).requested_at, "2026-10-08T12:00:00.000Z")
 }))
 
 test("pending requests are cleared when complete and quarantined when expired or without consent", () => scratch(async (env, base) => {
@@ -690,7 +754,7 @@ test("accepted labels carry no catch point when the record is adopted", () => sc
 
 // The golden local facts with stop facts on the human wait (as a `/4` deriver records them).
 function withStop(end, extra = {}) {
-  const value = local()
+  const value = sole()
   const wait = value.intervals.find((interval) => interval.kind === "human_wait")
   wait.stop = { end, asks: true, pending_agents: false }
   Object.assign(value.session, extra)
@@ -758,10 +822,18 @@ async function oldLabels(env, rubric = "3") {
   await writeLocalLabels(env, STORE, old)
 }
 
-test("an ended session labeled under an older rubric is labeled again while its log is on disk, and kept without it", () => scratch(async (env) => {
+// The derive receipt that says the session's facts carry stop facts (or, with an older version, that they do not).
+const derivedAt = (env, version = STOP_FACTS_BINDING_VERSION) => writeStatus(env, { derivations: { [NAME]: { store: STORE, binding_version: version } } })
+
+test("an ended session labeled under an older rubric is labeled again while its log is on disk and its facts carry stop facts, and kept otherwise", () => scratch(async (env) => {
   const log = await seed(env)
   await oldLabels(env)
   assert.equal(await localLabelsRubric(env, STORE, JOB, SESSION), "3")
+  // Facts derived before the derivers recorded stop facts: the relabel waits for the facts it classifies.
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "complete")
+  await derivedAt(env, STOP_FACTS_BINDING_VERSION - 1)
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "complete")
+  await derivedAt(env)
   const again = await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
   assert.equal(again.result, "ready")
   assert.equal(again.unlabeled, 0, "a relabel is not an unlabeled session")
@@ -860,8 +932,12 @@ test("the backstop asks for a relabel of a session labeled under an older rubric
   const marker = JSON.parse(await fs.readFile(markerFile, "utf8"))
   await writeMarker(env, { ...marker, desk_root: markerDesk })
   await oldLabels(env)
-  assert.deepEqual(await requestFinishedJobs(env, { deskRoot: path.join(base, "desk") }), { requested: [JOB] })
+  assert.deepEqual(await requestFinishedJobs(env, { deskRoot: path.join(base, "desk") }), { requested: [] }, "not before the facts carry stop facts")
+  await derivedAt(env)
+  assert.deepEqual(await requestFinishedJobs(env, { deskRoot: path.join(base, "desk"), now: Date.parse("2026-10-08T12:00:00.000Z") }), { requested: [JOB] })
   assert.equal((await listEvaluationRequests(env))[0].desk_root, markerDesk)
+  assert.equal((await listEvaluationRequests(env))[0].requested_at, "2026-10-08T12:00:00.000Z", "the request records the caller's time")
+  await assert.rejects(requestFinishedJobs(env, { now: Number.NaN }), TypeError)
   await expireEvaluationRequest(env, JOB)
   assert.deepEqual(await requestFinishedJobs(env, { deskRoot: markerDesk }), { requested: [] }, "an expired relabel is never asked for again")
   // Without the log, older labels stand and nothing is asked for.

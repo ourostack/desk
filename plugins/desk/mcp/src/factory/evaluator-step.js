@@ -22,22 +22,26 @@
 //     and attempt, saved) before it starts and taken back only if the runner reports that none started. Stored
 //     bookkeeping that is damaged fails closed (a damaged day count is a spent day, a damaged attempt entry a job
 //     at its limit) and the clock never moves the day backwards; the day is re-read before each run. `onChild` and `onChildExit` go to the runner and the probe unchanged. This step signals nothing.
-//   - Jobs with a session that has no labels at all run first, oldest finish first; relabels of sessions labeled
-//     under an older rubric come after them, so a relabel pass never holds up a fresh finish.
+//   - Jobs with a session that has no labels at all run first, oldest finish first; relabels (an older rubric, or
+//     facts derived again with other evidence) come after them, so a relabel pass never holds up a fresh finish.
+//   - A job runs at most once a UTC day and at most 3 times without an accepted answer; an accepted run starts its
+//     count again, so a session that runs on and is labeled again as its facts change never gives up.
 //   - A step that did not run never looks like one that found nothing: the result codes `no_jobs_waiting`,
 //     `none_could_run` and the blocked states differ, `waiting` counts the jobs left, and cost is `null` unless
 //     a run reported a number (`cost_unreported_runs` says how many of the day's runs reported none).
 //
 // `status.evaluator` (codes, counts and the cost number only; read by the measure step and the boot line):
 //
-//   { expired_total, gave_up, waiting,
+//   { expired_total, gave_up, waiting, ready_now, ready_later,
 //     headless: { state, day, jobs, accepted, rejected, cost_usd, cost_unreported_runs,
 //                 unsupported_jobs, deferred_jobs, blocked_days },
-//     lag: { at, unlabeled_jobs, oldest_finished_at } }
+//     lag: { at, unlabeled_jobs, oldest_finished_at, unsupported_jobs, gave_up_jobs } }
 //
 //   expired_total  requests moved to `evaluate-requests/expired/`, ever (each counted once)
 //   gave_up        waiting jobs that were attempted 3 times without an accepted answer
 //   waiting        ready jobs left after this step
+//   ready_now, ready_later   of those, the jobs the runner can still run (a supported brief, attempts to spare) that
+//                  were not attempted today, and that were: what the loop kick reads to drain the queue
 //   state          `idle` | `ran` | a blocked state | `unsupported_host` (jobs waiting, every one unsupported)
 //                  | `budget_exhausted` | `disabled`; with `idle`, `waiting` above 0 means nothing could run now
 //   day            the UTC day the counts below belong to; they start again each UTC day
@@ -48,7 +52,9 @@
 //   blocked_days   consecutive days the step has seen a machine-level blocked state (`no_agent_cli`,
 //                  `no_credentials`, `disabled_would_bill`, `sign_in_unknown`, `disabled`, `budget_exhausted`)
 //   lag            the label lag as this step left it: `at` (when it was read), `unlabeled_jobs` (finished
-//                  jobs with a labelable session that has no labels yet) and `oldest_finished_at` (the oldest
+//                  jobs with a session that has no labels yet and that the runner can label, not at the attempt
+//                  limit), `unsupported_jobs` and `gave_up_jobs` (the job IDs left out of the lag: an unlabeled
+//                  session on a host the runner does not support, and the attempt limit reached), and `oldest_finished_at` (the oldest
 //                  such job's finish time, `null` when there is none). The measure step turns it into the age
 //                  the health record, the session-start line and the `label_lag` alarm read.
 //
@@ -188,14 +194,21 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
   const clockStart = impl.clock()
   // The backstop never stops the step: a job it cannot ask for now is asked for at the next step.
   try {
-    await impl.requestFinishedJobs(env, { deskRoot: impl.deskRoot ?? null })
+    await impl.requestFinishedJobs(env, { deskRoot: impl.deskRoot ?? null, now: nowMs })
   } catch {
     // Nothing recorded: the requests already waiting are swept as before.
   }
   const sweep = await evaluatePending(env, { pluginVersion, now: nowMs })
   const ready = sweep.jobs.filter((entry) => entry.result === "ready").sort(byPriority)
-  // Finished jobs with a session that has no labels at all, and when each finished: the label lag.
-  const unlabeled = new Map(ready.filter((entry) => entry.unlabeled > 0).map((entry) => [entry.job, Date.parse(entry.finished_at)]))
+  // Finished jobs with a session that has no labels and that the runner can label, and when each finished: the label lag. Jobs with an
+  // unlabeled session the runner cannot label (a host it does not support) are named apart and never hold the lag.
+  const unlabeled = new Map()
+  const unsupportedJobs = new Set()
+  for (const entry of ready) {
+    const runnable = supportedBriefs(entry.unlabeled_briefs).paths.length
+    if (runnable > 0) unlabeled.set(entry.job, Date.parse(entry.finished_at))
+    if (runnable < entry.unlabeled_briefs.length) unsupportedJobs.add(entry.job)
+  }
   const live = new Set(sweep.jobs.filter((entry) => entry.result === "ready" || entry.result === "no_sessions").map((entry) => entry.job))
 
   const status = await readStatus(env)
@@ -218,15 +231,25 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
   }
   let stillWaiting = ready.length
 
+  // A ready job left that the runner could still run: a supported brief not labeled in this step, and attempts to spare.
+  const labeledHere = new Set()
+  const runnable = (entry) => live.has(entry.job) && !labeledHere.has(entry.job) && supportedBriefs(entry.briefs).paths.length > 0 && (ledger.attempts[entry.job]?.attempts ?? 0) < MAX_ATTEMPTS
+  const triedToday = (entry) => (ledger.attempts[entry.job]?.last_day ?? "") >= ledger.day
+
   async function save() {
     for (const job of Object.keys(ledger.attempts)) if (!live.has(job)) delete ledger.attempts[job]
-    const gaveUp = Object.values(ledger.attempts).filter((entry) => entry.attempts >= MAX_ATTEMPTS).length
+    const gaveUpJobs = Object.keys(ledger.attempts).filter((job) => ledger.attempts[job].attempts >= MAX_ATTEMPTS).sort()
+    const gaveUp = gaveUpJobs.length
+    // The lag counts only jobs this machine can label and is still trying.
+    const lagging = [...unlabeled].filter(([job]) => !gaveUpJobs.includes(job)).map(([, at]) => at)
     await updateStatus(env, (current) => ({
       ...current,
       evaluator: {
         expired_total: ledger.expired_total,
         gave_up: gaveUp,
         waiting: stillWaiting,
+        ready_now: ready.filter((entry) => runnable(entry) && !triedToday(entry)).length,
+        ready_later: ready.filter((entry) => runnable(entry) && triedToday(entry)).length,
         headless: {
           state: ledger.state,
           day: ledger.day,
@@ -241,8 +264,10 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
         },
         lag: {
           at: new Date(nowMs).toISOString(),
-          unlabeled_jobs: unlabeled.size,
-          oldest_finished_at: unlabeled.size === 0 ? null : new Date(Math.min(...unlabeled.values())).toISOString(),
+          unlabeled_jobs: lagging.length,
+          oldest_finished_at: lagging.length === 0 ? null : new Date(Math.min(...lagging)).toISOString(),
+          unsupported_jobs: [...unsupportedJobs].filter((job) => live.has(job)).sort(),
+          gave_up_jobs: gaveUpJobs,
         },
       },
       loop: { ...(isObject(current.loop) ? current.loop : {}), evaluate: { attempts: ledger.attempts, blocked_last_day: ledger.blocked_last_day } },
@@ -331,10 +356,17 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
     const accepted = await acceptEvaluations(env, { job: entry.job, pluginVersion })
     const mine = accepted.sessions.filter((session) => plan.sessions.has(session.session))
     const allAccepted = mine.length > 0 && mine.every((session) => session.result === "accepted")
-    if (allAccepted) ledger.accepted += 1
-    else ledger.rejected += 1
-    // Every brief of the job was run and accepted: none of its sessions is unlabeled any more.
-    if (allAccepted && plan.paths.length === entry.briefs.length) unlabeled.delete(entry.job)
+    // An accepted run starts the job's attempts again (it keeps today's date, so the job runs at most once a day): a session that runs on and is
+    // labeled again as its facts change never reaches the attempt limit.
+    if (allAccepted) {
+      ledger.accepted += 1
+      ledger.attempts[entry.job] = { attempts: 0, last_day: ledger.day }
+    } else ledger.rejected += 1
+    // Every brief the runner could take was run and accepted: none of the job's sessions it can label is unlabeled any more.
+    if (allAccepted) {
+      unlabeled.delete(entry.job)
+      labeledHere.add(entry.job)
+    }
     if (accepted.request === "cleared") {
       stillWaiting -= 1
       live.delete(entry.job)

@@ -5,10 +5,14 @@
 // some later session began. The kick closes that gap: at the end of a turn (`hooks/lib/factory-end.cjs`, the Stop
 // hook) and right after a finalize run has derived the finished job's sessions (`factory.js finalize`), Desk starts
 // the loop worker the same way the session-start hook does (`hooks/loop-start.cjs`, detached), but only when the
-// evaluator step is due:
+// evaluator step is due for the kick (`evaluateDue` with `kick`):
 //
-//   - an evaluation request was recorded after the step last ran (a fresh finish: due at once, whatever the gap), or
-//   - requests wait and the step's own minimum gap (`MIN_GAP_HOURS.evaluate`, 1 hour) has passed.
+//   - an evaluation request was recorded after the step last ran (a fresh finish: due at once, whatever the gap);
+//   - the queue is draining: the step's last run labeled a job, jobs the runner can run today are left
+//     (`status.evaluator.ready_now`) and the day's ceiling is not spent (due at once); or
+//   - the step's own minimum gap (`MIN_GAP_HOURS.evaluate`, 1 hour) has passed and a job the runner can run waits: one
+//     not attempted today, or one attempted on an earlier UTC day than today. Requests this machine cannot prepare
+//     (a job with no session here) or run (an unsupported host, the attempt limit) never keep the kick firing.
 //
 // It starts nothing in a headless factory session, with the loop switched off (`DESK_FACTORY_LOOP`), without factory
 // state, with no request waiting, or while a loop worker holds its lock and is younger than the worker's own hard
@@ -25,6 +29,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { isHeadlessFactorySession } from "./headless-flag.js"
+import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
 import { dueStep } from "./loop-status.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus } from "./outbox.js"
 
@@ -43,6 +48,28 @@ export async function newestRequestAt(env) {
   return times.length === 0 ? null : Math.max(...times)
 }
 
+const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
+const tally = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0)
+
+/**
+ * `evaluateDue(status, now, { newWorkAt, kick }) -> boolean`: whether the evaluator step is due. The loop worker asks without `kick`: the step's
+ * gap (`dueStep`) or a request newer than its last run, or the queue draining (see the header). The kick (`kick: true`) asks the same, except
+ * that past the gap it starts a worker only when a job the runner can run waits.
+ */
+export function evaluateDue(status, now, { newWorkAt = null, kick = false } = {}) {
+  const evaluator = isObject(status?.evaluator) ? status.evaluator : {}
+  const record = isObject(status?.loop?.steps?.evaluate) ? status.loop.steps.evaluate : {}
+  const ranAt = Date.parse(record.last_ran_at)
+  if (Number.isNaN(ranAt) || (Number.isFinite(newWorkAt) && newWorkAt > ranAt)) return dueStep(status, "evaluate", now, { newWorkAt })
+  const today = new Date(now).toISOString().slice(0, 10)
+  const headless = isObject(evaluator.headless) ? evaluator.headless : {}
+  const spent = headless.day === today && tally(headless.jobs) >= MAX_HEADLESS_JOBS_PER_DAY
+  if (record.last_result === "ran" && tally(evaluator.ready_now) > 0 && !spent) return true
+  if (!kick) return dueStep(status, "evaluate", now)
+  const runnable = tally(evaluator.ready_now) > 0 || (tally(evaluator.ready_later) > 0 && typeof headless.day === "string" && headless.day < today)
+  return runnable && !spent && dueStep(status, "evaluate", now)
+}
+
 /**
  * `evaluationKickDue(env, { now, readStatusImpl }) -> { due, reason }`: whether the end of this turn should start the loop worker, as the header
  * says. `reason` is `due`, `headless_session`, `disabled`, `no_factory_state`, `no_requests`, `worker_running` or `not_due`. It never throws:
@@ -57,7 +84,7 @@ export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl 
     const newest = await newestRequestAt(env)
     if (newest === null) return { due: false, reason: "no_requests" }
     if (await workerRunning(root, now)) return { due: false, reason: "worker_running" }
-    const due = dueStep(await readStatusImpl(env), "evaluate", new Date(now), { newWorkAt: newest })
+    const due = evaluateDue(await readStatusImpl(env), new Date(now), { newWorkAt: newest, kick: true })
     return { due, reason: due ? "due" : "not_due" }
   } catch {
     return { due: false, reason: "unreadable" }

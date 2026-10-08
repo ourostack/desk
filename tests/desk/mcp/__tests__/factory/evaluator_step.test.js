@@ -12,6 +12,7 @@ import { osEnv } from "../_os_env.js"
 import { NO_FILE_SYMLINKS } from "../_platform.js"
 
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
+import { STOP_FACTS_BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
 import { labelsBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts, writeLocalLabels, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -127,6 +128,8 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
     expired_total: 0,
     gave_up: 0,
     waiting: 0,
+    ready_now: 0,
+    ready_later: 0,
     headless: {
       state: "ran",
       day: new Date(DAY0).toISOString().slice(0, 10),
@@ -139,7 +142,7 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
       deferred_jobs: 0,
       blocked_days: 0,
     },
-    lag: { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null },
+    lag: { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [] },
   })
   const record = (await readStatus(env)).loop.steps.evaluate
   assert.equal(record.last_result, "ran")
@@ -910,6 +913,9 @@ async function labeledUnderRubric3(env, base, index) {
     schema_version: 1, host: "claude-code", session_id: session, log_path: log, cwd: base, desk_root: null,
     end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(),
   })
+  // The session's facts were derived with stop facts, so the rubric-4 relabel may run.
+  const name = `claude-code-${session}.json`
+  await updateStatus(env, (current) => ({ ...current, derivations: { ...current.derivations, [name]: { store: STORE, binding_version: STOP_FACTS_BINDING_VERSION } } }))
   return job
 }
 
@@ -953,13 +959,55 @@ test("the lag names the oldest finished job still unlabeled, counts them, and le
   // Every run fails, so nothing is labeled and both fresh finishes stay unlabeled.
   await step(env, seams({ runHeadless: fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false }) }))
   const { lag } = await evaluatorOf(env)
-  assert.deepEqual(lag, { at: new Date(DAY0).toISOString(), unlabeled_jobs: 2, oldest_finished_at: "2026-09-24T10:00:00.000Z" })
+  assert.deepEqual(lag, { at: new Date(DAY0).toISOString(), unlabeled_jobs: 2, oldest_finished_at: "2026-09-24T10:00:00.000Z", unsupported_jobs: [], gave_up_jobs: [] })
   assert.ok(second)
+}))
+
+test("a job whose unlabeled session the runner cannot label is named apart and never holds the lag; its labelable session still runs", () => scratch(async (env, base) => {
+  const mixed = await seedJob(env, base, 1, { hosts: ["claude-code", "copilot-cli"] })
+  const copilot = await seedJob(env, base, 2, { host: "copilot-cli" })
+  const options = seams()
+  assert.deepEqual(await step(env, options), { ok: true, result: "ran" })
+  assert.deepEqual(options.runHeadless.calls.map((call) => call.job.job), [mixed])
+  const evaluator = await evaluatorOf(env)
+  assert.deepEqual(evaluator.lag, { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [mixed, copilot], gave_up_jobs: [] })
+  assert.deepEqual([evaluator.waiting, evaluator.ready_now, evaluator.ready_later], [2, 0, 0], "both wait, and neither can run here")
+  // The accepted run starts the job's attempts again, keeping today's date.
+  assert.deepEqual((await readStatus(env)).loop.evaluate.attempts[mixed], { attempts: 0, last_day: new Date(DAY0).toISOString().slice(0, 10) })
+}))
+
+test("a job at the attempt limit is named apart and never holds the lag, and an accepted run starts the count again", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  const failing = seams({ runHeadless: fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false }) })
+  for (const day of [0, 1]) await step(env, { ...failing, now: DAY0 + day * DAY })
+  let evaluator = await evaluatorOf(env)
+  assert.deepEqual([evaluator.lag.unlabeled_jobs, evaluator.ready_now, evaluator.ready_later], [1, 0, 1], "tried today, so it runs again tomorrow")
+  await step(env, { ...failing, now: DAY0 + 2 * DAY })
+  evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.gave_up, 1)
+  assert.deepEqual(evaluator.lag, { at: new Date(DAY0 + 2 * DAY).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [job] })
+  assert.deepEqual([evaluator.ready_now, evaluator.ready_later], [0, 0])
+
+  // A second job fails twice, then is accepted: its count starts again, so it never reaches the limit.
+  const other = await seedJob(env, base, 2, { hosts: ["claude-code", "copilot-cli"] })
+  for (const day of [3, 4]) await step(env, { ...failing, now: DAY0 + day * DAY })
+  assert.equal((await readStatus(env)).loop.evaluate.attempts[other].attempts, 2)
+  await step(env, seams({ now: DAY0 + 5 * DAY }))
+  assert.equal((await readStatus(env)).loop.evaluate.attempts[other].attempts, 0)
+  assert.deepEqual((await evaluatorOf(env)).lag.gave_up_jobs, [job])
+}))
+
+test("a job left for want of time still counts as ready now", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  const options = seams({ deadline: Date.now() })
+  assert.deepEqual(await step(env, options), { ok: true, result: "none_could_run" })
+  const evaluator = await evaluatorOf(env)
+  assert.deepEqual([evaluator.waiting, evaluator.ready_now, evaluator.ready_later], [1, 1, 0])
 }))
 
 test("a job labeled in the step leaves the lag; a step with nothing waiting records none", () => scratch(async (env, base) => {
   await step(env, seams())
   await seedJob(env, base, 1)
   await step(env, seams({ now: DAY0 + DAY }))
-  assert.deepEqual((await evaluatorOf(env)).lag, { at: new Date(DAY0 + DAY).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null })
+  assert.deepEqual((await evaluatorOf(env)).lag, { at: new Date(DAY0 + DAY).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [] })
 }))

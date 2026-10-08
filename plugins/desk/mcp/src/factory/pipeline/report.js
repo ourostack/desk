@@ -76,7 +76,8 @@ const LABEL_REASON_TEXT = {
   job_unbound: "the session is not bound to the job",
   range: "a labeled stretch runs past the session",
   evidence_unmatched: "the labeled evidence no longer matches the facts",
-  inconsistent: "a labeled stop contradicts how the facts say the wait ended",
+  // The store's meaning (ourostack/factory site/src/format.js), in this map's punctuation; the check against facts also writes it for a stop on a wait a rule already decides.
+  inconsistent: "the labels contradict themselves or the facts, for example stops or waste listed while those facts are marked missing, a stop judged by a newer evaluator than the labels file, or a stop on a wait a rule already decides, so they are left unused",
   share_unknown: "the facts do not record which part of the session was the job's",
   outside_share: "the labels cover none of the job's own part of the session",
 }

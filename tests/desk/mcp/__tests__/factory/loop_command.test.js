@@ -15,7 +15,7 @@ import { main, runLoopCommand, SUPPORTED_COMMANDS } from "../../../../../plugins
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
-import { factoryStateRoot, readStatus, requestEvaluation, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const STORE = "ourostack/factory"
 const MINUTE = 60 * 1000
@@ -201,6 +201,20 @@ test("the worker does not remove a lock that now belongs to someone else", () =>
   }
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
   assert.equal(JSON.parse(await fs.readFile(lockFile, "utf8")).token, "another-worker")
+}))
+
+test("inside the gap, the evaluator step runs again while the queue drains, and not once it is drained", () => scratch(async (ctx) => {
+  const now = Date.now()
+  const log = []
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "ran", now: new Date(now - 60 * 1000) })
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { ready_now: 1, ready_later: 0, headless: { day: new Date(now).toISOString().slice(0, 10), jobs: 1 } } }))
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: fakes(log), clock: () => now })
+  assert.equal(names(log)[0], "evaluate")
+  const drained = []
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { ...current.evaluator, ready_now: 0 } }))
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "ran", now: new Date(now) })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: fakes(drained), clock: () => now + 60 * 1000 })
+  assert.equal(names(drained).includes("evaluate"), false)
 }))
 
 test("the child ids the evaluator step reports are listed in the lock while they run and removed when they exit, and nothing is signalled", () => scratch(async (ctx) => {

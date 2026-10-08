@@ -27,7 +27,8 @@
 //     several without segments): no label of it can be credited to the job,
 //     so the evaluator writes no stretches. The store counts labels only
 //     inside the job's share, so a shared session is labeled there, not whole;
-//   - `stops`: one hint per `human_wait` interval of `facts`, in order:
+//   - `stops`: one hint per `human_wait` interval of `facts` that overlaps
+//     `own_share` (none when it is `null`, as the store counts no other), in order:
 //     `{ wait: [start_ms, end_ms], stop, rule }`. `stop` is the interval's
 //     stop facts from the session's local facts (`{ end, asks,
 //     pending_agents }`, how the agent's turn ended before the wait) or
@@ -61,9 +62,11 @@
 // the job (`evaluate-requests/<job>.json`), because the session that
 // finished the job is usually not derived yet. `evaluatePending` prepares
 // retained requests again; a request is cleared only once every session of
-// the job has ended and has accepted labels of the current rubric (labels of
-// an older rubric are labeled again while the session's log is still on
-// disk; without it they stand), moved to
+// the job has settled labels: accepted labels whose evidence (`labelsBasis`:
+// the job's own share, the facts intervals in it and the stop hints) is still
+// the session's, whether the session has ended or runs on with other work
+// (labels of an older rubric are labeled again while the session's log is
+// still on disk and its facts carry stop facts; otherwise they stand), moved to
 // `evaluate-requests/expired/` when it expires (the evaluator step counts
 // these) and quarantined with a stable code when its stores lose consent. A session whose facts are
 // quarantined can never deliver labels, so it is not briefed: its labels key
@@ -85,15 +88,19 @@
 // (a session held back behind quarantined facts that were later released):
 // every job in the jobs index whose latest observed card status is `done` or
 // `cancelled`, that has no request, expired request or quarantined request,
-// and that has a labelable session needing labels (none yet, or labels of an
-// older rubric with the session's log still on disk) gets a request, with the
-// card's observed time as its finish time. It is how the rubric-4 relabel of
-// already-labeled finished jobs is asked for, once per job: a request that
-// expires is never made again.
+// and that has a labelable session needing labels (`sessionNeedsLabels`:
+// none yet, labels whose evidence changed since they were made, or labels of
+// an older rubric on facts with stop facts while the session's log is still
+// on disk) gets a request, with the card's observed time as its finish time.
+// A session held back behind quarantined facts is passed over; the job's
+// other sessions still count. It is how the rubric-4 relabel of
+// already-labeled finished jobs is asked for, and how labels follow facts
+// derived again: a job whose request expires is never asked for again.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
+import { createHash } from "node:crypto"
 import * as path from "node:path"
 import { promises as fsp } from "node:fs"
 
@@ -113,10 +120,13 @@ import {
   readEvaluationOutput,
   readJobsIndex,
   readLocalFacts,
+  readLabelsBasis,
   readMarker,
+  readStatus,
   requestEvaluation,
   settledEvaluationRequests,
   writeEvaluationBrief,
+  writeLabelsBasis,
   writeLocalLabels,
 } from "./outbox.js"
 import { publishedClock } from "./publish.js"
@@ -127,6 +137,12 @@ export const BRIEF_SCHEMA = "desk.factory.evaluator-brief/2"
 export const EVALUATOR_SKILL = "desk:factory-evaluator"
 /** The rubric `skills/factory-evaluator/SKILL.md` states; labels carry it as `evaluator.rubric`. */
 export const RUBRIC_VERSION = "4"
+/**
+ * The derive receipt's `binding_version` (`derive-run.js` `BINDING_VERSION`) from which the derivers record each human wait's stop facts
+ * (ourostack/desk #254 raises it to 7). Labels of an older rubric are labeled again under rubric 4 only for a session derived at this version
+ * or later, so the one-time relabel never runs on facts without the stop facts it classifies.
+ */
+export const STOP_FACTS_BINDING_VERSION = 7
 
 const DESK_VERSION = /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-(?:alpha|beta|rc)\.[0-9]{1,4})?$/u
 // The session ID an outbox file name (`<host>-<session_id>.json`) carries.
@@ -154,11 +170,10 @@ export function buildEvaluatorBrief({ job, localFacts, logPath, outputPath, plug
 
   // Codex sessions carry a version-7 ID and are not labelled yet (parked for milestone 4); their published ID is keyed, which labels cannot carry.
   if (!SESSION_ID_V4.test(localFacts.session.id)) return null
-  const { clock } = publishedClock(localFacts)
-  const binding = localFacts.jobs.find((bound) => bound.job === job)
+  const evidence = briefEvidence(job, localFacts)
   const unavailable = []
   if (logPath === null) unavailable.push("session_log_missing")
-  if (clock === null) unavailable.push("facts_missing")
+  if (evidence.facts === null) unavailable.push("facts_missing")
   return {
     schema: BRIEF_SCHEMA,
     skill: EVALUATOR_SKILL,
@@ -166,19 +181,42 @@ export function buildEvaluatorBrief({ job, localFacts, logPath, outputPath, plug
     session: { host: localFacts.session.host, id: localFacts.session.id },
     evaluator: { plugin_version: pluginVersion, rubric: RUBRIC_VERSION },
     session_log: logPath,
-    clock_origin: clock === null ? null : localFacts.session.started_at,
-    facts: clock === null ? null : { ...clock, counts: structuredClone(localFacts.counts) },
-    own_share: clock === null ? null : ownShareOf(binding, localFacts.jobs.length, clock.duration_ms),
-    stops: clock === null ? [] : stopHints(localFacts, clock),
+    clock_origin: evidence.facts === null ? null : localFacts.session.started_at,
+    facts: evidence.facts,
+    own_share: evidence.own_share,
+    stops: evidence.stops,
     unavailable,
     output: outputPath,
   }
 }
 
-// One hint per human wait the published clock keeps: its range, its local stop facts (or `null`) and the class a rule gives them (or `null`).
-function stopHints(localFacts, clock) {
+// What a brief tells the evaluator about the session: the published facts, the job's own share and the stop hints.
+function briefEvidence(job, localFacts) {
+  const { clock } = publishedClock(localFacts)
+  if (clock === null) return { facts: null, own_share: null, stops: [] }
+  const binding = localFacts.jobs.find((bound) => bound.job === job)
+  const share = ownShareOf(binding, localFacts.jobs.length, clock.duration_ms)
+  return { facts: { ...clock, counts: structuredClone(localFacts.counts) }, own_share: share, stops: stopHints(localFacts, clock, share) }
+}
+
+const inShare = (share, start, end) => share !== null && share.some((span) => start < span.end_ms && end > span.start_ms)
+
+/**
+ * `labelsBasis(evidence) -> string`: the fingerprint (64 hex) of the evidence a session's labels for one job rest on, from a brief or
+ * `briefEvidence`: the job's own share, the facts intervals that overlap it and the stop hints. The session's other work, its counts and the
+ * evaluator's version are left out, so a session that runs on with other jobs keeps the basis of a job that finished in it. Accepted labels
+ * record it (`writeLabelsBasis`); facts derived again with a different basis make the labels unsettled, so they are labeled again.
+ */
+export function labelsBasis({ facts, own_share: share, stops }) {
+  const evidence = facts === null ? null : { share, intervals: facts.intervals.filter((interval) => inShare(share, interval.start_ms, interval.end_ms)), stops }
+  return createHash("sha256").update(JSON.stringify(evidence)).digest("hex")
+}
+
+// One hint per human wait the published clock keeps inside the job's own share (none when the share is unknown, as the store counts no stop
+// there): its range, its local stop facts (or `null`) and the class a rule gives them (or `null`).
+function stopHints(localFacts, clock, share) {
   const startedMs = Date.parse(localFacts.session.started_at)
-  const kept = new Set(clock.intervals.filter((interval) => interval.kind === "human_wait").map((interval) => `${interval.start_ms}:${interval.end_ms}`))
+  const kept = new Set(clock.intervals.filter((interval) => interval.kind === "human_wait" && inShare(share, interval.start_ms, interval.end_ms)).map((interval) => `${interval.start_ms}:${interval.end_ms}`))
   // One hint per kept range, in the facts' order; a range listed twice keeps the stop facts one of them records.
   const hints = new Map()
   for (const interval of localFacts.intervals) {
@@ -250,6 +288,7 @@ export function acceptEvaluation(brief, bytes, stamping = null) {
     if (!against.ok) return rejected(against.errors)
   }
 
+  const hinted = new Set(brief.stops.map((hint) => `${hint.wait[0]}:${hint.wait[1]}`))
   // Rebuilt field by field in schema order: nothing but the schema's own keys survives.
   const labels = {
     schema: value.schema,
@@ -267,7 +306,8 @@ export function acceptEvaluation(brief, bytes, stamping = null) {
       confidence: stretch.confidence,
       evaluator_version: stretch.evaluator_version,
     })),
-    stops: value.stops.map((stop) => ({ wait: [stop.wait[0], stop.wait[1]], why: stop.why, confidence: stop.confidence, evaluator_version: stop.evaluator_version })),
+    // A stop on a wait the brief gave no hint for (outside the job's own share) counts for nothing in the store, so it is not kept.
+    stops: value.stops.filter((stop) => hinted.has(`${stop.wait[0]}:${stop.wait[1]}`)).map((stop) => ({ wait: [stop.wait[0], stop.wait[1]], why: stop.why, confidence: stop.confidence, evaluator_version: stop.evaluator_version })),
     unavailable: [...value.unavailable],
   }
   return { ok: true, errors: [], labels: stamping === null ? labels : stampCatchPoints(labels, stamping) }
@@ -306,13 +346,11 @@ async function consentedStores(env) {
  * `prepareEvaluation(env, { job, pluginVersion }) -> { result, job, briefs }`:
  * `result` is `ready` with the brief paths, `not_opted_in` when no store has
  * consent, `no_sessions` when no consented store holds a session of the job
- * that could be published, or `complete` when every such session already
- * has local labels and has ended, or has its labels held back because its
- * facts are quarantined (`holdLabels`). A session that has labels but is
- * still open is briefed again, so its labels follow the finished session,
- * and so is an ended one whose labels are of an older rubric while its log
- * is still on disk. A `ready` answer also says how many of its briefed
- * sessions have no labels at all (`unlabeled`).
+ * that could be published, or `complete` when every such session has settled
+ * labels (`sessionNeedsLabels`), or has its labels held back because its
+ * facts are quarantined (`holdLabels`). A `ready` answer also says how many
+ * of its briefed sessions have no labels at all (`unlabeled`) and which
+ * briefs those are (`unlabeled_briefs`).
  */
 export async function prepareEvaluation(env, { job, pluginVersion }) {
   if (typeof job !== "string" || !PATTERNS.jobId.test(job)) throw new TypeError("prepareEvaluation: job must be a job ID")
@@ -320,9 +358,10 @@ export async function prepareEvaluation(env, { job, pluginVersion }) {
   if (stores.length === 0) return { result: "not_opted_in", job, briefs: [] }
   const root = await factoryStateRoot(env)
   const names = (await readJobsIndex(env))[job] ?? []
+  const receipts = (await readStatus(env)).derivations
   const briefs = []
+  const unlabeledBriefs = []
   let sessions = 0
-  let unlabeled = 0
   for (const store of stores) {
     for (const name of names) {
       if (await heldBack(env, store, job, name)) {
@@ -335,20 +374,33 @@ export async function prepareEvaluation(env, { job, pluginVersion }) {
       const paths = await evaluationPaths(env, { job, store, name })
       const logPath = await sessionLog(env, root, name)
       const brief = buildEvaluatorBrief({ job, localFacts, logPath, outputPath: paths.output, pluginVersion })
-      const rubric = await localLabelsRubric(env, store, job, localFacts.session.id)
-      if (labelsSettled(localFacts, rubric, logPath)) continue
-      if (rubric === null) unlabeled += 1
-      briefs.push(await writeEvaluationBrief(env, { job, store, name, brief }))
+      const needs = await sessionNeedsLabels(env, { store, job, name, localFacts, evidence: brief, logPath, receipts })
+      if (needs === null) continue
+      const file = await writeEvaluationBrief(env, { job, store, name, brief })
+      briefs.push(file)
+      if (needs === "unlabeled") unlabeledBriefs.push(file)
     }
   }
   if (sessions === 0) return { result: "no_sessions", job, briefs }
-  return briefs.length > 0 ? { result: "ready", job, briefs, unlabeled } : { result: "complete", job, briefs }
+  return briefs.length > 0 ? { result: "ready", job, briefs, unlabeled: unlabeledBriefs.length, unlabeled_briefs: unlabeledBriefs } : { result: "complete", job, briefs }
 }
 
-// Whether a session's labels are done: it has ended and its labels are of the current rubric, or of an older one with no log left to label it again from.
-function labelsSettled(localFacts, rubric, logPath) {
-  if (localFacts.session.ended_at === null || rubric === null) return false
-  return Number(rubric) >= Number(RUBRIC_VERSION) || logPath === null
+/**
+ * Whether one session still needs labels for `job`: `"unlabeled"` (it has none), `"relabel"` or `null` (its labels are settled). Labels are
+ * settled when the evidence they were made against (`labelsBasis`, recorded on acceptance) is still the session's evidence, open or ended:
+ * a job that finished in a session that runs on is labeled once at its finish, and again only when its facts are derived again with different
+ * evidence. Labels recorded before the basis was kept follow the old rule: an open session is labeled again, an ended one stands. Either way,
+ * labels of an older rubric are labeled again while the session's log is on disk, but only on facts that carry stop facts
+ * (`STOP_FACTS_BINDING_VERSION`).
+ */
+async function sessionNeedsLabels(env, { store, job, name, localFacts, evidence, logPath, receipts }) {
+  const session = localFacts.session.id
+  const rubric = await localLabelsRubric(env, store, job, session)
+  if (rubric === null) return "unlabeled"
+  const outdated = Number(rubric) < Number(RUBRIC_VERSION) && logPath !== null && receipts?.[name]?.binding_version >= STOP_FACTS_BINDING_VERSION
+  const basis = await readLabelsBasis(env, store, job, session)
+  const stale = basis === null ? localFacts.session.ended_at === null : basis !== labelsBasis(evidence)
+  return outdated || stale ? "relabel" : null
 }
 
 // The brief the answer is checked against: rebuilt from the session's local
@@ -414,6 +466,7 @@ export async function acceptEvaluations(env, { job, pluginVersion }) {
       sessions.push({ session, result: "not_opted_in" })
       continue
     }
+    await writeLabelsBasis(env, store, { job, session, basis: labelsBasis(trusted.brief) })
     await clearEvaluation(env, { job, store, name })
     sessions.push({ session, result: "accepted" })
   }
@@ -427,6 +480,7 @@ async function labelStatus(env, job) {
   const stores = await consentedStores(env)
   const names = (await readJobsIndex(env))[job] ?? []
   const root = await factoryStateRoot(env)
+  const receipts = (await readStatus(env)).derivations
   let sessions = 0
   for (const store of stores) {
     for (const name of names) {
@@ -437,7 +491,8 @@ async function labelStatus(env, job) {
       const localFacts = await labelableFacts(env, store, name, job)
       if (localFacts === null) continue
       sessions += 1
-      if (!labelsSettled(localFacts, await localLabelsRubric(env, store, job, localFacts.session.id), await sessionLog(env, root, name))) return "incomplete"
+      const needs = await sessionNeedsLabels(env, { store, job, name, localFacts, evidence: briefEvidence(job, localFacts), logPath: await sessionLog(env, root, name), receipts })
+      if (needs !== null) return "incomplete"
     }
   }
   return sessions > 0 ? "complete" : "incomplete"
@@ -496,18 +551,21 @@ function laterObservation(current, { observed }) {
 }
 
 /**
- * `requestFinishedJobs(env, { deskRoot }) -> { requested: [job] }`: records an evaluation request for every finished job that needs labels and has
- * none (see the header). `deskRoot` (absolute, or null) stands in for a session marker that names no desk; a job with neither is left alone. Each
- * session's facts are read once, however many jobs it binds.
+ * `requestFinishedJobs(env, { deskRoot, now }) -> { requested: [job] }`: records an evaluation request for every finished job that needs labels and has
+ * none (see the header). `deskRoot` (absolute, or null) stands in for a session marker that names no desk; a job with neither is left alone. `now`
+ * (milliseconds, or null for the clock) is the time the requests record: the evaluator step passes its own start, so the requests it records
+ * itself never make the step due again. Each session's facts are read once, however many jobs it binds.
  */
-export async function requestFinishedJobs(env, { deskRoot = null } = {}) {
+export async function requestFinishedJobs(env, { deskRoot = null, now = null } = {}) {
   if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw new TypeError("requestFinishedJobs: deskRoot must be absolute or null")
+  if (now !== null && !Number.isFinite(now)) throw new TypeError("requestFinishedJobs: now must be milliseconds or null")
   const stores = await consentedStores(env)
   if (stores.length === 0) return { requested: [] }
   const root = await factoryStateRoot(env)
   const index = await readJobsIndex(env)
   const waiting = new Set((await listEvaluationRequests(env)).map((request) => request.job))
   const settled = await settledEvaluationRequests(env)
+  const receipts = (await readStatus(env)).derivations
   const factsRead = new Map()
   const markerRead = new Map()
   const facts = async (store, name) => {
@@ -542,15 +600,14 @@ export async function requestFinishedJobs(env, { deskRoot = null } = {}) {
         if (binding === undefined) continue
         latest = laterObservation(latest, binding)
         const logPath = await sessionLog(env, root, name)
-        const rubric = await localLabelsRubric(env, store, job, localFacts.session.id)
-        if (rubric === null || (localFacts.session.ended_at !== null && !labelsSettled(localFacts, rubric, logPath))) needs = true
+        if ((await sessionNeedsLabels(env, { store, job, name, localFacts, evidence: briefEvidence(job, localFacts), logPath, receipts })) !== null) needs = true
         desks.push((await marker(name))?.desk_root)
       }
     }
     // A valid marker's desk is absolute or null; the first one named wins, else the caller's.
     const desk = desks.find((named) => typeof named === "string") ?? deskRoot
     if (!needs || latest === null || !TERMINAL.has(latest.status) || desk === null) continue
-    await requestEvaluation(env, { job, deskRoot: desk, finishedAt: latest.at })
+    await requestEvaluation(env, { job, deskRoot: desk, finishedAt: latest.at, requestedAt: now === null ? null : new Date(now).toISOString() })
     requested.push(job)
   }
   return { requested }

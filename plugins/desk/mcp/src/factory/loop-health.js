@@ -45,6 +45,8 @@ export const HEADLESS_STATES = Object.freeze(["idle", "ran", "no_agent_cli", "no
 /** The states an agent can fix; only these open `loop_alarm:headless_blocked` (a spent cap, a switch and per-token billing are shown, never carded). */
 export const BLOCKING_STATES = Object.freeze(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
 const BLOCKED_DAYS_FOR_ALARM = 2
+// The evaluator states in which no run can start until the person or the machine changes something: `label_lag` stays down in them.
+const LAG_SILENT_STATES = Object.freeze(["no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "disabled"])
 
 const HOUR_MS = 3600 * 1000
 const DAY_MS = 24 * HOUR_MS
@@ -169,19 +171,21 @@ function unsignedSection(signoff, nowMs) {
 
 /**
  * The label lag from the evaluator step's record (`status.evaluator.lag`): `label_lag_minutes`, the age in whole minutes of the oldest finished
- * job with a labelable session that has no labels yet (a measured 0 when there is none), and `unlabeled_finished`, how many such jobs there
- * are. A record older than the stale window, dated in the future or damaged says nothing about now: both are `unavailable`.
+ * job this machine can label and is still trying to (a measured 0 when there is none), `unlabeled_finished`, how many such jobs there
+ * are, and `unlabeled_unsupported`, how many finished jobs wait with a session on a host the runner does not support (named on the
+ * session-start line; the record holds no job id). A record older than the stale window, dated in the future or damaged says nothing
+ * about now: all three are `unavailable`.
  */
 function lagSection(stored, nowMs) {
   const lag = isObject(stored) && isObject(stored.lag) ? stored.lag : null
   const fresh = freshness(lag, nowMs)
-  if (fresh !== "fresh") return { label_lag_minutes: unavailable(fresh), unlabeled_finished: unavailable(fresh) }
+  const none = (reason) => ({ label_lag_minutes: unavailable(reason), unlabeled_finished: unavailable(reason), unlabeled_unsupported: unavailable(reason) })
+  if (fresh !== "fresh") return none(fresh)
   const jobs = count(lag.unlabeled_jobs)
   const oldest = timeOf(lag.oldest_finished_at)
-  if (jobs.state !== "measured" || (jobs.value === 0) !== (lag.oldest_finished_at === null) || (jobs.value > 0 && Number.isNaN(oldest))) {
-    return { label_lag_minutes: unavailable("not_recorded"), unlabeled_finished: unavailable("not_recorded") }
-  }
-  return { label_lag_minutes: measured(jobs.value === 0 ? 0 : Math.max(0, Math.floor((nowMs - oldest) / 60000))), unlabeled_finished: jobs }
+  if (jobs.state !== "measured" || (jobs.value === 0) !== (lag.oldest_finished_at === null) || (jobs.value > 0 && Number.isNaN(oldest))) return none("not_recorded")
+  const unsupported = Array.isArray(lag.unsupported_jobs) ? measured(lag.unsupported_jobs.length) : unavailable("not_recorded")
+  return { label_lag_minutes: measured(jobs.value === 0 ? 0 : Math.max(0, Math.floor((nowMs - oldest) / 60000))), unlabeled_finished: jobs, unlabeled_unsupported: unsupported }
 }
 
 function headlessSection(stored, today) {
@@ -374,7 +378,8 @@ export function loopAlarms(loop, signals = {}) {
   if (BLOCKING_STATES.includes(evaluator.headless.state) && isInteger(signals.blocked_days) && signals.blocked_days >= BLOCKED_DAYS_FOR_ALARM) alarms.push({ name: "headless_blocked", evidence: { blocked_days: signals.blocked_days } })
   if (isInteger(signals.cards_invalid) && signals.cards_invalid > 0) alarms.push({ name: "cards_invalid", evidence: { files: signals.cards_invalid } })
   if (measuredAbove(evaluator.labels_quarantined, 0)) alarms.push({ name: "labels_quarantined", evidence: { count: evaluator.labels_quarantined.value } })
-  if (measuredAbove(evaluator.label_lag_minutes, LABEL_LAG_ALARM_MINUTES)) alarms.push({ name: "label_lag", evidence: { minutes: evaluator.label_lag_minutes.value, jobs: evaluator.unlabeled_finished.value } })
+  // A machine whose evaluator cannot run (a sign-in, a CLI, billing or the switch) has its own state and alarm; the lag says nothing more there.
+  if (!LAG_SILENT_STATES.includes(evaluator.headless.state) && measuredAbove(evaluator.label_lag_minutes, LABEL_LAG_ALARM_MINUTES)) alarms.push({ name: "label_lag", evidence: { minutes: evaluator.label_lag_minutes.value, jobs: evaluator.unlabeled_finished.value } })
   if (signals.facts_quarantine_not_settling === true) alarms.push({ name: "facts_quarantine_not_settling", evidence: {} })
   // The record's own slot fails the store's rule, so the capture record goes without it: said once as an alarm, never silence.
   if (signals.slot_invalid === true) alarms.push({ name: "capture_loop_slot", evidence: {} })

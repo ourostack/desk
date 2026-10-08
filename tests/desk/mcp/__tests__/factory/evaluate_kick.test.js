@@ -13,12 +13,14 @@ import {
   KICK_LOCK_AGE_MS,
   LOOP_LOCK_NAME,
   LOOP_START_SCRIPT,
+  evaluateDue,
   evaluationKickDue,
   kickLoop,
   newestRequestAt,
 } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
-import { factoryStateRoot, requestEvaluation } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
+import { factoryStateRoot, requestEvaluation, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const MINUTE = 60 * 1000
 const JOB = "ab".repeat(16)
@@ -70,8 +72,40 @@ test("a request newer than the step's last run is due at once; an older one wait
   assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + MINUTE }), { due: true, reason: "due" }, "a fresh finish")
   await recordStep(env, "evaluate", { ok: true, result: "ran", now: requestedMs + MINUTE })
   assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + 2 * MINUTE }), { due: false, reason: "not_due" })
-  assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + 61 * MINUTE }), { due: true, reason: "due" }, "past the gap with a request still waiting")
+  // A request this machine cannot prepare or run keeps no kick firing past the gap.
+  assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + 61 * MINUTE }), { due: false, reason: "not_due" }, "nothing the runner can run waits")
+  await updateStatus(env, (current) => ({ ...current, evaluator: { ready_now: 1, ready_later: 0 } }))
+  assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + 2 * MINUTE }), { due: true, reason: "due" }, "the queue drains at once after a run that labeled a job")
 }))
+
+// A status with the evaluator step's record and its own counts, on `day` (an ISO day) at `ranAt`.
+const stored = ({ result, ranAt, readyNow = 0, readyLater = 0, day, jobs = 0 }) => ({
+  loop: { steps: { evaluate: { last_ran_at: new Date(ranAt).toISOString(), last_result: result } } },
+  evaluator: { ready_now: readyNow, ready_later: readyLater, headless: { day, jobs } },
+})
+
+test("evaluateDue drains after a run that labeled a job, within the day's ceiling, and past the gap kicks only for a job the runner can run", () => {
+  const now = Date.parse("2026-10-08T12:00:00.000Z")
+  const today = "2026-10-08"
+  const soon = now - 5 * MINUTE
+  const long = now - 61 * MINUTE
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 2, day: today, jobs: 3 }), new Date(now), { kick: true }), true, "draining")
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 2, day: today, jobs: MAX_HEADLESS_JOBS_PER_DAY }), new Date(now), { kick: true }), false, "the ceiling is spent")
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 0, readyLater: 2, day: today }), new Date(now), { kick: true }), false, "only jobs tried today are left")
+  assert.equal(evaluateDue(stored({ result: "none_could_run", ranAt: soon, readyNow: 1, day: today }), new Date(now), { kick: true }), false, "inside the gap without a labeled job")
+  assert.equal(evaluateDue(stored({ result: "none_could_run", ranAt: long, readyNow: 1, day: today }), new Date(now), { kick: true }), true, "past the gap with a job to run")
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: long, readyLater: 1, day: today }), new Date(now), { kick: true }), false, "tried today waits for tomorrow")
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: long, readyLater: 1, day: "2026-10-07" }), new Date(now), { kick: true }), true, "tried on an earlier day")
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: long, readyLater: 1, day: today, jobs: MAX_HEADLESS_JOBS_PER_DAY }), new Date(now), { kick: true }), false)
+  // The worker itself keeps the plain gap, so its backstop still looks for finished jobs every hour.
+  assert.equal(evaluateDue(stored({ result: "no_jobs_waiting", ranAt: long, day: today }), new Date(now)), true)
+  assert.equal(evaluateDue(stored({ result: "no_jobs_waiting", ranAt: soon, day: today }), new Date(now)), false)
+  // New work always counts, and a step that never ran, or a damaged record, is due.
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, day: today }), new Date(now), { newWorkAt: now - MINUTE, kick: true }), true)
+  assert.equal(evaluateDue({}, new Date(now), { kick: true }), true)
+  assert.equal(evaluateDue({ evaluator: "x", loop: { steps: { evaluate: "x" } } }, new Date(now), { kick: true }), true)
+  assert.equal(evaluateDue({ loop: { steps: { evaluate: { last_ran_at: new Date(long).toISOString(), last_result: "ran" } } }, evaluator: { ready_now: -1, headless: "x" } }, new Date(now), { kick: true }), false)
+})
 
 test("a loop worker that holds its lock and is younger than its hard stop is left alone; an older lock is the worker's own takeover", () => scratch(async (env, base) => {
   await requestEvaluation(env, { job: JOB, deskRoot: path.join(base, "desk") })

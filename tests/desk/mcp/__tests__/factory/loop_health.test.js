@@ -135,7 +135,7 @@ test("the record has exactly the contract's keys, every number is a Count, and a
   assert.deepEqual(keysOf(loop.improvement.by_source), ["andon", "desk_problem", "evaluator", "flush_health", "friction_candidate", "loop_alarm", "reconcile_class", "store_build"])
   assert.deepEqual(keysOf(loop.unsigned_deliveries), ["count", "oldest_age_days"])
   assert.deepEqual(keysOf(loop.alarms), ["andon_open", "desk_problems_open", "loop_alarms_open", "store_build_failing"])
-  assert.deepEqual(keysOf(loop.evaluator), ["expired_total", "gave_up", "headless", "label_lag_alarm_minutes", "label_lag_minutes", "labels_quarantined", "oldest_wait_days", "unlabeled_finished", "waiting"])
+  assert.deepEqual(keysOf(loop.evaluator), ["expired_total", "gave_up", "headless", "label_lag_alarm_minutes", "label_lag_minutes", "labels_quarantined", "oldest_wait_days", "unlabeled_finished", "unlabeled_unsupported", "waiting"])
   assert.deepEqual(keysOf(loop.evaluator.headless), ["accepted_today", "cap_per_day", "cost_usd_today", "jobs_today", "rejected_today", "state"])
   assert.deepEqual(keysOf(loop.reconcile), ["desks", "last_ran_at", "mismatches", "report_link_unavailable", "store_side", "window_days"])
   assert.deepEqual(keysOf(loop.steps), [...STEPS].sort())
@@ -447,7 +447,7 @@ test("no evaluator record: every evaluator number is not_recorded and the state 
   const { evaluator: summary } = await build(ctx)
   assert.deepEqual(summary, {
     waiting: U("not_recorded"), oldest_wait_days: U("not_recorded"), expired_total: U("not_recorded"), labels_quarantined: U("not_recorded"), gave_up: U("not_recorded"),
-    label_lag_minutes: U("not_recorded"), unlabeled_finished: U("not_recorded"), label_lag_alarm_minutes: M(60),
+    label_lag_minutes: U("not_recorded"), unlabeled_finished: U("not_recorded"), unlabeled_unsupported: U("not_recorded"), label_lag_alarm_minutes: M(60),
     headless: { state: "unavailable", jobs_today: U("not_recorded"), cap_per_day: M(6), accepted_today: U("not_recorded"), rejected_today: U("not_recorded"), cost_usd_today: U("not_recorded") },
   })
   await setStatus(ctx, { evaluator: "x" })
@@ -720,8 +720,30 @@ test("the label lag is the oldest unlabeled finished job's age in minutes, a mea
   ]) {
     await setStatus(ctx, lag === undefined ? evaluator() : lagOf(lag))
     const lagged = (await build(ctx)).evaluator
-    assert.deepEqual([lagged.label_lag_minutes, lagged.unlabeled_finished], [U(reason), U(reason)], JSON.stringify(lag))
+    assert.deepEqual([lagged.label_lag_minutes, lagged.unlabeled_finished, lagged.unlabeled_unsupported], [U(reason), U(reason), U(reason)], JSON.stringify(lag))
   }
+}))
+
+test("finished jobs the runner cannot label are counted apart, never in the lag, and the record names none of them", () => scratch(async (ctx) => {
+  const job = "0123456789abcdef0123456789abcdef"
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [job], gave_up_jobs: [job] }))
+  const read = (await build(ctx)).evaluator
+  assert.deepEqual([read.label_lag_minutes, read.unlabeled_finished, read.unlabeled_unsupported], [M(0), M(0), M(1)])
+  assert.equal(JSON.stringify(await build(ctx)).includes(job), false, "no job id reaches the record")
+  // A lag record from before the split counts the unsupported jobs as not recorded.
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 0, oldest_finished_at: null }))
+  assert.deepEqual((await build(ctx)).evaluator.unlabeled_unsupported, U("not_recorded"))
+}))
+
+test("on a machine whose evaluator cannot run, the lag is shown but raises no label_lag alarm: the blocked state has its own", () => scratch(async (ctx) => {
+  for (const state of ["no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "disabled"]) {
+    await setStatus(ctx, evaluator({ lag: { at: TIME, unlabeled_jobs: 1, oldest_finished_at: MINUTES_AGO(600) } }, { state }))
+    const loop = await build(ctx)
+    assert.deepEqual(loop.evaluator.label_lag_minutes, M(600), state)
+    assert.deepEqual(loopAlarms(loop).filter((alarm) => alarm.name === "label_lag"), [], state)
+  }
+  await setStatus(ctx, evaluator({ lag: { at: TIME, unlabeled_jobs: 1, oldest_finished_at: MINUTES_AGO(600) } }, { state: "budget_exhausted" }))
+  assert.equal(loopAlarms(await build(ctx)).some((alarm) => alarm.name === "label_lag"), true, "a spent ceiling still raises it")
 }))
 
 test("a lag over an hour raises loop_alarm:label_lag, an hour exactly does not, and an unreadable lag is neither raised nor cleared", () => scratch(async (ctx) => {

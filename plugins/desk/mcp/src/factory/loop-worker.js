@@ -41,7 +41,7 @@ import { runReconcileStep } from "./reconcile-step.js"
 import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
 import { runEvaluatorStep } from "./evaluator-step.js"
-import { LOOP_LOCK_NAME, newestRequestAt } from "./evaluate-kick.js"
+import { LOOP_LOCK_NAME, evaluateDue, newestRequestAt } from "./evaluate-kick.js"
 import { runVerifyStep } from "./improvement-verify.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
@@ -81,9 +81,10 @@ async function routeStep(env, ctx, impls) {
 }
 
 // The ordered steps. Each `run(env, ctx, impls)` answers `{ ok, result }`; a step that records itself needs nothing more. A step with
-// `newWorkAt(env)` is due as soon as work newer than its last run arrives (`dueStep`): an evaluation request makes the evaluator step due at once.
+// `newWorkAt(env)` is due as soon as work newer than its last run arrives: an evaluation request makes the evaluator step due at once, and so
+// does a queue still draining (`evaluateDue`).
 const STEPS = Object.freeze([
-  { name: "evaluate", newWorkAt: newestRequestAt, run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.evaluatorDeadline, deskRoot: ctx.deskRoot, onChild: ctx.onChild, onChildExit: ctx.onChildExit }) },
+  { name: "evaluate", newWorkAt: newestRequestAt, due: (status, now, newWorkAt) => evaluateDue(status, now, { newWorkAt }), run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.evaluatorDeadline, deskRoot: ctx.deskRoot, onChild: ctx.onChild, onChildExit: ctx.onChildExit }) },
   { name: "route", run: routeStep },
   { name: "mirror", run: (env, ctx, impls) => impls.mirror(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }) },
   { name: "reconcile", run: (env, ctx, impls) => impls.reconcile(env, { now: ctx.now, desks: [ctx.deskRoot], personPrefix: ctx.personPrefix }) },
@@ -151,7 +152,8 @@ export async function runLoopWorker(env, {
       }
       // New work that cannot be read makes nothing due early; the gap still applies.
       const newWorkAt = stopped === null && step.newWorkAt !== undefined ? ((await swallow(() => step.newWorkAt(env))) ?? null) : null
-      if (stopped === null && !dueStep(status, step.name, new Date(clock()), { newWorkAt })) {
+      const due = step.due ?? ((stored, now, work) => dueStep(stored, step.name, now, { newWorkAt: work }))
+      if (stopped === null && !due(status, new Date(clock()), newWorkAt)) {
         outcome.steps[step.name] = "skipped"
         outcome.skipped += 1
         continue

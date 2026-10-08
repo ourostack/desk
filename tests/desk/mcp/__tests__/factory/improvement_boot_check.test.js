@@ -43,14 +43,14 @@ test("labelsBootCheck adds the age of the oldest waiting request and the stored 
   // No status yet: the evaluator is not recorded, which is not the same as zero.
   assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 2, quarantined: 0, oldest_days: 9, evaluator: null })
   await evaluatorStatus(env, running({ expired_total: 4, gave_up: 1, headless: { state: "ran" } }))
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "ran", expired_total: 4, gave_up: 1, lag_minutes: null })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "ran", expired_total: 4, gave_up: 1, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
   // An absent number stays absent; an unknown state is not a state.
   await evaluatorStatus(env, { headless: { state: "tomorrow" }, gave_up: -1, expired_total: "many" })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "unrecognized", expired_total: null, gave_up: null, lag_minutes: null })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "unrecognized", expired_total: null, gave_up: null, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
   await evaluatorStatus(env, { gave_up: 1 })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
   await evaluatorStatus(env, { headless: {}, gave_up: 1 })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
   // A request file that does not parse does not give an age, and the rest still do.
   await fs.writeFile(file(JOB_B), "not json")
   assert.equal(labelsBootCheck({ env, now: NOW }).oldest_days, 3)
@@ -255,4 +255,22 @@ test("labelsBootCheck reads the lag from the evaluator step's record, and only w
     { at, unlabeled_jobs: 1.5, oldest_finished_at: at },
     { at, unlabeled_jobs: 0, oldest_finished_at: at },
   ]) assert.equal(await lagged(lag), null, JSON.stringify(lag))
+}))
+
+test("the evaluator line names the jobs the lag leaves out: a host the plugin cannot label here, and the attempt limit", () => scratch(async ({ env, desk }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await requestEvaluation(env, { job: JOB_A, deskRoot: desk })
+  const at = new Date(NOW - 10 * 60 * 1000).toISOString()
+  const unsupported = "0123456789abcdef0123456789abcdef"
+  const gaveUp = "fedcba9876543210fedcba9876543210"
+  await evaluatorStatus(env, running({ gave_up: 1, lag: { at, unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [unsupported, "not a job"], gave_up_jobs: [gaveUp] } }))
+  const summary = labelsBootCheck({ env, now: NOW })
+  assert.deepEqual([summary.evaluator.unsupported_jobs, summary.evaluator.gave_up_jobs], [["01234567"], ["fedcba98"]])
+  const line = labelsLine(summary)
+  assert.match(line, /; 1 has been tried three times without an accepted result \(fedcba98\); 1 has a session the plugin cannot label on this machine \(a Copilot or Codex host\) \(01234567\)/u)
+  assert.doesNotMatch(line, /past the 1-hour target/u)
+  assert.match(labelsLine({ count: 3, oldest_days: 0, evaluator: { state: "ran", gave_up: 2, unsupported_jobs: ["01234567", "89abcdef"], gave_up_jobs: [] } }), /2 have been tried three times without an accepted result; 2 have sessions the plugin cannot label/u)
+  // A stale lag record names nothing.
+  await evaluatorStatus(env, running({ lag: { at: new Date(NOW - 73 * 3600 * 1000).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [unsupported], gave_up_jobs: [] } }))
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator.unsupported_jobs, [])
 }))
