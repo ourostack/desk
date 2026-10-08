@@ -1216,39 +1216,6 @@ test("withLock propagates an unexpected failure creating the lock file itself", 
   }
 }))
 
-test("on Windows, a lock file whose deletion is still pending is waited for, and a refusal that lasts is surfaced", (t) => scratch(async (plain, base) => {
-  const env = fakeWindowsEnv(plain, base)
-  const options = { platform: "win32", runner: fakeWindowsRunner([]) }
-  const original = fs.open
-  let refusals = 2
-  const transient = t.mock.method(fs, "open", async (...args) => {
-    if (refusals > 0 && String(args[0]).endsWith(".lock")) {
-      refusals -= 1
-      throw Object.assign(new Error("pending delete"), { code: refusals === 1 ? "EPERM" : "EACCES" })
-    }
-    return original.apply(fs, args)
-  })
-  await setConsent(env, { store: STORE, contribute: true }, options)
-  assert.equal(refusals, 0)
-  transient.mock.restore()
-  const failure = Object.assign(new Error("denied for good"), { code: "EPERM" })
-  const lasting = t.mock.method(fs, "open", async (...args) => {
-    if (String(args[0]).endsWith(".lock")) throw failure
-    return original.apply(fs, args)
-  })
-  // The wait is bounded by time (about 5 s), so a clock that jumps 3 s per reading reaches the bound after a few tries.
-  const realNow = Date.now
-  let clock = realNow()
-  const jumping = t.mock.method(Date, "now", () => (clock += 3000))
-  try {
-    await assert.rejects(() => setConsent(env, { store: STORE, contribute: false }, options), (error) => error === failure)
-    assert.ok(lasting.mock.callCount() >= 2)
-  } finally {
-    jumping.mock.restore()
-    lasting.mock.restore()
-  }
-}))
-
 test("on Windows, a waiter queued behind a held lock gets a fresh pending-delete wait after each time it sees the lock held, and a refusal that lasts is still surfaced", (t) => scratch(async (plain, base) => {
   const env = fakeWindowsEnv(plain, base)
   const options = { platform: "win32", runner: fakeWindowsRunner([]) }
@@ -1299,6 +1266,39 @@ test("on Windows, a waiter queued behind a held lock gets a fresh pending-delete
     assert.equal(off.mock.callCount(), 1)
   } finally {
     off.mock.restore()
+  }
+}))
+
+test("on Windows, a lock file whose deletion is still pending is waited for, and a refusal that lasts is surfaced", (t) => scratch(async (plain, base) => {
+  const env = fakeWindowsEnv(plain, base)
+  const options = { platform: "win32", runner: fakeWindowsRunner([]) }
+  const original = fs.open
+  let refusals = 2
+  const transient = t.mock.method(fs, "open", async (...args) => {
+    if (refusals > 0 && String(args[0]).endsWith(".lock")) {
+      refusals -= 1
+      throw Object.assign(new Error("pending delete"), { code: refusals === 1 ? "EPERM" : "EACCES" })
+    }
+    return original.apply(fs, args)
+  })
+  await setConsent(env, { store: STORE, contribute: true }, options)
+  assert.equal(refusals, 0)
+  transient.mock.restore()
+  const failure = Object.assign(new Error("denied for good"), { code: "EPERM" })
+  const lasting = t.mock.method(fs, "open", async (...args) => {
+    if (String(args[0]).endsWith(".lock")) throw failure
+    return original.apply(fs, args)
+  })
+  // The wait is bounded by time (about 5 s), so a clock that jumps 3 s per reading reaches the bound after a few tries.
+  const realNow = Date.now
+  let clock = realNow()
+  const jumping = t.mock.method(Date, "now", () => (clock += 3000))
+  try {
+    await assert.rejects(() => setConsent(env, { store: STORE, contribute: false }, options), (error) => error === failure)
+    assert.ok(lasting.mock.callCount() >= 2)
+  } finally {
+    jumping.mock.restore()
+    lasting.mock.restore()
   }
 }))
 
