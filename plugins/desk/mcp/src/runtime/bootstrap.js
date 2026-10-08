@@ -397,7 +397,10 @@ export function publishDirectoryAtomically({
   rename = renameSync,
   sleep = sleepSynchronously,
   writeLockOwner = writeFileSync,
+  platform = process.platform,
+  removeDirectory = rmSync,
 }) {
+  const lockIo = { platform, remove: removeDirectory }
   if (build === null) assertStagingComplete({ stagingDir, validateDestination })
 
   mkdirSync(path.dirname(destinationDir), { recursive: true })
@@ -412,6 +415,7 @@ export function publishDirectoryAtomically({
       sleep,
       validateDestination,
       writeLockOwner,
+      lockIo,
     })
   } catch (error) {
     rmSync(stagingDir, { recursive: true, force: true })
@@ -490,7 +494,7 @@ export function publishDirectoryAtomically({
     rmSync(backupDir, { recursive: true, force: true })
     publicationError = error
   } finally {
-    releasePublicationLock(publicationLock)
+    releasePublicationLock(publicationLock, lockIo)
   }
   throw publicationError
 }
@@ -514,6 +518,7 @@ function acquirePublicationLock({
   sleep,
   validateDestination,
   writeLockOwner,
+  lockIo,
 }) {
   const lockDir = `${destinationDir}.publish-lock`
   const startedAt = now()
@@ -526,7 +531,7 @@ function acquirePublicationLock({
       createLockDirectory(lockDir)
       acquired = true
     } catch (error) {
-      if (error?.code !== "EEXIST" && error?.code !== "ENOTEMPTY") {
+      if (!isContendedLockError(error, lockIo.platform)) {
         throw error
       }
     }
@@ -554,6 +559,7 @@ function acquirePublicationLock({
       createLockDirectory,
       now,
       processAlive,
+      lockIo,
     })) {
       continue
     }
@@ -582,18 +588,37 @@ function publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }) {
     : `atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which has exited; ${waited})`
 }
 
+// A lock folder another process holds, is creating, or is deleting. EEXIST and ENOTEMPTY say so everywhere. On Windows, mkdir and rmdir answer EPERM, EACCES or EBUSY while the folder is delete-pending or another process has a handle open in it; none of them means this caller is denied the lock, so it waits and tries again within its bounded wait.
+function isContendedLockError(error, platform) {
+  const code = error?.code
+  if (code === "EEXIST" || code === "ENOTEMPTY") return true
+  return platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY")
+}
+
+// Remove a lock folder, retrying the transient failures Node documents for rmdir. Returns false when the folder is still contended after the retries; any other failure is thrown.
+function removeLockDirectory(dir, { platform, remove }) {
+  try {
+    remove(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    return true
+  } catch (error) {
+    if (isContendedLockError(error, platform)) return false
+    throw error
+  }
+}
+
 function reclaimAbandonedPublicationLock({
   lockDir,
   lockTimeoutMs,
   createLockDirectory,
   now,
   processAlive,
+  lockIo,
 }) {
   const reclaimLockDir = `${lockDir}.reclaim-lock`
   try {
     createLockDirectory(reclaimLockDir)
   } catch (error) {
-    if (error?.code === "EEXIST" || error?.code === "ENOTEMPTY") {
+    if (isContendedLockError(error, lockIo.platform)) {
       return false
     }
     throw error
@@ -607,10 +632,9 @@ function reclaimAbandonedPublicationLock({
     })) {
       return false
     }
-    rmSync(lockDir, { recursive: true, force: true })
-    return true
+    return removeLockDirectory(lockDir, lockIo)
   } finally {
-    rmSync(reclaimLockDir, { recursive: true, force: true })
+    removeLockDirectory(reclaimLockDir, lockIo)
   }
 }
 
@@ -637,7 +661,7 @@ function publicationLockIsAbandoned({
     || !processAlive(owner.pid)
 }
 
-function releasePublicationLock({ lockDir, token }) {
+function releasePublicationLock({ lockDir, token }, lockIo) {
   let owner
   try {
     owner = readJson(path.join(lockDir, "owner.json"))
@@ -646,8 +670,8 @@ function releasePublicationLock({ lockDir, token }) {
   } catch {
     return
   }
-  if (owner.token === token) {
-    rmSync(lockDir, { recursive: true, force: true })
+  if (owner.token === token && !removeLockDirectory(lockDir, lockIo)) {
+    throw new Error(`atomic publication lock could not be released: ${lockDir} is still held open by another process`)
   }
 }
 

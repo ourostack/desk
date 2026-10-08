@@ -2457,3 +2457,155 @@ test("publishers in separate processes build the shared tree exactly once", asyn
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// On Windows, mkdir and rmdir answer EPERM, EACCES or EBUSY for a folder that is delete-pending or open in another process; such an answer means "contended", never "denied" or "acquired".
+function windowsError(code) {
+  return Object.assign(new Error(`${code}: injected`), { code })
+}
+
+function lockFixture() {
+  const root = makeTempDir()
+  const destinationDir = path.join(root, "cache")
+  const lockDir = `${destinationDir}.publish-lock`
+  const stagingDir = path.join(root, "cache.stage")
+  const publish = (publishDirectoryAtomically, extra) => publishDirectoryAtomically({
+    destinationDir,
+    stagingDir,
+    validateDestination: (candidate) => existsSync(path.join(candidate, "complete")),
+    build: () => writeText(path.join(stagingDir, "complete"), "yes\n"),
+    lockTimeoutMs: 1000,
+    ...extra,
+  })
+  return { root, destinationDir, lockDir, stagingDir, publish }
+}
+
+test("Windows: an EPERM, EACCES or EBUSY on the reclaim folder waits and retries instead of crashing the waiter", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  for (const code of ["EPERM", "EACCES", "EBUSY"]) {
+    const { root, destinationDir, lockDir, publish } = lockFixture()
+    try {
+      writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: process.pid, token: "live builder" })
+      let sleeps = 0
+      const result = publish(publishDirectoryAtomically, {
+        platform: "win32",
+        processAlive: () => true,
+        createLockDirectory: (dir) => {
+          if (dir.endsWith(".reclaim-lock")) throw windowsError(code)
+          mkdirSync(dir)
+        },
+        sleep: () => {
+          sleeps += 1
+          rmSync(lockDir, { recursive: true, force: true })
+        },
+      })
+      assert.deepEqual(result, { destinationDir, published: true, reused: false }, code)
+      assert.equal(sleeps, 1, "one wait, then the lock was free")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows: an EPERM on the lock folder itself waits and retries; elsewhere it is a real failure", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const first = lockFixture()
+  try {
+    let attempts = 0
+    let sleeps = 0
+    const result = first.publish(publishDirectoryAtomically, {
+      platform: "win32",
+      createLockDirectory: (dir) => {
+        attempts += 1
+        if (attempts === 1) throw windowsError("EPERM")
+        mkdirSync(dir)
+      },
+      sleep: () => { sleeps += 1 },
+    })
+    assert.equal(result.published, true)
+    assert.ok(attempts >= 2, "the lock folder was tried again after the EPERM")
+    assert.equal(sleeps, 0, "no lock folder existed, so the retry needed no wait")
+  } finally {
+    rmSync(first.root, { recursive: true, force: true })
+  }
+  for (const target of ["lock", "reclaim"]) {
+    const other = lockFixture()
+    try {
+      writeJson(path.join(other.lockDir, "owner.json"), { schema_version: 1, pid: process.pid, token: "live builder" })
+      assert.throws(
+        () => other.publish(publishDirectoryAtomically, {
+          platform: "linux",
+          processAlive: () => true,
+          createLockDirectory: (dir) => {
+            if (target === "reclaim" ? dir.endsWith(".reclaim-lock") : !dir.endsWith(".reclaim-lock")) throw windowsError("EPERM")
+            mkdirSync(dir)
+          },
+        }),
+        /EPERM/u,
+        `${target}: not a Windows transient`,
+      )
+    } finally {
+      rmSync(other.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows: removing a lock folder retries, then waits when it stays contended, and never crashes the waiter", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    const removals = []
+    let sleeps = 0
+    const result = publish(publishDirectoryAtomically, {
+      platform: "win32",
+      processAlive: () => false,
+      removeDirectory: (dir, options) => {
+        removals.push({ dir: path.basename(dir), maxRetries: options.maxRetries })
+        // The dead owner's folder is delete-pending on the first try only.
+        if (dir.endsWith(".publish-lock") && removals.filter((removal) => removal.dir === "cache.publish-lock").length === 1) throw windowsError("EPERM")
+        rmSync(dir, options)
+      },
+      sleep: () => { sleeps += 1 },
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(removals[0].dir, "cache.publish-lock")
+    assert.ok(removals.every((removal) => removal.maxRetries > 0), "every removal asks Node to retry the transient errors")
+    assert.equal(sleeps, 1, "the contended removal waited once before the retry")
+    assert.equal(removals.filter((removal) => removal.dir === "cache.publish-lock").length >= 2, true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a lock folder that cannot be removed for another reason fails loudly, and an owner that cannot release its lock says so", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const dead = lockFixture()
+  try {
+    writeJson(path.join(dead.lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    assert.throws(
+      () => dead.publish(publishDirectoryAtomically, {
+        platform: "win32",
+        processAlive: () => false,
+        removeDirectory: () => { throw windowsError("EIO") },
+      }),
+      /EIO/u,
+    )
+  } finally {
+    rmSync(dead.root, { recursive: true, force: true })
+  }
+  const owner = lockFixture()
+  try {
+    assert.throws(
+      () => owner.publish(publishDirectoryAtomically, {
+        platform: "win32",
+        removeDirectory: (dir, options) => {
+          if (dir.endsWith(".publish-lock")) throw windowsError("EBUSY")
+          rmSync(dir, options)
+        },
+      }),
+      /publication lock could not be released: .*publish-lock is still held open by another process/u,
+    )
+  } finally {
+    rmSync(owner.root, { recursive: true, force: true })
+  }
+})
