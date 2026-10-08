@@ -6,7 +6,7 @@
 // - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npm that ships next to that Node and puts that Node first on the child's PATH.
 // - Desk's default browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
 // - Playwright MCP defaults to Google Chrome. When Chrome is only in ~/Applications on macOS, where Playwright does not look, the launcher passes its path. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
-// - A plugin's `desk.browser` declaration switches the browser to the operator's real, signed-in profile through the Playwright Extension, in a window of its own that closes when the agent is done (web-real-profile.cjs). Other authenticated or persistent browser contexts are not this file's job: they go through the claims-based browser context broker (desk:cdp-headed-browser).
+// - A plugin's `desk.browser` declaration switches the browser to the operator's real, signed-in profile through the Playwright Extension, in a window of its own whose tabs close when the agent is done (web-real-profile.cjs). Other authenticated or persistent browser contexts are not this file's job: they go through the claims-based browser context broker (desk:cdp-headed-browser).
 // - This file backs the `desk-web` MCP server Desk declares beside `desk` (its tools read `mcp__plugin_desk_desk-web__browser_navigate` and so on). Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every tool is listed as unavailable and every call answers with a `status`, a `code` and a `fix`, the same shape `desk`'s own bootstrap serves when it cannot start. The one difference: `desk` keeps `desk_status`/`desk_doctor` answering without `isError` so a resuming agent can still ask "what's wrong"; the browser has no diagnostic tool of its own, so every call here answers with `isError: true` and the fix is in the payload itself.
 //
 // Like bootstrap.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins.
@@ -665,21 +665,23 @@ function start(o, io) {
     io.stderr.write("[web] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + "\n");
     // A copy installed just now is already the channel's current release.
     if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
-    function launching(extraArgs, extraEnv) {
+    function launching(extraArgs, extraEnv, secrets) {
       var launchEnv = withNodeFirst(env, node, platform);
       Object.keys(extraEnv).forEach(function (key) {
         launchEnv[key] = extraEnv[key];
       });
-      return { launch: { node: node, indexFile: installed.cli, args: launchArgs(extraArgs.concat(args), platform, env, fileExists, root), env: launchEnv } };
+      return { launch: { node: node, indexFile: installed.cli, args: launchArgs(extraArgs.concat(args), platform, env, fileExists, root), env: launchEnv, secrets: secrets } };
     }
-    if (!real) return Promise.resolve(launching([], {}));
+    if (!real) return Promise.resolve(launching([], {}, []));
+    var executable = firstExisting(browserPaths(declaration.channel, platform, env).concat(userBrowserPaths(declaration.channel, platform, env)), fileExists);
     return realProfile.connect({
-      declaration: declaration, installed: installed, platform: platform, env: env, homeDir: homeDir,
+      declaration: declaration, installed: installed, executable: executable, launcherDir: path.join(root, "launchers"),
+      platform: platform, env: env, homeDir: homeDir,
       unavailable: degraded, reconnectFix: retryFix, requireModule: o.requireModule, tmpdir: o.tmpdir
     }).then(function (connection) {
       if (connection.payload) return { retry: true, payload: failure(io, connection.payload.code, connection.payload.summary, connection.payload.fix) };
       io.stderr.write("[web] driving the " + connection.app + " profile " + connection.profile + " through the Playwright Extension\n");
-      return launching(connection.args, connection.env);
+      return launching(connection.args, connection.env, connection.secrets);
     });
   }
   var spawn = either(o.spawn, childProcess.spawn);
@@ -714,45 +716,13 @@ function start(o, io) {
       return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
     });
   }
-  // In the real profile the agent works in its own window (web-real-profile.cjs): it opens before the first call goes to the browser, closes after `browser_close` and closes however this process ends, always by the id it recorded.
-  var cleanup;
-  var gate = {};
-  var finish = { exit: io.exit, kill: kill };
-  if (real) {
-    var own = realProfile.windows({
-      channel: declaration.channel, platform: platform, stderr: io.stderr, unavailable: degraded, reconnectFix: retryFix,
-      osascript: either(o.osascript, realProfile.osascript(o.execFile))
-    });
-    cleanup = own.release;
-    gate = {
-      beforeCall: own.ensure,
-      afterCall: function (params) {
-        if (params.name === "browser_close") own.release();
-      }
-    };
-    ["SIGINT", "SIGTERM", "SIGHUP"].forEach(function (signal) {
-      signals.on(signal, cleanup);
-    });
-    ["end", "error", "close"].forEach(function (event) {
-      io.stdin.on(event, cleanup);
-    });
-    finish = {
-      exit: function (code) {
-        cleanup().then(function () {
-          io.exit(code);
-        });
-      },
-      kill: function (pid, signal) {
-        cleanup().then(function () {
-          kill(pid, signal);
-        });
-      }
-    };
-  }
+  // In the real profile the agent's own tabs are closed before browser_close goes on and when the session ends (web-real-profile.cjs).
+  var own = real ? realProfile.ownTabs(o.tabCallMs) : {};
   // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return proxy.serve({
-    beforeCall: gate.beforeCall,
-    afterCall: gate.afterCall,
+    beforeCall: own.beforeCall,
+    cleanup: own.cleanup,
+    cleanupMs: o.cleanupMs,
     stdin: io.stdin,
     stdout: io.stdout,
     stderr: io.stderr,
@@ -766,8 +736,8 @@ function start(o, io) {
     progressMs: o.progressMs,
     spawn: spawn,
     signals: signals,
-    kill: finish.kill,
-    exit: finish.exit,
+    kill: kill,
+    exit: io.exit,
     holdMs: o.holdMs,
     closeMs: o.closeMs,
     timeoutPayload: degraded("browser_not_ready", "Desk is still installing the browser and it did not finish in time",

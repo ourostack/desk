@@ -2,14 +2,14 @@
 //
 // - The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }` in a plugin's `plugin.json`. It is found the way the factory store declaration is found (`src/factory/plugin-sources.cjs` lists the installed plugin folders). When several plugins declare one, the last folder listed wins, so the overlay loaded after Desk decides.
 // - The profile is the one in the browser's own `Local State` profile list whose `user_name` (the signed-in account's address) ends in `@<profileAccountDomain>`.
-// - The Playwright Extension keeps a connection token in the profile's local storage. The launcher reads it from a temporary copy of that folder (never from the live one, which the running browser locks), hands it to Playwright MCP in its environment and deletes the copy at once. The token is never printed, stored or put in a command line.
-// - On macOS the agent works in its own window: before the first browser call is forwarded, the launcher opens a new window in that browser, brings it to the front so the extension's connect page lands there, and records its id. The window closes by that id when the agent calls `browser_close` and when the launcher ends (the host closing stdin, a stop signal or the browser process ending). It never quits the browser and never touches a window it did not open. Elsewhere there is no window opening: the connect page opens in the frontmost window, and the launcher says so once on stderr.
+// - The Playwright Extension keeps a connection token in the profile's local storage. The launcher reads it from a temporary copy of that folder (never from the live one, which the running browser locks), hands it to Playwright MCP in its environment and deletes the copy at once. The token is never printed, stored or put in a command line, and the proxy replaces it in everything it passes on (web-proxy.cjs).
+// - The agent works in a window of its own, on every platform and with no scripting of the browser. Playwright MCP opens the connect page by starting the browser executable with `--profile-directory=<profile> <connect url>`, which the running browser takes as a request for a tab in its own window. The launcher gives Playwright MCP a small wrapper as `--executable-path` that starts the real browser with `--new-window` first, so that request becomes a new window.
+// - Cleanup closes the agent's own tabs, never a window: `browser_tabs` lists only the tabs this connection controls, and the launcher closes them until none are left (closing a window's last tab closes the window). It does this before it passes `browser_close` on, and when the host closes stdin or stops the launcher. It never quits the browser and never touches a tab it did not open.
 //
 // Like web.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins (plugin-sources.cjs is loaded only when this mode is on).
 
 "use strict";
 
-var childProcess = require("child_process");
 var fs = require("fs");
 var os = require("os");
 var path = require("path");
@@ -20,8 +20,9 @@ var INSTALL_URL = "https://chromewebstore.google.com/detail/playwright-extension
 var CHANNELS = { msedge: "Microsoft Edge", chrome: "Google Chrome" };
 var MANIFESTS = ["plugin.json", path.join(".claude-plugin", "plugin.json"), path.join(".codex-plugin", "plugin.json")];
 var DOMAIN = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
-var OSASCRIPT = "/usr/bin/osascript";
-var OSASCRIPT_MS = 8000;
+// Each call to the browser during cleanup, and how many tabs one cleanup closes at most.
+var TAB_CALL_MS = 2500;
+var MAX_TABS = 50;
 var MAX_MANIFEST = 1024 * 1024;
 // plugin-sources.cjs checks plugin names, versions and repositories against these; the patterns match `PATTERNS` in src/factory/schema.js.
 var PATTERNS = {
@@ -180,10 +181,15 @@ function readExtensionToken(profileDir, deps) {
 // ---- connecting ----
 
 // What to start Playwright MCP with for a declaration: { args, env } or { payload } (a degraded answer that says what is missing).
-// `o.declaration`, `o.installed` (the Playwright MCP install, whose folder also holds classic-level), `o.platform`, `o.env`, `o.homeDir`, `o.unavailable(code, summary, fix)` and `o.reconnectFix(action)`; `o.requireModule` and `o.tmpdir` are for tests.
+// `o.declaration`, `o.installed` (the Playwright MCP install, whose folder also holds classic-level), `o.executable` (the browser's real executable, or null when it is not installed), `o.launcherDir` (where the new-window wrapper goes), `o.platform`, `o.env`, `o.homeDir`, `o.unavailable(code, summary, fix)` and `o.reconnectFix(action)`; `o.requireModule` and `o.tmpdir` are for tests.
 function connect(o) {
   var declaration = o.declaration;
   var app = CHANNELS[declaration.channel];
+  if (o.executable === null) {
+    return Promise.resolve({ payload: o.unavailable("browser_not_installed",
+      "Desk could not find " + app + " on this machine, so the browser is unavailable",
+      o.reconnectFix("Install " + app)) });
+  }
   var statePath = path.join(userDataDir(declaration.channel, o.platform, o.env, o.homeDir), "Local State");
   var profile = findProfileDir(statePath, declaration.domain);
   if (profile === null) {
@@ -210,7 +216,8 @@ function connect(o) {
     if (token === null || token === "") return missing();
     var env = {};
     env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token;
-    return { args: ["--extension", "--browser", declaration.channel, "--profile-dir-name", profile], env: env, profile: profile, app: app };
+    var launcher = writeLauncher(o.launcherDir, o.platform, declaration.channel, o.executable);
+    return { args: ["--extension", "--browser", declaration.channel, "--profile-dir-name", profile, "--executable-path", launcher], env: env, secrets: [token], profile: profile, app: app };
   }, function (error) {
     return { payload: o.unavailable("browser_token_unreadable",
       "Desk could not read the Playwright Extension's connection token from the " + app + " profile " + profile + " (" + describe(error) + "), so the browser is unavailable",
@@ -220,92 +227,92 @@ function connect(o) {
 
 // ---- the agent's own window ----
 
-// Runs one AppleScript through /usr/bin/osascript and resolves its trimmed output; rejects with osascript's own message.
-function osascript(execFile) {
-  return function (script) {
-    return new Promise(function (resolve, reject) {
-      execFile(OSASCRIPT, ["-e", script], { encoding: "utf8", timeout: OSASCRIPT_MS }, function (error, stdout) {
-        if (error) reject(error);
-        else resolve(String(stdout).trim());
+// The wrapper's text: it starts the real browser with `--new-window` before every other argument. Quoting keeps a path with spaces or quote marks in one piece.
+function launcherScript(platform, executable) {
+  if (platform === "win32") return "@echo off\r\n\"" + executable.replace(/%/g, "%%") + "\" --new-window %*\r\n";
+  return "#!/bin/sh\nexec '" + executable.replace(/'/g, "'\\''") + "' --new-window \"$@\"\n";
+}
+
+// Writes the wrapper for a browser executable into `dir` (only when its text changed, so concurrent sessions never rewrite a file another is starting) and returns its path.
+function writeLauncher(dir, platform, channel, executable) {
+  var file = path.join(dir, channel + "-new-window" + (platform === "win32" ? ".cmd" : ".sh"));
+  var text = launcherScript(platform, executable);
+  var current = null;
+  try {
+    current = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    // No wrapper yet.
+  }
+  if (current !== text) {
+    fs.mkdirSync(dir, { recursive: true });
+    var temp = file + "." + process.pid + ".tmp";
+    fs.writeFileSync(temp, text, { mode: 493 /* 0755 */ });
+    fs.renameSync(temp, file);
+  }
+  return file;
+}
+
+// ---- the agent's own tabs ----
+
+// How many tabs a `browser_tabs` list names: the lines that start `- <index>:`.
+function countTabs(result) {
+  var text = result && Array.isArray(result.content) ? result.content.map(function (part) {
+    return typeof part.text === "string" ? part.text : "";
+  }).join("\n") : "";
+  var lines = text.match(/^\s*-\s*\d+:/gm);
+  return lines === null ? 0 : lines.length;
+}
+
+// Closes every tab this connection controls, one at a time from the first, and resolves when none is left, a call fails or the limit is reached. `call(name, arguments, ms)` resolves a tool's result; each call gets `callMs` (TAB_CALL_MS by default). Never rejects.
+function closeOwnTabs(call, callMs) {
+  var ms = either(callMs, TAB_CALL_MS);
+  function next(closed) {
+    if (closed >= MAX_TABS) return Promise.resolve();
+    return call("browser_tabs", { action: "list" }, ms).then(function (listed) {
+      if (listed.isError || countTabs(listed) === 0) return null;
+      return call("browser_tabs", { action: "close", index: 0 }, ms).then(function (result) {
+        return result.isError ? null : next(closed + 1);
       });
     });
+  }
+  return next(0).then(null, function () {
+    // The browser is gone or too slow; there is nothing more to close.
+  });
+}
+
+// The hooks the proxy calls for the agent's tabs. Any call but `browser_close` marks the connection as used; `browser_close` closes the tabs first and then goes on to disconnect; the cleanup at the end of the session closes them only if the connection was used.
+function ownTabs(callMs) {
+  var used = false;
+  function cleanup(api) {
+    if (!used) return Promise.resolve();
+    used = false;
+    return closeOwnTabs(api.callTool, callMs);
+  }
+  return {
+    beforeCall: function (params, api) {
+      if (params.name !== "browser_close") {
+        used = true;
+        return Promise.resolve();
+      }
+      return cleanup(api);
+    },
+    cleanup: cleanup
   };
-}
-
-function openScript(app) {
-  var page = encodeURIComponent("<title>Desk agent window</title><h1>Desk agent window</h1><p>An agent is using this window and will close it when its task is done.</p>");
-  return "tell application \"" + app + "\"\nset w to make new window\nset URL of active tab of w to \"data:text/html," + page + "\"\nset index of w to 1\nreturn id of w\nend tell";
-}
-
-// Closes the window only if the browser still runs and still has it, so a window the operator already closed (or a browser they quit) is never reopened.
-function closeScript(app, id) {
-  return "if application \"" + app + "\" is running then\ntell application \"" + app + "\"\nif exists (first window whose id is " + id + ") then close (first window whose id is " + id + ")\nend tell\nend if";
-}
-
-// The one window this launcher opened, if any. `ensure()` opens it before the first browser call (once; again after `release()`), resolving null or { payload } when it cannot; `release()` closes it by its id and never rejects.
-function windows(o) {
-  var app = CHANNELS[o.channel];
-  var id = null;
-  var opening = null;
-  var closing = null;
-  var warned = false;
-  function open() {
-    return o.osascript(openScript(app)).then(function (answer) {
-      if (!/^[0-9]+$/.test(answer)) throw new Error("it answered " + JSON.stringify(answer) + " instead of a window id");
-      id = answer;
-      return null;
-    }).then(null, function (error) {
-      return { payload: o.unavailable("browser_window_failed",
-        "Desk could not open its own " + app + " window (" + describe(error) + "), so the browser is unavailable and no other window was touched",
-        o.reconnectFix("Check that " + app + " can open a window")) };
-    }).then(function (outcome) {
-      opening = null;
-      return outcome;
-    });
-  }
-  function ensure() {
-    if (o.platform !== "darwin") {
-      if (!warned) o.stderr.write("[web] opening a separate " + app + " window works on macOS only; the connect page opens in the frontmost window\n");
-      warned = true;
-      return Promise.resolve(null);
-    }
-    if (id !== null) return Promise.resolve(null);
-    if (opening === null) opening = open();
-    return opening;
-  }
-  function closeRecorded() {
-    if (id === null) return null;
-    var target = id;
-    id = null;
-    return o.osascript(closeScript(app, target)).then(null, function (error) {
-      o.stderr.write("[web] could not close the " + app + " window " + target + ": " + describe(error) + "\n");
-    });
-  }
-  function release() {
-    if (closing === null) {
-      closing = Promise.resolve(opening).then(closeRecorded).then(function () {
-        closing = null;
-      });
-    }
-    return closing;
-  }
-  return { ensure: ensure, release: release };
 }
 
 module.exports = {
   CHANNELS: CHANNELS,
   EXTENSION_ID: EXTENSION_ID,
   INSTALL_URL: INSTALL_URL,
-  closeScript: closeScript,
+  closeOwnTabs: closeOwnTabs,
   connect: connect,
+  countTabs: countTabs,
   findProfileDir: findProfileDir,
-  openScript: openScript,
-  osascript: function (execFile) {
-    return osascript(either(execFile, childProcess.execFile));
-  },
+  launcherScript: launcherScript,
+  ownTabs: ownTabs,
   pluginDirs: pluginDirs,
   readDeclaration: readDeclaration,
   readExtensionToken: readExtensionToken,
   userDataDir: userDataDir,
-  windows: windows
+  writeLauncher: writeLauncher
 };

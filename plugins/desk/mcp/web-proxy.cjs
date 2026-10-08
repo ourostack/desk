@@ -22,6 +22,8 @@ var PROGRESS_MS = 10000;
 // How long a call waits for the browser, and how long a child gets to exit after its stdin closes.
 var HOLD_MS = 120000;
 var CLOSE_MS = 5000;
+var CLEANUP_MS = 8000;
+var REDACTED = "<redacted>";
 
 function either(value, fallback) {
   return value === undefined || value === null ? fallback : value;
@@ -33,6 +35,23 @@ function frame(message) {
     out[key] = message[key];
   });
   return JSON.stringify(out) + "\n";
+}
+
+// The forms a secret can take in text the proxy passes on: as it is, percent-encoded, and escaped inside a JSON string.
+function secretForms(secrets) {
+  var forms = [];
+  secrets.forEach(function (secret) {
+    [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)].forEach(function (form) {
+      if (form !== "" && forms.indexOf(form) === -1) forms.push(form);
+    });
+  });
+  return forms;
+}
+
+function redact(text, forms) {
+  return forms.reduce(function (result, form) {
+    return result.split(form).join(REDACTED);
+  }, text);
 }
 
 function callFailure(payload) {
@@ -95,7 +114,7 @@ function describeDiff(diff) {
 // Serve the host on stdin/stdout until it closes stdin, or the child ends this process.
 //
 // options.ready resolves { launch: { node, indexFile, args, env } } when Playwright MCP can start, or { payload } (a degraded payload) when it cannot; it never rejects.
-// options.beforeCall(params), when given, runs before each tools/call goes to the browser and resolves null to go on or { payload } to answer the call with that degraded payload instead; it never rejects. options.afterCall(params), when given, runs after the browser's answer to a call has been sent to the host.
+// options.beforeCall(params, api), when given, runs before each tools/call goes to the browser, which waits for the promise it returns; it never rejects. options.cleanup(api), when given, runs once the host is done (it closed stdin or sent a stop signal) and before the browser is told to stop; it never rejects and gets options.cleanupMs (default 8 seconds) to finish. `api.callTool(name, arguments, ms)` calls a browser tool on the proxy's own behalf and resolves its result, or rejects when it errors, times out or the browser ends. A launch's `secrets` (strings) are replaced with <redacted> in everything the proxy writes to the host or to stderr.
 // options.catalog is the tools/list answer, and options.catalogVersion names the Playwright MCP release it was taken from. options.retry() starts the install again and returns a new ready promise, and options.abort() ends a running install; options.progressMs sets the progress interval. options.timeoutPayload, options.spawnPayload(error) and options.exitPayload(code, signal) build the degraded payloads for a call that waited too long, a child that would not start and a child that ended.
 function serve(options) {
   var stdin = options.stdin;
@@ -103,6 +122,7 @@ function serve(options) {
   var stderr = options.stderr;
   var holdMs = either(options.holdMs, HOLD_MS);
   var closeMs = either(options.closeMs, CLOSE_MS);
+  var cleanupMs = either(options.cleanupMs, CLEANUP_MS);
   var progressMs = either(options.progressMs, PROGRESS_MS);
   var signals = options.signals;
   return new Promise(function (resolve) {
@@ -110,7 +130,10 @@ function serve(options) {
     var childLines = { text: "", scanned: 0 };
     var queue = [];
     var inflight = {};
-    var calls = {};
+    var own = {};
+    var cleaning = null;
+    var forms = [];
+    var errorText = "";
     var nextId = 1;
     var child = null;
     var childReady = false;
@@ -121,11 +144,48 @@ function serve(options) {
     var handlers = {};
 
     function send(message) {
-      stdout.write(frame(message));
+      stdout.write(redact(frame(message), forms));
     }
 
     function toChild(message) {
       child.stdin.write(frame(message));
+    }
+
+    // A browser tool called on the proxy's own behalf: resolves its result, rejects on an error, a timeout or the browser ending.
+    function callTool(name, args, ms) {
+      return new Promise(function (resolve, reject) {
+        var id = nextId;
+        nextId += 1;
+        var timer = setTimeout(function () {
+          delete own[id];
+          reject(new Error(name + " timed out after " + ms / 1000 + " seconds"));
+        }, ms);
+        own[id] = function (message) {
+          clearTimeout(timer);
+          if (message.error) reject(new Error(String(message.error.message)));
+          else resolve(message.result);
+        };
+        toChild({ id: id, method: "tools/call", params: { name: name, arguments: args } });
+      });
+    }
+
+    var api = { callTool: callTool };
+
+    // The cleanup the caller asked for, run once at a time and cut off after cleanupMs; resolves when it is done, never rejects.
+    function cleanup() {
+      if (options.cleanup === undefined || !childReady) return Promise.resolve();
+      if (cleaning === null) {
+        cleaning = new Promise(function (resolve) {
+          var timer = setTimeout(resolve, cleanupMs);
+          options.cleanup(api).then(function () {
+            clearTimeout(timer);
+            resolve();
+          });
+        }).then(function () {
+          cleaning = null;
+        });
+      }
+      return cleaning;
     }
 
     // A held call's timers: its hold limit and its progress ticker.
@@ -151,7 +211,10 @@ function serve(options) {
     FORWARDED_SIGNALS.forEach(function (signal) {
       handlers[signal] = function () {
         if (child !== null) {
-          child.kill(signal);
+          var running = child;
+          cleanup().then(function () {
+            running.kill(signal);
+          });
           return;
         }
         options.abort();
@@ -179,7 +242,6 @@ function serve(options) {
       nextId += 1;
       entry.childId = childId;
       inflight[childId] = entry.id;
-      calls[childId] = entry.params;
       toChild({ id: childId, method: "tools/call", params: entry.params });
     }
 
@@ -188,9 +250,8 @@ function serve(options) {
         dispatch(entry);
         return;
       }
-      options.beforeCall(entry.params).then(function (gate) {
-        if (gate === null) dispatch(entry);
-        else send({ id: entry.id, result: callFailure(gate.payload) });
+      options.beforeCall(entry.params, api).then(function () {
+        dispatch(entry);
       });
     }
 
@@ -228,6 +289,12 @@ function serve(options) {
         compare(message);
         return;
       }
+      if (message.id !== undefined && message.method === undefined && own[message.id] !== undefined) {
+        var finish = own[message.id];
+        delete own[message.id];
+        finish(message);
+        return;
+      }
       if (message.id !== undefined && message.method === undefined) {
         var hostId = inflight[message.id];
         if (hostId === undefined) return;
@@ -236,9 +303,6 @@ function serve(options) {
         if (message.error) reply.error = message.error;
         else reply.result = message.result;
         send(reply);
-        var params = calls[message.id];
-        delete calls[message.id];
-        if (options.afterCall !== undefined) options.afterCall(params);
         return;
       }
       if (message.id !== undefined) {
@@ -272,7 +336,11 @@ function serve(options) {
         send({ id: inflight[childId], result: callFailure(payload) });
       });
       inflight = {};
-      calls = {};
+      Object.keys(own).forEach(function (id) {
+        own[id]({ error: { message: "the browser ended" } });
+      });
+      own = {};
+      flushErrors();
       if (!childReady) {
         // It ended before it could take calls: answer them with the reason and keep the handshake alive.
         child = null;
@@ -286,7 +354,28 @@ function serve(options) {
       done();
     }
 
+    // The browser's stderr as it comes, or, once there is a secret to hide, a line at a time so a secret split across two chunks is still found.
+    function writeErrors(chunk) {
+      if (forms.length === 0) {
+        stderr.write(chunk);
+        return;
+      }
+      errorText += chunk;
+      var newline = errorText.indexOf("\n");
+      while (newline !== -1) {
+        stderr.write(redact(errorText.slice(0, newline + 1), forms));
+        errorText = errorText.slice(newline + 1);
+        newline = errorText.indexOf("\n");
+      }
+    }
+
+    function flushErrors() {
+      if (errorText !== "") stderr.write(redact(errorText, forms));
+      errorText = "";
+    }
+
     function start(launch) {
+      forms = secretForms(either(launch.secrets, []));
       try {
         child = options.spawn(launch.node, [launch.indexFile].concat(launch.args), { stdio: ["pipe", "pipe", "pipe"], env: launch.env, windowsHide: true });
       } catch (error) {
@@ -297,9 +386,8 @@ function serve(options) {
       var launched = child;
       launched.stdout.setEncoding("utf8");
       launched.stdout.on("data", onChildData);
-      launched.stderr.on("data", function (chunk) {
-        stderr.write(chunk);
-      });
+      launched.stderr.setEncoding("utf8");
+      launched.stderr.on("data", writeErrors);
       launched.stdin.on("error", function () {
         // The child went away first; its exit is reported below.
       });
@@ -441,11 +529,13 @@ function serve(options) {
       if (child !== null) {
         // Playwright MCP exits when its own stdin closes; a child that does not is stopped after a short wait.
         var closing = child;
-        closing.stdin.end();
-        var timer = setTimeout(function () {
-          closing.kill("SIGTERM");
-        }, closeMs);
-        timer.unref();
+        cleanup().then(function () {
+          closing.stdin.end();
+          var timer = setTimeout(function () {
+            closing.kill("SIGTERM");
+          }, closeMs);
+          timer.unref();
+        });
         return;
       }
       if (settled) done();

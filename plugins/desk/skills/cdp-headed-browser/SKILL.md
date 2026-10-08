@@ -27,11 +27,11 @@ When an installed plugin declares `desk.browser` in its `plugin.json`, `desk-web
 
 Your window, and only your window:
 
-- On macOS, `desk-web` opens a new window in that browser before your first browser call and brings it to the front, so the extension's connect page lands there. It records the window's id. Work only in that window's tabs. The extension can reach the whole browser, and nothing enforces this, so the rule is yours to keep: never read, switch to, navigate or close a tab or window you did not open.
-- Call `browser_close` when your task is done. `desk-web` then closes your window by its recorded id. It also closes the window when the session ends, when the host stops it, and when the browser process ends. It never quits the browser and never touches a window it did not open.
-- A second `desk-web` session opens its own window and closes only that one.
-- On Windows and Linux there is no window opening: the connect page opens in the frontmost window. The launcher says so once on stderr.
-- If the first call answers that the Playwright Extension is not installed in that profile, install it from the link in the answer and call again. No restart is needed. If it names a missing profile, the operator is not signed in to that account in that browser.
+- The connect page opens in a new window of its own, on every platform. Desk gives Playwright MCP a small wrapper that starts the real browser with `--new-window` first, so the request to open the connect page becomes a new window instead of a tab in the operator's frontmost window. Work only in that window's tabs. The extension can reach the whole browser, and nothing enforces this, so the rule is yours to keep: never read, switch to, navigate or close a tab or window you did not open.
+- Call `browser_close` when your task is done. Desk first closes every tab your connection controls, which closes your window when its last tab goes, and then passes `browser_close` on. It does the same tab cleanup when the session ends or the host stops `desk-web`. `browser_tabs` lists only the tabs your connection controls, so the cleanup never touches the operator's tabs. It never quits the browser.
+- A second `desk-web` session opens its own window and closes only its own tabs.
+- Desk replaces the extension's connection token with `<redacted>` in everything it passes back to you, because the connect address carries it. Never try to recover it.
+- If the first call answers that the Playwright Extension is not installed in that profile, install it from the link in the answer and call again. No restart is needed. If it names a missing profile, the operator is not signed in to that account in that browser. If it says the browser is not installed, install it.
 
 The brokered contexts below are for a provider-backed persistent profile that is not the operator's real one. They do not apply to `desk-web` in this mode.
 
@@ -122,7 +122,7 @@ The persistent profile is the security-principal boundary. Leases separate targe
 
 ## Focus preservation
 
-The headed browser is background infrastructure, not a remote-control surface. Never call `page.bringToFront()` or `Target.activateTarget` during unattended automation. The lease proxy rejects those activation commands. This rule governs brokered leases and the operator's existing windows. It does not apply to the one new window `desk-web` opens for you in the real browser profile, which it brings to the front itself, once, so the connect page lands in it.
+The headed browser is background infrastructure, not a remote-control surface. Never call `page.bringToFront()` or `Target.activateTarget` during unattended automation. The lease proxy rejects those activation commands. This rule governs brokered leases and the operator's existing windows. It does not apply to the one new window `desk-web` opens for you in the real browser profile: the browser opens it in front, once, so the connect page lands in it.
 
 When a new page is required, create it in the background:
 
