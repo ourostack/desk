@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.232 — 2026-10-08
+
+[`work-orchestration`](skills/work-orchestration/SKILL.md) now says a worker must not end its turn while a child it launched is still running. In a real incident a worker took a child's interim "CI still running" notification as a result and ended its turn, the child's final report (CI green) went to the root coordinator instead, and the green pull request sat unmerged for about 40 hours. The new "Waiting for children" section treats an interim notification as not terminal, tells the worker to block on a foreground wait or monitor until each child returns a terminal result, and requires a handoff on the task card (which children run, what each owns, the exact next action on each result) when the turn must end anyway. It adds a short check to run before ending any turn, and pacing: fewer parallel children near a usage limit, one child per independent unit, and resuming an existing child for follow-up fixes. Model choice stays where it already was. One contract test fails if this wording disappears.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.231 — 2026-10-08
 
 ### Exact file identity, and a ready status that never sits next to an older detail
