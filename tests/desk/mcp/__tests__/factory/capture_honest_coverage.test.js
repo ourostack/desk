@@ -293,3 +293,39 @@ test("a kept pass clears coverage_failed, stores the Codex cache and leaves the 
   assert.deepEqual(status.coverage_cache, {})
   assert.deepEqual(status.coverage, PREVIOUS)
 }))
+
+// A quarantine that does not settle within the keep limit (an older Desk that keeps condemning valid copies, say) is recorded so the status and the
+// doctor can show it, but a host that is mostly sitting in quarantine was not measured: the record says the host was not counted, never a share.
+test("a host recorded while most of its sessions sit in a quarantine that does not settle goes to the store as not counted", () => scratch(async (ctx) => {
+  await seed(ctx)
+  await outboxCopies(ctx, [1, 2, 3, 4])
+  await quarantine(ctx, { names: [NAME(1), NAME(2), NAME(3)], ageMs: SETTLED })
+  const t0 = Date.now()
+  assert.equal(await recordCoverage(ctx.env, { ...options, now: () => t0 }), "kept")
+  assert.equal(await recordCoverage(ctx.env, { ...options, now: () => t0 + KEEP_LIMIT_MS }), "written")
+  const { coverage } = await readStatus(ctx.env)
+  const claude = coverage.hosts["claude-code"]
+  assert.equal(claude.held, 3, "the local coverage keeps the counts")
+  assert.equal(claude.held_in_quarantine, true)
+  const sent = JSON.parse(Buffer.from(record(coverage).bytes).toString("utf8"))
+  assert.deepEqual(sent.hosts["claude-code"], { not_counted: true })
+  assert.deepEqual(sharesOf(record(coverage).bytes), {})
+}))
+
+test("a host recorded with a minority in quarantine, or once the quarantine settles, is measured as before", () => scratch(async (ctx) => {
+  await seed(ctx)
+  await outboxCopies(ctx, [1, 2, 3, 4])
+  await quarantine(ctx, { names: [NAME(1)], ageMs: SETTLED })
+  assert.equal(await recordCoverage(ctx.env, options), "written")
+  const { coverage } = await readStatus(ctx.env)
+  assert.equal(Object.hasOwn(coverage.hosts["claude-code"], "held_in_quarantine"), false)
+  const sent = JSON.parse(Buffer.from(record(coverage).bytes).toString("utf8"))
+  assert.equal(sent.hosts["claude-code"].held, 1)
+}))
+
+test("captureFor sends a host flagged held_in_quarantine as not counted, and only a true flag does that", () => {
+  const flagged = { ...host({ [owner]: row({ held: 3, derived: 1 }) }), held_in_quarantine: true }
+  assert.deepEqual(JSON.parse(Buffer.from(record({ method: 1, ran_at: new Date(T0).toISOString(), hosts: { "claude-code": flagged } }).bytes).toString("utf8")).hosts, { "claude-code": { not_counted: true } })
+  const unflagged = { ...flagged, held_in_quarantine: false }
+  assert.equal(JSON.parse(Buffer.from(record({ method: 1, ran_at: new Date(T0).toISOString(), hosts: { "claude-code": unflagged } }).bytes).toString("utf8")).hosts["claude-code"].held, 3)
+})

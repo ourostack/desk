@@ -15,7 +15,9 @@
 // naming no store, a store without consent, an unproven Codex route) is a steady state and is recorded as `held`. The keep has a time limit,
 // `KEEP_LIMIT_MS`: `status.coverage_kept` is `{ code: "quarantine_in_flux", since, at }` while passes are kept; once the first kept pass is `KEEP_LIMIT_MS` old the
 // pass is recorded anyway and `coverage_kept` becomes `{ code: "quarantine_not_settling", since, at }`, which the status and the doctor show, so a quarantine that
-// does not settle is published as `held` and not hidden. A pass with nothing in flux clears `coverage_kept`.
+// does not settle is not hidden. A host most of whose sessions are in that quarantine keeps its counts locally and is flagged `held_in_quarantine: true`, and the
+// capture record sends it as not counted rather than as a measured share (a held majority is a state of the quarantine, not of capture). A pass with nothing in
+// flux clears `coverage_kept`.
 //
 // Store names are compared exactly in the classifier, so this file turns every store name into lower case first, in consent, copies, receipts and markers:
 // GitHub names are not case sensitive, and `session-route.js` (`sessionPlace`) and the flush (`sameRepo`) already compare them that way. Folders in the
@@ -181,12 +183,23 @@ function quarantineState(root) {
   return { changedAt }
 }
 
+// The counted hosts most of whose sessions on disk have their facts copy in quarantine.
+const quarantineMajority = (result) => Object.entries(result.coverage.hosts).filter(([host, entry]) => entry.state === "counted" && entry.on_disk > 0 && result.quarantined[host] / entry.on_disk > HELD_MAJORITY).map(([host]) => host)
+
 /** Whether the coverage pass was taken in a transient quarantine state; see the header.  */
 async function quarantineInFlux(env, result, nowMs) {
   // An unreadable state folder throws here and the caller reports the pass as failed, keeping the earlier coverage.
   const state = quarantineState(await factoryStateRoot(env, { create: false }))
   if (state.changedAt !== null && state.changedAt <= nowMs && nowMs - state.changedAt < QUARANTINE_SETTLE_MS) return true
-  return Object.entries(result.coverage.hosts).some(([host, entry]) => entry.state === "counted" && entry.on_disk > 0 && result.quarantined[host] / entry.on_disk > HELD_MAJORITY)
+  return quarantineMajority(result).length > 0
+}
+
+// A pass recorded although the quarantine did not settle: each host that is mostly in quarantine keeps its counts here and is flagged
+// `held_in_quarantine`, which `capture-publish.js` sends as not counted, so a store never reads a quarantine that would not settle as a measured share.
+function flagQuarantineMajority(result) {
+  const hosts = { ...result.coverage.hosts }
+  for (const host of quarantineMajority(result)) hosts[host] = { ...hosts[host], held_in_quarantine: true }
+  return { ...result.coverage, hosts }
 }
 
 /** See the header. */
@@ -208,7 +221,8 @@ export async function recordCoverage(env, options) {
         }
       }
     }
-    await writeStatus(env, result.ok ? { coverage: result.coverage, coverage_cache: result.cache, coverage_failed: undefined, coverage_kept: kept } : { coverage_failed: result.code })
+    const coverage = result.ok && kept !== undefined ? flagQuarantineMajority(result) : result.coverage
+    await writeStatus(env, result.ok ? { coverage, coverage_cache: result.cache, coverage_failed: undefined, coverage_kept: kept } : { coverage_failed: result.code })
     return result.ok ? "written" : "failed"
   } catch {
     // The status file could not be written; the sweep goes on and the next one tries again.

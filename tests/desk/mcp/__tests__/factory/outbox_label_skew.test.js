@@ -83,6 +83,31 @@ test("ownDeskVersion reads the plugin version and says null for anything else", 
   assert.equal(ownDeskVersion(() => "not json"), null)
 })
 
+// The MCP server runs Desk from a source mirror (`mcp/` copied to a runtime cache), which has no plugin.json three folders up; the plugin folder is
+// named by DESK_PLUGIN_ROOT. A Desk that cannot name itself there writes quarantine records no newer Desk can date, and cannot tell a newer Desk's labels
+// from bad ones.
+test("ownDeskVersion names the Desk when it runs from a source mirror with no plugin.json beside it", async () => {
+  const { mkdtemp, cp, writeFile, rm } = fs
+  const { execFileSync } = await import("node:child_process")
+  const os = await import("node:os")
+  const base = await mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desk-mirror-version-"))
+  try {
+    const source = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src", import.meta.url))
+    const mirror = path.join(base, "runtime-cache", "source-mirror", "0123abcd")
+    await cp(source, path.join(mirror, "src"), { recursive: true })
+    const plugin = path.join(base, "plugin")
+    await fs.mkdir(plugin, { recursive: true })
+    await writeFile(path.join(plugin, "plugin.json"), JSON.stringify({ name: "desk", version: "3.2.0-alpha.901" }))
+    const outbox = path.join(mirror, "src", "factory", "outbox.js")
+    const script = `import(${JSON.stringify(outbox)}).then((m) => process.stdout.write(String(m.ownDeskVersion())))`
+    const env = { ...process.env, DESK_PLUGIN_ROOT: plugin }
+    delete env.CLAUDE_PLUGIN_ROOT
+    assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }), "3.2.0-alpha.901")
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
 test("releasing outdated label quarantines judges only this Desk's own check codes from an older or unnamed Desk, and releases only files that publish now", () => scratch(async ({ env }) => {
   await assert.rejects(releaseOutdatedLabelQuarantines(env, STORE), /check/u)
   await assert.rejects(releaseOutdatedLabelQuarantines(env, STORE, {}), /check/u)

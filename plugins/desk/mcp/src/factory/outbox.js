@@ -75,7 +75,7 @@
 // Nothing here ever prints or logs the machine secret.
 
 import { randomBytes, createHash } from "node:crypto"
-import { promises as fsp, readFileSync } from "node:fs"
+import { promises as fsp } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -96,6 +96,7 @@ import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFact
 import { RETRACTED_COPIES, markerRoute, recordedHeld } from "./session-route.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
+import { deskVersion } from "../package-metadata.js"
 
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
@@ -134,9 +135,10 @@ function isNewerFormat(value, schema, validate) {
 }
 const newerFacts = (value) => isNewerFormat(value, LOCAL_SCHEMA, validateLocalFacts)
 
-// The version of the Desk running this code, read from the plugin.json beside it (never from a marker or a registry, which can name a newer Desk
-// than the one still executing); `null` when it cannot be read or is not a Desk version.
-const readPluginManifest = () => readFileSync(new URL("../../../plugin.json", import.meta.url), "utf8")
+// The version of the Desk running this code (never from a marker or a registry, which can name a newer Desk than the one still executing); `null`
+// when it cannot be read or is not a Desk version. It is `package-metadata.js`'s one resolver, which finds the plugin folder through DESK_PLUGIN_ROOT
+// when the code runs from a source mirror (the MCP server's copy of `mcp/`), where no plugin.json sits beside it.
+const readPluginManifest = () => JSON.stringify({ version: deskVersion() })
 const readOwnVersion = (read) => {
   try {
     const { version } = JSON.parse(read())
@@ -146,7 +148,7 @@ const readOwnVersion = (read) => {
   }
 }
 let ownVersionKept = null
-// Read once per process: the plugin.json beside this code cannot change under the Desk running it. With a reader (tests), it is read each time.
+// Read once per process: the plugin.json of the Desk running this code cannot change under it. With a reader (tests), it is read each time.
 export function ownDeskVersion(read = undefined) {
   if (read !== undefined) return readOwnVersion(read)
   ownVersionKept ??= readOwnVersion(readPluginManifest)
