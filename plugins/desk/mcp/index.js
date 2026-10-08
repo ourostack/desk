@@ -234,7 +234,7 @@ export async function main({
       input: { args, env: plainEnv, cwd, homeDir, injectedReadinessPolicy },
     }),
     setupDiagnostic: (error) => createSetupDiagnostic({ pathsTried: error.tried, bindingPath: claudeBindingPath(env) }),
-    loadRuntime: (activation, { onPhase } = {}) => loadRuntime({
+    loadRuntime: (activation, { onPhase }) => loadRuntime({
       onPhase,
       activation,
       env: plainEnv,
@@ -290,7 +290,7 @@ function deferPackVerification() {
 
 // Inspect, restore and import the runtime from the offline pack. Returns { runtimeServer, runtimeStatus }, or { outcome } naming the degraded state.
 // With the shipped importer, the inspection (which hashes and unpacks the archive) and the restore (which can wait on another process's publication lock) run on the admission worker; only the final import runs here.
-async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runtimeImporter, runtimeInspector, onPhase = () => {} }) {
+async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runtimeImporter, runtimeInspector, onPhase }) {
   const { runtimeCacheDir, sourceIdentity } = activation
   let inspection = null
   let prepared = null

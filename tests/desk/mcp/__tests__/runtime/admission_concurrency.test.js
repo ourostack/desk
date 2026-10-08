@@ -18,10 +18,13 @@ const WINDOW_MS = 200
 // Five Node processes starting at once on a machine already running the rest of the suite: the handshake must complete well inside the hosts' startup timeout (30 s), and the slowest per round is recorded. The single-start 3 s budget is asserted in admission_conditions.test.js.
 const CONCURRENT_HANDSHAKE_BUDGET_MS = 10000
 
+const LISTING_LIMIT = 300
+
 function fixtureListing(home, depth = 6) {
   const lines = []
+  let truncated = false
   const walk = (dir, level) => {
-    if (level > depth || lines.length >= 300) return
+    if (level > depth) return
     let entries
     try {
       entries = readdirSync(dir, { withFileTypes: true })
@@ -30,11 +33,16 @@ function fixtureListing(home, depth = 6) {
     }
     for (const entry of entries) {
       if (entry.name === "node_modules" || entry.name === ".git") continue
+      if (lines.length >= LISTING_LIMIT) {
+        truncated = true
+        return
+      }
       lines.push(`${"  ".repeat(level)}${entry.name}${entry.isDirectory() ? "/" : ""}`)
       if (entry.isDirectory()) walk(path.join(dir, entry.name), level + 1)
     }
   }
   walk(home, 0)
+  if (truncated) lines.push(`... listing truncated at ${LISTING_LIMIT} entries`)
   return lines.join("\n")
 }
 

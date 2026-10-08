@@ -151,7 +151,7 @@ export function runInWorker(job, { createWorker = (url, options) => new Worker(u
       settle(value)
     }
     worker.on("message", (reply) => {
-      if (reply.phase !== undefined) return onPhase(reply.phase)
+      if (reply.phase !== undefined) return settled ? undefined : onPhase(reply.phase)
       return reply.ok ? finish(resolve, reply.value) : finish(reject, reviveError(reply.error))
     })
     worker.once("error", (error) => finish(reject, error))
