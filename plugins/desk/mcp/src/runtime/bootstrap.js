@@ -384,10 +384,12 @@ function directoryIsValid(validateDestination, candidate) {
   }
 }
 
+// `build`, when given, fills `stagingDir` and runs only after this process owns the publication lock and the destination is still not valid. Without it, `stagingDir` must already be complete, and every concurrent publisher has paid for building its own copy before it learns that one of them wins.
 export function publishDirectoryAtomically({
   stagingDir,
   destinationDir,
   validateDestination,
+  build = null,
   lockTimeoutMs = publicationLockTimeoutMs,
   createLockDirectory = mkdirSync,
   now = Date.now,
@@ -396,13 +398,7 @@ export function publishDirectoryAtomically({
   sleep = sleepSynchronously,
   writeLockOwner = writeFileSync,
 }) {
-  if (!existsSync(stagingDir)) {
-    throw new Error(`atomic publication staging directory is missing: ${stagingDir}`)
-  }
-  if (!directoryIsValid(validateDestination, stagingDir)) {
-    rmSync(stagingDir, { recursive: true, force: true })
-    throw new Error(`atomic publication staging directory is incomplete: ${stagingDir}`)
-  }
+  if (build === null) assertStagingComplete({ stagingDir, validateDestination })
 
   mkdirSync(path.dirname(destinationDir), { recursive: true })
   let publicationLock
@@ -440,6 +436,10 @@ export function publishDirectoryAtomically({
         published: false,
         reused: true,
       }
+    }
+    if (build !== null) {
+      build()
+      assertStagingComplete({ stagingDir, validateDestination })
     }
     if (existsSync(destinationDir)) {
       rename(destinationDir, backupDir)
@@ -493,6 +493,16 @@ export function publishDirectoryAtomically({
     releasePublicationLock(publicationLock)
   }
   throw publicationError
+}
+
+function assertStagingComplete({ stagingDir, validateDestination }) {
+  if (!existsSync(stagingDir)) {
+    throw new Error(`atomic publication staging directory is missing: ${stagingDir}`)
+  }
+  if (!directoryIsValid(validateDestination, stagingDir)) {
+    rmSync(stagingDir, { recursive: true, force: true })
+    throw new Error(`atomic publication staging directory is incomplete: ${stagingDir}`)
+  }
 }
 
 function acquirePublicationLock({
@@ -692,37 +702,40 @@ export function restoreRuntimeDependencies({
   mkdirSync(path.dirname(runtimeCacheDir), { recursive: true })
   const stagingDir = siblingWorkPath(runtimeCacheDir, "stage")
   try {
-    mkdirSync(stagingDir, { recursive: true })
-    extractRuntimeArchive({
-      archivePath: packPaths.archivePath,
-      destinationDir: stagingDir,
-    })
-    writeFileSync(
-      path.join(stagingDir, cacheMarkerFile),
-      JSON.stringify({
-        schema_version: 1,
-        archive_sha256: archiveSha,
-        target,
-        plugin: {
-          name: inspection.manifest.plugin.name,
-          version: inspection.manifest.plugin.version,
-        },
-      }, null, 2),
-      "utf8",
-    )
-    writeFileSync(
-      path.join(stagingDir, ".complete.json"),
-      `${JSON.stringify({
-        schema_version: 1,
-        kind: "runtime-cache",
-        target,
-        prod_dependency_lock_hash: inspection.manifest.package_lock.prod_dependency_lock_hash,
-        archive_sha256: archiveSha,
-      }, null, 2)}\n`,
-      "utf8",
-    )
+    const build = () => {
+      mkdirSync(stagingDir, { recursive: true })
+      extractRuntimeArchive({
+        archivePath: packPaths.archivePath,
+        destinationDir: stagingDir,
+      })
+      writeFileSync(
+        path.join(stagingDir, cacheMarkerFile),
+        JSON.stringify({
+          schema_version: 1,
+          archive_sha256: archiveSha,
+          target,
+          plugin: {
+            name: inspection.manifest.plugin.name,
+            version: inspection.manifest.plugin.version,
+          },
+        }, null, 2),
+        "utf8",
+      )
+      writeFileSync(
+        path.join(stagingDir, ".complete.json"),
+        `${JSON.stringify({
+          schema_version: 1,
+          kind: "runtime-cache",
+          target,
+          prod_dependency_lock_hash: inspection.manifest.package_lock.prod_dependency_lock_hash,
+          archive_sha256: archiveSha,
+        }, null, 2)}\n`,
+        "utf8",
+      )
+    }
     const publication = publishDirectory({
       stagingDir,
+      build,
       destinationDir: runtimeCacheDir,
       validateDestination: (candidate) => runtimeCacheIsCurrent({
         runtimeCacheDir: candidate,
@@ -986,26 +999,29 @@ export function syncSourceMirror({
   }
   const stagingPath = siblingWorkPath(mirrorPath, "stage")
   try {
-    mkdirSync(stagingPath, { recursive: true })
-    for (const entry of ["index.js", "package.json", "package-lock.json", "config", "scripts", "src"]) {
-      if (!existsSync(path.join(mcpRoot, entry))) continue
-      cpSync(path.join(mcpRoot, entry), path.join(stagingPath, entry), {
-        recursive: true,
-        filter: (source) => !source.split(path.sep).includes("node_modules"),
-      })
+    const build = () => {
+      mkdirSync(stagingPath, { recursive: true })
+      for (const entry of ["index.js", "package.json", "package-lock.json", "config", "scripts", "src"]) {
+        if (!existsSync(path.join(mcpRoot, entry))) continue
+        cpSync(path.join(mcpRoot, entry), path.join(stagingPath, entry), {
+          recursive: true,
+          filter: (source) => !source.split(path.sep).includes("node_modules"),
+        })
+      }
+      writeFileSync(
+        path.join(stagingPath, ".complete.json"),
+        `${JSON.stringify({
+          schema_version: 1,
+          kind: "source-mirror",
+          source_hash: sourceHash,
+          source_files: sourceFilesForHash(mcpRoot),
+        }, null, 2)}\n`,
+        "utf8",
+      )
     }
-    writeFileSync(
-      path.join(stagingPath, ".complete.json"),
-      `${JSON.stringify({
-        schema_version: 1,
-        kind: "source-mirror",
-        source_hash: sourceHash,
-        source_files: sourceFilesForHash(mcpRoot),
-      }, null, 2)}\n`,
-      "utf8",
-    )
     publishDirectory({
       stagingDir: stagingPath,
+      build,
       destinationDir: mirrorPath,
       validateDestination: (candidate) => sourceMirrorIsCurrent({
         mirrorPath: candidate,
