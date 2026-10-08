@@ -234,3 +234,42 @@ test("identity helpers keep their defaults and a fallback folder that cannot be 
   fs.mkdirSync = () => { throw Object.assign(new Error("read-only file system"), { code: "EROFS" }) }
   assert.throws(() => endpoints.deriveControllerEndpoint({ identity, platform: "linux", uid: 501, fs }), /read-only file system/u)
 })
+
+// A controller child that cannot bind the endpoint (EADDRINUSE) lost the election. Either the winner answers soon and the session joins it, or nobody answers and the attempt fails with a reason, within a bound. It never waits on without a deadline.
+test("a listen that fails with EADDRINUSE joins the winner when it answers, and fails fast with a reason when nobody does", { timeout: 60_000 }, async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-eaddrinuse-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const inUse = () => { throw Object.assign(new Error("listen EADDRINUSE: address already in use"), { code: "EADDRINUSE" }) }
+
+  const lonely = path.join(root, "nobody-answers")
+  mkdirSync(lonely)
+  const started = Date.now()
+  await assert.rejects(
+    connectOrStartController({ root: lonely, stateHome: path.join(root, "state-a"), ephemeral: true, startController: inUse }),
+    /readiness controller election did not converge/u,
+  )
+  assert.ok(Date.now() - started < 10_000, `the attempt gave up after ${Date.now() - started} ms`)
+
+  const joined = path.join(root, "winner-answers")
+  mkdirSync(joined)
+  const stateHome = path.join(root, "state-b")
+  let winner
+  const client = await connectOrStartController({
+    root: joined,
+    stateHome,
+    ephemeral: true,
+    startController: async (options) => {
+      // The winner binds a moment after this loser failed, as five servers racing do.
+      setTimeout(() => {
+        startReadinessController({ ...options, ephemeral: true }).then((controller) => { winner = controller })
+      }, 150)
+      return inUse()
+    },
+  })
+  try {
+    assert.equal((await client.status()).state, "CONTROL_READY")
+  } finally {
+    await client.close()
+    await winner?.close()
+  }
+})
