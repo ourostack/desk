@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { openDb, closeDb, indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
@@ -49,20 +50,18 @@ function populate(fixture) {
   }
 }
 
-// Windows refuses to delete a file another process still has open (EPERM, EBUSY or EACCES), and a SQLite handle the controller or the session closes just after
-// convergence reports done is such a file for a moment. So the delete is retried for a bounded time, then fails with its own error: a handle that is never released is a real fault.
+// Windows refuses to delete a file another process still has open (EPERM, EBUSY or EACCES). After convergence reports done, a handle (a SQLite handle, a scanner such as antivirus or
+// the search indexer, or a child reaped late) can still be open for a moment, so the delete is retried for a bounded time, then fails with its own error: a handle that is never released is a real fault.
 const HELD_OPEN = new Set(["EPERM", "EBUSY", "EACCES"])
-export function removeWithRetry(file, { remove = rmSync, wait = pause, attempts = 50, delayMs = 100 } = {}) {
-  return (async () => {
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        return remove(file, { force: true })
-      } catch (error) {
-        if (!HELD_OPEN.has(error.code) || attempt >= attempts) throw error
-        await wait(delayMs)
-      }
+export async function removeWithRetry(file, { remove = rmSync, wait = pause, attempts = 50, delayMs = 100 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return remove(file, { force: true })
+    } catch (error) {
+      if (!HELD_OPEN.has(error.code) || attempt >= attempts) throw error
+      await wait(delayMs)
     }
-  })()
+  }
 }
 
 async function removeDerivedIndex(fixture) {
@@ -85,6 +84,17 @@ test("removing a file another process holds open is retried a bounded number of 
   await assert.rejects(() => removeWithRetry("index", { remove: () => { tries += 1; throw held("EIO") }, wait: async () => {} }), { code: "EIO" })
   assert.equal(tries, 1, "an error that is not a hold is not retried")
   assert.equal(await removeWithRetry("index", { remove: () => "gone", wait: async () => {} }), "gone")
+  // The default path, with nothing injected: a real file is deleted, and a file that is already missing is not an error.
+  const folder = mkdtempSync(path.join(tmpdir(), "desk-remove-retry-"))
+  try {
+    const file = path.join(folder, "desk-index.sqlite")
+    writeFileSync(file, "x")
+    await removeWithRetry(file)
+    assert.equal(existsSync(file), false)
+    await removeWithRetry(file)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
 })
 
 async function assertConnected(sessions) {
