@@ -367,6 +367,16 @@ test("a close that fails is reported on stderr and never throws", async () => {
   assert.match(lines.join(""), /could not close the Google Chrome window 4200: not authorised/u)
 })
 
+test("an osascript failure that is not an Error object is still reported by its text", async () => {
+  const { own, lines } = windowsFor([], { osascript: async (script) => { throw script.includes("make new window") ? "plain text refusal" : "second refusal" } })
+  assert.match((await own.ensure()).payload.summary, /plain text refusal/u)
+  const closer = windowsFor([], { osascript: async (script) => { if (script.includes("make new window")) return "9"; throw "second refusal" } })
+  await closer.own.ensure()
+  await closer.own.release()
+  assert.match(closer.lines.join(""), /second refusal/u)
+  assert.deepEqual(lines, [])
+})
+
 test("off macOS there is no window to open, and the launcher says so once", async () => {
   const events = []
   const { own, lines } = windowsFor(events, { platform: "linux" })

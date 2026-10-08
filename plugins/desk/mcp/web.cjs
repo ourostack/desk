@@ -715,9 +715,7 @@ function start(o, io) {
     });
   }
   // In the real profile the agent works in its own window (web-real-profile.cjs): it opens before the first call goes to the browser, closes after `browser_close` and closes however this process ends, always by the id it recorded.
-  var cleanup = function () {
-    return Promise.resolve();
-  };
+  var cleanup;
   var gate = {};
   var finish = { exit: io.exit, kill: kill };
   if (real) {
