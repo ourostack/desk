@@ -62,6 +62,8 @@ test("runtime: a publication-lock timeout names the lock and the process holding
   const input = { mcpRoot: "/plugin", env: {}, runtimeCacheDir: null, sourceIdentity: null, inspect: false }
   assert.deepEqual(prepareRuntimeInputs({ ...input, prepare: locked(lockDir) }).restoreError.lock, { dir: lockDir, pid: 4321 })
   assert.deepEqual(prepareRuntimeInputs({ ...input, prepare: locked(path.join(base, "gone.publish-lock")) }).restoreError.lock, { dir: path.join(base, "gone.publish-lock"), pid: null })
+  const detailed = () => { throw new Error(`atomic publication lock timed out: ${lockDir} (held by pid 4321, which is still running, so its build is taking longer than the wait; waited 30000 ms)`) }
+  assert.deepEqual(prepareRuntimeInputs({ ...input, prepare: detailed }).restoreError.lock, { dir: lockDir, pid: 4321 }, "the holder and wait detail after the lock name is not part of the lock name")
   writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({}))
   assert.equal(prepareRuntimeInputs({ ...input, prepare: locked(lockDir) }).restoreError.lock.pid, null)
   assert.equal(prepareRuntimeInputs({ ...input, prepare: () => { throw "a string" } }).restoreError.message, "a string")

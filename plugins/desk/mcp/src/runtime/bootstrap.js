@@ -559,10 +559,27 @@ function acquirePublicationLock({
     }
     const elapsedMs = now() - startedAt
     if (elapsedMs >= lockTimeoutMs) {
-      throw new Error(`atomic publication lock timed out: ${lockDir}`)
+      throw new Error(publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }))
     }
     sleep(Math.min(publicationLockPollMs, lockTimeoutMs - elapsedMs))
   }
+}
+
+// The first part is the stable text the admission worker parses to name the lock; what follows says who holds it and for how long this caller waited. A holder that is still running means the build under the lock is slower than the wait, not that the lock was abandoned.
+function publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }) {
+  let pid = null
+  try {
+    pid = readJson(path.join(lockDir, "owner.json")).pid
+  } catch {
+    // No readable owner record: the lock is named without a holder.
+  }
+  const waited = `waited ${elapsedMs} ms`
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return `atomic publication lock timed out: ${lockDir} (no readable owner record; ${waited})`
+  }
+  return processAlive(pid)
+    ? `atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which is still running, so its build is taking longer than the wait; ${waited})`
+    : `atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which has exited; ${waited})`
 }
 
 function reclaimAbandonedPublicationLock({

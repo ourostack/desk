@@ -19,7 +19,7 @@ import {
   resolveStartupStateBranch,
 } from "./startup-resolve.js"
 
-const LOCK_TIMEOUT = /^atomic publication lock timed out: (.+)$/u
+const LOCK_TIMEOUT = /^atomic publication lock timed out: (.+?)(?: \(.*)?$/u
 
 /** The root and activation inputs of one admission attempt. Failures are returned, not thrown: `rootError` stops admission, `activationError` stops it after the root. */
 export function resolveAdmissionInputs({ args, env, cwd, homeDir, injectedReadinessPolicy }) {

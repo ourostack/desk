@@ -1882,7 +1882,7 @@ test("publication lock reclaims dead and malformed owners but times out behind a
         lockTimeoutMs: 1,
         processAlive: () => true,
       }),
-      /publication lock timed out/u,
+      new RegExp(`publication lock timed out: .*publish-lock \\(held by pid ${process.pid}, which is still running, so its build is taking longer than the wait; waited \\d+ ms\\)`, "u"),
     )
     assert.equal(existsSync(liveStaging), false)
 
@@ -1904,9 +1904,23 @@ test("publication lock reclaims dead and malformed owners but times out behind a
         lockTimeoutMs: 1,
         processAlive: () => false,
       }),
-      /publication lock timed out/u,
+      new RegExp(`publication lock timed out: .*publish-lock \\(held by pid 999999, which has exited; waited \\d+ ms\\)`, "u"),
     )
     assert.equal(existsSync(reclaimStaging), false)
+
+    const bareDestination = path.join(root, "bare-runtime-cache")
+    mkdirSync(`${bareDestination}.publish-lock`, { recursive: true })
+    assert.throws(
+      () => publishDirectoryAtomically({
+        destinationDir: bareDestination,
+        stagingDir: `${bareDestination}.stage`,
+        validateDestination: () => false,
+        build: () => {},
+        lockTimeoutMs: 1,
+        processAlive: () => true,
+      }),
+      /publication lock timed out: .*publish-lock \(no readable owner record; waited \d+ ms\)/u,
+    )
 
     for (const failureSurface of ["owner", "acquire", "reclaim", "reclaim-nonempty"]) {
       const failureDestination = path.join(root, `${failureSurface}-failure-runtime-cache`)
@@ -2370,6 +2384,8 @@ test("publishers in separate processes build the shared tree exactly once", asyn
     const { publishDirectoryAtomically } = await import(${JSON.stringify(bootstrapUrl)})
     const destinationDir = ${JSON.stringify(destinationDir)}
     const stagingDir = destinationDir + ".stage-" + process.pid
+    process.stdout.write("ready\\n")
+    while (!existsSync(${JSON.stringify(path.join(root, "go"))})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
     const result = publishDirectoryAtomically({
       destinationDir,
       stagingDir,
@@ -2386,19 +2402,34 @@ test("publishers in separate processes build the shared tree exactly once", asyn
   const env = { ...process.env }
   delete env.NODE_OPTIONS
   try {
-    const runs = await Promise.all(Array.from({ length: 4 }, () => new Promise((resolve, reject) => {
+    // All four processes are running and waiting before any of them publishes: the start file releases them together, so they really contend for the lock.
+    let readyCount = 0
+    let release
+    const allReady = new Promise((resolve) => { release = resolve })
+    const finished = Array.from({ length: 4 }, () => new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env, stdio: ["ignore", "pipe", "pipe"] })
       let out = ""
       let err = ""
-      child.stdout.on("data", (chunk) => { out += chunk })
+      let counted = false
+      child.stdout.on("data", (chunk) => {
+        out += chunk
+        if (!counted && out.includes("ready\n")) {
+          counted = true
+          readyCount += 1
+          if (readyCount === 4) release()
+        }
+      })
       child.stderr.on("data", (chunk) => { err += chunk })
-      child.on("close", (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(`publisher exited ${code}: ${err}`))))
-    })))
+      child.on("close", (code) => (code === 0 ? resolve(JSON.parse(out.split("\n").at(-1))) : reject(new Error(`publisher exited ${code}: ${err}`))))
+    }))
+    await allReady
+    writeFileSync(path.join(root, "go"), "go\n")
+    const runs = await Promise.all(finished)
     assert.equal(readFileSync(buildLog, "utf8").trim().split("\n").length, 1, "one process built the tree")
     assert.equal(runs.filter((run) => run.published).length, 1)
     assert.equal(runs.filter((run) => run.reused).length, 3)
     assert.equal(existsSync(path.join(destinationDir, "complete")), true)
-    assert.deepEqual(readdirSync(root).sort(), ["builds.log", "cache"])
+    assert.deepEqual(readdirSync(root).sort(), ["builds.log", "cache", "go"])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
