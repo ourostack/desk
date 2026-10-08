@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.235 — 2026-10-08
+
+When several Desk servers start at once on a root whose runtime cache is new, one of them now builds the runtime cache and the source mirror, and the others wait for it and reuse the result. Before, each server unpacked the whole runtime archive and copied the source into its own staging folder first, and only then took the publication lock to learn that another server had already won, so five servers did the same work five times at once. In our Windows CI traces of the five-server start-up test, that work made loading the runtime take a median of about 9 seconds per server and up to about 18 seconds, and a round that ran past the test's 30 second admission window left sessions stuck in "admitting". The staging folder is now filled only after the server holds the publication lock and finds the destination still missing; a failed or incomplete build still leaves nothing behind.
+
+A publication-lock timeout now also says how long the caller waited and, when the lock has an owner record, which process holds it and whether it is still running (its build is then slower than the wait) or has exited. A timeout is rare now that only one server builds.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.234 — 2026-10-08
+
+Desk's Windows process-start read now finds Windows PowerShell from `SystemRoot` (then `windir`, then `C:\Windows`) instead of searching `PATH`. A controller process started with a trimmed environment, such as a standard user's, has no System32 on its `PATH`, so the read failed with ENOENT and Desk fell back to the process id alone when it checked whether a recorded controller owner was still the same process. The system PowerShell is now always the one used, whatever the environment holds.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.233 — 2026-10-08
 
 The factory build now names one more cause of idle time, `other_task`: a session credited to the task was working on another task's part of it. A session's part of each task is its binding to that task (its workers and the controller's segments), so `other_task` is the session's active time that another task's binding holds and this task's does not. It names no task. It appears wherever idle time is split by cause: each burst's and the task's `idle_by_waited_on_ms` and `waiting_by_waited_on_ms`, each gap's `waited_on`, the stack-up's `idle` row, `waiting:other_task` in `rollups/causes.json`, and the `waited_on` and `idle_waited_on` lists. Active time that no binding holds is not attributed: it stays `unknown`, and the `other_task` and `unknown` figures that hold some of it are partial with the new reason `session_work_unattributed`.

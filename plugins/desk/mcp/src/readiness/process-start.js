@@ -12,6 +12,7 @@
 
 import { execFile } from "node:child_process"
 import { readFile } from "node:fs/promises"
+import { win32 as winPath } from "node:path"
 
 const EXEC_TIMEOUT_MS = { darwin: 5_000, win32: 15_000 }
 
@@ -52,9 +53,19 @@ async function darwinStart(pid, { run = runForText } = {}) {
   return Number.isFinite(when) ? `darwin:${new Date(when).toISOString()}` : null
 }
 
+/** The operating system's own Windows PowerShell, from SystemRoot (any letter case, then windir, then C:\Windows), never from PATH: a child with a trimmed environment has no System32 on its PATH. */
+export function windowsPowerShellPath(env = process.env) {
+  const value = (name) => {
+    const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name && typeof env[candidate] === "string" && env[candidate].trim() !== "")
+    return key === undefined ? undefined : env[key].trim()
+  }
+  const root = [value("systemroot"), value("windir")].find((candidate) => candidate !== undefined && winPath.isAbsolute(candidate)) ?? "C:\\Windows"
+  return winPath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
 async function win32Start(pid, { run = runForText, env = process.env } = {}) {
   const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { $p.CreationDate.ToUniversalTime().ToString("o") }`
-  const text = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+  const text = await run(windowsPowerShellPath(env), ["-NoProfile", "-NonInteractive", "-Command", script], {
     timeout: EXEC_TIMEOUT_MS.win32,
     env,
   })
