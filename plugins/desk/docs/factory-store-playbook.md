@@ -893,6 +893,8 @@ The intake validator accepts `desk.factory.published/4` beside `/1`, `/2` and `/
 - `refs.prs[].created` is `true` when the session's own call created the pull request and `false` when the session only mentioned it. There is no "not known" value. A file marked `{job_offsets, desk_public}` never says `true` (`inconsistent`), because GitHub's public creation time of that pull request would date the session.
 - `intervals[].stop`, on `human_wait` intervals only (any other interval kind carrying it is `unknown_key`), records how the agent's turn ended before the wait: `end` is one of `end_turn`, `max_tokens`, `rate_limit`, `api_error`, `refusal`, `interrupted`, `ask_question`, `ask_plan` or `not_recorded`, and `asks` (the final reply ended in a question mark) and `pending_agents` (the agent's own background agents were still running) are `true`, `false` or `null`. It holds no text and no tool name.
 
+Desk's publishing transform writes `/4` for every file, so the first flush after the change sends every session in a machine's outbox once more, as a modification of the stored file. A session derived before the derivers recorded these facts publishes each wait's `stop` as `not_recorded` with both flags `null` and each PR as `created: false`; its finish day needs only the card times the local file already holds. How each host fills the keys is in [local capture](factory-local-capture.md), "Why the agent stopped, created pull requests and finish days".
+
 ## 9. Read-back checklist
 
 A request that was accepted is not proof. Read each setting back from GitHub and keep the output:

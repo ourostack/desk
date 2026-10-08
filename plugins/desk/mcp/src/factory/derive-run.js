@@ -35,9 +35,11 @@ async function sourceStamp(file) {
 /**
  * Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. 6: a Git rename
  * between two different cards no longer joins them, a focus on a merged task follows the merge, and `segments_capped_ms` also counts time the
- * cap hands to another task, so an older receipt's credit, and its `segments_capped_ms: 0`, is not this binder's.
+ * cap hands to another task, so an older receipt's credit, and its `segments_capped_ms: 0`, is not this binder's. 7: the derivers record
+ * each human wait's stop facts, the ask-tool waits and whether the session created each PR (published facts /4), so every ended session
+ * still on disk is derived once more to carry them.
  */
-export const BINDING_VERSION = 6
+export const BINDING_VERSION = 7
 
 // The Desk task tool calls that can change a card's outcome record: the session's facts carry the record of every task one of them named.
 const LIFECYCLE_CALL = /task_(?:signoff|update|create|archive)$/u

@@ -137,9 +137,6 @@ export const PUBLISHED_SCHEMA_V3 = "desk.factory.published/3"
 /** Every published schema value a reader accepts: the legacy `/1`, `/2` and `/3`, and the current one. */
 export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA_V3, PUBLISHED_SCHEMA])
 
-/** The schema a file with no `/3`-only content is still published as, so an unchanged session keeps its bytes. */
-export const PUBLISHED_SCHEMA_V2 = PUBLISHED_SCHEMAS[1]
-
 /** The earliest finish day a published job may carry. */
 const FINISHED_ON_MIN = "2025-01-01"
 

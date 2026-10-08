@@ -186,7 +186,7 @@ test("binding events: file write, shell commit, spawn task and the PR worker", a
   assert.deepEqual(events.deskToolCalls, [])
   assert.deepEqual(events.commitShas, [])
   assert.deepEqual(events.nativeCommitShas, [])
-  assert.deepEqual(facts.refs.prs, [{ repo: "example-org/example-repo", number: 42, agent: 0, at_ms: 9000 }])
+  assert.deepEqual(facts.refs.prs, [{ repo: "example-org/example-repo", number: 42, agent: 0, at_ms: 9000, created: true }])
   assert.ok(PR_URL.includes("/pull/42"))
 })
 
@@ -511,7 +511,7 @@ test("shell outcomes, retries, commits, MCP names, patches and PRs", () => withH
     { at: at(35), name: "mcp__desk__task_update", track: "trk", slug: "two", person: null, status: null, statusOnly: false, agent: 0, ok: false },
     { at: at(37), name: "mcp__desk__task_archive", track: "trk", slug: "three", person: null, status: null, statusOnly: false, agent: 0, ok: true },
   ])
-  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 7, agent: 0, at_ms: 52000 }])
+  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 7, agent: 0, at_ms: 52000, created: true }])
   assert.equal(facts.counts.tool_calls.desk, 4)
   assert.equal(facts.counts.tool_calls.mcp, 2)
   assert.ok(unavailable(facts, "tool_durations", "log_truncated"), "the call with no id can never finish")
@@ -682,7 +682,7 @@ test("a command still running is credited nothing, and a PR needs a recognised e
   assert.deepEqual(events.shellGitCommits, [])
   assert.deepEqual(events.fileWrites, [])
   assert.deepEqual(events.deskToolCalls.map((entry) => entry.ok), [false])
-  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 3, agent: 0, at_ms: 10000 }], "an unrecognised layout is not a creation; exit code 0 is")
+  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 3, agent: 0, at_ms: 10000, created: true }], "an unrecognised layout is not a creation; exit code 0 is")
   assert.equal(facts.counts.tool_calls.shell, 5, "the calls themselves still count")
 }))
 

@@ -208,15 +208,15 @@ test("hostile focus calls: out of order, before the start and past the end, all 
 test("dedupePrRefs times each PR from the session's start, keeps the earliest of one worker's refs, and drops a time outside the session", () => {
   const session = { startedAt: iso(0), derivedThrough: iso(100) }
   const ref = (agent, created, seconds) => ({ repo: "o/r", number: 1, agent, created, ...(seconds === undefined ? {} : { at: iso(seconds) }) })
-  assert.deepEqual(dedupePrRefs([ref(0, true, 40), ref(0, true, 20)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 20000 }])
-  assert.deepEqual(dedupePrRefs([ref(0, true, 20), ref(0, true, 40)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 20000 }])
-  assert.deepEqual(dedupePrRefs([ref(0, true), ref(0, true, 30)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 30000 }])
-  assert.deepEqual(dedupePrRefs([ref(0, true, 30), ref(0, true)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 30000 }])
+  assert.deepEqual(dedupePrRefs([ref(0, true, 40), ref(0, true, 20)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 20000, created: true }])
+  assert.deepEqual(dedupePrRefs([ref(0, true, 20), ref(0, true, 40)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 20000, created: true }])
+  assert.deepEqual(dedupePrRefs([ref(0, true), ref(0, true, 30)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 30000, created: true }])
+  assert.deepEqual(dedupePrRefs([ref(0, true, 30), ref(0, true)], session), [{ repo: "o/r", number: 1, agent: 0, at_ms: 30000, created: true }])
   // The creating worker still outranks an earlier sighting.
-  assert.deepEqual(dedupePrRefs([ref(0, false, 5), ref(2, true, 50)], session), [{ repo: "o/r", number: 1, agent: 2, at_ms: 50000 }])
+  assert.deepEqual(dedupePrRefs([ref(0, false, 5), ref(2, true, 50)], session), [{ repo: "o/r", number: 1, agent: 2, at_ms: 50000, created: true }])
   // Before the start, past the end, unreadable, or no session: no time.
   for (const [refs, given] of [[[ref(0, true, -1)], session], [[ref(0, true, 101)], session], [[{ ...ref(0, true), at: "nope" }], session], [[ref(0, true, 10)], undefined], [[ref(0, true, 10)], { startedAt: iso(0) }]]) {
-    assert.deepEqual(dedupePrRefs(refs, given), [{ repo: "o/r", number: 1, agent: 0 }])
+    assert.deepEqual(dedupePrRefs(refs, given), [{ repo: "o/r", number: 1, agent: 0, created: true }])
   }
   // applyLimits keeps the time.
   assert.deepEqual(applyLimits({ agents: [{ n: 0, parent: null, model: "m" }], intervals: [], models: [], prs: [{ repo: "o/r", number: 1, agent: 0, at_ms: 5 }] }, []).prs, [{ repo: "o/r", number: 1, agent: 0, at_ms: 5 }])
@@ -348,7 +348,7 @@ test("a private desk publishes segments and its controller PRs' times; a public 
   assert.deepEqual(published.jobs.map((entry) => entry.segments), [local.jobs[0].segments, local.jobs[1].segments])
   assert.notEqual(published.jobs[0].segments[0], local.jobs[0].segments[0], "copied, not shared")
   // Only a controller PR keeps its time: no other worker's time decides a job.
-  assert.deepEqual(published.refs.prs, [{ repo: "o/r", number: 1, agent: 0, at_ms: 45000 }, { repo: "o/r", number: 2, agent: 1 }, { repo: "o/r", number: 3, agent: 0 }])
+  assert.deepEqual(published.refs.prs, [{ repo: "o/r", number: 1, agent: 0, at_ms: 45000, created: false }, { repo: "o/r", number: 2, agent: 1, created: false }, { repo: "o/r", number: 3, agent: 0, created: false }])
   assert.equal(validatePublishedBytes(serializePublished(published)).ok, true)
 
   const open = toPublished(local, { visibility: () => "public", deskVisibility: "public", storeVisibility: "public", machineSecret: new Uint8Array(32).fill(7) }).published
@@ -358,22 +358,22 @@ test("a private desk publishes segments and its controller PRs' times; a public 
 
   // A private session with no segments publishes no PR time either.
   const unsplit = localFacts({ jobs: [job("a")], prs: [{ repo: "o/r", number: 1, agent: 0, at_ms: 45000 }] })
-  assert.deepEqual(toPublished(unsplit, { visibility: () => "public", deskVisibility: "private", storeVisibility: "private" }).published.refs.prs, [{ repo: "o/r", number: 1, agent: 0 }])
+  assert.deepEqual(toPublished(unsplit, { visibility: () => "public", deskVisibility: "private", storeVisibility: "private" }).published.refs.prs, [{ repo: "o/r", number: 1, agent: 0, created: false }])
 })
 
-test("a commit's time publishes as a controller PR's does, and only a file that carries one or the outcomes flag is /3", () => {
+test("a commit's time publishes as a controller PR's does, on a private desk with segments only", () => {
   const local = localFacts({ jobs: [job("a", { segments: [span(0, 40000)] }), job("b", { segments: [span(40000, 100000)] })] })
   local.refs.commits = [{ repo: "o/r", sha: "a".repeat(40), at_ms: 45000 }, { repo: "o/r", sha: "b".repeat(40) }, { repo: null, sha: "c".repeat(40), at_ms: 1 }]
   assert.deepEqual(validateLocalFacts(local), { ok: true, errors: [] })
   const options = { visibility: () => "public", deskVisibility: "private", storeVisibility: "private" }
   const { published } = toPublished(local, options)
-  assert.equal(published.schema, "desk.factory.published/3")
+  assert.equal(published.schema, "desk.factory.published/4")
   assert.deepEqual(published.refs.commits, [{ repo: "o/r", sha: "a".repeat(40), at_ms: 45000 }, { repo: "o/r", sha: "b".repeat(40) }])
   assert.equal(validatePublishedBytes(serializePublished(published)).ok, true)
 
-  // A public desk publishes no commit time, and with nothing else only /3 allows the file stays /2.
+  // A public desk publishes no commit time.
   const open = toPublished(local, { ...options, deskVisibility: "public", machineSecret: new Uint8Array(32).fill(7) }).published
-  assert.equal(open.schema, "desk.factory.published/2")
+  assert.equal(open.schema, "desk.factory.published/4")
   assert.ok(open.refs.commits.every((commit) => !Object.hasOwn(commit, "at_ms")))
   assert.equal(validatePublishedBytes(serializePublished(open)).ok, true)
 
@@ -381,13 +381,13 @@ test("a commit's time publishes as a controller PR's does, and only a file that 
   const unsplit = localFacts({ jobs: [job("a")] })
   unsplit.refs.commits = [{ repo: "o/r", sha: "a".repeat(40), at_ms: 45000 }]
   const plain = toPublished(unsplit, options).published
-  assert.equal(plain.schema, "desk.factory.published/2")
+  assert.equal(plain.schema, "desk.factory.published/4")
   assert.deepEqual(plain.refs.commits, [{ repo: "o/r", sha: "a".repeat(40) }])
 
-  // The outcomes flag alone makes the file /3, so a store never sees it in a /2 file.
+  // The outcomes flag is kept; every file is /4, which allows it.
   unsplit.unavailable = [...unsplit.unavailable, { field: "outcomes", reason: "capped" }]
   const cut = toPublished(unsplit, options).published
-  assert.equal(cut.schema, "desk.factory.published/3")
+  assert.equal(cut.schema, "desk.factory.published/4")
   assert.ok(cut.unavailable.some((entry) => entry.field === "outcomes" && entry.reason === "capped"))
   assert.equal(validatePublishedBytes(serializePublished(cut)).ok, true)
 })
@@ -568,7 +568,7 @@ test("a Claude controller working three jobs: derive, bind, publish and build sp
   try {
     writeSession(dir)
     const { facts, events } = await deriveClaudeSession({ transcriptPath: path.join(dir, `${SID}.jsonl`), plugins: [], endReason: "prompt_input_exit" })
-    assert.deepEqual(facts.refs.prs, [{ repo: "o/r", number: 20, agent: 0, at_ms: 4 * 60000 }, { repo: "o/r", number: 21, agent: 0, at_ms: 24 * 60000 }, { repo: "o/r", number: 22, agent: 1, at_ms: 9 * 60000 }])
+    assert.deepEqual(facts.refs.prs, [{ repo: "o/r", number: 20, agent: 0, at_ms: 4 * 60000, created: true }, { repo: "o/r", number: 21, agent: 0, at_ms: 24 * 60000, created: true }, { repo: "o/r", number: 22, agent: 1, at_ms: 9 * 60000, created: true }])
     facts.jobs = bindSession({
       events, agents: facts.agents, session: facts.session, deskRoot: "/desk", deskRemote: REMOTE, personPrefix: "",
       readTask: () => ({ status: "processing", created_at: at(-60), updated_at: at(0) }),

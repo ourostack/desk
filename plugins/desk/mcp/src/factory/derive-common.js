@@ -11,7 +11,9 @@ export function comparePrRefs(a, b) {
   return a.repo < b.repo ? -1 : 1
 }
 
-// Claude Code writes a `pr-link` line into the root transcript for every PR of the session, including the ones a subagent created. A `gitOperation.pr` with action `created` is the creating call; any other action (merged, ready, closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of the same kind the lowest worker wins.
+// Claude Code writes a `pr-link` line into the root transcript for every PR of the session, including the ones a subagent created and ones the session only looked at: on this machine's transcripts (2026-10-08), 62 of the 131 PRs a session knew only from a `pr-link` were first linked more than two minutes after GitHub's creation time, 4 of them created before the session began. So a link alone never makes `created` true. A `gitOperation.pr` with action `created` is the creating call; any other action (merged, ready, closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of the same kind the lowest worker wins.
+//
+// Each kept ref carries `created`, a plain boolean: `true` only when a creating ref was seen (`false` for a ref with no `created` key).
 //
 // A ref's `at` (the tool result's time) becomes `at_ms`, milliseconds from `session.startedAt`, kept only when it falls inside the session (`startedAt` to `derivedThrough`); among refs of the same kind and worker the earliest wins. Without a session, or a time, the ref has no `at_ms`.
 export function dedupePrRefs(refs, session = {}) {
@@ -28,7 +30,7 @@ export function dedupePrRefs(refs, session = {}) {
     const timed = { ...ref, at_ms: atMs(ref) }
     if (held === undefined || outranks(timed, held)) seen.set(key, timed)
   }
-  return [...seen.values()].map(({ repo, number, agent, at_ms: at }) => ({ repo, number, agent, ...(at === null ? {} : { at_ms: at }) })).sort(comparePrRefs)
+  return [...seen.values()].map(({ repo, number, agent, at_ms: at, created }) => ({ repo, number, agent, ...(at === null ? {} : { at_ms: at }), created: created === true })).sort(comparePrRefs)
 }
 
 // A creating ref beats a sighting, then the lower worker, then a known time beats none and the earlier time wins.
