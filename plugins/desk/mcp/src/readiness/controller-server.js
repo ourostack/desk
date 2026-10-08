@@ -21,6 +21,7 @@ export async function startReadinessController({
   ephemeral = false,
   exitRelease = defaultExitRelease,
   ownProcessStart = readOwnProcessStart,
+  bindBeforeProcessStart = process.platform === "win32",
   supervisor,
 } = {}) {
   validateControllerEndpoint(endpoint)
@@ -34,8 +35,12 @@ export async function startReadinessController({
     ...(supervisor ? { kind: "controller_child", parent_pid: process.ppid } : {}),
   }
   // The owner's start time makes the record name this process, not just its PID, which a later process may reuse (owner-record.js).
-  const processStart = await ownProcessStart()
-  if (processStart !== null) owner.process_start = processStart
+  // On Windows the read runs PowerShell (Get-CimInstance), which takes seconds on a loaded machine, and five servers racing for one root each start a controller. The pipe is therefore bound first: a controller that loses the election fails at once, and only the winner pays for the read. A named pipe leaves no file behind for a concurrent session to mistake for an abandoned one. Elsewhere the read is cheap and stays before the bind, so a socket file is never visible without its owner record for longer than before.
+  const readProcessStart = async () => {
+    const processStart = await ownProcessStart()
+    if (processStart !== null) owner.process_start = processStart
+  }
+  if (!bindBeforeProcessStart) await readProcessStart()
   let state = "CONTROL_READY"
   let convergence = null
   let convergenceResult = null
@@ -269,6 +274,14 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
+  if (bindBeforeProcessStart) {
+    try {
+      await readProcessStart()
+    } catch (error) {
+      await closeServer(server, stateDir, owner).catch(() => {})
+      throw error
+    }
+  }
   // listen() drops its one-shot error listener once bound; without a lasting one, a later server error would be an unhandled 'error' event that ends the whole Desk process.
   server.on("error", (error) => {
     process.stderr.write(`[desk-mcp] readiness controller server error: ${error?.message ?? String(error)}\n`)
