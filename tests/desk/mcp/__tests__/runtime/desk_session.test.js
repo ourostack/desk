@@ -758,6 +758,30 @@ test("desk_status: a call that arrives while a computation runs waits its own bu
   assert.equal(typeof joined[0].status_detail_from, "string")
 })
 
+test("desk_status stamps a detail it computed with the admission state it was computed under, never a later ready", async (t) => {
+  let releaseController
+  const controllerGate = new Promise((resolve) => { releaseController = resolve })
+  const runtime = fakeRuntime({ connectOrStartController: async () => { await controllerGate; return { accepted: true, async status() { return { state: "READY" } } } } })
+  const { session } = await makeSession(t, { runtime })
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  // The runtime reads the controller as converging, then readiness arrives before the answer does: the detail is older than the admission state at the end of the call.
+  runtime.callTool = async () => {
+    const detail = JSON.stringify({ status: "ok", readiness: { detail: { controller_state: "LEXICAL_CONVERGING" } } })
+    releaseController()
+    await waitUntil(() => session.admission.snapshot().state === "ready")
+    return { content: [{ type: "text", text: detail }] }
+  }
+  const first = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(first.status_detail, undefined, "the detail was computed by this call, so it is not marked cached")
+  assert.equal(first.readiness.detail.controller_state, "LEXICAL_CONVERGING")
+  assert.notEqual(first.state, "ready", "a LEXICAL_CONVERGING detail is never reported next to a ready state")
+  runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", readiness: { detail: { controller_state: "READY" } } }) }] })
+  const next = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(next.state, "ready")
+  assert.equal(next.readiness.detail.controller_state, "READY")
+})
+
 test("desk_status abandons a stuck computation after its age limit, and the abandoned one never replaces newer detail", async (t) => {
   const runtime = fakeRuntime()
   const { session } = await makeSession(t, { runtime, statusRunLimitMs: 300 })

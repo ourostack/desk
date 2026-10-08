@@ -88,6 +88,7 @@ import {
   protectLeafFile,
   realpathExistingPrefix,
 } from "./os-protect.js"
+import { EXACT, lstatExactIfPresent, sameFile } from "../util/file-identity.js"
 import { freshVisibility } from "./desk-visibility.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { DESK_VERSION, LABELS_SCHEMA, LABEL_CHECK_CODES, compareVersions, validateLabels } from "./label-schema.js"
@@ -568,31 +569,29 @@ export async function writeMarker(env, marker, { platform = process.platform, ru
 
 async function protectMarkerDirectory(root, { env, platform, runner }) {
   const dir = path.join(root, "markers")
-  const before = await lstatIfPresent(dir, NAMING)
+  const before = await lstatExactIfPresent(dir, NAMING)
   const batch = []
   await ensureDirChain(dir, root, platform, batch)
   if (platform === "win32") await protectWindowsPaths(batch, { env, runner, label: NAMING.label })
-  const identity = await fsp.lstat(dir)
-  if (before !== null && !sameInode(before, identity)) throw new Error("marker_changed")
+  const identity = await fsp.lstat(dir, EXACT)
+  if (before !== null && !sameFile(before, identity)) throw new Error("marker_changed")
   return { dir, identity }
 }
 
-const sameInode = (left, right) => left.dev === right.dev && left.ino === right.ino
-
 async function assertMarkerDirectory({ dir, identity }) {
-  const current = await fsp.lstat(dir)
-  if (!current.isDirectory() || !sameInode(identity, current) || current.mode !== identity.mode) throw new Error("marker_changed")
+  const current = await fsp.lstat(dir, EXACT)
+  if (!current.isDirectory() || !sameFile(identity, current) || current.mode !== identity.mode) throw new Error("marker_changed")
   await assertNotGitCheckout(dir, NAMING)
 }
 
 async function assertMarkerLeaf(file, identity) {
-  const current = await fsp.lstat(file)
-  if (!current.isFile() || current.nlink !== 1 || !sameInode(identity, current) || current.size !== identity.size || current.mtimeMs !== identity.mtimeMs) throw new Error("marker_changed")
+  const current = await fsp.lstat(file, EXACT)
+  if (!current.isFile() || current.nlink !== 1n || !sameFile(identity, current) || current.size !== identity.size || current.mtimeNs !== identity.mtimeNs) throw new Error("marker_changed")
 }
 
 async function readMarkerAt(file, directory, { env, platform, runner }) {
   await assertMarkerDirectory(directory)
-  const identity = await fsp.lstat(file)
+  const identity = await fsp.lstat(file, EXACT)
   await assertMarkerDirectory(directory)
   const text = readSmallText(file)
   // Do not repair a leaf reached through a transient external parent. Validate the read first.
@@ -654,7 +653,7 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
   let heldPruned = 0
   for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
     const file = path.join(dir, name)
-    const before = await lstatIfPresent(file, NAMING)
+    const before = await lstatExactIfPresent(file, NAMING)
     let marker = null
     try {
       marker = await readMarkerAt(file, directory, options)
@@ -667,8 +666,8 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
     if (marker === null || age > (held ? HELD_MARKER_TTL_MS : MARKER_TTL_MS)) {
       // Recheck the directory and exact leaf before pruning; never follow a replacement.
       await assertMarkerDirectory(directory)
-      const current = await lstatIfPresent(file, NAMING)
-      if (before !== null && current !== null && current.isFile() && current.nlink === 1 && current.dev === before.dev && current.ino === before.ino) {
+      const current = await lstatExactIfPresent(file, NAMING)
+      if (before !== null && current !== null && current.isFile() && current.nlink === 1n && sameFile(current, before)) {
         const removed = await fsp.unlink(file).then(() => true, () => false)
         if (removed && held) heldPruned += 1
       }
@@ -1184,7 +1183,7 @@ async function createMachineSecret(root, file, env, platform, runner) {
 // same-shaped name, which could belong to a different, still-in-flight
 // creation — and remove it before treating a lingering `nlink !== 1` as a
 // real hard-link attack.
-async function cleanupOrphanedSecretLink(root, ino) {
+async function cleanupOrphanedSecretLink(root, secret) {
   let names
   try {
     names = await fsp.readdir(root)
@@ -1194,8 +1193,8 @@ async function cleanupOrphanedSecretLink(root, ino) {
   for (const name of names) {
     if (!name.startsWith(".tmp-machine-secret-")) continue
     const candidate = path.join(root, name)
-    const candidateStat = await lstatIfPresent(candidate, NAMING)
-    if (candidateStat !== null && candidateStat.ino === ino) await fsp.unlink(candidate).catch(() => {})
+    const candidateStat = await lstatExactIfPresent(candidate, NAMING)
+    if (candidateStat !== null && sameFile(candidateStat, secret)) await fsp.unlink(candidate).catch(() => {})
   }
 }
 
@@ -1209,12 +1208,12 @@ async function cleanupOrphanedSecretLink(root, ino) {
 async function protectSecretFile(root, file, platform, naming) {
   let stat
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    stat = await lstatIfPresent(file, naming)
-    if (stat === null || stat.isSymbolicLink() || !stat.isFile() || stat.nlink === 1) break
+    stat = await lstatExactIfPresent(file, naming)
+    if (stat === null || stat.isSymbolicLink() || !stat.isFile() || stat.nlink === 1n) break
     await sleep(5)
   }
-  if (stat !== null && stat.isFile() && !stat.isSymbolicLink() && stat.nlink !== 1) {
-    await cleanupOrphanedSecretLink(root, stat.ino)
+  if (stat !== null && stat.isFile() && !stat.isSymbolicLink() && stat.nlink !== 1n) {
+    await cleanupOrphanedSecretLink(root, stat)
   }
   await protectLeafFile(file, platform, naming)
 }

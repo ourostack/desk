@@ -598,6 +598,8 @@ export function createDeskSession(deps) {
     const snapshot = await admission.refresh({ waitMs: STATUS_WAIT_MS, joinMs: 0 })
     if (snapshot.state === "ready") backgroundControllerCheck()
     let payload = baseDiagnostic(snapshot)
+    // The admission state the payload is stamped with. A detail computed by this very call is read after `snapshot` was taken, so it can describe a controller that was still converging when admission reaches ready a moment later; stamping it with the later state would report ready next to a LEXICAL_CONVERGING controller with nothing to say so. It is stamped with the state it was computed under instead, and the next call reports the newer one.
+    let stamped = null
     if (context.runtimeServer && context.root && launcher?.mode !== "refuse") {
       // A computation that is still running and not yet stuck is joined; otherwise this call starts a new one. Either way the call waits only for what is left of its own budget.
       const joined = statusRun !== null && Date.now() - statusRun.started < statusRunLimitMs
@@ -611,6 +613,7 @@ export function createDeskSession(deps) {
         payload = { ...outcome.value.payload, status_detail: `cached: this detail comes from a runtime status computation (index, readiness controller) that was already running when this call arrived; it started at ${run.at}.`, status_detail_from: run.at }
       } else if (!outcome.timedOut) {
         payload = outcome.value.payload
+        stamped = snapshot
       } else {
         const why = joined
           ? `a runtime status computation (index, readiness controller) that started at ${run.at} is still running`
@@ -620,7 +623,7 @@ export function createDeskSession(deps) {
           : { ...lastStatusDetail.payload, status_detail: `cached: ${why}; this detail is from ${lastStatusDetail.at} (${ageSeconds(lastStatusDetail.at)} s old). Call desk_status again shortly for a fresh one.`, status_detail_from: lastStatusDetail.at }
       }
     }
-    const full = withAdmission(payload, admission.snapshot())
+    const full = withAdmission(payload, stamped ?? admission.snapshot())
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
     return jsonResult(input?.detail === true ? full : compactStatus(full))
   }

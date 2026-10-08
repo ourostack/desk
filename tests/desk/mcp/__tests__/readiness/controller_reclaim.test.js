@@ -10,6 +10,7 @@ import { connectOrStartController, endpointIsAbandoned, endpointIsReclaimable, p
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { killAndWait } from "../_kill_and_wait.js"
+import { different, otherFile } from "../_file_identity.js"
 
 const posixOnly = process.platform === "win32" ? "POSIX sockets and modes" : false
 
@@ -169,7 +170,7 @@ test("a socket is reclaimable at once only when its recorded owner is gone or is
   assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "corrupt", record: null } }), null, "a corrupt record goes through the refused-twice check instead")
   assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "dead", record } }).ino, ino)
   assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "self", record } }).ino, ino)
-  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "dead", record: { ...record, socket: { dev, ino: ino + 1 } } } }), null, "another file than the one the owner published")
+  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "dead", record: { ...record, socket: otherFile({ dev, ino }) } } }), null, "another file than the one the owner published")
   assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "dead", record: { endpoint, owner: { pid: 7 } } } }), null, "a record that names no socket")
   assert.equal(endpointIsReclaimable({ endpoint: path.join(privateDir, "gone.sock"), owner: { state: "dead", record } }), null, "no socket at all")
   writeFileSync(path.join(privateDir, "file.sock"), "")
@@ -234,10 +235,8 @@ test("unlinkIfUnchanged removes only the exact file judged stale", async () => {
   const file = path.join(root, "endpoint")
   writeFileSync(file, "")
   const stat = lstatSync(file)
-  // A Windows file id can exceed 2^53, where adding one changes nothing, so a different number is built by halving instead.
-  const other = (n) => (n === 0 ? 1 : n / 2)
-  unlinkIfUnchanged(file, { dev: stat.dev, ino: other(stat.ino) })
-  unlinkIfUnchanged(file, { dev: other(stat.dev), ino: stat.ino })
+  unlinkIfUnchanged(file, { dev: stat.dev, ino: different(stat.ino) })
+  unlinkIfUnchanged(file, { dev: different(stat.dev), ino: stat.ino })
   assert.equal(lstatSync(file).ino, stat.ino, "a replaced file is kept")
   unlinkIfUnchanged(file, stat)
   assert.throws(() => lstatSync(file), /ENOENT/u)

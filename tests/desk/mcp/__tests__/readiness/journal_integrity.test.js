@@ -4,6 +4,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import { mkTempRoot } from "../_temp_roots.js"
+import { different } from "../_file_identity.js"
 import {
   CanonicalWriteRecordingError,
   JournalIntegrityError,
@@ -89,13 +90,13 @@ test("a journal file that is swapped while it is being read poisons the journal"
       root: f.root,
       stateDir: f.stateDir,
       io: io({
-        fstatSync: (fd) => {
-          const stat = fs.fstatSync(fd)
-          return swap && which === "opened" ? withStat(stat, { ino: stat.ino + 1 }) : stat
+        fstatSync: (fd, options) => {
+          const stat = fs.fstatSync(fd, options)
+          return swap && which === "opened" ? withStat(stat, { ino: different(stat.ino) }) : stat
         },
         lstatSync: (file, options) => {
           const stat = fs.lstatSync(file, options)
-          if (swap && which === "after" && file === logPath && ++lstats === 2) return withStat(stat, { ino: stat.ino + 1 })
+          if (swap && which === "after" && file === logPath && ++lstats === 2) return withStat(stat, { ino: different(stat.ino) })
           return stat
         },
       }),
@@ -103,6 +104,30 @@ test("a journal file that is swapped while it is being read poisons the journal"
     swap = true
     assert.throws(() => journal.replay(), { code: "journal_integrity_failed" })
   }
+})
+
+test("a journal file swapped for the neighboring file id is noticed above 2^53, where two ids are one Number", async () => {
+  const f = await fixture()
+  const logPath = path.join(f.stateDir, "changes.jsonl")
+  const WINDOWS_ID = 10414574139658612n
+  assert.equal(Number(WINDOWS_ID), Number(WINDOWS_ID + 1n), "the premise: as Numbers these two ids are equal")
+  let opened = WINDOWS_ID
+  // A file system answers in the type the caller asked for: Numbers (which round these ids together) unless bigint is requested.
+  const idFor = (id, options) => (options?.bigint ? id : Number(id))
+  const journal = await openChangeJournal({
+    root: f.root,
+    stateDir: f.stateDir,
+    io: io({
+      fstatSync: (fd, options) => withStat(fs.fstatSync(fd, options), { ino: idFor(opened, options) }),
+      lstatSync: (file, options) => {
+        const stat = fs.lstatSync(file, options)
+        return file === logPath ? withStat(stat, { ino: idFor(WINDOWS_ID, options) }) : stat
+      },
+    }),
+  })
+  journal.replay()
+  opened = WINDOWS_ID + 1n
+  assert.throws(() => journal.replay(), { code: "journal_integrity_failed" })
 })
 
 test("an append that opens a different file than it checked is refused and poisons the journal", async () => {
@@ -113,9 +138,9 @@ test("an append that opens a different file than it checked is refused and poiso
     root: f.root,
     stateDir: f.stateDir,
     io: io({
-      fstatSync: (fd) => {
-        const stat = fs.fstatSync(fd)
-        return ++fstats === swapAt ? withStat(stat, { ino: stat.ino + 1 }) : stat
+      fstatSync: (fd, options) => {
+        const stat = fs.fstatSync(fd, options)
+        return ++fstats === swapAt ? withStat(stat, { ino: different(stat.ino) }) : stat
       },
     }),
   })

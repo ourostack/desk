@@ -98,6 +98,8 @@ function isCompleteOwner(owner) {
 
 async function readLockEvidence(lockPath) {
   const lockStat = await stat(lockPath);
+  // The file id is read as a BigInt: on Windows it can exceed 2^53, where a Number cannot tell two files apart.
+  const lockId = await stat(lockPath, { bigint: true });
   const names = (await readdir(lockPath)).sort();
   const files = [];
   for (const name of names) {
@@ -117,8 +119,8 @@ async function readLockEvidence(lockPath) {
     owner: parseOwner(ownerContent),
     tempOwners,
     fingerprint: JSON.stringify({
-      dev: lockStat.dev,
-      ino: lockStat.ino,
+      dev: String(lockId.dev),
+      ino: String(lockId.ino),
       mtimeMs: lockStat.mtimeMs,
       files,
     }),
