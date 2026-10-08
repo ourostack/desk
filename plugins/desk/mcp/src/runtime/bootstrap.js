@@ -123,6 +123,7 @@ export function prepareRuntime({
   arch = process.arch,
   nodeAbi = process.versions.modules,
   sourceIdentity = null,
+  onPhase = () => {},
 } = {}) {
   if (!hasText(mcpRoot)) {
     throw new Error("desk-mcp: mcpRoot is required for runtime dependency bootstrap")
@@ -147,7 +148,9 @@ export function prepareRuntime({
     target,
     prodDependencyLockHash: path.basename(packPaths.packDir),
   })
+  onPhase("restoring_runtime_dependencies")
   restoreRuntimeDependencies({
+    onPhase,
     mcpRoot: resolvedMcpRoot,
     packageJson,
     packageLockPath,
@@ -158,6 +161,7 @@ export function prepareRuntime({
     arch,
     nodeAbi,
   })
+  onPhase("mirroring_source")
   const sourceMirrorPath = resolveAdmittedSourceMirror({
     runtimeCacheDir: resolvedRuntimeCacheDir,
     sourceIdentity,
@@ -165,6 +169,7 @@ export function prepareRuntime({
     mcpRoot: resolvedMcpRoot,
     runtimeCacheDir: resolvedRuntimeCacheDir,
     sourceIdentity,
+    onPhase,
   })
   return {
     runtimeCacheDir: resolvedRuntimeCacheDir,
@@ -390,6 +395,7 @@ export function publishDirectoryAtomically({
   destinationDir,
   validateDestination,
   build = null,
+  onPhase = () => {},
   lockTimeoutMs = publicationLockTimeoutMs,
   createLockDirectory = mkdirSync,
   now = Date.now,
@@ -403,6 +409,8 @@ export function publishDirectoryAtomically({
   const lockIo = { platform, remove: removeDirectory, sleep, writeLockOwner }
   if (build === null) assertStagingComplete({ stagingDir, validateDestination })
 
+  const name = path.basename(destinationDir)
+  onPhase(`waiting_for_publication_lock:${name}`)
   mkdirSync(path.dirname(destinationDir), { recursive: true })
   let publicationLock
   try {
@@ -442,6 +450,7 @@ export function publishDirectoryAtomically({
       }
     }
     if (build !== null) {
+      onPhase(`building:${name}`)
       build()
       assertStagingComplete({ stagingDir, validateDestination })
     }
@@ -746,6 +755,7 @@ export function restoreRuntimeDependencies({
   nodeAbi = process.versions.modules,
   supportMatrix,
   publishDirectory = publishDirectoryAtomically,
+  onPhase = () => {},
 }) {
   const inspection = inspectRuntimeDependencyPack({
     mcpRoot,
@@ -815,6 +825,7 @@ export function restoreRuntimeDependencies({
       )
     }
     const publication = publishDirectory({
+      onPhase,
       stagingDir,
       build,
       destinationDir: runtimeCacheDir,
@@ -1061,6 +1072,7 @@ export function syncSourceMirror({
   runtimeCacheDir,
   publishDirectory = publishDirectoryAtomically,
   sourceIdentity = null,
+  onPhase = () => {},
 }) {
   const sourceHash = hashCurrentSource(mcpRoot)
   if (sourceIdentity?.startsWith("sha256:") && sourceIdentity.slice("sha256:".length) !== sourceHash) {
@@ -1101,6 +1113,7 @@ export function syncSourceMirror({
       )
     }
     publishDirectory({
+      onPhase,
       stagingDir: stagingPath,
       build,
       destinationDir: mirrorPath,
