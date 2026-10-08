@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.234 — 2026-10-08
+
+Desk's Windows process-start read now finds Windows PowerShell from `SystemRoot` (then `windir`, then `C:\Windows`) instead of searching `PATH`. A controller process started with a trimmed environment, such as a standard user's, has no System32 on its `PATH`, so the read failed with ENOENT and Desk fell back to the process id alone when it checked whether a recorded controller owner was still the same process. The system PowerShell is now always the one used, whatever the environment holds.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.233 — 2026-10-08
 
 The factory build now names one more cause of idle time, `other_task`: a session credited to the task was working on another task's part of it. A session's part of each task is its binding to that task (its workers and the controller's segments), so `other_task` is the session's active time that another task's binding holds and this task's does not. It names no task. It appears wherever idle time is split by cause: each burst's and the task's `idle_by_waited_on_ms` and `waiting_by_waited_on_ms`, each gap's `waited_on`, the stack-up's `idle` row, `waiting:other_task` in `rollups/causes.json`, and the `waited_on` and `idle_waited_on` lists. Active time that no binding holds is not attributed: it stays `unknown`, and the `other_task` and `unknown` figures that hold some of it are partial with the new reason `session_work_unattributed`.
