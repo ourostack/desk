@@ -1,4 +1,6 @@
-// The evaluator step: the loop worker's way to label finished jobs without a person. It sweeps the retained
+// The evaluator step: the loop worker's way to label finished jobs without a person. It first asks for every
+// finished job that needs labels and has no request (`requestFinishedJobs`, the backstop for a request the done
+// step never recorded or that was settled while it could not be labeled), then sweeps the retained
 // evaluation requests (`evaluatePending`), runs the headless runner (`headless.js`, the only way a run ever
 // starts) on each ready job within the daily cap, checks the answer through the existing gate
 // (`acceptEvaluations`) and records what happened under `status.evaluator`.
@@ -20,6 +22,8 @@
 //     and attempt, saved) before it starts and taken back only if the runner reports that none started. Stored
 //     bookkeeping that is damaged fails closed (a damaged day count is a spent day, a damaged attempt entry a job
 //     at its limit) and the clock never moves the day backwards; the day is re-read before each run. `onChild` and `onChildExit` go to the runner and the probe unchanged. This step signals nothing.
+//   - Jobs with a session that has no labels at all run first, oldest finish first; relabels of sessions labeled
+//     under an older rubric come after them, so a relabel pass never holds up a fresh finish.
 //   - A step that did not run never looks like one that found nothing: the result codes `no_jobs_waiting`,
 //     `none_could_run` and the blocked states differ, `waiting` counts the jobs left, and cost is `null` unless
 //     a run reported a number (`cost_unreported_runs` says how many of the day's runs reported none).
@@ -28,7 +32,8 @@
 //
 //   { expired_total, gave_up, waiting,
 //     headless: { state, day, jobs, accepted, rejected, cost_usd, cost_unreported_runs,
-//                 unsupported_jobs, deferred_jobs, blocked_days } }
+//                 unsupported_jobs, deferred_jobs, blocked_days },
+//     lag: { at, unlabeled_jobs, oldest_finished_at } }
 //
 //   expired_total  requests moved to `evaluate-requests/expired/`, ever (each counted once)
 //   gave_up        waiting jobs that were attempted 3 times without an accepted answer
@@ -42,6 +47,10 @@
 //                  (already attempted today, past the deadline, or after a stop)
 //   blocked_days   consecutive days the step has seen a machine-level blocked state (`no_agent_cli`,
 //                  `no_credentials`, `disabled_would_bill`, `sign_in_unknown`, `disabled`, `budget_exhausted`)
+//   lag            the label lag as this step left it: `at` (when it was read), `unlabeled_jobs` (finished
+//                  jobs with a labelable session that has no labels yet) and `oldest_finished_at` (the oldest
+//                  such job's finish time, `null` when there is none). The measure step turns it into the age
+//                  the health record, the session-start line and the `label_lag` alarm read.
 //
 // Per-job bookkeeping keyed by job ID is kept apart, in `status.loop.evaluate.attempts`
 // (`{ <job>: { attempts, last_day } }`, with `blocked_last_day`): it holds only jobs whose request still waits
@@ -51,7 +60,7 @@
 import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 
-import { acceptEvaluations, evaluatePending } from "./evaluate-run.js"
+import { acceptEvaluations, evaluatePending, requestFinishedJobs } from "./evaluate-run.js"
 import {
   HEADLESS_TIMEOUT_MS,
   MAX_HEADLESS_JOBS_PER_DAY,
@@ -80,7 +89,7 @@ const MACHINE_BLOCKED = new Set(["no_agent_cli", "no_credentials", "disabled_wou
 // Every state that counts toward `blocked_days`.
 const BLOCKED_DAY_STATES = new Set([...MACHINE_BLOCKED, "disabled", "budget_exhausted"])
 
-const DEFAULT_SEAMS = { runHeadless, probeSignIn, findAgentCli, processAlive, clock: Date.now }
+const DEFAULT_SEAMS = { runHeadless, probeSignIn, findAgentCli, processAlive, requestFinishedJobs, clock: Date.now }
 const BRIEF_NAME = /^(claude-code|copilot-cli|codex-cli)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.brief\.json$/u
 const DAY_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/u
 
@@ -138,9 +147,10 @@ function readDay(evaluator, clockDay) {
 }
 
 /**
- * `runEvaluatorStep(env, { pluginVersion, now, deadline, onChild, onChildExit, ...seams }) -> { ok, result }`.
+ * `runEvaluatorStep(env, { pluginVersion, now, deadline, deskRoot, onChild, onChildExit, ...seams }) -> { ok, result }`.
+ * `deskRoot` (absolute, or null) is the desk the backstop names on a request whose session marker names none.
  * `now` is a time (default: the real clock) and `deadline` a time and required (the step also stops starting
- * runs 25 minutes after it took its lock, whatever the deadline says); a violated contract throws a `TypeError`. Seams for tests: `runHeadless`, `probeSignIn`, `findAgentCli`, `clock` (milliseconds).
+ * runs 25 minutes after it took its lock, whatever the deadline says); a violated contract throws a `TypeError`. Seams for tests: `runHeadless`, `probeSignIn`, `findAgentCli`, `requestFinishedJobs`, `clock` (milliseconds).
  * `result` is one of `ran`, `no_jobs_waiting`, `none_could_run`, `unsupported_host`, `busy`, `no_factory_state`,
  * `headless_session`, `step_error` or a blocked state (see the header); only `busy`, `no_factory_state` and
  * `headless_session` record nothing.
@@ -151,6 +161,7 @@ export async function runEvaluatorStep(env, options = {}) {
   if (typeof pluginVersion !== "string" || pluginVersion === "") throw new TypeError("pluginVersion: must be a Desk version")
   const nowMs = toMs(impl.now === undefined ? new Date() : impl.now, "now")
   const deadlineMs = toMs(impl.deadline ?? null, "deadline")
+  if (impl.deskRoot !== undefined && impl.deskRoot !== null && (typeof impl.deskRoot !== "string" || !path.isAbsolute(impl.deskRoot))) throw new TypeError("deskRoot: must be an absolute path or null")
   if (isHeadlessFactorySession(env)) return { ok: false, result: "headless_session" }
   const root = await factoryStateRoot(env, { create: false })
   if (root === null) return { ok: true, result: "no_factory_state" }
@@ -170,10 +181,21 @@ export async function runEvaluatorStep(env, options = {}) {
 
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10)
 
+// Fresh finishes first (a session with no labels at all), then relabels; within each, the oldest finish first.
+const byPriority = (left, right) => Number(right.unlabeled > 0) - Number(left.unlabeled > 0) || Date.parse(left.finished_at) - Date.parse(right.finished_at)
+
 async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild, onChildExit }) {
   const clockStart = impl.clock()
+  // The backstop never stops the step: a job it cannot ask for now is asked for at the next step.
+  try {
+    await impl.requestFinishedJobs(env, { deskRoot: impl.deskRoot ?? null })
+  } catch {
+    // Nothing recorded: the requests already waiting are swept as before.
+  }
   const sweep = await evaluatePending(env, { pluginVersion, now: nowMs })
-  const ready = sweep.jobs.filter((entry) => entry.result === "ready")
+  const ready = sweep.jobs.filter((entry) => entry.result === "ready").sort(byPriority)
+  // Finished jobs with a session that has no labels at all, and when each finished: the label lag.
+  const unlabeled = new Map(ready.filter((entry) => entry.unlabeled > 0).map((entry) => [entry.job, Date.parse(entry.finished_at)]))
   const live = new Set(sweep.jobs.filter((entry) => entry.result === "ready" || entry.result === "no_sessions").map((entry) => entry.job))
 
   const status = await readStatus(env)
@@ -216,6 +238,11 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
           unsupported_jobs: ledger.unsupported,
           deferred_jobs: ledger.deferred,
           blocked_days: ledger.blocked_days,
+        },
+        lag: {
+          at: new Date(nowMs).toISOString(),
+          unlabeled_jobs: unlabeled.size,
+          oldest_finished_at: unlabeled.size === 0 ? null : new Date(Math.min(...unlabeled.values())).toISOString(),
         },
       },
       loop: { ...(isObject(current.loop) ? current.loop : {}), evaluate: { attempts: ledger.attempts, blocked_last_day: ledger.blocked_last_day } },
@@ -303,8 +330,11 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
     await save()
     const accepted = await acceptEvaluations(env, { job: entry.job, pluginVersion })
     const mine = accepted.sessions.filter((session) => plan.sessions.has(session.session))
-    if (mine.length > 0 && mine.every((session) => session.result === "accepted")) ledger.accepted += 1
+    const allAccepted = mine.length > 0 && mine.every((session) => session.result === "accepted")
+    if (allAccepted) ledger.accepted += 1
     else ledger.rejected += 1
+    // Every brief of the job was run and accepted: none of its sessions is unlabeled any more.
+    if (allAccepted && plan.paths.length === entry.briefs.length) unlabeled.delete(entry.job)
     if (accepted.request === "cleared") {
       stillWaiting -= 1
       live.delete(entry.job)

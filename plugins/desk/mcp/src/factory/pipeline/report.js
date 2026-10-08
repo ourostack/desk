@@ -76,6 +76,7 @@ const LABEL_REASON_TEXT = {
   job_unbound: "the session is not bound to the job",
   range: "a labeled stretch runs past the session",
   evidence_unmatched: "the labeled evidence no longer matches the facts",
+  inconsistent: "a labeled stop contradicts how the facts say the wait ended",
   share_unknown: "the facts do not record which part of the session was the job's",
   outside_share: "the labels cover none of the job's own part of the session",
 }

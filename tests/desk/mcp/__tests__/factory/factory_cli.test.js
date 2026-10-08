@@ -811,6 +811,14 @@ test("finalize takes one to eight distinct jobs and reports each job's outcome",
   }
 }))
 
+test("finalize starts the loop worker when the evaluator step is due, after every job, and a kick that fails changes nothing printed", () => scratch(async (env) => {
+  const a = "a".repeat(32)
+  const kicks = []
+  assert.deepEqual(await runFinalizeCommand({ argv: ["--job", a], env, kick: async (given) => { kicks.push(given) } }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
+  assert.deepEqual(kicks, [env])
+  assert.deepEqual(await runFinalizeCommand({ argv: ["--job", a], env, kick: async () => { throw new Error("SENTINEL kick") } }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
+}))
+
 // ---------------------------------------------------------------------------
 // evaluate and evaluate-accept.
 // ---------------------------------------------------------------------------
@@ -910,7 +918,8 @@ test("evaluate-accept checks the evaluator's answer and moves accepted labels in
   const [briefFile] = (await prepareEvaluation(env, { job, pluginVersion: LABELS_GOLDEN.evaluator.plugin_version })).briefs
   const brief = JSON.parse(readFileSync(briefFile, "utf8"))
   // No marker names this session's log, so the labels rest on the facts alone.
-  const labels = { ...LABELS_GOLDEN, unavailable: ["session_log_missing"] }
+  // The current labels form: labels /3 under rubric 4, with no stop classified.
+  const labels = { ...LABELS_GOLDEN, schema: "desk.factory.labels/3", evaluator: { ...LABELS_GOLDEN.evaluator, rubric: "4" }, stops: [], unavailable: ["session_log_missing"] }
   await fs.writeFile(brief.output, JSON.stringify({ ...labels, note: "SENTINEL" }))
   let output = ""
   assert.equal(await main({ argv: ["evaluate-accept", "--job", job], env, write: (text) => { output += text }, logError: () => assert.fail("evaluate-accept must succeed") }), 0)

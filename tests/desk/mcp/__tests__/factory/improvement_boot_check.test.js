@@ -43,14 +43,14 @@ test("labelsBootCheck adds the age of the oldest waiting request and the stored 
   // No status yet: the evaluator is not recorded, which is not the same as zero.
   assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 2, quarantined: 0, oldest_days: 9, evaluator: null })
   await evaluatorStatus(env, running({ expired_total: 4, gave_up: 1, headless: { state: "ran" } }))
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "ran", expired_total: 4, gave_up: 1 })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "ran", expired_total: 4, gave_up: 1, lag_minutes: null })
   // An absent number stays absent; an unknown state is not a state.
   await evaluatorStatus(env, { headless: { state: "tomorrow" }, gave_up: -1, expired_total: "many" })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "unrecognized", expired_total: null, gave_up: null })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "unrecognized", expired_total: null, gave_up: null, lag_minutes: null })
   await evaluatorStatus(env, { gave_up: 1 })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1 })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null })
   await evaluatorStatus(env, { headless: {}, gave_up: 1 })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1 })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null })
   // A request file that does not parse does not give an age, and the rest still do.
   await fs.writeFile(file(JOB_B), "not json")
   assert.equal(labelsBootCheck({ env, now: NOW }).oldest_days, 3)
@@ -222,3 +222,37 @@ test("set-aside and unreadable card files are counted in the line, with the one 
   const both = improvementLine({ ...base, open: 4, oldest_days: 2, unreadable_files: 1 })
   assert.equal(both, "Improvement cards: 4 open (oldest 2 days). Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next; 2 files were set aside as invalid in the improvement folder under _meta (restore or delete them and commit); 1 card file could not be read and was left in place (fix its permissions or delete it and commit)")
 })
+
+test("the evaluator line says how long ago the oldest unlabeled job finished, and when that is past the 1-hour target", () => {
+  const base = { count: 2, oldest_days: 0, evaluator: { state: "ran", expired_total: null, gave_up: null } }
+  const line = (lag) => labelsLine({ ...base, evaluator: { ...base.evaluator, lag_minutes: lag } })
+  assert.equal(line(45), "Factory evaluator: 2 finished jobs wait for labels (oldest 0 days), and the oldest unlabeled one finished 45 minutes ago; the plugin labels them in the background, last result ran")
+  assert.match(line(1), /finished 1 minute ago;/u)
+  assert.match(line(61), /finished 61 minutes ago, past the 1-hour target;/u)
+  assert.match(line(150), /finished 2 hours ago, past the 1-hour target;/u)
+  assert.match(line(3 * 1440 + 5), /finished 3 days ago, past the 1-hour target;/u)
+  for (const lag of [0, null, undefined]) assert.doesNotMatch(line(lag), /finished .* ago/u)
+  assert.match(labelsLine({ count: 1, oldest_days: null, evaluator: { state: "disabled", lag_minutes: 90 } }), /^Factory evaluator: switched off on this machine; 1 finished job waits for labels, and the oldest unlabeled one finished 90 minutes ago, past the 1-hour target$/u)
+})
+
+test("labelsBootCheck reads the lag from the evaluator step's record, and only while that record is fresh", () => scratch(async ({ env, desk }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await requestEvaluation(env, { job: JOB_A, deskRoot: desk })
+  const at = new Date(NOW - 10 * 60 * 1000).toISOString()
+  const lagged = async (lag) => {
+    await evaluatorStatus(env, running({ lag }))
+    return labelsBootCheck({ env, now: NOW }).evaluator.lag_minutes
+  }
+  assert.equal(await lagged({ at, unlabeled_jobs: 1, oldest_finished_at: new Date(NOW - 125 * 60 * 1000).toISOString() }), 125)
+  assert.equal(await lagged({ at, unlabeled_jobs: 1, oldest_finished_at: new Date(NOW + 60 * 1000).toISOString() }), 0)
+  assert.equal(await lagged({ at, unlabeled_jobs: 0, oldest_finished_at: null }), 0)
+  for (const lag of [
+    "x",
+    { at: "garbage", unlabeled_jobs: 0, oldest_finished_at: null },
+    { at: new Date(NOW - 73 * 3600 * 1000).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null },
+    { at: new Date(NOW + 10 * 60 * 1000).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null },
+    { at, unlabeled_jobs: 1, oldest_finished_at: "garbage" },
+    { at, unlabeled_jobs: 1.5, oldest_finished_at: at },
+    { at, unlabeled_jobs: 0, oldest_finished_at: at },
+  ]) assert.equal(await lagged(lag), null, JSON.stringify(lag))
+}))

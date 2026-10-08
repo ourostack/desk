@@ -15,7 +15,7 @@ import { main, runLoopCommand, SUPPORTED_COMMANDS } from "../../../../../plugins
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
-import { factoryStateRoot, readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus, requestEvaluation, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const STORE = "ourostack/factory"
 const MINUTE = 60 * 1000
@@ -433,4 +433,27 @@ test("main prints one JSON line for the loop command and exits 1 only when a ste
   assert.deepEqual(JSON.parse(out[0]), { result: "disabled", ran: 0, skipped: 0, failed: 0, steps: {} })
   assert.ok(out[0].endsWith("\n"))
   assert.doesNotMatch(out[0], /desk-for-test|\//u)
+}))
+
+test("an evaluation request newer than the evaluator step's last run makes the step run inside its gap, and the step is given the desk", () => scratch(async (ctx) => {
+  const clock = fakeClock()
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: new Date(clock.now - 10 * MINUTE) })
+  const log = []
+  await run(ctx, log, { clock: clock.read })
+  assert.equal(names(log).includes("evaluate"), false, "inside its gap with no newer request")
+  await requestEvaluation(ctx.env, { job: "ab".repeat(16), deskRoot: ctx.desk })
+  const again = []
+  await run(ctx, again, { clock: clock.read })
+  assert.equal(names(again)[0], "evaluate")
+  assert.equal(Object.fromEntries(again).evaluate.deskRoot, ctx.desk)
+}))
+
+test("requests that cannot be read make nothing due early", () => scratch(async (ctx) => {
+  const clock = fakeClock()
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: new Date(clock.now - 10 * MINUTE) })
+  const root = await factoryStateRoot(ctx.env)
+  await fs.writeFile(path.join(root, "evaluate-requests"), "not a folder")
+  const log = []
+  const outcome = await run(ctx, log, { clock: clock.read })
+  assert.equal(outcome.steps.evaluate, "skipped")
 }))

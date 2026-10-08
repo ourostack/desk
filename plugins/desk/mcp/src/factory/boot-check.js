@@ -40,9 +40,13 @@
 //     lifts by itself if the session binds the job again;
 //   - `oldest_days`: whole days since the oldest counted request was made
 //     (the first 200 are read), or null when there is none to read;
-//   - `evaluator`: `{ state, expired_total, gave_up }` from `status.json`'s
-//     `evaluator` record, each null when it is not recorded (never 0), or null
-//     when there is no record.
+//   - `evaluator`: `{ state, expired_total, gave_up, lag_minutes }` from
+//     `status.json`'s `evaluator` record, each null when it is not recorded
+//     (never 0), or null when there is no record. `lag_minutes` is the age, in
+//     whole minutes, of the oldest finished job whose labelable session has
+//     no labels yet, from the evaluator step's lag record (`lag`), 0 when it
+//     recorded none, and null when the record is missing, damaged, dated in
+//     the future or older than 72 hours.
 //
 // The lines come from stored numbers only and never tell the agent to start
 // the evaluator: the plugin runs it. `labelsLine(summary, { cardOpen })` is the
@@ -246,12 +250,17 @@ const EVALUATOR_STATES = new Set(["idle", "ran", "no_agent_cli", "no_credentials
 const CARD_STATES = new Set(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
 
 const days = (n) => `${n} ${n === 1 ? "day" : "days"}`
+// The label lag target the `label_lag` alarm uses (`loop-health.js` `LABEL_LAG_ALARM_MINUTES`), said in the evaluator line.
+const LAG_TARGET_MINUTES = 60
+const LAG_FRESH_MS = 72 * 60 * 60 * 1000
+const lagText = (minutes) => (minutes < 120 ? `${minutes} ${minutes === 1 ? "minute" : "minutes"}` : minutes < 2880 ? `${Math.floor(minutes / 60)} hours` : days(Math.floor(minutes / 1440)))
 const wholeDays = (from, now) => Math.floor(Math.max(0, now - from) / DAY_MS)
 
 /** The agent line for the evaluator: `{ count, oldest_days, evaluator }` from `labelsBootCheck`, `cardOpen` true only when a `loop_alarm:headless_blocked` card is open. */
 export function labelsLine({ count, oldest_days: oldest = null, evaluator = null }, { cardOpen = false } = {}) {
   const state = evaluator?.state ?? null
-  const age = oldest === null ? "" : ` (oldest ${days(oldest)})`
+  const lag = typeof evaluator?.lag_minutes === "number" && evaluator.lag_minutes > 0 ? `, and the oldest unlabeled one finished ${lagText(evaluator.lag_minutes)} ago${evaluator.lag_minutes > LAG_TARGET_MINUTES ? ", past the 1-hour target" : ""}` : ""
+  const age = `${oldest === null ? "" : ` (oldest ${days(oldest)})`}${lag}`
   const waits = `${count} finished ${count === 1 ? "job waits" : "jobs wait"}`
   const gaveUp = evaluator?.gave_up > 0 ? [`${evaluator.gave_up} ${evaluator.gave_up === 1 ? "has" : "have"} been tried three times without an accepted result`] : []
   const expired = evaluator?.expired_total > 0 ? [`${evaluator.expired_total} evaluation ${evaluator.expired_total === 1 ? "request expired and is" : "requests expired and are"} counted`] : []
@@ -406,18 +415,28 @@ export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
     const at = Date.parse(readState(path.join(dir, "evaluate-requests", `${job}.json`), {})?.requested_at)
     if (!Number.isNaN(at) && (oldest === null || at < oldest)) oldest = at
   }
-  return { count: waiting.length, quarantined: quarantined.size, oldest_days: oldest === null ? null : wholeDays(oldest, now), evaluator: evaluatorRecord(dir) }
+  return { count: waiting.length, quarantined: quarantined.size, oldest_days: oldest === null ? null : wholeDays(oldest, now), evaluator: evaluatorRecord(dir, now) }
 }
 
 /** `status.json`'s `evaluator` record as `{ state, expired_total, gave_up }`, each null when it is not recorded as a plausible value; null with no record. */
-function evaluatorRecord(dir) {
+function evaluatorRecord(dir, now) {
   const record = readState(path.join(dir, "status.json"), {})?.evaluator
   if (!isPlainObject(record)) return null
   const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
   // A state this version does not know is said as not recognised, never as no result.
   const recorded = isPlainObject(record.headless) ? record.headless.state : undefined
   const state = EVALUATOR_STATES.has(recorded) ? recorded : typeof recorded === "string" ? "unrecognized" : null
-  return { state, expired_total: count(record.expired_total), gave_up: count(record.gave_up) }
+  return { state, expired_total: count(record.expired_total), gave_up: count(record.gave_up), lag_minutes: lagMinutes(record.lag, now) }
+}
+
+// The lag record's age of the oldest unlabeled finished job, in whole minutes; 0 with none recorded; null when it says nothing about now.
+function lagMinutes(lag, now) {
+  if (!isPlainObject(lag)) return null
+  const at = Date.parse(lag.at)
+  if (Number.isNaN(at) || now - at > LAG_FRESH_MS || at - now > 5 * 60 * 1000) return null
+  if (lag.unlabeled_jobs === 0 && lag.oldest_finished_at === null) return 0
+  const oldest = Date.parse(lag.oldest_finished_at)
+  return Number.isSafeInteger(lag.unlabeled_jobs) && lag.unlabeled_jobs > 0 && !Number.isNaN(oldest) ? Math.max(0, Math.floor((now - oldest) / 60000)) : null
 }
 
 const NO_CARDS = Object.freeze({ status: "unreadable", open: 0, oldest_days: null, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 })

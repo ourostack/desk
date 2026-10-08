@@ -1,5 +1,5 @@
-// Published labels (`desk.factory.labels/2`; `/1` files are still read):
-// the waste labels for one job's session.
+// Published labels (`desk.factory.labels/3`; `/1` and `/2` files are still
+// read): the waste labels for one job's session, and why its agent stopped.
 //
 // An independent evaluator (the `observer` agent, never the agent that did
 // the work) reads a finished job's evidence and writes one labels file per
@@ -44,6 +44,21 @@
 //     it as its own row, in labeled time but out of every waste total. A `/1`
 //     file has none of these (a `/2` key is `unknown_key`, `unknown` is not
 //     an enum member) and stays valid as it is.
+//   - `/3` adds `stops`, required in a `/3` file and an `unknown_key` in an
+//     older one: why the agent stopped before each human wait the evaluator
+//     classified. A stop is `{ wait, why, confidence, evaluator_version }`:
+//     `wait` is the `[start_ms, end_ms]` of one `human_wait` interval, with
+//     `start_ms <= end_ms` (else `order`); `why` is one of `LABEL_STOP_WHY`
+//     (`decision`, `approval`, `acceptance`, `question`, `stopped_short`, or
+//     `unknown` for "could not tell"); `confidence` and `evaluator_version`
+//     are as on a `/2` stretch (a version newer than the file's evaluator is
+//     `inconsistent`). Stops are listed in wait order (else `order`), at most
+//     one per wait (else `duplicate`), and a `facts_missing` file has none
+//     (else `inconsistent`). Stops are not stretches: they describe a wait,
+//     which is idle time, and never enter class or waste totals. The causes a
+//     rule decides from the wait's stop facts (`STOP_RULES`: an error or limit,
+//     an interrupt, an open question or plan tool) are never the evaluator's,
+//     so they are not `why` values.
 //   - `caught` is optional: where the defect was caught (`in_task`,
 //     `at_review` or `after_delivery`). Desk writes it on `defects` stretches
 //     from the job's record; the evaluator never does.
@@ -67,7 +82,12 @@
 // The labels must name that session (`session_mismatch`) and a job its facts
 // bind (`job_unbound`), every stretch must end within the session (`range`),
 // and every evidence range must equal one interval's `start_ms` and `end_ms`
-// exactly (`evidence_unmatched`).
+// exactly (`evidence_unmatched`). Every stop's wait must end within the
+// session (`range`) and equal one `human_wait` interval's `start_ms` and
+// `end_ms` exactly (`evidence_unmatched`), and a stop on a wait whose
+// `stop.end` a rule already decides (`STOP_RULES`) is `inconsistent` at its
+// `why`. Facts from before `/4` carry no stop facts, so no rule decides their
+// waits.
 //
 // `evaluatorDowngrade` supports the store's replacement rule: a labels file
 // may be replaced only by labels from an evaluator whose plugin version and
@@ -93,10 +113,27 @@ import {
   validateObject,
 } from "./schema.js"
 
-export const LABELS_SCHEMA = "desk.factory.labels/2"
+export const LABELS_SCHEMA = "desk.factory.labels/3"
 
-/** Every labels schema value a reader accepts: the legacy `/1` and the current one. */
-export const LABELS_SCHEMAS = Object.freeze(["desk.factory.labels/1", LABELS_SCHEMA])
+/** The labels form before stops: confidence, versions and "could not tell" on stretches only. */
+export const LABELS_SCHEMA_V2 = "desk.factory.labels/2"
+
+/** Every labels schema value a reader accepts: the legacy `/1` and `/2`, and the current one. */
+export const LABELS_SCHEMAS = Object.freeze(["desk.factory.labels/1", LABELS_SCHEMA_V2, LABELS_SCHEMA])
+
+/** Why the agent stopped before a human wait, as the evaluator classifies it (`/3` `stops[].why`); `unknown` is "could not tell". */
+export const LABEL_STOP_WHY = Object.freeze(["decision", "approval", "acceptance", "question", "stopped_short", "unknown"])
+
+/** The stop ends (`intervals[kind=human_wait].stop.end`) a rule classifies, and the class each gets; the evaluator never labels these waits. */
+export const STOP_RULES = Object.freeze({
+  max_tokens: "error_limit",
+  rate_limit: "error_limit",
+  api_error: "error_limit",
+  refusal: "error_limit",
+  interrupted: "interrupted",
+  ask_question: "question",
+  ask_plan: "approval",
+})
 
 export const LABEL_CLASSES = Object.freeze(["value", "support", "muda"])
 
@@ -126,6 +163,7 @@ const LABEL_CAUGHT = Object.freeze(["in_task", "at_review", "after_delivery"])
 export const LABEL_LIMITS = Object.freeze({
   stretches: 10000,
   evidence: 1000,
+  stops: 10000,
 })
 
 /**
@@ -136,7 +174,7 @@ export const LABEL_LIMITS = Object.freeze({
  */
 export const LABEL_CHECK_CODES = Object.freeze(new Set(["invalid", "type", "missing", "unknown_key", "enum", "pattern", "integer", "range", "order", "overlap", "duplicate", "empty", "too_many", "inconsistent"]))
 
-const LABELS_SCHEMA_PATTERN = /^desk\.factory\.labels\/[12]$/u
+const LABELS_SCHEMA_PATTERN = /^desk\.factory\.labels\/[123]$/u
 export const DESK_VERSION = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?:-(alpha|beta|rc)\.([0-9]{1,4}))?$/u
 const RUBRIC = /^[1-9][0-9]{0,2}$/u
 const STAGES = Object.freeze(["alpha", "beta", "rc"])
@@ -227,8 +265,24 @@ const TOP = {
 
 const TOP_V2 = { ...TOP, stretches: stretchesField(STRETCH_V2) }
 
-// A `/1` file is walked with the `/1` stretch spec; anything else, including a wrong schema value (refused once, as `pattern`), with the current one.
-const topFields = (value) => (value.schema === LABELS_SCHEMAS[0] ? TOP : TOP_V2)
+// `/3`: one stop per classified human wait.
+const STOP = {
+  wait: customField(checkEvidenceRange),
+  why: enumField(LABEL_STOP_WHY),
+  confidence: enumField(LABEL_CONFIDENCE),
+  evaluator_version: patternField(DESK_VERSION),
+}
+
+const { unavailable: UNAVAILABLE_FIELD, ...TOP_V2_HEAD } = TOP_V2
+const TOP_V3 = { ...TOP_V2_HEAD, stops: arrayField(objectField(STOP), LABEL_LIMITS.stops), unavailable: UNAVAILABLE_FIELD }
+
+// Each file is walked with its own schema's spec. A wrong schema value (refused once, as `pattern`) is walked with the current spec when it
+// carries stops and with the `/2` spec when it does not, so its keys add no second error.
+function topFields(value) {
+  if (value.schema === LABELS_SCHEMAS[0]) return TOP
+  if (value.schema === LABELS_SCHEMA_V2) return TOP_V2
+  return value.schema === LABELS_SCHEMA || Object.hasOwn(value, "stops") ? TOP_V3 : TOP_V2
+}
 
 // For the structural test: every allowed key carries a real check.
 export const __LABEL_SPECS__ = Object.freeze({
@@ -236,6 +290,7 @@ export const __LABEL_SPECS__ = Object.freeze({
   evaluator: EVALUATOR,
   stretch: { ...STRETCH, ...CAUGHT },
   stretchV2: { ...STRETCH_V2, ...CAUGHT },
+  stop: STOP,
 })
 
 // A stretch whose own start and end are sound and in order.
@@ -272,6 +327,8 @@ export function validateLabels(value) {
     })
   }
 
+  if (Array.isArray(results.stops)) checkStops(value, results, errors)
+
   if (Array.isArray(results.unavailable)) {
     const seen = new Set()
     value.unavailable.forEach((code, index) => {
@@ -281,9 +338,28 @@ export function validateLabels(value) {
     })
     // Without the job's facts there is no evidence to cite.
     if (seen.has("facts_missing") && Array.isArray(value.stretches) && value.stretches.length > 0) addError(errors, "inconsistent", "stretches")
+    if (seen.has("facts_missing") && Array.isArray(value.stops) && value.stops.length > 0) addError(errors, "inconsistent", "stops")
   }
 
   return { ok: errors.length === 0, errors }
+}
+
+// Stops in wait order, one per wait, none newer than the file's evaluator. A stop whose own wait is unsound is skipped, so one bad stop is one error.
+function checkStops(value, results, errors) {
+  const fileVersion = results.evaluator?.plugin_version === true ? value.evaluator.plugin_version : null
+  const seen = new Set()
+  let previous = null
+  value.stops.forEach((stop, index) => {
+    const result = results.stops[index]
+    if (!isPlainObject(result)) return
+    if (fileVersion !== null && result.evaluator_version === true && compareVersions(stop.evaluator_version, fileVersion) > 0) addError(errors, "inconsistent", `stops.${index}.evaluator_version`)
+    if (result.wait !== true) return
+    const key = `${stop.wait[0]}:${stop.wait[1]}`
+    if (seen.has(key)) addError(errors, "duplicate", `stops.${index}`)
+    else if (previous !== null && stop.wait[0] <= previous) addError(errors, "order", `stops.${index}`)
+    seen.add(key)
+    previous = Math.max(previous ?? stop.wait[0], stop.wait[0])
+  })
 }
 
 /** `validateLabelsBytes(buffer) -> { ok, errors }`: the size cap, the canonical-bytes rule, then `validateLabels`. */
@@ -307,6 +383,17 @@ export function checkLabelsAgainstFacts(labels, facts) {
       if (!intervals.has(`${range[0]}:${range[1]}`)) addError(errors, "evidence_unmatched", `stretches.${index}.evidence.${rangeIndex}`)
     })
   })
+  // Each human wait by its exact range, with its stop facts when the facts carry them.
+  const waits = new Map(facts.intervals.filter((interval) => interval.kind === "human_wait").map((interval) => [`${interval.start_ms}:${interval.end_ms}`, interval]))
+  for (const [index, stop] of (labels.stops ?? []).entries()) {
+    if (stop.wait[1] > facts.session.duration_ms) {
+      addError(errors, "range", `stops.${index}.wait`)
+      continue
+    }
+    const wait = waits.get(`${stop.wait[0]}:${stop.wait[1]}`)
+    if (wait === undefined) addError(errors, "evidence_unmatched", `stops.${index}.wait`)
+    else if (Object.hasOwn(STOP_RULES, wait.stop?.end ?? "")) addError(errors, "inconsistent", `stops.${index}.why`)
+  }
   return { ok: errors.length === 0, errors }
 }
 

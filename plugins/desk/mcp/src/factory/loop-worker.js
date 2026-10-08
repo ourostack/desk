@@ -1,7 +1,8 @@
 // The loop worker: one detached run of the improvement cycle, started by the session-start hook (hooks/loop-start.cjs)
 // through `factory.js loop`. It runs the steps in order (the list `STEPS` below is data, so a step added later is
 // one more entry), one at a time and each inside its own try, so one failing step never stops the next. A step that
-// is not due (`dueStep`, inside its minimum gap) is skipped and leaves no record.
+// is not due (`dueStep`, inside its minimum gap with no newer work for it) is skipped and leaves no record. Besides the
+// session-start hook, the end of a turn and a finalize run start the worker when the evaluator step is due (`evaluate-kick.js`).
 //
 // Safe and detached:
 //   - One worker at a time per machine, under one lock file in the factory state folder (`process-lock.js`: the
@@ -40,6 +41,7 @@ import { runReconcileStep } from "./reconcile-step.js"
 import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
 import { runEvaluatorStep } from "./evaluator-step.js"
+import { LOOP_LOCK_NAME, newestRequestAt } from "./evaluate-kick.js"
 import { runVerifyStep } from "./improvement-verify.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
@@ -49,7 +51,7 @@ export const LOOP_BUDGET_MS = 20 * 60 * 1000
 export const LATER_STEPS_RESERVE_MS = 3 * 60 * 1000
 // The process ends itself this long after the budget if a step is still running.
 const CEILING_GRACE_MS = 60 * 1000
-const LOCK_NAME = "loop-worker.running"
+const LOCK_NAME = LOOP_LOCK_NAME
 const CODE = /^[a-z0-9][a-z0-9_:-]{0,63}$/u
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
@@ -78,9 +80,10 @@ async function routeStep(env, ctx, impls) {
   return outcome
 }
 
-// The ordered steps. Each `run(env, ctx, impls)` answers `{ ok, result }`; a step that records itself needs nothing more.
+// The ordered steps. Each `run(env, ctx, impls)` answers `{ ok, result }`; a step that records itself needs nothing more. A step with
+// `newWorkAt(env)` is due as soon as work newer than its last run arrives (`dueStep`): an evaluation request makes the evaluator step due at once.
 const STEPS = Object.freeze([
-  { name: "evaluate", run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.evaluatorDeadline, onChild: ctx.onChild, onChildExit: ctx.onChildExit }) },
+  { name: "evaluate", newWorkAt: newestRequestAt, run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.evaluatorDeadline, deskRoot: ctx.deskRoot, onChild: ctx.onChild, onChildExit: ctx.onChildExit }) },
   { name: "route", run: routeStep },
   { name: "mirror", run: (env, ctx, impls) => impls.mirror(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }) },
   { name: "reconcile", run: (env, ctx, impls) => impls.reconcile(env, { now: ctx.now, desks: [ctx.deskRoot], personPrefix: ctx.personPrefix }) },
@@ -146,7 +149,9 @@ export async function runLoopWorker(env, {
           stopped = "status_unavailable"
         }
       }
-      if (stopped === null && !dueStep(status, step.name, new Date(clock()))) {
+      // New work that cannot be read makes nothing due early; the gap still applies.
+      const newWorkAt = stopped === null && step.newWorkAt !== undefined ? ((await swallow(() => step.newWorkAt(env))) ?? null) : null
+      if (stopped === null && !dueStep(status, step.name, new Date(clock()), { newWorkAt })) {
         outcome.steps[step.name] = "skipped"
         outcome.skipped += 1
         continue

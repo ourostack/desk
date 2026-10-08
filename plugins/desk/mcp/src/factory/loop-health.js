@@ -32,6 +32,8 @@ import { slotValid } from "./loop-slot.js"
 import { PATTERNS } from "./schema.js"
 
 export const AGE_ALARM_DAYS = 7
+/** The label lag target: a finished job is labeled within this many minutes of its finish, else `loop_alarm:label_lag` opens. */
+export const LABEL_LAG_ALARM_MINUTES = 60
 export const STUCK_ALARM_DAYS = 21
 export const STALE_AFTER_HOURS = 72
 /** A stored time this far ahead of the clock is clock skew, not a fresh reading. */
@@ -165,6 +167,23 @@ function unsignedSection(signoff, nowMs) {
   return { count: read("unsigned"), oldest_age_days: read("oldest_unsigned_age_days") }
 }
 
+/**
+ * The label lag from the evaluator step's record (`status.evaluator.lag`): `label_lag_minutes`, the age in whole minutes of the oldest finished
+ * job with a labelable session that has no labels yet (a measured 0 when there is none), and `unlabeled_finished`, how many such jobs there
+ * are. A record older than the stale window, dated in the future or damaged says nothing about now: both are `unavailable`.
+ */
+function lagSection(stored, nowMs) {
+  const lag = isObject(stored) && isObject(stored.lag) ? stored.lag : null
+  const fresh = freshness(lag, nowMs)
+  if (fresh !== "fresh") return { label_lag_minutes: unavailable(fresh), unlabeled_finished: unavailable(fresh) }
+  const jobs = count(lag.unlabeled_jobs)
+  const oldest = timeOf(lag.oldest_finished_at)
+  if (jobs.state !== "measured" || (jobs.value === 0) !== (lag.oldest_finished_at === null) || (jobs.value > 0 && Number.isNaN(oldest))) {
+    return { label_lag_minutes: unavailable("not_recorded"), unlabeled_finished: unavailable("not_recorded") }
+  }
+  return { label_lag_minutes: measured(jobs.value === 0 ? 0 : Math.max(0, Math.floor((nowMs - oldest) / 60000))), unlabeled_finished: jobs }
+}
+
 function headlessSection(stored, today) {
   const hl = isObject(stored) && isObject(stored.headless) ? stored.headless : null
   // A stored day earlier than today means no run today: a measured 0. A day that is today's keeps its numbers; an unreadable or future day says nothing.
@@ -292,6 +311,8 @@ export function assembleLoop({ status, read, nowMs, version }) {
       expired_total: field("expired_total"),
       labels_quarantined: recordedCount(loopStatus.labels_quarantined, "count", nowMs),
       gave_up: field("gave_up"),
+      ...lagSection(evaluator, nowMs),
+      label_lag_alarm_minutes: count(LABEL_LAG_ALARM_MINUTES),
       headless: headlessSection(evaluator, today),
     },
     reconcile: reconcileSection(stored.reconcile),
@@ -353,6 +374,7 @@ export function loopAlarms(loop, signals = {}) {
   if (BLOCKING_STATES.includes(evaluator.headless.state) && isInteger(signals.blocked_days) && signals.blocked_days >= BLOCKED_DAYS_FOR_ALARM) alarms.push({ name: "headless_blocked", evidence: { blocked_days: signals.blocked_days } })
   if (isInteger(signals.cards_invalid) && signals.cards_invalid > 0) alarms.push({ name: "cards_invalid", evidence: { files: signals.cards_invalid } })
   if (measuredAbove(evaluator.labels_quarantined, 0)) alarms.push({ name: "labels_quarantined", evidence: { count: evaluator.labels_quarantined.value } })
+  if (measuredAbove(evaluator.label_lag_minutes, LABEL_LAG_ALARM_MINUTES)) alarms.push({ name: "label_lag", evidence: { minutes: evaluator.label_lag_minutes.value, jobs: evaluator.unlabeled_finished.value } })
   if (signals.facts_quarantine_not_settling === true) alarms.push({ name: "facts_quarantine_not_settling", evidence: {} })
   // The record's own slot fails the store's rule, so the capture record goes without it: said once as an alarm, never silence.
   if (signals.slot_invalid === true) alarms.push({ name: "capture_loop_slot", evidence: {} })
@@ -372,6 +394,7 @@ export function unreadAlarms(loop, signals = {}) {
   if (evaluator.headless.state === "unavailable" || !isInteger(signals.blocked_days)) unread.push("headless_blocked")
   if (!isInteger(signals.cards_invalid)) unread.push("cards_invalid")
   if (evaluator.labels_quarantined.state === "unavailable") unread.push("labels_quarantined")
+  if (evaluator.label_lag_minutes.state === "unavailable") unread.push("label_lag")
   if (typeof signals.facts_quarantine_not_settling !== "boolean") unread.push("facts_quarantine_not_settling")
   const attempted = signals.attempted ?? []
   for (const step of STEPS) if (!attempted.includes(step)) unread.push(`step_stale:${step}`)

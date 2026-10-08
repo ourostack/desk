@@ -546,7 +546,7 @@ test("every label-check code in label-schema.js that can reach a page has plain 
   assert.ok(start > 0 && end > start, "the check function is found")
   const codes = [...source.slice(start, end).matchAll(/addError\(errors, "([a-z_]+)"/g)].map((match) => match[1])
   assert.equal(codes.length, source.slice(start, end).split("addError(").length - 1, "every call that writes a code is read: a new call shape fails here")
-  assert.deepEqual([...new Set(codes)].sort(), ["evidence_unmatched", "job_unbound", "range", "session_mismatch"], "the codes the check can write")
+  assert.deepEqual([...new Set(codes)].sort(), ["evidence_unmatched", "inconsistent", "job_unbound", "range", "session_mismatch"], "the codes the check can write")
   for (const code of [...new Set(codes), ...LABEL_UNAVAILABLE]) {
     assert.ok(Object.hasOwn(REASON_TEXT, code), `${code} has text`)
     assert.ok(REASON_TEXT[code].length > 10, `${code} text is words`)

@@ -5,10 +5,11 @@ import { existsSync, readFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Readable } from "node:stream"
-import { factoryStateRoot, listMarkers, requestFinalize, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, listMarkers, requestEvaluation, requestFinalize, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
 
 import { readInput, runHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
+import { LOOP_START_SCRIPT } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
 
@@ -481,4 +482,20 @@ test("plain Copilot takes a plugin's source from its install record's GitHub mar
     assert.equal(sourcesOf(await scanFor(ctx, "copilot", path.join(folder, "desk"))).desk, null, `${file}: ${text.slice(0, 20)}`)
     await fs.writeFile(path.join(home, file), saved)
   }
+}))
+
+test("the end of a turn starts the loop launcher when an evaluation request is newer than the evaluator's last run, and leaves it to finalize when one is pending", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const calls = []
+  const options = { host: "claude", payload: { session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: "Stop" }, env: ctx.env, launch: async (...args) => calls.push(args) }
+  await runHook(options)
+  assert.deepEqual(calls, [], "no request waits")
+  await requestEvaluation(ctx.env, { job: "2".repeat(32), deskRoot: ctx.desk })
+  await runHook(options)
+  assert.deepEqual(calls.map((call) => [call[0], call[1]]), [[LOOP_START_SCRIPT, []]])
+  // With a finalize request pending, finalize starts the worker itself once it has derived the job's sessions.
+  await requestFinalize(ctx.env, { job: "3".repeat(32), deskRoot: ctx.desk })
+  calls.length = 0
+  await runHook(options)
+  assert.deepEqual(calls.map((call) => call[1]), [["finalize", "--job", "3".repeat(32)]])
 }))

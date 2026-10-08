@@ -16,7 +16,7 @@ import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/r
 import { STEPS, recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import {
   AGE_ALARM_DAYS, STALE_AFTER_HOURS, STUCK_ALARM_DAYS, BLOCKING_STATES, HEADLESS_STATES,
-  STORE_SIDE_REASONS, assembleLoop, buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
+  STORE_SIDE_REASONS, LABEL_LAG_ALARM_MINUTES, assembleLoop, buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
 } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
 
 const DAY = 24 * 3600 * 1000
@@ -135,7 +135,7 @@ test("the record has exactly the contract's keys, every number is a Count, and a
   assert.deepEqual(keysOf(loop.improvement.by_source), ["andon", "desk_problem", "evaluator", "flush_health", "friction_candidate", "loop_alarm", "reconcile_class", "store_build"])
   assert.deepEqual(keysOf(loop.unsigned_deliveries), ["count", "oldest_age_days"])
   assert.deepEqual(keysOf(loop.alarms), ["andon_open", "desk_problems_open", "loop_alarms_open", "store_build_failing"])
-  assert.deepEqual(keysOf(loop.evaluator), ["expired_total", "gave_up", "headless", "labels_quarantined", "oldest_wait_days", "waiting"])
+  assert.deepEqual(keysOf(loop.evaluator), ["expired_total", "gave_up", "headless", "label_lag_alarm_minutes", "label_lag_minutes", "labels_quarantined", "oldest_wait_days", "unlabeled_finished", "waiting"])
   assert.deepEqual(keysOf(loop.evaluator.headless), ["accepted_today", "cap_per_day", "cost_usd_today", "jobs_today", "rejected_today", "state"])
   assert.deepEqual(keysOf(loop.reconcile), ["desks", "last_ran_at", "mismatches", "report_link_unavailable", "store_side", "window_days"])
   assert.deepEqual(keysOf(loop.steps), [...STEPS].sort())
@@ -447,6 +447,7 @@ test("no evaluator record: every evaluator number is not_recorded and the state 
   const { evaluator: summary } = await build(ctx)
   assert.deepEqual(summary, {
     waiting: U("not_recorded"), oldest_wait_days: U("not_recorded"), expired_total: U("not_recorded"), labels_quarantined: U("not_recorded"), gave_up: U("not_recorded"),
+    label_lag_minutes: U("not_recorded"), unlabeled_finished: U("not_recorded"), label_lag_alarm_minutes: M(60),
     headless: { state: "unavailable", jobs_today: U("not_recorded"), cap_per_day: M(6), accepted_today: U("not_recorded"), rejected_today: U("not_recorded"), cost_usd_today: U("not_recorded") },
   })
   await setStatus(ctx, { evaluator: "x" })
@@ -571,11 +572,11 @@ test("loopAlarms and unreadAlarms work from a record and its signals alone", () 
   const loop = await build(ctx)
   assert.deepEqual(loopAlarms(loop), [{ name: "improvement_age", evidence: { age_days: 9 } }])
   assert.deepEqual(loopAlarms(loop, { attempted: ["route"], blocked_days: 3, cards_invalid: 1 }).map((alarm) => alarm.name), ["improvement_age", "cards_invalid"])
-  assert.deepEqual(unreadAlarms(loop, { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0, facts_quarantine_not_settling: false }), ["unsigned_age", "headless_blocked", "labels_quarantined"])
-  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "facts_quarantine_not_settling", ...STEPS.map((step) => `step_stale:${step}`)])
+  assert.deepEqual(unreadAlarms(loop, { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0, facts_quarantine_not_settling: false }), ["unsigned_age", "headless_blocked", "labels_quarantined", "label_lag"])
+  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", ...STEPS.map((step) => `step_stale:${step}`)])
   assert.deepEqual(loopAlarms(loop, { facts_quarantine_not_settling: true }).map((alarm) => alarm.name), ["improvement_age", "facts_quarantine_not_settling"])
   const blind = await build(ctx, { readCardsImpl: async () => ({ unreadable: true }) })
-  assert.deepEqual(unreadAlarms(blind, { attempted: [...STEPS], blocked_days: 0, cards_invalid: null, facts_quarantine_not_settling: false }), ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined"])
+  assert.deepEqual(unreadAlarms(blind, { attempted: [...STEPS], blocked_days: 0, cards_invalid: null, facts_quarantine_not_settling: false }), ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag"])
 }))
 
 test("an alarm whose input could not be read is not observed clear when it is recorded present", () => scratch(async (ctx) => {
@@ -690,4 +691,49 @@ test("loop alarm cards are in no card count but loop_alarms_open: open, claimed,
   await make(ctx, "andon", "ourostack/factory#1", { state: "claimed", days: 1 })
   const { improvement, alarms } = await build(ctx)
   assert.deepEqual([improvement.open, improvement.claimed, improvement.shipped, improvement.verifying, alarms.loop_alarms_open], [M(0), M(1), M(0), M(0), M(4)])
+}))
+
+// ---------------------------------------------------------------------------
+// The label lag: the age of the oldest finished job still unlabeled.
+// ---------------------------------------------------------------------------
+
+const lagOf = (lag) => evaluator({ lag })
+const MINUTES_AGO = (minutes) => new Date(NOW.getTime() - minutes * 60 * 1000).toISOString()
+
+test("the label lag is the oldest unlabeled finished job's age in minutes, a measured 0 with none, and unavailable when it says nothing about now", () => scratch(async (ctx) => {
+  assert.equal(LABEL_LAG_ALARM_MINUTES, 60)
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 3, oldest_finished_at: MINUTES_AGO(95) }))
+  const read = (await build(ctx)).evaluator
+  assert.deepEqual([read.label_lag_minutes, read.unlabeled_finished, read.label_lag_alarm_minutes], [M(95), M(3), M(60)])
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 0, oldest_finished_at: null }))
+  assert.deepEqual((await build(ctx)).evaluator.label_lag_minutes, M(0))
+  // A finish recorded a little ahead of the clock is no negative age.
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 1, oldest_finished_at: new Date(NOW.getTime() + 60000).toISOString() }))
+  assert.deepEqual((await build(ctx)).evaluator.label_lag_minutes, M(0))
+  for (const [lag, reason] of [
+    [undefined, "not_recorded"],
+    [{ at: new Date(NOW.getTime() - (STALE_AFTER_HOURS + 1) * 3600 * 1000).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null }, "stale"],
+    [{ at: TIME, unlabeled_jobs: -1, oldest_finished_at: null }, "not_recorded"],
+    [{ at: TIME, unlabeled_jobs: 0, oldest_finished_at: MINUTES_AGO(5) }, "not_recorded"],
+    [{ at: TIME, unlabeled_jobs: 2, oldest_finished_at: null }, "not_recorded"],
+    [{ at: TIME, unlabeled_jobs: 2, oldest_finished_at: "garbage" }, "not_recorded"],
+  ]) {
+    await setStatus(ctx, lag === undefined ? evaluator() : lagOf(lag))
+    const lagged = (await build(ctx)).evaluator
+    assert.deepEqual([lagged.label_lag_minutes, lagged.unlabeled_finished], [U(reason), U(reason)], JSON.stringify(lag))
+  }
+}))
+
+test("a lag over an hour raises loop_alarm:label_lag, an hour exactly does not, and an unreadable lag is neither raised nor cleared", () => scratch(async (ctx) => {
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 2, oldest_finished_at: MINUTES_AGO(61) }))
+  assert.deepEqual(loopAlarms(await build(ctx)).filter((alarm) => alarm.name === "label_lag"), [{ name: "label_lag", evidence: { minutes: 61, jobs: 2 } }])
+  assert.equal(unreadAlarms(await build(ctx), {}).includes("label_lag"), false)
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 2, oldest_finished_at: MINUTES_AGO(60) }))
+  assert.deepEqual(loopAlarms(await build(ctx)).filter((alarm) => alarm.name === "label_lag"), [])
+  assert.ok(LOOP_ALARMS.includes("label_lag"))
+  // The measure step opens the card for it.
+  await setStatus(ctx, lagOf({ at: TIME, unlabeled_jobs: 1, oldest_finished_at: MINUTES_AGO(180) }))
+  const out = await measure(ctx, { attempted: [...STEPS] })
+  assert.ok(out.spy.calls[0].present.includes("label_lag"))
+  assert.ok((await readCards({ deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix })).cards.some((card) => card.key === cardKey("loop_alarm", "label_lag")))
 }))

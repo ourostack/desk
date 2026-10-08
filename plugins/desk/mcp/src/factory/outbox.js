@@ -49,11 +49,14 @@
 //   evaluations/<job>/<store-slug>/<host>-<session_id>.labels.json
 //                                      what the evaluator wrote, checked
 //                                      before it becomes local labels
-//   evaluate-requests/<job>.json       a finished job still needing labels
+//   evaluate-requests/<job>.json       a finished job still needing labels:
+//                                      { schema_version, job, desk_root,
+//                                        requested_at, finished_at? }
 //   evaluate-requests/quarantine/<job>.json   { reason, at }
+//   evaluate-requests/expired/<job>.json      { reason: "expired", at }
 //   locks/<name>.lock                  a named critical-section lock with no JSON file of its own
 //
-// Local labels (`desk.factory.labels/2`, or `/1`) are already on the published
+// Local labels (`desk.factory.labels/3`, or `/2` or `/1`) are already on the published
 // session clock and carry no free text; like local facts they leave only
 // through the publishing transform (`publish.js`'s `toPublishedLabels`),
 // which keys the job on a desk that is not known to be private. Their
@@ -1860,17 +1863,46 @@ export async function hasLocalLabels(env, store, job, session) {
 }
 
 /**
+ * `localLabelsRubric(env, store, job, session) -> string | null`: the rubric of `store`'s local labels for `job`'s session, `null` when there are
+ * none, and `"0"` (older than every rubric) when the file is there but does not read as labels with a rubric.
+ */
+export async function localLabelsRubric(env, store, job, session) {
+  if (!(await hasLocalLabels(env, store, job, session))) return null
+  const root = await factoryStateRoot(env)
+  try {
+    const rubric = JSON.parse(await fsp.readFile(path.join(root, "labels", storeSlug(store), job, `${session}.json`), "utf8"))?.evaluator?.rubric
+    return typeof rubric === "string" && /^[1-9][0-9]{0,2}$/u.test(rubric) ? rubric : "0"
+  } catch {
+    return "0"
+  }
+}
+
+/** `settledEvaluationRequests(env) -> Set<job>`: the jobs whose evaluation request was moved to `expired/` or `quarantine/`; nothing asks for them again by itself. */
+export async function settledEvaluationRequests(env) {
+  const root = await factoryStateRoot(env)
+  const jobs = new Set()
+  for (const folder of ["expired", "quarantine"]) {
+    for (const name of await listRegularFiles(path.join(root, "evaluate-requests", folder), FINALIZE_NAME_PATTERN)) jobs.add(name.slice(0, -".json".length))
+  }
+  return jobs
+}
+
+/**
  * Records that `job` finished and still needs waste labels
  * (`evaluate-requests/<job>.json`), kept until its labels are complete or
- * the request is quarantined, like a finalize request.
+ * the request is quarantined, like a finalize request. `finishedAt` (an ISO
+ * time) is when the job finished, when the caller knows it better than the
+ * request's own time; a request already recorded keeps its times.
  */
-export async function requestEvaluation(env, { job, deskRoot }) {
+export async function requestEvaluation(env, { job, deskRoot, finishedAt = null }) {
   requirePattern(job, PATTERNS.jobId, "job")
   requireAbsolutePath(deskRoot, "deskRoot")
+  if (finishedAt !== null && !PATTERNS.timestamp.test(finishedAt)) fail("finishedAt", "must be an ISO time")
   const root = await factoryStateRoot(env, { deskRoot })
   const file = path.join(root, "evaluate-requests", `${job}.json`)
   const existing = await readJsonFileSafe(file, null, process.platform)
-  const record = { schema_version: 1, job, desk_root: deskRoot, requested_at: existing?.requested_at ?? defaultNow() }
+  const finished = existing === null ? finishedAt : PATTERNS.timestamp.test(existing.finished_at ?? "") ? existing.finished_at : null
+  const record = { schema_version: 1, job, desk_root: deskRoot, requested_at: existing?.requested_at ?? defaultNow(), ...(finished === null ? {} : { finished_at: finished }) }
   await writeJsonAtomic(root, file, record, { platform: process.platform, env })
   return record
 }
@@ -1882,7 +1914,10 @@ export async function listEvaluationRequests(env) {
   const results = []
   for (const name of await listRegularFiles(dir, FINALIZE_NAME_PATTERN)) {
     const record = await readJsonFileSafe(path.join(dir, name), null, process.platform)
-    if (record !== null && record.job === name.slice(0, -".json".length) && typeof record.desk_root === "string" && PATTERNS.timestamp.test(record.requested_at ?? "")) results.push(record)
+    if (record === null || record.job !== name.slice(0, -".json".length) || typeof record.desk_root !== "string" || !PATTERNS.timestamp.test(record.requested_at ?? "")) continue
+    // A finish time that does not read is dropped, never trusted: the request's own time stands in for it.
+    if (Object.hasOwn(record, "finished_at") && !PATTERNS.timestamp.test(String(record.finished_at))) delete record.finished_at
+    results.push(record)
   }
   return results
 }

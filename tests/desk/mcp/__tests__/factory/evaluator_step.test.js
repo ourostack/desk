@@ -14,7 +14,7 @@ import { NO_FILE_SYMLINKS } from "../_platform.js"
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
 import { labelsBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
-import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, listEvaluationRequests, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts, writeLocalLabels, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -56,8 +56,10 @@ async function seedJob(env, base, index, { host = "claude-code", hosts = [host] 
   return job
 }
 
+// The current labels form (labels /3 under rubric 4), with no stops: the fixture's one wait is left unclassified.
 function labelsFor(brief) {
-  return { ...structuredClone(LABELS), job: brief.job, session: brief.session.id, unavailable: ["session_log_missing"] }
+  const { unavailable, ...head } = structuredClone(LABELS)
+  return { ...head, schema: "desk.factory.labels/3", job: brief.job, session: brief.session.id, evaluator: { ...head.evaluator, rubric: "4" }, stops: [], unavailable: ["session_log_missing"] }
 }
 
 // A fake runner. `script(call, count)` answers `{ state, cost_usd }`; `write` makes the evaluator answer.
@@ -137,6 +139,7 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
       deferred_jobs: 0,
       blocked_days: 0,
     },
+    lag: { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null },
   })
   const record = (await readStatus(env)).loop.steps.evaluate
   assert.equal(record.last_result, "ran")
@@ -597,6 +600,8 @@ test("the caller's contract is checked", () => scratch(async (env) => {
   await assert.rejects(step(env, { pluginVersion: VERSION }), TypeError, "a deadline is required")
   await assert.rejects(step(env, { pluginVersion: VERSION, deadline: null }), TypeError, "a deadline is required")
   await assert.rejects(step(env), TypeError)
+  await assert.rejects(step(env, { pluginVersion: VERSION, deadline: Date.now(), deskRoot: "relative" }), TypeError)
+  await assert.rejects(step(env, { pluginVersion: VERSION, deadline: Date.now(), deskRoot: 7 }), TypeError)
 }))
 
 test("the runner is told the folder of each session log the briefs name", () => scratch(async (env, base) => {
@@ -886,4 +891,75 @@ test("the time limit is checked again right before the run, after the sign-in pr
   assert.equal(evaluator.headless.jobs, 0)
   assert.equal(evaluator.headless.deferred_jobs, 1)
   assert.deepEqual((await readStatus(env)).loop.evaluate.attempts, {})
+}))
+
+// ---------------------------------------------------------------------------
+// The tight loop: the backstop, fresh finishes first, and the label lag.
+// ---------------------------------------------------------------------------
+
+// Labels of an older rubric for a seeded job's first session, with a marker whose log is still on disk, so it is relabeled.
+async function labeledUnderRubric3(env, base, index) {
+  const job = await seedJob(env, base, index)
+  const session = sessionId(index * 10)
+  const { unavailable, ...old } = structuredClone(LABELS)
+  for (const stretch of old.stretches) delete stretch.caught
+  await writeLocalLabels(env, STORE, { ...old, job, session, unavailable })
+  const log = path.join(base, `log-${index}.jsonl`)
+  await fs.writeFile(log, "{}\n")
+  await writeMarker(env, {
+    schema_version: 1, host: "claude-code", session_id: session, log_path: log, cwd: base, desk_root: null,
+    end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(),
+  })
+  return job
+}
+
+test("a finished job with no request is found by the backstop and labeled in the same step", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  const root = await factoryStateRoot(env)
+  await fs.rm(path.join(root, "evaluate-requests", `${job}.json`))
+  const options = seams({ deskRoot: path.join(base, "desk") })
+  assert.deepEqual(await step(env, options), { ok: true, result: "ran" })
+  assert.equal(options.runHeadless.calls.length, 1)
+  assert.deepEqual(await listEvaluationRequests(env), [], "labeled, so the request it recorded is cleared")
+}))
+
+test("a backstop that fails never stops the step: the requests already waiting run", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  const options = seams({ requestFinishedJobs: async () => { throw new Error("SENTINEL backstop") } })
+  assert.deepEqual(await step(env, options), { ok: true, result: "ran" })
+  assert.equal(JSON.stringify(await readStatus(env)).includes("SENTINEL"), false)
+}))
+
+test("fresh finishes run before relabels, and the oldest finish first", () => scratch(async (env, base) => {
+  const relabel = await labeledUnderRubric3(env, base, 1)
+  const newer = await seedJob(env, base, 2)
+  const older = await seedJob(env, base, 3)
+  const root = await factoryStateRoot(env)
+  const at = (job, finished) => fs.writeFile(path.join(root, "evaluate-requests", `${job}.json`), JSON.stringify({ schema_version: 1, job, desk_root: path.join(base, "desk"), requested_at: "2026-09-25T09:00:00.000Z", finished_at: finished }))
+  await at(relabel, "2026-09-20T00:00:00.000Z")
+  await at(newer, "2026-09-25T10:00:00.000Z")
+  await at(older, "2026-09-24T10:00:00.000Z")
+  const options = seams()
+  await step(env, options)
+  assert.deepEqual(options.runHeadless.calls.map((call) => call.job.job), [older, newer, relabel])
+}))
+
+test("the lag names the oldest finished job still unlabeled, counts them, and leaves out relabels", () => scratch(async (env, base) => {
+  await labeledUnderRubric3(env, base, 1)
+  const first = await seedJob(env, base, 2)
+  const second = await seedJob(env, base, 3)
+  const root = await factoryStateRoot(env)
+  await fs.writeFile(path.join(root, "evaluate-requests", `${first}.json`), JSON.stringify({ schema_version: 1, job: first, desk_root: path.join(base, "desk"), requested_at: "2026-09-25T09:00:00.000Z", finished_at: "2026-09-24T10:00:00.000Z" }))
+  // Every run fails, so nothing is labeled and both fresh finishes stay unlabeled.
+  await step(env, seams({ runHeadless: fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false }) }))
+  const { lag } = await evaluatorOf(env)
+  assert.deepEqual(lag, { at: new Date(DAY0).toISOString(), unlabeled_jobs: 2, oldest_finished_at: "2026-09-24T10:00:00.000Z" })
+  assert.ok(second)
+}))
+
+test("a job labeled in the step leaves the lag; a step with nothing waiting records none", () => scratch(async (env, base) => {
+  await step(env, seams())
+  await seedJob(env, base, 1)
+  await step(env, seams({ now: DAY0 + DAY }))
+  assert.deepEqual((await evaluatorOf(env)).lag, { at: new Date(DAY0 + DAY).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null })
 }))
