@@ -92,11 +92,15 @@
 //     and idle time lower bounds and leaves working time exact; intervals
 //     the log lost make working time a lower bound and idle time an upper
 //     one; and so on. A ratio takes its numerator's direction against its
-//     lead time's. When the reasons pull both ways, or none moves the
-//     figure, or the figure is a ranking and not one quantity, `bound` is
-//     `null` and `bound_reason` says which (`bound_reasons_conflict`,
-//     `bound_not_moved`, `bound_not_one_quantity`); the key is never left
-//     out of a partial figure, and a measured or unavailable one has none.
+//     lead time's. Every reason that can reach these figures is named
+//     (`REASON_CHANGE`); one that is not fails closed. When there is no
+//     direction, `bound` is `null` and `bound_reason` says why: the reasons
+//     pull both ways (`bound_reasons_conflict`), none of them changes the
+//     figure, so it is exact for the task's window as stated
+//     (`bound_not_moved`), the figure is a ranking and not one quantity
+//     (`bound_not_one_quantity`), or a reason's direction was never decided
+//     (`bound_direction_undecided`). The key is never left out of a partial
+//     figure, and a measured or unavailable one has none.
 //   - A burst's counts publish as envelopes, never a zero for no data: its
 //     labeled time is unavailable (`not_labeled`) when none of its sessions
 //     has labels, its operator turns take the formulas' `attention` state
@@ -175,17 +179,35 @@ function covered(value, base, ...coverages) {
   return known(value, [...base, ...coverages.flatMap((coverage) => coverage.reasons)])
 }
 
-// What each reason says about the figure, by the kind of change it stands for; a reason not named here says some of the job's
-// intervals were not seen (`log_truncated`, `session_open`, `source_unreadable`, ...).
-const REASON_CHANGE = Object.freeze({
+// What each reason that can reach a walk figure says about it, by the kind of change it stands for. The lead time's reasons, the labels'
+// coverage, the job clock's placement, unattributed work, and every reason the formulas' interval coverage (`active_time_ms`) can carry:
+// the facts' own flags (`ENUMS.unavailableReason`) and the shared and split workers. A reason not named here has no decided direction:
+// its figure fails closed (`bound: null`, `bound_direction_undecided`), and a test fails when the fixtures reach one.
+export const REASON_CHANGE = Object.freeze({
   censored: "open",
+  open_job: "open",
   card_dates_shorter_than_work: "floor",
   labels_from_shared_session: "shared",
   partial: "part_labeled",
   job_offsets_unavailable: "unplaced",
   session_work_unattributed: "unattributed",
+  worker_shared: "overcount",
+  // A session the job owns only some workers of leaves that session's share out, as lost intervals do.
+  worker_split: "unseen",
+  host_does_not_record: "unseen",
+  log_missing: "unseen",
+  log_truncated: "unseen",
+  session_open: "unseen",
+  not_collected_in_slice_1: "unseen",
+  source_unreadable: "unseen",
+  capped: "unseen",
+  desk_public: "unseen",
+  field_absent: "unseen",
+  host_records_partly: "unseen",
+  withheld_public: "unseen",
 })
-const changeOf = (reason) => REASON_CHANGE[reason] ?? "unseen"
+const UNDECIDED = "undecided"
+const changeOf = (reason) => REASON_CHANGE[reason] ?? UNDECIDED
 
 /**
  * Which way each kind of change pulls each kind of figure: `lower` (the true figure is higher), `upper` (it is lower) or `both`; a change
@@ -194,39 +216,47 @@ const changeOf = (reason) => REASON_CHANGE[reason] ?? "unseen"
  * time is at least this, idle time and `unknown` at most) and the evidence that names a wait. Some sessions unlabeled (`part_labeled`)
  * leaves their labeled waits counted as working, and their labeled time out. A session the job clock cannot place (`unplaced`) leaves
  * its work out and its span reading as no session. Unattributed session work (`unattributed`) may be another job's: `other_task` is at
- * least this and `unknown` at most; unseen intervals may be this job's work inside it or another job's outside it, so they pull
- * `other_task` both ways. Labels from a shared session (`shared`) move time inside the job's own intervals, with no known
- * direction, as the site reads them.
+ * least this and `unknown` at most. Unseen intervals may be this job's work inside `other_task` or another job's outside it, so they pull
+ * it both ways, unless the span has no `unknown`, `no_session` or `queue_before_start` time for it to grow into: then it can only shrink
+ * (`other_task_capped`). A worker shared with another job (`overcount`) has its time counted for each job, so working and labeled time
+ * are at most this, and idle time, `unknown` and `other_task` at least. Labels from a shared session (`shared`) were judged without
+ * knowing whose work a moment was, so the class or waste of a labeled moment can be off either way; they do not move working, idle or
+ * a wait's cause, because the cut keeps every labeled moment inside this job's share and whether it is working or waiting does not
+ * depend on whose it was.
  */
 export const BOUND_DIRECTIONS = Object.freeze({
   lead: { open: "lower", floor: "lower", unseen: "lower", unplaced: "lower" },
-  working: { open: "lower", unseen: "lower", part_labeled: "upper", unplaced: "lower" },
-  labeled: { open: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower" },
-  idle: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "upper" },
-  unknown: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "upper", unattributed: "upper" },
+  working: { open: "lower", unseen: "lower", part_labeled: "upper", unplaced: "lower", overcount: "upper" },
+  labeled: { open: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower", overcount: "upper", shared: "both" },
+  idle: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "upper", overcount: "lower" },
+  unknown: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "upper", unattributed: "upper", overcount: "lower" },
   evidence: { open: "lower", floor: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower" },
-  other_task: { open: "lower", floor: "lower", unseen: "both", part_labeled: "lower", unplaced: "lower", unattributed: "lower" },
+  other_task: { open: "lower", floor: "lower", unseen: "both", part_labeled: "lower", unplaced: "lower", unattributed: "lower", overcount: "lower" },
+  other_task_capped: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "lower", unattributed: "lower", overcount: "lower" },
   placement: { open: "lower", floor: "lower", unplaced: "upper" },
   count: { open: "lower", unseen: "both", unplaced: "both" },
 })
 
-// The direction `reasons` give a figure of `kind`: "lower", "upper", "both" or "none".
+// The direction `reasons` give a figure of `kind`: "lower", "upper", "both", "none", or "undecided" when a reason is not named.
 function directionOf(kind, reasons) {
-  const pulls = new Set(reasons.map((reason) => BOUND_DIRECTIONS[kind][changeOf(reason)]).filter((pull) => pull !== undefined))
+  const changes = reasons.map(changeOf)
+  if (changes.includes(UNDECIDED)) return UNDECIDED
+  const pulls = new Set(changes.map((change) => BOUND_DIRECTIONS[kind][change]).filter((pull) => pull !== undefined))
   if (pulls.has("both") || pulls.size > 1) return "both"
   return pulls.size === 0 ? "none" : [...pulls][0]
 }
 
-const FLIP = Object.freeze({ lower: "upper", upper: "lower", both: "both", none: "none" })
+const FLIP = Object.freeze({ lower: "upper", upper: "lower", both: "both", none: "none", [UNDECIDED]: UNDECIDED })
 
-// Two directions of one figure's parts as one.
+// Two directions of one figure's parts as one; an undecided part leaves the whole undecided.
 function joined(left, right) {
+  if (left === UNDECIDED || right === UNDECIDED) return UNDECIDED
   if (left === "none") return right
   if (right === "none" || left === right) return left
   return "both"
 }
 
-const BOUND_REASON = Object.freeze({ both: "bound_reasons_conflict", none: "bound_not_moved", ranking: "bound_not_one_quantity" })
+const BOUND_REASON = Object.freeze({ both: "bound_reasons_conflict", none: "bound_not_moved", ranking: "bound_not_one_quantity", [UNDECIDED]: "bound_direction_undecided" })
 
 // A figure with its `bound` when partial: the direction, or `null` with the `bound_reason` that says why there is none.
 function directed(number, direction) {
@@ -576,7 +606,9 @@ function idleFigures(idle, { base, coverage, intervals, placement }) {
   const unattributed = idle.unattributed.length > 0 ? ["session_work_unattributed"] : []
   return Object.fromEntries(IDLE_WAITED_ON.map((cause) => {
     const value = duration(idle[cause])
-    const kind = IDLE_KIND[cause] ?? "evidence"
+    // `other_task` cannot grow where nothing is left for it to take (see `BOUND_DIRECTIONS`).
+    const room = duration(idle.unknown) + duration(idle.no_session) + duration(idle.queue_before_start)
+    const kind = cause === "other_task" && room === 0 ? "other_task_capped" : IDLE_KIND[cause] ?? "evidence"
     if (cause === "queue_before_start" || cause === "no_session") return [cause, bounded(covered(value, [...base, ...placement], intervals), kind)]
     if (cause === "tool_failure" || cause === "long_tool_call") return [cause, bounded(covered(value, base, intervals, coverage), kind)]
     if (cause === "other_task") return [cause, bounded(covered(value, [...base, ...placement, ...unattributed], intervals, refinedBy(coverage)), kind)]

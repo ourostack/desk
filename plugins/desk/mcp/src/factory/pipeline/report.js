@@ -53,7 +53,8 @@ const REPORT_REASON_TEXT = {
   session_work_unattributed: "a session of this task did work that no task's binding claims, so that time stays under cause not recorded and some of it may have been another task's",
   // Why a partial figure's `bound` is null: no direction is known.
   bound_reasons_conflict: "its reasons pull it both ways, so the true figure may be higher or lower",
-  bound_not_moved: "none of its reasons moves it in a known direction",
+  bound_not_moved: "its reasons do not change this figure, so it is exact for the task's window as stated",
+  bound_direction_undecided: "one of its reasons has no decided direction yet, so the true figure may be higher or lower",
   bound_not_one_quantity: "it is a ranking or a status, not one quantity, so it has no single direction",
   no_wait_intervals: "no wait was recorded",
   no_active_intervals: "no active time was recorded",

@@ -1,12 +1,16 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync, readdirSync } from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 
+import { ENUMS } from "../../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { calculateFormulas } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js"
 import { normalizePublished, stableStringify } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
 import { computeRollups, jobRecord, resolveLabels } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
 import { AGENTS_WORKING, LONG_TOOL_CALL_MS, UNLABELED_CLASS, WAITED_ON, causeKey, compareFields, correctStretches, evidenceIntervals, sessionDetail, timelineAdditions, waitedOn } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/stretches.js"
 import { buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
-import { BOUND_DIRECTIONS, BURST_IDLE_GAP_MS, IDLE_WAITED_ON, bounded, causesRollup, figure, jobWalk, sessionAttribution, stackupRollup, tasksRollup } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/walk.js"
+import { BOUND_DIRECTIONS, BURST_IDLE_GAP_MS, IDLE_WAITED_ON, REASON_CHANGE, bounded, causesRollup, figure, jobWalk, sessionAttribution, stackupRollup, tasksRollup } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/walk.js"
 import { DETAIL_FILE_BUDGET_BYTES } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 
 const J = (digit) => digit.repeat(32)
@@ -981,10 +985,24 @@ test("each reason pulls each kind of figure one way, and a ratio takes its numer
   assert.deepEqual(bounded(partial(["card_dates_shorter_than_work", "log_truncated"]), "idle"), { ...partial(["card_dates_shorter_than_work", "log_truncated"]), bound: null, bound_reason: "bound_reasons_conflict" })
   assert.equal(bounded(partial(["partial"]), "working").bound, "upper", "an unlabeled session's waits count as working")
   assert.equal(bounded(partial(["partial"]), "labeled").bound, "lower")
+  // Shared labels move no working time, but the class or waste of a labeled moment can be off either way.
   assert.equal(bounded(partial(["labels_from_shared_session"]), "working").bound_reason, "bound_not_moved")
+  assert.deepEqual(bounded(partial(["labels_from_shared_session"]), "labeled"), { ...partial(["labels_from_shared_session"]), bound: null, bound_reason: "bound_reasons_conflict" })
+  assert.equal(bounded(partial(["labels_from_shared_session", "log_truncated"]), "labeled").bound_reason, "bound_reasons_conflict", "a shared session's labels are not dropped beside another reason")
+  assert.equal(bounded(partial(["labels_from_shared_session", "log_truncated"]), "working").bound, "lower")
+  // A worker shared with another job is counted for each: working and labeled time at most this, idle time at least.
+  assert.equal(bounded(partial(["worker_shared"]), "working").bound, "upper")
+  assert.equal(bounded(partial(["worker_shared"]), "labeled").bound, "upper")
+  assert.equal(bounded(partial(["worker_shared"]), "idle").bound, "lower")
+  assert.equal(bounded(partial(["worker_shared", "log_truncated"]), "working").bound_reason, "bound_reasons_conflict")
+  assert.equal(bounded(partial(["open_job"]), "labeled").bound, "lower", "an open job is a job still open")
   assert.equal(bounded(partial(["job_offsets_unavailable"]), "placement").bound, "upper")
-  assert.equal(bounded(partial(["some_new_reason"]), "working").bound, "lower", "a reason not named reads as unseen intervals")
-  assert.deepEqual(Object.keys(BOUND_DIRECTIONS).sort(), ["count", "evidence", "idle", "labeled", "lead", "other_task", "placement", "unknown", "working"])
+  // A reason nobody decided a direction for fails closed, whatever else the figure carries.
+  for (const kind of Object.keys(BOUND_DIRECTIONS)) {
+    assert.deepEqual(bounded(partial(["some_new_reason"]), kind), { ...partial(["some_new_reason"]), bound: null, bound_reason: "bound_direction_undecided" }, kind)
+    assert.equal(bounded(partial(["censored", "some_new_reason"]), kind).bound_reason, "bound_direction_undecided", kind)
+  }
+  assert.deepEqual(Object.keys(BOUND_DIRECTIONS).sort(), ["count", "evidence", "idle", "labeled", "lead", "other_task", "other_task_capped", "placement", "unknown", "working"])
   // Ratios: a floored closed job's flow efficiency is at most its figure; with unlabeled sessions too, both parts say at most.
   const floored = facts({
     id: S(67),
@@ -1000,4 +1018,47 @@ test("each reason pulls each kind of figure one way, and a ratio takes its numer
   const whole = walkOf([facts({ id: S(69), duration: 30 * MIN, intervals: [span("turn", 0, 0, 30 * MIN)], unavailable: [{ field: "tool_durations", reason: "session_open" }], jobs: [binding(J("a"), 0, { done: 30 * MIN })] })], [], J("a")).walk
   assert.equal(whole.task.flow_efficiency.bound, "lower", "unseen work makes working time, and so the ratio, a lower bound")
   assert.equal(whole.task.active_share_recorded.bound, "lower")
+})
+
+// Every reason on a figure of a built output that carries a bound, with where it was first found.
+function reasonsIn(node, path, out) {
+  if (Array.isArray(node)) node.forEach((item, index) => reasonsIn(item, `${path}[${index}]`, out))
+  else if (node !== null && typeof node === "object") {
+    // A ranking has no direction whatever its reasons, so its reasons decide nothing.
+    if (Object.hasOwn(node, "bound") && node.bound_reason !== "bound_not_one_quantity") for (const reason of node.reasons) if (!out.has(reason)) out.set(reason, path)
+    for (const [key, value] of Object.entries(node)) reasonsIn(value, `${path}.${key}`, out)
+  }
+  return out
+}
+
+test("every reason a walk figure can carry has a decided direction: the facts' flags, the formulas' worker reasons, and every reason the fixtures reach", () => {
+  // The interval coverage can carry any of the facts' own flags and the shared and split workers.
+  for (const reason of [...ENUMS.unavailableReason, "worker_shared", "worker_split"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
+  // Every reason on a bounded figure of the golden walk outputs is named.
+  const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures")
+  const found = new Map()
+  for (const golden of ["store-expected", "rollup-store-expected"]) {
+    const root = path.join(fixtures, golden)
+    for (const file of ["rollups/tasks.json", "rollups/stackup.json", "rollups/causes.json"]) reasonsIn(JSON.parse(readFileSync(path.join(root, file), "utf8")), `${golden}/${file}`, found)
+    for (const file of readdirSync(path.join(root, "jobs")).filter((name) => name.endsWith(".json"))) reasonsIn(JSON.parse(readFileSync(path.join(root, "jobs", file), "utf8")).timeline, `${golden}/jobs/${file}`, found)
+  }
+  assert.ok(found.size > 0)
+  for (const [reason, where] of found) assert.ok(Object.hasOwn(REASON_CHANGE, reason), `${reason} (first at ${where}) has no decided direction`)
+})
+
+test("other_task with lost intervals is an upper bound when the span has no unknown, no-session or queue time for it to grow into", () => {
+  const session = twoTaskSession(S(71), {
+    // Job a works 0 to 10 and 30 to 40; job b's part, 10 to 30, is all of a's idle time.
+    intervals: [span("turn", 0, 0, 40 * MIN)],
+    segmentsA: [{ start_ms: 0, end_ms: 10 * MIN }, { start_ms: 30 * MIN, end_ms: 40 * MIN }],
+    segmentsB: [{ start_ms: 10 * MIN, end_ms: 30 * MIN }],
+    unavailable: [{ field: "tool_durations", reason: "session_open" }],
+  })
+  const { walk } = walkOf([session], [], J("a"))
+  const split = walk.task.waiting_by_waited_on_ms
+  assert.deepEqual([split.unknown.value, split.no_session.value, split.queue_before_start.value], [0, 0, 0])
+  assert.deepEqual(split.other_task, { class: "inferred", state: "partial", value: 20 * MIN, reasons: ["session_open"], bound: "upper" })
+  // The gap is the same span, so it says the same; a burst holds none of it.
+  assert.equal(walk.gaps[0].idle_by_waited_on_ms.other_task.bound, "upper")
+  assert.equal(walk.bursts[0].idle_by_waited_on_ms.other_task.bound, "upper")
 })
