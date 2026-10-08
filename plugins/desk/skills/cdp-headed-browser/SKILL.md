@@ -1,6 +1,6 @@
 ---
 name: cdp-headed-browser
-description: Invoke when the agent needs Playwright to drive a web UI behind an interactive authentication flow that a throwaway isolated browser cannot complete, when several agents need one persistent authenticated context without sharing tabs, or when the operator's existing Playwright MCP cannot reuse the required browser state. Covers claims-based context acquisition, lease-isolated CDP proxying, background-safe target creation, exact lease release, and broker status and recovery. Signed-in or authenticated browsing routes here even when Desk's headless `desk-web` server is healthy, because that browser is isolated and signed out. Do NOT invoke for browser tasks where an isolated signed-out browser works, for unauthenticated scraping, or when the current Playwright MCP already has the signed-in state the task needs.
+description: Invoke when the agent needs Playwright to drive a web UI behind an interactive authentication flow that a throwaway isolated browser cannot complete, when several agents need one persistent authenticated context without sharing tabs, or when the operator's existing Playwright MCP cannot reuse the required browser state. Covers claims-based context acquisition, lease-isolated CDP proxying, background-safe target creation, exact lease release, and broker status and recovery. Signed-in or authenticated browsing routes here: when no plugin declares a real browser profile, Desk's `desk-web` server is headless, isolated and signed out; when one does, `desk-web` is already the operator's signed-in browser (see "The real browser profile"). Do NOT invoke for browser tasks where an isolated signed-out browser works, for unauthenticated scraping, or when the current Playwright MCP already has the signed-in state the task needs.
 ---
 
 # cdp-headed-browser
@@ -19,9 +19,23 @@ Use a brokered headed context when:
 - Several agents need the same persistent authenticated context while keeping their targets isolated.
 - A provider-backed persistent profile is required for the task.
 
-Keep the default isolated browser when it works. Desk ships it as the `desk-web` MCP server on every install: headless, with an in-memory profile, started from a copy of `@playwright/mcp` that Desk installs in its state folder and keeps on the `@latest` channel. It is always signed out, so a page that needs the operator's sign-in never works there. Broker setup has a persistent-context and provider cost that unauthenticated tasks do not need.
+Keep the default isolated browser when it works. Desk ships it as the `desk-web` MCP server on every install: with no `desk.browser` declaration it is headless, with an in-memory profile, started from a copy of `@playwright/mcp` that Desk installs in its state folder and keeps on the `@latest` channel. That default is always signed out, so a page that needs the operator's sign-in never works there. Broker setup has a persistent-context and provider cost that unauthenticated tasks do not need.
 
-The broker needs an overlay provider. Today only the MS Desk overlay supplies one (managed Edge); without a provider, `acquire` fails closed (`INVALID_ARGUMENTS` with no `--config`, `INVALID_PROVIDER_CONFIG` when the config has no provider). On a personal install with no provider, reach a signed-in page by adding a separate workspace MCP server with `desk:add-workspace-mcp` that runs `@playwright/mcp@latest` with Playwright MCP's own options: `--extension` to attach to the operator's running browser through the Playwright MCP Bridge extension, or `--user-data-dir <dir>` or `--storage-state <file>` for a persistent or saved signed-in profile. Give it its own name, never `desk-web`.
+## The real browser profile
+
+When an installed plugin declares `desk.browser` in its `plugin.json`, `desk-web` drives the operator's own signed-in browser profile instead of the headless default, and a signed-in page needs no broker, no provider and no second server. The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }`. Desk finds the profile whose signed-in account ends in `@<domain>` in the browser's own profile list, reads the Playwright Extension's connection token from that profile, and attaches silently. The operator clicks nothing and copies nothing. When several installed plugins declare one, the last plugin listed wins.
+
+Your window, and only your window:
+
+- On macOS, `desk-web` opens a new window in that browser before your first browser call and brings it to the front, so the extension's connect page lands there. It records the window's id. Work only in that window's tabs. The extension can reach the whole browser, and nothing enforces this, so the rule is yours to keep: never read, switch to, navigate or close a tab or window you did not open.
+- Call `browser_close` when your task is done. `desk-web` then closes your window by its recorded id. It also closes the window when the session ends, when the host stops it, and when the browser process ends. It never quits the browser and never touches a window it did not open.
+- A second `desk-web` session opens its own window and closes only that one.
+- On Windows and Linux there is no window opening: the connect page opens in the frontmost window. The launcher says so once on stderr.
+- If the first call answers that the Playwright Extension is not installed in that profile, install it from the link in the answer and call again. No restart is needed. If it names a missing profile, the operator is not signed in to that account in that browser.
+
+The brokered contexts below are for a provider-backed persistent profile that is not the operator's real one. They do not apply to `desk-web` in this mode.
+
+The broker needs an overlay provider. Today only the MS Desk overlay supplies one (managed Edge); without a provider, `acquire` fails closed (`INVALID_ARGUMENTS` with no `--config`, `INVALID_PROVIDER_CONFIG` when the config has no provider). On a personal install with no provider and no `desk.browser` declaration, reach a signed-in page by adding a separate workspace MCP server with `desk:add-workspace-mcp` that runs `@playwright/mcp@latest` with Playwright MCP's own options: `--extension` to attach to the operator's running browser through the Playwright MCP Bridge extension, or `--user-data-dir <dir>` or `--storage-state <file>` for a persistent or saved signed-in profile. Give it its own name, never `desk-web`.
 
 ## Required runtime inputs
 
@@ -108,7 +122,7 @@ The persistent profile is the security-principal boundary. Leases separate targe
 
 ## Focus preservation
 
-The headed browser is background infrastructure, not a remote-control surface. Never call `page.bringToFront()` or `Target.activateTarget` during unattended automation. The lease proxy rejects those activation commands.
+The headed browser is background infrastructure, not a remote-control surface. Never call `page.bringToFront()` or `Target.activateTarget` during unattended automation. The lease proxy rejects those activation commands. This rule governs brokered leases and the operator's existing windows. It does not apply to the one new window `desk-web` opens for you in the real browser profile, which it brings to the front itself, once, so the connect page lands in it.
 
 When a new page is required, create it in the background:
 

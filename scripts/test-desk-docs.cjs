@@ -715,6 +715,9 @@ function validateBrowserFocusPolicy(errors, {
   ) {
     errors.push("cdp-headed-browser must not recommend fixed-port or arbitrary endpoint discovery");
   }
+  if (!body.includes("desk.browser") || !lower.includes("only in that window") || !body.includes("`browser_close`") || !lower.includes("does not apply to the one new window")) {
+    errors.push("cdp-headed-browser must describe the real browser profile: the desk.browser declaration, working only in the agent's own window, closing it with browser_close, and the focus rule's exception for that window");
+  }
   if (/\b(?:pkill|killall|pgrep)\b/u.test(body)) {
     errors.push("cdp-headed-browser must not recommend process-pattern cleanup");
   }

@@ -4,9 +4,9 @@
 // - The first launch on a machine answers the host's handshake at once and installs the copy meanwhile; web-proxy.cjs holds browser calls until the install finishes and then passes them to Playwright MCP, so a first call waits instead of failing and the tool catalog never changes under the host. Every npm call runs with no fetch retries and a short fetch timeout, so an unreachable registry fails in seconds with a message naming the registry, instead of after minutes.
 // - Installs and refreshes run under one lock file, so sessions that start together never race: one installs while the others wait for it or, with a copy already installed, skip the refresh.
 // - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npm that ships next to that Node and puts that Node first on the child's PATH.
-// - Desk's own browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
+// - Desk's default browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
 // - Playwright MCP defaults to Google Chrome. When Chrome is only in ~/Applications on macOS, where Playwright does not look, the launcher passes its path. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
-// - Authenticated or persistent browser contexts are not this file's job: they go through the claims-based browser context broker (desk:cdp-headed-browser).
+// - A plugin's `desk.browser` declaration switches the browser to the operator's real, signed-in profile through the Playwright Extension, in a window of its own that closes when the agent is done (web-real-profile.cjs). Other authenticated or persistent browser contexts are not this file's job: they go through the claims-based browser context broker (desk:cdp-headed-browser).
 // - This file backs the `desk-web` MCP server Desk declares beside `desk` (its tools read `mcp__plugin_desk_desk-web__browser_navigate` and so on). Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every tool is listed as unavailable and every call answers with a `status`, a `code` and a `fix`, the same shape `desk`'s own bootstrap serves when it cannot start. The one difference: `desk` keeps `desk_status`/`desk_doctor` answering without `isError` so a resuming agent can still ask "what's wrong"; the browser has no diagnostic tool of its own, so every call here answers with `isError: true` and the fix is in the payload itself.
 //
 // Like bootstrap.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins.
@@ -19,9 +19,12 @@ var os = require("os");
 var path = require("path");
 var bootstrap = require("./bootstrap.cjs");
 var proxy = require("./web-proxy.cjs");
+var realProfile = require("./web-real-profile.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
+// Installed beside Playwright MCP, so a real-browser launch can read the Playwright Extension's token from the profile's LevelDB. It ships prebuilt N-API binaries, so one install serves every Node.
+var LEVEL_PACKAGE = "classic-level@1.4.1";
 var DEFAULT_ARGS = ["--headless", "--isolated"];
 // Options that connect to a browser that already runs; with any of them Desk's headless and isolated defaults do not apply.
 var CONNECT = ["--cdp-endpoint", "--extension", "--endpoint"];
@@ -301,7 +304,7 @@ function readInstall(root, dir) {
   var cli = path.join(modules, "@playwright", "mcp", bin);
   if (!exists(cli)) return null;
   var core = readJson(path.join(modules, "playwright-core", "package.json"));
-  return { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir) };
+  return { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")) };
 }
 
 // The install current.json points at, or null.
@@ -337,7 +340,7 @@ function install(tools, root, timeoutMs) {
   var dir = path.join(root, id);
   mkdirp(dir);
   fs.writeFileSync(path.join(dir, "package.json"), "{\"private\":true}\n");
-  return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock", PACKAGE], timeoutMs).then(function (result) {
+  return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock", PACKAGE, LEVEL_PACKAGE], timeoutMs).then(function (result) {
     var installed = result.code === 0 ? readInstall(root, id) : null;
     if (installed === null) {
       removeTree(dir);
@@ -411,10 +414,10 @@ function wait(ms) {
   });
 }
 
-// The installed copy, installing it first when there is none. Resolves { installed, fresh } or { error }.
-function ensureInstalled(tools, root, deadline) {
+// The installed copy, installing it first when there is none (or, when `reader` is set, none with the token reader). Resolves { installed, fresh } or { error }.
+function ensureInstalled(tools, root, deadline, reader) {
   var installed = readInstalled(root);
-  if (installed !== null) return Promise.resolve({ installed: installed, fresh: false });
+  if (installed !== null && (!reader || installed.reader)) return Promise.resolve({ installed: installed, fresh: false });
   var lock = path.join(root, "refresh.lock");
   if (takeLock(lock, tools.clock)) {
     return Promise.resolve().then(function () {
@@ -429,7 +432,7 @@ function ensureInstalled(tools, root, deadline) {
   }
   if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it", retry: true });
   return wait(WAIT_STEP_MS).then(function () {
-    return ensureInstalled(tools, root, deadline);
+    return ensureInstalled(tools, root, deadline, reader);
   });
 }
 
@@ -489,6 +492,11 @@ function startRefresh(o) {
 
 function reconnectFix(action) {
   return action + ", then reconnect the desk-web MCP server (in Claude Code run /mcp and reconnect desk-web; otherwise start a new session).";
+}
+
+// The fix for a problem the next browser call re-checks, so no reconnect is needed.
+function retryFix(action) {
+  return action + ", then call the browser tool again.";
 }
 
 function degraded(code, summary, fix) {
@@ -631,6 +639,12 @@ function start(o, io) {
   }
   var root = stateDir(env, homeDir);
   mkdirp(root);
+  // A plugin's desk.browser setting switches the browser to the operator's real profile (web-real-profile.cjs); a caller that passes its own connection option keeps it.
+  var declaration = hasOption(args, CONNECT) ? { state: "none" } : realProfile.readDeclaration({ env: env, homeDir: homeDir, pluginDirs: o.pluginDirs });
+  if (declaration.state === "invalid") {
+    return fail(io, "browser_declaration_invalid", declaration.summary, reconnectFix("Fix the desk.browser setting in the plugin"));
+  }
+  var real = declaration.state === "declared";
   var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
     return failure(io, "node_spawn_failed",
@@ -651,21 +665,31 @@ function start(o, io) {
     io.stderr.write("[web] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + "\n");
     // A copy installed just now is already the channel's current release.
     if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
-    return Promise.resolve({ launch: {
-      node: node,
-      indexFile: installed.cli,
-      args: launchArgs(args, platform, env, fileExists, root),
-      env: withNodeFirst(env, node, platform)
-    } });
+    function launching(extraArgs, extraEnv) {
+      var launchEnv = withNodeFirst(env, node, platform);
+      Object.keys(extraEnv).forEach(function (key) {
+        launchEnv[key] = extraEnv[key];
+      });
+      return { launch: { node: node, indexFile: installed.cli, args: launchArgs(extraArgs.concat(args), platform, env, fileExists, root), env: launchEnv } };
+    }
+    if (!real) return Promise.resolve(launching([], {}));
+    return realProfile.connect({
+      declaration: declaration, installed: installed, platform: platform, env: env, homeDir: homeDir,
+      unavailable: degraded, reconnectFix: retryFix, requireModule: o.requireModule, tmpdir: o.tmpdir
+    }).then(function (connection) {
+      if (connection.payload) return { retry: true, payload: failure(io, connection.payload.code, connection.payload.summary, connection.payload.fix) };
+      io.stderr.write("[web] driving the " + connection.app + " profile " + connection.profile + " through the Playwright Extension\n");
+      return launching(connection.args, connection.env);
+    });
   }
   var spawn = either(o.spawn, childProcess.spawn);
   var signals = either(o.signals, process);
   var kill = either(o.kill, process.kill);
   var present = readInstalled(root) !== null;
   function installing() {
-    return ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS)).then(prepare);
+    return ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS), real).then(prepare);
   }
-  if (present) {
+  if (present && !real) {
     // An installed copy answers the host's handshake itself, so the host sees its real tool list and nothing is swapped later.
     return installing().then(function (outcome) {
       return bootstrap.reexec({
@@ -690,8 +714,47 @@ function start(o, io) {
       return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
     });
   }
+  // In the real profile the agent works in its own window (web-real-profile.cjs): it opens before the first call goes to the browser, closes after `browser_close` and closes however this process ends, always by the id it recorded.
+  var cleanup = function () {
+    return Promise.resolve();
+  };
+  var gate = {};
+  var finish = { exit: io.exit, kill: kill };
+  if (real) {
+    var own = realProfile.windows({
+      channel: declaration.channel, platform: platform, stderr: io.stderr, unavailable: degraded, reconnectFix: retryFix,
+      osascript: either(o.osascript, realProfile.osascript(o.execFile))
+    });
+    cleanup = own.release;
+    gate = {
+      beforeCall: own.ensure,
+      afterCall: function (params) {
+        if (params.name === "browser_close") own.release();
+      }
+    };
+    ["SIGINT", "SIGTERM", "SIGHUP"].forEach(function (signal) {
+      signals.on(signal, cleanup);
+    });
+    ["end", "error", "close"].forEach(function (event) {
+      io.stdin.on(event, cleanup);
+    });
+    finish = {
+      exit: function (code) {
+        cleanup().then(function () {
+          io.exit(code);
+        });
+      },
+      kill: function (pid, signal) {
+        cleanup().then(function () {
+          kill(pid, signal);
+        });
+      }
+    };
+  }
   // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return proxy.serve({
+    beforeCall: gate.beforeCall,
+    afterCall: gate.afterCall,
     stdin: io.stdin,
     stdout: io.stdout,
     stderr: io.stderr,
@@ -705,8 +768,8 @@ function start(o, io) {
     progressMs: o.progressMs,
     spawn: spawn,
     signals: signals,
-    kill: kill,
-    exit: io.exit,
+    kill: finish.kill,
+    exit: finish.exit,
     holdMs: o.holdMs,
     closeMs: o.closeMs,
     timeoutPayload: degraded("browser_not_ready", "Desk is still installing the browser and it did not finish in time",
@@ -738,6 +801,7 @@ function run(o) {
 module.exports = {
   BROWSER_TOOL_NAMES: BROWSER_TOOL_NAMES,
   DEFAULT_ARGS: DEFAULT_ARGS,
+  LEVEL_PACKAGE: LEVEL_PACKAGE,
   NPM_ENV: NPM_ENV,
   PACKAGE: PACKAGE,
   REFRESH_FLAG: REFRESH_FLAG,

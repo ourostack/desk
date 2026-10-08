@@ -104,7 +104,7 @@ The browser is part of the default install, so check it here, but never let it b
 
 Retry once after the fix. If it still fails, or `example.com` is unreachable, report the browser as not verified, with the error, in your setup report, and continue; the rest of setup does not depend on it.
 
-For a signed-in page, which `desk-web` cannot reach, `desk:cdp-headed-browser` shows how to make the browser context broker runnable from the installed plugin with a short copy-and-install sequence. The broker also needs a provider that launches the signed-in browser, and a personal install has none yet, so on such an install use the Playwright MCP options that skill names.
+For a signed-in page, which the default `desk-web` cannot reach, an installed plugin can declare `desk.browser` so `desk-web` drives the operator's own signed-in browser profile in a window of its own (`desk:cdp-headed-browser` explains it). Without that declaration, `desk:cdp-headed-browser` shows how to make the browser context broker runnable from the installed plugin with a short copy-and-install sequence. The broker also needs a provider that launches the signed-in browser, and a personal install has none yet, so on such an install use the Playwright MCP options that skill names.
 
 If any of these fail, `desk_doctor` explains why. Desk never ends setup by being unavailable: with no desk bound it runs in setup mode and routes back to step 5.
 

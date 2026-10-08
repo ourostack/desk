@@ -271,6 +271,7 @@ function host(options) {
 
 test("the launcher installs the @playwright/mcp channel with bounded npm calls, never a pinned version", () => {
   assert.equal(browser.PACKAGE, "@playwright/mcp@latest")
+  assert.equal(browser.LEVEL_PACKAGE, "classic-level@1.4.1")
   assert.doesNotMatch(readFileSync(browserPath, "utf8"), /@playwright\/mcp@\d/u)
   assert.deepEqual(browser.DEFAULT_ARGS, ["--headless", "--isolated"])
   assert.equal(browser.NPM_ENV.npm_config_fetch_retries, "0")
@@ -399,7 +400,9 @@ test("only a complete install counts as installed", async () => {
   touch(path.join(pkg, "package.json"), JSON.stringify({ version: "1", bin: "cli.js" }))
   assert.equal(browser.readInstalled(root), null, "no entry script")
   touch(path.join(pkg, "cli.js"))
-  assert.deepEqual(browser.readInstalled(root), { version: "1", core: null, cli: path.join(pkg, "cli.js"), dir: path.join(root, "i") })
+  assert.deepEqual(browser.readInstalled(root), { version: "1", core: null, cli: path.join(pkg, "cli.js"), dir: path.join(root, "i"), reader: false })
+  touch(path.join(root, "i", "node_modules", "classic-level", "package.json"), "{}")
+  assert.equal(browser.readInstalled(root).reader, true, "the token reader beside it")
   touch(path.join(root, "i", "node_modules", "playwright-core", "package.json"), JSON.stringify({ version: 2 }))
   assert.equal(browser.readInstalled(root).core, null)
 })
@@ -473,7 +476,7 @@ test("the first launch answers the handshake at once, installs meanwhile, then p
   assert.match(answer.result.content[0].text, /^ran browser_navigate \{"url":"https:\/\/example\.com"\} \["--headless"/u)
   assert.match(h.errors.join(""), /^\[web\] @playwright\/mcp 0\.0\.90 \(playwright-core 1\.64\.0-test\) from .*installs/u)
   const [call] = m.calls()
-  assert.deepEqual(call.args.slice(0, 1).concat(call.args.slice(-3)), ["install", "--no-save", "--no-package-lock", "@playwright/mcp@latest"])
+  assert.deepEqual(call.args.slice(0, 1).concat(call.args.slice(-4)), ["install", "--no-save", "--no-package-lock", "@playwright/mcp@latest", "classic-level@1.4.1"])
   assert.equal(call.retries, "0")
   assert.equal(call.timeout, "10000")
   assert.equal(existsSync(path.join(m.state, "refresh.lock")), false, "the lock is released")
@@ -1370,7 +1373,7 @@ async function fixturePlugin(prefix) {
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
   writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
   const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")

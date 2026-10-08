@@ -95,6 +95,7 @@ function describeDiff(diff) {
 // Serve the host on stdin/stdout until it closes stdin, or the child ends this process.
 //
 // options.ready resolves { launch: { node, indexFile, args, env } } when Playwright MCP can start, or { payload } (a degraded payload) when it cannot; it never rejects.
+// options.beforeCall(params), when given, runs before each tools/call goes to the browser and resolves null to go on or { payload } to answer the call with that degraded payload instead; it never rejects. options.afterCall(params), when given, runs after the browser's answer to a call has been sent to the host.
 // options.catalog is the tools/list answer, and options.catalogVersion names the Playwright MCP release it was taken from. options.retry() starts the install again and returns a new ready promise, and options.abort() ends a running install; options.progressMs sets the progress interval. options.timeoutPayload, options.spawnPayload(error) and options.exitPayload(code, signal) build the degraded payloads for a call that waited too long, a child that would not start and a child that ended.
 function serve(options) {
   var stdin = options.stdin;
@@ -109,6 +110,7 @@ function serve(options) {
     var childLines = { text: "", scanned: 0 };
     var queue = [];
     var inflight = {};
+    var calls = {};
     var nextId = 1;
     var child = null;
     var childReady = false;
@@ -172,12 +174,24 @@ function serve(options) {
       });
     }
 
-    function forward(entry) {
+    function dispatch(entry) {
       var childId = nextId;
       nextId += 1;
       entry.childId = childId;
       inflight[childId] = entry.id;
+      calls[childId] = entry.params;
       toChild({ id: childId, method: "tools/call", params: entry.params });
+    }
+
+    function forward(entry) {
+      if (options.beforeCall === undefined) {
+        dispatch(entry);
+        return;
+      }
+      options.beforeCall(entry.params).then(function (gate) {
+        if (gate === null) dispatch(entry);
+        else send({ id: entry.id, result: callFailure(gate.payload) });
+      });
     }
 
     function flush() {
@@ -222,6 +236,9 @@ function serve(options) {
         if (message.error) reply.error = message.error;
         else reply.result = message.result;
         send(reply);
+        var params = calls[message.id];
+        delete calls[message.id];
+        if (options.afterCall !== undefined) options.afterCall(params);
         return;
       }
       if (message.id !== undefined) {
@@ -255,6 +272,7 @@ function serve(options) {
         send({ id: inflight[childId], result: callFailure(payload) });
       });
       inflight = {};
+      calls = {};
       if (!childReady) {
         // It ended before it could take calls: answer them with the reason and keep the handshake alive.
         child = null;
