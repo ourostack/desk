@@ -234,7 +234,8 @@ export async function main({
       input: { args, env: plainEnv, cwd, homeDir, injectedReadinessPolicy },
     }),
     setupDiagnostic: (error) => createSetupDiagnostic({ pathsTried: error.tried, bindingPath: claudeBindingPath(env) }),
-    loadRuntime: (activation) => loadRuntime({
+    loadRuntime: (activation, { onPhase } = {}) => loadRuntime({
+      onPhase,
       activation,
       env: plainEnv,
       mcpRoot,
@@ -289,7 +290,7 @@ function deferPackVerification() {
 
 // Inspect, restore and import the runtime from the offline pack. Returns { runtimeServer, runtimeStatus }, or { outcome } naming the degraded state.
 // With the shipped importer, the inspection (which hashes and unpacks the archive) and the restore (which can wait on another process's publication lock) run on the admission worker; only the final import runs here.
-async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runtimeImporter, runtimeInspector }) {
+async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runtimeImporter, runtimeInspector, onPhase = () => {} }) {
   const { runtimeCacheDir, sourceIdentity } = activation
   let inspection = null
   let prepared = null
@@ -297,7 +298,7 @@ async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runti
     const job = await offload({
       kind: "runtime",
       input: { mcpRoot, env, runtimeCacheDir, sourceIdentity, inspect: runtimeInspector === inspectRuntimeDependencyPack },
-    })
+    }, { onPhase })
     if (job.inspectionError) return inspectionFailedOutcome({ mcpRoot, runtimeCacheDir, env })
     inspection = job.inspection ?? null
     if (inspection !== null && !inspection.ok) return runtimeOutcome(runtimeDiagnostic({ inspection, runtimeCacheDir, env }))
@@ -314,6 +315,7 @@ async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runti
     }
   }
   let runtimeServer
+  onPhase("importing_runtime")
   try {
     runtimeServer = prepared === null
       ? await runtimeImporter({ env, mcpRoot, runtimeCacheDir, sourceIdentity })

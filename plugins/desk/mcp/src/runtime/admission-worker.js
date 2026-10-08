@@ -75,9 +75,10 @@ export function warmNativeModules(sourceMirrorPath, { requireFrom = createRequir
 export function prepareRuntimeInputs({
   mcpRoot, env, runtimeCacheDir, sourceIdentity, inspect,
   inspector = inspectRuntimeDependencyPack, prepare = prepareRuntime, warm = warmNativeModules,
-}) {
+}, { onPhase = () => {} } = {}) {
   let inspection = null
   if (inspect) {
+    onPhase("inspecting_runtime_pack")
     try {
       // The archive's entries and manifest are large and only needed for verification.
       const { archiveEntries, manifest, ...rest } = inspector({ mcpRoot })
@@ -89,7 +90,7 @@ export function prepareRuntimeInputs({
   }
   let prepared
   try {
-    prepared = prepare({ mcpRoot, env, runtimeCacheDir, sourceIdentity })
+    prepared = prepare({ mcpRoot, env, runtimeCacheDir, sourceIdentity, onPhase })
   } catch (error) {
     return { inspection, restoreError: { ...serializeError(error), ...publicationLock(error) } }
   }
@@ -113,10 +114,10 @@ function publicationLock(error) {
 const JOBS = { resolve: resolveAdmissionInputs, runtime: prepareRuntimeInputs }
 
 /** Run one job in this thread. */
-export function runAdmissionJob(job) {
+export function runAdmissionJob(job, { onPhase } = {}) {
   const run = JOBS[job?.kind]
   if (typeof run !== "function") throw new TypeError(`unknown admission job: ${job?.kind}`)
-  return run(job.input)
+  return run(job.input, { onPhase })
 }
 
 /** The worker side: answer one job on `port`. Does nothing outside a Desk admission worker, so importing this module elsewhere is harmless. */
@@ -125,7 +126,8 @@ export function attachAdmissionWorker(port, data) {
   port.once("message", (job) => {
     let reply
     try {
-      reply = { ok: true, value: runAdmissionJob(job) }
+      // A phase goes to the thread that answers the host as soon as it is posted, even while this thread then blocks on a lock wait.
+      reply = { ok: true, value: runAdmissionJob(job, { onPhase: (phase) => port.postMessage({ phase }) }) }
     } catch (error) {
       reply = { ok: false, error: serializeError(error) }
     }
@@ -136,8 +138,8 @@ export function attachAdmissionWorker(port, data) {
 
 attachAdmissionWorker(parentPort, workerData)
 
-/** Run one job on a fresh worker thread and resolve with its result. The worker never keeps the process alive. */
-export function runInWorker(job, { createWorker = (url, options) => new Worker(url, options) } = {}) {
+/** Run one job on a fresh worker thread and resolve with its result. `onPhase(name)` hears each step the job reports while it runs. The worker never keeps the process alive. */
+export function runInWorker(job, { createWorker = (url, options) => new Worker(url, options), onPhase = () => {} } = {}) {
   return new Promise((resolve, reject) => {
     const worker = createWorker(new URL(import.meta.url), { workerData: { deskAdmissionWorker: true } })
     worker.unref()
@@ -148,7 +150,10 @@ export function runInWorker(job, { createWorker = (url, options) => new Worker(u
       worker.terminate()
       settle(value)
     }
-    worker.once("message", (reply) => (reply.ok ? finish(resolve, reply.value) : finish(reject, reviveError(reply.error))))
+    worker.on("message", (reply) => {
+      if (reply.phase !== undefined) return onPhase(reply.phase)
+      return reply.ok ? finish(resolve, reply.value) : finish(reject, reviveError(reply.error))
+    })
     worker.once("error", (error) => finish(reject, error))
     worker.once("exit", (code) => finish(reject, new Error(`the admission worker exited (code ${code}) before answering`)))
     worker.postMessage(job)
