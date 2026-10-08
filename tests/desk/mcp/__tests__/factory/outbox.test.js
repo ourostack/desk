@@ -1356,6 +1356,65 @@ test("on Windows, a lock file whose deletion is still pending is waited for, and
   }
 }))
 
+test("on Windows, a rename onto a file another process has open is waited for, so the write lands; a refusal that lasts, or any other failure, is surfaced", (t) => scratch(async (plain, base) => {
+  const env = fakeWindowsEnv(plain, base)
+  const options = { platform: "win32", runner: fakeWindowsRunner([]) }
+  const root = await factoryStateRoot(env, options)
+  const original = fs.rename
+  const refuse = (codes) => {
+    let calls = 0
+    return { count: () => calls, mock: t.mock.method(fs, "rename", async (...args) => {
+      if (!String(args[1]).endsWith("status.json")) return original.apply(fs, args)
+      const code = codes[calls++]
+      if (code === undefined) return original.apply(fs, args)
+      throw Object.assign(new Error(`busy ${code}`), { code })
+    }) }
+  }
+  // Another process reads status.json at the moment of the rename: three refusals in a row, then the reader lets go.
+  const transient = refuse(["EPERM", "EACCES", "EBUSY"])
+  await writeStatus(env, { derivations: { a: { store: STORE } } }, options)
+  assert.equal(transient.count(), 4, "three refusals and the rename that went through")
+  transient.mock.mock.restore()
+  assert.equal((await readStatus(env, options)).derivations.a.store, STORE, "the write landed once the file was free")
+  assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp-")), [], "no temporary file is left behind")
+
+  // Refused for good: the wait is bounded by time (about 5 s), so a clock that jumps 3 s per reading reaches the bound after a few tries.
+  const failure = Object.assign(new Error("denied for good"), { code: "EPERM" })
+  const lasting = t.mock.method(fs, "rename", async (...args) => {
+    if (String(args[1]).endsWith("status.json")) throw failure
+    return original.apply(fs, args)
+  })
+  const realNow = Date.now
+  let clock = realNow()
+  const jumping = t.mock.method(Date, "now", () => (clock += 3000))
+  try {
+    await assert.rejects(() => writeStatus(env, { derivations: { b: { store: STORE } } }, options), (error) => error === failure)
+    assert.ok(lasting.mock.callCount() >= 2)
+    assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp-")), [], "a refused write leaves no temporary file")
+    // A cleanup that fails too still surfaces the refusal, not its own error.
+    const removing = t.mock.method(fs, "rm", async () => { throw new Error("cannot remove") })
+    try {
+      await assert.rejects(() => writeStatus(env, { derivations: { b: { store: STORE } } }, options), (error) => error === failure)
+    } finally {
+      removing.mock.restore()
+    }
+  } finally {
+    jumping.mock.restore()
+    lasting.mock.restore()
+  }
+
+  // A failure that is not contention, and the same refusal off Windows, are surfaced on the first try.
+  for (const [platform, code] of [["win32", "EIO"], ["linux", "EPERM"]]) {
+    const single = refuse([code, code])
+    try {
+      await assert.rejects(() => writeStatus(platform === "win32" ? env : plain, { derivations: { c: { store: STORE } } }, platform === "win32" ? options : { platform }), (error) => error.code === code)
+      assert.equal(single.count(), 1, `${platform} ${code}`)
+    } finally {
+      single.mock.mock.restore()
+    }
+  }
+}))
+
 test("listFinalizeRequests never follows a symlink planted in the finalize directory", () => scratch(async (env, base) => {
   await requestFinalize(env, { job: JOB, deskRoot: "/tmp/desk" })
   const root = await factoryStateRoot(env)

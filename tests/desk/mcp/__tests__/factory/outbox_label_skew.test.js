@@ -5,11 +5,11 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
-  factoryStateRoot, outdatedLabelRecords, ownDeskVersion, pendingLabels, quarantine, readConsent, releaseOutdatedLabelQuarantines, setConsent, writeLocalFacts, writeMarker, writeStatus,
+  OWN_VERSION_READERS, factoryStateRoot, outdatedLabelRecords, ownDeskVersion, pendingLabels, quarantine, readConsent, releaseOutdatedLabelQuarantines, setConsent, writeLocalFacts, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { LABEL_CHECK_CODES, validateLabels } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
@@ -81,6 +81,65 @@ test("ownDeskVersion reads the plugin version and says null for anything else", 
   assert.equal(ownDeskVersion(() => JSON.stringify({})), null)
   assert.equal(ownDeskVersion(() => { throw new Error("gone") }), null)
   assert.equal(ownDeskVersion(() => "not json"), null)
+})
+
+// The MCP server runs Desk from a source mirror (`mcp/` copied to a runtime cache), which has no plugin.json three folders up; the plugin folder is
+// named by DESK_PLUGIN_ROOT. A Desk that cannot name itself there writes quarantine records no newer Desk can date, and cannot tell a newer Desk's labels
+// from bad ones.
+test("ownDeskVersion names the Desk when it runs from a source mirror with no plugin.json beside it", async () => {
+  const { mkdtemp, cp, writeFile, rm } = fs
+  const { execFileSync } = await import("node:child_process")
+  const os = await import("node:os")
+  const base = await mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desk-mirror-version-"))
+  try {
+    const source = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src", import.meta.url))
+    const mirror = path.join(base, "runtime-cache", "source-mirror", "0123abcd")
+    await cp(source, path.join(mirror, "src"), { recursive: true })
+    const plugin = path.join(base, "plugin")
+    await fs.mkdir(plugin, { recursive: true })
+    await writeFile(path.join(plugin, "plugin.json"), JSON.stringify({ name: "desk", version: "3.2.0-alpha.901" }))
+    const outbox = path.join(mirror, "src", "factory", "outbox.js")
+    const script = `import(${JSON.stringify(pathToFileURL(outbox).href)}).then((m) => process.stdout.write(String(m.ownDeskVersion())))`
+    const env = { ...process.env, DESK_PLUGIN_ROOT: plugin }
+    delete env.CLAUDE_PLUGIN_ROOT
+    assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }), "3.2.0-alpha.901")
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+// The plugin.json beside the running code wins over the environment: a DESK_PLUGIN_ROOT folder that an in-place cache updated can name a newer Desk
+// than the code still executing.
+test("ownDeskVersion prefers the plugin.json beside the running code over DESK_PLUGIN_ROOT", async () => {
+  const { mkdtemp, cp, writeFile, rm } = fs
+  const { execFileSync } = await import("node:child_process")
+  const os = await import("node:os")
+  const base = await mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desk-beside-version-"))
+  try {
+    const source = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src", import.meta.url))
+    const running = path.join(base, "running")
+    await cp(source, path.join(running, "mcp", "src"), { recursive: true })
+    await writeFile(path.join(running, "plugin.json"), JSON.stringify({ name: "desk", version: "3.2.0-alpha.902" }))
+    const updated = path.join(base, "updated")
+    await fs.mkdir(updated, { recursive: true })
+    await writeFile(path.join(updated, "plugin.json"), JSON.stringify({ name: "desk", version: "3.2.0-alpha.999" }))
+    const outbox = path.join(running, "mcp", "src", "factory", "outbox.js")
+    const script = `import(${JSON.stringify(pathToFileURL(outbox).href)}).then((m) => process.stdout.write(String(m.ownDeskVersion())))`
+    const env = { ...process.env, DESK_PLUGIN_ROOT: updated }
+    assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }), "3.2.0-alpha.902")
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test("ownDeskVersion takes the first reader that names a Desk version, and the environment reader names this checkout's", () => {
+  const gone = () => { throw new Error("gone") }
+  assert.equal(ownDeskVersion([gone, () => JSON.stringify({ version: "3.2.0-alpha.7" })]), "3.2.0-alpha.7")
+  assert.equal(ownDeskVersion([() => JSON.stringify({ version: "3.2.0-alpha.8" }), () => JSON.stringify({ version: "3.2.0-alpha.7" })]), "3.2.0-alpha.8")
+  assert.equal(ownDeskVersion([gone, gone]), null)
+  const checkout = JSON.parse(readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/plugin.json", import.meta.url)), "utf8")).version
+  assert.equal(ownDeskVersion([gone, OWN_VERSION_READERS[1]]), process.env.DESK_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT ? ownDeskVersion([OWN_VERSION_READERS[1]]) : checkout)
+  assert.equal(ownDeskVersion([OWN_VERSION_READERS[0]]), checkout)
 })
 
 test("releasing outdated label quarantines judges only this Desk's own check codes from an older or unnamed Desk, and releases only files that publish now", () => scratch(async ({ env }) => {

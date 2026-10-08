@@ -22,7 +22,8 @@
 // `labelsBootCheck({ env, now })` reads, when a store has `contribute: true`,
 // the names in `evaluate-requests/` and in each contributing store's
 // `quarantine/<store-slug>/labels/<job>/`, the times of those job folders,
-// and, only when both hold something, `jobs-index.json`; it also reads the
+// the reason in each quarantine record there, and, only when both hold
+// something, `jobs-index.json`; it also reads the
 // first requests' own times and `status.json`'s `evaluator` record. It returns
 // `{ count, quarantined, oldest_days, evaluator }`:
 //
@@ -33,7 +34,10 @@
 //     be delivered: a job folder in labels quarantine updated within 30
 //     days, or a request left out of `count` for that reason. Labels are
 //     quarantined when the store's gate refuses them or when their facts are
-//     quarantined (`outbox.js`'s `holdLabels`);
+//     quarantined (`outbox.js`'s `holdLabels`). A job folder whose every
+//     record is a `job_unbound` withdrawal (`label-binding.js`) is not
+//     reported: the flush withdrew those labels on purpose, and the hold
+//     lifts by itself if the session binds the job again;
 //   - `oldest_days`: whole days since the oldest counted request was made
 //     (the first 200 are read), or null when there is none to read;
 //   - `evaluator`: `{ state, expired_total, gave_up }` from `status.json`'s
@@ -116,6 +120,8 @@ const FINALIZE_NAME = /^[0-9a-f]{32}\.json$/u
 const JOB_NAME = /^[0-9a-f]{32}$/u
 const SESSION_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const SESSION_FILE = new RegExp(`^${SESSION_SRC}\\.json$`, "u")
+// The quarantine reason `label-binding.js` gives a delivered label it withdrew because the session no longer binds the job.
+const WITHDRAWN_REASON = "job_unbound"
 const SESSION_OF = new RegExp(`-(${SESSION_SRC})\\.json$`, "u")
 
 class BudgetExceeded extends Error {
@@ -374,10 +380,16 @@ export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
     const base = path.join(dir, "quarantine", store.replace("/", "__"), "labels")
     for (const job of listNames(base).filter((name) => JOB_NAME.test(name))) {
       const sessions = held.get(job) ?? new Set()
-      for (const name of listNames(path.join(base, job))) if (SESSION_FILE.test(name)) sessions.add(name.slice(0, -5))
+      // A label the flush withdrew on purpose (`job_unbound`) is held back, but it is not a fault to report; a record that does not read is.
+      let faults = 0
+      for (const name of listNames(path.join(base, job))) {
+        if (!SESSION_FILE.test(name)) continue
+        sessions.add(name.slice(0, -5))
+        if (readState(path.join(base, job, name), null)?.reason !== WITHDRAWN_REASON) faults += 1
+      }
       held.set(job, sessions)
       // A folder gone since the listing has no time, and the comparison with `undefined` is false.
-      if (sessions.size > 0 && now - lstatSync(path.join(base, job), { throwIfNoEntry: false })?.mtimeMs <= RECENT_MS) quarantined.add(job)
+      if (faults > 0 && now - lstatSync(path.join(base, job), { throwIfNoEntry: false })?.mtimeMs <= RECENT_MS) quarantined.add(job)
     }
   }
   const index = held.size > 0 && requests.length > 0 ? readState(path.join(dir, "jobs-index.json"), {}) ?? {} : {}

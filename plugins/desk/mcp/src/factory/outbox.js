@@ -96,6 +96,7 @@ import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject, validateLocalFact
 import { RETRACTED_COPIES, markerRoute, recordedHeld } from "./session-route.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
+import { deskVersion } from "../package-metadata.js"
 
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
@@ -107,6 +108,8 @@ const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
 // Windows refuses to create a file whose deletion is still pending (EPERM, sometimes EACCES), and a lock another writer has just released is such a file for a moment, so it is contention for a bounded time (the delete finishes within milliseconds unless a scanner holds the file), not a fault.
 const LOCK_PENDING_DELETE_MS = 5000
+// Windows also refuses to rename a file over one that another process has open at that instant (EPERM, EACCES or EBUSY): a reader, a virus scanner, the search indexer. The other process lets go within milliseconds, so this too is contention for a bounded time, not a fault.
+const RENAME_BUSY_MS = 5000
 // A GitHub login: letters, digits and hyphens, and for an Enterprise Managed User the enterprise short code after `_`, the account a work store needs.
 const ACCOUNT_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?(?:_[A-Za-z0-9]{1,20})?$/u
 const REASON_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u
@@ -134,22 +137,31 @@ function isNewerFormat(value, schema, validate) {
 }
 const newerFacts = (value) => isNewerFormat(value, LOCAL_SCHEMA, validateLocalFacts)
 
-// The version of the Desk running this code, read from the plugin.json beside it (never from a marker or a registry, which can name a newer Desk
-// than the one still executing); `null` when it cannot be read or is not a Desk version.
-const readPluginManifest = () => readFileSync(new URL("../../../plugin.json", import.meta.url), "utf8")
-const readOwnVersion = (read) => {
-  try {
-    const { version } = JSON.parse(read())
-    return DESK_VERSION.test(version) ? version : null
-  } catch {
-    return null
+// The version of the Desk running this code (never from a marker or a registry, which can name a newer Desk than the one still executing); `null`
+// when it cannot be read or is not a Desk version. The plugin.json beside this code comes first: it is the running code's own. The MCP server runs a
+// source mirror (a copy of `mcp/`) with none beside it, so `package-metadata.js`'s one resolver, which follows DESK_PLUGIN_ROOT, is the fallback;
+// a DESK_PLUGIN_ROOT folder that an in-place cache updates can name a newer Desk, which is why it is only the fallback.
+export const OWN_VERSION_READERS = Object.freeze([
+  () => readFileSync(new URL("../../../plugin.json", import.meta.url), "utf8"),
+  () => JSON.stringify({ version: deskVersion() }),
+])
+const readOwnVersion = (reads) => {
+  for (const read of reads) {
+    try {
+      const { version } = JSON.parse(read())
+      if (DESK_VERSION.test(version)) return version
+    } catch {
+      // This reader has no version; the next one may.
+    }
   }
+  return null
 }
 let ownVersionKept = null
-// Read once per process: the plugin.json beside this code cannot change under the Desk running it. With a reader (tests), it is read each time.
+// Read once per process: the plugin.json of the Desk running this code cannot change under it. With readers (tests), they are read each time;
+// one reader or a list, the first that names a Desk version wins.
 export function ownDeskVersion(read = undefined) {
-  if (read !== undefined) return readOwnVersion(read)
-  ownVersionKept ??= readOwnVersion(readPluginManifest)
+  if (read !== undefined) return readOwnVersion([read].flat())
+  ownVersionKept ??= readOwnVersion(OWN_VERSION_READERS)
   return ownVersionKept
 }
 const isDeskVersion = (value) => typeof value === "string" && DESK_VERSION.test(value)
@@ -392,11 +404,30 @@ async function writeAtomic(root, file, data, { platform, env, runner }) {
   } finally {
     await handle.close()
   }
-  await fsp.rename(tmp, file)
+  try {
+    await renameOverBusyFile(tmp, file, platform)
+  } catch (error) {
+    // The finished temporary file is of no use once the rename has failed for good; a failed cleanup never hides the error that led to it.
+    await fsp.rm(tmp, { force: true }).catch(() => {})
+    throw error
+  }
   await protectLeafFile(file, platform, NAMING)
   if (platform === "win32") {
     windowsBatch.push({ path: file, kind: "file", created: !existedBefore })
     await protectWindowsPaths(windowsBatch, { env, runner, label: NAMING.label })
+  }
+}
+
+// `rename(tmp, file)`, waiting out a Windows refusal because `file` is open elsewhere for a moment. Without the wait, a writer that lost the race gave up: the detached derivation behind a session end then wrote nothing, and nothing retried it.
+async function renameOverBusyFile(tmp, file, platform) {
+  const deadline = Date.now() + RENAME_BUSY_MS
+  while (true) {
+    try {
+      return await fsp.rename(tmp, file)
+    } catch (error) {
+      if (platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error.code) || Date.now() >= deadline) throw error
+      await sleep(LOCK_RETRY_DELAY_MS)
+    }
   }
 }
 

@@ -59,9 +59,10 @@ const invalid = () => ({ invalid: CAPTURE_INVALID })
 export const isCaptureInvalid = (result) => isObject(result) && result.invalid === CAPTURE_INVALID
 
 // One host's entry for `owners`, `null` when the host is out of scope, or `undefined` when its input is malformed. A host whose listing was
-// capped or unreadable is `{ not_counted: true }`, the one honest way to say "could not count" (the store takes exactly that and nothing else).
+// capped or unreadable is `{ not_counted: true }`, the one honest way to say "could not count" (the store takes exactly that and nothing else). So is a
+// host the sweep recorded while most of its sessions sat in a quarantine that did not settle (`held_in_quarantine`): its counts are not a measurement.
 function hostEntry(name, host, owners) {
-  if (isObject(host) && NOT_COUNTED_STATES.includes(host.state)) return { [NOT_COUNTED]: true }
+  if (isObject(host) && (NOT_COUNTED_STATES.includes(host.state) || host.held_in_quarantine === true)) return { [NOT_COUNTED]: true }
   if (!isObject(host) || host.state !== "counted") return null
   if (!isObject(host.by_owner) || typeof host.unverified !== "boolean") return undefined
   const withDesk = host.not_in_a_desk !== null

@@ -11,6 +11,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -338,7 +339,7 @@ function listSourceMirrors(runtimeCacheDir) {
     .sort()
 }
 
-test("runtime cache resolution honors configured, environment, XDG, and HOME fallbacks", async () => {
+test("runtime cache resolution honors configured, environment, XDG, and HOME fallbacks", { timeout: 60_000 }, async () => {
   const { resolveRuntimeCacheDir } = await loadBootstrap()
   const packageJson = { version: "1.3.1" }
   const target = "darwin-arm64-node-127"
@@ -447,7 +448,7 @@ test("runtime cache resolution honors configured, environment, XDG, and HOME fal
   }
 })
 
-test("prepareRuntime restores dependencies, reuses current cache, and imports updated source mirrors", async () => {
+test("prepareRuntime restores dependencies, reuses current cache, and imports updated source mirrors", { timeout: 60_000 }, async () => {
   const {
     importRuntimeServer,
     prepareRuntime,
@@ -532,7 +533,7 @@ test("prepareRuntime restores dependencies, reuses current cache, and imports up
   }
 })
 
-test("exact admitted source identity reuses a validated source mirror without rehashing changed source", async () => {
+test("exact admitted source identity reuses a validated source mirror without rehashing changed source", { timeout: 60_000 }, async () => {
   const {
     importRuntimeServer,
   } = await loadBootstrap()
@@ -568,7 +569,7 @@ test("exact admitted source identity reuses a validated source mirror without re
   }
 })
 
-test("an existing valid source mirror is admitted for later warm reuse", async () => {
+test("an existing valid source mirror is admitted for later warm reuse", { timeout: 60_000 }, async () => {
   const {
     importRuntimeServer,
   } = await loadBootstrap()
@@ -613,7 +614,7 @@ test("an existing valid source mirror is admitted for later warm reuse", async (
   }
 })
 
-test("a content-derived source identity rejects changed source on a cold cache", async () => {
+test("a content-derived source identity rejects changed source on a cold cache", { timeout: 60_000 }, async () => {
   const {
     hashCurrentSource,
     importRuntimeServer,
@@ -641,7 +642,7 @@ test("a content-derived source identity rejects changed source on a cold cache",
   }
 })
 
-test("a persisted content identity cannot point at a differently hashed mirror", async () => {
+test("a persisted content identity cannot point at a differently hashed mirror", { timeout: 60_000 }, async () => {
   const {
     hashCurrentSource,
     importRuntimeServer,
@@ -684,7 +685,7 @@ test("a persisted content identity cannot point at a differently hashed mirror",
   }
 })
 
-test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", async () => {
+test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", { timeout: 60_000 }, async () => {
   const { restoreRuntimeDependencies } = await loadBootstrap()
   const fixture = makeMcpFixture()
   const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
@@ -727,7 +728,7 @@ test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", a
   }
 })
 
-test("restoreRuntimeDependencies fails before extraction when the cache path is not writable as a directory", async () => {
+test("restoreRuntimeDependencies fails before extraction when the cache path is not writable as a directory", { timeout: 60_000 }, async () => {
   const { restoreRuntimeDependencies } = await loadBootstrap()
   const fixture = makeMcpFixture()
   const runtimeCacheDir = path.join(fixture.root, "runtime-cache-file")
@@ -755,7 +756,7 @@ test("restoreRuntimeDependencies fails before extraction when the cache path is 
   }
 })
 
-test("source hashing ignores nested node_modules and mirrors clean up staging directories", async () => {
+test("source hashing ignores nested node_modules and mirrors clean up staging directories", { timeout: 60_000 }, async () => {
   const { hashCurrentSource, sourceFilesForHash, syncSourceMirror } = await loadBootstrap()
   const fixture = makeMcpFixture()
   const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
@@ -797,7 +798,7 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
   }
 })
 
-test("source mirror admission rejects marker traversal, omissions, directories, and symlinks", async (t) => {
+test("source mirror admission rejects marker traversal, omissions, directories, and symlinks", { timeout: 60_000 }, async (t) => {
   const {
     hashCurrentSource,
     resolveAdmittedSourceMirror,
@@ -853,7 +854,7 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
   }
 })
 
-test("source mirror admission rejects Windows and backslash paths on POSIX hosts", { skip: process.platform === "win32" ? "the fixture files named C:\\payload.js and \\\\server\\share\\payload.js cannot exist on Windows, where the colon and the backslash are path syntax" : false }, async () => {
+test("source mirror admission rejects Windows and backslash paths on POSIX hosts", { skip: process.platform === "win32" ? "the fixture files named C:\\payload.js and \\\\server\\share\\payload.js cannot exist on Windows, where the colon and the backslash are path syntax" : false, timeout: 60_000 }, async () => {
   const {
     resolveAdmittedSourceMirror,
     syncSourceMirror,
@@ -899,7 +900,7 @@ test("source mirror admission rejects Windows and backslash paths on POSIX hosts
   }
 })
 
-test("source mirror admission rejects symlinked ancestors and undeclared files", async (t) => {
+test("source mirror admission rejects symlinked ancestors and undeclared files", { timeout: 60_000 }, async (t) => {
   const {
     hashCurrentSource,
     resolveAdmittedSourceMirror,
@@ -956,7 +957,7 @@ test("source mirror admission rejects symlinked ancestors and undeclared files",
   }
 })
 
-test("source mirror admission rejects incomplete inventories and special files", async (t) => {
+test("source mirror admission rejects incomplete inventories and special files", { timeout: 60_000 }, async (t) => {
   const {
     hashCurrentSource,
     resolveAdmittedSourceMirror,
@@ -1000,7 +1001,7 @@ test("source mirror admission rejects incomplete inventories and special files",
   }
 })
 
-test("source mirroring supports fixtures without optional package and config roots", async () => {
+test("source mirroring supports fixtures without optional package and config roots", { timeout: 60_000 }, async () => {
   const { syncSourceMirror } = await loadBootstrap()
   const fixture = makeMcpFixture()
   try {
@@ -1018,7 +1019,7 @@ test("source mirroring supports fixtures without optional package and config roo
   }
 })
 
-test("bootstrap pack verifier rejects missing metadata, drift, corrupt archives, and bundled source", async () => {
+test("bootstrap pack verifier rejects missing metadata, drift, corrupt archives, and bundled source", { timeout: 60_000 }, async () => {
   const { verifyBootstrapRuntimeDependencyPack } = await loadBootstrap()
   const fixture = makeMcpFixture()
   try {
@@ -1310,7 +1311,7 @@ test("bootstrap pack verifier rejects missing metadata, drift, corrupt archives,
   }
 })
 
-test("extractRuntimeArchive handles tar name variants and rejects unsafe paths", async () => {
+test("extractRuntimeArchive handles tar name variants and rejects unsafe paths", { timeout: 60_000 }, async () => {
   const { extractRuntimeArchive } = await loadBootstrap()
   const root = makeTempDir()
   try {
@@ -1379,7 +1380,7 @@ test("extractRuntimeArchive handles tar name variants and rejects unsafe paths",
   }
 })
 
-test("runtime pack diagnostics list expected paths, available targets, and remediation", async () => {
+test("runtime pack diagnostics list expected paths, available targets, and remediation", { timeout: 60_000 }, async () => {
   const { runtimeDependencyPackError } = await loadBootstrap()
   const root = makeTempDir()
   try {
@@ -1417,7 +1418,7 @@ test("runtime pack diagnostics list expected paths, available targets, and remed
   }
 })
 
-test("runtime pack inspection classifies unsupported, missing, checksum, manifest, and archive failures", async () => {
+test("runtime pack inspection classifies unsupported, missing, checksum, manifest, and archive failures", { timeout: 60_000 }, async () => {
   const { inspectRuntimeDependencyPack } = await loadBootstrap()
   const fixture = makeMcpFixture()
   try {
@@ -1573,7 +1574,7 @@ test("runtime pack inspection classifies unsupported, missing, checksum, manifes
   }
 })
 
-test("atomic publication rejects invalid staging and rolls back invalid destinations", async () => {
+test("atomic publication rejects invalid staging and rolls back invalid destinations", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const destinationDir = path.join(root, "runtime-cache")
@@ -1640,7 +1641,7 @@ test("atomic publication rejects invalid staging and rolls back invalid destinat
   }
 })
 
-test("atomic publication restores the previous cache after interruption", async () => {
+test("atomic publication restores the previous cache after interruption", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const destinationDir = path.join(root, "runtime-cache")
@@ -1740,7 +1741,7 @@ for (const collisionCode of ["EEXIST", "ENOTEMPTY"]) {
   })
 }
 
-test("publication lock makes concurrent publishers reuse a valid winner without moving it", async () => {
+test("publication lock makes concurrent publishers reuse a valid winner without moving it", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const destinationDir = path.join(root, "runtime-cache")
@@ -1798,7 +1799,7 @@ test("publication lock makes concurrent publishers reuse a valid winner without 
   }
 })
 
-test("publication lock reclaims dead and malformed owners but times out behind a live owner", async () => {
+test("publication lock reclaims dead and malformed owners but times out behind a live owner", { timeout: 60_000 }, async () => {
   const {
     processIsAlive,
     publishDirectoryAtomically,
@@ -1895,7 +1896,10 @@ test("publication lock reclaims dead and malformed owners but times out behind a
       pid: 999_999,
       token: "dead",
     })
+    // A reclaim folder dated in the future is never stale, so the wait ends in the timeout.
     mkdirSync(`${reclaimLock}.reclaim-lock`)
+    const future = new Date(Date.now() + 3_600_000)
+    utimesSync(`${reclaimLock}.reclaim-lock`, future, future)
     assert.throws(
       () => publishDirectoryAtomically({
         destinationDir: reclaimDestination,
@@ -1947,6 +1951,7 @@ test("publication lock reclaims dead and malformed owners but times out behind a
           stagingDir: failureStaging,
           validateDestination: (candidate) => existsSync(path.join(candidate, "marker")),
           lockTimeoutMs: 1,
+          platform: "linux",
           createLockDirectory: (candidate) => {
             if (failureSurface === "acquire" && candidate === failureLock) {
               const error = new Error("publication lock denied")
@@ -1990,7 +1995,7 @@ test("publication lock reclaims dead and malformed owners but times out behind a
   }
 })
 
-test("publication lock does not remove a lock whose ownership token changed", async () => {
+test("publication lock does not remove a lock whose ownership token changed", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const destinationDir = path.join(root, "runtime-cache")
@@ -2024,7 +2029,7 @@ test("publication lock does not remove a lock whose ownership token changed", as
   }
 })
 
-test("runtime restoration stages a complete tree before replacing a stale cache", async () => {
+test("runtime restoration stages a complete tree before replacing a stale cache", { timeout: 60_000 }, async () => {
   const { restoreRuntimeDependencies } = await loadBootstrap()
   const fixture = makeMcpFixture()
   try {
@@ -2077,7 +2082,7 @@ test("runtime restoration stages a complete tree before replacing a stale cache"
   }
 })
 
-test("source mirror stages a complete tree before replacing a stale mirror", async () => {
+test("source mirror stages a complete tree before replacing a stale mirror", { timeout: 60_000 }, async () => {
   const { syncSourceMirror } = await loadBootstrap()
   const fixture = makeMcpFixture()
   try {
@@ -2121,14 +2126,14 @@ test("source mirror stages a complete tree before replacing a stale mirror", asy
   }
 })
 
-test("omitted bootstrap options fail before any runtime path is resolved", async () => {
+test("omitted bootstrap options fail before any runtime path is resolved", { timeout: 60_000 }, async () => {
   const { importRuntimeServer, prepareRuntime } = await loadBootstrap()
   const message = "desk-mcp: mcpRoot is required for runtime dependency bootstrap"
   assert.throws(() => prepareRuntime(), { message })
   await assert.rejects(() => importRuntimeServer(), { message })
 })
 
-test("omitted cache options use the ambient override without creating a cache", async () => {
+test("omitted cache options use the ambient override without creating a cache", { timeout: 60_000 }, async () => {
   const { resolveRuntimeCacheDir } = await loadBootstrap()
   const root = makeTempDir()
   const cache = path.join(root, "ambient-cache")
@@ -2145,7 +2150,7 @@ test("omitted cache options use the ambient override without creating a cache", 
   }
 })
 
-test("default host inspection and restoration preserve exact missing-matrix and missing-pack diagnostics", async (t) => {
+test("default host inspection and restoration preserve exact missing-matrix and missing-pack diagnostics", { timeout: 60_000 }, async (t) => {
   const { inspectRuntimeDependencyPack, restoreRuntimeDependencies, sourceFilesForHash } = await loadBootstrap()
   const { deriveRuntimeDependencyPackPaths, deriveRuntimeSupportMatrixPath } = await loadRuntimeDeps()
   const { default: fs } = await import("node:fs")
@@ -2207,12 +2212,12 @@ test("default host inspection and restoration preserve exact missing-matrix and 
   }
 })
 
-test("process liveness's default signal-zero operation observes the current test process", async () => {
+test("process liveness's default signal-zero operation observes the current test process", { timeout: 60_000 }, async () => {
   const { processIsAlive } = await loadBootstrap()
   assert.equal(processIsAlive(process.pid), true)
 })
 
-test("source hashing ignores real directory links and their changing external content", async () => {
+test("source hashing ignores real directory links and their changing external content", { timeout: 60_000 }, async () => {
   const { hashCurrentSource, sourceFilesForHash } = await loadBootstrap()
   const { symlinkSync } = await import("node:fs")
   const fixture = makeMcpFixture()
@@ -2231,7 +2236,7 @@ test("source hashing ignores real directory links and their changing external co
   }
 })
 
-test("publication recovers when a competing lock vanishes before metadata inspection", async () => {
+test("publication recovers when a competing lock vanishes before metadata inspection", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const stagingDir = path.join(root, "stage")
@@ -2261,7 +2266,7 @@ test("publication recovers when a competing lock vanishes before metadata inspec
   }
 })
 
-test("publication does not fail or remove payload when its lock disappears before release", async () => {
+test("publication does not fail or remove payload when its lock disappears before release", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const stagingDir = path.join(root, "stage")
@@ -2291,7 +2296,7 @@ test("publication does not fail or remove payload when its lock disappears befor
   }
 })
 
-test("a first publication rename failure propagates its error with no previous destination to restore", async () => {
+test("a first publication rename failure propagates its error with no previous destination to restore", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const stagingDir = path.join(root, "stage")
@@ -2317,7 +2322,7 @@ test("a first publication rename failure propagates its error with no previous d
   }
 })
 
-test("a publisher builds its staging tree only once it owns the lock and the destination is still missing", async () => {
+test("a publisher builds its staging tree only once it owns the lock and the destination is still missing", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const destinationDir = path.join(root, "cache")
@@ -2342,7 +2347,7 @@ test("a publisher builds its staging tree only once it owns the lock and the des
   }
 })
 
-test("a build that leaves an incomplete tree, or throws, fails the publication and cleans up", async () => {
+test("a build that leaves an incomplete tree, or throws, fails the publication and cleans up", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const root = makeTempDir()
   const destinationDir = path.join(root, "cache")
@@ -2380,7 +2385,7 @@ test("a build that leaves an incomplete tree, or throws, fails the publication a
   }
 })
 
-test("publishers in separate processes build the shared tree exactly once", async () => {
+test("publishers in separate processes build the shared tree exactly once", { timeout: 60_000 }, async () => {
   const root = makeTempDir()
   const destinationDir = path.join(root, "cache")
   const buildLog = path.join(root, "builds.log")
@@ -2454,6 +2459,329 @@ test("publishers in separate processes build the shared tree exactly once", asyn
     assert.deepEqual(readdirSync(root).sort(), ["builds.log", "cache", "go"])
   } finally {
     for (const child of children) if (child.exitCode === null) child.kill()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// On Windows, mkdir and rmdir answer EPERM, EACCES or EBUSY for a folder that is delete-pending or open in another process; such an answer means "contended", never "denied" or "acquired".
+function windowsError(code) {
+  return Object.assign(new Error(`${code}: injected`), { code })
+}
+
+function lockFixture() {
+  const root = makeTempDir()
+  const destinationDir = path.join(root, "cache")
+  const lockDir = `${destinationDir}.publish-lock`
+  const stagingDir = path.join(root, "cache.stage")
+  const publish = (publishDirectoryAtomically, extra) => publishDirectoryAtomically({
+    destinationDir,
+    stagingDir,
+    validateDestination: (candidate) => existsSync(path.join(candidate, "complete")),
+    build: () => writeText(path.join(stagingDir, "complete"), "yes\n"),
+    lockTimeoutMs: 1000,
+    ...extra,
+  })
+  return { root, destinationDir, lockDir, stagingDir, publish }
+}
+
+
+test("while the lock owner is alive a waiter creates no reclaim folder at all", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: process.pid, token: "live builder" })
+    const created = []
+    let sleeps = 0
+    const result = publish(publishDirectoryAtomically, {
+      processAlive: () => true,
+      createLockDirectory: (dir) => {
+        created.push(path.basename(dir))
+        mkdirSync(dir)
+      },
+      sleep: () => {
+        sleeps += 1
+        if (sleeps === 3) rmSync(lockDir, { recursive: true, force: true })
+      },
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(sleeps, 3, "three polls behind the live owner")
+    assert.deepEqual(created.filter((name) => name.endsWith(".reclaim-lock")), [], "no reclaim folder was created or deleted while the owner lived")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Windows: an EPERM, EACCES or EBUSY on the reclaim folder waits and retries instead of crashing the waiter", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  for (const code of ["EPERM", "EACCES", "EBUSY"]) {
+    const { root, destinationDir, lockDir, publish } = lockFixture()
+    try {
+      writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+      let sleeps = 0
+      const result = publish(publishDirectoryAtomically, {
+        platform: "win32",
+        processAlive: () => false,
+        createLockDirectory: (dir) => {
+          if (dir.endsWith(".reclaim-lock") && sleeps === 0) throw windowsError(code)
+          mkdirSync(dir)
+        },
+        sleep: () => { sleeps += 1 },
+      })
+      assert.deepEqual(result, { destinationDir, published: true, reused: false }, code)
+      assert.equal(sleeps, 2, "one wait after the contended reclaim folder, one after the reclaim itself")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows: an EPERM on the lock folder itself waits and retries; elsewhere it is a real failure", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const first = lockFixture()
+  try {
+    let attempts = 0
+    const result = first.publish(publishDirectoryAtomically, {
+      platform: "win32",
+      createLockDirectory: (dir) => {
+        attempts += 1
+        if (attempts === 1) throw windowsError("EPERM")
+        mkdirSync(dir)
+      },
+    })
+    assert.equal(result.published, true)
+    assert.ok(attempts >= 2, "the lock folder was tried again after the EPERM")
+  } finally {
+    rmSync(first.root, { recursive: true, force: true })
+  }
+  for (const target of ["lock", "reclaim"]) {
+    const other = lockFixture()
+    try {
+      writeJson(path.join(other.lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+      assert.throws(
+        () => other.publish(publishDirectoryAtomically, {
+          platform: "linux",
+          processAlive: () => false,
+          createLockDirectory: (dir) => {
+            if (target === "reclaim" ? dir.endsWith(".reclaim-lock") : !dir.endsWith(".reclaim-lock")) throw windowsError("EPERM")
+            mkdirSync(dir)
+          },
+        }),
+        /EPERM/u,
+        `${target}: not a Windows transient`,
+      )
+    } finally {
+      rmSync(other.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows: a dead owner's lock folder that is contended on removal is retried on the next poll", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    let lockRemovals = 0
+    let sleeps = 0
+    const result = publish(publishDirectoryAtomically, {
+      platform: "win32",
+      processAlive: () => false,
+      removeDirectory: (dir, options) => {
+        if (dir.endsWith(".publish-lock") && (lockRemovals += 1) === 1) throw windowsError("EPERM")
+        rmSync(dir, options)
+      },
+      sleep: () => { sleeps += 1 },
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(sleeps, 2, "a wait after the contended removal, and one after the reclaim")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a lock folder that cannot be removed for another reason fails loudly", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    assert.throws(
+      () => publish(publishDirectoryAtomically, {
+        platform: "win32",
+        processAlive: () => false,
+        removeDirectory: () => { throw windowsError("EIO") },
+      }),
+      /EIO/u,
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a lock that cannot be removed at release is marked abandoned and never hides the publish result", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  for (const removal of ["contended", "unexpected"]) {
+    const { root, destinationDir, lockDir, publish } = lockFixture()
+    try {
+      let sleeps = 0
+      const result = publish(publishDirectoryAtomically, {
+        platform: "win32",
+        removeDirectory: (dir, options) => {
+          if (dir.endsWith(".publish-lock")) throw windowsError(removal === "contended" ? "EBUSY" : "EIO")
+          rmSync(dir, options)
+        },
+        sleep: () => { sleeps += 1 },
+      })
+      assert.deepEqual(result, { destinationDir, published: true, reused: false }, removal)
+      assert.equal(sleeps, removal === "contended" ? 9 : 0, "bounded retries only for a contended folder")
+      const owner = JSON.parse(readFileSync(path.join(lockDir, "owner.json"), "utf8"))
+      assert.equal(owner.pid, 0, "the owner record names no process")
+      // Any later publisher treats that record as abandoned and reclaims it.
+      const again = publishDirectoryAtomically({
+        destinationDir: `${destinationDir}-2`,
+        stagingDir: path.join(root, "second.stage"),
+        validateDestination: (candidate) => existsSync(path.join(candidate, "complete")),
+        build: () => writeText(path.join(root, "second.stage", "complete"), "yes\n"),
+      })
+      assert.equal(again.published, true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+  // A lock whose abandoned mark cannot be written either: still the publish result, not a crash.
+  const stuck = lockFixture()
+  try {
+    let owners = 0
+    const result = stuck.publish(publishDirectoryAtomically, {
+      platform: "win32",
+      removeDirectory: (dir, options) => {
+        if (dir.endsWith(".publish-lock")) throw windowsError("EIO")
+        rmSync(dir, options)
+      },
+      writeLockOwner: (file, text, encoding) => {
+        owners += 1
+        if (owners > 1) throw windowsError("EBUSY")
+        writeFileSync(file, text, encoding)
+      },
+    })
+    assert.equal(result.published, true)
+    assert.equal(owners, 2)
+  } finally {
+    rmSync(stuck.root, { recursive: true, force: true })
+  }
+})
+
+test("a reclaim folder older than the lock timeout is removed so it cannot block recovery forever", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    const reclaimLock = `${lockDir}.reclaim-lock`
+    mkdirSync(reclaimLock)
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(reclaimLock, old, old)
+    const result = publish(publishDirectoryAtomically, { processAlive: () => false, sleep: () => {} })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(existsSync(reclaimLock), false)
+    // A fresh reclaim folder belongs to a live reclaimer and is left alone; the wait then ends in the usual timeout.
+    const fresh = lockFixture()
+    try {
+      writeJson(path.join(fresh.lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+      mkdirSync(`${fresh.lockDir}.reclaim-lock`)
+      assert.throws(
+        () => fresh.publish(publishDirectoryAtomically, { processAlive: () => false, lockTimeoutMs: 60_000, now: ((values) => () => values.shift() ?? values.at(-1))([0, Date.now(), 60_000]) }),
+        /publication lock timed out/u,
+      )
+      assert.equal(existsSync(`${fresh.lockDir}.reclaim-lock`), true)
+    } finally {
+      rmSync(fresh.root, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a reclaim folder that vanishes before its age is read is simply retried", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    let attempts = 0
+    const result = publish(publishDirectoryAtomically, {
+      processAlive: () => false,
+      createLockDirectory: (dir) => {
+        if (dir.endsWith(".reclaim-lock") && (attempts += 1) === 1) throw windowsError("EEXIST")
+        mkdirSync(dir)
+      },
+      sleep: () => {},
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("an owner that turns out to be alive on the second look keeps its lock", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "restarted" })
+    const answers = [false, true]
+    let sleeps = 0
+    const result = publish(publishDirectoryAtomically, {
+      processAlive: () => answers.shift() ?? true,
+      sleep: () => {
+        sleeps += 1
+        rmSync(lockDir, { recursive: true, force: true })
+      },
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(sleeps, 1, "the lock was not reclaimed from under the live owner")
+    assert.equal(existsSync(`${lockDir}.reclaim-lock`), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Windows: a lock folder that persistently cannot be created waits between attempts and ends in the timeout", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  for (const code of ["EPERM", "EACCES", "EBUSY"]) {
+    const { root, publish } = lockFixture()
+    try {
+      // A fake clock that only the waits advance: a loop that does not wait makes no progress toward the deadline and is caught by the attempt cap.
+      let clock = 0
+      let attempts = 0
+      assert.throws(
+        () => publish(publishDirectoryAtomically, {
+          platform: "win32",
+          lockTimeoutMs: 100,
+          now: () => clock,
+          sleep: (ms) => { clock += ms },
+          createLockDirectory: (dir) => {
+            // The reclaim folder can be made (and finds no lock folder to remove); only the lock folder itself is refused.
+            if (dir.endsWith(".reclaim-lock")) return mkdirSync(dir)
+            attempts += 1
+            if (attempts > 1000) throw new Error("no wait between attempts: the loop spins")
+            throw windowsError(code)
+          },
+        }),
+        /publication lock timed out/u,
+        code,
+      )
+      assert.ok(attempts >= 2 && attempts <= 10, `${attempts} attempts in 100 ms of waiting`)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("a reclaim that finishes after the deadline still gets one attempt at the lock", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    let clock = 0
+    const result = publish(publishDirectoryAtomically, { processAlive: () => false, now: () => (clock += 10_000) })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+  } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })

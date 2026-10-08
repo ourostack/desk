@@ -1,5 +1,43 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.240 — 2026-10-08
+
+The factory's public gate now accepts published facts `desk.factory.published/4`, and every `/1`, `/2` and `/3` file already in a store stays valid ([`published-schema.js`](mcp/src/factory/published-schema.js)). A `/4` file adds four keys, each required where it applies in `/4` and refused as `inconsistent` in an older file: each job's UTC finish day `jobs[].finished_on` with its source `jobs[].finished_basis` (`transition` or `card_updated`), whether the session created each pull request (`refs.prs[].created`, a plain `true` or `false` with no "not known" value, so a deriver writes `false` unless its own events show the session created the PR), and, on human waits only, how the agent's turn ended before the wait (`intervals[].stop`: `end`, `asks`, `pending_agents`; no text and no tool name). The finish day is the only date published facts may carry: it must be a real calendar day no earlier than 2025-01-01, it sits only on a job whose card was seen done or cancelled and whose file carries the timed source its basis names, and a desk whose remote is public still publishes no job timing, so no finish day, and no PR marked `created: true`, because GitHub's public creation time of such a PR would date the session. The store's intake also refuses a finish day after the UTC day it runs ([`validate-pr.js`](mcp/src/factory/pipeline/validate-pr.js), code `future`). Local facts accept the PR flag and the stop facts as optional keys ([`schema.js`](mcp/src/factory/schema.js), `ENUMS.stopEnd`). The publishing transform still writes `/2` and `/3` until the derivers and the transform fill the new keys, and the [store playbook](docs/factory-store-playbook.md) describes the `/4` gate.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.239 — 2026-10-08
+
+The loop no longer raises `labels_quarantined`, and the session-start line no longer counts a job, for labels the flush withdrew on purpose ([`boot-check.js`](mcp/src/factory/boot-check.js) `labelsBootCheck`). A `job_unbound` record means a delivered label was taken out of the store because its session's facts stopped binding the job, and the hold lifts by itself if the session binds the job again, so there is nothing for anyone to repair. Counting it kept the alarm, and the store's `loop_alarms_open`, raised for 30 days after every withdrawal; on 2026-10-08 five such withdrawals re-raised it. A job with any other quarantine record, or with a record that does not read, is still reported.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.238 — 2026-10-08
+
+On Windows, a Desk server waiting for another server's runtime cache build no longer crashes when the lock folders are briefly unavailable. A waiter used to create and delete a reclaim folder on every poll to check whether the lock owner was dead, so with several servers starting together Windows could answer one of those `mkdir` calls with `EPERM: operation not permitted, mkdir '…publish-lock.reclaim-lock'` (it answers EPERM, EACCES or EBUSY, not "already exists", for a folder that is being deleted or that another process has open), and the waiter failed its whole start-up. A waiter now looks at the owner first and touches no reclaim folder while the owner is alive. If the owner is dead, those Windows answers mean "someone else has it": the waiter waits and tries again inside its existing 30 second limit. A reclaim folder older than that limit, left by a reclaimer that died, is removed so it cannot block recovery.
+
+Releasing the lock is now bounded and best-effort. If the lock folder still cannot be removed after ten short retries, the owner record is rewritten to name no process, so the next waiter reclaims it, and the build's own result is returned instead of an error. Other platforms keep the same lock rules, with the owner-first check, the stale reclaim cleanup and the best-effort release.
+
+A wait for the lock now always ends at its limit: before, a lock folder that could not be created for a lasting reason on Windows (a persistent EPERM or EACCES) was reclaimed and retried in a loop that never reached the limit.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.237 — 2026-10-08
+
+A capture record no longer reports a stuck quarantine as a measurement. When a coverage pass is recorded because the quarantine did not settle within the hour, each host most of whose sessions sit in quarantine keeps its counts locally, is flagged `held_in_quarantine`, and goes to the store as `{ "not_counted": true }` instead of a captured share ([`capture-sweep.js`](mcp/src/factory/capture-sweep.js), [`capture-publish.js`](mcp/src/factory/capture-publish.js)). The status and the doctor still show `quarantine_not_settling`, and the loop raises a new `facts_quarantine_not_settling` alarm ([`loop-health.js`](mcp/src/factory/loop-health.js)), so the store's status line still shows that something is wrong through `loop_alarms_open` and a `factory-alarm` issue can own it. A host that switches between a share and not counted, either way, is sent at the next flush instead of after 20 hours ([`capture-flush.js`](mcp/src/factory/capture-flush.js)). This happened on 2026-10-07, when a long-running session still on Desk 3.2.0-alpha.150 hooks, which predate the newer-format guard, quarantined 230 valid sessions and 14 valid label files as `invalid`.
+
+The factory names the running Desk from the `plugin.json` beside its own code and, when there is none, with `package-metadata.js`'s one resolver ([`outbox.js`](mcp/src/factory/outbox.js) `ownDeskVersion`). The MCP server runs Desk from a source mirror with no `plugin.json` beside it. There, quarantine records used to carry no `desk_version`, and a labels file written by a newer Desk could be quarantined as `invalid` instead of being left for that Desk.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.236 — 2026-10-08
+
+### Fixed
+
+On Windows, the factory no longer drops a session's derivation when another process has the destination file open at the moment of the write. Writing a factory file (an outbox facts file, a marker, `status.json`) renames a finished temporary file over the old one, and Windows refuses that rename with a permission or busy error while any other process holds the old file open, such as a reader or a virus scanner. The detached derivation that a session end starts gave up on the first refusal and left the session's newest facts unwritten, with nothing to retry it. The write now waits up to five seconds, retrying every 15 ms, for the file to be free, as it already did for a lock file whose deletion was pending. A write that is refused for good now also removes its temporary file before the error surfaces. Other platforms and other errors behave as before. No emitted or published field changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.235 — 2026-10-08
 
 When several Desk servers start at once on a root whose runtime cache is new, one of them now builds the runtime cache and the source mirror, and the others wait for it and reuse the result. Before, each server unpacked the whole runtime archive and copied the source into its own staging folder first, and only then took the publication lock to learn that another server had already won, so five servers did the same work five times at once. In our Windows CI traces of the five-server start-up test, that work made loading the runtime take a median of about 9 seconds per server and up to about 18 seconds, and a round that ran past the test's 30 second admission window left sessions stuck in "admitting". The staging folder is now filled only after the server holds the publication lock and finds the destination still missing; a failed or incomplete build still leaves nothing behind.
