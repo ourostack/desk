@@ -2,9 +2,10 @@
 // its stack-up of lead time, its compact answer, and the causes of waste
 // ranked by time. Every figure is a number-state envelope, `{ state, value,
 // reasons }`, with `value` absent when the state is `unavailable`; a zero is
-// always a measured zero, never missing data. No who, no when: every time is
-// on a job's own clock (milliseconds since its card was created), and
-// nothing here orders jobs against each other.
+// always a measured zero, never missing data. No who: every time is on a
+// job's own clock (milliseconds since its card was created), and the one date
+// is each task's UTC finish day (`finished_on`), as the published facts carry
+// it. Nothing here orders jobs against each other.
 //
 // Rules:
 //   - The lead window is the span the job's lead time measures: from the
@@ -20,9 +21,17 @@
 //     intervals, less, in each session, the time that session's evaluator
 //     labeled `waiting` (after the honest correction: the work was stopped,
 //     and no other worker of the job was working), so one session's wait
-//     never hides another's work. Idle time is the rest of the window, and
-//     "waiting" means idle time and nothing else. A job with no labels yet
-//     counts all of its recorded work as working.
+//     never hides another's work. Time inside an ask-tool wait (a
+//     `human_wait` whose `stop.end` is `ask_question` or `ask_plan`: the
+//     agent asked the operator through a question or plan tool and waited
+//     for the answer) is not working time either, except where another
+//     worker of the job worked meanwhile; the facts' `human_wait` makes it
+//     `next_prompt`. That rule lowers working time and flow efficiency for
+//     tasks whose agents asked through those tools, which before it counted
+//     the operator's think time inside the tool call as work. Idle time is
+//     the rest of the window, and "waiting" means idle time and nothing
+//     else. A job with no labels yet counts all of its recorded work as
+//     working.
 //   - Each idle moment has one `waited_on`, the first of `IDLE_WAITED_ON`
 //     that claims it: `next_prompt` (a labeled wait on it, or the facts'
 //     `human_wait`: the agent had stopped and the next prompt had not come,
@@ -111,6 +120,24 @@
 //     `job_offsets_unavailable` for a session the job clock cannot place).
 //     A human turn outside the lead window is in no burst, and a tool call
 //     counts in the burst where it starts.
+//   - Each after-stop wait (a root `human_wait` interval the job holds) is
+//     listed in `waits` with the facts' record of how the turn ended
+//     (`stop`, `null` with the reason `not_in_published_facts` before
+//     facts `/4`) and `next_prompt_ms`, the idle `next_prompt` time inside
+//     the lead window it holds. A moment two waits hold goes to the earlier, so
+//     the waits' times plus the `next_prompt` time no wait holds (a labeled
+//     wait that runs past its human wait) are the task's
+//     `waiting_by_waited_on_ms.next_prompt` exactly. A prompt joins the wait
+//     it ends by session and `end_ms == at_ms`.
+//   - `finished_on` is the task's UTC finish day from the published facts,
+//     on the job file and on its `rollups/tasks.json` and
+//     `rollups/stackup.json` rows: measured from a session's own transition,
+//     an upper bound from the card's last update, the latest day when
+//     sessions disagree (`reopened`), and unavailable with its reason
+//     otherwise (`finishedOn`).
+//   - `human_turns_state` and `prs_state` say how whole the job's lists of
+//     operator prompts and pull requests are, so a list that was not
+//     recorded never reads as empty: a partial list is a lower bound.
 //   - A cause is `waiting:<waited_on>` for idle time, and for a labeled
 //     waste of working time `<waste>:<detail>`: for defects, the failed tool
 //     kind its evidence rests on most; otherwise `all`. `rollups/causes.json`
@@ -123,7 +150,7 @@
 import { LABEL_WASTES, UNKNOWN_LABEL } from "../label-schema.js"
 import { recordedSpans } from "./formulas.js"
 import { ROLLUPS_SCHEMA, pluginVersion } from "./rollups.js"
-import { CAUSE_REFERENCES, UNLABELED_CLASS, causeKey, compareFields, jobStretches, mostTime } from "./stretches.js"
+import { CAUSE_REFERENCES, UNLABELED_CLASS, askIdle, causeKey, compareFields, jobStretches, jobWaits, mostTime } from "./stretches.js"
 import { ACTIVE_KINDS, boundIntervals, duration, intervalInSession, union } from "./timeline.js"
 
 /** An idle gap at least this long ends a work burst: 15 minutes. */
@@ -205,6 +232,13 @@ export const REASON_CHANGE = Object.freeze({
   field_absent: "unseen",
   host_records_partly: "unseen",
   withheld_public: "unseen",
+  // A list the facts do not carry (older facts) or cannot place on the job (no segments) leaves its entries unseen.
+  not_in_published_facts: "unseen",
+  no_segments: "unseen",
+  // A finish day from the card's last update: the card can be edited after the task is done.
+  finish_from_card_update: "card_update",
+  // The latest of several finishes is the task's final finish, exact as such.
+  reopened: "reopened",
 })
 const UNDECIDED = "undecided"
 const changeOf = (reason) => REASON_CHANGE[reason] ?? UNDECIDED
@@ -235,6 +269,11 @@ export const BOUND_DIRECTIONS = Object.freeze({
   other_task_capped: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "lower", unattributed: "lower", overcount: "lower" },
   placement: { open: "lower", floor: "lower", unplaced: "upper" },
   count: { open: "lower", unseen: "both", unplaced: "both" },
+  // A list of recorded entries (operator prompts, pull requests): whatever the facts did not record, could not place or withheld for
+  // another job may be missing from it, so it holds at least these.
+  list: { open: "lower", unseen: "lower", unplaced: "lower", overcount: "lower", unattributed: "lower" },
+  // A finish day: the card's last update is on or after the day the task finished.
+  finish: { card_update: "upper" },
 })
 
 // The direction `reasons` give a figure of `kind`: "lower", "upper", "both", "none", or "undecided" when a reason is not named.
@@ -380,7 +419,8 @@ const isAgentsWorking = (stretch) => stretch.class === UNLABELED_CLASS
 
 /**
  * The job's working time on the job clock: each session's active intervals less that session's labeled waiting (the time its evaluator
- * found the work stopped, after the honest correction), merged across sessions, so one session's wait never hides another's work.
+ * found the work stopped, after the honest correction) and its ask-tool waits (`askIdle`: the agent was waiting on the operator's answer),
+ * merged across sessions, so one session's wait never hides another's work.
  */
 function workingSpans(timeline, stretches) {
   const bySession = new Map()
@@ -389,7 +429,8 @@ function workingSpans(timeline, stretches) {
     const key = `${interval.host}/${interval.session_id}`
     bySession.set(key, [...(bySession.get(key) ?? []), interval])
   }
-  return spansOf([...bySession.entries()].flatMap(([key, intervals]) => subtract(spansOf(intervals), spansOf(stretches.filter((stretch) => isWaiting(stretch) && `${stretch.host}/${stretch.session}` === key)))))
+  const asked = askIdle(timeline)
+  return spansOf([...bySession.entries()].flatMap(([key, intervals]) => subtract(spansOf(intervals), spansOf([...stretches.filter((stretch) => isWaiting(stretch) && `${stretch.host}/${stretch.session}` === key), ...(asked.get(key) ?? [])]))))
 }
 
 /**
@@ -485,9 +526,92 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
     // The split of the whole gap by cause, stated as the task's split is, so a gap that holds several causes is exact.
     walk.gaps.push({ start_ms: from, end_ms: to, waited_on: waitedOn, idle_by_waited_on_ms: idleFigures(idleWithin(idle, from, to), { base: [], coverage, intervals, placement }) })
   }
-  walk.stackup = stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels })
+  const held = waitsHeld(jobWaits(timeline), idle.next_prompt, window)
+  walk.waits = held.waits
+  walk.next_prompt_unheld_ms = held.unheld_ms
+  walk.finished_on = finishedOn(timeline, formulas)
+  walk.human_turns_state = turnsListState(timeline, additions)
+  // The formulas' coverage of the job's public pull requests, with the list's own count.
+  const prs = formulas.references.parts.public_prs
+  walk.prs_state = bounded(figure(prs.state, additions.prs.length, prs.reasons, "measured"), "list")
+  walk.stackup = stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels, walk })
   walk.task = taskRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels, walk })
   return walk
+}
+
+/**
+ * Each after-stop wait (`jobWaits`) with `next_prompt_ms`, the idle `next_prompt` time inside the lead window it holds, and `reasons`
+ * (`not_in_published_facts` when the facts carry no stop record: facts before `/4`). A moment two waits hold (concurrent sessions) goes
+ * to the first in start order, so the waits' times plus `unheld_ms`, the `next_prompt` time no wait holds (a labeled wait that runs past
+ * its human wait), are the task's `next_prompt` waiting exactly. Without a lead window there is no waiting split: `next_prompt_ms` is
+ * `null` and the reasons are the lead time's.
+ */
+function waitsHeld(waits, nextPrompt, window) {
+  const hasWindow = Object.hasOwn(window, "start_ms")
+  let taken = []
+  const out = waits.map((wait) => {
+    const reasons = sortedUnique([...(wait.stop === null ? ["not_in_published_facts"] : []), ...(hasWindow ? [] : window.reasons)])
+    if (!hasWindow) return { ...wait, next_prompt_ms: null, reasons }
+    const mine = subtract(clip(nextPrompt, wait.start_ms, wait.end_ms), taken)
+    taken = spansOf([...taken, ...mine])
+    return { ...wait, next_prompt_ms: duration(mine), reasons }
+  })
+  return { waits: out, unheld_ms: hasWindow ? duration(subtract(nextPrompt, spansOf(waits))) : null }
+}
+
+const TERMINAL = new Set(["done", "cancelled"])
+
+/**
+ * `finishedOn(timeline, formulas) -> envelope`: the UTC day the task finished, `{ class, state, value, basis, reasons }` with `bound` when
+ * partial, read from each session's published `finished_on` (facts `/4`). Only a task whose status is `done` or `cancelled` has one. A day
+ * from a session's own transition (`basis: "transition"`) is measured and outranks a day from the card's last update (`card_updated`),
+ * which is an upper bound (`finish_from_card_update`) because a card can be edited after the task is done. When sessions moved the card to
+ * its end on different days (a reopened task), the latest wins, with the reason `reopened`. Unavailable, with `basis: null`, for an open
+ * task (`open_job`), a status not recorded (`status_unavailable`), a public desk (`job_offsets_withheld`), older facts
+ * (`not_in_published_facts`) or a job clock that could not be read (`job_offsets_unavailable`).
+ */
+function finishedOn(timeline, formulas) {
+  const none = (reasons) => ({ ...figure("unavailable", null, reasons), basis: null })
+  if (formulas.status.state === "unavailable") return none(["status_unavailable"])
+  if (!TERMINAL.has(formulas.status.value)) return none(["open_job"])
+  const bindings = timeline.source_sessions.map((session) => ({ session, binding: session.jobs.find((candidate) => candidate.job === timeline.job) }))
+  const days = bindings.filter(({ binding }) => typeof binding.finished_on === "string").map(({ binding }) => ({ day: binding.finished_on, basis: binding.finished_basis }))
+  if (days.length === 0) {
+    return none(bindings.map(({ session, binding }) => {
+      if (session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")) return "job_offsets_withheld"
+      return Object.hasOwn(binding, "finished_on") ? "job_offsets_unavailable" : "not_in_published_facts"
+    }))
+  }
+  const moved = days.filter((entry) => entry.basis === "transition")
+  const chosen = moved.length > 0 ? moved : days
+  const value = chosen.map((entry) => entry.day).sort(compareText).at(-1)
+  const reasons = [...(moved.length === 0 ? ["finish_from_card_update"] : []), ...(new Set(moved.map((entry) => entry.day)).size > 1 ? ["reopened"] : [])]
+  const basis = moved.length > 0 ? "transition" : "card_updated"
+  return { ...bounded(figure(reasons.length === 0 ? "measured" : "partial", value, reasons, moved.length > 0 ? "measured" : "declared"), "finish"), basis }
+}
+
+const flagsOf = (session, field) => session.unavailable.filter((entry) => entry.field === field).map((entry) => entry.reason)
+
+/**
+ * The list state of the job's operator prompts (`human_turns_state`): how whole `human_turns` is, so a task with none recorded never reads
+ * as having had none. Each session either gives its list, with the host's own flags on it (`host_records_partly`, `capped`,
+ * `log_truncated`, ...), or gives none: a public desk (`desk_public`), a session the job clock cannot place (`job_offsets_unavailable`), no
+ * list (the host's flag, such as `host_does_not_record`, or `not_in_published_facts` for older facts) or no segments to place the turns on
+ * (`no_segments`). Unavailable when no session gives a list, partial (a lower bound) when some do not or a list is flagged.
+ */
+function turnsListState(timeline, additions) {
+  const parts = timeline.source_sessions.map((session, index) => {
+    if (session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")) return { lacking: ["desk_public"] }
+    if (timeline.sessions[index].offset_ms === null) return { lacking: ["job_offsets_unavailable"] }
+    const flags = flagsOf(session, "human_turns")
+    if (!Array.isArray(session.human_turns)) return { lacking: flags.length > 0 ? flags : ["not_in_published_facts"] }
+    const binding = session.jobs.find((candidate) => candidate.job === timeline.job)
+    if (!Array.isArray(binding.segments) || binding.segments.length === 0) return { lacking: ["no_segments"] }
+    return { flags }
+  })
+  const reasons = parts.flatMap((part) => part.lacking ?? part.flags)
+  if (parts.every((part) => Object.hasOwn(part, "lacking"))) return figure("unavailable", null, reasons)
+  return bounded(figure(reasons.length === 0 ? "measured" : "partial", additions.human_turns.length, reasons, "measured"), "list")
 }
 
 // What each burst holds, counted once each: its sessions and workers (every interval it overlaps), its tool calls (each in the burst
@@ -617,8 +741,8 @@ function idleFigures(idle, { base, coverage, intervals, placement }) {
   }))
 }
 
-function stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle }) {
-  const row = { job: timeline.job, desk_version: pluginVersion(timeline.source_sessions), status: statusFigure(formulas), lead_time_ms: bounded(window.lead, "lead") }
+function stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, walk }) {
+  const row = { job: timeline.job, desk_version: pluginVersion(timeline.source_sessions), status: statusFigure(formulas), finished_on: walk.finished_on, lead_time_ms: bounded(window.lead, "lead") }
   if (!Object.hasOwn(window, "start_ms")) {
     const none = figure("unavailable", null, window.reasons)
     row.working_ms = none
@@ -679,6 +803,7 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
   const row = {
     job: timeline.job,
     status: statusFigure(formulas),
+    finished_on: walk.finished_on,
     lead_time_ms: bounded(window.lead, "lead"),
     labels_from_shared_session: timeline.sessions.some((session) => labels.sharedLabels?.has(`${timeline.job}/${session.id}`)),
     active_share_recorded: boundedRatio(fromResult(formulas.flow_efficiency), window.lead.reasons),
