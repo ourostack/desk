@@ -84,7 +84,7 @@ process.stdin.on("data", (chunk) => {
   }
 })
 process.stdin.on("end", () => { if (mode !== "stubborn") process.exit(0) })
-if (mode === "stubborn") setInterval(() => {}, 1000)
+if (mode === "stubborn") setTimeout(() => {}, 600000)
 `
 
 // A fake npm: `install` writes a stub @playwright/mcp (and playwright-core) into --prefix, `view` prints a version, `config get registry` prints a registry. FAKE_NPM_MODE picks a failure (grandchild starts a second process and hangs, writing its pid to FAKE_NPM_GRANDCHILD), FAKE_NPM_VERSION the version, FAKE_NPM_DELAY_MS a pause, and FAKE_NPM_LOG receives one JSON line per call.
@@ -95,11 +95,11 @@ const mode = process.env.FAKE_NPM_MODE || "ok"
 const version = process.env.FAKE_NPM_VERSION || "0.0.82"
 if (process.env.FAKE_NPM_LOG) fs.appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ args, retries: process.env.npm_config_fetch_retries, timeout: process.env.npm_config_fetch_timeout, path: process.env.PATH }) + "\\n")
 function main() {
-  if (mode === "hang") { setInterval(() => {}, 1000); return }
+  if (mode === "hang") { setTimeout(() => {}, 600000); return }
   if (mode === "grandchild") {
-    const grandchild = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+    const grandchild = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" })
     fs.writeFileSync(process.env.FAKE_NPM_GRANDCHILD, String(grandchild.pid))
-    setInterval(() => {}, 1000)
+    setTimeout(() => {}, 600000)
     return
   }
   if (mode === "failall" || (mode === "fail" && args[0] !== "config")) { process.stderr.write("npm error code ENOTCONN\\nnpm error network unreachable\\n"); process.exit(1) }
@@ -539,14 +539,17 @@ test("a registry that hangs is cut off at the first-install time limit", posixOn
 
 test("an npm call that times out is ended with everything it started", posixOnly, async (t) => {
   const grandchildFile = path.join(await mkTempRoot("desk-web-timeoutgrand-"), "pid")
-  const m = await machine("desk-web-timeout-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile }, firstInstallMs: 300 })
+  const m = await machine("desk-web-timeout-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile }, firstInstallMs: 2000 })
   const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
-  let helper = null
-  t.after(() => { if (helper !== null && alive(helper)) process.kill(helper, "SIGKILL") })
-  const { errors } = await launchDegraded(m.options)
+  let ended = false
+  t.after(() => { if (!ended && existsSync(grandchildFile)) { const pid = Number(readFileSync(grandchildFile, "utf8")); if (alive(pid)) process.kill(pid, "SIGKILL") } })
+  const running = launchDegraded(m.options)
+  const helper = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
+  assert.equal(alive(helper), true, "the helper runs while npm is within its limit")
+  const { errors } = await running
   assert.match(errors.join(""), /timed out/u)
-  helper = Number(readFileSync(grandchildFile, "utf8"))
   await until(() => !alive(helper), "the helper npm started to end")
+  ended = true
 })
 
 test("a POSIX tree stop falls back to the npm process when its process group is gone", posixOnly, () => {
@@ -577,6 +580,12 @@ test("a Windows tree stop runs taskkill from SystemRoot and falls back to the np
   missing.emit("error", new Error("spawn ENOENT"))
   assert.deepEqual(missingRun.killed, ["SIGKILL"])
   assert.deepEqual(run(() => { throw new Error("spawn EMFILE") }).killed, ["SIGKILL"])
+  let spawned = 0
+  for (const ended of [{ exitCode: 0 }, { exitCode: null, signalCode: "SIGKILL" }]) {
+    const child = { pid: 42, kill: () => {}, ...ended }
+    browser.stopTree({ platform: "win32", env: {}, spawn: () => { spawned += 1; return new EventEmitter() } }, child, "SIGKILL")
+  }
+  assert.equal(spawned, 0, "an npm that already ended is not taskkilled, because its pid may belong to another process now")
   const done = new EventEmitter()
   const doneRun = run(() => done)
   done.emit("exit", 0)
@@ -1313,11 +1322,17 @@ test("a real install error stays the answer for every later call, with no second
 
 // ---- stop signals end the install ----
 
-test("a stop signal during the first install ends npm and everything it started, then ends the launcher with that signal", posixOnly, async () => {
+test("a stop signal during the first install ends npm and everything it started, then ends the launcher with that signal", posixOnly, async (t) => {
   const grandchildFile = path.join(await mkTempRoot("desk-web-grand-"), "pid")
   const m = await machine("desk-web-signal-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile } })
   const npms = []
   const h = host({ ...m.options, npmSpawn: (...argv) => { const child = spawn(...argv); npms.push(child); return child } })
+  let ended = false
+  t.after(() => {
+    h.stdin.end()
+    h.signals.emit("SIGTERM")
+    if (!ended && existsSync(grandchildFile)) { try { process.kill(Number(readFileSync(grandchildFile, "utf8")), "SIGKILL") } catch { /* already gone */ } }
+  })
   await h.handshake()
   const grandchild = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
   const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
@@ -1327,6 +1342,7 @@ test("a stop signal during the first install ends npm and everything it started,
   assert.deepEqual(h.kills, ["SIGHUP"])
   await until(() => npms[0].exitCode !== null || npms[0].signalCode !== null, "npm to end")
   await until(() => !alive(grandchild), "the helper to end")
+  ended = true
   assert.equal(h.signals.listenerCount("SIGHUP"), 0, "the handlers are removed")
 })
 

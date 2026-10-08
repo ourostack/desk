@@ -274,6 +274,8 @@ function stopTree(tools, child, signal) {
     }
     return;
   }
+  // npm has already ended: its pid may belong to another process now, and taskkill would end that one.
+  if (typeof child.exitCode === "number" || typeof child.signalCode === "string") return;
   try {
     var killer = tools.spawn(taskkillPath(tools.env), ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
     killer.on("error", function () {
