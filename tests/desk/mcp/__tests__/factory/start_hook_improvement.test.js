@@ -29,6 +29,9 @@ async function card(desk, key, daysAgo, personPrefix = "") {
   assert.equal(result.result, "opened")
 }
 
+// The andon record is read against the real clock and goes stale after ANDON_STALE_MS, so a fixed date ages into "stale"; take the check time relative to now.
+const justChecked = () => new Date(Date.now() - 60 * 60 * 1000).toISOString()
+
 test("the improvement check is the last check and names the open cards, once, with the planned wording", () => scratch(async ({ env: raw, desk }) => {
   const env = interactive(raw)
   assert.equal(checks.at(-1).id, "improvement")
@@ -54,7 +57,7 @@ test("no check speaks in a noninteractive session or a headless factory session"
   const env = interactive(raw)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await requestEvaluation(env, { job: JOB, deskRoot: desk })
-  await writeStatus(env, { andon: { [STORE]: { checked_at: "2026-10-05T00:00:00.000Z", issues: [{ number: 7, title: "x" }] } } })
+  await writeStatus(env, { andon: { [STORE]: { checked_at: justChecked(), issues: [{ number: 7, title: "x" }] } } })
   await card(desk, cardKey("andon", `${STORE}#7`), 3)
   for (const check of [labelsCheck, andonCheck, improvementCheck]) assert.notEqual(await run(env, check), "", `${check.id} speaks in an interactive session`)
   for (const quiet of [{ CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }, { CLAUDE_CODE_SESSION_ATTENDED: "0" }, { CI: "true" }, { GITHUB_ACTIONS: "1" }, { DESK_FACTORY_HEADLESS: "1" }]) {
@@ -81,7 +84,7 @@ test("the quarantined-labels and andon lines read the cards, and an unreadable f
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await indexJob(env, HELD, "claude-code-00000001-0000-4000-8000-000000000001.json")
   await quarantine(env, STORE, `labels/${HELD}/00000001-0000-4000-8000-000000000001.json`, "facts_quarantined", { facts: "claude-code-00000001-0000-4000-8000-000000000001.json" })
-  await writeStatus(env, { andon: { [STORE]: { checked_at: "2026-10-05T00:00:00.000Z", issues: [{ number: 7, title: "x" }, { number: 8, title: "y" }] } } })
+  await writeStatus(env, { andon: { [STORE]: { checked_at: justChecked(), issues: [{ number: 7, title: "x" }, { number: 8, title: "y" }] } } })
   await card(desk, cardKey("loop_alarm", "labels_quarantined"), 1)
   await card(desk, cardKey("andon", `${STORE}#7`), 1)
   assert.equal(await run(env, labelsCheck), "Desk boot pre-checks: Factory: 1 finished job has quarantined waste labels; a card is open for it")
@@ -125,7 +128,7 @@ test("a cut-off card read leaves the card lines unsure, never saying no card is 
   const env = interactive(raw)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await requestEvaluation(env, { job: JOB, deskRoot: desk })
-  await writeStatus(env, { evaluator: { headless: { state: "no_credentials" } }, andon: { [STORE]: { checked_at: "2026-10-05T00:00:00.000Z", issues: [{ number: 7, title: "x" }] } } })
+  await writeStatus(env, { evaluator: { headless: { state: "no_credentials" } }, andon: { [STORE]: { checked_at: justChecked(), issues: [{ number: 7, title: "x" }] } } })
   const cards = { status: "ok", open: 1, oldest_days: 1, open_keys: [], truncated: true, set_aside: 0, unreadable_files: 0 }
   const shared = { root: Promise.resolve(desk), improvement: Promise.resolve(cards) }
   const ctx = { env, host: "claude", shared, deadline: Infinity, budgetMs: 100 }
