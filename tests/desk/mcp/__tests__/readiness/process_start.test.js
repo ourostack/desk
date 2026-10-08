@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import {
-  processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText,
+  processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText, windowsPowerShellPath,
 } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { killAndWait } from "../_kill_and_wait.js"
 
@@ -76,13 +76,23 @@ test("Windows: Get-CimInstance Win32_Process CreationDate, in UTC", async () => 
   const answer = (text) => async (file, args, options) => { calls.push({ file, args, options }); return text }
   const env = { SystemRoot: "C:\\Windows" }
   assert.equal(await readProcessStart(7, { platform: "win32", env, run: answer("2026-09-25T10:00:00.1234567Z\r\n") }), "win32:2026-09-25T10:00:00.123Z")
-  assert.equal(calls[0].file, "powershell.exe")
+  assert.equal(calls[0].file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
   assert.deepEqual(calls[0].args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"])
   assert.match(calls[0].args[3], /Get-CimInstance Win32_Process -Filter "ProcessId=7".*CreationDate\.ToUniversalTime\(\)/u)
   assert.equal(calls[0].options.env, env)
   assert.equal(await readProcessStart(7, { platform: "win32", run: answer("") }), null, "no such process prints nothing")
   assert.equal(await readProcessStart(7, { platform: "win32", run: answer(null) }), null)
   assert.equal(calls[1].options.env, process.env, "the default environment")
+})
+
+test("Windows: PowerShell is found from SystemRoot, not PATH, so a trimmed environment still reads the start time", () => {
+  const exe = (root) => `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+  assert.equal(windowsPowerShellPath({ PATH: "", SystemRoot: "D:\\Win" }), exe("D:\\Win"))
+  assert.equal(windowsPowerShellPath({ SYSTEMROOT: "E:\\W" }), exe("E:\\W"), "any letter case")
+  assert.equal(windowsPowerShellPath({ windir: "F:\\Win" }), exe("F:\\Win"), "windir when SystemRoot is missing")
+  assert.equal(windowsPowerShellPath({ SystemRoot: "relative", windir: "  " }), exe("C:\\Windows"), "a relative or blank root falls back")
+  assert.equal(windowsPowerShellPath({}), exe("C:\\Windows"))
+  assert.equal(windowsPowerShellPath(), windowsPowerShellPath(process.env), "the process environment by default")
 })
 
 test("runForText resolves with stdout, or null when the command fails or cannot run", async () => {
