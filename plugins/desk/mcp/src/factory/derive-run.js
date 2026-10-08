@@ -16,7 +16,7 @@ import { crewWorkspace } from "../desk/crew-roster.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { outcomeSnapshot } from "./outcome.js"
-import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, recordRoutes, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, recordRoutes, setJobsForFile, updateStatus, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
 import { githubRepoOfRemote } from "./desk-visibility.js"
@@ -28,7 +28,7 @@ import { routeHolds } from "./held-route.js"
 
 async function sourceStamp(file) {
   const stat = await fs.lstat(file)
-  if (!stat.isFile() || stat.nlink !== 1) throw new Error("source_unreadable")
+  if (!stat.isFile() || stat.nlink !== 1) throw Object.assign(new Error("source_unreadable"), { path: file })
   return { size: stat.size, mtime: stat.mtimeMs, ino: stat.ino, dev: stat.dev }
 }
 
@@ -156,12 +156,52 @@ function newerDeskRecorded(ownVersion, plugins) {
   return isVersion(own) && compareVersions(own, declared) < 0
 }
 
+// A derivation that fails for a reason other than an unreadable session log leaves a diagnostic in `status.json` under `derive_failures`, keyed by the
+// marker's file name: `{ at, step, code }`, where `step` names the part that failed and `code` is the error's code, else its constructor's name. No message
+// is stored: an error message can quote a path or session text, and `factory.js status` prints this record. The result handed back is unchanged
+// (`source_unreadable`, which the flush reads as "try again later"), so a failed write is retried and is also seen. The session log itself missing or not
+// a regular file is expected and benign, and is recorded nowhere; the same error on any other path is recorded. Every settled result clears the session's
+// record, and the status is read first so a result with no record to clear takes no lock and writes nothing. Recording never throws.
+const FAILURES_KEPT = 20
+const FAILURE_CODE = /^[A-Za-z0-9_]{1,40}$/u
+const READ_ONLY_STEPS = new Set(["route", "source", "derive", "read_marker", "wait_quiet"])
+const SETTLED = new Set(["written", "not_opted_in", "held", "skipped", "invalid", "log_missing"])
+
+const unreadable = (error, step, logs) => READ_ONLY_STEPS.has(step) && (error?.code === "ENOENT" || error?.message === "source_unreadable") && logs.has(error.path)
+
+const codeOf = (error) => [error?.code, error?.constructor?.name].find((code) => typeof code === "string" && FAILURE_CODE.test(code)) ?? "unknown"
+
+// `failure` is `{ step, error, logs }` for a failed derivation and `null` to clear the session's record. `diag.failed` tells the caller a failure was seen.
+async function noteDerive(env, name, failure, diag = { failed: false }) {
+  try {
+    if (failure !== null) {
+      if (unreadable(failure.error, failure.step, failure.logs ?? new Set())) return
+      diag.failed = true
+    } else if (!Object.hasOwn((await readStatus(env)).derive_failures ?? {}, name)) {
+      return
+    }
+    const at = new Date().toISOString()
+    await updateStatus(env, ({ derive_failures: before, ...current }) => {
+      const kept = Object.entries(isPlainObject(before) ? before : {}).filter(([key]) => key !== name)
+      if (failure !== null) kept.push([name, { at, step: failure.step, code: codeOf(failure.error) }])
+      return kept.length === 0 ? current : { ...current, derive_failures: Object.fromEntries(kept.slice(-FAILURES_KEPT)) }
+    })
+  } catch {
+    // A diagnostic that cannot be written must not stop the derivation, nor the end hook.
+  }
+}
+
 export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = deskVersion, now = Date.now, siblings = lazyProofIndex(() => listMarkers(env)), admit = null } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
+  const name = `${marker.host}-${marker.session_id}.json`
+  const diag = { failed: false }
   try {
-    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings, admit }), { deskRoot: marker.desk_root })
-  } catch {
+    const outcome = await withDerivationLock(env, name, (root) => deriveUnlocked(env, marker, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings, admit, diag }), { deskRoot: marker.desk_root })
+    if (!diag.failed && SETTLED.has(outcome.result)) await noteDerive(env, name, null)
+    return outcome
+  } catch (error) {
+    await noteDerive(env, name, { step: "lock", error }, diag)
     return { result: "source_unreadable", store: null }
   }
 }
@@ -187,10 +227,13 @@ async function newestMarker(env, root, marker, requireStored) {
 
 // `admit`, when given, runs inside the derivation lock before anything is read or written and answers a refusal reason or null, so a decision that
 // guards the write is made under the same lock as the write.
-async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings, admit }) {
+async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings, admit, diag }) {
+  const logs = new Set([input.log_path])
   let store = null
+  let step = "route"
   try {
     let marker = await newestMarker(env, root, input, requireStored)
+    logs.add(marker.log_path)
     if (marker.desk_root === null) return { result: "held", store }
     if (isStaleDeriver(ownVersion, marker.plugins, marker.updated_at, now)) return { result: "held", store }
     await factoryStateRoot(env, { deskRoot: marker.desk_root })
@@ -202,8 +245,10 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (store === null) return { result: "held", store }
     if ((await readConsent(env)).stores[store]?.contribute !== true) return { result: "not_opted_in", store }
     if (marker.host === "codex-cli" && route.source === "default" && !provenBy(marker, await siblings())) return { result: "held", store: null, reason: "route_unverified" }
+    step = "source"
     const before = await sourceStamp(marker.log_path)
     marker = await reconcileMarker(marker)
+    logs.add(marker.log_path)
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
     if (quietMs > 0 && (requireQuiet || marker.ended_at === null) && Date.now() - before.mtime < quietMs) return { result: "skipped", store }
     const hash = markerHash(marker)
@@ -221,6 +266,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       }
     }
     let derived
+    step = "derive"
     // A marker from a hook older than 58adb141 names plugins without `source`; the host's plugin cache and install records fill it in for this derivation only.
     const plugins = backfillPluginSources(marker.host, marker.plugins, { env })
     if (marker.host === "claude-code") {
@@ -237,6 +283,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
     if (derived.facts === null) return { result: derived.reason, store }
     if (derived.facts.session.id !== marker.session_id) return { result: "invalid", store }
+    step = "bind"
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
     const deskRemote = readDeskRemote({ deskRoot })
@@ -250,8 +297,10 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     // The decision that guards the write is made again right before it: the derivation above is long.
     const late = admit === null ? null : await admit()
     if (late !== null) return { result: "refused", store, reason: late }
+    step = "write_facts"
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
+    step = "write_jobs"
     await setJobsForFile(env, written.name, [...new Set([...jobs, ...derived.facts.outcomes].map((j) => j.job))])
     // `desk_root` stays local: the flush reads the desk's declaration from it once the marker is pruned (`session-route.js`).
     // So do `bound_by` (job ID -> "focus" | "inferred"), `own_activity` (spans in ms from the session's start), `focus_disagrees` (job IDs)
@@ -265,9 +314,11 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     // `checked_route` is the store this derive checked, written only on a positive route (an older hook's default route with no overlay check
     // is not one), so a session whose marker is later pruned is placed on it (`session-route.js`).
     const checked = route.source === "default" && !marker.routing && marker.host !== "codex-cli" ? {} : { checked_route: store }
+    step = "write_receipt"
     await writeStatus(env, { derivations: { [name]: { store, ...checked, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, repo_unresolved: repoUnresolved, segments_capped_ms: segmentsCappedMs, ...(deskRepo === undefined ? {} : { desk_repo: deskRepo }), ...(receipt?.desk_unprotected === true ? { desk_unprotected: true } : {}), ...before } } })
     return { result: "written", store }
   } catch (error) {
+    await noteDerive(env, `${input.host}-${input.session_id}.json`, { step, error, logs }, diag)
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }
   }
 }
@@ -683,11 +734,15 @@ async function markerPresent(file) {
 }
 
 export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } = {}) {
+  let step = "read_marker"
+  const logs = new Set()
   try {
     if (!(await markerPresent(file))) return { result: "invalid", store: null }
     let marker = await readMarker(env, file)
     if (marker === null) return { result: "invalid", store: null }
+    logs.add(marker.log_path)
     const deadline = Date.now() + maxWaitMs
+    step = "wait_quiet"
     while (quietMs > 0) {
       const stamp = await sourceStamp(marker.log_path)
       const remaining = quietMs - (Date.now() - stamp.mtime)
@@ -698,9 +753,11 @@ export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } 
       if (!(await markerPresent(file))) return { result: "invalid", store: null }
       marker = await readMarker(env, file)
       if (marker === null) return { result: "invalid", store: null }
+      logs.add(marker.log_path)
     }
     return deriveMarker(env, marker, { quietMs, requireQuiet: true, requireStored: true })
   } catch (error) {
+    await noteDerive(env, path.basename(file), { step, error, logs })
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store: null }
   }
 }

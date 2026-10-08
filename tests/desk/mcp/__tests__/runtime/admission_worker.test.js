@@ -196,3 +196,38 @@ test("the readiness policy comes from desk_runtime, then desk.runtime, then the 
   const neither = write("neither.json", {})
   assert.equal(resolveStartupReadinessPolicy({ args: { activationConfig: neither }, env: {} }).semantic, "background")
 })
+
+test("a job reports its steps as phases: through runAdmissionJob, over the worker port, and to runInWorker's onPhase", async () => {
+  const base = await mkTempRoot("desk-worker-phase-")
+  const heard = []
+  const seen = []
+  const inspected = { ok: true, runtime: {} }
+  const prepared = { sourceMirrorPath: base, runtimeCacheDir: base, target: "t", packDir: base }
+  const input = { mcpRoot: base, env: {}, runtimeCacheDir: base, sourceIdentity: null, inspect: true, inspector: () => inspected, prepare: ({ onPhase }) => { onPhase("restoring_runtime_dependencies"); return prepared }, warm: () => false }
+  prepareRuntimeInputs(input, { onPhase: (phase) => heard.push(phase) })
+  assert.deepEqual(heard, ["inspecting_runtime_pack", "restoring_runtime_dependencies"])
+  prepareRuntimeInputs({ ...input, inspect: false })
+  runAdmissionJob({ kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } })
+  const channel = new MessageChannel()
+  attachAdmissionWorker(channel.port1, { deskAdmissionWorker: true })
+  const messages = []
+  const done = new Promise((resolve) => channel.port2.on("message", (message) => { messages.push(message); if (message.ok !== undefined) resolve() }))
+  channel.port2.postMessage({ kind: "runtime", input: { mcpRoot: base, env: {}, runtimeCacheDir: base, sourceIdentity: null, inspect: true } })
+  await done
+  assert.deepEqual(messages[0], { phase: "inspecting_runtime_pack" }, "the step is posted before the job ends, and carries no reply fields")
+  assert.equal(messages.at(-1).ok, true)
+  channel.port1.close()
+  channel.port2.close()
+  const worker = Object.assign(new EventEmitter(), { unref() {}, terminate() {}, postMessage() {} })
+  const answered = runInWorker({ kind: "resolve" }, { createWorker: () => worker, onPhase: (phase) => seen.push(phase) })
+  worker.emit("message", { phase: "building:runtime-cache" })
+  worker.emit("message", { ok: true, value: 7 })
+  assert.equal(await answered, 7)
+  worker.emit("message", { phase: "arrives after the answer" })
+  assert.deepEqual(seen, ["building:runtime-cache"], "a phase that arrives after the call settled is ignored")
+  const silent = Object.assign(new EventEmitter(), { unref() {}, terminate() {}, postMessage() {} })
+  const quiet = runInWorker({ kind: "resolve" }, { createWorker: () => silent })
+  silent.emit("message", { phase: "ignored without a listener" })
+  silent.emit("message", { ok: true, value: 8 })
+  assert.equal(await quiet, 8)
+})

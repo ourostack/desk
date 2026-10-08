@@ -1104,3 +1104,28 @@ test("with a state branch configured and HEAD on it, a write reaches the tool", 
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
   assert.equal(runtime.calls.length, 1)
 })
+
+test("desk_status names the step a running admission attempt is in, and clears it when the attempt ends", async (t) => {
+  let release
+  let reportPhase
+  const { session } = await makeSession(t, {
+    loadRuntime: (activation, { onPhase }) => new Promise((resolve) => {
+      reportPhase = onPhase
+      release = () => resolve({ runtimeServer: fakeRuntime(), runtimeStatus: {} })
+    }),
+  })
+  const phases = async () => {
+    const admission = payload(await session.callTool({ name: "desk_status", input: { detail: true } })).admission
+    return [admission.phase, admission.phase_since]
+  }
+  let [phase, since] = await phases()
+  assert.equal(phase, "loading_runtime")
+  assert.match(since, /^\d{4}-\d\d-\d\dT/u)
+  reportPhase("waiting_for_publication_lock:runtime-cache")
+  assert.equal((await phases())[0], "waiting_for_publication_lock:runtime-cache", "a step reported by the runtime load replaces the coarse one")
+  release()
+  await session.admission.refresh({ waitMs: 5000 })
+  ;[phase, since] = await phases()
+  assert.equal(phase, null)
+  assert.equal(since, null)
+})
