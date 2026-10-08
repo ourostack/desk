@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.239 — 2026-10-08
+
+The loop no longer raises `labels_quarantined`, and the session-start line no longer counts a job, for labels the flush withdrew on purpose ([`boot-check.js`](mcp/src/factory/boot-check.js) `labelsBootCheck`). A `job_unbound` record means a delivered label was taken out of the store because its session's facts stopped binding the job, and the hold lifts by itself if the session binds the job again, so there is nothing for anyone to repair. Counting it kept the alarm, and the store's `loop_alarms_open`, raised for 30 days after every withdrawal; on 2026-10-08 five such withdrawals re-raised it. A job with any other quarantine record, or with a record that does not read, is still reported.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.238 — 2026-10-08
 
 On Windows, a Desk server waiting for another server's runtime cache build no longer crashes when the lock folders are briefly unavailable. A waiter used to create and delete a reclaim folder on every poll to check whether the lock owner was dead, so with several servers starting together Windows could answer one of those `mkdir` calls with `EPERM: operation not permitted, mkdir '…publish-lock.reclaim-lock'` (it answers EPERM, EACCES or EBUSY, not "already exists", for a folder that is being deleted or that another process has open), and the waiter failed its whole start-up. A waiter now looks at the owner first and touches no reclaim folder while the owner is alive. If the owner is dead, those Windows answers mean "someone else has it": the waiter waits and tries again inside its existing 30 second limit. A reclaim folder older than that limit, left by a reclaimer that died, is removed so it cannot block recovery.
