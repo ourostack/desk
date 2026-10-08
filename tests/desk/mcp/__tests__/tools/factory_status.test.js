@@ -352,6 +352,7 @@ test("desk_doctor and desk_status raise a stopped pruning and a store check that
   body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.equal(typeof body.factory.coverage_kept.since, "string")
   assert.match(body.summary, /\n  the quarantine did not settle since /u)
+  assert.match(body.summary, /a host mostly in quarantine is kept locally as held and sent to the store as not counted until the quarantine is cleared; the loop raises the alarm facts_quarantine_not_settling\./u)
   await writeStatus(host.env, { coverage_kept: undefined })
   // A store this machine no longer contributes to never settles its count, so it is no finding.
   await setConsent(host.env, { store: STORE, contribute: false })

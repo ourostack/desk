@@ -397,7 +397,10 @@ export function publishDirectoryAtomically({
   rename = renameSync,
   sleep = sleepSynchronously,
   writeLockOwner = writeFileSync,
+  platform = process.platform,
+  removeDirectory = rmSync,
 }) {
+  const lockIo = { platform, remove: removeDirectory, sleep, writeLockOwner }
   if (build === null) assertStagingComplete({ stagingDir, validateDestination })
 
   mkdirSync(path.dirname(destinationDir), { recursive: true })
@@ -412,6 +415,7 @@ export function publishDirectoryAtomically({
       sleep,
       validateDestination,
       writeLockOwner,
+      lockIo,
     })
   } catch (error) {
     rmSync(stagingDir, { recursive: true, force: true })
@@ -490,7 +494,7 @@ export function publishDirectoryAtomically({
     rmSync(backupDir, { recursive: true, force: true })
     publicationError = error
   } finally {
-    releasePublicationLock(publicationLock)
+    releasePublicationLock(publicationLock, lockIo)
   }
   throw publicationError
 }
@@ -514,9 +518,11 @@ function acquirePublicationLock({
   sleep,
   validateDestination,
   writeLockOwner,
+  lockIo,
 }) {
   const lockDir = `${destinationDir}.publish-lock`
   const startedAt = now()
+  let retriedPastDeadline = false
   while (true) {
     if (directoryIsValid(validateDestination, destinationDir)) {
       return { lockDir, owned: false }
@@ -526,7 +532,7 @@ function acquirePublicationLock({
       createLockDirectory(lockDir)
       acquired = true
     } catch (error) {
-      if (error?.code !== "EEXIST" && error?.code !== "ENOTEMPTY") {
+      if (!isContendedLockError(error, lockIo.platform)) {
         throw error
       }
     }
@@ -548,20 +554,24 @@ function acquirePublicationLock({
       }
       return { lockDir, owned: true, token }
     }
-    if (reclaimAbandonedPublicationLock({
+    const reclaimed = reclaimAbandonedPublicationLock({
       lockDir,
       lockTimeoutMs,
       createLockDirectory,
       now,
       processAlive,
-    })) {
-      continue
-    }
+      lockIo,
+    })
+    // The deadline applies to every pass, a reclaim included: a lock folder that cannot be created (a persistent EPERM or EACCES on Windows) must end in the timeout, not in a loop that reclaims nothing and tries again at once.
     const elapsedMs = now() - startedAt
-    if (elapsedMs >= lockTimeoutMs) {
+    const pastDeadline = elapsedMs >= lockTimeoutMs
+    // A reclaim that finishes at the deadline still gets one more attempt at the lock; a second pass past the deadline times out.
+    if (pastDeadline && !(reclaimed && !retriedPastDeadline)) {
       throw new Error(publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }))
     }
-    sleep(Math.min(publicationLockPollMs, lockTimeoutMs - elapsedMs))
+    if (reclaimed) retriedPastDeadline = pastDeadline
+    // Every pass that did not take the lock waits a poll, a reclaim that removed nothing included, so a lock folder that cannot be created never spins the CPU until the deadline.
+    sleep(Math.max(0, Math.min(publicationLockPollMs, lockTimeoutMs - elapsedMs)))
   }
 }
 
@@ -582,23 +592,60 @@ function publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }) {
     : `atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which has exited; ${waited})`
 }
 
+// A lock folder another process holds, is creating, or is deleting. EEXIST and ENOTEMPTY say so everywhere. On Windows, mkdir and rmdir answer EPERM, EACCES or EBUSY while the folder is delete-pending or another process has a handle open in it; none of them means this caller is denied the lock, so it waits and tries again within its bounded wait.
+function isContendedLockError(error, platform) {
+  const code = error?.code
+  if (code === "EEXIST" || code === "ENOTEMPTY") return true
+  return platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY")
+}
+
+// Remove a lock folder once. Returns false when it is contended (see above); any other failure is thrown. Callers that can wait retry on their own bounded schedule.
+function removeLockDirectory(dir, { platform, remove }) {
+  try {
+    remove(dir, { recursive: true, force: true })
+    return true
+  } catch (error) {
+    if (isContendedLockError(error, platform)) return false
+    throw error
+  }
+}
+
+// A reclaim folder older than the lock timeout belongs to a reclaimer that died; left alone it would block every later dead-owner recovery.
+function removeStaleReclaimLock({ reclaimLockDir, lockTimeoutMs, now, lockIo }) {
+  let ageMs
+  try {
+    ageMs = now() - statSync(reclaimLockDir).mtimeMs
+  } catch {
+    // It vanished between the failed mkdir and this look: the next poll finds it gone.
+    return
+  }
+  if (ageMs >= lockTimeoutMs) removeLockDirectory(reclaimLockDir, lockIo)
+}
+
 function reclaimAbandonedPublicationLock({
   lockDir,
   lockTimeoutMs,
   createLockDirectory,
   now,
   processAlive,
+  lockIo,
 }) {
+  // The owner comes first: while it is alive nothing here creates or deletes a folder, so waiters polling together cause no churn on the reclaim folder.
+  if (!publicationLockIsAbandoned({ lockDir, lockTimeoutMs, now, processAlive })) {
+    return false
+  }
   const reclaimLockDir = `${lockDir}.reclaim-lock`
   try {
     createLockDirectory(reclaimLockDir)
   } catch (error) {
-    if (error?.code === "EEXIST" || error?.code === "ENOTEMPTY") {
+    if (isContendedLockError(error, lockIo.platform)) {
+      removeStaleReclaimLock({ reclaimLockDir, lockTimeoutMs, now, lockIo })
       return false
     }
     throw error
   }
   try {
+    // Look again inside the reclaim folder: the owner may have changed since the first look.
     if (!publicationLockIsAbandoned({
       lockDir,
       lockTimeoutMs,
@@ -607,10 +654,9 @@ function reclaimAbandonedPublicationLock({
     })) {
       return false
     }
-    rmSync(lockDir, { recursive: true, force: true })
-    return true
+    return removeLockDirectory(lockDir, lockIo)
   } finally {
-    rmSync(reclaimLockDir, { recursive: true, force: true })
+    removeLockDirectory(reclaimLockDir, lockIo)
   }
 }
 
@@ -637,7 +683,10 @@ function publicationLockIsAbandoned({
     || !processAlive(owner.pid)
 }
 
-function releasePublicationLock({ lockDir, token }) {
+const releaseAttempts = 10
+
+// Bounded and best-effort: the publication already happened (or failed for its own reason), and a lock that cannot be released must neither replace that outcome nor stay held by this long-lived process. After the attempts, the owner record is rewritten to name no process, which every waiter treats as abandoned and reclaims.
+function releasePublicationLock({ lockDir, token }, lockIo) {
   let owner
   try {
     owner = readJson(path.join(lockDir, "owner.json"))
@@ -646,8 +695,23 @@ function releasePublicationLock({ lockDir, token }) {
   } catch {
     return
   }
-  if (owner.token === token) {
-    rmSync(lockDir, { recursive: true, force: true })
+  if (owner.token !== token) return
+  for (let attempt = 1; attempt <= releaseAttempts; attempt += 1) {
+    try {
+      if (removeLockDirectory(lockDir, lockIo)) return
+    } catch {
+      break
+    }
+    if (attempt < releaseAttempts) lockIo.sleep(publicationLockPollMs)
+  }
+  try {
+    lockIo.writeLockOwner(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({ schema_version: 1, pid: 0, token: "released-but-not-removed" }),
+      "utf8",
+    )
+  } catch {
+    // Nothing more can be done from here; waiters reclaim the lock once its owner process is gone.
   }
 }
 

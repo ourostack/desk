@@ -9,7 +9,8 @@
 //   pr           the number of the pull request that carried it, until the default branch holds it or the store refuses it
 //   sent_bytes   the exact record pushed in `pr` (counts of this machine's own store scope only), so an open pull request keeps carrying those bytes
 //   sent_share   per host, the captured share (derived over capturable) of the record last pushed, kept after the record settles so a record whose share
-//                moved by `SHARE_JUMP` or more is due now (a plain ratio between 0 and 1 per host name, never a count)
+//                moved by `SHARE_JUMP` or more is due now (a plain ratio between 0 and 1 per host name, never a count, or the code `not_counted` for a
+//                host sent as not counted, so a switch between a share and not counted is due now too)
 //   refused      the fixed code of the store's refusal that named the record
 //   skipped      `store_not_ready`: the store's `capture.json` is not exactly `{"capture":1}`
 //   invalid      `capture_invalid`: the record failed its own gate (a bug in the caller or the coverage); nothing is sent
@@ -22,7 +23,8 @@
 // Due, with no network: coverage whose `ran_at` is a parsable time not in the future and under three days old (a failed pass leaves the earlier
 // coverage in place, so it is used only while that holds; none, or a stale one, sends nothing and retracts nothing), now past `retry_after`, a record
 // (or the empty record that retracts one sent before) whose blob differs from `blob`, and either 20 hours since `sent_at` or a captured share (derived over derived + frozen + pending + not_seen) of any host named by both
-// this record and the last one sent that differs by `SHARE_JUMP` (0.15) or more from the last one's (`sent_share`), so a corrected record replaces a wrong one at once. A record whose pull request is
+// this record and the last one sent that differs by `SHARE_JUMP` (0.15) or more from the last one's (`sent_share`), or that is not counted in one of them and
+// has a share in the other, so a corrected record replaces a wrong one at once. A record whose pull request is
 // still open (`pr` is set while the flush has a batch it has not seen settled) is carried in every rebuild of the branch, so it is never dropped
 // from the open pull request by an unrelated rebuild.
 //
@@ -42,6 +44,8 @@ const CAPTURE_FLAG = 1
 const SEND_INTERVAL_MS = 20 * 60 * 60 * 1000
 // A record whose captured share for any host differs by this much (a fraction, as the store's own alarm reads it) from the last record sent is due now, not after the 20 hours.
 export const SHARE_JUMP = 0.15
+// The `sent_share` value of a host the record sent as `{ "not_counted": true }`.
+const NOT_COUNTED_SHARE = "not_counted"
 const FRESH_MS = 3 * 24 * 60 * 60 * 1000
 const NOT_READY_MS = 24 * 60 * 60 * 1000
 const INVALID_MS = 24 * 60 * 60 * 1000
@@ -65,13 +69,20 @@ function freshCoverage(status, nowMs) {
   return Number.isFinite(ranAt) && ranAt <= nowMs && nowMs - ranAt < FRESH_MS ? coverage : null
 }
 
-/** The captured share of each counted host of a record (`derived` over `derived + frozen + pending + not_seen`), as `{ host: share }`; a host with nothing capturable, or an unreadable record, has none. */
+/**
+ * The captured share of each counted host of a record (`derived` over `derived + frozen + pending + not_seen`), as `{ host: share }`, and
+ * `NOT_COUNTED_SHARE` for a host sent as `{ "not_counted": true }`; a host with nothing capturable, or an unreadable record, has none.
+ */
 export function sharesOf(bytes) {
   const shares = {}
   try {
     const hosts = JSON.parse(Buffer.from(bytes).toString("utf8"))?.hosts
     for (const [host, entry] of Object.entries(isObject(hosts) ? hosts : {})) {
       if (!isObject(entry)) continue
+      if (entry.not_counted === true) {
+        shares[host] = NOT_COUNTED_SHARE
+        continue
+      }
       const capturable = ["derived", "frozen", "pending", "not_seen"].reduce((sum, key) => sum + (Number.isSafeInteger(entry[key]) ? entry[key] : Number.NaN), 0)
       if (Number.isFinite(capturable) && capturable > 0) shares[host] = entry.derived / capturable
     }
@@ -81,9 +92,16 @@ export function sharesOf(bytes) {
   return shares
 }
 
-/** Whether any host both records name has a share that differs by `SHARE_JUMP` or more. A host only one of them names, or one with nothing capturable, is not compared. */
+/**
+ * Whether any host both records name has a share that differs by `SHARE_JUMP` or more, or is not counted in one and has a share in the other (what
+ * the store can say about it changed). A host only one of them names, or one with nothing capturable, is not compared.
+ */
 function shareMoved(before, after) {
-  return Object.entries(after).some(([host, share]) => typeof before[host] === "number" && Math.abs(share - before[host]) >= SHARE_JUMP - 1e-9)
+  return Object.entries(after).some(([host, share]) => {
+    const was = before[host]
+    if (typeof was === "number" && typeof share === "number") return Math.abs(share - was) >= SHARE_JUMP - 1e-9
+    return (was === NOT_COUNTED_SHARE && typeof share === "number") || (typeof was === "number" && share === NOT_COUNTED_SHARE)
+  })
 }
 
 // The shares of the record last pushed: kept as `sent_share`, else read from the bytes an open pull request carries; `null` when neither is there.

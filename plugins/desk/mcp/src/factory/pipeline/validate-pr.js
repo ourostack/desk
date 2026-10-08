@@ -11,6 +11,10 @@
 //   - the machine's capture record at `capture/<intake id>.json`
 //     (`capture-schema.js`): checked on its own bytes, with no rule against the
 //     bytes it replaces (counts may fall, which is the alarm).
+// A facts file's job finish days (`jobs[].finished_on`, `desk.factory.published/4`)
+// may not be after the UTC day the gate runs (`future`): `now`, in
+// milliseconds since 1970, defaults to the clock, and a value that is not a
+// finite number is refused at `now` rather than skipping the check.
 // A delete is accepted only when the caller says the author is a trusted
 // maintainer (`trustedMaintainer: true`; `scripts/factory.js` derives it from
 // the author association), else it is `removal`. It must be at one of those
@@ -99,10 +103,22 @@ function validateLabelsChange(change, parts, safePath) {
   return checkLabelsAgainstFacts(current.value, parsed.value).errors.map((item) => error(item.code, safePath))
 }
 
+// The UTC day of `now` as `YYYY-MM-DD`, or `null` when `now` is not a usable instant.
+function utcDay(now) {
+  if (typeof now !== "number" || !Number.isFinite(now)) return null
+  const date = new Date(now)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10)
+}
+
+// Whether any job of a sound facts value finished after `today`. Both are `YYYY-MM-DD`, so text order is day order.
+const finishedAfter = (facts, today) => facts.jobs.some((job) => typeof job.finished_on === "string" && job.finished_on > today)
+
 export function validatePr(input) {
   const changes = input?.changes
   if (!Array.isArray(changes)) return { ok: false, errors: [error("type", "changes")] }
   if (changes.length > MAX_CHANGES) return { ok: false, errors: [error("too_many_changes", "changes")] }
+  const today = utcDay(input.now === undefined ? Date.now() : input.now)
+  if (today === null) return { ok: false, errors: [error("type", "now")] }
 
   const trusted = input.trustedMaintainer === true
   const errors = []
@@ -148,6 +164,7 @@ export function validatePr(input) {
     }
     if (current.value.session.host !== match[1]) errors.push(error("host_mismatch", safePath))
     if (current.value.session.id !== match[2]) errors.push(error("session_mismatch", safePath))
+    if (finishedAfter(current.value, today)) errors.push(error("future", safePath))
 
     if (change.status !== "modified") continue
     if (change.previousBytes === undefined) {

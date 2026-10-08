@@ -262,7 +262,8 @@ export function withLoopSwitch(record, env) {
 
 /**
  * `assembleLoop({ status, read, nowMs, version }) -> { loop, signals }`: the pure part. `signals` holds what the alarms need and the record
- * does not carry: `blocked_days` (consecutive blocked days, or null), `cards_invalid` (count of set-aside and unreadable card files, or null).
+ * does not carry: `blocked_days` (consecutive blocked days, or null), `cards_invalid` (count of set-aside and unreadable card files, or null),
+ * `facts_quarantine_not_settling` (the coverage pass was recorded although a facts quarantine did not settle, `status.coverage_kept`).
  */
 export function assembleLoop({ status, read, nowMs, version }) {
   const cards = cardSection(read, nowMs)
@@ -298,7 +299,9 @@ export function assembleLoop({ status, read, nowMs, version }) {
     worker: workerSection(loopStatus.worker),
   }
   const blocked = evaluator !== null && isObject(evaluator.headless) && isInteger(evaluator.headless.blocked_days) ? evaluator.headless.blocked_days : null
-  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid, slot_invalid: !slotValid(loop) }, cards: cards.cards }
+  // A facts quarantine that has not settled within the keep limit (`capture-sweep.js`): its hosts go to the store as not counted, which no store alarm reads.
+  const notSettling = isObject(stored.coverage_kept) && stored.coverage_kept.code === "quarantine_not_settling"
+  return { loop, signals: { blocked_days: blocked, cards_invalid: invalid, slot_invalid: !slotValid(loop), facts_quarantine_not_settling: notSettling }, cards: cards.cards }
 }
 
 function toMillis(now) {
@@ -337,7 +340,7 @@ export async function buildLoopHealth(input) {
 const measuredAbove = (value, threshold) => (value.state === "measured" || value.state === "partial") && value.value > threshold
 
 /**
- * `loopAlarms(loop, { attempted?, blocked_days?, cards_invalid? }) -> [{ name, evidence }]`: the alarms that hold now, in a fixed order. `evidence`
+ * `loopAlarms(loop, { attempted?, blocked_days?, cards_invalid?, facts_quarantine_not_settling? }) -> [{ name, evidence }]`: the alarms that hold now, in a fixed order. `evidence`
  * is a small object of counts for the caller's logs; a card carries no evidence pointer. `attempted` names the steps the worker ran this
  * run: a step that was not attempted never raises `step_stale`.
  */
@@ -350,6 +353,7 @@ export function loopAlarms(loop, signals = {}) {
   if (BLOCKING_STATES.includes(evaluator.headless.state) && isInteger(signals.blocked_days) && signals.blocked_days >= BLOCKED_DAYS_FOR_ALARM) alarms.push({ name: "headless_blocked", evidence: { blocked_days: signals.blocked_days } })
   if (isInteger(signals.cards_invalid) && signals.cards_invalid > 0) alarms.push({ name: "cards_invalid", evidence: { files: signals.cards_invalid } })
   if (measuredAbove(evaluator.labels_quarantined, 0)) alarms.push({ name: "labels_quarantined", evidence: { count: evaluator.labels_quarantined.value } })
+  if (signals.facts_quarantine_not_settling === true) alarms.push({ name: "facts_quarantine_not_settling", evidence: {} })
   // The record's own slot fails the store's rule, so the capture record goes without it: said once as an alarm, never silence.
   if (signals.slot_invalid === true) alarms.push({ name: "capture_loop_slot", evidence: {} })
   for (const step of signals.attempted ?? []) if (STEPS.includes(step) && steps[step].stale) alarms.push({ name: `step_stale:${step}`, evidence: { failures: steps[step].failures.value } })
@@ -368,6 +372,7 @@ export function unreadAlarms(loop, signals = {}) {
   if (evaluator.headless.state === "unavailable" || !isInteger(signals.blocked_days)) unread.push("headless_blocked")
   if (!isInteger(signals.cards_invalid)) unread.push("cards_invalid")
   if (evaluator.labels_quarantined.state === "unavailable") unread.push("labels_quarantined")
+  if (typeof signals.facts_quarantine_not_settling !== "boolean") unread.push("facts_quarantine_not_settling")
   const attempted = signals.attempted ?? []
   for (const step of STEPS) if (!attempted.includes(step)) unread.push(`step_stale:${step}`)
   return unread
