@@ -521,3 +521,42 @@ test("validatePr refuses a capture change that carries no bytes, and does not th
   }
   assert.deepEqual(validatePr({ changes: [{ path: CAPTURE_PATH_OK, status: "added", bytes: null }] }).errors, [{ code: "type", path: CAPTURE_PATH_OK }])
 })
+
+// --- facts /4: a finish day is never after the day the store's CI runs ---
+
+function v4Value(finishedOn) {
+  const value = structuredClone(GOLDEN)
+  value.schema = "desk.factory.published/4"
+  value.refs.prs = value.refs.prs.map((pr) => ({ ...pr, created: false }))
+  value.jobs = value.jobs.map((job) => ({ ...job, finished_on: null, finished_basis: null }))
+  value.jobs[0].finished_on = finishedOn
+  value.jobs[0].finished_basis = "transition"
+  value.intervals = value.intervals.map((item) => (item.kind === "human_wait" ? { ...item, stop: { end: "not_recorded", asks: null, pending_agents: null } } : item))
+  return value
+}
+
+const v4Bytes = (finishedOn) => Buffer.from(`${JSON.stringify(v4Value(finishedOn))}\n`)
+const NOW = Date.parse("2026-10-08T23:59:59.999Z")
+
+test("validatePr accepts a /4 facts file whose finish days are on or before the day it runs (UTC)", () => {
+  for (const day of ["2026-10-08", "2026-10-07", "2025-01-01"]) {
+    assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: v4Bytes(day) }], now: NOW }), { ok: true, errors: [] }, day)
+  }
+  // A /3 file replaced by its /4 form is an ordinary modification.
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "modified", bytes: v4Bytes("2026-10-08"), previousBytes: GOLDEN_BYTES }], now: NOW }), { ok: true, errors: [] })
+})
+
+test("validatePr refuses a finish day after the day it runs, with the file's path only", () => {
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: v4Bytes("2026-10-09") }], now: NOW }), { ok: false, errors: [{ code: "future", path: VALID_PATH }] })
+  // One minute later it is the next UTC day.
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: v4Bytes("2026-10-09") }], now: NOW + 60000 }), { ok: true, errors: [] })
+  // Without `now` the gate uses the clock it runs on.
+  const tomorrow = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: v4Bytes(tomorrow) }] }).errors, [{ code: "future", path: VALID_PATH }])
+})
+
+test("validatePr refuses a malformed now rather than skipping the finish-day check", () => {
+  for (const now of ["2026-10-08", Number.NaN, null, 1e20]) {
+    assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: v4Bytes("2026-10-08") }], now }), { ok: false, errors: [{ code: "type", path: "now" }] }, String(now))
+  }
+})
