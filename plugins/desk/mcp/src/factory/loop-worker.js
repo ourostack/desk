@@ -2,7 +2,8 @@
 // through `factory.js loop`. It runs the steps in order (the list `STEPS` below is data, so a step added later is
 // one more entry), one at a time and each inside its own try, so one failing step never stops the next. A step that
 // is not due (`dueStep`, inside its minimum gap with no newer work for it) is skipped and leaves no record. Besides the
-// session-start hook, the end of a turn and a finalize run start the worker when the evaluator step is due (`evaluate-kick.js`).
+// session-start hook, the end of a turn and a finalize run start the worker when the evaluator step is due (`evaluate-kick.js`),
+// and a worker whose evaluator step labeled a job starts the next one as it ends, so the queue drains back to back.
 //
 // Safe and detached:
 //   - One worker at a time per machine, under one lock file in the factory state folder (`process-lock.js`: the
@@ -41,7 +42,7 @@ import { runReconcileStep } from "./reconcile-step.js"
 import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
 import { runEvaluatorStep } from "./evaluator-step.js"
-import { LOOP_LOCK_NAME, evaluateDue, newestRequestAt } from "./evaluate-kick.js"
+import { LOOP_LOCK_NAME, evaluateDue, kickLoop, newestRequestAt } from "./evaluate-kick.js"
 import { runVerifyStep } from "./improvement-verify.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
@@ -94,7 +95,7 @@ const STEPS = Object.freeze([
 
 export const LOOP_STEP_NAMES = Object.freeze(STEPS.map(({ name }) => name))
 
-const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, routeIssues: runRouteIssuesStep, routeLocal: runRouteLocalStep, mirror: runMirrorStep, reconcile: runReconcileStep, verify: runVerifyStep, measure: runMeasureStep }
+const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, routeIssues: runRouteIssuesStep, routeLocal: runRouteLocalStep, mirror: runMirrorStep, reconcile: runReconcileStep, verify: runVerifyStep, measure: runMeasureStep, kick: kickLoop }
 
 /**
  * `runLoopWorker(env, { deskRoot, personPrefix, pluginVersion, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl, impls }) -> result`
@@ -183,5 +184,8 @@ export async function runLoopWorker(env, {
     await pending
     await releaseLock(lock)
   }
+  // A worker whose evaluator step labeled a job starts the next one once its lock is free, so the queue drains back to back. The kick starts
+  // one only while a job the runner can run today is left within the day's ceiling (`evaluateDue`); a kick that fails changes nothing here.
+  if (outcome.steps.evaluate === "ran") await swallow(() => functions.kick(env))
   return outcome
 }

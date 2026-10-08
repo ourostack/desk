@@ -14,6 +14,10 @@
 //     not attempted today, or one attempted on an earlier UTC day than today. Requests this machine cannot prepare
 //     (a job with no session here) or run (an unsupported host, the attempt limit) never keep the kick firing.
 //
+// A loop worker whose evaluator step labeled a job kicks once more when it ends (`loop-worker.js`), so the queue
+// drains back to back, one worker after another, until nothing the runner can run today is left. Every run stays
+// inside the daily ceiling (`MAX_HEADLESS_JOBS_PER_DAY`), the 3-attempt limit and one attempt per job per UTC day.
+//
 // It starts nothing in a headless factory session, with the loop switched off (`DESK_FACTORY_LOOP`), without factory
 // state, with no request waiting, or while a loop worker holds its lock and is younger than the worker's own hard
 // stop. The kick changes no budget rule: the worker it starts runs the same evaluator step, under the same daily cap,

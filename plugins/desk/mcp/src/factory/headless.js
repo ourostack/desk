@@ -28,7 +28,8 @@ import * as path from "node:path"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 
 export const HEADLESS_BUDGET_USD = 1
-export const MAX_HEADLESS_JOBS_PER_DAY = 6
+/** A safety ceiling against a runaway, not a pace: the loop drains its queue back to back and stops here for the UTC day. */
+export const MAX_HEADLESS_JOBS_PER_DAY = 30
 export const HEADLESS_TIMEOUT_MS = 900000
 
 const PROBE_TIMEOUT_MS = 15000

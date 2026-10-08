@@ -419,7 +419,7 @@ test("headless_blocked opens only after 2 consecutive blocked days and only for 
 test("the headless block: today's numbers count only for today's UTC day, and cost is measured only when no run went unreported", () => scratch(async (ctx) => {
   await setStatus(ctx, evaluator())
   let hl = (await build(ctx)).evaluator.headless
-  assert.deepEqual(hl, { state: "ran", jobs_today: M(2), cap_per_day: M(6), accepted_today: M(1), rejected_today: M(1), cost_usd_today: M(0.5) })
+  assert.deepEqual(hl, { state: "ran", jobs_today: M(2), cap_per_day: M(30), accepted_today: M(1), rejected_today: M(1), cost_usd_today: M(0.5) })
   await setStatus(ctx, evaluator({}, { day: "2026-10-04" }))
   hl = (await build(ctx)).evaluator.headless
   assert.deepEqual([hl.jobs_today, hl.accepted_today, hl.rejected_today, hl.cost_usd_today], [M(0), M(0), M(0), M(0)])
@@ -448,7 +448,7 @@ test("no evaluator record: every evaluator number is not_recorded and the state 
   assert.deepEqual(summary, {
     waiting: U("not_recorded"), oldest_wait_days: U("not_recorded"), expired_total: U("not_recorded"), labels_quarantined: U("not_recorded"), gave_up: U("not_recorded"),
     label_lag_minutes: U("not_recorded"), unlabeled_finished: U("not_recorded"), unlabeled_unsupported: U("not_recorded"), label_lag_alarm_minutes: M(60),
-    headless: { state: "unavailable", jobs_today: U("not_recorded"), cap_per_day: M(6), accepted_today: U("not_recorded"), rejected_today: U("not_recorded"), cost_usd_today: U("not_recorded") },
+    headless: { state: "unavailable", jobs_today: U("not_recorded"), cap_per_day: M(30), accepted_today: U("not_recorded"), rejected_today: U("not_recorded"), cost_usd_today: U("not_recorded") },
   })
   await setStatus(ctx, { evaluator: "x" })
   assert.equal((await build(ctx)).evaluator.headless.state, "unavailable")

@@ -43,6 +43,7 @@ function fakeClock() {
 
 // Fake steps in the shape of the real ones; the ones that record themselves do so, as the real ones do.
 function fakes(log, { clock, over = {} } = {}) {
+  const kicks = []
   const selfRecording = (name, key = name) => async (env, options) => {
     log.push([key, options])
     const { ok, result } = over[key]?.result ?? { ok: true, result: "done" }
@@ -56,7 +57,10 @@ function fakes(log, { clock, over = {} } = {}) {
   const impls = {
     evaluate: selfRecording("evaluate"), routeIssues: collector("routeIssues"), routeLocal: collector("routeLocal"),
     mirror: selfRecording("mirror"), reconcile: selfRecording("reconcile"), verify: selfRecording("verify"), measure: selfRecording("measure"),
+    // The kick that drains the queue never starts a process in a test.
+    kick: async () => { kicks.push(1); return { kicked: false, reason: "test" } },
   }
+  impls.kicks = kicks
   for (const [key, value] of Object.entries(over)) if (value.throws) impls[key] = async () => { log.push([key]); throw new Error("PRIVATE boom") }
   return impls
 }
@@ -201,6 +205,27 @@ test("the worker does not remove a lock that now belongs to someone else", () =>
   }
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
   assert.equal(JSON.parse(await fs.readFile(lockFile, "utf8")).token, "another-worker")
+}))
+
+test("a worker whose evaluator step labeled a job kicks the next one once its lock is free; other results and a failing kick start nothing more", () => scratch(async (ctx) => {
+  const root = await factoryStateRoot(ctx.env)
+  const lockFile = path.join(root, "locks", "loop-worker.running")
+  const ran = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  let lockAtKick = null
+  ran.kick = async (env) => {
+    assert.equal(env, ctx.env)
+    lockAtKick = await fs.stat(lockFile).then(() => "held", () => "free")
+    return { kicked: true, reason: "due" }
+  }
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: ran })
+  assert.equal(lockAtKick, "free")
+  const done = fakes([])
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: done, clock: () => Date.now() + 2 * 3600 * 1000 })
+  assert.deepEqual(done.kicks, [], "a step that labeled nothing kicks nothing")
+  const failing = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  failing.kick = async () => { throw new Error("PRIVATE kick") }
+  const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: failing, clock: () => Date.now() + 4 * 3600 * 1000 })
+  assert.equal(outcome.steps.evaluate, "ran")
 }))
 
 test("inside the gap, the evaluator step runs again while the queue drains, and not once it is drained", () => scratch(async (ctx) => {
