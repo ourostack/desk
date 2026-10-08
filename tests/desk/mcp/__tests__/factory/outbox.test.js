@@ -1269,7 +1269,7 @@ test("on Windows, a rename onto a file another process has open is waited for, s
   assert.equal(transient.count(), 4, "three refusals and the rename that went through")
   transient.mock.mock.restore()
   assert.equal((await readStatus(env, options)).derivations.a.store, STORE, "the write landed once the file was free")
-  assert.deepEqual(readdirSync(root).filter((name) => name.startsWith(".tmp-")), [], "no temporary file is left behind")
+  assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp-")), [], "no temporary file is left behind")
 
   // Refused for good: the wait is bounded by time (about 5 s), so a clock that jumps 3 s per reading reaches the bound after a few tries.
   const failure = Object.assign(new Error("denied for good"), { code: "EPERM" })
@@ -1283,6 +1283,14 @@ test("on Windows, a rename onto a file another process has open is waited for, s
   try {
     await assert.rejects(() => writeStatus(env, { derivations: { b: { store: STORE } } }, options), (error) => error === failure)
     assert.ok(lasting.mock.callCount() >= 2)
+    assert.deepEqual(readdirSync(root).filter((name) => name.includes(".tmp-")), [], "a refused write leaves no temporary file")
+    // A cleanup that fails too still surfaces the refusal, not its own error.
+    const removing = t.mock.method(fs, "rm", async () => { throw new Error("cannot remove") })
+    try {
+      await assert.rejects(() => writeStatus(env, { derivations: { b: { store: STORE } } }, options), (error) => error === failure)
+    } finally {
+      removing.mock.restore()
+    }
   } finally {
     jumping.mock.restore()
     lasting.mock.restore()

@@ -394,7 +394,13 @@ async function writeAtomic(root, file, data, { platform, env, runner }) {
   } finally {
     await handle.close()
   }
-  await renameOverBusyFile(tmp, file, platform)
+  try {
+    await renameOverBusyFile(tmp, file, platform)
+  } catch (error) {
+    // The finished temporary file is of no use once the rename has failed for good; a failed cleanup never hides the error that led to it.
+    await fsp.rm(tmp, { force: true }).catch(() => {})
+    throw error
+  }
   await protectLeafFile(file, platform, NAMING)
   if (platform === "win32") {
     windowsBatch.push({ path: file, kind: "file", created: !existedBefore })
