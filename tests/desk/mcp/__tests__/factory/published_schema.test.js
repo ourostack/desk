@@ -1138,17 +1138,33 @@ test("the basis names a source the file itself carries: a timed transition into 
   assertSingle(validatePublished(value), "inconsistent", "jobs.2.finished_basis")
 })
 
-test("finished_on is the only key exempt from the date refusal: every other string in a /4 file still refuses a date", () => {
-  const leaves = stringLeaves(golden4()).filter((keys) => keys[keys.length - 1] !== "finished_on")
-  assert.ok(leaves.some((keys) => keys[keys.length - 1] === "finished_basis"))
-  assert.ok(leaves.some((keys) => keys.includes("stop")))
+test("finished_on is the only key exempt from the date refusal: every string field that could hold a date or a time of day refuses one with its own code", () => {
+  const value = golden4()
+  // Agent 1 also names its type and requested model, so those token fields are walked too.
+  value.agents[1].agent_type = "general-purpose"
+  value.agents[1].requested_model = "sonnet"
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  const leaves = stringLeaves(value).filter((keys) => keys[keys.length - 1] !== "finished_on")
+  const checked = new Set()
   for (const keys of leaves) {
-    const result = validatePublished(setPath(golden4(), keys, "2026-09-25"))
+    const original = at(value, keys)[keys[keys.length - 1]]
+    // Each field is probed only where its own pattern accepts the same characters in a shape that is no date (one-digit month) or no time (one-digit hour), so only the date or time refusal can refuse the shaped value.
+    for (const [shaped, plain, code] of [[`${original}-2026-09-25`, `${original}-2026-9-25`, "date"], [`${original}:t08:30`, `${original}:t8:30`, "time"]]) {
+      if (!validatePublished(setPath(structuredClone(value), keys, plain)).ok) continue
+      checked.add(`${ps(keys)} ${code}`)
+      assertSingle(validatePublished(setPath(structuredClone(value), keys, shaped)), code, ps(keys))
+    }
+  }
+  for (const field of ["models.0.id", "models.1.id", "agents.0.model", "agents.1.model", "agents.1.agent_type", "agents.1.requested_model", "plugins.0.name", "refs.prs.0.repo", "refs.commits.0.repo"]) {
+    assert.ok(checked.has(`${field} date`), field)
+  }
+  for (const field of ["models.0.id", "agents.0.model", "agents.1.agent_type", "agents.1.requested_model"]) assert.ok(checked.has(`${field} time`), field)
+  // No other string field can hold either shape at all, so a date there fails its own pattern or enum.
+  for (const keys of leaves) {
+    const result = validatePublished(setPath(structuredClone(value), keys, "2026-09-25"))
     assert.equal(result.ok, false, ps(keys))
     assertNoLeak(result)
   }
-  // The exemption is the field, not the value: a date in a model ID is still `date`.
-  assertSingle(validatePublished(setPath(golden4(), ["models", 0, "id"], "gpt-4o-2024-08-06")), "date", "models.0.id")
   // And a time of day is never a finish day.
   assertSingle(validatePublished(setPath(golden4(), ["jobs", 0, "finished_on"], "08:30")), "pattern", "jobs.0.finished_on")
 })
@@ -1158,7 +1174,8 @@ test("a desk_public /4 file carries no finish day: both keys null, else the job 
   value.jobs = value.jobs.map((job) => ({ ...job, session_offset_ms: null, transitions: [], observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null }, finished_on: null, finished_basis: null }))
   value.unavailable = [{ field: "job_offsets", reason: "desk_public" }]
   delete value.refs.commits[0].at_ms
-  // The PR flag and the stop facts are no job timing.
+  // The stop facts are no job timing, and a PR the session created is published as not created (below).
+  value.refs.prs = value.refs.prs.map((pr) => ({ ...pr, created: false }))
   assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
   const dated = structuredClone(value)
   dated.jobs[0].finished_on = "2026-09-25"
@@ -1233,4 +1250,24 @@ test("the /4 level specs carry check functions", () => {
     assert.ok(__PUBLISHED_SPECS__[name], name)
     for (const [fieldName, field] of Object.entries(__PUBLISHED_SPECS__[name])) assert.equal(typeof field.check, "function", `${name}.${fieldName}`)
   }
+})
+
+test("a desk_public file never says a PR was created: with GitHub's public creation time it would date the session", () => {
+  const value = golden4()
+  value.jobs = value.jobs.map((job) => ({ ...job, session_offset_ms: null, transitions: [], observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null }, finished_on: null, finished_basis: null }))
+  value.unavailable = [{ field: "job_offsets", reason: "desk_public" }]
+  delete value.refs.commits[0].at_ms
+  value.refs.prs = [{ repo: "ourostack/desk", number: 9, created: false }, { repo: "ourostack/desk", number: 10, created: true }]
+  assertSingle(validatePublished(value), "inconsistent", "refs.prs.1.created")
+  value.refs.prs[1].created = false
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  // A PR that fails its own check is named once, by that check.
+  value.refs.prs[1].created = "yes"
+  assertSingle(validatePublished(value), "type", "refs.prs.1.created")
+  value.refs.prs[1] = `${SENTINEL} not a PR`
+  const result = validatePublished(value)
+  assertSingle(result, "type", "refs.prs.1")
+  assertNoLeak(result)
+  // A private desk may say it.
+  assert.deepEqual(validatePublished(golden4()), { ok: true, errors: [] })
 })

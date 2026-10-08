@@ -312,7 +312,9 @@ function mapOfField(allowedKeys, valueField) {
 
 /**
  * Validate `value` as an object shaped by `specOrFn` (a field-spec object, or
- * a function of `value` and the caller's `ctx` returning one). Checks the key set exactly once
+ * a function of `value` and the caller's `ctx` returning one). A function
+ * spec always receives `ctx` as its second argument, so a spec function with
+ * another optional second parameter must be wrapped. Checks the key set exactly once
  * against `Object.keys(spec)`, then runs each present field's own check —
  * the single source of truth I2 (real declarative spec walker) asks for.
  * Returns a map of field name -> that field's check result, or `undefined`
@@ -574,7 +576,8 @@ const UNRESOLVED_SPEC = {
 
 const REFS_SPEC = {
   prs: arrayField(objectField(prFields), LIMITS.prs),
-  commits: arrayField(objectField(commitFields), LIMITS.commits),
+  // Wrapped: a function spec also receives the walker's context, which `commitFields` would read as its `base`.
+  commits: arrayField(objectField((value) => commitFields(value)), LIMITS.commits),
   unresolved: objectField(UNRESOLVED_SPEC),
 }
 

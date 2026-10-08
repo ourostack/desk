@@ -72,7 +72,7 @@
 //     `finished_on`), and its basis names a source the file itself carries:
 //     a timed transition into that status, or a timed observation (else
 //     `inconsistent` at `finished_basis`). A `{job_offsets, desk_public}`
-//     file carries no finish day. The store's intake also refuses a day
+//     file carries no finish day, and no PR in it says `created: true`. The store's intake also refuses a day
 //     after the day it runs (`pipeline/validate-pr.js`, `future`).
 //   - `intervals[].stop` exists only on a `human_wait` interval (elsewhere it
 //     is an `unknown_key`) and holds `end` (`ENUMS.stopEnd`), and `asks` and
@@ -544,10 +544,11 @@ export function validatePublished(value) {
       if (timed) addError(errors, "inconsistent", `jobs.${index}`)
     })
   }
-  // Nor a PR or commit time, which with a public PR's creation time or a public commit's date would date the session.
+  // Nor a PR or commit time, which with a public PR's creation time or a public commit's date would date the session. Nor a PR the session says it created: GitHub's public creation time of that PR is an instant inside the session, so a public desk publishes every PR as `created: false`.
   if (deskPublic && refs?.prs) {
     value.refs.prs.forEach((pr, index) => {
       if (isPlainObject(pr) && Object.hasOwn(pr, "at_ms")) addError(errors, "inconsistent", `refs.prs.${index}`)
+      else if (isPlainObject(pr) && pr.created === true && refs.prs[index].created === true) addError(errors, "inconsistent", `refs.prs.${index}.created`)
     })
   }
   if (deskPublic && refs?.commits) {

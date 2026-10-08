@@ -22,6 +22,7 @@ import {
   LIMITS,
   LOCAL_SCHEMA,
   LOCAL_SCHEMAS,
+  validateObject,
   __SPECS__,
 } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { CATCH_POINTS, OUTCOME_STATES, REFUSAL_REASONS, RETURN_REASONS } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
@@ -1118,4 +1119,18 @@ test("the local stop spec is in the structural spec list", () => {
   assert.deepEqual(Object.keys(__SPECS__.stop), ["end", "asks", "pending_agents"])
   assert.ok(Object.hasOwn(__SPECS__.pr, "created"))
   assert.ok(Object.hasOwn(__SPECS__.intervalWait, "stop"))
+})
+
+test("a function spec gets the walker's context as its second argument, and no local spec misreads it", () => {
+  const seen = []
+  const errors = []
+  validateObject({ a: 1 }, "", (value, ctx) => {
+    seen.push(ctx)
+    return { a: __SPECS__.counts.tool_retries }
+  }, errors, { v4: true })
+  assert.deepEqual(seen, [{ v4: true }])
+  assert.deepEqual(errors, [])
+  // Local refs, commits included, validate the same with any context.
+  validateObject(golden().refs, "refs", __SPECS__.refs, errors, { v4: true, prs: null })
+  assert.deepEqual(errors, [])
 })
