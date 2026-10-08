@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.236 — 2026-10-08
+
+### Fixed
+
+On Windows, the factory no longer drops a session's derivation when another process has the destination file open at the moment of the write. Writing a factory file (an outbox facts file, a marker, `status.json`) renames a finished temporary file over the old one, and Windows refuses that rename with a permission or busy error while any other process holds the old file open, such as a reader or a virus scanner. The detached derivation that a session end starts gave up on the first refusal and left the session's newest facts unwritten, with nothing to retry it. The write now waits up to five seconds, retrying every 15 ms, for the file to be free, as it already did for a lock file whose deletion was pending. A write that is refused for good now also removes its temporary file before the error surfaces. Other platforms and other errors behave as before. No emitted or published field changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.235 — 2026-10-08
 
 When several Desk servers start at once on a root whose runtime cache is new, one of them now builds the runtime cache and the source mirror, and the others wait for it and reuse the result. Before, each server unpacked the whole runtime archive and copied the source into its own staging folder first, and only then took the publication lock to learn that another server had already won, so five servers did the same work five times at once. In our Windows CI traces of the five-server start-up test, that work made loading the runtime take a median of about 9 seconds per server and up to about 18 seconds, and a round that ran past the test's 30 second admission window left sessions stuck in "admitting". The staging folder is now filled only after the server holds the publication lock and finds the destination still missing; a failed or incomplete build still leaves nothing behind.
