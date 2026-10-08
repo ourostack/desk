@@ -11,7 +11,9 @@
 // `session.start.context.gitRoot`, where the session's short commit SHAs are
 // resolved (never kept); for binding only, `session.start`/`session.resume` `context.cwd` and the
 // `command` argument of a `bash` or `powershell` call, matched in memory for
-// `git … commit` and never kept;
+// `git … commit` and `gh pr create` and never kept; of a successful `gh pr
+// create` call, the first PR URL in `tool.execution_complete.result.content`
+// (only the repository and number are kept);
 // `session.shutdown.modelMetrics` (never `codeChanges`);
 // `assistant.turn_start.{turnId, interactionId}` and `turn_end.turnId`;
 // `user.message.{source, isAutopilotContinuation}` (classification only);
@@ -23,9 +25,10 @@
 // `permission.requested.requestId`, `permission.completed.{requestId,
 // toolCallId, decisionSource}`; `subagent.started/completed/failed.
 // {toolCallId, model}`; `session.compaction_complete.success`; the status
-// fields of failures (`statusCode`, `failureKind`); and
+// fields of failures (`statusCode`, `failureKind`, and `errorType` matched
+// against two fixed codes, never kept); and
 // `skill.invoked.{pluginName, pluginVersion}`. Content fields (message and
-// prompt text, other tool arguments, results, `initialPrompt`, summaries,
+// prompt text, other tool arguments, results other than that PR URL, `initialPrompt`, summaries,
 // `codeChanges.filesModified`) are never read into facts, and no classifying
 // value (`agentId`, `source`, `interactionId`) is ever copied into them. From
 // the database: `assistant_usage_events`, `session_refs` and the `repository`
@@ -75,7 +78,11 @@
 //     not human. `human_wait` (agent 0 only) runs from the end of the last
 //     interaction to the next human prompt, when no turn is open in between.
 //     Its `stop` (published facts /4) is `interrupted` when a root `abort`
-//     came after the root's last turn start, else `end_turn`; `asks` is
+//     came after the root's last turn start; else `rate_limit` or
+//     `api_error` when a root `session.error` or failed model call came after
+//     it with no root reply since (`rate_limit` for status 429 or an
+//     `errorType` of `rate_limit` or `quota`, which this machine's logs show
+//     as status 402); else `end_turn`. `asks` is
 //     whether the last root `assistant.message` text since the previous human
 //     prompt ended in "?" (`null` with none); `pending_agents` is `null`,
 //     because Copilot logs no background-agent count.
@@ -148,7 +155,14 @@
 //     in the session's own repository: the `session.start` `context.gitRoot`,
 //     else the repository holding `sessions.cwd`. A short SHA it finds
 //     becomes its full SHA; one it does not find is counted in
-//     `refs.unresolved.commits`; a 40-hex row is kept either way. A commit
+//     `refs.unresolved.commits`; a 40-hex row is kept either way. A PR
+//     is `created: true` only when a `bash` or `powershell` call of any
+//     worker ran `gh pr create`, finished with `success` and exit code 0,
+//     and printed that PR's URL; such a PR carries the worker and `at_ms`
+//     (the result's time) and replaces the store's row for it, or is added
+//     when the store does not name it. Every other PR is `created: false`.
+//     On this machine's logs (2026-10-08), all 60 such calls printed a PR
+//     that GitHub created 0.8 to 8.8 seconds before the result. A commit
 //     carries `sessions.repository` only when that repository has it and
 //     the repository's `origin` normalizes to
 //     `https://github.com/<sessions.repository>` (review I2, fix round 2);
@@ -212,7 +226,7 @@ import { createInterface } from "node:readline"
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionCommitTimes, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
-import { addNullable, compareByStart, createHumanTurns, comparePrRefs, countOrNull, declaredFocus, deskCallStatus, deskSavePaths, flagEmptyUsage, shellBinding, usageAbsent, withRequestedModel } from "./derive-common.js"
+import { addNullable, compareByStart, createHumanTurns, comparePrRefs, countOrNull, declaredFocus, dedupePrRefs, deskCallStatus, deskSavePaths, flagEmptyUsage, shellBinding, usageAbsent, withRequestedModel } from "./derive-common.js"
 import { hostFlagsFor } from "./host-flags.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { normalizeTimestamp } from "./time.js"
@@ -228,7 +242,11 @@ const PR_URL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$
 const PR_BARE = /^\d+$/u
 const COMMIT = /^[0-9a-fA-F]{40}$/u
 const TURN_RETRY = new Set(["model.turn_retry", "assistant.turn_retry"])
+// The error types that mean a usage limit, which the stop facts call `rate_limit` like a 429.
+const RATE_LIMIT_TYPES = new Set(["rate_limit", "quota"])
 const CALL_FAILURE = new Set(["model.model_call_failure", "model.call_failure"])
+const PR_CREATE = /\bgh\s+pr\s+create\b/u
+const PR_URL_IN_TEXT = /github\.com\/([^/\s]+\/[^/\s]+?)(?:\.git)?\/pull\/(\d+)/u
 const SHELL_DIALECT = Object.freeze({ bash: "posix", powershell: "powershell" })
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -305,6 +323,19 @@ function shellOf(name, args, cwd) {
   if (dialect === undefined || !isObject(args) || typeof args.command !== "string") return null
   const { commits, writes } = shellBinding({ command: args.command, cwd, home: os.homedir(), dialect })
   return commits.length > 0 || writes.length > 0 ? { commits, writes } : null
+}
+
+// Whether a call is a shell `gh pr create`; the command is matched and dropped.
+function isPrCreate(name, args) {
+  return name !== null && Object.hasOwn(SHELL_DIALECT, name) && isObject(args) && typeof args.command === "string" && PR_CREATE.test(args.command)
+}
+
+// The first PR URL in a successful `gh pr create` result, as `{ repo, number }`, or `null`. Nothing else of the result is kept.
+function createdPrOf(content) {
+  const match = typeof content === "string" ? PR_URL_IN_TEXT.exec(content) : null
+  if (match === null || !PATTERNS.prRepo.test(match[1])) return null
+  const number = Number(match[2])
+  return Number.isSafeInteger(number) && number > 0 ? { repo: match[1], number } : null
 }
 
 function contextCwd(data) {
@@ -393,6 +424,8 @@ function createSessionFold() {
   const deskToolCalls = []
   const fileWrites = []
   const shellGitCommits = []
+  // The PRs a successful `gh pr create` printed, with the worker and the result's time.
+  const createdPrs = []
   const spawnTasks = []
   const spawns = []
   const focusCalls = []
@@ -410,6 +443,8 @@ function createSessionFold() {
   // reply text ended in a question mark (`null` with no reply text since the last human prompt). Copilot records no background-agent count.
   let aborted = false
   let replyAsks = null
+  // The end an error gives the root's turn (`rate_limit` or `api_error`) when the root has not recovered from it: no turn start or reply since (a retry that succeeds replies).
+  let errorEnd = null
 
   function settlePrompt(stopped) {
     if (held === null) return
@@ -453,6 +488,12 @@ function createSessionFold() {
     if (retryStart === null && isRetryableFailure(data)) retryStart = at
   }
 
+  // A root error or failed model call. Only the status code and the error type's code are read; the message is not.
+  function noteFailure(data, at, root) {
+    openRetry(data, at)
+    if (root) errorEnd = data.statusCode === 429 || RATE_LIMIT_TYPES.has(data.errorType) ? "rate_limit" : "api_error"
+  }
+
   // Where the session's short commit SHAs are resolved.
   let gitRoot = null
   // The model the session was asked to start with, compared with the resolved root model at the end.
@@ -477,6 +518,7 @@ function createSessionFold() {
       pendingPermissions.clear()
       lastTurnEnd = null
       aborted = false
+      errorEnd = null
       retryStart = null
       compactionStart = undefined
       if (shutdown !== null) shutdown.stale = true
@@ -494,6 +536,7 @@ function createSessionFold() {
       // The agent is working again, so an earlier turn end was not its stop, and an earlier abort did not end this turn.
       stopAt = null
       aborted = false
+      errorEnd = null
       const id = stringOrNull(data.interactionId) ?? `turn:${turnId}`
       if (interaction !== null && interaction.id !== id) closeInteraction()
       if (interaction === null) {
@@ -517,6 +560,8 @@ function createSessionFold() {
     "assistant.message"(data, at, root) {
       if (!root) return
       settlePrompt(true)
+      // The root replied after an error, so the error did not end its turn.
+      errorEnd = null
       // A message that only asks for tools may carry no `content` key: it has no text, which is not a lost value.
       const toolOnly = data.content === undefined && Array.isArray(data.toolRequests) && data.toolRequests.length > 0
       const chars = toolOnly ? 0 : textLength(data.content)
@@ -532,10 +577,11 @@ function createSessionFold() {
       if (!isHumanPrompt(data, root)) return
       recordHumanTurn(data, at)
       if (interaction !== null && interaction.open.size === 0) closeInteraction()
-      const stop = { end: aborted ? "interrupted" : "end_turn", asks: replyAsks, pending_agents: null }
+      const stop = { end: aborted ? "interrupted" : errorEnd ?? "end_turn", asks: replyAsks, pending_agents: null }
       if (interaction === null && lastTurnEnd !== null) addTimed({ kind: "human_wait", agent: 0, stop }, lastTurnEnd, at, "human_waits")
       lastTurnEnd = null
       aborted = false
+      errorEnd = null
       replyAsks = null
     },
     "tool.execution_start"(data, at) {
@@ -562,6 +608,7 @@ function createSessionFold() {
         focus: focusOf(name, data.arguments, at),
         writes: fileWritesOf(name, data.arguments, at),
         shell: shellOf(name, data.arguments, sessionCwd),
+        prCreate: isPrCreate(name, data.arguments),
       })
     },
     "tool.execution_complete"(data, at) {
@@ -579,6 +626,11 @@ function createSessionFold() {
       if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, agent: pending.agent, ok: outcome === "ok" })
       if (pending.focus !== null && outcome === "ok") focusCalls.push({ agent: pending.agent, ...pending.focus })
       if (pending.writes !== null && data.success === true) fileWrites.push(...pending.writes.map((write) => ({ ...write, agent: pending.agent })))
+      // Only a recognised exit code of 0 counts: a failed `gh pr create` can still print an existing PR's URL. The result is matched for a PR URL and dropped.
+      if (pending.prCreate && data.success === true && data.shellExecution?.exitCode === 0) {
+        const ref = createdPrOf(data.result?.content)
+        if (ref !== null) createdPrs.push({ ...ref, agent: pending.agent, created: true, at })
+      }
       if (pending.shell !== null && pending.start !== null && at !== null && data.success === true && outcome === "ok") {
         for (const { cwd, paths } of pending.shell.commits) shellGitCommits.push({ start: pending.start, end: at, cwd, paths, agent: pending.agent })
         if (pending.shell.writes.length > 0) fileWrites.push(...pending.shell.writes.map((written) => ({ at: pending.start, path: written, agent: pending.agent })))
@@ -624,7 +676,7 @@ function createSessionFold() {
     },
     "subagent.completed": endSubagent,
     "subagent.failed": endSubagent,
-    "session.error": openRetry,
+    "session.error": noteFailure,
     "session.compaction_start"(data, at) {
       compactionStart = at
     },
@@ -646,7 +698,7 @@ function createSessionFold() {
     },
   }
 
-  for (const type of CALL_FAILURE) handlers[type] = openRetry
+  for (const type of CALL_FAILURE) handlers[type] = noteFailure
   for (const type of TURN_RETRY) {
     handlers[type] = (data, at) => {
       apiRetries += 1
@@ -696,6 +748,7 @@ function createSessionFold() {
         deskToolCalls,
         fileWrites,
         shellGitCommits,
+        createdPrs,
         spawnTasks,
         spawns,
         focusCalls,
@@ -842,11 +895,17 @@ function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits, start
     if (at !== undefined && (!timeOf.has(sha) || at < timeOf.get(sha))) timeOf.set(sha, at)
   })
   return {
-    // Copilot records which PRs a session named, never which it created, so no PR is marked created.
-    prs: [...prs.values()].sort(comparePrRefs).slice(0, LIMITS.prs).map((ref) => ({ ...ref, created: false })),
+    // The store records which PRs a session named, never which it created; `withCreatedPrs` marks the ones the session's own calls created.
+    prs: [...prs.values()].sort(comparePrRefs).map((ref) => ({ ...ref, created: false })),
     commits: sortedCommits.slice(0, LIMITS.commits).map((sha) => ({ repo: commits.get(sha), sha, ...(timeOf.has(sha) ? { at_ms: timeOf.get(sha) } : {}) })),
     unresolved,
   }
+}
+
+// The store's PRs with the ones the session created: a created PR replaces the store's row for it, and one the store does not name is added.
+function withCreatedPrs(named, created) {
+  const createdKeys = new Set(created.map((ref) => `${ref.repo}#${ref.number}`))
+  return [...named.filter((ref) => !createdKeys.has(`${ref.repo}#${ref.number}`)), ...created].sort(comparePrRefs).slice(0, LIMITS.prs)
 }
 
 // ---------------------------------------------------------------------------
@@ -947,6 +1006,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   if (state.openTurns) flag("turns", openOrTruncated)
 
   const refs = refsFromDatabase({ sessionId, env, flag, gitRoot: state.gitRoot, resolveCommits, startedAt: state.earliest, derivedThrough: state.latest })
+  const prs = withCreatedPrs(refs.prs, dedupePrRefs(state.createdPrs, { startedAt: state.earliest, derivedThrough: state.latest }))
   const mergedPlugins = mergePlugins(plugins, state.skillPlugins, flag)
   flag("ci_runs", "not_collected_in_slice_1")
   const sessionEntrypoint = entrypoint === "launcher" ? "launcher" : "cli"
@@ -975,7 +1035,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
       api_retries: state.apiRetries,
       compactions: state.compactions,
     },
-    refs: { prs: refs.prs, commits: refs.commits, unresolved: refs.unresolved },
+    refs: { prs, commits: refs.commits, unresolved: refs.unresolved },
     human_turns: state.humanTurns,
     jobs: [],
     unavailable: unavailableList(state.flags),

@@ -6,7 +6,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import test from "node:test"
 import { COVERAGE_FAILED, coverageNow, placesFor, recordCoverage } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
-import { BINDING_VERSION, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
+import { BINDING_RULES_VERSION, BINDING_VERSION, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { factoryStateRoot, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { ID, SENTINEL, STORE, json, recent, scratch, session } from "./_session_helpers.js"
 
@@ -390,4 +390,19 @@ test("a private desk and a public desk each own their own sessions", () => scrat
     "someone/private": { derived: 0, held: 0, frozen: 0, pending: 1, not_seen: 1, not_in_a_desk: 0 },
     "?": { derived: 0, held: 0, frozen: 0, pending: 0, not_seen: 0, not_in_a_desk: 1 },
   })
+}))
+
+test("an orphan whose receipt predates only a re-derive bump, not a binding change, counts as derived, because its binding is current", () => scratch(async (ctx) => {
+  assert.ok(BINDING_RULES_VERSION < BINDING_VERSION, "this test needs a re-derive bump above the binding rules")
+  const root = await factoryStateRoot(ctx.env)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const name = (id) => `claude-code-${id}.json`
+  for (const id of ids.slice(0, 2)) {
+    await put(claudeFile(ctx, "-Users-someone-work", id))
+    await put(path.join(root, "outbox", "ourostack__factory", name(id)), "{}")
+  }
+  await writeStatus(ctx.env, { derivations: { [name(ids[0])]: { store: STORE, checked_route: STORE, binding_version: BINDING_RULES_VERSION }, [name(ids[1])]: { store: STORE, checked_route: STORE, binding_version: BINDING_RULES_VERSION - 1 } } })
+  await sweep(ctx.env, { quietMs: 0 })
+  const claude = (await statusOf(ctx)).coverage.hosts["claude-code"]
+  assert.deepEqual([claude.derived, claude.frozen], [1, 1])
 }))

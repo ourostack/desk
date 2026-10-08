@@ -8,7 +8,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
-import { PUBLISHED_SCHEMA, validatePublished } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { FINISHED_ON_MIN, PUBLISHED_SCHEMA, validatePublished } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -130,7 +130,10 @@ test("given the clock, a finish day after today is withheld, because the store r
   assert.deepEqual(at(Number.NaN), [{ day: "2026-10-09", basis: "card_updated" }])
 })
 
-test("a finish day before 2025-01-01 is withheld, because the store refuses it", () => {
-  const value = local([job({ task_created_at: "2024-12-30T00:00:00.000Z", observed: { status: "done", at: "2024-12-31T23:00:00.000Z" } })])
-  assert.deepEqual(finish(publish(value)), [{ day: null, basis: null }])
+test("a finish day before the gate's earliest day is withheld, because the store refuses it, and the earliest day itself publishes", () => {
+  assert.equal(FINISHED_ON_MIN, "2025-01-01")
+  const before = local([job({ task_created_at: "2024-12-30T00:00:00.000Z", observed: { status: "done", at: "2024-12-31T23:00:00.000Z" } })])
+  assert.deepEqual(finish(publish(before)), [{ day: null, basis: null }])
+  const first = local([job({ task_created_at: "2024-12-30T00:00:00.000Z", observed: { status: "done", at: `${FINISHED_ON_MIN}T00:00:00.000Z` } })])
+  assert.deepEqual(finish(publish(first)), [{ day: FINISHED_ON_MIN, basis: "card_updated" }])
 })

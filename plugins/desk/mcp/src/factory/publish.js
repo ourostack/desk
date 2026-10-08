@@ -35,7 +35,7 @@
 //     time, which is an upper bound (`"card_updated"`). Only a source this
 //     file also publishes with an offset counts, so a job with no readable
 //     card creation time, an open job and any job of a desk that withholds
-//     its timing publish `null` for both. A day before 2025-01-01, or after
+//     its timing publish `null` for both. A day before the gate's `FINISHED_ON_MIN` (2025-01-01, imported, not copied), or after
 //     the UTC day of the optional `now` (milliseconds; a hand-edited card
 //     dated ahead), is `null` too, because the store would refuse the file.
 //   - Offsets and durations are capped at `PUBLISHED_LIMITS.maxOffsetMs`,
@@ -153,7 +153,7 @@ import { PRIVATE_VISIBILITIES, deskTimingKept } from "./desk-visibility.js"
 import { waitClass } from "./outcome.js"
 import { intervalInSession } from "./pipeline/timeline.js"
 import { validateLocalFacts } from "./schema.js"
-import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
+import { DATE_SHAPE, FINISHED_ON_MIN, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
 /** Why `toPublished` returned no file. */
 export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_not_v4"])
@@ -375,7 +375,6 @@ function protectedJob(job, machineSecret) {
 }
 
 const TERMINAL = new Set(["done", "cancelled"])
-const EARLIEST_FINISH_DAY = "2025-01-01"
 const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10)
 
 // The job's finish day and its source (see the header): the last published transition into the terminal status the card was observed in,
@@ -390,7 +389,7 @@ function finishOf(observed, transitions, transitionMs, observedMs, now) {
   let found = none
   if (latest !== null) found = { finished_on: utcDay(latest), finished_basis: "transition" }
   else if (observed.offset_ms !== null) found = { finished_on: utcDay(observedMs), finished_basis: "card_updated" }
-  if (found.finished_on === null || found.finished_on < EARLIEST_FINISH_DAY) return none
+  if (found.finished_on === null || found.finished_on < FINISHED_ON_MIN) return none
   if (Number.isFinite(now) && found.finished_on > utcDay(now)) return none
   return found
 }

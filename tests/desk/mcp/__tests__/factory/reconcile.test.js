@@ -10,7 +10,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { OWN_ACTIVITY_SPANS, jobId, normalizeRemote, taskCommitRule } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
-import { BINDING_VERSION, ORPHAN_HUNG_STRIKES } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
+import { BINDING_RULES_VERSION, BINDING_VERSION, ORPHAN_HUNG_STRIKES } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { ownVersion } from "../../../../../plugins/desk/mcp/src/factory/local-status.js"
 import { factoryStateRoot, markDelivered, quarantine, setConsent, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { deskTimingKept, deskVisibilityOf } from "../../../../../plugins/desk/mcp/src/factory/desk-visibility.js"
@@ -957,7 +957,7 @@ test("the receipt's two measures are reported per session and as totals; a recei
 test("an older binder's receipt measures nothing for this binder: its segments_capped_ms: 0 reads not recorded, never a measured zero", () => scratch(async (context) => {
   const { desk, env } = context
   await standardDesk(desk, [["t", "old"], ["t", "new"]])
-  await addSession(context, 1, "t", "old", { boundBy: "focus", receipt: BINDING_VERSION - 1, receiptFields: { segments_capped_ms: 0, repo_unresolved: 0 } })
+  await addSession(context, 1, "t", "old", { boundBy: "focus", receipt: BINDING_RULES_VERSION - 1, receiptFields: { segments_capped_ms: 0, repo_unresolved: 0 } })
   await addSession(context, 2, "t", "new", { boundBy: "focus", receiptFields: { segments_capped_ms: 0, repo_unresolved: 0 } })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   const pick = ({ session, segments_capped_ms, repository_evidence_unavailable }) => [session, segments_capped_ms, repository_evidence_unavailable]
@@ -1339,3 +1339,14 @@ after(() => {
   if ([...process.execArgv, ...process.argv].some((arg) => /test-(?:name|skip)-pattern/u.test(arg))) return
   assert.deepEqual(RECONCILE_REASONS.filter((reason) => !REACHED.has(reason)), [], "reasons no test reached")
 })
+
+test("a receipt from a re-derive bump that changed no binding is current: its binding and measures count, and it is not stale", () => scratch(async (context) => {
+  assert.ok(BINDING_RULES_VERSION < BINDING_VERSION, "this test needs a re-derive bump above the binding rules")
+  const { desk, env } = context
+  await standardDesk(desk, [["t", "kept"]])
+  await addSession(context, 1, "t", "kept", { boundBy: "focus", receipt: BINDING_RULES_VERSION, receiptFields: { segments_capped_ms: 7, repo_unresolved: 0 } })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.deepEqual(result.sessions.map(({ segments_capped_ms: capped }) => capped), [got(7)])
+  assert.equal(result.mismatches.some((item) => item.reason === "stale_binding"), false)
+  assert.deepEqual(result.counts.bound_by, { focus: 1, inferred: 0, subagent_only: 0, not_recorded: 0 })
+}))
