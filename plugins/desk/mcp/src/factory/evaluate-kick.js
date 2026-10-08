@@ -8,7 +8,7 @@
 // evaluator step is due for the kick (`evaluateDue` with `kick`):
 //
 //   - an evaluation request was recorded after the step last ran (a fresh finish: due at once, whatever the gap);
-//   - the queue is draining: the step's last run labeled a job, jobs the runner can run today are left
+//   - the queue is draining: the step's last run accepted a job's labels (`status.evaluator.accepted_last_step`), jobs the runner can run today are left
 //     (`status.evaluator.ready_now`) and the day's ceiling is not spent (due at once); or
 //   - the step's own minimum gap (`MIN_GAP_HOURS.evaluate`, 1 hour) has passed and a job the runner can run waits: one
 //     not attempted today, or one attempted on an earlier UTC day than today. Requests this machine cannot prepare
@@ -68,7 +68,8 @@ export function evaluateDue(status, now, { newWorkAt = null, kick = false } = {}
   const today = new Date(now).toISOString().slice(0, 10)
   const headless = isObject(evaluator.headless) ? evaluator.headless : {}
   const spent = headless.day === today && tally(headless.jobs) >= MAX_HEADLESS_JOBS_PER_DAY
-  if (record.last_result === "ran" && tally(evaluator.ready_now) > 0 && !spent) return true
+  // Only a step that accepted a job's labels drains on: a run that timed out, spent its budget, failed or was rejected waits out the gap.
+  if (record.last_result === "ran" && tally(evaluator.accepted_last_step) > 0 && tally(evaluator.ready_now) > 0 && !spent) return true
   if (!kick) return dueStep(status, "evaluate", now)
   const runnable = tally(evaluator.ready_now) > 0 || (tally(evaluator.ready_later) > 0 && typeof headless.day === "string" && headless.day < today)
   return runnable && !spent && dueStep(status, "evaluate", now)

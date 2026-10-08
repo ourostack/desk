@@ -576,6 +576,31 @@ test("a job that finished in a session still open is labeled once, and again onl
   assert.deepEqual([again.result, again.unlabeled], ["ready", 0], "a relabel is not an unlabeled session")
 }))
 
+test("labels made against evidence that changed during the run are accepted but leave the job wanting labels", () => scratch(async (env, base) => {
+  const deskRoot = path.join(base, "desk")
+  await setConsent(env, { store: STORE, contribute: true })
+  const open = sole()
+  open.session.ended_at = null
+  open.session.end_reason = null
+  open.session.derived_through = "2026-09-25T09:20:00.000Z"
+  await writeLocalFacts(env, STORE, open)
+  await indexJob(env, JOB, NAME)
+  await requestEvaluation(env, { job: JOB, deskRoot })
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "ready")
+  // The session ends while the evaluator runs: its facts are derived again, through a later end.
+  await writeLocalFacts(env, STORE, sole())
+  await answer(env, { ...labels(), stretches: labels().stretches.slice(0, 1), unavailable: ["session_log_missing"] })
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "accepted" }], request: "kept" })
+  assert.notEqual(await readLabelsBasis(env, STORE, JOB, SESSION), labelsBasis(brief({ localFacts: sole() })))
+  const again = await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  assert.deepEqual([again.result, again.unlabeled], ["ready", 0], "labeled again from the ended session's facts")
+  // A brief file that does not read as a brief settles nothing either.
+  await fs.writeFile(again.briefs[0], JSON.stringify({ schema: "desk.factory.evaluator-brief/2", job: JOB, session: { host: "claude-code", id: SESSION }, facts: "x" }))
+  await answer(env, { ...labels(), stretches: labels().stretches.slice(0, 1), unavailable: ["session_log_missing"] })
+  assert.equal((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).sessions[0].result, "accepted")
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "ready")
+}))
+
 test("labels kept from before their evidence was recorded follow the old rule: an open session is labeled again, an ended one stands", () => scratch(async (env) => {
   await seed(env)
   await writeLocalLabels(env, STORE, labels())

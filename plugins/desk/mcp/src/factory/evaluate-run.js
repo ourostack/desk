@@ -237,6 +237,18 @@ function ownShareOf(binding, jobs, durationMs) {
 
 const rejected = (errors) => ({ ok: false, errors })
 
+// A recorded basis no evidence has: labels made against evidence that changed before they were accepted.
+const UNSETTLED_BASIS = "0".repeat(64)
+
+// The basis of a brief file as the evaluator read it, or null when it does not read as one.
+function briefBasis(brief) {
+  try {
+    return labelsBasis(brief)
+  } catch {
+    return null
+  }
+}
+
 /**
  * `acceptEvaluation(brief, bytes) -> { ok: true, errors: [], labels } |
  * { ok: false, errors }`: the evaluator's answer for `brief` (a value
@@ -388,8 +400,8 @@ export async function prepareEvaluation(env, { job, pluginVersion }) {
 /**
  * Whether one session still needs labels for `job`: `"unlabeled"` (it has none), `"relabel"` or `null` (its labels are settled). Labels are
  * settled when the evidence they were made against (`labelsBasis`, recorded on acceptance) is still the session's evidence, open or ended:
- * a job that finished in a session that runs on is labeled once at its finish, and again only when its facts are derived again with different
- * evidence. Labels recorded before the basis was kept follow the old rule: an open session is labeled again, an ended one stands. Either way,
+ * a job that finished in a session that runs on is labeled at its finish, and again only when its facts are derived again with different
+ * evidence (at most once a UTC day, by the evaluator step's rule; a share that keeps growing is relabeled daily until the session ends). Labels recorded before the basis was kept follow the old rule: an open session is labeled again, an ended one stands. Either way,
  * labels of an older rubric are labeled again while the session's log is on disk, but only on facts that carry stop facts
  * (`STOP_FACTS_BINDING_VERSION`).
  */
@@ -466,7 +478,10 @@ export async function acceptEvaluations(env, { job, pluginVersion }) {
       sessions.push({ session, result: "not_opted_in" })
       continue
     }
-    await writeLabelsBasis(env, store, { job, session, basis: labelsBasis(trusted.brief) })
+    // The basis is the evidence the labels were made against: the brief's, when it is still the session's at acceptance. Facts derived again
+    // during the run (a session that ended mid-run) record a basis that matches nothing, so the job still wants labels from the newer facts.
+    const basis = labelsBasis(trusted.brief)
+    await writeLabelsBasis(env, store, { job, session, basis: briefBasis(brief) === basis ? basis : UNSETTLED_BASIS })
     await clearEvaluation(env, { job, store, name })
     sessions.push({ session, result: "accepted" })
   }

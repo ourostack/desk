@@ -184,8 +184,8 @@ export async function runLoopWorker(env, {
     await pending
     await releaseLock(lock)
   }
-  // A worker whose evaluator step labeled a job starts the next one once its lock is free, so the queue drains back to back. The kick starts
+  // A worker whose evaluator step accepted a job's labels (`evaluator.accepted_last_step`) starts the next one once its lock is free, so the queue drains back to back. The kick starts
   // one only while a job the runner can run today is left within the day's ceiling (`evaluateDue`); a kick that fails changes nothing here.
-  if (outcome.steps.evaluate === "ran") await swallow(() => functions.kick(env))
+  if (outcome.steps.evaluate === "ran" && (await swallow(async () => (await readStatusImpl(env))?.evaluator?.accepted_last_step > 0)) === true) await swallow(() => functions.kick(env))
   return outcome
 }

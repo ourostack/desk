@@ -32,7 +32,7 @@
 //
 // `status.evaluator` (codes, counts and the cost number only; read by the measure step and the boot line):
 //
-//   { expired_total, gave_up, waiting, ready_now, ready_later,
+//   { expired_total, gave_up, waiting, ready_now, ready_later, accepted_last_step, scan_ms,
 //     headless: { state, day, jobs, accepted, rejected, cost_usd, cost_unreported_runs,
 //                 unsupported_jobs, deferred_jobs, blocked_days },
 //     lag: { at, unlabeled_jobs, oldest_finished_at, unsupported_jobs, gave_up_jobs } }
@@ -42,6 +42,9 @@
 //   waiting        ready jobs left after this step
 //   ready_now, ready_later   of those, the jobs the runner can still run (a supported brief, attempts to spare) that
 //                  were not attempted today, and that were: what the loop kick reads to drain the queue
+//   accepted_last_step   jobs whose every run brief this step ran was accepted; only a step above 0 drains the queue
+//                  on (a run that timed out, spent its budget, failed or was rejected labels nothing)
+//   scan_ms        how long this step's backstop and sweep took to read the facts, in milliseconds
 //   state          `idle` | `ran` | a blocked state | `unsupported_host` (jobs waiting, every one unsupported)
 //                  | `budget_exhausted` | `disabled`; with `idle`, `waiting` above 0 means nothing could run now
 //   day            the UTC day the counts below belong to; they start again each UTC day
@@ -59,8 +62,9 @@
 //                  the health record, the session-start line and the `label_lag` alarm read.
 //
 // Per-job bookkeeping keyed by job ID is kept apart, in `status.loop.evaluate.attempts`
-// (`{ <job>: { attempts, last_day } }`, with `blocked_last_day`): it holds only jobs whose request still waits
-// and is pruned at every save, so it is bounded by the number of waiting requests and never reaches a health
+// (`{ <job>: { attempts, last_day } }`, with `blocked_last_day`): it holds jobs whose request still waits and jobs
+// run today whose request has cleared (so a relabel asked for later the same day waits for the next day), and is
+// pruned at every save, so it is bounded by the waiting requests plus the day's runs and never reaches a health
 // record.
 
 import { promises as fsp } from "node:fs"
@@ -137,6 +141,12 @@ function readAttempts(status, retained, day) {
     const valid = isObject(entry) && Number.isSafeInteger(entry.attempts) && entry.attempts >= 0
     attempts[job] = valid ? { attempts: entry.attempts, last_day: DAY_TEXT.test(entry.last_day) ? entry.last_day : day } : { attempts: MAX_ATTEMPTS, last_day: day }
   }
+  // A job run today whose request has since cleared keeps its day, so a relabel asked for later the same day still waits for tomorrow.
+  if (isObject(stored)) {
+    for (const [job, entry] of Object.entries(stored)) {
+      if (!Object.hasOwn(attempts, job) && isObject(entry) && entry.last_day === day && Number.isSafeInteger(entry.attempts) && entry.attempts >= 0) attempts[job] = { attempts: entry.attempts, last_day: day }
+    }
+  }
   return attempts
 }
 
@@ -199,6 +209,9 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
     // Nothing recorded: the requests already waiting are swept as before.
   }
   const sweep = await evaluatePending(env, { pluginVersion, now: nowMs })
+  // How long the backstop and the sweep took to read the facts: a run starts only with 15 minutes left before the deadline, so a scan that
+  // grows with history shrinks that window, and this number shows it before every step ends with none_could_run.
+  const scanMs = Math.max(0, impl.clock() - clockStart)
   const ready = sweep.jobs.filter((entry) => entry.result === "ready").sort(byPriority)
   // Finished jobs with a session that has no labels and that the runner can label, and when each finished: the label lag. Jobs with an
   // unlabeled session the runner cannot label (a host it does not support) are named apart and never hold the lag.
@@ -227,6 +240,7 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
     attempts: readAttempts(status, live, before.day),
     state: "ran",
     unsupported: 0,
+    acceptedHere: 0,
     deferred: 0,
   }
   let stillWaiting = ready.length
@@ -237,8 +251,8 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
   const triedToday = (entry) => (ledger.attempts[entry.job]?.last_day ?? "") >= ledger.day
 
   async function save() {
-    for (const job of Object.keys(ledger.attempts)) if (!live.has(job)) delete ledger.attempts[job]
-    const gaveUpJobs = Object.keys(ledger.attempts).filter((job) => ledger.attempts[job].attempts >= MAX_ATTEMPTS).sort()
+    for (const job of Object.keys(ledger.attempts)) if (!live.has(job) && ledger.attempts[job].last_day !== ledger.day) delete ledger.attempts[job]
+    const gaveUpJobs = Object.keys(ledger.attempts).filter((job) => live.has(job) && ledger.attempts[job].attempts >= MAX_ATTEMPTS).sort()
     const gaveUp = gaveUpJobs.length
     // The lag counts only jobs this machine can label and is still trying.
     const lagging = [...unlabeled].filter(([job]) => !gaveUpJobs.includes(job)).map(([, at]) => at)
@@ -250,6 +264,8 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
         waiting: stillWaiting,
         ready_now: ready.filter((entry) => runnable(entry) && !triedToday(entry)).length,
         ready_later: ready.filter((entry) => runnable(entry) && triedToday(entry)).length,
+        accepted_last_step: ledger.acceptedHere,
+        scan_ms: scanMs,
         headless: {
           state: ledger.state,
           day: ledger.day,
@@ -360,6 +376,7 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
     // labeled again as its facts change never reaches the attempt limit.
     if (allAccepted) {
       ledger.accepted += 1
+      ledger.acceptedHere += 1
       ledger.attempts[entry.job] = { attempts: 0, last_day: ledger.day }
     } else ledger.rejected += 1
     // Every brief the runner could take was run and accepted: none of the job's sessions it can label is unlabeled any more.

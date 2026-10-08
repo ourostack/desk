@@ -12,6 +12,7 @@ import { osEnv } from "../_os_env.js"
 import { NO_FILE_SYMLINKS } from "../_platform.js"
 
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
+import { evaluateDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { STOP_FACTS_BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
 import { labelsBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
@@ -130,6 +131,8 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
     waiting: 0,
     ready_now: 0,
     ready_later: 0,
+    accepted_last_step: 1,
+    scan_ms: evaluator.scan_ms,
     headless: {
       state: "ran",
       day: new Date(DAY0).toISOString().slice(0, 10),
@@ -961,6 +964,70 @@ test("the lag names the oldest finished job still unlabeled, counts them, and le
   const { lag } = await evaluatorOf(env)
   assert.deepEqual(lag, { at: new Date(DAY0).toISOString(), unlabeled_jobs: 2, oldest_finished_at: "2026-09-24T10:00:00.000Z", unsupported_jobs: [], gave_up_jobs: [] })
   assert.ok(second)
+}))
+
+test("only a step that accepted a job's labels counts as labeling: a timeout, a spent run budget, a failed run and a rejected answer do not", () => scratch(async (env, base) => {
+  const outcomes = [
+    ["timeout", fakeRunner(() => ({ state: "timeout", cost_usd: null }), { write: false })],
+    ["budget_exceeded", fakeRunner(() => ({ state: "budget_exceeded", cost_usd: 1 }), { write: false })],
+    ["failed", fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false })],
+    ["rejected", async (call) => {
+      for (const file of call.briefPaths) await fs.writeFile(JSON.parse(await fs.readFile(file, "utf8")).output, JSON.stringify({ schema: "desk.factory.labels/3" }))
+      return { state: "ran", cost_usd: 0.1, detail: null }
+    }],
+  ]
+  for (const [index, [name, runner]] of outcomes.entries()) {
+    await seedJob(env, base, index + 1)
+    assert.deepEqual(await step(env, seams({ runHeadless: runner, now: DAY0 + index * DAY })), { ok: true, result: "ran" }, name)
+    const evaluator = await evaluatorOf(env)
+    assert.equal(evaluator.accepted_last_step, 0, name)
+    assert.equal(evaluateDue(await readStatus(env), new Date(DAY0 + index * DAY + 60 * 1000), { kick: true }), false, `${name}: no drain`)
+  }
+  await seedJob(env, base, 9)
+  const options = seams({ now: DAY0 + 5 * DAY })
+  await step(env, options)
+  assert.equal((await evaluatorOf(env)).accepted_last_step, options.runHeadless.calls.length, "every run that day was accepted")
+  assert.ok(options.runHeadless.calls.length > 0)
+}))
+
+test("the step records how long its facts scan took, so the shrinking start window shows", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  let now = 0
+  const clock = () => now
+  const requestFinishedJobs = async () => { now += 4000; return { requested: [] } }
+  await step(env, seams({ clock, requestFinishedJobs, runHeadless: fakeRunner(async () => { now += 60000; return { state: "ran", cost_usd: 0.1 } }) }))
+  assert.equal((await evaluatorOf(env)).scan_ms, 4000)
+}))
+
+test("a finished job whose share keeps growing in a session that stays open is labeled again at most once a UTC day", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  const name = `claude-code-${sessionId(10)}.json`
+  const grown = async (minutes) => {
+    const facts = structuredClone(LOCAL)
+    facts.session.id = sessionId(10)
+    facts.session.ended_at = null
+    facts.session.end_reason = null
+    facts.session.derived_through = new Date(Date.parse(LOCAL.session.derived_through) + minutes * 60 * 1000).toISOString()
+    facts.jobs = [{ ...facts.jobs[0], job }]
+    await writeLocalFacts(env, STORE, facts)
+  }
+  await grown(0)
+  const runs = []
+  const options = (day) => seams({ now: DAY0 + day * DAY, deskRoot: path.join(base, "desk"), runHeadless: fakeRunner((call) => { runs.push(day); return { state: "ran", cost_usd: 0.1 } }) })
+  await step(env, options(0))
+  assert.deepEqual(runs, [0], "labeled at its finish")
+  // The session runs on and is derived again twice the same day: the job's share grew, so it needs labels again, but it already ran today.
+  await grown(10)
+  await step(env, { ...options(0), now: DAY0 + 2 * 3600 * 1000 })
+  await grown(20)
+  await step(env, { ...options(0), now: DAY0 + 4 * 3600 * 1000 })
+  assert.deepEqual(runs, [0])
+  await step(env, options(1))
+  assert.deepEqual(runs, [0, 1], "once the next day")
+  await step(env, { ...options(1), now: DAY0 + DAY + 3600 * 1000 })
+  assert.deepEqual(runs, [0, 1], "and not again that day: its evidence has not changed")
+  assert.equal((await evaluatorOf(env)).gave_up, 0)
+  assert.ok(name)
 }))
 
 test("a job whose unlabeled session the runner cannot label is named apart and never holds the lag; its labelable session still runs", () => scratch(async (env, base) => {

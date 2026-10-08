@@ -212,13 +212,25 @@ test("a worker whose evaluator step labeled a job kicks the next one once its lo
   const lockFile = path.join(root, "locks", "loop-worker.running")
   const ran = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
   let lockAtKick = null
+  let blindReads = 0
   ran.kick = async (env) => {
     assert.equal(env, ctx.env)
     lockAtKick = await fs.stat(lockFile).then(() => "held", () => "free")
     return { kicked: true, reason: "due" }
   }
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { accepted_last_step: 1 } }))
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: ran })
   assert.equal(lockAtKick, "free")
+  // A step whose runs all labeled nothing (timed out, over budget, failed or rejected) kicks nothing.
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { accepted_last_step: 0 } }))
+  const unlabeled = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: unlabeled, clock: () => Date.now() + 3600 * 1000 + 60 * 1000 })
+  assert.deepEqual(unlabeled.kicks, [])
+  // A status that cannot be read after the run kicks nothing either.
+  const blind = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: blind, clock: () => Date.now() + 9 * 3600 * 1000, readStatusImpl: async () => { blindReads += 1; if (blindReads > 6) throw new Error("PRIVATE"); return {} } })
+  assert.deepEqual(blind.kicks, [])
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { accepted_last_step: 1 } }))
   const done = fakes([])
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: done, clock: () => Date.now() + 2 * 3600 * 1000 })
   assert.deepEqual(done.kicks, [], "a step that labeled nothing kicks nothing")
@@ -232,7 +244,7 @@ test("inside the gap, the evaluator step runs again while the queue drains, and 
   const now = Date.now()
   const log = []
   await recordStep(ctx.env, "evaluate", { ok: true, result: "ran", now: new Date(now - 60 * 1000) })
-  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { ready_now: 1, ready_later: 0, headless: { day: new Date(now).toISOString().slice(0, 10), jobs: 1 } } }))
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { ready_now: 1, ready_later: 0, accepted_last_step: 1, headless: { day: new Date(now).toISOString().slice(0, 10), jobs: 1 } } }))
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: fakes(log), clock: () => now })
   assert.equal(names(log)[0], "evaluate")
   const drained = []

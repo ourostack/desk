@@ -74,14 +74,14 @@ test("a request newer than the step's last run is due at once; an older one wait
   assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + 2 * MINUTE }), { due: false, reason: "not_due" })
   // A request this machine cannot prepare or run keeps no kick firing past the gap.
   assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + 61 * MINUTE }), { due: false, reason: "not_due" }, "nothing the runner can run waits")
-  await updateStatus(env, (current) => ({ ...current, evaluator: { ready_now: 1, ready_later: 0 } }))
+  await updateStatus(env, (current) => ({ ...current, evaluator: { ready_now: 1, ready_later: 0, accepted_last_step: 1 } }))
   assert.deepEqual(await evaluationKickDue(env, { now: requestedMs + 2 * MINUTE }), { due: true, reason: "due" }, "the queue drains at once after a run that labeled a job")
 }))
 
 // A status with the evaluator step's record and its own counts, on `day` (an ISO day) at `ranAt`.
-const stored = ({ result, ranAt, readyNow = 0, readyLater = 0, day, jobs = 0 }) => ({
+const stored = ({ result, ranAt, readyNow = 0, readyLater = 0, day, jobs = 0, accepted = 1 }) => ({
   loop: { steps: { evaluate: { last_ran_at: new Date(ranAt).toISOString(), last_result: result } } },
-  evaluator: { ready_now: readyNow, ready_later: readyLater, headless: { day, jobs } },
+  evaluator: { ready_now: readyNow, ready_later: readyLater, accepted_last_step: accepted, headless: { day, jobs } },
 })
 
 test("evaluateDue drains after a run that labeled a job, within the day's ceiling, and past the gap kicks only for a job the runner can run", () => {
@@ -91,6 +91,8 @@ test("evaluateDue drains after a run that labeled a job, within the day's ceilin
   const long = now - 61 * MINUTE
   assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 2, day: today, jobs: 3 }), new Date(now), { kick: true }), true, "draining")
   assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 2, day: today, jobs: MAX_HEADLESS_JOBS_PER_DAY }), new Date(now), { kick: true }), false, "the ceiling is spent")
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 2, day: today, accepted: 0 }), new Date(now), { kick: true }), false, "a run that labeled nothing ends the drain")
+  assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 2, day: today, accepted: 0 }), new Date(now)), false, "and the worker waits out the gap too")
   assert.equal(evaluateDue(stored({ result: "ran", ranAt: soon, readyNow: 0, readyLater: 2, day: today }), new Date(now), { kick: true }), false, "only jobs tried today are left")
   assert.equal(evaluateDue(stored({ result: "none_could_run", ranAt: soon, readyNow: 1, day: today }), new Date(now), { kick: true }), false, "inside the gap without a labeled job")
   assert.equal(evaluateDue(stored({ result: "none_could_run", ranAt: long, readyNow: 1, day: today }), new Date(now), { kick: true }), true, "past the gap with a job to run")
