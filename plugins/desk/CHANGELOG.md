@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.230 — 2026-10-08
+
+### Capture coverage no longer raises false alarms on the public factory site
+
+A capture record that was wrong stayed on the site for 20 hours, and Copilot CLI and Codex sessions that no desk owned were counted against the one store as misses. Both showed up as "less than 80% of capturable sessions were captured".
+
+A record whose captured share for a host differs by 0.15 or more from the last record sent is now sent at the next flush instead of waiting out the 20 hours, so a corrected record replaces a wrong one at once. A normal small change still waits. The share of the last record sent is kept as `sent_share` in the local `status.json` capture bookkeeping (a ratio per host, never a count, and never published).
+
+The coverage pass is no longer recorded while it can only measure a transient state. If a quarantine folder changed in the last 5 minutes, or the sessions whose facts copy is in quarantine are more than half of a host's sessions on disk, the previous coverage stays and the sweep reports `kept`. Sessions held for another reason (a store without consent, a marker naming no store) do not count. The keep lasts at most one hour: after that the pass is recorded anyway, and `status.json`, `factory.js status` and the doctor say that the quarantine did not settle. Before this, a pass taken during a quarantine release counted every quarantined copy as `held`, not `derived`, and that record was published.
+
+For a host that cannot tell a non-desk session from a miss (its `not_in_a_desk` is null), an unowned session that no marker names is no longer counted as `not_seen` in a store's record. It is withheld like an owner-`?` session, because it may belong to a private store, and the host keeps `not_in_a_desk: null` so the store can tell. The store must read such a host's shares as unavailable (`host_does_not_say_desk`), so merge the matching ourostack/factory change before this Desk release. Owned sessions are counted as before. No emitted field is removed or renamed, and no field is added to the published record. The user doc [factory-local-capture.md](docs/factory-local-capture.md) describes the owner rule, the 20-hour wait and its exception, and what an omitted host means.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.229 — 2026-10-07
 
 The factory build now writes the data the store's Lean walk needs, without changing any existing figure. In the new data, a job's lead time splits into working time and idle time, and "waiting" means idle time and nothing else. Working time is the job's recorded turns, tool calls and subagents, less the time the evaluator labeled `waiting` in the same session. Idle time is the rest of the lead time, and each idle moment has one `waited_on`: `next_prompt` (the agent had stopped and the next prompt had not come, nights included), `api_retry`, `tool_failure`, `long_tool_call` (a successful call of five minutes or more), `queue_before_start` (no session of the job had started), `no_session` (no session was running) or `unknown` (no label or evidence says). Labeled classes and wastes describe working time only. A job with no labels yet counts all of its recorded work as working.
