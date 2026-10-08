@@ -274,18 +274,22 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
+  // listen() drops its one-shot error listener once bound; without a lasting one, a later server error would be an unhandled 'error' event that ends the whole Desk process. It is attached before the process start read, which can take seconds.
+  server.on("error", (error) => {
+    process.stderr.write(`[desk-mcp] readiness controller server error: ${error?.message ?? String(error)}\n`)
+  })
   if (bindBeforeProcessStart) {
     try {
       await readProcessStart()
     } catch (error) {
-      await closeServer(server, stateDir, owner).catch(() => {})
+      try {
+        await closeServer(server, stateDir, owner)
+      } catch {
+        // The read failure is the one to report; the pipe is released with the process anyway.
+      }
       throw error
     }
   }
-  // listen() drops its one-shot error listener once bound; without a lasting one, a later server error would be an unhandled 'error' event that ends the whole Desk process.
-  server.on("error", (error) => {
-    process.stderr.write(`[desk-mcp] readiness controller server error: ${error?.message ?? String(error)}\n`)
-  })
   let socket = null
   try {
     socket = controllerSocketIdentity(endpoint)

@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { mkdirSync, rmSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
@@ -89,30 +89,61 @@ test("a session that lost the bind waits for a winner that is still starting, an
   const inUse = () => { throw Object.assign(new Error("listen EADDRINUSE: address already in use"), { code: "EADDRINUSE" }) }
 
   const late = await fixture(t, "desk-election-late-")
-  let winner
-  const client = await connectOrStartController({
-    root: late.root, stateHome: late.stateHome, ephemeral: true,
-    startController: async (options) => {
-      // The winner is slow: it holds the pipe now and publishes its owner record 1.5 s later, longer than the old 20 tries of 25 ms.
-      setTimeout(() => {
-        startReadinessController({ ...options, ephemeral: true, exitRelease: quietExit(), ownProcessStart: () => new Promise((resolve) => setTimeout(() => resolve(null), 1500)) })
-          .then((controller) => { winner = controller })
-      }, 0)
-      return inUse()
-    },
+  // The winner holds the pipe now and publishes its owner record 1.5 s later, longer than the old 20 tries of 25 ms.
+  const starting = startReadinessController({
+    identity: late.identity, endpoint: late.endpoint, stateDir: late.stateDir, ephemeral: true, exitRelease: quietExit(), bindBeforeProcessStart: true,
+    ownProcessStart: () => new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
   })
+  while (!(await accepting(late.endpoint))) await new Promise((resolve) => setTimeout(resolve, 10))
+  const client = await connectOrStartController({ root: late.root, stateHome: late.stateHome, ephemeral: true, startController: inUse, electionWaitMs: 10_000 })
+  const winner = await starting
   try {
     assert.equal((await client.status()).state, "CONTROL_READY")
   } finally {
     await client.close()
-    await winner?.close()
+    await winner.close()
   }
 
   const nobody = await fixture(t, "desk-election-nobody-")
   const started = Date.now()
   await assert.rejects(
-    connectOrStartController({ root: nobody.root, stateHome: nobody.stateHome, ephemeral: true, startController: inUse, electionWaitMs: 300 }),
-    /readiness controller election did not converge/u,
+    connectOrStartController({ root: nobody.root, stateHome: nobody.stateHome, ephemeral: true, startController: inUse, electionWaitMs: 30_000 }),
+    /readiness controller election winner is gone/u,
   )
-  assert.ok(Date.now() - started < 5000, `gave up after ${Date.now() - started} ms`)
+  assert.ok(Date.now() - started < 5000, `the dead winner was noticed after ${Date.now() - started} ms, not after the 30 s wait`)
+})
+
+test("a session that handshakes while the winner has bound the pipe but not published its owner record gets no controller, and joins once it is published", { timeout: 60_000 }, async (t) => {
+  const { root, identity, endpoint, stateDir, stateHome } = await fixture(t, "desk-election-window-")
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const starting = startReadinessController({
+    identity, endpoint, stateDir, ephemeral: true, exitRelease: quietExit(), bindBeforeProcessStart: true,
+    ownProcessStart: async () => { await gate; return null },
+  })
+  while (!(await accepting(endpoint))) await new Promise((resolve) => setTimeout(resolve, 10))
+  const inUse = () => { throw Object.assign(new Error("listen EADDRINUSE: address already in use"), { code: "EADDRINUSE" }) }
+  await assert.rejects(
+    connectOrStartController({ root, stateHome, ephemeral: true, startController: inUse, electionWaitMs: 300 }),
+    /readiness controller election did not converge|token|owner/u,
+    "no half-started controller answers before the owner record is published",
+  )
+  release()
+  const winner = await starting
+  t.after(() => winner.close())
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true, startController: inUse, electionWaitMs: 300 })
+  try {
+    assert.equal((await client.status()).state, "CONTROL_READY")
+  } finally {
+    await client.close()
+  }
+})
+
+test("a failing process start read still reports its own error when releasing the pipe fails too", { timeout: 60_000 }, async (t) => {
+  const { identity, endpoint, stateDir } = await fixture(t, "desk-bindfirst-closefail-")
+  await assert.rejects(startReadinessController({
+    identity, endpoint, stateDir, ephemeral: true, exitRelease: quietExit(), bindBeforeProcessStart: true,
+    // An owner record that cannot be parsed makes the release fail.
+    ownProcessStart: async () => { writeFileSync(path.join(stateDir, "owner.json"), "{not json"); throw new Error("the read failed") },
+  }), /the read failed/u)
 })
