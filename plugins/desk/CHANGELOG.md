@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.238 — 2026-10-08
+
+On Windows, a Desk server waiting for another server's runtime cache build no longer crashes when the lock folders are briefly unavailable. A waiter used to create and delete a reclaim folder on every poll to check whether the lock owner was dead, so with several servers starting together Windows could answer one of those `mkdir` calls with `EPERM: operation not permitted, mkdir '…publish-lock.reclaim-lock'` (it answers EPERM, EACCES or EBUSY, not "already exists", for a folder that is being deleted or that another process has open), and the waiter failed its whole start-up. A waiter now looks at the owner first and touches no reclaim folder while the owner is alive. If the owner is dead, those Windows answers mean "someone else has it": the waiter waits and tries again inside its existing 30 second limit. A reclaim folder older than that limit, left by a reclaimer that died, is removed so it cannot block recovery.
+
+Releasing the lock is now bounded and best-effort. If the lock folder still cannot be removed after ten short retries, the owner record is rewritten to name no process, so the next waiter reclaims it, and the build's own result is returned instead of an error. Other platforms keep the same lock rules, with the owner-first check, the stale reclaim cleanup and the best-effort release.
+
+A wait for the lock now always ends at its limit: before, a lock folder that could not be created for a lasting reason on Windows (a persistent EPERM or EACCES) was reclaimed and retried in a loop that never reached the limit.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.237 — 2026-10-08
 
 A capture record no longer reports a stuck quarantine as a measurement. When a coverage pass is recorded because the quarantine did not settle within the hour, each host most of whose sessions sit in quarantine keeps its counts locally, is flagged `held_in_quarantine`, and goes to the store as `{ "not_counted": true }` instead of a captured share ([`capture-sweep.js`](mcp/src/factory/capture-sweep.js), [`capture-publish.js`](mcp/src/factory/capture-publish.js)). The status and the doctor still show `quarantine_not_settling`, and the loop raises a new `facts_quarantine_not_settling` alarm ([`loop-health.js`](mcp/src/factory/loop-health.js)), so the store's status line still shows that something is wrong through `loop_alarms_open` and a `factory-alarm` issue can own it. A host that switches between a share and not counted, either way, is sent at the next flush instead of after 20 hours ([`capture-flush.js`](mcp/src/factory/capture-flush.js)). This happened on 2026-10-07, when a long-running session still on Desk 3.2.0-alpha.150 hooks, which predate the newer-format guard, quarantined 230 valid sessions and 14 valid label files as `invalid`.
