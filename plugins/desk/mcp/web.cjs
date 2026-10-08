@@ -227,7 +227,7 @@ function npm(tools, args, timeoutMs) {
     tools.children.push(child);
     timer = setTimeout(function () {
       err = "npm " + args[0] + " timed out after " + timeoutMs / 1000 + " seconds\n";
-      child.kill("SIGKILL");
+      stopTree(tools, child, "SIGKILL");
       finish(null);
     }, timeoutMs);
     child.stdout.on("data", function (chunk) {
@@ -246,15 +246,51 @@ function npm(tools, args, timeoutMs) {
   });
 }
 
-// End every npm run still going, with the processes it started: on POSIX the whole process group, elsewhere the npm process.
+// Windows' own taskkill, from SystemRoot (any letter case, then windir, then C:\Windows), never from PATH: an environment trimmed for npm may have no System32 on its PATH.
+function taskkillPath(env) {
+  function value(name) {
+    var key = Object.keys(env).filter(function (candidate) {
+      return candidate.toLowerCase() === name;
+    })[0];
+    return key === undefined ? undefined : env[key];
+  }
+  var root = [value("systemroot"), value("windir")].filter(function (candidate) {
+    return candidate !== undefined && path.win32.isAbsolute(candidate);
+  })[0];
+  return path.win32.join(root === undefined ? "C:\\Windows" : root, "System32", "taskkill.exe");
+}
+
+// End one npm run and everything it started. On POSIX npm leads its own process group, so the signal goes to the group; on Windows taskkill ends npm and its whole tree. When neither works, or npm has no pid, the npm process alone gets the signal.
+function stopTree(tools, child, signal) {
+  if (typeof child.pid !== "number") {
+    child.kill(signal);
+    return;
+  }
+  if (tools.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      child.kill(signal);
+    }
+    return;
+  }
+  try {
+    var killer = tools.spawn(taskkillPath(tools.env), ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    killer.on("error", function () {
+      child.kill(signal);
+    });
+    killer.on("exit", function (code) {
+      if (code !== 0) child.kill(signal);
+    });
+  } catch (error) {
+    child.kill(signal);
+  }
+}
+
+// End every npm run still going, with the processes it started.
 function stopInstalls(tools) {
   tools.children.forEach(function (child) {
-    try {
-      if (tools.platform === "win32") child.kill("SIGTERM");
-      else process.kill(-child.pid, "SIGTERM");
-    } catch (error) {
-      child.kill("SIGTERM");
-    }
+    stopTree(tools, child, "SIGTERM");
   });
 }
 
@@ -752,6 +788,8 @@ module.exports = {
   serveDegraded: serveDegraded,
   startRefresh: startRefresh,
   stopInstalls: stopInstalls,
+  stopTree: stopTree,
+  taskkillPath: taskkillPath,
   stateDir: stateDir,
   takeLock: takeLock,
   withNodeFirst: withNodeFirst

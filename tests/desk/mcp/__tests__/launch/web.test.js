@@ -537,6 +537,52 @@ test("a registry that hangs is cut off at the first-install time limit", posixOn
   assert.match(errors.join(""), /\(npm install timed out after 1 seconds\)/u)
 })
 
+test("an npm call that times out is ended with everything it started", posixOnly, async (t) => {
+  const grandchildFile = path.join(await mkTempRoot("desk-web-timeoutgrand-"), "pid")
+  const m = await machine("desk-web-timeout-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile }, firstInstallMs: 300 })
+  const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+  let helper = null
+  t.after(() => { if (helper !== null && alive(helper)) process.kill(helper, "SIGKILL") })
+  const { errors } = await launchDegraded(m.options)
+  assert.match(errors.join(""), /timed out/u)
+  helper = Number(readFileSync(grandchildFile, "utf8"))
+  await until(() => !alive(helper), "the helper npm started to end")
+})
+
+test("a POSIX tree stop falls back to the npm process when its process group is gone", posixOnly, () => {
+  const killed = []
+  browser.stopTree({ platform: "linux", children: [] }, { pid: 2147483646, kill: (signal) => killed.push(signal) }, "SIGKILL")
+  assert.deepEqual(killed, ["SIGKILL"])
+})
+
+test("a Windows tree stop runs taskkill from SystemRoot and falls back to the npm process when taskkill cannot end it", () => {
+  assert.equal(browser.taskkillPath({ SystemRoot: "D:\\Win" }), "D:\\Win\\System32\\taskkill.exe")
+  assert.equal(browser.taskkillPath({ SYSTEMROOT: "relative", windir: "E:\\W" }), "E:\\W\\System32\\taskkill.exe")
+  assert.equal(browser.taskkillPath({ PATH: "x" }), "C:\\Windows\\System32\\taskkill.exe")
+  const run = (spawnKiller) => {
+    const calls = []
+    const killed = []
+    const child = { pid: 42, kill: (signal) => killed.push(signal) }
+    browser.stopTree({ platform: "win32", env: { SystemRoot: "D:\\Win" }, spawn: (...argv) => { calls.push(argv); return spawnKiller() } }, child, "SIGKILL")
+    return { calls, killed }
+  }
+  const ended = run(() => { const killer = new EventEmitter(); setImmediate(() => killer.emit("exit", 0)); return killer })
+  assert.deepEqual(ended.calls, [["D:\\Win\\System32\\taskkill.exe", ["/PID", "42", "/T", "/F"], { stdio: "ignore", windowsHide: true }]])
+  const failed = new EventEmitter()
+  const failedRun = run(() => failed)
+  failed.emit("exit", 128)
+  assert.deepEqual(failedRun.killed, ["SIGKILL"])
+  const missing = new EventEmitter()
+  const missingRun = run(() => missing)
+  missing.emit("error", new Error("spawn ENOENT"))
+  assert.deepEqual(missingRun.killed, ["SIGKILL"])
+  assert.deepEqual(run(() => { throw new Error("spawn EMFILE") }).killed, ["SIGKILL"])
+  const done = new EventEmitter()
+  const doneRun = run(() => done)
+  done.emit("exit", 0)
+  assert.deepEqual(doneRun.killed, [])
+})
+
 test("npm that cannot be spawned, or fails to start, is reported like any other install failure", posixOnly, async () => {
   const m = await machine("desk-web-npmspawn-", { npmSpawn: () => { throw new Error("spawn EMFILE") } })
   const { errors } = await launchDegraded(m.options)
