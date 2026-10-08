@@ -302,3 +302,19 @@ test("Copilot CLI: a wait carries end_turn, or interrupted after the operator's 
     { kind: "human_wait", agent: 0, start: cts(34), end: cts(40), stop: { end: "end_turn", asks: true, pending_agents: null } },
   ])
 })
+
+test("Copilot CLI: an abort the root worked past is not why it stopped", async () => {
+  const ev = copilotEvents()
+  const facts = await deriveCopilot([
+    ev("session.start", 0, { sessionId: COPILOT_SESSION, copilotVersion: "1.0.88", context: { cwd: "/tmp/w" } }),
+    ev("user.message", 1, { content: PROMPT }),
+    ev("assistant.turn_start", 2, { turnId: "1", interactionId: "i-1" }),
+    ev("abort", 3, { reason: "user_initiated" }),
+    ev("assistant.turn_end", 4, { turnId: "1" }),
+    ev("assistant.turn_start", 5, { turnId: "2", interactionId: "i-1" }),
+    ev("assistant.message", 6, { messageId: "m-2", content: DONE_REPLY }),
+    ev("assistant.turn_end", 7, { turnId: "2" }),
+    ev("user.message", 10, { content: PROMPT }),
+  ])
+  assert.deepEqual(facts.intervals.filter((interval) => interval.kind === "human_wait").map((wait) => wait.stop), [{ end: "end_turn", asks: false, pending_agents: null }])
+})
