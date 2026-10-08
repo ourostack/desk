@@ -79,6 +79,12 @@ export const ENUMS = Object.freeze({
   // The size class of a character count (`sizeClass` in `derive-common.js`), and how a human turn relates to the agent's last stop.
   sizeClass: Object.freeze(["none", "xs", "s", "m", "l", "xl"]),
   turnBasis: Object.freeze(["first", "after_stop", "mid_turn"]),
+  // How the agent's turn ended before a human wait (`intervals[kind=human_wait].stop.end`): the root reply's stop reason, an API error or limit, the operator's interrupt, an open question or plan tool, or `not_recorded` when the host's log does not say.
+  stopEnd: Object.freeze([
+    "end_turn", "max_tokens", "rate_limit", "api_error", "refusal", "interrupted", "ask_question", "ask_plan", "not_recorded",
+  ]),
+  // The source of a published job's finish day (`jobs[].finished_on`, `desk.factory.published/4`): the session's own last transition into the terminal status, or the card's `updated` time, which is an upper bound.
+  finishedBasis: Object.freeze(["transition", "card_updated"]),
 })
 
 export const LOCAL_SCHEMA = "desk.factory.local/2"
@@ -306,7 +312,9 @@ function mapOfField(allowedKeys, valueField) {
 
 /**
  * Validate `value` as an object shaped by `specOrFn` (a field-spec object, or
- * a function of `value` returning one). Checks the key set exactly once
+ * a function of `value` and the caller's `ctx` returning one). A function
+ * spec always receives `ctx` as its second argument, so a spec function with
+ * another optional second parameter must be wrapped. Checks the key set exactly once
  * against `Object.keys(spec)`, then runs each present field's own check —
  * the single source of truth I2 (real declarative spec walker) asks for.
  * Returns a map of field name -> that field's check result, or `undefined`
@@ -317,7 +325,7 @@ export function validateObject(value, path, specOrFn, errors, ctx) {
     addError(errors, "type", path)
     return undefined
   }
-  const spec = typeof specOrFn === "function" ? specOrFn(value) : specOrFn
+  const spec = typeof specOrFn === "function" ? specOrFn(value, ctx) : specOrFn
   checkKnownKeys(value, path, Object.keys(spec), errors)
   const results = {}
   for (const [key, field] of Object.entries(spec)) {
@@ -392,12 +400,29 @@ export const PR_SPEC = {
 // cross-field check (`checkAgentReferences`).
 // `at_ms` (when the creating tool result came, in milliseconds from session
 // start) is optional too: files written before PRs were timed stay valid.
+// So is `created`, whether this session's own call created the PR rather than
+// only mentioning it; the published form requires it from `/4` on.
 export function prFields(value) {
   return {
     ...PR_SPEC,
     ...(Object.hasOwn(value, "agent") ? { agent: rangeIntField(0, 9999) } : {}),
     ...(Object.hasOwn(value, "at_ms") ? { at_ms: nonNegIntField() } : {}),
+    ...(Object.hasOwn(value, "created") ? { created: booleanField() } : {}),
   }
+}
+
+// `true`, `false` or `null` (not known).
+const nullableBooleanField = () => leaf((value, path, errors) => (value === null ? true : booleanField().check(value, path, errors)))
+
+// `intervals[kind=human_wait].stop`: the mechanical facts of how the agent's
+// turn ended before the wait. `asks` is whether the final reply ended in a
+// question mark and `pending_agents` whether the agent's own background
+// agents were still running; each is `null` when the host does not say. No
+// text and no tool name. Shared by the local and published forms.
+export const STOP_SPEC = {
+  end: enumField(ENUMS.stopEnd),
+  asks: nullableBooleanField(),
+  pending_agents: nullableBooleanField(),
 }
 
 // `jobs[].agents`: the workers whose work belongs to the job. A non-empty,
@@ -551,7 +576,8 @@ const UNRESOLVED_SPEC = {
 
 const REFS_SPEC = {
   prs: arrayField(objectField(prFields), LIMITS.prs),
-  commits: arrayField(objectField(commitFields), LIMITS.commits),
+  // Wrapped: a function spec also receives the walker's context, which `commitFields` would read as its `base`.
+  commits: arrayField(objectField((value) => commitFields(value)), LIMITS.commits),
   unresolved: objectField(UNRESOLVED_SPEC),
 }
 
@@ -712,6 +738,8 @@ function intervalFields(value) {
     fields.tool = enumField(ENUMS.toolKind)
     fields.outcome = enumField(ENUMS.outcome)
   }
+  // `stop` exists only on a human wait, and is optional here so local files written before it stay valid.
+  if (value.kind === "human_wait" && Object.hasOwn(value, "stop")) fields.stop = objectField(STOP_SPEC)
   return fields
 }
 
@@ -792,7 +820,8 @@ export const __SPECS__ = Object.freeze({
   tokens: TOKENS_SPEC,
   plugin: localPluginFields({ source: null }),
   agent: AGENT_SPEC,
-  pr: prFields({ agent: 0, at_ms: 0 }),
+  pr: prFields({ agent: 0, at_ms: 0, created: true }),
+  stop: STOP_SPEC,
   segment: segmentFields({ shared: true }),
   commit: commitFields({ at_ms: 0 }),
   refs: REFS_SPEC,
@@ -808,6 +837,7 @@ export const __SPECS__ = Object.freeze({
   counts: COUNTS_SPEC,
   intervalTool: intervalFields({ kind: "tool" }),
   intervalOther: intervalFields({ kind: "turn" }),
+  intervalWait: intervalFields({ kind: "human_wait", stop: null }),
 })
 
 /**

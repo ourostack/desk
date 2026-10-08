@@ -22,6 +22,7 @@ import {
   LIMITS,
   LOCAL_SCHEMA,
   LOCAL_SCHEMAS,
+  validateObject,
   __SPECS__,
 } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { CATCH_POINTS, OUTCOME_STATES, REFUSAL_REASONS, RETURN_REASONS } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
@@ -783,6 +784,8 @@ test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself
     ],
     sizeClass: ["none", "xs", "s", "m", "l", "xl"],
     turnBasis: ["first", "after_stop", "mid_turn"],
+    stopEnd: ["end_turn", "max_tokens", "rate_limit", "api_error", "refusal", "interrupted", "ask_question", "ask_plan", "not_recorded"],
+    finishedBasis: ["transition", "card_updated"],
   }
   assert.deepEqual(Object.keys(ENUMS).sort(), Object.keys(table).sort())
   for (const [name, expected] of Object.entries(table)) {
@@ -1077,4 +1080,57 @@ test("turns must be in time order; equal times are allowed", () => {
   const result = validateLocalFacts({ ...base, human_turns: [later, TURN] })
   assertSingle(result, "order", "human_turns.1.at")
   assertNoLeak(result)
+})
+
+// --- facts /4 inputs: a PR's `created` flag and a human wait's stop facts (both optional locally) ---
+
+test("ENUMS.stopEnd lists how a turn can end before a human wait", () => {
+  assert.deepEqual(ENUMS.stopEnd, ["end_turn", "max_tokens", "rate_limit", "api_error", "refusal", "interrupted", "ask_question", "ask_plan", "not_recorded"])
+  assert.ok(Object.isFrozen(ENUMS.stopEnd))
+})
+
+test("a local PR may say whether the session created it, as a boolean", () => {
+  for (const created of [true, false]) {
+    assert.deepEqual(validateLocalFacts(setPath(golden(), ["refs", "prs", 0, "created"], created)), { ok: true, errors: [] })
+  }
+  const result = validateLocalFacts(setPath(golden(), ["refs", "prs", 0, "created"], SENTINEL))
+  assertSingle(result, "type", "refs.prs.0.created")
+  assert.equal(JSON.stringify(result.errors).includes(SENTINEL), false)
+})
+
+test("a local human_wait may carry stop facts; any other interval kind may not", () => {
+  const waitIndex = GOLDEN.intervals.findIndex((item) => item.kind === "human_wait")
+  assert.ok(waitIndex >= 0)
+  assert.deepEqual(validateLocalFacts(setPath(golden(), ["intervals", waitIndex, "stop"], { end: "rate_limit", asks: null, pending_agents: true })), { ok: true, errors: [] })
+  // Older local files have none.
+  assert.deepEqual(validateLocalFacts(golden()), { ok: true, errors: [] })
+  const turn = GOLDEN.intervals.findIndex((item) => item.kind === "turn")
+  assertSingle(validateLocalFacts(setPath(golden(), ["intervals", turn, "stop"], { end: "end_turn", asks: false, pending_agents: false })), "unknown_key", `intervals.${turn}`)
+  let result = validateLocalFacts(setPath(golden(), ["intervals", waitIndex, "stop"], { end: SENTINEL, asks: false, pending_agents: false }))
+  assertSingle(result, "enum", `intervals.${waitIndex}.stop.end`)
+  assert.equal(JSON.stringify(result.errors).includes(SENTINEL), false)
+  result = validateLocalFacts(setPath(golden(), ["intervals", waitIndex, "stop"], { end: "end_turn", asks: false, pending_agents: false, [SENTINEL]: SENTINEL }))
+  assertSingle(result, "unknown_key", `intervals.${waitIndex}.stop`)
+  assert.equal(JSON.stringify(result.errors).includes(SENTINEL), false)
+  assertSingle(validateLocalFacts(setPath(golden(), ["intervals", waitIndex, "stop"], { end: "end_turn", asks: "yes", pending_agents: false })), "type", `intervals.${waitIndex}.stop.asks`)
+})
+
+test("the local stop spec is in the structural spec list", () => {
+  assert.deepEqual(Object.keys(__SPECS__.stop), ["end", "asks", "pending_agents"])
+  assert.ok(Object.hasOwn(__SPECS__.pr, "created"))
+  assert.ok(Object.hasOwn(__SPECS__.intervalWait, "stop"))
+})
+
+test("a function spec gets the walker's context as its second argument, and no local spec misreads it", () => {
+  const seen = []
+  const errors = []
+  validateObject({ a: 1 }, "", (value, ctx) => {
+    seen.push(ctx)
+    return { a: __SPECS__.counts.tool_retries }
+  }, errors, { v4: true })
+  assert.deepEqual(seen, [{ v4: true }])
+  assert.deepEqual(errors, [])
+  // Local refs, commits included, validate the same with any context.
+  validateObject(golden().refs, "refs", __SPECS__.refs, errors, { v4: true, prs: null })
+  assert.deepEqual(errors, [])
 })

@@ -1,9 +1,10 @@
-// Published facts (`desk.factory.published/3`; `/1` and `/2` files are still read): the public gate.
+// Published facts (`desk.factory.published/4`; `/1`, `/2` and `/3` files are still read): the public gate.
 //
 // A published facts file is the only thing that ever leaves this machine for
 // a factory store, and the stores are public. It says how the work went and
-// nothing about who did it or when: durations and offsets only, never a
-// date, a time of day or an epoch value, and never a contributor, operator,
+// nothing about who did it: durations and offsets, and one date only, each
+// job's UTC finish day (`jobs[].finished_on`, from `/4`); never another date,
+// a time of day or an epoch value, and never a contributor, operator,
 // machine, host name, desk path, account or branch. Only references to
 // public repositories appear; the rest are counted in `refs.private`. A
 // plugin is named only when it was installed from a public repository or the
@@ -59,6 +60,23 @@
 //     `LIMITS.outcomes`). `/1` and `/2` files without them stay valid, so
 //     records already in a store keep passing. A job carries `segments` only when its
 //     `agents` lists worker 0, else `inconsistent`.
+//   - Four keys are `/4` only, and each is required in a `/4` file and
+//     `inconsistent` in an older one: a job's `finished_on` and
+//     `finished_basis`, a PR's `created` and a human wait's `stop`.
+//   - `jobs[].finished_on` is the one key exempt from the `date` refusal. It
+//     is exactly `YYYY-MM-DD`, a real calendar day (else `pattern`) no earlier
+//     than `FINISHED_ON_MIN` (else `range`), or `null`. `finished_basis` is
+//     `transition`, `card_updated` or `null`, and is `null` exactly when
+//     `finished_on` is (else `inconsistent`). A day sits only on a job whose
+//     card was observed `done` or `cancelled` (else `inconsistent` at
+//     `finished_on`), and its basis names a source the file itself carries:
+//     a timed transition into that status, or a timed observation (else
+//     `inconsistent` at `finished_basis`). A `{job_offsets, desk_public}`
+//     file carries no finish day, and no PR in it says `created: true`. The store's intake also refuses a day
+//     after the day it runs (`pipeline/validate-pr.js`, `future`).
+//   - `intervals[].stop` exists only on a `human_wait` interval (elsewhere it
+//     is an `unknown_key`) and holds `end` (`ENUMS.stopEnd`), and `asks` and
+//     `pending_agents` as `true`, `false` or `null`: no text, no tool name.
 //   - `jobs[].session_offset_ms` and every `offset_ms` are safe integers
 //     (signed: a session may begin before its task card exists) or `null`,
 //     and at most `PUBLISHED_LIMITS.maxOffsetMs` (ten years) either way. The
@@ -89,6 +107,7 @@ import {
   addError,
   arrayField,
   booleanField,
+  STOP_SPEC,
   checkAgentReferences,
   checkBasis,
   checkSegmentAgents,
@@ -110,13 +129,19 @@ import {
 } from "./schema.js"
 import { isCredentialLike } from "./credential.js"
 
-export const PUBLISHED_SCHEMA = "desk.factory.published/3"
+export const PUBLISHED_SCHEMA = "desk.factory.published/4"
 
-/** Every published schema value a reader accepts: the legacy `/1` and `/2`, and the current one. */
-export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA])
+/** The schema the transform writes for a session with `/3`-only content until it fills the `/4` keys. */
+export const PUBLISHED_SCHEMA_V3 = "desk.factory.published/3"
+
+/** Every published schema value a reader accepts: the legacy `/1`, `/2` and `/3`, and the current one. */
+export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA_V3, PUBLISHED_SCHEMA])
 
 /** The schema a file with no `/3`-only content is still published as, so an unchanged session keeps its bytes. */
 export const PUBLISHED_SCHEMA_V2 = PUBLISHED_SCHEMAS[1]
+
+/** The earliest finish day a published job may carry. */
+const FINISHED_ON_MIN = "2025-01-01"
 
 /** An ISO calendar date anywhere in a string. */
 export const DATE_SHAPE = /\d{4}-\d{2}-\d{2}/u
@@ -131,7 +156,40 @@ export const PUBLISHED_LIMITS = Object.freeze({
   maxOffsetMs: 3650 * 24 * 60 * 60 * 1000,
 })
 
-const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[123]$/u
+const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/[1234]$/u
+
+// The `/4` keys a level adds: every one in a `/4` file (`ctx.v4`), else only those the value carries, so an older file that carries one is named `inconsistent` rather than `unknown_key`.
+const v4Keys = (value, ctx, fields) => Object.fromEntries(Object.entries(fields).filter(([key]) => ctx?.v4 === true || Object.hasOwn(value, key)))
+
+const FINISHED_ON = /^(\d{4})-(\d{2})-(\d{2})$/u
+
+// Whether `text` is exactly `YYYY-MM-DD` and names a real day of the proleptic Gregorian calendar.
+function isCalendarDay(text) {
+  const match = FINISHED_ON.exec(text)
+  if (match === null) return false
+  const [year, month, day] = match.slice(1).map(Number)
+  const date = new Date(0)
+  date.setUTCFullYear(year, month - 1, day)
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+// `jobs[].finished_on`: a UTC calendar day or `null`. Not a `publicPatternField`: this is the one key whose value is a date.
+const finishedOnField = () => leaf((value, path, errors) => {
+  if (value === null) return true
+  if (typeof value !== "string") {
+    addError(errors, "type", path)
+    return false
+  }
+  if (!isCalendarDay(value)) {
+    addError(errors, "pattern", path)
+    return false
+  }
+  if (value < FINISHED_ON_MIN) {
+    addError(errors, "range", path)
+    return false
+  }
+  return true
+})
 
 const DATE_PARTS = /(\d{4})-(\d{2})-(\d{2})/u
 const TIME_PARTS = /(\d{2}):(\d{2})/u
@@ -242,9 +300,9 @@ const PR = {
   repo: publicTokenField(PATTERNS.prRepo),
 }
 
-// The optional worker attribution, as in the local form.
-function prFieldsPublished(value) {
-  return { ...prFields(value), ...PR }
+// The optional worker attribution and time, as in the local form, and from `/4` whether the session created the PR.
+function prFieldsPublished(value, ctx) {
+  return { ...prFields(value), ...PR, ...v4Keys(value, ctx, { created: booleanField() }) }
 }
 
 // Unlike the local form, a published commit always names its repository.
@@ -285,6 +343,14 @@ const JOB = {
   observed: nullableObjectField(OBSERVED),
 }
 
+// From `/4`: the UTC day the task finished and its source.
+const FINISH = {
+  finished_on: finishedOnField(),
+  finished_basis: nullableEnumField(ENUMS.finishedBasis),
+}
+
+const publishedJobFields = (value, ctx) => jobFields(value, { ...JOB, ...v4Keys(value, ctx, FINISH) })
+
 const UNAVAILABLE = {
   field: enumField(ENUMS.publishedUnavailableField),
   reason: enumField(ENUMS.unavailableReason),
@@ -300,9 +366,9 @@ const SESSION = {
   end_reason: nullableEnumField(ENUMS.endReason),
 }
 
-// As in the local schema, `tool`/`outcome` exist only on tool intervals, so
-// their presence elsewhere is an `unknown_key`.
-function intervalFields(value) {
+// As in the local schema, `tool`/`outcome` exist only on tool intervals and
+// `stop` only on human waits, so their presence elsewhere is an `unknown_key`.
+function intervalFields(value, ctx) {
   const fields = {
     kind: enumField(ENUMS.intervalKind),
     agent: rangeIntField(0, 9999),
@@ -313,6 +379,7 @@ function intervalFields(value) {
     fields.tool = enumField(ENUMS.toolKind)
     fields.outcome = enumField(ENUMS.outcome)
   }
+  if (value.kind === "human_wait") Object.assign(fields, v4Keys(value, ctx, { stop: objectField(STOP_SPEC) }))
   return fields
 }
 
@@ -329,7 +396,7 @@ const TOP = {
   intervals: arrayField(objectField(intervalFields, intervalOrderCheck), LIMITS.intervals),
   counts: objectField(COUNTS_SPEC),
   refs: objectField(REFS),
-  jobs: arrayField(objectField((value) => jobFields(value, JOB)), LIMITS.jobs),
+  jobs: arrayField(objectField(publishedJobFields), LIMITS.jobs),
   unavailable: arrayField(objectField(UNAVAILABLE), LIMITS.unavailable),
 }
 
@@ -414,6 +481,10 @@ export const __PUBLISHED_SPECS__ = Object.freeze({
   unavailable: UNAVAILABLE,
   intervalTool: intervalFields({ kind: "tool" }),
   intervalOther: intervalFields({ kind: "turn" }),
+  intervalWaitV4: intervalFields({ kind: "human_wait" }, { v4: true }),
+  jobV4: publishedJobFields({}, { v4: true }),
+  prV4: prFieldsPublished({}, { v4: true }),
+  stop: STOP_SPEC,
   outcome: OUTCOME,
   wait: WAIT,
   return: RETURN_SPEC,
@@ -427,7 +498,8 @@ export const __PUBLISHED_SPECS__ = Object.freeze({
  */
 export function validatePublished(value) {
   const errors = []
-  const results = validateObject(value, "", topFields, errors)
+  const v4 = isPlainObject(value) && value.schema === PUBLISHED_SCHEMA
+  const results = validateObject(value, "", topFields, errors, { v4 })
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
   checkSegmentAgents(value, results, errors)
@@ -467,13 +539,16 @@ export function validatePublished(value) {
         || Object.hasOwn(job, "segments")
         || (Array.isArray(job.transitions) && job.transitions.length > 0)
         || (isPlainObject(job.observed) && job.observed.offset_ms !== null)
+        || (Object.hasOwn(job, "finished_on") && job.finished_on !== null)
+        || (Object.hasOwn(job, "finished_basis") && job.finished_basis !== null)
       if (timed) addError(errors, "inconsistent", `jobs.${index}`)
     })
   }
-  // Nor a PR or commit time, which with a public PR's creation time or a public commit's date would date the session.
+  // Nor a PR or commit time, which with a public PR's creation time or a public commit's date would date the session. Nor a PR the session says it created: GitHub's public creation time of that PR is an instant inside the session, so a public desk publishes every PR as `created: false`.
   if (deskPublic && refs?.prs) {
     value.refs.prs.forEach((pr, index) => {
       if (isPlainObject(pr) && Object.hasOwn(pr, "at_ms")) addError(errors, "inconsistent", `refs.prs.${index}`)
+      else if (isPlainObject(pr) && pr.created === true && refs.prs[index].created === true) addError(errors, "inconsistent", `refs.prs.${index}.created`)
     })
   }
   if (deskPublic && refs?.commits) {
@@ -481,8 +556,8 @@ export function validatePublished(value) {
       if (isPlainObject(commit) && Object.hasOwn(commit, "at_ms")) addError(errors, "inconsistent", `refs.commits.${index}`)
     })
   }
-  // A commit time and the outcomes flag are `/3` only.
-  if (results.schema === true && value.schema !== PUBLISHED_SCHEMA) {
+  // A commit time and the outcomes flag are `/3` and later only.
+  if (results.schema === true && value.schema !== PUBLISHED_SCHEMA && value.schema !== PUBLISHED_SCHEMA_V3) {
     if (refs?.commits) {
       value.refs.commits.forEach((commit, index) => {
         if (isPlainObject(commit) && Object.hasOwn(commit, "at_ms")) addError(errors, "inconsistent", `refs.commits.${index}.at_ms`)
@@ -494,6 +569,9 @@ export function validatePublished(value) {
       })
     }
   }
+
+  if (results.schema === true && !v4) checkNoV4Keys(value, results, errors)
+  if (v4) checkFinishDays(value, results, errors)
 
   // No interval, job segment, PR time or commit time may run past the session's end.
   // Checked only when the duration itself is sound, so one bad duration is
@@ -525,6 +603,46 @@ export function validatePublished(value) {
   }
 
   return { ok: errors.length === 0, errors }
+}
+
+// Whether a field's own check passed: `true`, or a nested object whose every field passed.
+const sound = (result) => result === true || (isPlainObject(result) && Object.values(result).every((entry) => entry === true))
+
+// A `/4` key in an older file is `inconsistent`, named once: only when its own check passed.
+function checkNoV4Keys(value, results, errors) {
+  results.jobs?.forEach((jobResult, index) => {
+    for (const key of Object.keys(FINISH)) if (sound(jobResult?.[key])) addError(errors, "inconsistent", `jobs.${index}.${key}`)
+  })
+  results.refs?.prs?.forEach((prResult, index) => {
+    if (sound(prResult?.created)) addError(errors, "inconsistent", `refs.prs.${index}.created`)
+  })
+  results.intervals?.forEach((intervalResult, index) => {
+    if (sound(intervalResult?.stop)) addError(errors, "inconsistent", `intervals.${index}.stop`)
+  })
+}
+
+const TERMINAL = new Set(["done", "cancelled"])
+
+// A finish day and its basis agree with each other and with the job's own status and timing. Checked only on jobs whose two keys passed their own checks.
+function checkFinishDays(value, results, errors) {
+  results.jobs?.forEach((jobResult, index) => {
+    if (jobResult?.finished_on !== true || jobResult.finished_basis !== true) return
+    const job = value.jobs[index]
+    if ((job.finished_on === null) !== (job.finished_basis === null)) {
+      addError(errors, "inconsistent", `jobs.${index}.finished_basis`)
+      return
+    }
+    if (job.finished_on === null) return
+    if (!isPlainObject(job.observed) || !TERMINAL.has(job.observed.status)) {
+      addError(errors, "inconsistent", `jobs.${index}.finished_on`)
+      return
+    }
+    const timed = (offset) => Number.isSafeInteger(offset)
+    const source = job.finished_basis === "transition"
+      ? Array.isArray(job.transitions) && job.transitions.some((transition) => isPlainObject(transition) && transition.to === job.observed.status && timed(transition.offset_ms))
+      : timed(job.observed.offset_ms)
+    if (!source) addError(errors, "inconsistent", `jobs.${index}.finished_basis`)
+  })
 }
 
 /** `validatePublishedBytes(buffer) -> { ok, errors }`: the size cap, the canonical-bytes rule, then `validatePublished`. */

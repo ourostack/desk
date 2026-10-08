@@ -6,7 +6,9 @@
 // one valid local facts file (`desk.factory.local/2`, `schema.js`) into
 // published facts (`desk.factory.published/3`, `published-schema.js`, or
 // `/2` when the file carries nothing only `/3` allows: a commit's `at_ms` or
-// the `outcomes` flag, so an unchanged session keeps its bytes). The
+// the `outcomes` flag, so an unchanged session keeps its bytes). The gate
+// also accepts `/4`, whose keys (finish days, PR `created`, stop facts) this
+// transform does not write yet. The
 // stores are public, so the published form carries no who and no when, just
 // how:
 //
@@ -133,7 +135,7 @@ import { PRIVATE_VISIBILITIES, deskTimingKept } from "./desk-visibility.js"
 import { waitClass } from "./outcome.js"
 import { intervalInSession } from "./pipeline/timeline.js"
 import { validateLocalFacts } from "./schema.js"
-import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, PUBLISHED_SCHEMA_V2, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
+import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA_V2, PUBLISHED_SCHEMA_V3, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
 /** Why `toPublished` returned no file. */
 export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_not_v4"])
@@ -483,7 +485,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
   const models = publishModels(local.models, flag)
   const unavailable = [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)), ...own]
   const published = {
-    schema: needsV3(refs.commits, unavailable) ? PUBLISHED_SCHEMA : PUBLISHED_SCHEMA_V2,
+    schema: needsV3(refs.commits, unavailable) ? PUBLISHED_SCHEMA_V3 : PUBLISHED_SCHEMA_V2,
     session: publishSession(local.session, durationMs, sessionId),
     plugins: plugins.plugins,
     models,
