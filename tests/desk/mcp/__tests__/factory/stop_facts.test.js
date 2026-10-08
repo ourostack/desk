@@ -338,3 +338,104 @@ test("Claude Code: an ask call on a sidechain line of the root transcript is a s
   ])
   assert.deepEqual(waits(facts), [])
 })
+
+test("Copilot CLI: a turn that ends on an error the root did not recover from is rate_limit for a 429 or a quota or rate-limit error, else api_error", async () => {
+  const ev = copilotEvents()
+  const turn = (start, id) => [ev("assistant.turn_start", start, { turnId: id, interactionId: `i-${id}` }), ev("assistant.message", start + 1, { messageId: `m-${id}`, content: DONE_REPLY })]
+  const facts = await deriveCopilot([
+    ev("session.start", 0, { sessionId: COPILOT_SESSION, copilotVersion: "1.0.88", context: { cwd: "/tmp/w" } }),
+    ev("user.message", 1, { content: PROMPT }),
+    ...turn(2, "1"),
+    ev("session.error", 4, { errorType: "rate_limit", statusCode: 429, message: QUESTION }),
+    ev("assistant.turn_end", 5, { turnId: "1" }),
+    ev("user.message", 10, { content: PROMPT }),
+    ...turn(11, "2"),
+    ev("session.error", 13, { errorType: "quota", statusCode: 402, message: QUESTION }),
+    ev("assistant.turn_end", 14, { turnId: "2" }),
+    ev("user.message", 20, { content: PROMPT }),
+    ...turn(21, "3"),
+    ev("model.call_failure", 23, { statusCode: 500 }),
+    ev("assistant.turn_end", 24, { turnId: "3" }),
+    ev("user.message", 30, { content: PROMPT }),
+    // Recovered: a retry and a later reply mean the error did not end the turn.
+    ...turn(31, "4"),
+    ev("session.error", 33, { errorType: "query", statusCode: 400, message: QUESTION }),
+    ev("assistant.turn_retry", 34, {}),
+    ev("assistant.message", 35, { messageId: "m-4b", content: DONE_REPLY }),
+    ev("assistant.turn_end", 36, { turnId: "4" }),
+    ev("user.message", 40, { content: PROMPT }),
+    // A subagent's error is not the root's stop, and the operator's abort outranks an error.
+    ...turn(41, "5"),
+    ev("session.error", 43, { errorType: "quota", statusCode: 402, message: QUESTION }, { agentId: "sub-1" }),
+    ev("assistant.turn_end", 44, { turnId: "5" }),
+    ev("user.message", 50, { content: PROMPT }),
+    ...turn(51, "6"),
+    ev("session.error", 53, { errorType: "query", statusCode: 400, message: QUESTION }),
+    ev("abort", 54, { reason: "user_abort" }),
+    ev("assistant.turn_end", 55, { turnId: "6" }),
+    ev("user.message", 60, { content: PROMPT }),
+    // An error before the turn that followed it started is not that turn's end, even when that turn wrote no reply.
+    ev("session.error", 61, { errorType: "query", message: QUESTION }),
+    ev("assistant.turn_start", 62, { turnId: "7", interactionId: "i-7" }),
+    ev("assistant.turn_end", 64, { turnId: "7" }),
+    ev("user.message", 70, { content: PROMPT }),
+  ])
+  assert.deepEqual(facts.intervals.filter((interval) => interval.kind === "human_wait").map((wait) => wait.stop.end), ["rate_limit", "rate_limit", "api_error", "end_turn", "end_turn", "interrupted", "end_turn"])
+})
+
+test("Copilot CLI: a successful gh pr create marks the PR it printed created, timed at its result; a failed one, or another command's URL, does not", async () => {
+  const ev = copilotEvents()
+  const shell = (second, id, command, exitCode, content, extra = {}) => [
+    ev("tool.execution_start", second, { toolCallId: id, toolName: "bash", arguments: { command }, ...extra }),
+    ev("tool.execution_complete", second + 2, { toolCallId: id, success: true, shellExecution: { exitCode }, result: { content }, ...extra }),
+  ]
+  const facts = await deriveCopilot([
+    ev("session.start", 0, { sessionId: COPILOT_SESSION, copilotVersion: "1.0.88", context: { cwd: "/tmp/w" } }),
+    ev("user.message", 1, { content: PROMPT }),
+    ev("assistant.turn_start", 2, { turnId: "1", interactionId: "i-1" }),
+    ...shell(3, "c1", `gh pr create --title "${PLAN}" --body "${DONE_REPLY}"`, 0, `${DONE_REPLY}\nhttps://github.com/ourostack/desk/pull/301\n`),
+    // A failed create can still print an existing PR's URL.
+    ...shell(6, "c2", "gh pr create --fill", 1, "a pull request already exists: https://github.com/ourostack/desk/pull/290"),
+    ...shell(9, "c3", "gh pr view 288 --web", 0, "https://github.com/ourostack/desk/pull/288"),
+    ev("subagent.started", 12, { toolCallId: "t1", model: "claude-opus-5-5", agentName: "general-purpose" }),
+    ...shell(13, "c4", "cd /tmp/w && gh pr create --fill", 0, "https://github.com/ourostack/factory/pull/77", { parentToolCallId: "t1" }),
+    ev("subagent.completed", 16, { toolCallId: "t1" }),
+    ev("assistant.turn_end", 17, { turnId: "1" }),
+    ev("user.message", 20, { content: PROMPT }),
+  ])
+  assert.deepEqual(facts.refs.prs, [
+    { repo: "ourostack/desk", number: 301, agent: 0, at_ms: 5000, created: true },
+    { repo: "ourostack/factory", number: 77, agent: 1, at_ms: 15000, created: true },
+  ])
+})
+
+test("Copilot CLI: a create call that did not succeed, printed no usable PR URL or was not a shell call marks nothing created", async () => {
+  const ev = copilotEvents()
+  let n = 0
+  const call = (complete, toolName = "bash", command = "gh pr create --fill") => {
+    n += 1
+    return [
+      ev("tool.execution_start", 3 + n, { toolCallId: `c${n}`, toolName, arguments: { command } }),
+      ev("tool.execution_complete", 3 + n, { toolCallId: `c${n}`, ...complete }),
+    ]
+  }
+  const ok = { success: true, shellExecution: { exitCode: 0 } }
+  const facts = await deriveCopilot([
+    ev("session.start", 0, { sessionId: COPILOT_SESSION, copilotVersion: "1.0.88", context: { cwd: "/tmp/w" } }),
+    ev("user.message", 1, { content: PROMPT }),
+    ev("assistant.turn_start", 2, { turnId: "1", interactionId: "i-1" }),
+    ...call({ success: false, shellExecution: { exitCode: 0 }, result: { content: "https://github.com/ourostack/desk/pull/1" } }),
+    ...call({ success: true, result: { content: "https://github.com/ourostack/desk/pull/2" } }),
+    ...call(ok),
+    ...call({ ...ok, result: { content: ["https://github.com/ourostack/desk/pull/3"] } }),
+    ...call({ ...ok, result: { content: DONE_REPLY } }),
+    ...call({ ...ok, result: { content: `https://github.com/${"o".repeat(40)}/desk/pull/4` } }),
+    ...call({ ...ok, result: { content: "https://github.com/ourostack/desk/pull/0" } }),
+    ...call({ ...ok, result: { content: "https://github.com/ourostack/desk/pull/99999999999999999999" } }),
+    ...call({ ...ok, result: { content: "https://github.com/ourostack/desk/pull/5" } }, "view", "gh pr create --fill"),
+    ...call({ ...ok, result: { content: "https://github.com/ourostack/desk/pull/6" } }, "bash", "gh pr list"),
+    ev("assistant.turn_end", 20, { turnId: "1" }),
+    ev("user.message", 21, { content: PROMPT }),
+  ])
+  assert.deepEqual(facts.refs.prs, [])
+})
