@@ -89,6 +89,9 @@ const STRUCTURAL = Object.freeze([
   ["job/timeline/bursts/[]/tool_failures", "a count of the recorded tool intervals in the burst whose outcome was not ok"],
   ["job/timeline/gaps/[]/start_ms", "where a gap between bursts starts on the job clock, inside the lead window"],
   ["job/timeline/gaps/[]/end_ms", "where a gap between bursts ends on the job clock, inside the lead window"],
+  ["job/timeline/waits/[]/start_ms", "where an after-stop wait starts on the job clock, read from a recorded human wait; a wait not recorded has no entry"],
+  ["job/timeline/waits/[]/end_ms", "where an after-stop wait ends on the job clock, read from a recorded human wait; a wait not recorded has no entry"],
+  ["job/timeline/waits/[]/next_prompt_ms", "the idle next-prompt time inside the lead window the wait holds, its share of the task's next_prompt waiting figure; the list's waits_state carries that figure's state, reasons and bound, and when the figure is unavailable every wait's value is null with the figure's reasons"],
   ["rollups/stackup.json/burst_idle_gap_ms", "the idle gap that ends a work burst, a constant of the method published so the bursts can be reproduced"],
   ["rollups/tasks.json/jobs/[]/longest_gap/value/start_ms", "where the longest gap starts on the job clock, covered by the figure's state"],
   ["rollups/tasks.json/jobs/[]/longest_gap/value/end_ms", "where the longest gap ends on the job clock, covered by the figure's state"],
@@ -393,7 +396,7 @@ test("the walk sees the files it is meant to see", () => {
     assert.ok(kinds.includes("session"), `${label}: per-session swimlane files`)
     for (const name of ["coverage", "measures", "muda", "tool-kinds", "totals"]) assert.ok(kinds.includes(`rollups/${name}.json`), `${label}: ${name}`)
   }
-  assert.deepEqual(fresh.files.map((published) => published.schema), Array(3).fill("desk.factory.published/2"))
+  assert.deepEqual(fresh.files.map((published) => published.schema), Array(3).fill("desk.factory.published/4"))
   assert.ok(walked.reduce((sum, { seen }) => sum + seen.numberObjects.length, 0) > 300, "number objects were walked")
   assert.ok(walked.reduce((sum, { seen }) => sum + seen.stats.length, 0) > 100, "stats and totals leaves were walked")
 })
@@ -625,6 +628,18 @@ function filesUnder(root) {
   })
 }
 
+// A facts file's text with each job's finish day, the one date published facts /4 allow, checked for its exact shape and blanked.
+function withoutFinishDays(file, text, factsDir) {
+  if (!file.startsWith(factsDir)) return text
+  const value = JSON.parse(text)
+  for (const job of value.jobs ?? []) {
+    if (!Object.hasOwn(job, "finished_on")) continue
+    assert.ok(job.finished_on === null || /^\d{4}-\d{2}-\d{2}$/u.test(job.finished_on), `a finish day is a bare day in ${path.basename(file)}`)
+    job.finished_on = null
+  }
+  return JSON.stringify(value)
+}
+
 test("no output file contains a prompt, command, path, date or time-of-day sentinel", () => {
   // The sentinels really are in the inputs: in prompts, commands and working directories of the logs, and in the folder names.
   const planted = fresh.derived.inputs.flatMap((root) => filesUnder(root).filter((file) => !file.endsWith(".db"))).map((file) => readFileSync(file, "utf8")).join("\n")
@@ -632,8 +647,9 @@ test("no output file contains a prompt, command, path, date or time-of-day senti
   assert.ok(fresh.derived.inputs.every((root) => root.includes(PATH_SENTINEL)), "the folder names carry the path sentinel")
   const outputs = [...filesUnder(fresh.out), ...filesUnder(path.join(fresh.store, "facts"))]
   assert.ok(outputs.length > 8)
+  const factsDir = path.join(fresh.store, "facts")
   for (const file of outputs) {
-    const text = readFileSync(file, "utf8")
+    const text = withoutFinishDays(file, readFileSync(file, "utf8"), factsDir)
     for (const sentinel of [CLAUDE_SENTINEL, CODEX_SENTINEL, COPILOT_SENTINEL, PATH_SENTINEL]) assert.equal(text.includes(sentinel), false, `${sentinel} in ${path.basename(file)}`)
     assert.equal(/\d{4}-\d{2}-\d{2}/.test(text), false, `a date in ${path.basename(file)}`)
     assert.equal(WHEN.test(text), false, `a date or time of day in ${path.basename(file)}`)

@@ -125,7 +125,7 @@ export function createDeskSession(deps) {
     reclaim: async (probe) => (await import("../readiness/controller-process.js")).reclaimControllerChild(probe),
     ...hungOptions,
   }
-  const context = { pendingRepairs: [], exceptions: [], hung: { misses: 0 }, launcher }
+  const context = { pendingRepairs: [], exceptions: [], hung: { misses: 0 }, launcher, phase: null }
   const lexicalViews = new WeakMap()
   const focus = createFocusHolder()
   let headWatch = null
@@ -218,7 +218,13 @@ export function createDeskSession(deps) {
       return await admitAttempt()
     } finally {
       context.startupDone = true
+      context.phase = null
     }
+  }
+
+  // Where the running admission attempt is, for desk_status: a stuck start names its step instead of only "admitting".
+  function setPhase(name) {
+    context.phase = { name, since: new Date().toISOString() }
   }
 
   async function admitAttempt() {
@@ -227,6 +233,7 @@ export function createDeskSession(deps) {
     context.headTriggered = false
     if (launcher?.mode === "refuse") return launcherRefusedOutcome(launcher)
 
+    setPhase("resolving_inputs")
     const inputs = await deps.resolveInputs()
     if (inputs.rootError) {
       forgetDesk()
@@ -248,7 +255,8 @@ export function createDeskSession(deps) {
     const policy = activation.readinessPolicy
 
     if (!context.runtimeServer) {
-      const loaded = await deps.loadRuntime(activation)
+      setPhase("loading_runtime")
+      const loaded = await deps.loadRuntime(activation, { onPhase: setPhase })
       if (loaded.outcome) return loaded.outcome
       context.runtimeServer = loaded.runtimeServer
       context.runtime = loaded.runtimeStatus
@@ -257,6 +265,7 @@ export function createDeskSession(deps) {
     // The automatic switch runs only during the first admission attempt, and never for a HEAD change the watch saw.
     const startup = !context.startupDone && !headTriggered
     let branchProblem = null
+    setPhase("inspecting_state_branch")
     let inspection = await inspectStateBranch({ root: deskRoot, branch: activation.stateBranch, git })
     if (!inspection.ok && inspection.automatic && startup) {
       const repaired = await repairStateBranch({ inspection, git })
@@ -273,6 +282,7 @@ export function createDeskSession(deps) {
 
     const onRepair = (repair) => repairs.push(recordRepair(`repaired: readiness state directory mode ${repair.from} → 700 (${repair.path})`))
     let controllerProblem = null
+    setPhase("admitting_authority")
     if (!context.authorityAdmitted) {
       const admitted = await admitAuthority({ deskRoot, policy, onRepair })
       if (admitted.outcome) return { ...admitted.outcome, repair: repairs.at(-1) }
@@ -288,6 +298,7 @@ export function createDeskSession(deps) {
       hungOwner = null
     }
 
+    setPhase("checking_semantic_readiness")
     let semanticProblem = null
     const controller = context.admission?.controller
     if (policy.semantic === "required" && controller && !context.semanticCurrent) {
@@ -321,10 +332,12 @@ export function createDeskSession(deps) {
         stateHome: readinessStateHome,
         onRepair,
         verifyAuthority: async (options) => {
+          setPhase("verifying_authority")
           verified = await verifyAdmissionAuthority(options)
           return verified
         },
         connectController: async (options) => {
+          setPhase("connecting_controller")
           try {
             return await connector(options)
           } catch (error) {
@@ -792,6 +805,8 @@ export function createDeskSession(deps) {
         failures: snapshot.failures,
         since: snapshot.since,
         next_retry_at: snapshot.next_retry_at,
+        phase: context.phase?.name ?? null,
+        phase_since: context.phase?.since ?? null,
         state_branch: branchSummary(context.stateBranch),
         controller: context.admission?.controller ? "connected" : "absent",
         hung_controller: context.hung.misses > 0 ? { ...context.hung } : null,

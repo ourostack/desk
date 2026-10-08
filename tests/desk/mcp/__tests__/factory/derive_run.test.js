@@ -263,7 +263,7 @@ test("a status-only update alone binds no job", () => scratch(async (ctx) => {
   assert.equal(receipt.own_activity.length, 1, "the call is still the session's own activity")
 }))
 
-test("the receipt has binding_version: 6, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
+test("the receipt has binding_version: 7, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
   const marker = await session(ctx)
   await writeCard(ctx, "track/task")
@@ -280,8 +280,8 @@ test("the receipt has binding_version: 6, bound_by, own_activity (at most 500) a
   const status = await readStatus(ctx.env)
   const receipt = status.derivations[name]
   const [job] = Object.keys(await readJobsIndex(ctx.env))
-  assert.equal(BINDING_VERSION, 6)
-  assert.equal(receipt.binding_version, 6)
+  assert.equal(BINDING_VERSION, 7)
+  assert.equal(receipt.binding_version, 7)
   assert.deepEqual(receipt.bound_by, { [job]: "focus" })
   assert.deepEqual(receipt.focus_disagrees, [job])
   // The update at two minutes in, widened by a minute each way, in milliseconds from the session's start.
@@ -461,14 +461,15 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
 
 test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
-  assert.equal(BINDING_VERSION, 6)
+  assert.equal(BINDING_VERSION, 7)
   const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
   const name = `claude-code-${ID}.json`
   const receipt = (await readStatus(ctx.env)).derivations[name]
   assert.equal(receipt.binding_version, BINDING_VERSION)
-  for (const older of [undefined, 1, 2, 3, 4]) {
+  // 6 is the version before the derivers recorded stop facts, PR creation and the ask-tool waits.
+  for (const older of [undefined, 1, 2, 3, 4, 6]) {
     const { binding_version, ...legacy } = receipt
     await writeStatus(ctx.env, { derivations: { [name]: older === undefined ? legacy : { ...legacy, binding_version: older } } })
     assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
@@ -698,7 +699,7 @@ async function orphan(ctx, { declare = true, receiptRoot = true, cwd = ctx.desk,
   if (stale || !receiptRoot) {
     await staleReceipt(ctx, name, (receipt) => {
       if (!receiptRoot) delete receipt.desk_root
-      if (!stale) receipt.binding_version = 6
+      if (!stale) receipt.binding_version = 7
       return receipt
     })
   }
@@ -1729,7 +1730,7 @@ test("the receipt still records segments_capped_ms as before", () => scratch(asy
   await deriveMarker(ctx.env, marker)
   const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
   assert.equal(Number.isInteger(receipt.segments_capped_ms) && receipt.segments_capped_ms > 0, true)
-  assert.equal(receipt.binding_version, 6)
+  assert.equal(receipt.binding_version, 7)
 }))
 
 // Capture coverage (capture-sweep.js): the sweep makes one call after the orphan pass and reports it in its summary.
@@ -1752,4 +1753,160 @@ test("a sweep whose capture coverage fails still derives and reports coverage fa
   const summary = await sweep(ctx.env, { quietMs: 0 })
   assert.deepEqual([summary.written, summary.coverage], [1, "failed"])
   assert.equal((await readStatus(ctx.env)).coverage_failed, "state_unreadable")
+}))
+
+const failuresOf = async (env) => (await readStatus(env)).derive_failures
+const throwing = (fn) => ({ claude: fn, copilot: fn })
+
+test("a missing or non-regular session log is expected and leaves no diagnostic", () => scratch(async (ctx) => {
+  const { deriveMarker, deriveFile, sweep } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, marker)
+  await fs.unlink(marker.log_path)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "log_missing")
+  await fs.mkdir(marker.log_path)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "source_unreadable")
+  assert.equal((await sweep(ctx.env)).source_unreadable, 1)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  assert.equal((await deriveFile(ctx.env, file, { quietMs: 1 })).result, "source_unreadable")
+  await fs.rmdir(marker.log_path)
+  assert.equal((await deriveFile(ctx.env, file, { quietMs: 1 })).result, "log_missing")
+  assert.equal(await failuresOf(ctx.env), undefined)
+}))
+
+test("the same error on a path other than the session log is recorded, and the log's own error from a deriver is not", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const name = `${marker.host}-${ID}.json`
+  const enoent = (file) => Object.assign(new Error(`ENOENT: no such file, open '${file}'`), { code: "ENOENT", path: file })
+  assert.equal((await deriveMarker(ctx.env, marker, throwing(async () => { throw enoent(marker.log_path) }))).result, "log_missing")
+  assert.equal(await failuresOf(ctx.env), undefined)
+  assert.equal((await deriveMarker(ctx.env, marker, throwing(async () => { throw enoent(path.join(ctx.base, "elsewhere")) }))).result, "log_missing")
+  assert.deepEqual(Object.keys((await failuresOf(ctx.env))[name]).sort(), ["at", "code", "step"])
+  assert.deepEqual({ step: (await failuresOf(ctx.env))[name].step, code: (await failuresOf(ctx.env))[name].code }, { step: "derive", code: "ENOENT" }, "a record is not cleared by the log_missing it came with")
+  await fs.rm(path.join(await factoryStateRoot(ctx.env), "status.json"))
+  assert.equal((await deriveMarker(ctx.env, marker, throwing(async () => { throw new Error("source_unreadable") }))).result, "source_unreadable")
+  assert.equal((await failuresOf(ctx.env))[name].code, "Error", "a source_unreadable error with no path is not the log's")
+}))
+
+test("a write that fails is recorded with its step and code only, still retries, and is cleared by the success", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const name = `${marker.host}-${ID}.json`
+  const blocker = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
+  await fs.mkdir(path.join(blocker, "inner"), { recursive: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "source_unreadable", store: STORE }, "the result the flush reads as try again is unchanged")
+  const record = (await failuresOf(ctx.env))[name]
+  assert.deepEqual(Object.keys(record).sort(), ["at", "code", "step"])
+  assert.equal(record.step, "write_facts")
+  assert.match(record.code, /^[A-Za-z0-9_]+$/u)
+  assert.equal(Number.isNaN(Date.parse(record.at)), false)
+  await fs.rm(blocker, { recursive: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE }, "the marker is kept, so the next derive retries")
+  assert.equal(await failuresOf(ctx.env), undefined)
+}))
+
+test("no error text is stored, and a code falls back to the error's constructor name", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const name = `${marker.host}-${ID}.json`
+  const secret = "sk-secret-session-text"
+  const cases = [
+    [Object.assign(new Error(`EPERM rename '/Users/someone/${secret}' ${secret}`), { code: "EPERM" }), "EPERM"],
+    [new SyntaxError(`Unexpected token in JSON ${secret}`), "SyntaxError"],
+    [new Error(secret), "Error"],
+    [{ code: "not a code!" }, "Object"],
+    [Object.create(null), "unknown"],
+  ]
+  for (const [error, code] of cases) {
+    assert.equal((await deriveMarker(ctx.env, marker, throwing(async () => { throw error }))).result, "source_unreadable")
+    assert.equal((await failuresOf(ctx.env))[name].code, code)
+    assert.equal(JSON.stringify(await readStatus(ctx.env)).includes(secret), false)
+  }
+}))
+
+test("only the newest twenty failures are kept, and a damaged record is replaced", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const boom = throwing(async () => { throw new Error("boom") })
+  const old = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`claude-code-old-${String(i).padStart(2, "0")}.json`, { at: "2026-01-01T00:00:00.000Z", step: "derive", code: "unknown" }]))
+  await writeStatus(ctx.env, { derive_failures: old })
+  await deriveMarker(ctx.env, marker, boom)
+  const kept = Object.keys(await failuresOf(ctx.env))
+  assert.equal(kept.length, 20)
+  assert.equal(kept.at(-1), `${marker.host}-${ID}.json`)
+  assert.equal(kept.includes("claude-code-old-00.json"), false)
+  await writeStatus(ctx.env, { derive_failures: "garbled" })
+  await deriveMarker(ctx.env, marker, boom)
+  assert.deepEqual(Object.keys(await failuresOf(ctx.env)), [`${marker.host}-${ID}.json`])
+}))
+
+test("a failure before the derivation's own steps (the state root cannot be used) returns the retry result and does not throw", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  // A state root inside a Git working tree is refused by `factoryStateRoot`, so the lock step fails and the diagnostic itself cannot be written.
+  await fs.mkdir(path.join(ctx.desk, ".git"), { recursive: true })
+  const inside = { ...ctx.env, XDG_STATE_HOME: ctx.desk }
+  assert.deepEqual(await deriveMarker(inside, marker), { result: "source_unreadable", store: null })
+}))
+
+test("a marker file that cannot be read is recorded at the step that read it", () => scratch(async (ctx) => {
+  const { deriveFile } = await runner()
+  const marker = await session(ctx)
+  await writeMarker(ctx.env, marker)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  await fs.writeFile(file, "{")
+  assert.equal((await deriveFile(ctx.env, file)).result, "source_unreadable")
+  assert.deepEqual({ step: (await failuresOf(ctx.env))[path.basename(file)].step, code: (await failuresOf(ctx.env))[path.basename(file)].code }, { step: "read_marker", code: "SyntaxError" })
+}))
+
+test("every settled result clears the session's record, and a failed one keeps it", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  const name = `${marker.host}-${ID}.json`
+  const plant = () => writeStatus(ctx.env, { derive_failures: { [name]: { at: "2026-01-01T00:00:00.000Z", step: "write_facts", code: "EPERM" }, "other.json": { at: "2026-01-01T00:00:00.000Z", step: "derive", code: "Error" } } })
+  const left = async () => Object.keys((await failuresOf(ctx.env)) ?? {})
+  await plant()
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "not_opted_in")
+  assert.deepEqual(await left(), ["other.json"])
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await plant()
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  assert.deepEqual(await left(), ["other.json"])
+  await plant()
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped")
+  assert.deepEqual(await left(), ["other.json"])
+  await json(path.join(ctx.desk, "_meta/factory.json"), { schema_version: 1, store: "invalid" })
+  await plant()
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "held")
+  assert.deepEqual(await left(), ["other.json"])
+  await fs.rm(path.join(ctx.desk, "_meta/factory.json"))
+  await fs.unlink(marker.log_path)
+  await plant()
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "log_missing")
+  assert.deepEqual(await left(), ["other.json"])
+  await plant()
+  await fs.mkdir(marker.log_path)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "source_unreadable")
+  assert.deepEqual(await left(), [name, "other.json"], "an unreadable log is not settled, so the record stays")
+}))
+
+test("a result with no record to clear takes no status lock and writes nothing", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  const status = path.join(await factoryStateRoot(ctx.env), "status.json")
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "not_opted_in")
+  assert.equal(existsSync(status), false, "no status file is created")
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  const identity = async () => { const stat = await fs.stat(status); return [stat.ino, stat.mtimeMs, await fs.readFile(status, "utf8")] }
+  const before = await identity()
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped")
+  assert.deepEqual(await identity(), before)
 }))

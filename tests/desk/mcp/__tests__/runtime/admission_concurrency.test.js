@@ -18,8 +18,11 @@ const WINDOW_MS = 200
 // Five Node processes starting at once on a machine already running the rest of the suite: the handshake must complete well inside the hosts' startup timeout (30 s), and the slowest per round is recorded. The single-start 3 s budget is asserted in admission_conditions.test.js.
 const CONCURRENT_HANDSHAKE_BUDGET_MS = 10000
 
-function fixtureListing(home, depth = 4) {
+const LISTING_LIMIT = 300
+
+function fixtureListing(home, depth = 6) {
   const lines = []
+  let truncated = false
   const walk = (dir, level) => {
     if (level > depth) return
     let entries
@@ -29,14 +32,18 @@ function fixtureListing(home, depth = 4) {
       return
     }
     for (const entry of entries) {
-      if (entry.name === "node_modules") continue
+      if (entry.name === "node_modules" || entry.name === ".git") continue
+      if (lines.length >= LISTING_LIMIT) {
+        truncated = true
+        return
+      }
       lines.push(`${"  ".repeat(level)}${entry.name}${entry.isDirectory() ? "/" : ""}`)
-      if (entry.isDirectory() && /stage|backup|lock|runtime|mirror|readiness/u.test(entry.name)) walk(path.join(dir, entry.name), level + 1)
-      else if (entry.isDirectory() && level < 2) walk(path.join(dir, entry.name), level + 1)
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), level + 1)
     }
   }
   walk(home, 0)
-  return lines.slice(0, 200).join("\n")
+  if (truncated) lines.push(`... listing truncated at ${LISTING_LIMIT} entries`)
+  return lines.join("\n")
 }
 
 function ownerRecords(readinessHome) {
@@ -66,7 +73,7 @@ test(`${SERVERS} servers on one root within ${WINDOW_MS} ms, ${ROUNDS} times: ev
       try {
         statuses = await Promise.all(sessions.map((session) => session.statusUntil((payload) => payload.state === "ready", { deadlineMs: 30000 })))
       } catch (error) {
-        // A failing round carries its own evidence: what each folder under the fixture's home held when admission was still not ready, so a stall in the runtime restore (a staging folder still being filled, a publication lock still held) shows in the report.
+        // A failing round carries its own evidence: every folder under the fixture's home (six levels deep) when admission was still not ready, so a staging folder still being filled or a publication lock still held shows in the report next to each server's admission phase.
         error.message += `\nround ${round} fixture listing:\n${fixtureListing(fixture.home)}`
         throw error
       }

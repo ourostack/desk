@@ -579,7 +579,7 @@ async function resolveVisibility(env, client, account, repos, nowIso, force = ne
   return known
 }
 
-function publishOne(local, name, { transform, known, desk, store, secret }) {
+function publishOne(local, name, { transform, known, desk, store, secret, nowMs }) {
   if (`${local?.session?.host}-${local?.session?.id}.json` !== name) return { reason: "invalid" }
   let out
   try {
@@ -590,6 +590,8 @@ function publishOne(local, name, { transform, known, desk, store, secret }) {
       // The store was resolved with them too; an unknown store is treated as public.
       storeVisibility: known.get(store.toLowerCase()) ?? "unknown",
       machineSecret: secret,
+      // A finish day after today (a card dated ahead) is withheld, because the store refuses it.
+      now: nowMs,
     })
   } catch {
     return { reason: "invalid" }
@@ -1066,6 +1068,8 @@ async function deliver(env, context) {
   const unprotected = parsed.filter(({ name }) => !deferred.has(name) && receipts[name]?.desk_unprotected !== true && typeof desks.get(name) === "string" && !deskTimingKept(deskVisibilityOf(desks.get(name), known))).map(({ name }) => name)
   if (unprotected.length > 0) await recordDeskUnprotected(env, unprotected)
   const secret = await readMachineSecret(env)
+  // One clock reading for every file, so the same file publishes the same bytes throughout this delivery.
+  const nowMs = now()
   // Where this Desk would publish the outbox files `names` of away sessions now, as `{ path, sha }` by name: used only to find this machine's
   // files in the store, never sent and never quarantined.
   const republish = async (names) => {
@@ -1074,7 +1078,7 @@ async function deliver(env, context) {
     for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) if (!distrusted.has(repo)) known.set(repo, visibility)
     const found = new Map()
     for (const { name, local } of facts) {
-      const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
+      const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret, nowMs })
       if (out.bytes) found.set(name, { path: `facts/${out.file}`, sha: gitBlobSha(out.bytes) })
     }
     for (const { key, local } of labels) {
@@ -1090,7 +1094,7 @@ async function deliver(env, context) {
   const released = []
   for (const { name, held, local } of parsed) {
     if (deferred.has(name)) continue
-    const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
+    const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret, nowMs })
     if (out.file) publishedFile.set(name, out.file)
     if (held !== null) {
       if (unresolved.has(name)) continue

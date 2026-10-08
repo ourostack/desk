@@ -2,13 +2,13 @@
 // machine for a factory store.
 //
 // `toPublished(local, { visibility, deskVisibility, storeVisibility,
-// machineSecret })` turns
+// machineSecret, now })` turns
 // one valid local facts file (`desk.factory.local/2`, `schema.js`) into
-// published facts (`desk.factory.published/3`, `published-schema.js`, or
-// `/2` when the file carries nothing only `/3` allows: a commit's `at_ms` or
-// the `outcomes` flag, so an unchanged session keeps its bytes). The
-// stores are public, so the published form carries no who and no when, just
-// how:
+// published facts (`desk.factory.published/4`, `published-schema.js`). Every
+// file is `/4`, so the first flush after this change sends each session in
+// the outbox once more, with the `/4` keys. The stores are public, so the
+// published form carries no who and no time of day, just how, and one date
+// per job, the UTC day the task finished:
 //
 //   - No when. `session.duration_ms` is `derived_through - started_at` and
 //     `ended` is whether `ended_at` is set. Every interval becomes
@@ -28,6 +28,16 @@
 //     value. Either loss adds `{job_offsets, source_unreadable}` once. A
 //     non-terminal card's observation (`at: null`, M3-4) publishes its
 //     status with `offset_ms: null`; no observation publishes `null`.
+//   - Finish day (`/4`). A job whose card was observed `done` or `cancelled`
+//     publishes `finished_on`, the UTC day (`YYYY-MM-DD`) of the session's
+//     own last transition into that status (`finished_basis:
+//     "transition"`), else of the observation's `at`, the card's `updated`
+//     time, which is an upper bound (`"card_updated"`). Only a source this
+//     file also publishes with an offset counts, so a job with no readable
+//     card creation time, an open job and any job of a desk that withholds
+//     its timing publish `null` for both. A day before 2025-01-01, or after
+//     the UTC day of the optional `now` (milliseconds; a hand-edited card
+//     dated ahead), is `null` too, because the store would refuse the file.
 //   - Offsets and durations are capped at `PUBLISHED_LIMITS.maxOffsetMs`,
 //     ten years (controller rulings, M3-5 fix rounds 1 and 2). Ten years is
 //     less than the time since 1970, so no offset can be an epoch value in
@@ -68,6 +78,16 @@
 //     clock) is published under the rule for a controller PR's `at_ms`: only
 //     on a desk known to be private and only in a session whose jobs carry
 //     segments, where it can place the commit in a job's segment.
+//   - Created PRs (`/4`). `refs.prs[].created` is `true` only when the local
+//     ref says the session's own call created the PR; a ref written before
+//     derivers kept the flag publishes `false`. A desk that withholds its
+//     timing publishes `false` for every PR, because GitHub's public creation
+//     time of a created PR would date the session.
+//   - Stop facts (`/4`). Each human wait keeps its `stop` (how the agent's
+//     turn ended, whether its last reply ended in a question mark, whether
+//     its background agents were running: codes and booleans, no text). A
+//     wait derived before stop facts were recorded publishes `{ end:
+//     "not_recorded", asks: null, pending_agents: null }`.
 //   - Public references only. A PR or commit is kept only when
 //     `visibility(repo)` returns exactly `"public"`. Private and unknown
 //     repositories, commits without a repository, and a repository whose
@@ -133,7 +153,7 @@ import { PRIVATE_VISIBILITIES, deskTimingKept } from "./desk-visibility.js"
 import { waitClass } from "./outcome.js"
 import { intervalInSession } from "./pipeline/timeline.js"
 import { validateLocalFacts } from "./schema.js"
-import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, PUBLISHED_SCHEMA_V2, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
+import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
 /** Why `toPublished` returned no file. */
 export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_not_v4"])
@@ -183,6 +203,8 @@ function publishSession(session, durationMs, id) {
   }
 }
 
+const NOT_RECORDED_STOP = Object.freeze({ end: "not_recorded", asks: null, pending_agents: null })
+
 function publishIntervals(intervals, startedMs, durationMs, flag) {
   const kept = []
   for (const interval of intervals) {
@@ -199,6 +221,10 @@ function publishIntervals(intervals, startedMs, durationMs, flag) {
     }
     out.start_ms = startMs
     out.end_ms = endMs
+    if (interval.kind === "human_wait") {
+      const stop = interval.stop ?? NOT_RECORDED_STOP
+      out.stop = { end: stop.end, asks: stop.asks, pending_agents: stop.pending_agents }
+    }
     kept.push(out)
   }
   return kept
@@ -213,8 +239,8 @@ function publicRepos(visibility) {
   }
 }
 
-// `timed`: whether a controller PR and a commit keep their `at_ms` (see `toPublished`).
-function publishRefs(refs, askPublic, timed) {
+// `timed`: whether a controller PR and a commit keep their `at_ms` (see `toPublished`). `deskPrivate`: whether a PR may say it was created.
+function publishRefs(refs, askPublic, timed, deskPrivate) {
   const isPublic = (repo) => repo !== null && !DATE_SHAPE.test(repo) && askPublic(repo)
   const dropped = { prs: refs.unresolved.prs, commits: refs.unresolved.commits }
   // Keeps each public reference once (by `keyOf`) and counts the others.
@@ -235,6 +261,7 @@ function publishRefs(refs, askPublic, timed) {
     number: pr.number,
     ...(Object.hasOwn(pr, "agent") ? { agent: pr.agent } : {}),
     ...(timed && pr.agent === 0 && Object.hasOwn(pr, "at_ms") ? { at_ms: pr.at_ms } : {}),
+    created: deskPrivate && pr.created === true,
   }))
   const commits = keep(refs.commits, "commits", (commit) => commit.sha, (commit) => ({
     repo: commit.repo,
@@ -342,10 +369,33 @@ function protectedJob(job, machineSecret) {
     transitions: [],
     observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null },
     ...agentsOf(job),
+    finished_on: null,
+    finished_basis: null,
   }
 }
 
-function publishJob(job, startedMs, flag) {
+const TERMINAL = new Set(["done", "cancelled"])
+const EARLIEST_FINISH_DAY = "2025-01-01"
+const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10)
+
+// The job's finish day and its source (see the header): the last published transition into the terminal status the card was observed in,
+// else the published observation. `transitionMs` holds each published transition's instant.
+function finishOf(observed, transitions, transitionMs, observedMs, now) {
+  const none = { finished_on: null, finished_basis: null }
+  if (observed === null || !TERMINAL.has(observed.status)) return none
+  let latest = null
+  transitions.forEach((transition, index) => {
+    if (transition.to === observed.status && (latest === null || transitionMs[index] > latest)) latest = transitionMs[index]
+  })
+  let found = none
+  if (latest !== null) found = { finished_on: utcDay(latest), finished_basis: "transition" }
+  else if (observed.offset_ms !== null) found = { finished_on: utcDay(observedMs), finished_basis: "card_updated" }
+  if (found.finished_on === null || found.finished_on < EARLIEST_FINISH_DAY) return none
+  if (Number.isFinite(now) && found.finished_on > utcDay(now)) return none
+  return found
+}
+
+function publishJob(job, startedMs, flag, now) {
   const anchor = job.task_created_at === null ? null : Date.parse(job.task_created_at)
   const offsetOf = (ms) => {
     if (anchor === null) return null
@@ -356,10 +406,14 @@ function publishJob(job, startedMs, flag) {
   const sessionOffset = offsetOf(startedMs)
   let lost = sessionOffset === null
   const transitions = []
+  const transitionMs = []
   for (const transition of job.transitions) {
     const offset = offsetOf(Date.parse(transition.at))
     if (offset === null) lost = true
-    else transitions.push({ to: transition.to, offset_ms: offset })
+    else {
+      transitions.push({ to: transition.to, offset_ms: offset })
+      transitionMs.push(Date.parse(transition.at))
+    }
   }
   let observed = null
   if (job.observed !== null) {
@@ -372,6 +426,7 @@ function publishJob(job, startedMs, flag) {
   return {
     job: job.job, basis: [...job.basis], session_offset_ms: sessionOffset, transitions, observed, ...agentsOf(job),
     ...(Object.hasOwn(job, "segments") ? { segments: job.segments.map((segment) => ({ ...segment })) } : {}),
+    ...finishOf(observed, transitions, transitionMs, observed === null || job.observed.at === null ? null : Date.parse(job.observed.at), now),
   }
 }
 
@@ -419,12 +474,9 @@ function publishHumanTurns(turns, startedMs, durationMs, flag) {
   return kept
 }
 
-// A file is `/3` only when it carries something only `/3` allows (a commit time or the outcomes flag), so an unchanged session republishes the same bytes.
-const needsV3 = (commits, unavailable) => commits.some((commit) => Object.hasOwn(commit, "at_ms")) || unavailable.some((entry) => entry.field === "outcomes")
-
 /**
  * `toPublished(local, { visibility, deskVisibility, storeVisibility,
- * machineSecret }) -> { published, dropped: { prs, commits, plugins } }`,
+ * machineSecret, now }) -> { published, dropped: { prs, commits, plugins } }`,
  * or `{ published: null,
  * dropped: null, reason }` with a reason from `REFUSALS` when the session
  * cannot be published at all.
@@ -437,10 +489,12 @@ const needsV3 = (commits, unavailable) => commits.some((commit) => Object.hasOwn
  * the file goes to (`"private"` or `"internal"` name every plugin; anything
  * else, including a missing value, names only plugins whose `source`
  * repository is public); `machineSecret` (at least 32 bytes) keys the job IDs
- * of a desk that withholds its timing and is required then. These are
+ * of a desk that withholds its timing and is required then; `now`, when a
+ * finite number of milliseconds, withholds a finish day after its UTC day
+ * (the transform reads no clock of its own). These are
  * caller contracts: a violation throws a `TypeError` that names no value.
  */
-export function toPublished(local, { visibility, deskVisibility, storeVisibility, machineSecret } = {}) {
+export function toPublished(local, { visibility, deskVisibility, storeVisibility, machineSecret, now } = {}) {
   if (typeof visibility !== "function") throw new TypeError("toPublished: visibility must be a function")
   if (!validateLocalFacts(local).ok) throw new TypeError("toPublished: local facts must pass validateLocalFacts")
   const deskPrivate = deskIsPrivate(deskVisibility, machineSecret, "toPublished")
@@ -469,13 +523,13 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
   // Job segments and controller PR and commit times are job timing: a desk that withholds its timing publishes none of them.
   // Elsewhere a PR's `at_ms` is published only where it decides a PR's job: a controller (worker 0) PR in a session whose jobs carry segments.
   // A commit's `at_ms` follows the same rule; a commit names no worker, and the one host that times commits (Copilot) records them as the root's.
-  const refs = publishRefs(local.refs, isPublic, deskPrivate && local.jobs.some((job) => Object.hasOwn(job, "segments")))
+  const refs = publishRefs(local.refs, isPublic, deskPrivate && local.jobs.some((job) => Object.hasOwn(job, "segments")), deskPrivate)
   const plugins = publishPlugins(local.plugins, isPublic, storeVisibility)
   const dropped = { ...refs.dropped, plugins: plugins.hidden }
   // A list with names left out says so, so a short list never reads as the whole one.
   if (plugins.hidden > 0) flag("plugins", "withheld_public")
   const jobs = deskPrivate
-    ? local.jobs.map((job) => publishJob(job, startedMs, flag))
+    ? local.jobs.map((job) => publishJob(job, startedMs, flag, now))
     : local.jobs.map((job) => protectedJob(job, machineSecret)).sort((a, b) => (a.job < b.job ? -1 : 1))
   if (!deskPrivate && jobs.length > 0) flag("job_offsets", "desk_public")
 
@@ -483,7 +537,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
   const models = publishModels(local.models, flag)
   const unavailable = [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)), ...own]
   const published = {
-    schema: needsV3(refs.commits, unavailable) ? PUBLISHED_SCHEMA : PUBLISHED_SCHEMA_V2,
+    schema: PUBLISHED_SCHEMA,
     session: publishSession(local.session, durationMs, sessionId),
     plugins: plugins.plugins,
     models,

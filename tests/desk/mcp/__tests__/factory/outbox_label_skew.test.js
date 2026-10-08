@@ -5,7 +5,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
@@ -99,7 +99,7 @@ test("ownDeskVersion names the Desk when it runs from a source mirror with no pl
     await fs.mkdir(plugin, { recursive: true })
     await writeFile(path.join(plugin, "plugin.json"), JSON.stringify({ name: "desk", version: "3.2.0-alpha.901" }))
     const outbox = path.join(mirror, "src", "factory", "outbox.js")
-    const script = `import(${JSON.stringify(outbox)}).then((m) => process.stdout.write(String(m.ownDeskVersion())))`
+    const script = `import(${JSON.stringify(pathToFileURL(outbox).href)}).then((m) => process.stdout.write(String(m.ownDeskVersion())))`
     const env = { ...process.env, DESK_PLUGIN_ROOT: plugin }
     delete env.CLAUDE_PLUGIN_ROOT
     assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }), "3.2.0-alpha.901")
@@ -124,7 +124,7 @@ test("ownDeskVersion prefers the plugin.json beside the running code over DESK_P
     await fs.mkdir(updated, { recursive: true })
     await writeFile(path.join(updated, "plugin.json"), JSON.stringify({ name: "desk", version: "3.2.0-alpha.999" }))
     const outbox = path.join(running, "mcp", "src", "factory", "outbox.js")
-    const script = `import(${JSON.stringify(outbox)}).then((m) => process.stdout.write(String(m.ownDeskVersion())))`
+    const script = `import(${JSON.stringify(pathToFileURL(outbox).href)}).then((m) => process.stdout.write(String(m.ownDeskVersion())))`
     const env = { ...process.env, DESK_PLUGIN_ROOT: updated }
     assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }), "3.2.0-alpha.902")
   } finally {

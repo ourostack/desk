@@ -2785,3 +2785,40 @@ test("a reclaim that finishes after the deadline still gets one attempt at the l
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("a publisher reports that it waits for the lock and that it builds, and prepareRuntime passes the reporter down", { timeout: 60_000 }, async () => {
+  const { publishDirectoryAtomically, prepareRuntime } = await loadBootstrap()
+  const root = makeTempDir()
+  try {
+    const phases = []
+    const stagingDir = path.join(root, "cache.stage")
+    publishDirectoryAtomically({
+      destinationDir: path.join(root, "cache"),
+      stagingDir,
+      validateDestination: (candidate) => existsSync(path.join(candidate, "complete")),
+      build: () => writeText(path.join(stagingDir, "complete"), "yes\n"),
+      onPhase: (phase) => phases.push(phase),
+    })
+    assert.deepEqual(phases, ["waiting_for_publication_lock:cache", "building:cache"])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+  const fixture = makeMcpFixture()
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const steps = []
+    prepareRuntime({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir: path.join(fixture.root, "runtime-cache"),
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      onPhase: (phase) => steps.push(phase),
+    })
+    assert.equal(steps[0], "restoring_runtime_dependencies")
+    assert.ok(steps.includes("mirroring_source"))
+    assert.ok(steps.some((step) => step.startsWith("building:")), `a first build was reported: ${steps}`)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})

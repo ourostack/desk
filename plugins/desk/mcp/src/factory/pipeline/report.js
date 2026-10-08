@@ -63,6 +63,10 @@ const REPORT_REASON_TEXT = {
   facts_missing: "the session's facts are missing",
   no_facts: "no facts file matches the labels",
   facts_ambiguous: "more than one facts file matches the labels",
+  // A task's finish day.
+  finish_from_card_update: "the day comes from the task card's last update, so the task finished on or before it",
+  reopened: "the task was finished more than once, so this is the day it last finished",
+  job_offsets_withheld: "the desk withholds this task's timing because its remote is public",
 }
 
 // What the independent evaluator's labels file can declare unreadable, and the codes of the check of labels against facts.
