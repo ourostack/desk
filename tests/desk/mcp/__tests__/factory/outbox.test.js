@@ -1249,6 +1249,59 @@ test("on Windows, a lock file whose deletion is still pending is waited for, and
   }
 }))
 
+test("on Windows, a waiter queued behind a held lock gets a fresh pending-delete wait after each time it sees the lock held, and a refusal that lasts is still surfaced", (t) => scratch(async (plain, base) => {
+  const env = fakeWindowsEnv(plain, base)
+  const options = { platform: "win32", runner: fakeWindowsRunner([]) }
+  const original = fs.open
+  // The lock is held for 20 s of the (mocked) clock, then released by its holder; the waiter's last open meets a delete that is still pending.
+  const realNow = Date.now
+  let clock = realNow()
+  const ticking = t.mock.method(Date, "now", () => (clock += 1000))
+  const script = ["EEXIST", ...Array(18).fill("EEXIST"), "EPERM", "EBUSY", "EACCES"]
+  let step = 0
+  const refusing = t.mock.method(fs, "open", async (...args) => {
+    if (!String(args[0]).endsWith(".lock") || step >= script.length) return original.apply(fs, args)
+    throw Object.assign(new Error("scripted"), { code: script[step++] })
+  })
+  const stat = t.mock.method(fs, "stat", async (...args) => (String(args[0]).endsWith(".lock") ? { mtimeMs: clock } : original.apply(fs, args)))
+  try {
+    await setConsent(env, { store: STORE, contribute: true }, options)
+    assert.equal(step, script.length, "every scripted refusal was waited out; 20 s in all, past the 5 s bound that now applies to a run of refusals")
+  } finally {
+    stat.mock.restore()
+    refusing.mock.restore()
+    ticking.mock.restore()
+  }
+  // A run of refusals that lasts past the bound is surfaced, whatever came before it, and the other codes are contention too.
+  for (const code of ["EBUSY", "EACCES"]) {
+    const failure = Object.assign(new Error(`${code} for good`), { code })
+    const lasting = t.mock.method(fs, "open", async (...args) => {
+      if (String(args[0]).endsWith(".lock")) throw failure
+      return original.apply(fs, args)
+    })
+    let jump = realNow()
+    const jumping = t.mock.method(Date, "now", () => (jump += 3000))
+    try {
+      await assert.rejects(() => setConsent(env, { store: STORE, contribute: false }, options), (error) => error === failure)
+    } finally {
+      jumping.mock.restore()
+      lasting.mock.restore()
+    }
+  }
+  // Off Windows the same codes are not contention.
+  const failure = Object.assign(new Error("denied"), { code: "EBUSY" })
+  const off = t.mock.method(fs, "open", async (...args) => {
+    if (String(args[0]).endsWith(".lock")) throw failure
+    return original.apply(fs, args)
+  })
+  try {
+    await assert.rejects(() => setConsent(plain, { store: STORE, contribute: true }), (error) => error === failure)
+    assert.equal(off.mock.callCount(), 1)
+  } finally {
+    off.mock.restore()
+  }
+}))
+
 test("listFinalizeRequests never follows a symlink planted in the finalize directory", () => scratch(async (env, base) => {
   await requestFinalize(env, { job: JOB, deskRoot: "/tmp/desk" })
   const root = await factoryStateRoot(env)

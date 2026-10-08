@@ -437,7 +437,8 @@ async function listRegularFiles(dir, pattern) {
 async function withLock(root, file, platform, body) {
   const lockFile = `${file}.lock`
   await ensureDirChain(path.dirname(lockFile), root, platform)
-  const pendingDeadline = Date.now() + LOCK_PENDING_DELETE_MS
+  // When a run of refusals began. The bound is on that run, not on the whole wait: a waiter queued behind other writers sees the lock held (EEXIST) for as long as they take, and a pending delete it meets after that is a new, short event.
+  let refusedSince = null
   while (true) {
     try {
       const handle = await fsp.open(lockFile, "wx", OWNER_FILE_MODE)
@@ -452,11 +453,14 @@ async function withLock(root, file, platform, body) {
       }
       break
     } catch (error) {
-      if (platform === "win32" && (error.code === "EPERM" || error.code === "EACCES") && Date.now() < pendingDeadline) {
+      if (platform === "win32" && ["EPERM", "EACCES", "EBUSY"].includes(error.code)) {
+        refusedSince ??= Date.now()
+        if (Date.now() - refusedSince >= LOCK_PENDING_DELETE_MS) throw error
         await sleep(LOCK_RETRY_DELAY_MS)
         continue
       }
       if (error.code !== "EEXIST") throw error
+      refusedSince = null
       // Staleness is judged from the lock file's own creation time
       // (filesystem metadata, set atomically by `open`), never by parsing
       // its content: content is written in a second step after the file
