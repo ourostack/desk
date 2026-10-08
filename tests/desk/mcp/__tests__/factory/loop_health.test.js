@@ -16,7 +16,7 @@ import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/r
 import { STEPS, recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import {
   AGE_ALARM_DAYS, STALE_AFTER_HOURS, STUCK_ALARM_DAYS, BLOCKING_STATES, HEADLESS_STATES,
-  STORE_SIDE_REASONS, buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
+  STORE_SIDE_REASONS, assembleLoop, buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
 } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
 
 const DAY = 24 * 3600 * 1000
@@ -494,6 +494,28 @@ test("labels quarantined: read from the hand-off value with the same stale rule,
   assert.deepEqual((await build(ctx)).evaluator.labels_quarantined, U("not_recorded"))
 }))
 
+// A facts quarantine that does not settle is sent to the store as not counted (capture-sweep.js), which raises no capture alarm there; this loop alarm
+// is what keeps it visible, through loop_alarms_open, on the store's status line.
+test("a facts quarantine that does not settle opens facts_quarantine_not_settling; one still settling, or none, does not", () => scratch(async (ctx) => {
+  assert.ok(LOOP_ALARMS.includes("facts_quarantine_not_settling"))
+  assert.deepEqual((await measure(ctx)).spy.calls[0].present, [])
+  await setStatus(ctx, { coverage_kept: { code: "quarantine_in_flux", since: TIME, at: TIME } })
+  assert.deepEqual((await measure(ctx)).spy.calls[0].present, [])
+  await setStatus(ctx, { coverage_kept: { code: "quarantine_not_settling", since: TIME, at: TIME } })
+  assert.deepEqual((await measure(ctx)).spy.calls[0].present, ["facts_quarantine_not_settling"])
+  assert.equal((await allCards(ctx)).find((card) => card.key === "loop_alarm:facts_quarantine_not_settling").title, "Session facts have sat in a quarantine that does not settle")
+  await setStatus(ctx, { coverage_kept: "x" })
+  assert.deepEqual((await measure(ctx)).spy.calls[0].present, [])
+}))
+
+test("the not-settling signal is read from the coverage keep note alone", () => {
+  const signal = (status) => assembleLoop({ status, read: null, nowMs: NOW.getTime(), version: "3.2.0-alpha.9" }).signals.facts_quarantine_not_settling
+  assert.equal(signal({}), false)
+  assert.equal(signal({ coverage_kept: null }), false)
+  assert.equal(signal({ coverage_kept: { code: "quarantine_in_flux" } }), false)
+  assert.equal(signal({ coverage_kept: { code: "quarantine_not_settling" } }), true)
+})
+
 test("cards the library set aside or could not read open cards_invalid", () => scratch(async (ctx) => {
   const read = (extra) => async () => ({ cards: [], unreadable: false, truncated: false, skipped: {}, set_aside_total: 0, unreadable_files: 0, ...extra })
   assert.deepEqual((await measure(ctx, { readCardsImpl: read({}) })).spy.calls[0].present, [])
@@ -549,10 +571,11 @@ test("loopAlarms and unreadAlarms work from a record and its signals alone", () 
   const loop = await build(ctx)
   assert.deepEqual(loopAlarms(loop), [{ name: "improvement_age", evidence: { age_days: 9 } }])
   assert.deepEqual(loopAlarms(loop, { attempted: ["route"], blocked_days: 3, cards_invalid: 1 }).map((alarm) => alarm.name), ["improvement_age", "cards_invalid"])
-  assert.deepEqual(unreadAlarms(loop, { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0 }), ["unsigned_age", "headless_blocked", "labels_quarantined"])
-  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", ...STEPS.map((step) => `step_stale:${step}`)])
+  assert.deepEqual(unreadAlarms(loop, { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0, facts_quarantine_not_settling: false }), ["unsigned_age", "headless_blocked", "labels_quarantined"])
+  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "facts_quarantine_not_settling", ...STEPS.map((step) => `step_stale:${step}`)])
+  assert.deepEqual(loopAlarms(loop, { facts_quarantine_not_settling: true }).map((alarm) => alarm.name), ["improvement_age", "facts_quarantine_not_settling"])
   const blind = await build(ctx, { readCardsImpl: async () => ({ unreadable: true }) })
-  assert.deepEqual(unreadAlarms(blind, { attempted: [...STEPS], blocked_days: 0, cards_invalid: null }), ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined"])
+  assert.deepEqual(unreadAlarms(blind, { attempted: [...STEPS], blocked_days: 0, cards_invalid: null, facts_quarantine_not_settling: false }), ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined"])
 }))
 
 test("an alarm whose input could not be read is not observed clear when it is recorded present", () => scratch(async (ctx) => {
@@ -643,7 +666,7 @@ test("a desk with a person prefix keeps its cards there", () => scratch(async (c
 }))
 
 test("every alarm name the step can open is in the card library's list", () => {
-  for (const name of ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", ...STEPS.map((step) => `step_stale:${step}`)]) assert.ok(LOOP_ALARMS.includes(name), name)
+  for (const name of ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "facts_quarantine_not_settling", ...STEPS.map((step) => `step_stale:${step}`)]) assert.ok(LOOP_ALARMS.includes(name), name)
   assert.deepEqual(RECONCILE_REASONS.length > 0, true)
 })
 
