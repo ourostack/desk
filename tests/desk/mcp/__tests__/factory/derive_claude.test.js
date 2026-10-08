@@ -423,9 +423,9 @@ test("unavailable gets tool_durations when an orphan tool_use exists, keyed to w
 test("pr-link and gitOperation.pr refs are deduplicated and sorted by repo then number; a non-GitHub URL is dropped", async () => {
   const { facts } = await deriveFull()
   assert.deepEqual(facts.refs.prs, [
-    { repo: "another-org/repo", number: 3, agent: 0, at_ms: 37000 },
-    { repo: "ourostack/desk", number: 7, agent: 0, at_ms: 36000 },
-    { repo: "ourostack/desk", number: 42, agent: 0, at_ms: 18000 },
+    { repo: "another-org/repo", number: 3, agent: 0, at_ms: 37000, created: false },
+    { repo: "ourostack/desk", number: 7, agent: 0, at_ms: 36000, created: false },
+    { repo: "ourostack/desk", number: 42, agent: 0, at_ms: 18000, created: true },
   ])
   assert.deepEqual(facts.refs.commits, [])
 })
@@ -916,11 +916,12 @@ test("a PR is credited to the worker whose call created it, not to the root that
     ],
   )
   assert.deepEqual(facts.refs.prs, [
-    { repo: "o/r", number: 1, agent: 1 },
-    { repo: "o/r", number: 2, agent: 1 },
-    { repo: "o/r", number: 3, agent: 2 },
+    { repo: "o/r", number: 1, agent: 1, created: true },
+    { repo: "o/r", number: 2, agent: 1, created: true },
+    { repo: "o/r", number: 3, agent: 2, created: true },
     // The root's pr-link is timed; the children's creations come after the root's last line, past the session, so they carry no time.
-    { repo: "o/r", number: 4, agent: 0, at_ms: 4000 },
+    // A PR known only from its link is not marked created.
+    { repo: "o/r", number: 4, agent: 0, at_ms: 4000, created: false },
   ])
   assert.equal(validateLocalFacts(facts).ok, true)
 })
@@ -931,16 +932,16 @@ test("a merge or any other action on a PR does not take the credit from the work
     [line({ type: "user", message: { role: "user", content: "go" } }), ...createdPr(line, "m1", "o/r", 1, "merged"), ...createdPr(line, "m2", "o/r", 2, null)],
     [{ stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5"), ...createdPr(line, "c1", "o/r", 1), ...createdPr(line, "c2", "o/r", 2)] }],
   )
-  assert.deepEqual(facts.refs.prs, [{ repo: "o/r", number: 1, agent: 1 }, { repo: "o/r", number: 2, agent: 1 }])
+  assert.deepEqual(facts.refs.prs, [{ repo: "o/r", number: 1, agent: 1, created: true }, { repo: "o/r", number: 2, agent: 1, created: true }])
 })
 
 test("dedupePrRefs: a creating ref outranks a link whatever the worker, and the lowest worker wins among the same kind", () => {
   const ref = (agent, created) => ({ repo: "o/r", number: 1, agent, created })
   const dedupe = (...refs) => common.dedupePrRefs(refs)
-  assert.deepEqual(dedupe(ref(0, false), ref(2, true)), [{ repo: "o/r", number: 1, agent: 2 }])
-  assert.deepEqual(dedupe(ref(2, true), ref(0, false)), [{ repo: "o/r", number: 1, agent: 2 }])
-  assert.deepEqual(dedupe(ref(3, true), ref(1, true), ref(2, true)), [{ repo: "o/r", number: 1, agent: 1 }])
-  assert.deepEqual(dedupe(ref(3, false), ref(1, false), ref(2, false)), [{ repo: "o/r", number: 1, agent: 1 }])
+  assert.deepEqual(dedupe(ref(0, false), ref(2, true)), [{ repo: "o/r", number: 1, agent: 2, created: true }])
+  assert.deepEqual(dedupe(ref(2, true), ref(0, false)), [{ repo: "o/r", number: 1, agent: 2, created: true }])
+  assert.deepEqual(dedupe(ref(3, true), ref(1, true), ref(2, true)), [{ repo: "o/r", number: 1, agent: 1, created: true }])
+  assert.deepEqual(dedupe(ref(3, false), ref(1, false), ref(2, false)), [{ repo: "o/r", number: 1, agent: 1, created: false }])
 })
 
 test("a subagent's model is its own assistant model, else a valid meta model, else unknown", async () => {

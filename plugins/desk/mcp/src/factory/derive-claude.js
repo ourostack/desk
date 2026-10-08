@@ -49,6 +49,19 @@
 //     `{tool_durations, log_truncated}`.
 //   - `human_wait` is emitted for agent 0 only: a subagent's next prompt
 //     (a `SendMessage` resume) waits on the parent, not on a human.
+//   - Every `human_wait` carries `stop: { end, asks, pending_agents }`
+//     (published facts /4): `end` from the turn's last root reply
+//     (`STOP_REASON_END`), `rate_limit` or `api_error` when the turn ended on
+//     an API error, `interrupted` for the wait the interrupt marker ends and
+//     the one after it while the agent did nothing, else `not_recorded`;
+//     `asks` whether the last reply text ended in "?" (`null` with no text);
+//     `pending_agents` from the turn's `system/turn_duration` line (`null`
+//     with none). A root `AskUserQuestion` or `ExitPlanMode` call that got
+//     its result is also a `human_wait` over the call (`ask_question`,
+//     `ask_plan`). Only a reply's last character is read; no text and no
+//     tool name reaches the facts.
+//   - `refs.prs[].created` is true only for a `gitOperation.pr` with action
+//     `created`; a `pr-link` line never makes it true (`derive-common.js`).
 //   - `started_at`/`derived_through` are the earliest/latest valid root
 //     timestamps (the first/last line in a well-ordered transcript). An
 //     interval whose end is before its start (clock skew between lines) is
@@ -109,6 +122,11 @@ const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive
 const COMMIT_SHA_PATTERN = /\b[0-9a-f]{40}\b/gu
 const PR_URL_PATTERN = /github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/pull\/\d+/u
 const SYNTHETIC_MODEL = "<synthetic>"
+// The ask tools: an open call waits on the operator, so it is also a human wait (`stop.end` names which). The tool's name never leaves this file.
+const ASK_TOOL_END = new Map([["AskUserQuestion", "ask_question"], ["ExitPlanMode", "ask_plan"]])
+// How a root reply's `stop_reason` ends the agent's turn (`stop.end`). A stop sequence is a normal end; any other reason (`tool_use`, a
+// thinking line's `null`, a reason this file does not know) says the turn did not end on its own reply, so the end is `not_recorded`.
+const STOP_REASON_END = new Map([["end_turn", "end_turn"], ["stop_sequence", "end_turn"], ["max_tokens", "max_tokens"], ["refusal", "refusal"]])
 
 // ---------------------------------------------------------------------------
 // Small, defensive helpers. None of these ever throw on an unexpected shape.
@@ -191,6 +209,18 @@ function toolResultBlocksOf(line) {
 function promptText(content) {
   if (typeof content === "string") return content
   return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n")
+}
+
+// Whether a message's last text ends in a question mark (ignoring trailing white space), or `null` when it holds no text. Only the one
+// character is looked at, and nothing is kept.
+function endsInQuestion(content) {
+  if (typeof content === "string") return content.trim().length > 0 ? content.trimEnd().endsWith("?") : null
+  const blocks = Array.isArray(content) ? content : []
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const text = blocks[index]?.type === "text" ? blocks[index].text : undefined
+    if (typeof text === "string" && text.trim().length > 0) return text.trimEnd().endsWith("?")
+  }
+  return null
 }
 
 // The number of text characters in a message's content: the whole string, or the text blocks (an image adds nothing). The text itself is never returned.
@@ -326,6 +356,12 @@ function createAgentProcessor({ agentIndex }) {
   let originSeen = false
   let unmarkedSeen = false
   let humanTurnUndated = false
+  // The stop facts of the root's current turn (`human_wait.stop`): how its last reply ended, whether its last text asked, whether its own
+  // background agents were still running (from `turn_duration`), and whether the turn is the operator's interrupt with no work since.
+  let stopEnd = null
+  let stopAsks = null
+  let stopPending = null
+  let interruptRun = false
 
   const intervals = []
   const toolCallCounts = new Map()
@@ -390,6 +426,8 @@ function createAgentProcessor({ agentIndex }) {
     } else {
       intervals.push({ kind: "tool", agent: agentIndex, tool: pending.kind, outcome, start: pending.start, end: ts })
     }
+    // The operator answered an ask tool: the call's span is also a wait on them. Its text, and the question's, are not read.
+    if (pending.ask !== undefined) intervals.push({ kind: "human_wait", agent: 0, start: pending.start, end: ts, stop: { end: pending.ask, asks: null, pending_agents: null } })
     toolCallCounts.set(pending.kind, (toolCallCounts.get(pending.kind) ?? 0) + 1)
     if (outcome !== "ok") toolFailureCounts.set(pending.kind, (toolFailureCounts.get(pending.kind) ?? 0) + 1)
     lastFinishedByKind.set(pending.kind, { end: ts, outcome, retried: false })
@@ -466,6 +504,15 @@ function createAgentProcessor({ agentIndex }) {
       }
     }
 
+    if (agentIndex === 0 && line.isSidechain !== true) {
+      if (line.isApiErrorMessage) stopEnd = line.apiErrorStatus === 429 || line.error === "rate_limit" ? "rate_limit" : "api_error"
+      else if (message.model !== SYNTHETIC_MODEL) {
+        stopEnd = STOP_REASON_END.get(message.stop_reason) ?? "not_recorded"
+        const asks = endsInQuestion(message.content)
+        if (asks !== null) stopAsks = asks
+      }
+    }
+
     // The reply's size only: the text is measured here and not kept.
     if (humanTurns !== null && humanSeen && line.isSidechain !== true && !line.isApiErrorMessage && message.model !== SYNTHETIC_MODEL) humanTurns.addReply(textLength(message.content))
 
@@ -490,7 +537,8 @@ function createAgentProcessor({ agentIndex }) {
       }
       const kind = toolKind({ host: HOST, name })
       const isSubagentCall = SUBAGENT_SPAWN_TOOLS.has(name)
-      pendingCalls.set(block.id, { name, kind, start: ts, isSubagentCall })
+      const ask = agentIndex === 0 && line.isSidechain !== true ? ASK_TOOL_END.get(name) : undefined
+      pendingCalls.set(block.id, { name, kind, start: ts, isSubagentCall, ask })
       const previous = lastFinishedByKind.get(kind)
       if (previous && previous.outcome !== "ok" && !previous.retried && ts > previous.end) {
         toolRetries += 1
@@ -546,10 +594,13 @@ function createAgentProcessor({ agentIndex }) {
       return
     }
     if (isHumanPromptLine(line)) {
+      const marker = isInterruptMarker(line.message?.content)
       if (currentPromptStart !== null) {
         const end = lastActivityTs ?? currentPromptStart
         intervals.push({ kind: "turn", agent: agentIndex, start: currentPromptStart, end })
-        if (agentIndex === 0) intervals.push({ kind: "human_wait", agent: agentIndex, start: end, end: ts })
+        // The wait the operator's interrupt ends, and the one after it while the agent did nothing, are the operator's redirect.
+        const stoppedBy = marker || (interruptRun && lastActivityTs === null) ? "interrupted" : stopEnd ?? "not_recorded"
+        if (agentIndex === 0) intervals.push({ kind: "human_wait", agent: agentIndex, start: end, end: ts, stop: { end: stoppedBy, asks: stopAsks, pending_agents: stopPending } })
         // The agent stopped where the wait starts, if it did anything after the last prompt. A prompt the human queued while it worked is written after, but typed during the turn.
         if (humanTurns !== null && lastActivityTs !== null && line.promptSource !== "queued") humanTurns.agentStopped(end)
       }
@@ -559,6 +610,10 @@ function createAgentProcessor({ agentIndex }) {
       }
       currentPromptStart = ts
       lastActivityTs = null
+      stopEnd = null
+      stopAsks = null
+      stopPending = null
+      interruptRun = marker
     } else if (isToolResultLine(line)) {
       lastActivityTs = ts
     }
@@ -583,6 +638,11 @@ function createAgentProcessor({ agentIndex }) {
         handleAssistantLine(line, ts)
       } else if (line.type === "system" && line.subtype === "compact_boundary") {
         compactions += 1
+      } else if (line.type === "system" && line.subtype === "turn_duration" && agentIndex === 0 && line.isSidechain !== true) {
+        // The host writes the count only when it is above zero (on this machine's transcripts, 2.1.274 to 2.1.290, never as 0), so a line
+        // without it means none were running. A count that is no whole number does not say.
+        const pending = Object.hasOwn(line, "pendingBackgroundAgentCount") ? line.pendingBackgroundAgentCount : 0
+        stopPending = Number.isSafeInteger(pending) && pending >= 0 ? pending > 0 : null
       } else if (line.type === "pr-link") {
         if (isValidPrRef(line.prRepository, line.prNumber)) prRefs.push({ repo: line.prRepository, number: line.prNumber, agent: agentIndex, created: false, at: ts })
       } else if (line.type === "file-history-delta") {

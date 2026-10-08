@@ -307,7 +307,7 @@ test("visibility is resolved with the account token, cached for seven days, and 
   const retried = anonymousPaths(github)
   assert.deepEqual(retried, ["acme/gone", "acme/hidden", "ourostack/desk"], "the 403 and the 404 are both retried, unauthenticated, over plain HTTP (the desk plugin's own unregistered source 404s and is retried too)")
   const published = JSON.parse(github.blobs.get(github.headFacts(STORE, await intakeBranch(env)).get(name).sha))
-  assert.deepEqual(published.refs.prs, [{ repo: "acme/open", number: 1 }])
+  assert.deepEqual(published.refs.prs, [{ repo: "acme/open", number: 1, created: false }])
   assert.deepEqual(published.refs.commits, [{ repo: "acme/open", sha: "a".repeat(40) }])
   assert.deepEqual(published.refs.private, { prs: 3, commits: 1, plugins: 1 }, "the desk plugin's source is not known to be public in this fake")
   assert.doesNotMatch(JSON.stringify(published), /secret|hidden|gone/u)

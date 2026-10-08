@@ -74,6 +74,11 @@
 //     `autopilot`, scheduled (`schedule-*`) and any other sourced message is
 //     not human. `human_wait` (agent 0 only) runs from the end of the last
 //     interaction to the next human prompt, when no turn is open in between.
+//     Its `stop` (published facts /4) is `interrupted` when a root `abort`
+//     came after the root's last turn start, else `end_turn`; `asks` is
+//     whether the last root `assistant.message` text since the previous human
+//     prompt ended in "?" (`null` with none); `pending_agents` is `null`,
+//     because Copilot logs no background-agent count.
 //   - Human turns (`human_turns`): each human prompt (as above) is one entry,
 //     fed to `createHumanTurns` as a character count. A root `assistant.message`
 //     adds its length to the reply size of the next prompt. The agent's stop is
@@ -401,6 +406,10 @@ function createSessionFold() {
   let stopInteraction = null
   // A prompt that follows a stop waits here for the next root turn start: if that turn continues the interaction the stop closed, the prompt came between two iterations and the agent had not stopped. Anything else (a turn of a new interaction, or no turn start before another event) is read as a stop.
   let held = null
+  // The stop facts of the next human wait: whether the operator aborted the root since its last turn started, and whether the root's last
+  // reply text ended in a question mark (`null` with no reply text since the last human prompt). Copilot records no background-agent count.
+  let aborted = false
+  let replyAsks = null
 
   function settlePrompt(stopped) {
     if (held === null) return
@@ -467,6 +476,7 @@ function createSessionFold() {
       pendingSubagents.clear()
       pendingPermissions.clear()
       lastTurnEnd = null
+      aborted = false
       retryStart = null
       compactionStart = undefined
       if (shutdown !== null) shutdown.stale = true
@@ -481,8 +491,9 @@ function createSessionFold() {
       if (!root || turnId === null) return
       // A prompt logged right after a turn end is settled by this turn: one that continues the interaction the turn end closed means the agent had not stopped.
       settlePrompt(!(held !== null && held.stopId !== null && held.stopId === (stringOrNull(data.interactionId) ?? `turn:${turnId}`)))
-      // The agent is working again, so an earlier turn end was not its stop.
+      // The agent is working again, so an earlier turn end was not its stop, and an earlier abort did not end this turn.
       stopAt = null
+      aborted = false
       const id = stringOrNull(data.interactionId) ?? `turn:${turnId}`
       if (interaction !== null && interaction.id !== id) closeInteraction()
       if (interaction === null) {
@@ -511,13 +522,21 @@ function createSessionFold() {
       const chars = toolOnly ? 0 : textLength(data.content)
       if (chars === null) flag("human_turns", "source_unreadable")
       else humans.addReply(chars)
+      // Only the last character is looked at; the text is not kept.
+      if (typeof data.content === "string" && data.content.trim().length > 0) replyAsks = data.content.trimEnd().endsWith("?")
+    },
+    abort(data, at, root) {
+      if (root) aborted = true
     },
     "user.message"(data, at, root) {
       if (!isHumanPrompt(data, root)) return
       recordHumanTurn(data, at)
       if (interaction !== null && interaction.open.size === 0) closeInteraction()
-      if (interaction === null && lastTurnEnd !== null) addTimed({ kind: "human_wait", agent: 0 }, lastTurnEnd, at, "human_waits")
+      const stop = { end: aborted ? "interrupted" : "end_turn", asks: replyAsks, pending_agents: null }
+      if (interaction === null && lastTurnEnd !== null) addTimed({ kind: "human_wait", agent: 0, stop }, lastTurnEnd, at, "human_waits")
       lastTurnEnd = null
+      aborted = false
+      replyAsks = null
     },
     "tool.execution_start"(data, at) {
       const toolCallId = stringOrNull(data.toolCallId)
@@ -823,7 +842,8 @@ function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits, start
     if (at !== undefined && (!timeOf.has(sha) || at < timeOf.get(sha))) timeOf.set(sha, at)
   })
   return {
-    prs: [...prs.values()].sort(comparePrRefs).slice(0, LIMITS.prs),
+    // Copilot records which PRs a session named, never which it created, so no PR is marked created.
+    prs: [...prs.values()].sort(comparePrRefs).slice(0, LIMITS.prs).map((ref) => ({ ...ref, created: false })),
     commits: sortedCommits.slice(0, LIMITS.commits).map((sha) => ({ repo: commits.get(sha), sha, ...(timeOf.has(sha) ? { at_ms: timeOf.get(sha) } : {}) })),
     unresolved,
   }
