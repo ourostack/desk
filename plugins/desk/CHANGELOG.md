@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.240 — 2026-10-08
+
+The factory's public gate now accepts published facts `desk.factory.published/4`, and every `/1`, `/2` and `/3` file already in a store stays valid ([`published-schema.js`](mcp/src/factory/published-schema.js)). A `/4` file adds four keys, each required where it applies in `/4` and refused as `inconsistent` in an older file: each job's UTC finish day `jobs[].finished_on` with its source `jobs[].finished_basis` (`transition` or `card_updated`), whether the session created each pull request (`refs.prs[].created`, a plain `true` or `false` with no "not known" value, so a deriver writes `false` unless its own events show the session created the PR), and, on human waits only, how the agent's turn ended before the wait (`intervals[].stop`: `end`, `asks`, `pending_agents`; no text and no tool name). The finish day is the only date published facts may carry: it must be a real calendar day no earlier than 2025-01-01, it sits only on a job whose card was seen done or cancelled and whose file carries the timed source its basis names, and a desk whose remote is public still publishes no job timing, so no finish day, and no PR marked `created: true`, because GitHub's public creation time of such a PR would date the session. The store's intake also refuses a finish day after the UTC day it runs ([`validate-pr.js`](mcp/src/factory/pipeline/validate-pr.js), code `future`). Local facts accept the PR flag and the stop facts as optional keys ([`schema.js`](mcp/src/factory/schema.js), `ENUMS.stopEnd`). The publishing transform still writes `/2` and `/3` until the derivers and the transform fill the new keys, and the [store playbook](docs/factory-store-playbook.md) describes the `/4` gate.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.239 — 2026-10-08
+
+The loop no longer raises `labels_quarantined`, and the session-start line no longer counts a job, for labels the flush withdrew on purpose ([`boot-check.js`](mcp/src/factory/boot-check.js) `labelsBootCheck`). A `job_unbound` record means a delivered label was taken out of the store because its session's facts stopped binding the job, and the hold lifts by itself if the session binds the job again, so there is nothing for anyone to repair. Counting it kept the alarm, and the store's `loop_alarms_open`, raised for 30 days after every withdrawal; on 2026-10-08 five such withdrawals re-raised it. A job with any other quarantine record, or with a record that does not read, is still reported.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.238 — 2026-10-08
 
 On Windows, a Desk server waiting for another server's runtime cache build no longer crashes when the lock folders are briefly unavailable. A waiter used to create and delete a reclaim folder on every poll to check whether the lock owner was dead, so with several servers starting together Windows could answer one of those `mkdir` calls with `EPERM: operation not permitted, mkdir '…publish-lock.reclaim-lock'` (it answers EPERM, EACCES or EBUSY, not "already exists", for a folder that is being deleted or that another process has open), and the waiter failed its whole start-up. A waiter now looks at the owner first and touches no reclaim folder while the owner is alive. If the owner is dead, those Windows answers mean "someone else has it": the waiter waits and tries again inside its existing 30 second limit. A reclaim folder older than that limit, left by a reclaimer that died, is removed so it cannot block recovery.

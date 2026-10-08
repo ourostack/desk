@@ -16,6 +16,7 @@ import {
   publishableToken,
   validatePublishedBytes,
   PUBLISHED_SCHEMA,
+  PUBLISHED_SCHEMA_V3,
   PUBLISHED_SCHEMAS,
   PUBLISHED_LIMITS,
   DATE_SHAPE,
@@ -33,10 +34,10 @@ const GOLDEN = JSON.parse(GOLDEN_BYTES.toString("utf8"))
 const LOCAL_GOLDEN = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
 const SENTINEL = "SENTINEL-7f3a"
 
-// The golden file is `/2`, as the transform writes a session with nothing only `/3` allows; the cases below run on its `/3` form, with a timed commit.
+// The golden file is `/2`, as the transform writes a session with nothing only `/3` allows; the cases below run on its `/3` form, with a timed commit. The `/4` cases at the end start from `golden4()`.
 function golden() {
   const value = structuredClone(GOLDEN)
-  value.schema = PUBLISHED_SCHEMA
+  value.schema = PUBLISHED_SCHEMA_V3
   value.refs.commits[0].at_ms = 600000
   return value
 }
@@ -76,18 +77,19 @@ test("the golden published file validates, as a value and as its exact bytes", (
   assert.deepEqual(validatePublished(golden()), { ok: true, errors: [] })
   assert.deepEqual(validatePublishedBytes(GOLDEN_BYTES), { ok: true, errors: [] })
   assert.equal(GOLDEN.schema, "desk.factory.published/2")
-  assert.equal(PUBLISHED_SCHEMA, "desk.factory.published/3")
-  assert.deepEqual(PUBLISHED_SCHEMAS, ["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA])
+  assert.equal(PUBLISHED_SCHEMA, "desk.factory.published/4")
+  assert.equal(PUBLISHED_SCHEMA_V3, "desk.factory.published/3")
+  assert.deepEqual(PUBLISHED_SCHEMAS, ["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA_V3, PUBLISHED_SCHEMA])
 })
 
-test("published facts accept schema /1, /2 and /3 and refuse /4", () => {
+test("published facts accept schema /1, /2 and /3 without the /4 keys and refuse /5", () => {
   const bare = golden()
   delete bare.human_turns // a /1 file carries no human_turns
   delete bare.refs.commits[0].at_ms // nor does a /1 or /2 file carry a commit time
   for (const schema of ["desk.factory.published/1", "desk.factory.published/2", "desk.factory.published/3"]) {
     assert.deepEqual(validatePublished({ ...bare, schema }), { ok: true, errors: [] }, schema)
   }
-  assertSingle(validatePublished({ ...golden(), schema: "desk.factory.published/4" }), "pattern", "schema")
+  assertSingle(validatePublished({ ...golden(), schema: "desk.factory.published/5" }), "pattern", "schema")
 })
 
 test("a commit time is /3 only, within the session, and never beside a public desk's withheld timing", () => {
@@ -1005,4 +1007,267 @@ test("human_turns is refused in a /1 file", () => {
   delete bare.refs.commits[0].at_ms
   bare.schema = "desk.factory.published/1"
   assert.deepEqual(validatePublished(bare), { ok: true, errors: [] })
+})
+
+// ---------------------------------------------------------------------------
+// `/4`: each job's UTC finish day, whether the session created each PR, and
+// the mechanical facts of why the agent stopped before each human wait.
+// ---------------------------------------------------------------------------
+
+// The golden `/3` file as `/4`: the first job finished on a transition into `done`, the others carry no day (open, no readable card creation time, no observation); the PR was created by the session; the one human wait records how the turn ended.
+function golden4() {
+  const value = golden()
+  value.schema = PUBLISHED_SCHEMA
+  value.refs.prs = value.refs.prs.map((pr) => ({ ...pr, created: true }))
+  value.jobs = value.jobs.map((job) => ({ ...job, finished_on: null, finished_basis: null }))
+  value.jobs[0].finished_on = "2026-09-25"
+  value.jobs[0].finished_basis = "transition"
+  value.intervals = value.intervals.map((item) => (item.kind === "human_wait" ? { ...item, stop: { end: "end_turn", asks: true, pending_agents: false } } : item))
+  return value
+}
+
+const WAIT_INDEX = 2
+const V4_KEYS = [
+  ["jobs", 0, "finished_on"],
+  ["jobs", 0, "finished_basis"],
+  ["refs", "prs", 0, "created"],
+  ["intervals", WAIT_INDEX, "stop"],
+]
+
+test("the /4 golden value validates, and its new keys are the ones the design names", () => {
+  const value = golden4()
+  assert.equal(value.intervals[WAIT_INDEX].kind, "human_wait")
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  assert.deepEqual(validatePublishedBytes(JSON.stringify(value)), { ok: true, errors: [] })
+  assert.deepEqual(ENUMS.stopEnd, ["end_turn", "max_tokens", "rate_limit", "api_error", "refusal", "interrupted", "ask_question", "ask_plan", "not_recorded"])
+  assert.deepEqual(ENUMS.finishedBasis, ["transition", "card_updated"])
+})
+
+for (const keys of V4_KEYS) {
+  test(`a /4 file without ${ps(keys)} fails with missing`, () => {
+    assertSingle(validatePublished(deletePath(golden4(), keys)), "missing", ps(keys))
+  })
+  test(`${ps(keys)} is /4 only: an older file carrying it is inconsistent`, () => {
+    const value = golden4()
+    const carried = at(value, keys)[keys[keys.length - 1]]
+    for (const schema of PUBLISHED_SCHEMAS.slice(0, 3)) {
+      const older = golden()
+      if (schema !== PUBLISHED_SCHEMA_V3) delete older.refs.commits[0].at_ms
+      if (schema === PUBLISHED_SCHEMAS[0]) delete older.human_turns
+      older.schema = schema
+      setPath(older, keys, carried)
+      assertSingle(validatePublished(older), "inconsistent", ps(keys))
+    }
+  })
+}
+
+test("an older file whose /4-only key fails its own check is named once, by that check", () => {
+  const older = setPath(golden(), ["jobs", 0, "finished_on"], `${SENTINEL}`)
+  const result = validatePublished(older)
+  assertSingle(result, "pattern", "jobs.0.finished_on")
+  assertNoLeak(result)
+  assertSingle(validatePublished(setPath(golden(), ["refs", "prs", 0, "created"], "yes")), "type", "refs.prs.0.created")
+})
+
+test("a /4 file keeps every older rule: a /3 commit time and outcomes flag stay valid in it", () => {
+  const value = golden4()
+  value.unavailable = [{ field: "outcomes", reason: "capped" }]
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+})
+
+test("finished_on is a real calendar day, written exactly as YYYY-MM-DD, no earlier than 2025-01-01", () => {
+  for (const day of ["2025-01-01", "2026-09-25", "2028-02-29", "2026-12-31"]) {
+    assert.deepEqual(validatePublished(setPath(golden4(), ["jobs", 0, "finished_on"], day)), { ok: true, errors: [] }, day)
+  }
+  for (const day of ["2026-9-25", "2026-02-30", "2027-02-29", "2026-13-01", "2026-00-10", "2026-09-25T00:00:00.000Z", " 2026-09-25", "2026-09-25\n", "20260925", "", `${SENTINEL}-2026-09-25`]) {
+    const result = validatePublished(setPath(golden4(), ["jobs", 0, "finished_on"], day))
+    assertSingle(result, "pattern", "jobs.0.finished_on")
+    assertNoLeak(result)
+  }
+  for (const day of ["2024-12-31", "1970-01-01", "0000-01-01"]) {
+    assertSingle(validatePublished(setPath(golden4(), ["jobs", 0, "finished_on"], day)), "range", "jobs.0.finished_on")
+  }
+  for (const bad of [20260925, true, {}, ["2026-09-25"]]) {
+    assertSingle(validatePublished(setPath(golden4(), ["jobs", 0, "finished_on"], bad)), "type", "jobs.0.finished_on")
+  }
+})
+
+test("finished_basis is transition, card_updated or null, and is null exactly when finished_on is", () => {
+  const result = validatePublished(setPath(golden4(), ["jobs", 0, "finished_basis"], SENTINEL))
+  assertSingle(result, "enum", "jobs.0.finished_basis")
+  assertNoLeak(result)
+  assertSingle(validatePublished(setPath(golden4(), ["jobs", 0, "finished_basis"], null)), "inconsistent", "jobs.0.finished_basis")
+  assertSingle(validatePublished(setPath(golden4(), ["jobs", 1, "finished_basis"], "card_updated")), "inconsistent", "jobs.1.finished_basis")
+  // A day of either source on a job whose card was seen done.
+  const card = setPath(golden4(), ["jobs", 0, "finished_basis"], "card_updated")
+  assert.deepEqual(validatePublished(card), { ok: true, errors: [] })
+})
+
+test("finished_on is set only on a job whose card was observed done or cancelled", () => {
+  // Open (processing) and never observed.
+  for (const index of [1, 3]) {
+    const value = golden4()
+    value.jobs[index].finished_on = "2026-09-25"
+    value.jobs[index].finished_basis = "card_updated"
+    assertSingle(validatePublished(value), "inconsistent", `jobs.${index}.finished_on`)
+  }
+  const cancelled = golden4()
+  cancelled.jobs[0].observed.status = "cancelled"
+  cancelled.jobs[0].transitions[1].to = "cancelled"
+  assert.deepEqual(validatePublished(cancelled), { ok: true, errors: [] })
+})
+
+test("the basis names a source the file itself carries: a timed transition into the observed status, or a timed observation", () => {
+  // No transition into the observed status.
+  let value = golden4()
+  value.jobs[0].transitions = [{ to: "processing", offset_ms: 86700000 }]
+  assertSingle(validatePublished(value), "inconsistent", "jobs.0.finished_basis")
+  // A transition into it with no offset (no readable card creation time).
+  value = golden4()
+  value.jobs[0].transitions[1].offset_ms = null
+  assertSingle(validatePublished(value), "inconsistent", "jobs.0.finished_basis")
+  // The card's update with no offset.
+  value = golden4()
+  value.jobs[0].finished_basis = "card_updated"
+  value.jobs[0].observed.offset_ms = null
+  assertSingle(validatePublished(value), "inconsistent", "jobs.0.finished_basis")
+  // Job 2 was seen done but has no offsets, so it can carry no day.
+  value = golden4()
+  value.jobs[2].finished_on = "2026-09-25"
+  value.jobs[2].finished_basis = "card_updated"
+  assertSingle(validatePublished(value), "inconsistent", "jobs.2.finished_basis")
+})
+
+test("finished_on is the only key exempt from the date refusal: every string field that could hold a date or a time of day refuses one with its own code", () => {
+  const value = golden4()
+  // Agent 1 also names its type and requested model, so those token fields are walked too.
+  value.agents[1].agent_type = "general-purpose"
+  value.agents[1].requested_model = "sonnet"
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  const leaves = stringLeaves(value).filter((keys) => keys[keys.length - 1] !== "finished_on")
+  const checked = new Set()
+  for (const keys of leaves) {
+    const original = at(value, keys)[keys[keys.length - 1]]
+    // Each field is probed only where its own pattern accepts the same characters in a shape that is no date (one-digit month) or no time (one-digit hour), so only the date or time refusal can refuse the shaped value.
+    for (const [shaped, plain, code] of [[`${original}-2026-09-25`, `${original}-2026-9-25`, "date"], [`${original}:t08:30`, `${original}:t8:30`, "time"]]) {
+      if (!validatePublished(setPath(structuredClone(value), keys, plain)).ok) continue
+      checked.add(`${ps(keys)} ${code}`)
+      assertSingle(validatePublished(setPath(structuredClone(value), keys, shaped)), code, ps(keys))
+    }
+  }
+  for (const field of ["models.0.id", "models.1.id", "agents.0.model", "agents.1.model", "agents.1.agent_type", "agents.1.requested_model", "plugins.0.name", "refs.prs.0.repo", "refs.commits.0.repo"]) {
+    assert.ok(checked.has(`${field} date`), field)
+  }
+  for (const field of ["models.0.id", "agents.0.model", "agents.1.agent_type", "agents.1.requested_model"]) assert.ok(checked.has(`${field} time`), field)
+  // No other string field can hold either shape at all, so a date there fails its own pattern or enum.
+  for (const keys of leaves) {
+    const result = validatePublished(setPath(structuredClone(value), keys, "2026-09-25"))
+    assert.equal(result.ok, false, ps(keys))
+    assertNoLeak(result)
+  }
+  // And a time of day is never a finish day.
+  assertSingle(validatePublished(setPath(golden4(), ["jobs", 0, "finished_on"], "08:30")), "pattern", "jobs.0.finished_on")
+})
+
+test("a desk_public /4 file carries no finish day: both keys null, else the job is inconsistent", () => {
+  const value = golden4()
+  value.jobs = value.jobs.map((job) => ({ ...job, session_offset_ms: null, transitions: [], observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null }, finished_on: null, finished_basis: null }))
+  value.unavailable = [{ field: "job_offsets", reason: "desk_public" }]
+  delete value.refs.commits[0].at_ms
+  // The stop facts are no job timing, and a PR the session created is published as not created (below).
+  value.refs.prs = value.refs.prs.map((pr) => ({ ...pr, created: false }))
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  const dated = structuredClone(value)
+  dated.jobs[0].finished_on = "2026-09-25"
+  const result = validatePublished(dated)
+  assert.ok(result.errors.some((error) => error.code === "inconsistent" && error.path === "jobs.0"), JSON.stringify(result.errors))
+})
+
+test("stop exists only on a human_wait interval: on any other kind it is an unknown key", () => {
+  for (const index of [0, 1, 3]) {
+    const value = golden4()
+    value.intervals[index].stop = { end: "end_turn", asks: null, pending_agents: null }
+    assertSingle(validatePublished(value), "unknown_key", `intervals.${index}`)
+  }
+})
+
+test("stop holds a stop end, and asks and pending_agents as true, false or null, and nothing else", () => {
+  for (const end of ENUMS.stopEnd) {
+    for (const flag of [true, false, null]) {
+      const value = setPath(golden4(), ["intervals", WAIT_INDEX, "stop"], { end, asks: flag, pending_agents: flag })
+      assert.deepEqual(validatePublished(value), { ok: true, errors: [] }, `${end} ${flag}`)
+    }
+  }
+  const stopPath = ["intervals", WAIT_INDEX, "stop"]
+  const cases = [
+    { keys: [...stopPath, "end"], value: SENTINEL, code: "enum" },
+    { keys: [...stopPath, "end"], value: null, code: "type" },
+    { keys: [...stopPath, "asks"], value: SENTINEL, code: "type" },
+    { keys: [...stopPath, "asks"], value: 1, code: "type" },
+    { keys: [...stopPath, "pending_agents"], value: SENTINEL, code: "type" },
+    { keys: stopPath, value: SENTINEL, code: "type" },
+    { keys: stopPath, value: null, code: "type" },
+  ]
+  for (const spec of cases) {
+    const result = validatePublished(setPath(golden4(), spec.keys, spec.value))
+    assertSingle(result, spec.code, ps(spec.keys))
+    assertNoLeak(result)
+  }
+  for (const key of ["end", "asks", "pending_agents"]) {
+    assertSingle(validatePublished(deletePath(golden4(), [...stopPath, key])), "missing", ps([...stopPath, key]))
+  }
+  // No text and no tool name rides along.
+  for (const key of [SENTINEL, "text", "tool"]) {
+    const result = validatePublished(setPath(golden4(), [...stopPath, key], SENTINEL))
+    assertSingle(result, "unknown_key", ps(stopPath))
+    assertNoLeak(result)
+  }
+})
+
+test("refs.prs[].created is a boolean, and a PR the session only looked at is false", () => {
+  assert.deepEqual(validatePublished(setPath(golden4(), ["refs", "prs", 0, "created"], false)), { ok: true, errors: [] })
+  for (const bad of [null, "true", 1]) {
+    assertSingle(validatePublished(setPath(golden4(), ["refs", "prs", 0, "created"], bad)), "type", "refs.prs.0.created")
+  }
+  // With the optional keys it already had.
+  const value = golden4()
+  value.refs.prs[0].agent = 1
+  value.refs.prs[0].at_ms = 600000
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+})
+
+test("a /4 file with no job, PR or human wait needs none of the new keys", () => {
+  const value = golden4()
+  value.jobs = []
+  value.refs.prs = []
+  value.intervals = value.intervals.filter((item) => item.kind !== "human_wait")
+  value.outcomes = []
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+})
+
+test("the /4 level specs carry check functions", () => {
+  for (const name of ["stop", "jobV4", "prV4", "intervalWaitV4"]) {
+    assert.ok(__PUBLISHED_SPECS__[name], name)
+    for (const [fieldName, field] of Object.entries(__PUBLISHED_SPECS__[name])) assert.equal(typeof field.check, "function", `${name}.${fieldName}`)
+  }
+})
+
+test("a desk_public file never says a PR was created: with GitHub's public creation time it would date the session", () => {
+  const value = golden4()
+  value.jobs = value.jobs.map((job) => ({ ...job, session_offset_ms: null, transitions: [], observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null }, finished_on: null, finished_basis: null }))
+  value.unavailable = [{ field: "job_offsets", reason: "desk_public" }]
+  delete value.refs.commits[0].at_ms
+  value.refs.prs = [{ repo: "ourostack/desk", number: 9, created: false }, { repo: "ourostack/desk", number: 10, created: true }]
+  assertSingle(validatePublished(value), "inconsistent", "refs.prs.1.created")
+  value.refs.prs[1].created = false
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  // A PR that fails its own check is named once, by that check.
+  value.refs.prs[1].created = "yes"
+  assertSingle(validatePublished(value), "type", "refs.prs.1.created")
+  value.refs.prs[1] = `${SENTINEL} not a PR`
+  const result = validatePublished(value)
+  assertSingle(result, "type", "refs.prs.1")
+  assertNoLeak(result)
+  // A private desk may say it.
+  assert.deepEqual(validatePublished(golden4()), { ok: true, errors: [] })
 })
