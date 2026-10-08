@@ -133,6 +133,16 @@ test("a task whose status was never recorded has no finish day", () => {
   assert.deepEqual(walkOf([session], J("a")).walk.finished_on, { class: "unavailable", state: "unavailable", basis: null, reasons: ["status_unavailable"] })
 })
 
+test("a missing finish day names the job clock only when the clock was not read: a session that did not see the card end gives no reason of its own", () => {
+  // An earlier /4 session saw the card still processing; the finishing session wrote /3 facts.
+  const early = facts({ id: S(46), duration: 30 * MIN, intervals: [span("turn", 0, 0, 30 * MIN)], jobs: [bound(J("a"), 0, { length: 30 * MIN, status: "processing", day: null, transitions: [{ to: "processing", offset_ms: 0 }], observed: { status: "processing", offset_ms: 0 } })] })
+  const late = facts({ id: S(47), schema: "desk.factory.published/3", duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [older(J("a"), 0)] })
+  assert.deepEqual(walkOf([early, late], J("a")).walk.finished_on.reasons, ["not_in_published_facts"])
+  // A /4 session with a timed done transition but no observation of the card: the clock was read, the day was not published.
+  const unobserved = facts({ id: S(48), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [{ ...bound(J("b"), 0, { day: null }), observed: null }] })
+  assert.deepEqual(walkOf([unobserved], J("b")).walk.finished_on.reasons, ["not_in_published_facts"])
+})
+
 test("a cancelled task has a finish day though it has no lead window", () => {
   const session = facts({ id: S(11), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [bound(J("a"), 0, { status: "cancelled", day: "2026-10-04" })] })
   const { walk } = walkOf([session], J("a"))
@@ -188,6 +198,14 @@ test("each pull request says whether a session of the task created it: true when
   assert.equal(byNumber[2].created, false)
   assert.equal(byNumber[3].created, null)
   assert.equal(Object.hasOwn(byNumber[3], "at_ms"), false)
+})
+
+test("a pull request marked created never takes a mention's time: with no timed creating call it is published without a time", () => {
+  // Session A creates #7 without a time; session B, placed two hours later, mentions it at 40 minutes on its own clock.
+  const creator = facts({ id: S(44), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [bound(J("a"), 0)], prs: [{ repo: "ourostack/desk", number: 7, agent: 0, created: true }] })
+  const mention = facts({ id: S(45), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [bound(J("a"), 120 * MIN)], prs: [{ repo: "ourostack/desk", number: 7, agent: 0, at_ms: 40 * MIN, created: false }] })
+  const { additions } = walkOf([creator, mention], J("a"))
+  assert.deepEqual(additions.prs, [{ host: "claude-code", session: S(44), repo: "ourostack/desk", number: 7, worker: 0, created: true }])
 })
 
 // --- waits ----------------------------------------------------------------------------------------------------------------------
@@ -260,6 +278,44 @@ test("without a lead window a wait has no next-prompt time, and says why", () =>
   const session = facts({ id: S(30), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("a"), 0, { status: "cancelled" })] })
   const { walk } = walkOf([session], J("a"))
   assert.deepEqual(walk.waits, [{ host: "claude-code", session: S(30), start_ms: 10 * MIN, end_ms: 30 * MIN, next_prompt_ms: null, stop: { end: "end_turn", asks: false, pending_agents: false }, reasons: ["cancelled"] }])
+  assert.deepEqual(walk.waits_state, { state: "unavailable", reasons: ["cancelled"] })
+})
+
+test("when the task's next-prompt figure is unavailable, no wait publishes a number: each is null with the figure's reasons, and the list says so", () => {
+  const session = facts({
+    id: S(40),
+    duration: 60 * MIN,
+    intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)],
+    jobs: [bound(J("a"), 0)],
+    unavailable: [...CLAUDE_FLAGS, { field: "turns", reason: "source_unreadable" }, { field: "tool_durations", reason: "source_unreadable" }],
+  })
+  const { walk } = walkOf([session], J("a"))
+  assert.equal(walk.task.waiting_by_waited_on_ms.next_prompt.state, "unavailable")
+  assert.deepEqual(walk.waits.map((entry) => [entry.next_prompt_ms, entry.reasons]), [[null, ["source_unreadable"]]])
+  assert.deepEqual(walk.waits_state, { state: "unavailable", reasons: ["source_unreadable"] })
+})
+
+test("when the task's next-prompt figure is partial, the waits' list state says so with the figure's bound", () => {
+  const truncated = facts({
+    id: S(41),
+    duration: 60 * MIN,
+    intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)],
+    jobs: [bound(J("a"), 0)],
+    unavailable: [...CLAUDE_FLAGS, { field: "tool_durations", reason: "log_truncated" }],
+  })
+  const { walk } = walkOf([truncated], J("a"))
+  const figure = walk.task.waiting_by_waited_on_ms.next_prompt
+  assert.equal(figure.state, "partial")
+  assert.deepEqual(walk.waits_state, { state: "partial", reasons: figure.reasons, bound: figure.bound })
+  assert.equal(walk.waits[0].next_prompt_ms, 20 * MIN, "a partial figure still has its value, and each wait its share")
+  assert.deepEqual(walk.waits[0].reasons, [], "the list state carries the figure's reasons, not each stop")
+
+  const open = facts({ id: S(42), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("b"), 0, { status: "processing", day: null, observed: { status: "processing", offset_ms: 0 } })] })
+  const { walk: still } = walkOf([open], J("b"))
+  assert.deepEqual(still.waits_state, { state: "partial", reasons: ["censored"], bound: "lower" })
+
+  const whole = facts({ id: S(43), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("c"), 0)] })
+  assert.deepEqual(walkOf([whole], J("c")).walk.waits_state, { state: "measured", reasons: [] })
 })
 
 // --- the ask-tool idle rule -----------------------------------------------------------------------------------------------------
@@ -298,6 +354,9 @@ test("a subagent's ask wait is idle through its parent's turn around it, but not
   const { walk } = walkOf([session], J("a"))
   assert.equal(walk.task.working_ms.value, 30 * MIN)
   assert.deepEqual(walk.waits, [], "only a root wait is an after-stop wait")
+  // Its idle time is next-prompt time that no wait holds.
+  assert.equal(walk.next_prompt_unheld_ms, walk.task.waiting_by_waited_on_ms.next_prompt.value)
+  assert.equal(walk.next_prompt_unheld_ms, 30 * MIN)
 })
 
 test("an ask wait cut by the task's segments is idle only inside them", () => {

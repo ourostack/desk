@@ -38,8 +38,9 @@ function replaceDirectory(source, destination) {
 // The job's timeline as `jobs/<job>.json` publishes it. The Lean walk adds, every time on the job clock: the job's workers
 // (`agents`), human turns and pull requests (`timelineAdditions`) with how whole each list is (`human_turns_state`, `prs_state`), the
 // lead window, the work bursts and the gaps between them (`jobWalk`) with `bursts_state`, how whole the intervals they are read from are,
-// the after-stop waits (`waits`, each with the `next_prompt` time it holds), the task's UTC finish day (`finished_on`), and `detail_files`,
-// the per-session swimlane files (`jobs/<job>/<session id>.json`) that hold the stretches.
+// the after-stop waits (`waits`, each with the `next_prompt` time it holds) with `waits_state`, the state of the task's `next_prompt`
+// figure they split, the task's UTC finish day (`finished_on`), and `detail_files`, the per-session swimlane files
+// (`jobs/<job>/<session id>.json`) that hold the stretches.
 function outputTimeline(timeline, additions, walk, detailFiles) {
   const window = walk.window
   return {
@@ -59,6 +60,7 @@ function outputTimeline(timeline, additions, walk, detailFiles) {
     bursts_state: walk.bursts_state,
     gaps: walk.gaps,
     waits: walk.waits,
+    waits_state: walk.waits_state,
     finished_on: walk.finished_on,
     detail_files: detailFiles,
   }

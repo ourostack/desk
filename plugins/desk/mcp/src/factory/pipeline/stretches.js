@@ -262,7 +262,7 @@ export function askIdle(timeline) {
 
 /**
  * `jobWaits(timeline) -> waits`: every after-stop wait of the job on the job clock: each root (worker 0) `human_wait` interval the job's
- * binding holds (cut to its segments), as `{ host, session, start_ms, end_ms, stop }`, where `stop` is the facts' record of how the turn
+ * binding holds (cut to its segments, so a wait the segments cut is one entry per part), as `{ host, session, start_ms, end_ms, stop }`, where `stop` is the facts' record of how the turn
  * ended (facts `/4`), or `null` when the facts carry none. In start order. A session without a job offset places none.
  */
 export function jobWaits(timeline) {
@@ -444,10 +444,10 @@ function detailStretches(corrected, { session, offset, entry, position }) {
   })
 }
 
-// Each pull request once: the creating call's time when a session timed the call that created it, else the earliest timed mention when
-// any session times it, else the first by host and session. `created` is `true` when any session created it, else `false` when any
-// session's facts say so, else `null` (facts before `/4` do not say). Timed entries come first, earliest first; untimed ones after, by
-// repository and number.
+// Each pull request once. One a session created is the earliest creating call, timed first, and has no time when no creating call was
+// timed: a mention's time never stands for its opening. Any other is the earliest timed mention when any session times it, else the
+// first by host and session. `created` is `true` when any session created it, else `false` when any session's facts say so, else `null`
+// (facts before `/4` do not say). Timed entries come first, earliest first; untimed ones after, by repository and number.
 function firstOfEachPr(prs) {
   const created = new Map()
   for (const pr of prs) {
@@ -455,18 +455,17 @@ function firstOfEachPr(prs) {
     if (pr.created === true || (pr.created === false && created.get(prKey) !== true)) created.set(prKey, pr.created)
   }
   const seen = new Set()
-  const key = (pr) => ({ ...pr, untimed: Number(!Object.hasOwn(pr, "at_ms")), mention: Number(pr.created !== true), time: pr.at_ms ?? 0 })
-  const order = ["untimed", "mention", "time", "repo", "number", "host", "session"]
-  const first = [...prs].sort((left, right) => compareFields(key(left), key(right), order)).filter((pr) => {
+  const key = (pr) => ({ ...pr, untimed: Number(!Object.hasOwn(pr, "at_ms")), time: pr.at_ms ?? 0 })
+  const order = ["untimed", "time", "repo", "number", "host", "session"]
+  // A pull request a session created is placed only by a creating call: a mention's time is not its opening.
+  const creating = prs.filter((pr) => created.get(`${pr.repo}#${pr.number}`) !== true || pr.created === true)
+  const first = creating.sort((left, right) => compareFields(key(left), key(right), order)).filter((pr) => {
     const prKey = `${pr.repo}#${pr.number}`
     if (seen.has(prKey)) return false
     seen.add(prKey)
     return true
   })
-  // The list keeps its time order, untimed entries by repository and number.
-  return first
-    .map((pr) => ({ ...pr, created: created.get(`${pr.repo}#${pr.number}`) ?? null }))
-    .sort((left, right) => compareFields(key(left), key(right), ["untimed", "time", "repo", "number", "host", "session"]))
+  return first.map((pr) => ({ ...pr, created: created.get(`${pr.repo}#${pr.number}`) ?? null }))
 }
 
 const byStart = (left, right) => compareFields(left, right, ["start_ms", "end_ms", "host", "session"])
@@ -480,7 +479,7 @@ const byStart = (left, right) => compareFields(left, right, ["start_ms", "end_ms
  *     and size classes.
  *   - `prs`: the job's pull requests (the formulas' ownership rule), each once, with the worker that opened it and `at_ms` only when the
  *     facts carry them (a public desk's facts withhold both), and `created`: whether a session of the job created it (`true`), only
- *     mentioned it (`false`), or `null` when its facts predate `/4`. A timed creating call places the pull request before any mention.
+ *     mentioned it (`false`), or `null` when its facts predate `/4`. A created one's `at_ms` is only ever a creating call's time.
  */
 export function timelineAdditions(timeline) {
   const agents = []

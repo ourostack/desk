@@ -91,7 +91,7 @@ const STRUCTURAL = Object.freeze([
   ["job/timeline/gaps/[]/end_ms", "where a gap between bursts ends on the job clock, inside the lead window"],
   ["job/timeline/waits/[]/start_ms", "where an after-stop wait starts on the job clock, read from a recorded human wait; a wait not recorded has no entry"],
   ["job/timeline/waits/[]/end_ms", "where an after-stop wait ends on the job clock, read from a recorded human wait; a wait not recorded has no entry"],
-  ["job/timeline/waits/[]/next_prompt_ms", "the idle next-prompt time inside the lead window the wait holds, its share of the task's next_prompt waiting figure, which carries the state; null with the lead time's reasons when there is no lead window"],
+  ["job/timeline/waits/[]/next_prompt_ms", "the idle next-prompt time inside the lead window the wait holds, its share of the task's next_prompt waiting figure; the list's waits_state carries that figure's state, reasons and bound, and when the figure is unavailable every wait's value is null with the figure's reasons"],
   ["rollups/stackup.json/burst_idle_gap_ms", "the idle gap that ends a work burst, a constant of the method published so the bursts can be reproduced"],
   ["rollups/tasks.json/jobs/[]/longest_gap/value/start_ms", "where the longest gap starts on the job clock, covered by the figure's state"],
   ["rollups/tasks.json/jobs/[]/longest_gap/value/end_ms", "where the longest gap ends on the job clock, covered by the figure's state"],

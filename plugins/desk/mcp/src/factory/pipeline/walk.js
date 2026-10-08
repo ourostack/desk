@@ -126,9 +126,13 @@
 //     facts `/4`) and `next_prompt_ms`, the idle `next_prompt` time inside
 //     the lead window it holds. A moment two waits hold goes to the earlier, so
 //     the waits' times plus the `next_prompt` time no wait holds (a labeled
-//     wait that runs past its human wait) are the task's
-//     `waiting_by_waited_on_ms.next_prompt` exactly. A prompt joins the wait
-//     it ends by session and `end_ms == at_ms`.
+//     wait that runs past its human wait, or a subagent's ask-tool wait,
+//     since only root waits are listed) are the task's
+//     `waiting_by_waited_on_ms.next_prompt` exactly. `waits_state` is that
+//     figure's state, reasons and bound; when it is unavailable, every
+//     `next_prompt_ms` is `null` with its reasons. A wait the task's
+//     segments cut is listed once per part. A prompt joins the wait it ends
+//     by session and `end_ms == at_ms`.
 //   - `finished_on` is the task's UTC finish day from the published facts,
 //     on the job file and on its `rollups/tasks.json` and
 //     `rollups/stackup.json` rows: measured from a session's own transition,
@@ -526,8 +530,11 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
     // The split of the whole gap by cause, stated as the task's split is, so a gap that holds several causes is exact.
     walk.gaps.push({ start_ms: from, end_ms: to, waited_on: waitedOn, idle_by_waited_on_ms: idleFigures(idleWithin(idle, from, to), { base: [], coverage, intervals, placement }) })
   }
-  const held = waitsHeld(jobWaits(timeline), idle.next_prompt, window)
+  // The task's own next-prompt figure, as `waiting_by_waited_on_ms.next_prompt` states it: the waits are its parts.
+  const nextPrompt = hasWindow ? idleFigures(idle, { base: window.reasons, coverage, intervals, placement }).next_prompt : figure("unavailable", null, window.reasons)
+  const held = waitsHeld(jobWaits(timeline), idle.next_prompt, nextPrompt)
   walk.waits = held.waits
+  walk.waits_state = listState(nextPrompt)
   walk.next_prompt_unheld_ms = held.unheld_ms
   walk.finished_on = finishedOn(timeline, formulas)
   walk.human_turns_state = turnsListState(timeline, additions)
@@ -539,24 +546,34 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
   return walk
 }
 
+// A figure's state as a list states it (`waits_state`, like `bursts_state`): its state, reasons and, when partial, its bound.
+function listState(number) {
+  const out = { state: number.state, reasons: number.reasons }
+  if (Object.hasOwn(number, "bound")) out.bound = number.bound
+  if (Object.hasOwn(number, "bound_reason")) out.bound_reason = number.bound_reason
+  return out
+}
+
 /**
  * Each after-stop wait (`jobWaits`) with `next_prompt_ms`, the idle `next_prompt` time inside the lead window it holds, and `reasons`
  * (`not_in_published_facts` when the facts carry no stop record: facts before `/4`). A moment two waits hold (concurrent sessions) goes
- * to the first in start order, so the waits' times plus `unheld_ms`, the `next_prompt` time no wait holds (a labeled wait that runs past
- * its human wait), are the task's `next_prompt` waiting exactly. Without a lead window there is no waiting split: `next_prompt_ms` is
- * `null` and the reasons are the lead time's.
+ * to the first in start order, so the waits' times plus `unheld_ms`, the `next_prompt` time no wait holds, are the task's `next_prompt`
+ * waiting exactly. No wait holds the time a labeled wait runs past its human wait, nor a subagent's ask-tool wait (only root waits are
+ * listed). When the task's figure (`figure`, `waiting_by_waited_on_ms.next_prompt`) is unavailable, as it is without a lead window or
+ * with unreadable intervals, no wait has a number: `next_prompt_ms` is `null` and the wait's reasons gain the figure's. A partial figure
+ * keeps each wait's share; the list's `waits_state` carries its state and bound.
  */
-function waitsHeld(waits, nextPrompt, window) {
-  const hasWindow = Object.hasOwn(window, "start_ms")
+function waitsHeld(waits, nextPrompt, number) {
+  if (number.state === "unavailable") {
+    return { waits: waits.map((wait) => ({ ...wait, next_prompt_ms: null, reasons: sortedUnique([...(wait.stop === null ? ["not_in_published_facts"] : []), ...number.reasons]) })), unheld_ms: null }
+  }
   let taken = []
   const out = waits.map((wait) => {
-    const reasons = sortedUnique([...(wait.stop === null ? ["not_in_published_facts"] : []), ...(hasWindow ? [] : window.reasons)])
-    if (!hasWindow) return { ...wait, next_prompt_ms: null, reasons }
     const mine = subtract(clip(nextPrompt, wait.start_ms, wait.end_ms), taken)
     taken = spansOf([...taken, ...mine])
-    return { ...wait, next_prompt_ms: duration(mine), reasons }
+    return { ...wait, next_prompt_ms: duration(mine), reasons: wait.stop === null ? ["not_in_published_facts"] : [] }
   })
-  return { waits: out, unheld_ms: hasWindow ? duration(subtract(nextPrompt, spansOf(waits))) : null }
+  return { waits: out, unheld_ms: duration(subtract(nextPrompt, spansOf(waits))) }
 }
 
 const TERMINAL = new Set(["done", "cancelled"])
@@ -567,8 +584,9 @@ const TERMINAL = new Set(["done", "cancelled"])
  * from a session's own transition (`basis: "transition"`) is measured and outranks a day from the card's last update (`card_updated`),
  * which is an upper bound (`finish_from_card_update`) because a card can be edited after the task is done. When sessions moved the card to
  * its end on different days (a reopened task), the latest wins, with the reason `reopened`. Unavailable, with `basis: null`, for an open
- * task (`open_job`), a status not recorded (`status_unavailable`), a public desk (`job_offsets_withheld`), older facts
- * (`not_in_published_facts`) or a job clock that could not be read (`job_offsets_unavailable`).
+ * task (`open_job`), a status not recorded (`status_unavailable`), a public desk (`job_offsets_withheld`), a session whose job clock
+ * could not be read (`job_offsets_unavailable`), or older facts and sessions that did not see the card end, so the published facts carry
+ * no day (`not_in_published_facts`).
  */
 function finishedOn(timeline, formulas) {
   const none = (reasons) => ({ ...figure("unavailable", null, reasons), basis: null })
@@ -577,10 +595,14 @@ function finishedOn(timeline, formulas) {
   const bindings = timeline.source_sessions.map((session) => ({ session, binding: session.jobs.find((candidate) => candidate.job === timeline.job) }))
   const days = bindings.filter(({ binding }) => typeof binding.finished_on === "string").map(({ binding }) => ({ day: binding.finished_on, basis: binding.finished_basis }))
   if (days.length === 0) {
-    return none(bindings.map(({ session, binding }) => {
-      if (session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")) return "job_offsets_withheld"
-      return Object.hasOwn(binding, "finished_on") ? "job_offsets_unavailable" : "not_in_published_facts"
-    }))
+    // A `/4` session that read the job clock but did not see the card end publishes no day for its own part, so it names no reason.
+    const reasons = bindings.flatMap(({ session, binding }) => {
+      if (session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")) return ["job_offsets_withheld"]
+      if (!Object.hasOwn(binding, "finished_on")) return ["not_in_published_facts"]
+      if (binding.session_offset_ms === null) return ["job_offsets_unavailable"]
+      return []
+    })
+    return none(reasons.length > 0 ? reasons : ["not_in_published_facts"])
   }
   const moved = days.filter((entry) => entry.basis === "transition")
   const chosen = moved.length > 0 ? moved : days
