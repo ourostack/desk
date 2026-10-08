@@ -49,10 +49,43 @@ function populate(fixture) {
   }
 }
 
-function removeDerivedIndex(fixture) {
-  // Convergence has finished and no reader is open. Force real indexing, not a warm hash-only scan.
-  for (const suffix of ["", "-wal", "-shm"]) rmSync(`${indexDbPath(fixture.desk)}${suffix}`, { force: true })
+// Windows refuses to delete a file another process still has open (EPERM, EBUSY or EACCES), and a SQLite handle the controller or the session closes just after
+// convergence reports done is such a file for a moment. So the delete is retried for a bounded time, then fails with its own error: a handle that is never released is a real fault.
+const HELD_OPEN = new Set(["EPERM", "EBUSY", "EACCES"])
+export function removeWithRetry(file, { remove = rmSync, wait = pause, attempts = 50, delayMs = 100 } = {}) {
+  return (async () => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return remove(file, { force: true })
+      } catch (error) {
+        if (!HELD_OPEN.has(error.code) || attempt >= attempts) throw error
+        await wait(delayMs)
+      }
+    }
+  })()
 }
+
+async function removeDerivedIndex(fixture) {
+  // Convergence has finished. Force real indexing, not a warm hash-only scan.
+  for (const suffix of ["", "-wal", "-shm"]) await removeWithRetry(`${indexDbPath(fixture.desk)}${suffix}`)
+}
+
+test("removing a file another process holds open is retried a bounded number of times, and any other failure or a lasting hold is surfaced", async () => {
+  const held = (code) => Object.assign(new Error(code), { code })
+  const calls = []
+  const waits = []
+  const flaky = (file) => { calls.push(file); if (calls.length < 4) throw held(["EPERM", "EBUSY", "EACCES"][calls.length - 1]) }
+  await removeWithRetry("index", { remove: flaky, wait: async (ms) => { waits.push(ms) } })
+  assert.equal(calls.length, 4)
+  assert.deepEqual(waits, [100, 100, 100])
+  let tries = 0
+  await assert.rejects(() => removeWithRetry("index", { remove: () => { tries += 1; throw held("EPERM") }, wait: async () => {}, attempts: 5 }), { code: "EPERM" })
+  assert.equal(tries, 5, "a hold that lasts is surfaced after the last attempt")
+  tries = 0
+  await assert.rejects(() => removeWithRetry("index", { remove: () => { tries += 1; throw held("EIO") }, wait: async () => {} }), { code: "EIO" })
+  assert.equal(tries, 1, "an error that is not a hold is not retried")
+  assert.equal(await removeWithRetry("index", { remove: () => "gone", wait: async () => {} }), "gone")
+})
 
 async function assertConnected(sessions) {
   for (const session of sessions) {
@@ -67,7 +100,7 @@ test("a 6,000-document reindex keeps the owning MCP session's tools/list within 
   const fixture = await makeGitDesk("desk-controller-latency-")
   populate(fixture)
   const session = await readySession(t, fixture)
-  removeDerivedIndex(fixture)
+  await removeDerivedIndex(fixture)
   let finished = false
   const reindex = session.call("desk_reindex", { force: true }).finally(() => { finished = true })
   const timings = []
@@ -127,7 +160,7 @@ test("child death during a 6,000-document reindex re-elects and returns the owni
   for (let cycle = 0; cycle < 2; cycle += 1) {
     const original = ownerRecord(fixture)
     assert.notEqual(original.owner.pid, session.child.pid, "only a separate controller may be killed")
-    removeDerivedIndex(fixture)
+    await removeDerivedIndex(fixture)
     let completed = false
     const reindex = session.call("desk_reindex", { force: true }).finally(() => { completed = true })
     await until(() => existsSync(indexDbPath(fixture.desk)), "the child must enter the real index rebuild before it is killed", 20000)
