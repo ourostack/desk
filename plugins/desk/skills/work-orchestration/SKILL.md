@@ -74,6 +74,14 @@ Choose each subagent's model deliberately, by the work's need for capability. Pi
 
 A child brief bounds the work and leaves the method to the child; a handoff to a peer that owns its task is not a brief. A handoff never tells that agent how to do its work. Put yourself in its shoes: it owns its task and its method, and you do not know its state. Do not presume what it has done, where it stopped or what blocks it. Say what you would want to hear in its position: what your own side changed and intends to touch, what was decided, where the edges are, what you would like from it, and how to reach you. No step lists, no commands. Keep the message short and point to the task card.
 
+## Waiting for children
+
+A worker must not end its turn while any child it launched is still running. An interim child notification, such as "still waiting on CI", is not a terminal result: keep the turn alive by blocking on a foreground wait or monitor until each child returns a terminal result, because a child's final report goes to whoever is still waiting, and a worker that has ended its turn is not that agent. If the turn genuinely must end (a human gate or a hard limit), first record on the task card which children are still running, what each owns (for example its PR URL), and the exact next action on each result, so whoever resumes acts on them.
+
+Before ending any turn, list the children still running. If any exist, wait for them or do the recorded handoff above; never end the turn on a child's interim notification.
+
+Pace children as well as choosing their models (see above). Near a usage limit, run fewer children in parallel. Prefer one child per independent unit, and resume an existing child with its context rather than spawning a fresh one for a follow-up fix.
+
 ## Merging and the terminal state
 
 If a repository will let you merge, merge when confident. Being inside the operator's work boundary does not by itself require their approval. Do not ask the human to approve a pull request unless the repository or platform itself enforces a human approval (a required reviewer, a branch policy) or they asked for it on that work. When a platform does enforce one, request it with the exact reviewed head and status and resume after it. You own the whole terminal state either way: prepare the PR, wait for checks, review, merge, deploy, smoke, clean up, and never report completion while the PR remains open.
