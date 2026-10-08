@@ -1262,7 +1262,8 @@ test("on Windows, a waiter queued behind a held lock gets a fresh pending-delete
     return original.apply(fs, args)
   })
   try {
-    await assert.rejects(() => setConsent(plain, { store: STORE, contribute: true }), (error) => error === failure)
+    // The platform is named, not read from the host: on a Windows runner the default would be win32 and the refusal would be waited out.
+    await assert.rejects(() => withNamedLock(plain, "off-windows", async () => {}, { platform: "linux" }), (error) => error === failure)
     assert.equal(off.mock.callCount(), 1)
   } finally {
     off.mock.restore()
