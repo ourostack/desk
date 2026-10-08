@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { gzipSync } from "node:zlib"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -1882,7 +1882,7 @@ test("publication lock reclaims dead and malformed owners but times out behind a
         lockTimeoutMs: 1,
         processAlive: () => true,
       }),
-      /publication lock timed out/u,
+      new RegExp(`publication lock timed out: .*publish-lock \\(held by pid ${process.pid}, which is still running, so its build is taking longer than the wait; waited \\d+ ms\\)`, "u"),
     )
     assert.equal(existsSync(liveStaging), false)
 
@@ -1904,9 +1904,30 @@ test("publication lock reclaims dead and malformed owners but times out behind a
         lockTimeoutMs: 1,
         processAlive: () => false,
       }),
-      /publication lock timed out/u,
+      new RegExp(`publication lock timed out: .*publish-lock \\(held by pid 999999, which has exited; waited \\d+ ms\\)`, "u"),
     )
     assert.equal(existsSync(reclaimStaging), false)
+
+    // A lock folder with no owner record that is still fresh: the clock is injected so the folder is never old enough to reclaim, and the wait is long enough to time out.
+    const bareDestination = path.join(root, "bare-runtime-cache")
+    const bareLock = `${bareDestination}.publish-lock`
+    mkdirSync(bareLock, { recursive: true })
+    const mtime = statSync(bareLock).mtimeMs
+    const clock = [mtime - 5000, mtime, mtime - 3000]
+    let tick = 0
+    assert.throws(
+      () => publishDirectoryAtomically({
+        destinationDir: bareDestination,
+        stagingDir: `${bareDestination}.stage`,
+        validateDestination: () => false,
+        build: () => assert.fail("a publisher that never got the lock must not build"),
+        lockTimeoutMs: 1000,
+        now: () => clock[Math.min(tick++, clock.length - 1)],
+        processAlive: () => true,
+      }),
+      /publication lock timed out: .*publish-lock \(no readable owner record; waited 2000 ms\)/u,
+    )
+    assert.equal(existsSync(bareLock), true, "a fresh lock is left alone")
 
     for (const failureSurface of ["owner", "acquire", "reclaim", "reclaim-nonempty"]) {
       const failureDestination = path.join(root, `${failureSurface}-failure-runtime-cache`)
@@ -2026,7 +2047,8 @@ test("runtime restoration stages a complete tree before replacing a stale cache"
         platform: fixturePlatform,
         arch: fixtureArch,
         nodeAbi: fixtureNodeAbi,
-        publishDirectory: ({ destinationDir, stagingDir }) => {
+        publishDirectory: ({ destinationDir, stagingDir, build }) => {
+          build()
           assert.equal(destinationDir, runtimeCacheDir)
           assert.equal(
             readFileSync(
@@ -2072,7 +2094,8 @@ test("source mirror stages a complete tree before replacing a stale mirror", asy
       () => syncSourceMirror({
         mcpRoot: fixture.mcpRoot,
         runtimeCacheDir,
-        publishDirectory: ({ destinationDir, stagingDir }) => {
+        publishDirectory: ({ destinationDir, stagingDir, build }) => {
+          build()
           assert.equal(destinationDir, sourceMirror)
           assert.equal(
             readFileSync(path.join(stagingDir, "package.json"), "utf8"),
@@ -2290,6 +2313,147 @@ test("a first publication rename failure propagates its error with no previous d
     )
     assert.deepEqual(readdirSync(root), [])
   } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a publisher builds its staging tree only once it owns the lock and the destination is still missing", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const root = makeTempDir()
+  const destinationDir = path.join(root, "cache")
+  const stagingDir = path.join(root, "cache.stage-a")
+  const validateDestination = (candidate) => existsSync(path.join(candidate, "complete"))
+  try {
+    let builds = 0
+    const build = () => {
+      builds += 1
+      writeText(path.join(stagingDir, "complete"), "yes\n")
+    }
+    const first = publishDirectoryAtomically({ destinationDir, stagingDir, validateDestination, build })
+    assert.deepEqual(first, { destinationDir, published: true, reused: false })
+    assert.equal(builds, 1)
+    // The destination is valid now: a later publisher neither builds nor leaves a staging tree.
+    const second = publishDirectoryAtomically({ destinationDir, stagingDir, validateDestination, build })
+    assert.deepEqual(second, { destinationDir, published: false, reused: true })
+    assert.equal(builds, 1, "a valid destination is reused without building")
+    assert.deepEqual(readdirSync(root), ["cache"])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a build that leaves an incomplete tree, or throws, fails the publication and cleans up", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const root = makeTempDir()
+  const destinationDir = path.join(root, "cache")
+  const stagingDir = path.join(root, "cache.stage-a")
+  const validateDestination = (candidate) => existsSync(path.join(candidate, "complete"))
+  try {
+    assert.throws(
+      () => publishDirectoryAtomically({ destinationDir, stagingDir, validateDestination, build: () => {} }),
+      /staging directory is missing/u,
+    )
+    assert.throws(
+      () => publishDirectoryAtomically({
+        destinationDir,
+        stagingDir,
+        validateDestination,
+        build: () => writeText(path.join(stagingDir, "half"), "x\n"),
+      }),
+      /staging directory is incomplete/u,
+    )
+    assert.throws(
+      () => publishDirectoryAtomically({
+        destinationDir,
+        stagingDir,
+        validateDestination,
+        build: () => {
+          writeText(path.join(stagingDir, "half"), "x\n")
+          throw new Error("injected build failure")
+        },
+      }),
+      /injected build failure/u,
+    )
+    assert.deepEqual(readdirSync(root), [], "no staging tree, backup or lock is left behind")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("publishers in separate processes build the shared tree exactly once", async () => {
+  const root = makeTempDir()
+  const destinationDir = path.join(root, "cache")
+  const buildLog = path.join(root, "builds.log")
+  const bootstrapUrl = pathToFileURL(path.join(mcpRoot, "src", "runtime", "bootstrap.js")).href
+  const script = `
+    import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
+    import * as path from "node:path"
+    const { publishDirectoryAtomically } = await import(${JSON.stringify(bootstrapUrl)})
+    const destinationDir = ${JSON.stringify(destinationDir)}
+    const stagingDir = destinationDir + ".stage-" + process.pid
+    process.stdout.write("ready\\n")
+    while (!existsSync(${JSON.stringify(path.join(root, "go"))})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    const result = publishDirectoryAtomically({
+      destinationDir,
+      stagingDir,
+      validateDestination: (candidate) => existsSync(path.join(candidate, "complete")),
+      build: () => {
+        appendFileSync(${JSON.stringify(buildLog)}, process.pid + "\\n")
+        mkdirSync(stagingDir, { recursive: true })
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400)
+        writeFileSync(path.join(stagingDir, "complete"), "yes\\n")
+      },
+    })
+    process.stdout.write(JSON.stringify({ published: result.published, reused: result.reused }))
+  `
+  const env = { ...process.env }
+  delete env.NODE_OPTIONS
+  const children = []
+  try {
+    // All four processes are running and waiting before any of them publishes: the start file releases them together, so they really contend for the lock.
+    let readyCount = 0
+    let release
+    let abandon
+    const allReady = new Promise((resolve, reject) => { release = resolve; abandon = reject })
+    const readyTimer = setTimeout(() => abandon(new Error("the publishers did not all report ready within 60 s")), 60000)
+    const finished = Array.from({ length: 4 }, () => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env, stdio: ["ignore", "pipe", "pipe"] })
+      children.push(child)
+      let out = ""
+      let err = ""
+      let counted = false
+      child.stdout.on("data", (chunk) => {
+        out += chunk
+        if (!counted && out.includes("ready\n")) {
+          counted = true
+          readyCount += 1
+          if (readyCount === 4) release()
+        }
+      })
+      child.stderr.on("data", (chunk) => { err += chunk })
+      child.on("error", (error) => { abandon(error); reject(error) })
+      child.on("close", (code) => {
+        if (code === 0) return resolve(JSON.parse(out.split("\n").at(-1)))
+        const failure = new Error(`publisher exited ${code}: ${err}`)
+        abandon(failure)
+        reject(failure)
+      })
+    }))
+    finished.forEach((run) => run.catch(() => {}))
+    try {
+      await allReady
+    } finally {
+      clearTimeout(readyTimer)
+    }
+    writeFileSync(path.join(root, "go"), "go\n")
+    const runs = await Promise.all(finished)
+    assert.equal(readFileSync(buildLog, "utf8").trim().split("\n").length, 1, "one process built the tree")
+    assert.equal(runs.filter((run) => run.published).length, 1)
+    assert.equal(runs.filter((run) => run.reused).length, 3)
+    assert.equal(existsSync(path.join(destinationDir, "complete")), true)
+    assert.deepEqual(readdirSync(root).sort(), ["builds.log", "cache", "go"])
+  } finally {
+    for (const child of children) if (child.exitCode === null) child.kill()
     rmSync(root, { recursive: true, force: true })
   }
 })
