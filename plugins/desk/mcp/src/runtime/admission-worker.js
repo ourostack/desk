@@ -19,7 +19,8 @@ import {
   resolveStartupStateBranch,
 } from "./startup-resolve.js"
 
-const LOCK_TIMEOUT = /^atomic publication lock timed out: (.+?)(?: \(.*)?$/u
+// The lock path, then optionally the exact detail bootstrap.js appends. Anchoring the tail to its known forms keeps a path that itself holds " (" whole, as in "Program Files (x86)".
+const LOCK_TIMEOUT = /^atomic publication lock timed out: (.+?)(?: \((?:held by pid \d+, (?:which is still running, so its build is taking longer than the wait|which has exited)|no readable owner record); waited \d+ ms\))?$/u
 
 /** The root and activation inputs of one admission attempt. Failures are returned, not thrown: `rootError` stops admission, `activationError` stops it after the root. */
 export function resolveAdmissionInputs({ args, env, cwd, homeDir, injectedReadinessPolicy }) {

@@ -1908,19 +1908,26 @@ test("publication lock reclaims dead and malformed owners but times out behind a
     )
     assert.equal(existsSync(reclaimStaging), false)
 
+    // A lock folder with no owner record that is still fresh: the clock is injected so the folder is never old enough to reclaim, and the wait is long enough to time out.
     const bareDestination = path.join(root, "bare-runtime-cache")
-    mkdirSync(`${bareDestination}.publish-lock`, { recursive: true })
+    const bareLock = `${bareDestination}.publish-lock`
+    mkdirSync(bareLock, { recursive: true })
+    const mtime = statSync(bareLock).mtimeMs
+    const clock = [mtime - 5000, mtime, mtime - 3000]
+    let tick = 0
     assert.throws(
       () => publishDirectoryAtomically({
         destinationDir: bareDestination,
         stagingDir: `${bareDestination}.stage`,
         validateDestination: () => false,
-        build: () => {},
-        lockTimeoutMs: 1,
+        build: () => assert.fail("a publisher that never got the lock must not build"),
+        lockTimeoutMs: 1000,
+        now: () => clock[Math.min(tick++, clock.length - 1)],
         processAlive: () => true,
       }),
-      /publication lock timed out: .*publish-lock \(no readable owner record; waited \d+ ms\)/u,
+      /publication lock timed out: .*publish-lock \(no readable owner record; waited 2000 ms\)/u,
     )
+    assert.equal(existsSync(bareLock), true, "a fresh lock is left alone")
 
     for (const failureSurface of ["owner", "acquire", "reclaim", "reclaim-nonempty"]) {
       const failureDestination = path.join(root, `${failureSurface}-failure-runtime-cache`)
@@ -2401,13 +2408,17 @@ test("publishers in separate processes build the shared tree exactly once", asyn
   `
   const env = { ...process.env }
   delete env.NODE_OPTIONS
+  const children = []
   try {
     // All four processes are running and waiting before any of them publishes: the start file releases them together, so they really contend for the lock.
     let readyCount = 0
     let release
-    const allReady = new Promise((resolve) => { release = resolve })
+    let abandon
+    const allReady = new Promise((resolve, reject) => { release = resolve; abandon = reject })
+    const readyTimer = setTimeout(() => abandon(new Error("the publishers did not all report ready within 60 s")), 60000)
     const finished = Array.from({ length: 4 }, () => new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env, stdio: ["ignore", "pipe", "pipe"] })
+      children.push(child)
       let out = ""
       let err = ""
       let counted = false
@@ -2420,9 +2431,20 @@ test("publishers in separate processes build the shared tree exactly once", asyn
         }
       })
       child.stderr.on("data", (chunk) => { err += chunk })
-      child.on("close", (code) => (code === 0 ? resolve(JSON.parse(out.split("\n").at(-1))) : reject(new Error(`publisher exited ${code}: ${err}`))))
+      child.on("error", (error) => { abandon(error); reject(error) })
+      child.on("close", (code) => {
+        if (code === 0) return resolve(JSON.parse(out.split("\n").at(-1)))
+        const failure = new Error(`publisher exited ${code}: ${err}`)
+        abandon(failure)
+        reject(failure)
+      })
     }))
-    await allReady
+    finished.forEach((run) => run.catch(() => {}))
+    try {
+      await allReady
+    } finally {
+      clearTimeout(readyTimer)
+    }
     writeFileSync(path.join(root, "go"), "go\n")
     const runs = await Promise.all(finished)
     assert.equal(readFileSync(buildLog, "utf8").trim().split("\n").length, 1, "one process built the tree")
@@ -2431,6 +2453,7 @@ test("publishers in separate processes build the shared tree exactly once", asyn
     assert.equal(existsSync(path.join(destinationDir, "complete")), true)
     assert.deepEqual(readdirSync(root).sort(), ["builds.log", "cache", "go"])
   } finally {
+    for (const child of children) if (child.exitCode === null) child.kill()
     rmSync(root, { recursive: true, force: true })
   }
 })

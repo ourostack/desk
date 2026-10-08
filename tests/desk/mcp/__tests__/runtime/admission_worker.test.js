@@ -64,6 +64,19 @@ test("runtime: a publication-lock timeout names the lock and the process holding
   assert.deepEqual(prepareRuntimeInputs({ ...input, prepare: locked(path.join(base, "gone.publish-lock")) }).restoreError.lock, { dir: path.join(base, "gone.publish-lock"), pid: null })
   const detailed = () => { throw new Error(`atomic publication lock timed out: ${lockDir} (held by pid 4321, which is still running, so its build is taking longer than the wait; waited 30000 ms)`) }
   assert.deepEqual(prepareRuntimeInputs({ ...input, prepare: detailed }).restoreError.lock, { dir: lockDir, pid: 4321 }, "the holder and wait detail after the lock name is not part of the lock name")
+  const spaced = path.join(base, "Program Files (x86)", "cache.publish-lock")
+  mkdirSync(spaced, { recursive: true })
+  writeFileSync(path.join(spaced, "owner.json"), JSON.stringify({ pid: 77 }))
+  for (const detail of [
+    "held by pid 77, which has exited",
+    "held by pid 77, which is still running, so its build is taking longer than the wait",
+    "no readable owner record",
+  ]) {
+    const withDetail = () => { throw new Error(`atomic publication lock timed out: ${spaced} (${detail}; waited 5 ms)`) }
+    assert.deepEqual(prepareRuntimeInputs({ ...input, prepare: withDetail }).restoreError.lock, { dir: spaced, pid: 77 }, `a path holding " (" stays whole: ${detail}`)
+  }
+  const bareSpaced = () => { throw new Error(`atomic publication lock timed out: ${spaced}`) }
+  assert.deepEqual(prepareRuntimeInputs({ ...input, prepare: bareSpaced }).restoreError.lock, { dir: spaced, pid: 77 })
   writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({}))
   assert.equal(prepareRuntimeInputs({ ...input, prepare: locked(lockDir) }).restoreError.lock.pid, null)
   assert.equal(prepareRuntimeInputs({ ...input, prepare: () => { throw "a string" } }).restoreError.message, "a string")
