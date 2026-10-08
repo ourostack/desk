@@ -798,7 +798,7 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
   }
 })
 
-test("source mirror admission rejects marker traversal, omissions, directories, and symlinks", async (t) => {
+test("source mirror admission rejects marker traversal, omissions, directories, and symlinks", { timeout: 60_000 }, async (t) => {
   const {
     hashCurrentSource,
     resolveAdmittedSourceMirror,
@@ -854,7 +854,7 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
   }
 })
 
-test("source mirror admission rejects Windows and backslash paths on POSIX hosts", { timeout: 60_000 }, async () => {
+test("source mirror admission rejects Windows and backslash paths on POSIX hosts", { skip: process.platform === "win32" ? "the fixture files named C:\\payload.js and \\\\server\\share\\payload.js cannot exist on Windows, where the colon and the backslash are path syntax" : false, timeout: 60_000 }, async () => {
   const {
     resolveAdmittedSourceMirror,
     syncSourceMirror,
@@ -900,7 +900,7 @@ test("source mirror admission rejects Windows and backslash paths on POSIX hosts
   }
 })
 
-test("source mirror admission rejects symlinked ancestors and undeclared files", async (t) => {
+test("source mirror admission rejects symlinked ancestors and undeclared files", { timeout: 60_000 }, async (t) => {
   const {
     hashCurrentSource,
     resolveAdmittedSourceMirror,
@@ -957,7 +957,7 @@ test("source mirror admission rejects symlinked ancestors and undeclared files",
   }
 })
 
-test("source mirror admission rejects incomplete inventories and special files", async (t) => {
+test("source mirror admission rejects incomplete inventories and special files", { timeout: 60_000 }, async (t) => {
   const {
     hashCurrentSource,
     resolveAdmittedSourceMirror,
@@ -2150,7 +2150,7 @@ test("omitted cache options use the ambient override without creating a cache", 
   }
 })
 
-test("default host inspection and restoration preserve exact missing-matrix and missing-pack diagnostics", async (t) => {
+test("default host inspection and restoration preserve exact missing-matrix and missing-pack diagnostics", { timeout: 60_000 }, async (t) => {
   const { inspectRuntimeDependencyPack, restoreRuntimeDependencies, sourceFilesForHash } = await loadBootstrap()
   const { deriveRuntimeDependencyPackPaths, deriveRuntimeSupportMatrixPath } = await loadRuntimeDeps()
   const { default: fs } = await import("node:fs")
@@ -2528,7 +2528,7 @@ test("Windows: an EPERM, EACCES or EBUSY on the reclaim folder waits and retries
         sleep: () => { sleeps += 1 },
       })
       assert.deepEqual(result, { destinationDir, published: true, reused: false }, code)
-      assert.equal(sleeps, 1, "one wait, then the dead owner's lock was reclaimed")
+      assert.equal(sleeps, 2, "one wait after the contended reclaim folder, one after the reclaim itself")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -2592,7 +2592,7 @@ test("Windows: a dead owner's lock folder that is contended on removal is retrie
       sleep: () => { sleeps += 1 },
     })
     assert.deepEqual(result, { destinationDir, published: true, reused: false })
-    assert.equal(sleeps, 1, "the contended removal waited once before the retry")
+    assert.equal(sleeps, 2, "a wait after the contended removal, and one after the reclaim")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -2741,25 +2741,32 @@ test("an owner that turns out to be alive on the second look keeps its lock", { 
   }
 })
 
-test("Windows: a lock folder that persistently cannot be created ends in the timeout instead of looping", { timeout: 60_000 }, async () => {
+test("Windows: a lock folder that persistently cannot be created waits between attempts and ends in the timeout", { timeout: 60_000 }, async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   for (const code of ["EPERM", "EACCES", "EBUSY"]) {
     const { root, publish } = lockFixture()
     try {
+      // A fake clock that only the waits advance: a loop that does not wait makes no progress toward the deadline and is caught by the attempt cap.
+      let clock = 0
       let attempts = 0
       assert.throws(
         () => publish(publishDirectoryAtomically, {
           platform: "win32",
-          lockTimeoutMs: 50,
-          createLockDirectory: () => {
+          lockTimeoutMs: 100,
+          now: () => clock,
+          sleep: (ms) => { clock += ms },
+          createLockDirectory: (dir) => {
+            // The reclaim folder can be made (and finds no lock folder to remove); only the lock folder itself is refused.
+            if (dir.endsWith(".reclaim-lock")) return mkdirSync(dir)
             attempts += 1
-            if (attempts > 100_000) throw new Error("no deadline: the wait looped without end")
+            if (attempts > 1000) throw new Error("no wait between attempts: the loop spins")
             throw windowsError(code)
           },
         }),
         /publication lock timed out/u,
         code,
       )
+      assert.ok(attempts >= 2 && attempts <= 10, `${attempts} attempts in 100 ms of waiting`)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -569,11 +569,9 @@ function acquirePublicationLock({
     if (pastDeadline && !(reclaimed && !retriedPastDeadline)) {
       throw new Error(publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }))
     }
-    if (reclaimed) {
-      retriedPastDeadline = pastDeadline
-      continue
-    }
-    sleep(Math.min(publicationLockPollMs, lockTimeoutMs - elapsedMs))
+    if (reclaimed) retriedPastDeadline = pastDeadline
+    // Every pass that did not take the lock waits a poll, a reclaim that removed nothing included, so a lock folder that cannot be created never spins the CPU until the deadline.
+    sleep(Math.max(0, Math.min(publicationLockPollMs, lockTimeoutMs - elapsedMs)))
   }
 }
 
