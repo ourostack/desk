@@ -8,6 +8,8 @@
 //   sent_at      when a record was last pushed
 //   pr           the number of the pull request that carried it, until the default branch holds it or the store refuses it
 //   sent_bytes   the exact record pushed in `pr` (counts of this machine's own store scope only), so an open pull request keeps carrying those bytes
+//   sent_share   per host, the captured share (derived over capturable) of the record last pushed, kept after the record settles so a record whose share
+//                moved by `SHARE_JUMP` or more is due now (a plain ratio between 0 and 1 per host name, never a count)
 //   refused      the fixed code of the store's refusal that named the record
 //   skipped      `store_not_ready`: the store's `capture.json` is not exactly `{"capture":1}`
 //   invalid      `capture_invalid`: the record failed its own gate (a bug in the caller or the coverage); nothing is sent
@@ -19,7 +21,8 @@
 //
 // Due, with no network: coverage whose `ran_at` is a parsable time not in the future and under three days old (a failed pass leaves the earlier
 // coverage in place, so it is used only while that holds; none, or a stale one, sends nothing and retracts nothing), now past `retry_after`, a record
-// (or the empty record that retracts one sent before) whose blob differs from `blob`, and 20 hours since `sent_at`. A record whose pull request is
+// (or the empty record that retracts one sent before) whose blob differs from `blob`, and either 20 hours since `sent_at` or a captured share (derived over derived + frozen + pending + not_seen) of any host named by both
+// this record and the last one sent that differs by `SHARE_JUMP` (0.15) or more from the last one's (`sent_share`), so a corrected record replaces a wrong one at once. A record whose pull request is
 // still open (`pr` is set while the flush has a batch it has not seen settled) is carried in every rebuild of the branch, so it is never dropped
 // from the open pull request by an unrelated rebuild.
 //
@@ -37,6 +40,8 @@ import { gitBlobSha, readStatus, writeStatus } from "./outbox.js"
 
 const CAPTURE_FLAG = 1
 const SEND_INTERVAL_MS = 20 * 60 * 60 * 1000
+// A record whose captured share for any host differs by this much (a fraction, as the store's own alarm reads it) from the last record sent is due now, not after the 20 hours.
+export const SHARE_JUMP = 0.15
 const FRESH_MS = 3 * 24 * 60 * 60 * 1000
 const NOT_READY_MS = 24 * 60 * 60 * 1000
 const INVALID_MS = 24 * 60 * 60 * 1000
@@ -50,7 +55,7 @@ const SHA = /^[0-9a-f]{40}$/u
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const timeOf = (value) => (typeof value === "string" ? Date.parse(value) : Number.NaN)
 const iso = (ms) => new Date(ms).toISOString()
-const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable", "sent_bytes", "dropped", "dropped_at"]
+const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable", "sent_bytes", "dropped", "dropped_at", "sent_share"]
 
 /** The coverage the record may be built from: parsable `ran_at`, not in the future, under three days old; else null. */
 function freshCoverage(status, nowMs) {
@@ -59,6 +64,30 @@ function freshCoverage(status, nowMs) {
   const ranAt = timeOf(coverage.ran_at)
   return Number.isFinite(ranAt) && ranAt <= nowMs && nowMs - ranAt < FRESH_MS ? coverage : null
 }
+
+/** The captured share of each counted host of a record (`derived` over `derived + frozen + pending + not_seen`), as `{ host: share }`; a host with nothing capturable, or an unreadable record, has none. */
+export function sharesOf(bytes) {
+  const shares = {}
+  try {
+    const hosts = JSON.parse(Buffer.from(bytes).toString("utf8"))?.hosts
+    for (const [host, entry] of Object.entries(isObject(hosts) ? hosts : {})) {
+      if (!isObject(entry)) continue
+      const capturable = ["derived", "frozen", "pending", "not_seen"].reduce((sum, key) => sum + (Number.isSafeInteger(entry[key]) ? entry[key] : Number.NaN), 0)
+      if (Number.isFinite(capturable) && capturable > 0) shares[host] = entry.derived / capturable
+    }
+  } catch {
+    return {}
+  }
+  return shares
+}
+
+/** Whether any host both records name has a share that differs by `SHARE_JUMP` or more. A host only one of them names, or one with nothing capturable, is not compared. */
+function shareMoved(before, after) {
+  return Object.entries(after).some(([host, share]) => typeof before[host] === "number" && Math.abs(share - before[host]) >= SHARE_JUMP - 1e-9)
+}
+
+// The shares of the record last pushed: kept as `sent_share`, else read from the bytes an open pull request carries; `null` when neither is there.
+const lastShares = (cap) => (isObject(cap.sent_share) ? cap.sent_share : typeof cap.sent_bytes === "string" ? sharesOf(cap.sent_bytes) : null)
 
 /** How many stores have `contribute: true`, a store counted once however its name is spelled and only when every spelling says so (as the sweep reads consent). */
 export function contributingStores(stores) {
@@ -92,7 +121,9 @@ export function planCapture({ status, consent, store, intakeId, nowMs, mayBeOpen
   if (isCaptureInvalid(made)) return { ...none, invalid: true }
   if (made === null || made.sha === cap.blob) return none
   const sentAt = timeOf(cap.sent_at)
-  const due = !(sentAt <= nowMs && nowMs - sentAt < SEND_INTERVAL_MS)
+  // A corrected record replaces a wrong one at once; a small change waits out the interval.
+  const before = lastShares(cap)
+  const due = !(sentAt <= nowMs && nowMs - sentAt < SEND_INTERVAL_MS) || (before !== null && shareMoved(before, sharesOf(made.bytes)))
   const carry = Number.isSafeInteger(cap.pr) && mayBeOpen === true
   const fresh = { path: made.path, bytes: Buffer.from(made.bytes, "utf8"), sha: made.sha, capture: true, empty: made.bytes === EMPTY_RECORD }
   if (due) return { work: true, due, carry, record: fresh, cap, invalid: false }
@@ -130,8 +161,13 @@ export const saveRefused = (env, store, code, nowMs) => update(env, store, (cap)
 /** The store's `capture.json` does not say `{"capture":1}`: nothing is sent, and it is asked again after a day. */
 export const saveNotReady = (env, store, nowMs) => update(env, store, (cap) => ({ ...without(cap, ["refused", "invalid"]), skipped: NOT_READY, retry_after: iso(nowMs + NOT_READY_MS) }))
 
+const sentShare = (bytes) => {
+  const shares = sharesOf(bytes)
+  return Object.keys(shares).length === 0 ? {} : { sent_share: shares }
+}
+
 /** The record was pushed in pull request `pr`. */
-export const saveSent = (env, store, item, pr, nowMs) => update(env, store, (cap) => ({ ...without(cap, SIGNALS), pr, sent_bytes: item.bytes.toString("utf8"), sent_at: item.fresh === false ? cap.sent_at : iso(nowMs) }))
+export const saveSent = (env, store, item, pr, nowMs) => update(env, store, (cap) => ({ ...without(cap, [...SIGNALS, "sent_share"]), pr, sent_bytes: item.bytes.toString("utf8"), ...sentShare(item.bytes), sent_at: item.fresh === false ? cap.sent_at : iso(nowMs) }))
 
 /** The default branch holds the record's bytes (`sha`); an empty record that is there is forgotten, with everything else kept about the delivery. */
 export const saveSettled = (env, store, item) => update(env, store, (cap) => (item.empty ? without(cap, [...RECORD_KEYS]) : { ...without(cap, SETTLED_CLEARS), blob: item.sha }))
@@ -142,7 +178,7 @@ export const saveSettled = (env, store, item) => update(env, store, (cap) => (it
  * record is due at the next flush instead of 20 hours after it was lost. Without kept bytes (`confirmed: false`) the drop cannot be checked against what
  * was sent (the record may have landed), so it is named `capture_drop_unconfirmed`, never raised as a finding, and `sent_at` stays so the 20 hours still apply.
  */
-export const saveDropped = (env, store, nowMs, { confirmed }) => update(env, store, (cap) => ({ ...without(cap, confirmed ? ["pr", "sent_bytes", "sent_at"] : ["pr", "sent_bytes"]), dropped: confirmed ? DROPPED : DROP_UNCONFIRMED, dropped_at: iso(nowMs) }))
+export const saveDropped = (env, store, nowMs, { confirmed }) => update(env, store, (cap) => ({ ...without(cap, confirmed ? ["pr", "sent_bytes", "sent_at", "sent_share"] : ["pr", "sent_bytes"]), dropped: confirmed ? DROPPED : DROP_UNCONFIRMED, dropped_at: iso(nowMs) }))
 
 /** An empty record with nothing on the default branch to retract: forgotten. */
 export const saveForgotten = (env, store) => update(env, store, (cap) => without(cap, RECORD_KEYS))

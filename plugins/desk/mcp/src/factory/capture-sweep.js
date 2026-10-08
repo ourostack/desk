@@ -6,8 +6,16 @@
 // `by_owner` and nothing else that names anything (no path, session id, desk, host folder or account). `cache` is the Codex answer cache, kept in
 // `status.coverage_cache` and nowhere else, because its keys are rollout file names.
 //
-// `recordCoverage(env, options)` is what the sweep calls: it writes the result with `writeStatus` and returns `"written"` or `"failed"`. A failure
+// `recordCoverage(env, options)` is what the sweep calls: it writes the result with `writeStatus` and returns `"written"`, `"kept"` or `"failed"`. A failure
 // writes `coverage_failed: <code>` and leaves the previous `coverage` and `coverage_cache` where they were; a success clears `coverage_failed`.
+// `"kept"` is a success that does not replace `coverage`: a pass taken while the quarantine folder is in flux measures a transient state (copies sitting
+// in quarantine count as `held`, not `derived`), so the previous `coverage` stays and a record is never built from it. It is in flux when a quarantine
+// folder changed within `QUARANTINE_SETTLE_MS` (a folder dated in the future counts as settled), or when the sessions of a host whose facts copy is in
+// quarantine are more than `HELD_MAJORITY` of its sessions on disk. Only sessions held in quarantine count: a session held for another reason (a marker
+// naming no store, a store without consent, an unproven Codex route) is a steady state and is recorded as `held`. The keep has a time limit,
+// `KEEP_LIMIT_MS`: `status.coverage_kept` is `{ code: "quarantine_in_flux", since, at }` while passes are kept; once the first kept pass is `KEEP_LIMIT_MS` old the
+// pass is recorded anyway and `coverage_kept` becomes `{ code: "quarantine_not_settling", since, at }`, which the status and the doctor show, so a quarantine that
+// does not settle is published as `held` and not hidden. A pass with nothing in flux clears `coverage_kept`.
 //
 // Store names are compared exactly in the classifier, so this file turns every store name into lower case first, in consent, copies, receipts and markers:
 // GitHub names are not case sensitive, and `session-route.js` (`sessionPlace`) and the flush (`sameRepo`) already compare them that way. Folders in the
@@ -16,15 +24,23 @@
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
-import { statSync } from "node:fs"
+import { readdirSync, statSync } from "node:fs"
+import * as path from "node:path"
 import { claudeFolderOf, listRootSessions } from "./capture-count.js"
 import { assertPartition, classifySessions } from "./capture-classify.js"
-import { allOutboxNames, listMarkers, readConsent, readDelivered, readStatus, writeStatus } from "./outbox.js"
+import { allOutboxNames, factoryStateRoot, listMarkers, readConsent, readDelivered, readStatus, writeStatus } from "./outbox.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
 import { derivedStoreOf, deskRootOf, markerRoute, proofIndex, provenBy, sessionPlace, sessionRoute } from "./session-route.js"
 
 /** The stage a failed coverage pass stopped at; the only thing a failure records. */
 export const COVERAGE_FAILED = Object.freeze(["state_unreadable", "count_failed", "classify_failed"])
+
+/** A quarantine folder that changed this recently is still moving: the coverage pass is not recorded. */
+export const QUARANTINE_SETTLE_MS = 5 * 60 * 1000
+/** With quarantine non-empty, a host whose `held` is more than this share of its sessions on disk is read as a transient quarantine, not a measurement. */
+export const HELD_MAJORITY = 0.5
+/** The longest a coverage pass is kept back for a quarantine in flux; after it the pass is recorded anyway and says so. */
+export const KEEP_LIMIT_MS = 60 * 60 * 1000
 
 const FACTS_NAME = new RegExp(`^(?:${ENUMS.host.join("|")})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.json$`, "u")
 const lower = (store) => (typeof store === "string" ? store.toLowerCase() : store)
@@ -131,17 +147,68 @@ export async function coverageNow(env, { now = Date.now, bindingVersion, orphans
       folderOf: claudeFolderOf,
     })
     for (const host of Object.values(hosts)) assertPartition(host)
-    return { ok: true, coverage: { method: 1, ran_at: new Date(now()).toISOString(), hosts }, cache: counted.cache }
+    // Per host, the sessions whose facts copy is in quarantine: the only kind of `held` that is a transient state.
+    const inQuarantine = new Set(state.copies.map(({ name }) => name).filter((name) => state.quarantined.includes(name)))
+    const quarantined = Object.fromEntries(Object.entries(counted.hosts).map(([host, entry]) => [host, entry.sessions.filter(({ name }) => inQuarantine.has(name)).length]))
+    return { ok: true, coverage: { method: 1, ran_at: new Date(now()).toISOString(), hosts }, cache: counted.cache, quarantined }
   } catch {
     return { ok: false, code: stage }
   }
+}
+
+// The quarantine folder and its store folders: when the newest of them changed (ms, or null). Times only; an unreadable folder has not changed.
+function quarantineState(root) {
+  const top = path.join(root, "quarantine")
+  let changedAt = null
+  const touch = (folder) => {
+    try {
+      const at = statSync(folder).mtimeMs
+      if (changedAt === null || at > changedAt) changedAt = at
+    } catch {
+      // A missing folder has not changed.
+    }
+  }
+  touch(top)
+  let slugs = []
+  try {
+    slugs = readdirSync(top, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+  } catch {
+    // No quarantine folder.
+  }
+  for (const slug of slugs) {
+    touch(path.join(top, slug))
+  }
+  return { changedAt }
+}
+
+/** Whether the coverage pass was taken in a transient quarantine state; see the header.  */
+async function quarantineInFlux(env, result, nowMs) {
+  // An unreadable state folder throws here and the caller reports the pass as failed, keeping the earlier coverage.
+  const state = quarantineState(await factoryStateRoot(env, { create: false }))
+  if (state.changedAt !== null && state.changedAt <= nowMs && nowMs - state.changedAt < QUARANTINE_SETTLE_MS) return true
+  return Object.entries(result.coverage.hosts).some(([host, entry]) => entry.state === "counted" && entry.on_disk > 0 && result.quarantined[host] / entry.on_disk > HELD_MAJORITY)
 }
 
 /** See the header. */
 export async function recordCoverage(env, options) {
   const result = await coverageNow(env, options)
   try {
-    await writeStatus(env, result.ok ? { coverage: result.coverage, coverage_cache: result.cache, coverage_failed: undefined } : { coverage_failed: result.code })
+    let kept
+    if (result.ok) {
+      const nowMs = (options?.now ?? Date.now)()
+      if (await quarantineInFlux(env, result, nowMs)) {
+        const before = (await readStatus(env)).coverage_kept
+        const first = isPlainObject(before) && typeof before.since === "string" ? Date.parse(before.since) : Number.NaN
+        const since = Number.isFinite(first) && first <= nowMs ? first : nowMs
+        const holding = nowMs - since < KEEP_LIMIT_MS
+        kept = { code: holding ? "quarantine_in_flux" : "quarantine_not_settling", since: new Date(since).toISOString(), at: new Date(nowMs).toISOString() }
+        if (holding) {
+          await writeStatus(env, { coverage_cache: result.cache, coverage_failed: undefined, coverage_kept: kept })
+          return "kept"
+        }
+      }
+    }
+    await writeStatus(env, result.ok ? { coverage: result.coverage, coverage_cache: result.cache, coverage_failed: undefined, coverage_kept: kept } : { coverage_failed: result.code })
     return result.ok ? "written" : "failed"
   } catch {
     // The status file could not be written; the sweep goes on and the next one tries again.
