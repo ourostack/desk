@@ -67,6 +67,11 @@ const REPORT_REASON_TEXT = {
   finish_from_card_update: "the day comes from the task card's last update, so the task finished on or before it",
   reopened: "the task was finished more than once, so this is the day it last finished",
   job_offsets_withheld: "the desk withholds this task's timing because its remote is public",
+  // Why the agent stopped before a wait for the next prompt, when it is not known, and the split by why.
+  could_not_tell: "the evaluator read this wait's evidence and could not tell why the agent stopped",
+  stop_not_recorded: "no record of the agent's stop holds this time: the host does not record stops, or no recorded wait covers the moment",
+  outside_own_share: "the facts do not say which part of the session was this task's, so the evaluator does not judge this wait for it",
+  stop_partly_classified: "why the agent stopped is not known for some of this waiting, so each reason's time is at least this much",
 }
 
 // What the independent evaluator's labels file can declare unreadable, and the codes of the check of labels against facts.
