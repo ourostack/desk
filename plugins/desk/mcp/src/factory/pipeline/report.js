@@ -50,6 +50,11 @@ const REPORT_REASON_TEXT = {
   over_budget_after_binning: "the swimlane file is still larger than its size budget after every run of intervals was merged, because the intervals its stretches cite do not fit",
   labels_from_shared_session: "the labels come from a session several jobs share, so they may count another job's time",
   card_dates_shorter_than_work: "the task card's dates are shorter than the work its sessions recorded, so the lead time is at least that recorded span",
+  session_work_unattributed: "a session of this task did work that no task's binding claims, so that time stays under cause not recorded and some of it may have been another task's",
+  // Why a partial figure's `bound` is null: no direction is known.
+  bound_reasons_conflict: "its reasons pull it both ways, so the true figure may be higher or lower",
+  bound_not_moved: "none of its reasons moves it in a known direction",
+  bound_not_one_quantity: "it is a ranking or a status, not one quantity, so it has no single direction",
   no_wait_intervals: "no wait was recorded",
   no_active_intervals: "no active time was recorded",
   not_reported_to_store: "the store only receives published facts, so it cannot count sessions that never published any",

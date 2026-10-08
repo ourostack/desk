@@ -29,9 +29,17 @@
 //     nights included), `api_retry` (a labeled wait or the facts' retry),
 //     `tool_failure` and `long_tool_call` (labeled waits only),
 //     `queue_before_start` (no session of the job had started yet),
-//     `no_session` (no session of the job was running) and `unknown` (no
-//     label or evidence says). Labeled classes and wastes describe working
-//     time only: a label over an idle moment does not change its cause.
+//     `no_session` (no session of the job was running), `other_task` (a
+//     session credited to the job was working on another job's part of it)
+//     and `unknown` (no label or evidence says). A session's part of each job
+//     is its binding to that job (its `agents`, and worker 0's `segments`):
+//     `other_task` is the session's active time that another job's binding
+//     holds and this job's does not, and it names no job. Active time no
+//     binding holds is not attributed: it stays `unknown`, and the `unknown`
+//     and `other_task` figures that hold some of it are partial
+//     (`session_work_unattributed`). Labeled classes and wastes describe
+//     working time only: a label over an idle moment does not change its
+//     cause.
 //   - A work burst is a maximal run of working time inside the lead window,
 //     broken by an idle gap of at least `BURST_IDLE_GAP_MS` (15 minutes) or
 //     by an operator turn: a turn that arrives while work runs splits the
@@ -40,10 +48,11 @@
 //     burst, between bursts and after the last one. Bursts and gaps add up
 //     to the lead time exactly, and each burst's `idle_ms` is the idle time
 //     inside it, split by cause in `idle_by_waited_on_ms`: the gaps plus
-//     every burst's idle time are the idle time. A
-//     gap's `waited_on` is the cause holding most of it, ties to the first
-//     in `IDLE_WAITED_ON`; the totals count short waits inside bursts too,
-//     each with its own cause.
+//     every burst's idle time are the idle time. A gap's `waited_on` is the
+//     cause holding most of it, ties to the first in `IDLE_WAITED_ON`, and
+//     its `idle_by_waited_on_ms` splits all of it by cause, so a gap that
+//     holds several causes is exact; the totals count short waits inside
+//     bursts too, each with its own cause.
 //   - The stack-up row splits the lead window into `working` (by class and
 //     waste, where labeled stretches of concurrent sessions overlap the
 //     moment goes to the first of value, support, the seven working wastes
@@ -71,13 +80,23 @@
 //     intervals more whole than the formulas do. The job file says so for
 //     its bursts and gaps in `bursts_state`. A task's `flow_efficiency` is
 //     working time over lead time, stated as both are, so it agrees with
-//     the working and idle figures. When the card's dates are shorter than
-//     the work and the job is closed, the floored lead time makes it an
-//     upper bound (`bound: "upper"`) and the idle time a lower bound
-//     (`bound: "lower"`, in the stack-up too); an open job's has no bound. The formulas' own ratio (recorded
+//     the working and idle figures. The formulas' own ratio (recorded
 //     active time in the card's lead window over the lead time, none when
 //     the lead time is floored to the work) is kept beside it as
 //     `active_share_recorded`.
+//   - Every partial figure says which way the true figure lies, in `bound`:
+//     `"lower"` (the true figure is at least this) or `"upper"` (at most
+//     this). Each reason pulls a kind of figure one way, or not at all
+//     (`BOUND_DIRECTIONS`): a job still open (`censored`) makes every time
+//     so far a lower bound; a lead time floored to the work makes the lead
+//     and idle time lower bounds and leaves working time exact; intervals
+//     the log lost make working time a lower bound and idle time an upper
+//     one; and so on. A ratio takes its numerator's direction against its
+//     lead time's. When the reasons pull both ways, or none moves the
+//     figure, or the figure is a ranking and not one quantity, `bound` is
+//     `null` and `bound_reason` says which (`bound_reasons_conflict`,
+//     `bound_not_moved`, `bound_not_one_quantity`); the key is never left
+//     out of a partial figure, and a measured or unavailable one has none.
 //   - A burst's counts publish as envelopes, never a zero for no data: its
 //     labeled time is unavailable (`not_labeled`) when none of its sessions
 //     has labels, its operator turns take the formulas' `attention` state
@@ -101,13 +120,13 @@ import { LABEL_WASTES, UNKNOWN_LABEL } from "../label-schema.js"
 import { recordedSpans } from "./formulas.js"
 import { ROLLUPS_SCHEMA, pluginVersion } from "./rollups.js"
 import { CAUSE_REFERENCES, UNLABELED_CLASS, causeKey, compareFields, jobStretches, mostTime } from "./stretches.js"
-import { ACTIVE_KINDS, duration, union } from "./timeline.js"
+import { ACTIVE_KINDS, boundIntervals, duration, intervalInSession, union } from "./timeline.js"
 
 /** An idle gap at least this long ends a work burst: 15 minutes. */
 export const BURST_IDLE_GAP_MS = 15 * 60 * 1000
 
 /** What idle time waited on, in the order a moment two causes could claim is given to one, and a gap's tie broken (see the header). */
-export const IDLE_WAITED_ON = Object.freeze(["next_prompt", "api_retry", "tool_failure", "long_tool_call", "queue_before_start", "no_session", "unknown"])
+export const IDLE_WAITED_ON = Object.freeze(["next_prompt", "api_retry", "tool_failure", "long_tool_call", "queue_before_start", "no_session", "other_task", "unknown"])
 
 /** The stack-up's labeled segments, in the order wall-clock time is given to them where stretches overlap. */
 const STACKUP_CLASSES = Object.freeze(["value", "support"])
@@ -155,6 +174,74 @@ function covered(value, base, ...coverages) {
   if (missing.length > 0) return figure("unavailable", null, missing.flatMap((coverage) => coverage.unavailable))
   return known(value, [...base, ...coverages.flatMap((coverage) => coverage.reasons)])
 }
+
+// What each reason says about the figure, by the kind of change it stands for; a reason not named here says some of the job's
+// intervals were not seen (`log_truncated`, `session_open`, `source_unreadable`, ...).
+const REASON_CHANGE = Object.freeze({
+  censored: "open",
+  card_dates_shorter_than_work: "floor",
+  labels_from_shared_session: "shared",
+  partial: "part_labeled",
+  job_offsets_unavailable: "unplaced",
+  session_work_unattributed: "unattributed",
+})
+const changeOf = (reason) => REASON_CHANGE[reason] ?? "unseen"
+
+/**
+ * Which way each kind of change pulls each kind of figure: `lower` (the true figure is higher), `upper` (it is lower) or `both`; a change
+ * a kind does not name leaves it where it is. A job still open (`open`) leaves every time so far a lower bound. A lead time floored to
+ * the work (`floor`) is a lower bound and so is the idle time in it, and the work inside is whole. Unseen intervals hide work (working
+ * time is at least this, idle time and `unknown` at most) and the evidence that names a wait. Some sessions unlabeled (`part_labeled`)
+ * leaves their labeled waits counted as working, and their labeled time out. A session the job clock cannot place (`unplaced`) leaves
+ * its work out and its span reading as no session. Unattributed session work (`unattributed`) may be another job's: `other_task` is at
+ * least this and `unknown` at most; unseen intervals may be this job's work inside it or another job's outside it, so they pull
+ * `other_task` both ways. Labels from a shared session (`shared`) move time inside the job's own intervals, with no known
+ * direction, as the site reads them.
+ */
+export const BOUND_DIRECTIONS = Object.freeze({
+  lead: { open: "lower", floor: "lower", unseen: "lower", unplaced: "lower" },
+  working: { open: "lower", unseen: "lower", part_labeled: "upper", unplaced: "lower" },
+  labeled: { open: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower" },
+  idle: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "upper" },
+  unknown: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "upper", unattributed: "upper" },
+  evidence: { open: "lower", floor: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower" },
+  other_task: { open: "lower", floor: "lower", unseen: "both", part_labeled: "lower", unplaced: "lower", unattributed: "lower" },
+  placement: { open: "lower", floor: "lower", unplaced: "upper" },
+  count: { open: "lower", unseen: "both", unplaced: "both" },
+})
+
+// The direction `reasons` give a figure of `kind`: "lower", "upper", "both" or "none".
+function directionOf(kind, reasons) {
+  const pulls = new Set(reasons.map((reason) => BOUND_DIRECTIONS[kind][changeOf(reason)]).filter((pull) => pull !== undefined))
+  if (pulls.has("both") || pulls.size > 1) return "both"
+  return pulls.size === 0 ? "none" : [...pulls][0]
+}
+
+const FLIP = Object.freeze({ lower: "upper", upper: "lower", both: "both", none: "none" })
+
+// Two directions of one figure's parts as one.
+function joined(left, right) {
+  if (left === "none") return right
+  if (right === "none" || left === right) return left
+  return "both"
+}
+
+const BOUND_REASON = Object.freeze({ both: "bound_reasons_conflict", none: "bound_not_moved", ranking: "bound_not_one_quantity" })
+
+// A figure with its `bound` when partial: the direction, or `null` with the `bound_reason` that says why there is none.
+function directed(number, direction) {
+  if (number.state !== "partial") return number
+  return direction === "lower" || direction === "upper" ? { ...number, bound: direction } : { ...number, bound: null, bound_reason: BOUND_REASON[direction] }
+}
+
+/** `bounded(figure, kind) -> figure`: a figure of `kind` (a key of `BOUND_DIRECTIONS`) with its `bound` when it is partial. */
+export const bounded = (number, kind) => directed(number, directionOf(kind, number.reasons))
+
+// A ratio over a lead time: its numerator's direction (a `working` figure with the ratio's reasons) against the lead time's.
+const boundedRatio = (number, leadReasons) => directed(number, joined(directionOf("working", number.reasons), FLIP[directionOf("lead", leadReasons)]))
+
+// A ranking has no one direction.
+const ranked = (number) => directed(number, "ranking")
 
 // Merged spans clipped to [start, end].
 function clip(spans, start, end) {
@@ -276,11 +363,34 @@ function workingSpans(timeline, stretches) {
 }
 
 /**
+ * What the job's sessions did for other jobs, on the job clock: `other`, the active time (turn, tool and subagent intervals) another job's
+ * binding of the session holds and none of this job's does, and `unattributed`, the active time no binding of the session holds. A
+ * session the job clock cannot place gives neither. Only the time is kept: no other job is named.
+ */
+export function sessionAttribution(timeline) {
+  const other = []
+  const unattributed = []
+  timeline.sessions.forEach((placed, index) => {
+    if (placed.offset_ms === null) return
+    const source = timeline.source_sessions[index]
+    const inside = { intervals: source.intervals.filter((interval) => ACTIVE_KINDS.has(interval.kind) && intervalInSession(interval.start_ms, interval.end_ms, source.session.duration_ms)) }
+    const held = (bindings) => union(bindings.flatMap((binding) => boundIntervals(inside, binding)))
+    const own = held(source.jobs.filter((binding) => binding.job === timeline.job))
+    const others = held(source.jobs.filter((binding) => binding.job !== timeline.job))
+    const shift = (spans) => spans.map(([start, end]) => [start + placed.offset_ms, end + placed.offset_ms])
+    other.push(...shift(subtract(others, own)))
+    unattributed.push(...shift(subtract(subtract(union(inside.intervals), own), others)))
+  })
+  return { other: spansOf(other), unattributed: spansOf(unattributed) }
+}
+
+/**
  * What each idle moment in [start, end] waited on, as disjoint merged spans per `IDLE_WAITED_ON` cause (see the header): before any session
  * of the job, no session running, then a labeled wait's `waited_on` or the facts' own `human_wait` (`next_prompt`) and `api_retry`
- * intervals, each moment to the first cause in that order, and the rest `unknown`.
+ * intervals, then a session of the job working for another job (`other_task`), each moment to the first cause in that order, and the
+ * rest `unknown`. `unattributed` is the part of `unknown` during which a session of the job did work no binding holds.
  */
-function idleCauses(start, end, working, sessions, stretches, intervals) {
+function idleCauses(start, end, working, sessions, stretches, intervals, attribution) {
   const idle = subtract([[start, end]], working)
   const outside = subtract(idle, sessions.spans)
   const queue = clip(outside, start, sessions.first)
@@ -294,6 +404,7 @@ function idleCauses(start, end, working, sessions, stretches, intervals) {
     const facts = intervals.filter((interval) => interval.kind === evidence[cause])
     sources.set(cause, spansOf([...labeled, ...facts]))
   }
+  sources.set("other_task", attribution.other)
   sources.set("unknown", [[start, end]])
   let taken = []
   const out = {}
@@ -302,8 +413,12 @@ function idleCauses(start, end, working, sessions, stretches, intervals) {
     out[cause] = spans
     taken = spansOf([...taken, ...spans])
   }
+  out.unattributed = attribution.unattributed.flatMap(([from, to]) => clip(out.unknown, from, to))
   return out
 }
+
+// The idle causes (and their unattributed part) inside [start, end].
+const idleWithin = (idle, start, end) => Object.fromEntries(Object.entries(idle).map(([cause, spans]) => [cause, clip(spans, start, end)]))
 
 /**
  * `jobWalk({ timeline, formulas, additions }, labels, finished) -> walk`: everything the walk derives for one job: the lead window, its
@@ -325,7 +440,7 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
   const raw = burstSpans(working, turns)
   // Without a lead window idle time is read only between the first and last burst.
   const [start, end] = hasWindow ? [window.start_ms, window.end_ms] : [raw.at(0)?.start_ms ?? 0, raw.at(-1)?.end_ms ?? 0]
-  const idle = idleCauses(start, end, working, sessions, stretches, timeline.intervals)
+  const idle = idleCauses(start, end, working, sessions, stretches, timeline.intervals, sessionAttribution(timeline))
   const walk = { job: timeline.job, window, stretches, coverage, intervals, working, idle }
   const counts = burstCounts(raw, timeline, turns, additions)
   const context = { timeline, stretches, coverage, labels, formulas, additions, idle, intervals, placement }
@@ -335,7 +450,10 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
   walk.gaps = []
   for (let index = 0; index + 1 < edges.length; index += 2) {
     const [from, to] = [edges[index], edges[index + 1]]
-    if (to > from) walk.gaps.push({ start_ms: from, end_ms: to, waited_on: mostTime(IDLE_WAITED_ON, new Map(IDLE_WAITED_ON.map((cause) => [cause, within(idle[cause], from, to)]))) })
+    if (to <= from) continue
+    const waitedOn = mostTime(IDLE_WAITED_ON, new Map(IDLE_WAITED_ON.map((cause) => [cause, within(idle[cause], from, to)])))
+    // The split of the whole gap by cause, stated as the task's split is, so a gap that holds several causes is exact.
+    walk.gaps.push({ start_ms: from, end_ms: to, waited_on: waitedOn, idle_by_waited_on_ms: idleFigures(idleWithin(idle, from, to), { base: [], coverage, intervals, placement }) })
   }
   walk.stackup = stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels })
   walk.task = taskRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels, walk })
@@ -413,7 +531,7 @@ function burstEntry(burst, count, context) {
     working_ms: working,
     idle_ms: burst.end_ms - burst.start_ms - working,
     // The idle time inside the burst by the same causes as the task's split, stated as the task's are.
-    idle_by_waited_on_ms: idleFigures(Object.fromEntries(IDLE_WAITED_ON.map((cause) => [cause, clip(context.idle[cause], burst.start_ms, burst.end_ms)])), { base: [], coverage: context.coverage, intervals: context.intervals, placement: context.placement }),
+    idle_by_waited_on_ms: idleFigures(idleWithin(context.idle, burst.start_ms, burst.end_ms), { base: [], coverage: context.coverage, intervals: context.intervals, placement: context.placement }),
     sessions,
     agents: count.agents.size,
     tool_calls: count.tools,
@@ -448,18 +566,27 @@ function workingSegments(stretches, window, working) {
 // A labels coverage that, when the job has no labels, only notes it: figures the labels refine but do not need.
 const refinedBy = (coverage) => (Object.hasOwn(coverage, "unavailable") ? { reasons: [] } : coverage)
 
-// Each idle cause as a figure: before and outside sessions need placement, and labeled causes need the labels.
+// The kind of figure each idle cause is, for its bound (`BOUND_DIRECTIONS`).
+const IDLE_KIND = Object.freeze({ queue_before_start: "placement", no_session: "placement", other_task: "other_task", unknown: "unknown" })
+
+// Each idle cause as a figure, with its bound: before and outside sessions need placement, labeled causes need the labels, another job's
+// work needs placement too, and `other_task` and `unknown` are partial (`session_work_unattributed`) when some of the unknown time had a
+// session of the job doing work no binding holds.
 function idleFigures(idle, { base, coverage, intervals, placement }) {
+  const unattributed = idle.unattributed.length > 0 ? ["session_work_unattributed"] : []
   return Object.fromEntries(IDLE_WAITED_ON.map((cause) => {
     const value = duration(idle[cause])
-    if (cause === "queue_before_start" || cause === "no_session") return [cause, covered(value, [...base, ...placement], intervals)]
-    if (cause === "tool_failure" || cause === "long_tool_call") return [cause, covered(value, base, intervals, coverage)]
-    return [cause, covered(value, base, intervals, refinedBy(coverage))]
+    const kind = IDLE_KIND[cause] ?? "evidence"
+    if (cause === "queue_before_start" || cause === "no_session") return [cause, bounded(covered(value, [...base, ...placement], intervals), kind)]
+    if (cause === "tool_failure" || cause === "long_tool_call") return [cause, bounded(covered(value, base, intervals, coverage), kind)]
+    if (cause === "other_task") return [cause, bounded(covered(value, [...base, ...placement, ...unattributed], intervals, refinedBy(coverage)), kind)]
+    if (cause === "unknown") return [cause, bounded(covered(value, [...base, ...unattributed], intervals, refinedBy(coverage)), kind)]
+    return [cause, bounded(covered(value, base, intervals, refinedBy(coverage)), kind)]
   }))
 }
 
 function stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle }) {
-  const row = { job: timeline.job, desk_version: pluginVersion(timeline.source_sessions), status: statusFigure(formulas), lead_time_ms: window.lead }
+  const row = { job: timeline.job, desk_version: pluginVersion(timeline.source_sessions), status: statusFigure(formulas), lead_time_ms: bounded(window.lead, "lead") }
   if (!Object.hasOwn(window, "start_ms")) {
     const none = figure("unavailable", null, window.reasons)
     row.working_ms = none
@@ -476,30 +603,22 @@ function stackupRow({ timeline, formulas, window, stretches, coverage, placement
   const base = window.reasons
   const workingTime = duration(working)
   const segments = workingSegments(stretches, window, working)
-  const labeledFigure = (value) => covered(value, base, coverage, intervals)
-  row.working_ms = covered(workingTime, base, intervals, refinedBy(coverage))
-  row.idle_ms = covered(window.end_ms - window.start_ms - workingTime, base, intervals, refinedBy(coverage))
+  const labeledFigure = (value) => bounded(covered(value, base, coverage, intervals), "labeled")
+  row.working_ms = bounded(covered(workingTime, base, intervals, refinedBy(coverage)), "working")
+  row.idle_ms = bounded(covered(window.end_ms - window.start_ms - workingTime, base, intervals, refinedBy(coverage)), "idle")
   row.working = {
     class_ms: Object.fromEntries(STACKUP_CLASSES.map((name) => [name, labeledFigure(segments.times[name])])),
     waste_ms: Object.fromEntries(WORKING_WASTES.map((waste) => [waste, labeledFigure(segments.times[waste])])),
     agents_working_unlabeled_ms: labeledFigure(segments.times.agents_working),
-    not_labeled_ms: covered(segments.not_labeled, base, intervals),
+    not_labeled_ms: bounded(covered(segments.not_labeled, base, intervals), "working"),
   }
-  boundByFloor(row, window, [["idle_ms", "lower"]])
   row.idle = idleFigures(idle, { base, coverage, intervals, placement })
   return row
 }
 
-// A lead time floored to the work is a lower bound, so on a closed job the flow efficiency is at most its figure and the idle time at
-// least its figure. An open job's lead time is censored too, so neither direction holds and no bound is given. The stack-up and the
-// task row bound the same figures the same way.
-function boundByFloor(row, window, bounds) {
-  if (!window.lead.reasons.includes("card_dates_shorter_than_work") || window.lead.reasons.includes("censored")) return
-  for (const [key, bound] of bounds) if (row[key].state !== "unavailable") row[key] = { ...row[key], bound }
-}
-
+// A status is not a quantity, so a partial one has no direction.
 function statusFigure(formulas) {
-  return fromResult(formulas.status)
+  return ranked(fromResult(formulas.status))
 }
 
 /**
@@ -528,9 +647,9 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
   const row = {
     job: timeline.job,
     status: statusFigure(formulas),
-    lead_time_ms: window.lead,
+    lead_time_ms: bounded(window.lead, "lead"),
     labels_from_shared_session: timeline.sessions.some((session) => labels.sharedLabels?.has(`${timeline.job}/${session.id}`)),
-    active_share_recorded: fromResult(formulas.flow_efficiency),
+    active_share_recorded: boundedRatio(fromResult(formulas.flow_efficiency), window.lead.reasons),
   }
   const keys = ["working_ms", "idle_ms", "value_in_working_ms", "flow_efficiency", "agents_working_unlabeled_ms", "top_causes", "longest_gap", "bursts"]
   if (!Object.hasOwn(window, "start_ms")) {
@@ -543,21 +662,21 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
   const workingTime = duration(working)
   const segments = workingSegments(walk.stretches, window, working)
   // Labeled figures that the intervals also shape (the split, waited_on and cause keys read them).
-  const labeledFigure = (value) => covered(value, base, coverage, intervals)
-  row.working_ms = covered(workingTime, base, intervals, refinedBy(coverage))
-  row.idle_ms = covered(window.end_ms - window.start_ms - workingTime, base, intervals, refinedBy(coverage))
+  const labeledFigure = (value) => bounded(covered(value, base, coverage, intervals), "labeled")
+  row.working_ms = bounded(covered(workingTime, base, intervals, refinedBy(coverage)), "working")
+  row.idle_ms = bounded(covered(window.end_ms - window.start_ms - workingTime, base, intervals, refinedBy(coverage)), "idle")
   row.value_in_working_ms = labeledFigure(segments.times.value)
   // Working time over lead time; `working_ms` already carries the lead time's reasons.
   const lead = window.end_ms - window.start_ms
   if (lead === 0) row.flow_efficiency = figure("unavailable", null, ["zero_lead_time"])
-  else row.flow_efficiency = row.working_ms.state === "unavailable" ? row.working_ms : known(row.working_ms.value / lead, row.working_ms.reasons)
-  boundByFloor(row, window, [["flow_efficiency", "upper"], ["idle_ms", "lower"]])
+  else row.flow_efficiency = row.working_ms.state === "unavailable" ? row.working_ms : boundedRatio(known(row.working_ms.value / lead, row.working_ms.reasons), window.lead.reasons)
   row.waiting_by_waited_on_ms = idleFigures(idle, { base, coverage, intervals, placement })
   row.agents_working_unlabeled_ms = labeledFigure(segments.times.agents_working)
-  row.top_causes = labeledFigure(jobCauses(walk).slice(0, TOP_CAUSES).map(({ cause, total_ms: total }) => ({ cause, total_ms: total, hours: total / MS_PER_HOUR })))
+  row.top_causes = ranked(covered(jobCauses(walk).slice(0, TOP_CAUSES).map(({ cause, total_ms: total }) => ({ cause, total_ms: total, hours: total / MS_PER_HOUR })), base, coverage, intervals))
   const longest = [...walk.gaps].sort((left, right) => (right.end_ms - right.start_ms) - (left.end_ms - left.start_ms) || left.start_ms - right.start_ms)[0]
-  row.longest_gap = longest === undefined ? figure("unavailable", null, ["no_wait_intervals"]) : covered({ ...longest, duration_ms: longest.end_ms - longest.start_ms }, base, intervals)
-  row.bursts = covered(walk.bursts.length, base, intervals)
+  // Its bound is its length's, an idle time.
+  row.longest_gap = longest === undefined ? figure("unavailable", null, ["no_wait_intervals"]) : bounded(covered({ start_ms: longest.start_ms, end_ms: longest.end_ms, duration_ms: longest.end_ms - longest.start_ms, waited_on: longest.waited_on }, base, intervals), "idle")
+  row.bursts = bounded(covered(walk.bursts.length, base, intervals), "count")
   return row
 }
 
@@ -618,6 +737,8 @@ export function causesRollup({ records, walks, labels }) {
     basis: CAUSES_BASIS,
     state,
     reasons,
+    // A ranking of causes has no one direction.
+    ...(state === "partial" ? { bound: null, bound_reason: BOUND_REASON.ranking } : {}),
     n: counted.length,
     N: records.length,
     references_per_cause: CAUSE_REFERENCES,
