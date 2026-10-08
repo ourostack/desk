@@ -400,7 +400,7 @@ export function publishDirectoryAtomically({
   platform = process.platform,
   removeDirectory = rmSync,
 }) {
-  const lockIo = { platform, remove: removeDirectory }
+  const lockIo = { platform, remove: removeDirectory, sleep, writeLockOwner }
   if (build === null) assertStagingComplete({ stagingDir, validateDestination })
 
   mkdirSync(path.dirname(destinationDir), { recursive: true })
@@ -595,15 +595,27 @@ function isContendedLockError(error, platform) {
   return platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY")
 }
 
-// Remove a lock folder, retrying the transient failures Node documents for rmdir. Returns false when the folder is still contended after the retries; any other failure is thrown.
+// Remove a lock folder once. Returns false when it is contended (see above); any other failure is thrown. Callers that can wait retry on their own bounded schedule.
 function removeLockDirectory(dir, { platform, remove }) {
   try {
-    remove(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    remove(dir, { recursive: true, force: true })
     return true
   } catch (error) {
     if (isContendedLockError(error, platform)) return false
     throw error
   }
+}
+
+// A reclaim folder older than the lock timeout belongs to a reclaimer that died; left alone it would block every later dead-owner recovery.
+function removeStaleReclaimLock({ reclaimLockDir, lockTimeoutMs, now, lockIo }) {
+  let ageMs
+  try {
+    ageMs = now() - statSync(reclaimLockDir).mtimeMs
+  } catch {
+    // It vanished between the failed mkdir and this look: the next poll finds it gone.
+    return
+  }
+  if (ageMs >= lockTimeoutMs) removeLockDirectory(reclaimLockDir, lockIo)
 }
 
 function reclaimAbandonedPublicationLock({
@@ -614,16 +626,22 @@ function reclaimAbandonedPublicationLock({
   processAlive,
   lockIo,
 }) {
+  // The owner comes first: while it is alive nothing here creates or deletes a folder, so waiters polling together cause no churn on the reclaim folder.
+  if (!publicationLockIsAbandoned({ lockDir, lockTimeoutMs, now, processAlive })) {
+    return false
+  }
   const reclaimLockDir = `${lockDir}.reclaim-lock`
   try {
     createLockDirectory(reclaimLockDir)
   } catch (error) {
     if (isContendedLockError(error, lockIo.platform)) {
+      removeStaleReclaimLock({ reclaimLockDir, lockTimeoutMs, now, lockIo })
       return false
     }
     throw error
   }
   try {
+    // Look again inside the reclaim folder: the owner may have changed since the first look.
     if (!publicationLockIsAbandoned({
       lockDir,
       lockTimeoutMs,
@@ -661,6 +679,9 @@ function publicationLockIsAbandoned({
     || !processAlive(owner.pid)
 }
 
+const releaseAttempts = 10
+
+// Bounded and best-effort: the publication already happened (or failed for its own reason), and a lock that cannot be released must neither replace that outcome nor stay held by this long-lived process. After the attempts, the owner record is rewritten to name no process, which every waiter treats as abandoned and reclaims.
 function releasePublicationLock({ lockDir, token }, lockIo) {
   let owner
   try {
@@ -670,8 +691,23 @@ function releasePublicationLock({ lockDir, token }, lockIo) {
   } catch {
     return
   }
-  if (owner.token === token && !removeLockDirectory(lockDir, lockIo)) {
-    throw new Error(`atomic publication lock could not be released: ${lockDir} is still held open by another process`)
+  if (owner.token !== token) return
+  for (let attempt = 1; attempt <= releaseAttempts; attempt += 1) {
+    try {
+      if (removeLockDirectory(lockDir, lockIo)) return
+    } catch {
+      break
+    }
+    if (attempt < releaseAttempts) lockIo.sleep(publicationLockPollMs)
+  }
+  try {
+    lockIo.writeLockOwner(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({ schema_version: 1, pid: 0, token: "released-but-not-removed" }),
+      "utf8",
+    )
+  } catch {
+    // Nothing more can be done from here; waiters reclaim the lock once its owner process is gone.
   }
 }
 

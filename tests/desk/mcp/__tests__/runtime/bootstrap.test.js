@@ -11,6 +11,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -2479,27 +2480,51 @@ function lockFixture() {
   return { root, destinationDir, lockDir, stagingDir, publish }
 }
 
+
+test("while the lock owner is alive a waiter creates no reclaim folder at all", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: process.pid, token: "live builder" })
+    const created = []
+    let sleeps = 0
+    const result = publish(publishDirectoryAtomically, {
+      processAlive: () => true,
+      createLockDirectory: (dir) => {
+        created.push(path.basename(dir))
+        mkdirSync(dir)
+      },
+      sleep: () => {
+        sleeps += 1
+        if (sleeps === 3) rmSync(lockDir, { recursive: true, force: true })
+      },
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(sleeps, 3, "three polls behind the live owner")
+    assert.deepEqual(created.filter((name) => name.endsWith(".reclaim-lock")), [], "no reclaim folder was created or deleted while the owner lived")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("Windows: an EPERM, EACCES or EBUSY on the reclaim folder waits and retries instead of crashing the waiter", async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   for (const code of ["EPERM", "EACCES", "EBUSY"]) {
     const { root, destinationDir, lockDir, publish } = lockFixture()
     try {
-      writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: process.pid, token: "live builder" })
+      writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
       let sleeps = 0
       const result = publish(publishDirectoryAtomically, {
         platform: "win32",
-        processAlive: () => true,
+        processAlive: () => false,
         createLockDirectory: (dir) => {
-          if (dir.endsWith(".reclaim-lock")) throw windowsError(code)
+          if (dir.endsWith(".reclaim-lock") && sleeps === 0) throw windowsError(code)
           mkdirSync(dir)
         },
-        sleep: () => {
-          sleeps += 1
-          rmSync(lockDir, { recursive: true, force: true })
-        },
+        sleep: () => { sleeps += 1 },
       })
       assert.deepEqual(result, { destinationDir, published: true, reused: false }, code)
-      assert.equal(sleeps, 1, "one wait, then the lock was free")
+      assert.equal(sleeps, 1, "one wait, then the dead owner's lock was reclaimed")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -2511,7 +2536,6 @@ test("Windows: an EPERM on the lock folder itself waits and retries; elsewhere i
   const first = lockFixture()
   try {
     let attempts = 0
-    let sleeps = 0
     const result = first.publish(publishDirectoryAtomically, {
       platform: "win32",
       createLockDirectory: (dir) => {
@@ -2519,22 +2543,20 @@ test("Windows: an EPERM on the lock folder itself waits and retries; elsewhere i
         if (attempts === 1) throw windowsError("EPERM")
         mkdirSync(dir)
       },
-      sleep: () => { sleeps += 1 },
     })
     assert.equal(result.published, true)
     assert.ok(attempts >= 2, "the lock folder was tried again after the EPERM")
-    assert.equal(sleeps, 0, "no lock folder existed, so the retry needed no wait")
   } finally {
     rmSync(first.root, { recursive: true, force: true })
   }
   for (const target of ["lock", "reclaim"]) {
     const other = lockFixture()
     try {
-      writeJson(path.join(other.lockDir, "owner.json"), { schema_version: 1, pid: process.pid, token: "live builder" })
+      writeJson(path.join(other.lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
       assert.throws(
         () => other.publish(publishDirectoryAtomically, {
           platform: "linux",
-          processAlive: () => true,
+          processAlive: () => false,
           createLockDirectory: (dir) => {
             if (target === "reclaim" ? dir.endsWith(".reclaim-lock") : !dir.endsWith(".reclaim-lock")) throw windowsError("EPERM")
             mkdirSync(dir)
@@ -2549,41 +2571,36 @@ test("Windows: an EPERM on the lock folder itself waits and retries; elsewhere i
   }
 })
 
-test("Windows: removing a lock folder retries, then waits when it stays contended, and never crashes the waiter", async () => {
+test("Windows: a dead owner's lock folder that is contended on removal is retried on the next poll", async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
   const { root, destinationDir, lockDir, publish } = lockFixture()
   try {
     writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
-    const removals = []
+    let lockRemovals = 0
     let sleeps = 0
     const result = publish(publishDirectoryAtomically, {
       platform: "win32",
       processAlive: () => false,
       removeDirectory: (dir, options) => {
-        removals.push({ dir: path.basename(dir), maxRetries: options.maxRetries })
-        // The dead owner's folder is delete-pending on the first try only.
-        if (dir.endsWith(".publish-lock") && removals.filter((removal) => removal.dir === "cache.publish-lock").length === 1) throw windowsError("EPERM")
+        if (dir.endsWith(".publish-lock") && (lockRemovals += 1) === 1) throw windowsError("EPERM")
         rmSync(dir, options)
       },
       sleep: () => { sleeps += 1 },
     })
     assert.deepEqual(result, { destinationDir, published: true, reused: false })
-    assert.equal(removals[0].dir, "cache.publish-lock")
-    assert.ok(removals.every((removal) => removal.maxRetries > 0), "every removal asks Node to retry the transient errors")
     assert.equal(sleeps, 1, "the contended removal waited once before the retry")
-    assert.equal(removals.filter((removal) => removal.dir === "cache.publish-lock").length >= 2, true)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("a lock folder that cannot be removed for another reason fails loudly, and an owner that cannot release its lock says so", async () => {
+test("a lock folder that cannot be removed for another reason fails loudly", async () => {
   const { publishDirectoryAtomically } = await loadBootstrap()
-  const dead = lockFixture()
+  const { root, lockDir, publish } = lockFixture()
   try {
-    writeJson(path.join(dead.lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
     assert.throws(
-      () => dead.publish(publishDirectoryAtomically, {
+      () => publish(publishDirectoryAtomically, {
         platform: "win32",
         processAlive: () => false,
         removeDirectory: () => { throw windowsError("EIO") },
@@ -2591,21 +2608,131 @@ test("a lock folder that cannot be removed for another reason fails loudly, and 
       /EIO/u,
     )
   } finally {
-    rmSync(dead.root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
   }
-  const owner = lockFixture()
-  try {
-    assert.throws(
-      () => owner.publish(publishDirectoryAtomically, {
+})
+
+test("a lock that cannot be removed at release is marked abandoned and never hides the publish result", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  for (const removal of ["contended", "unexpected"]) {
+    const { root, destinationDir, lockDir, publish } = lockFixture()
+    try {
+      let sleeps = 0
+      const result = publish(publishDirectoryAtomically, {
         platform: "win32",
         removeDirectory: (dir, options) => {
-          if (dir.endsWith(".publish-lock")) throw windowsError("EBUSY")
+          if (dir.endsWith(".publish-lock")) throw windowsError(removal === "contended" ? "EBUSY" : "EIO")
           rmSync(dir, options)
         },
-      }),
-      /publication lock could not be released: .*publish-lock is still held open by another process/u,
-    )
+        sleep: () => { sleeps += 1 },
+      })
+      assert.deepEqual(result, { destinationDir, published: true, reused: false }, removal)
+      assert.equal(sleeps, removal === "contended" ? 9 : 0, "bounded retries only for a contended folder")
+      const owner = JSON.parse(readFileSync(path.join(lockDir, "owner.json"), "utf8"))
+      assert.equal(owner.pid, 0, "the owner record names no process")
+      // Any later publisher treats that record as abandoned and reclaims it.
+      const again = publishDirectoryAtomically({
+        destinationDir: `${destinationDir}-2`,
+        stagingDir: path.join(root, "second.stage"),
+        validateDestination: (candidate) => existsSync(path.join(candidate, "complete")),
+        build: () => writeText(path.join(root, "second.stage", "complete"), "yes\n"),
+      })
+      assert.equal(again.published, true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+  // A lock whose abandoned mark cannot be written either: still the publish result, not a crash.
+  const stuck = lockFixture()
+  try {
+    let owners = 0
+    const result = stuck.publish(publishDirectoryAtomically, {
+      platform: "win32",
+      removeDirectory: (dir, options) => {
+        if (dir.endsWith(".publish-lock")) throw windowsError("EIO")
+        rmSync(dir, options)
+      },
+      writeLockOwner: (file, text, encoding) => {
+        owners += 1
+        if (owners > 1) throw windowsError("EBUSY")
+        writeFileSync(file, text, encoding)
+      },
+    })
+    assert.equal(result.published, true)
+    assert.equal(owners, 2)
   } finally {
-    rmSync(owner.root, { recursive: true, force: true })
+    rmSync(stuck.root, { recursive: true, force: true })
+  }
+})
+
+test("a reclaim folder older than the lock timeout is removed so it cannot block recovery forever", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    const reclaimLock = `${lockDir}.reclaim-lock`
+    mkdirSync(reclaimLock)
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(reclaimLock, old, old)
+    const result = publish(publishDirectoryAtomically, { processAlive: () => false, sleep: () => {} })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(existsSync(reclaimLock), false)
+    // A fresh reclaim folder belongs to a live reclaimer and is left alone; the wait then ends in the usual timeout.
+    const fresh = lockFixture()
+    try {
+      writeJson(path.join(fresh.lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+      mkdirSync(`${fresh.lockDir}.reclaim-lock`)
+      assert.throws(
+        () => fresh.publish(publishDirectoryAtomically, { processAlive: () => false, lockTimeoutMs: 60_000, now: ((values) => () => values.shift() ?? values.at(-1))([0, Date.now(), 60_000]) }),
+        /publication lock timed out/u,
+      )
+      assert.equal(existsSync(`${fresh.lockDir}.reclaim-lock`), true)
+    } finally {
+      rmSync(fresh.root, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a reclaim folder that vanishes before its age is read is simply retried", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "dead" })
+    let attempts = 0
+    const result = publish(publishDirectoryAtomically, {
+      processAlive: () => false,
+      createLockDirectory: (dir) => {
+        if (dir.endsWith(".reclaim-lock") && (attempts += 1) === 1) throw windowsError("EEXIST")
+        mkdirSync(dir)
+      },
+      sleep: () => {},
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("an owner that turns out to be alive on the second look keeps its lock", async () => {
+  const { publishDirectoryAtomically } = await loadBootstrap()
+  const { root, destinationDir, lockDir, publish } = lockFixture()
+  try {
+    writeJson(path.join(lockDir, "owner.json"), { schema_version: 1, pid: 999_999, token: "restarted" })
+    const answers = [false, true]
+    let sleeps = 0
+    const result = publish(publishDirectoryAtomically, {
+      processAlive: () => answers.shift() ?? true,
+      sleep: () => {
+        sleeps += 1
+        rmSync(lockDir, { recursive: true, force: true })
+      },
+    })
+    assert.deepEqual(result, { destinationDir, published: true, reused: false })
+    assert.equal(sleeps, 1, "the lock was not reclaimed from under the live owner")
+    assert.equal(existsSync(`${lockDir}.reclaim-lock`), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
