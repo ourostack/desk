@@ -1,0 +1,55 @@
+name: shard 2 probe
+on:
+  push:
+    branches: [shard2-probe]
+permissions:
+  contents: read
+jobs:
+  shard2:
+    name: shard 2 rep ${{ matrix.rep }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+      - working-directory: plugins/desk/mcp
+        run: npm ci
+      - name: Run shard 2 as the standard user, as the suite does
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $command = 'node .github\scripts\run-suite-files.mjs --shard 2/6 --out results.json --probe-acl --only ""'
+          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
+      - name: Verdict (fails on any failed test, an empty result, or a missing stall test)
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path results.json)) { throw "no results.json" }
+          $r = Get-Content results.json -Raw | ConvertFrom-Json
+          "files: $($r.results.Count)"
+          foreach ($name in @('runtime/admission_concurrency.test.js', 'readiness/generations.test.js')) {
+            $f = $r.results | Where-Object { $_.file -eq $name }
+            if (-not $f) { throw "stall test missing from this shard: $name" }
+            "$name pass=$($f.pass) fail=$($f.fail) exit=$($f.exitCode) ms=$($f.ms)"
+          }
+          $bad = @($r.results | Where-Object { $_.fail -gt 0 -or $_.exitCode -ne 0 -or $_.timedOut })
+          $bad | ForEach-Object { "FAILED $($_.file) fail=$($_.fail) exit=$($_.exitCode) timedOut=$($_.timedOut)" }
+          if ($r.results.Count -eq 0) { throw "empty results" }
+          if ($bad.Count -gt 0) { throw "$($bad.Count) file(s) failed" }
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard2-${{ matrix.rep }}
+          path: results.json
+          if-no-files-found: warn
