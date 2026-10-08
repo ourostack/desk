@@ -16,7 +16,7 @@ import { crewWorkspace } from "../desk/crew-roster.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { outcomeSnapshot } from "./outcome.js"
-import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, recordRoutes, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { COPY_RETENTION_MS, factoryStateRoot, keepCopiesElsewhere, listMarkers, outboxCopies, pruneDeliveredCopy, pruneTombstones, retractionNames, readConsent, readLocalFacts, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, recordRoutes, setJobsForFile, updateStatus, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { backfillPluginSources } from "./plugin-registry.js"
 import { githubRepoOfRemote } from "./desk-visibility.js"
@@ -156,12 +156,52 @@ function newerDeskRecorded(ownVersion, plugins) {
   return isVersion(own) && compareVersions(own, declared) < 0
 }
 
+// A derivation that fails for a reason other than an unreadable source leaves a diagnostic in `status.json` under `derive_failures`, keyed by the
+// marker's file name: `{ at, step, code, message }`, where `step` names the part that failed and `code` is the error's code. The result handed back
+// is unchanged (`source_unreadable`, which the flush reads as "try again later"), so a failed write is retried and is also seen. The record is local, never
+// published and never carries session content: the message has its quoted text and paths removed and is cut short, and a syntax error, whose message
+// can quote the text it could not parse, gives no message at all. A source that cannot be read (a missing or non-regular log) is expected and benign: it is
+// recorded nowhere. A later `written` result clears the session's record. Recording never throws.
+const FAILURES_KEPT = 20
+const FAILURE_MESSAGE_MAX = 160
+const FAILURE_CODE = /^[A-Za-z0-9_]{1,40}$/u
+const READ_ONLY_STEPS = new Set(["route", "source", "derive", "read_marker", "wait_quiet"])
+
+const unreadable = (error, step) => READ_ONLY_STEPS.has(step) && (error?.code === "ENOENT" || error?.message === "source_unreadable")
+
+function failureMessage(error) {
+  if (error instanceof SyntaxError || typeof error?.message !== "string") return ""
+  return error.message.split("\n")[0].replace(/"[^"]*"|'[^']*'|`[^`]*`/gu, "...").replace(/\S*[\\/]\S*/gu, "<path>").slice(0, FAILURE_MESSAGE_MAX)
+}
+
+// `failure` is `{ step, error }` for a failed derivation and `null` for a written one, which clears the session's record.
+async function noteDerive(env, name, failure) {
+  if (failure !== null && unreadable(failure.error, failure.step)) return
+  try {
+    const at = new Date().toISOString()
+    await updateStatus(env, ({ derive_failures: before, ...current }) => {
+      const kept = Object.entries(isPlainObject(before) ? before : {}).filter(([key]) => key !== name)
+      if (failure !== null) {
+        const code = typeof failure.error?.code === "string" && FAILURE_CODE.test(failure.error.code) ? failure.error.code : "unknown"
+        kept.push([name, { at, step: failure.step, code, message: failureMessage(failure.error) }])
+      }
+      return kept.length === 0 ? current : { ...current, derive_failures: Object.fromEntries(kept.slice(-FAILURES_KEPT)) }
+    })
+  } catch {
+    // A diagnostic that cannot be written must not stop the derivation, nor the end hook.
+  }
+}
+
 export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = deskVersion, now = Date.now, siblings = lazyProofIndex(() => listMarkers(env)), admit = null } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
+  const name = `${marker.host}-${marker.session_id}.json`
   try {
-    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings, admit }), { deskRoot: marker.desk_root })
-  } catch {
+    const outcome = await withDerivationLock(env, name, (root) => deriveUnlocked(env, marker, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings, admit }), { deskRoot: marker.desk_root })
+    if (outcome.result === "written") await noteDerive(env, name, null)
+    return outcome
+  } catch (error) {
+    await noteDerive(env, name, { step: "lock", error })
     return { result: "source_unreadable", store: null }
   }
 }
@@ -189,6 +229,7 @@ async function newestMarker(env, root, marker, requireStored) {
 // guards the write is made under the same lock as the write.
 async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings, admit }) {
   let store = null
+  let step = "route"
   try {
     let marker = await newestMarker(env, root, input, requireStored)
     if (marker.desk_root === null) return { result: "held", store }
@@ -202,6 +243,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (store === null) return { result: "held", store }
     if ((await readConsent(env)).stores[store]?.contribute !== true) return { result: "not_opted_in", store }
     if (marker.host === "codex-cli" && route.source === "default" && !provenBy(marker, await siblings())) return { result: "held", store: null, reason: "route_unverified" }
+    step = "source"
     const before = await sourceStamp(marker.log_path)
     marker = await reconcileMarker(marker)
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
@@ -221,6 +263,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       }
     }
     let derived
+    step = "derive"
     // A marker from a hook older than 58adb141 names plugins without `source`; the host's plugin cache and install records fill it in for this derivation only.
     const plugins = backfillPluginSources(marker.host, marker.plugins, { env })
     if (marker.host === "claude-code") {
@@ -237,6 +280,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
     if (derived.facts === null) return { result: derived.reason, store }
     if (derived.facts.session.id !== marker.session_id) return { result: "invalid", store }
+    step = "bind"
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
     const deskRemote = readDeskRemote({ deskRoot })
@@ -250,8 +294,10 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     // The decision that guards the write is made again right before it: the derivation above is long.
     const late = admit === null ? null : await admit()
     if (late !== null) return { result: "refused", store, reason: late }
+    step = "write_facts"
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
+    step = "write_jobs"
     await setJobsForFile(env, written.name, [...new Set([...jobs, ...derived.facts.outcomes].map((j) => j.job))])
     // `desk_root` stays local: the flush reads the desk's declaration from it once the marker is pruned (`session-route.js`).
     // So do `bound_by` (job ID -> "focus" | "inferred"), `own_activity` (spans in ms from the session's start), `focus_disagrees` (job IDs)
@@ -265,9 +311,11 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     // `checked_route` is the store this derive checked, written only on a positive route (an older hook's default route with no overlay check
     // is not one), so a session whose marker is later pruned is placed on it (`session-route.js`).
     const checked = route.source === "default" && !marker.routing && marker.host !== "codex-cli" ? {} : { checked_route: store }
+    step = "write_receipt"
     await writeStatus(env, { derivations: { [name]: { store, ...checked, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, bound_by: boundBy, own_activity: ownActivity, focus_disagrees: disagrees, repo_unresolved: repoUnresolved, segments_capped_ms: segmentsCappedMs, ...(deskRepo === undefined ? {} : { desk_repo: deskRepo }), ...(receipt?.desk_unprotected === true ? { desk_unprotected: true } : {}), ...before } } })
     return { result: "written", store }
   } catch (error) {
+    await noteDerive(env, `${input.host}-${input.session_id}.json`, { step, error })
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }
   }
 }
@@ -683,11 +731,13 @@ async function markerPresent(file) {
 }
 
 export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } = {}) {
+  let step = "read_marker"
   try {
     if (!(await markerPresent(file))) return { result: "invalid", store: null }
     let marker = await readMarker(env, file)
     if (marker === null) return { result: "invalid", store: null }
     const deadline = Date.now() + maxWaitMs
+    step = "wait_quiet"
     while (quietMs > 0) {
       const stamp = await sourceStamp(marker.log_path)
       const remaining = quietMs - (Date.now() - stamp.mtime)
@@ -701,6 +751,7 @@ export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } 
     }
     return deriveMarker(env, marker, { quietMs, requireQuiet: true, requireStored: true })
   } catch (error) {
+    await noteDerive(env, path.basename(file), { step, error })
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store: null }
   }
 }

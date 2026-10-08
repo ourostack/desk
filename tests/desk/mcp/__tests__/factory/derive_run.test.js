@@ -1753,3 +1753,95 @@ test("a sweep whose capture coverage fails still derives and reports coverage fa
   assert.deepEqual([summary.written, summary.coverage], [1, "failed"])
   assert.equal((await readStatus(ctx.env)).coverage_failed, "state_unreadable")
 }))
+
+const failuresOf = async (env) => (await readStatus(env)).derive_failures
+
+test("an unreadable or missing source is expected and leaves no diagnostic", () => scratch(async (ctx) => {
+  const { deriveMarker, deriveFile, sweep } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, marker)
+  await fs.unlink(marker.log_path)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "log_missing")
+  await fs.mkdir(marker.log_path)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "source_unreadable")
+  assert.equal((await sweep(ctx.env)).source_unreadable, 1)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  assert.equal((await deriveFile(ctx.env, file, { quietMs: 1 })).result, "source_unreadable")
+  assert.equal(await failuresOf(ctx.env), undefined)
+}))
+
+test("a write that fails is recorded with its step and code, still retries, and is cleared by the success", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const name = `${marker.host}-${ID}.json`
+  const blocker = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
+  await fs.mkdir(path.join(blocker, "inner"), { recursive: true })
+  const failed = await deriveMarker(ctx.env, marker)
+  assert.deepEqual(failed, { result: "source_unreadable", store: STORE }, "the result the flush reads as try again is unchanged")
+  const record = (await failuresOf(ctx.env))[name]
+  assert.equal(record.step, "write_facts")
+  assert.match(record.code, /^[A-Z0-9_]+$/u)
+  assert.equal(typeof record.message, "string")
+  assert.ok(record.message.length <= 160)
+  assert.equal(Number.isNaN(Date.parse(record.at)), false)
+  assert.deepEqual(Object.keys(record).sort(), ["at", "code", "message", "step"])
+  await fs.rm(blocker, { recursive: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE }, "the marker is kept, so the next derive retries")
+  assert.equal(await failuresOf(ctx.env), undefined)
+}))
+
+test("a failure inside the deriver is recorded without paths, quoted text or syntax-error text", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const name = `${marker.host}-${ID}.json`
+  const fail = (error) => ({ [marker.host === "claude-code" ? "claude" : "copilot"]: async () => { throw error } })
+  const secret = "sk-secret-session-text"
+  const withCode = Object.assign(new Error(`EPERM: operation not permitted, rename '/Users/someone/${secret}' -> "C:\\\\x\\\\y" and ${secret} \`z\`\nsecond line`), { code: "EPERM" })
+  assert.equal((await deriveMarker(ctx.env, marker, fail(withCode))).result, "source_unreadable")
+  let record = (await failuresOf(ctx.env))[name]
+  assert.equal(record.step, "derive")
+  assert.equal(record.code, "EPERM")
+  assert.equal(record.message.includes("/Users"), false)
+  assert.equal(record.message.includes("second line"), false)
+  assert.equal(record.message, "EPERM: operation not permitted, rename ... -> ... and sk-secret-session-text ...")
+  assert.equal((await deriveMarker(ctx.env, marker, fail(new SyntaxError(`Unexpected token in JSON ${secret}`)))).result, "source_unreadable")
+  record = (await failuresOf(ctx.env))[name]
+  assert.deepEqual({ code: record.code, message: record.message }, { code: "unknown", message: "" })
+  assert.equal((await deriveMarker(ctx.env, marker, fail({ code: "not a code!" }))).result, "source_unreadable")
+  record = (await failuresOf(ctx.env))[name]
+  assert.deepEqual({ code: record.code, message: record.message }, { code: "unknown", message: "" })
+  assert.equal(JSON.stringify(await readStatus(ctx.env)).includes("/Users/someone"), false)
+}))
+
+test("only the newest twenty failures are kept, and a failure never reaches the caller when the status cannot be written", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const stub = { claude: async () => { throw new Error("boom") }, copilot: async () => { throw new Error("boom") } }
+  const old = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`claude-code-old-${String(i).padStart(2, "0")}.json`, { at: "2026-01-01T00:00:00.000Z", step: "derive", code: "unknown", message: "" }]))
+  await writeStatus(ctx.env, { derive_failures: old })
+  await deriveMarker(ctx.env, marker, stub)
+  const kept = Object.keys(await failuresOf(ctx.env))
+  assert.equal(kept.length, 20)
+  assert.equal(kept.at(-1), `${marker.host}-${ID}.json`)
+  assert.equal(kept.includes("claude-code-old-00.json"), false)
+  await writeStatus(ctx.env, { derive_failures: "garbled" })
+  await deriveMarker(ctx.env, marker, stub)
+  assert.deepEqual(Object.keys(await failuresOf(ctx.env)), [`${marker.host}-${ID}.json`])
+  await fs.mkdir(path.join(ctx.desk, ".git"), { recursive: true }).catch(() => {})
+  assert.equal((await deriveMarker({ ...ctx.env, XDG_STATE_HOME: ctx.desk }, marker, stub)).result, "source_unreadable")
+}))
+
+test("a marker file that cannot be read is recorded at the step that read it", () => scratch(async (ctx) => {
+  const { deriveFile } = await runner()
+  const marker = await session(ctx)
+  await writeMarker(ctx.env, marker)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  await fs.writeFile(file, "{")
+  assert.equal((await deriveFile(ctx.env, file)).result, "source_unreadable")
+  const record = (await failuresOf(ctx.env))[path.basename(file)]
+  assert.deepEqual({ step: record.step, message: record.message }, { step: "read_marker", message: "" })
+}))
