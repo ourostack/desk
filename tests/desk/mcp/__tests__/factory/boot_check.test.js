@@ -375,6 +375,27 @@ test("labelsBootCheck reports quarantined labels, and a request whose every sess
   assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 3, quarantined: 2 })
 }))
 
+test("labelsBootCheck does not report a job whose only quarantined labels were withdrawn as job_unbound", () => scratch(async ({ env }) => {
+  const { labelsBootCheck: labels } = await load()
+  const quarantined = (options) => labels(options).quarantined
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const root = await factoryStateRoot(env)
+  const [withdrawn, mixed, unread] = ["a1", "b2", "c3"].map((prefix) => prefix.repeat(16))
+  const labelsKey = (job, n) => `labels/${job}/${sessionId(n)}.json`
+  // `withdrawn`: every record is a withdrawal the flush made on purpose, which clears itself if the session binds the job again.
+  await quarantine(env, STORE, labelsKey(withdrawn, 1), "job_unbound")
+  await quarantine(env, STORE, labelsKey(withdrawn, 2), "job_unbound")
+  assert.equal(quarantined({ env, now: NOW }), 0)
+  // `mixed`: one withdrawal and one refusal; the refusal is still reported.
+  await quarantine(env, STORE, labelsKey(mixed, 3), "job_unbound")
+  await quarantine(env, STORE, labelsKey(mixed, 4), "facts_quarantined", { facts: `claude-code-${sessionId(4)}.json` })
+  assert.equal(quarantined({ env, now: NOW }), 1)
+  // `unread`: a record that does not read is not known to be a withdrawal, so it is reported.
+  await quarantine(env, STORE, labelsKey(unread, 5), "job_unbound")
+  await fs.writeFile(path.join(root, "quarantine", "ourostack__factory", labelsKey(unread, 5)), "not json")
+  assert.equal(quarantined({ env, now: NOW }), 2)
+}))
+
 test("andonBootCheck returns the recorded open andon issues of each contributing store", () => scratch(async ({ env }) => {
   const { andonBootCheck } = await load()
   assert.deepEqual(andonBootCheck({ env }), [])
