@@ -318,3 +318,23 @@ test("Copilot CLI: an abort the root worked past is not why it stopped", async (
   ])
   assert.deepEqual(facts.intervals.filter((interval) => interval.kind === "human_wait").map((wait) => wait.stop), [{ end: "end_turn", asks: false, pending_agents: null }])
 })
+
+test("Claude Code: a reply whose content is a bare string is measured the same way, and a blank one says nothing", async () => {
+  const stringReply = (second, text) => ({ ...base(second), type: "assistant", message: { id: `m-${second}`, model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 }, content: text } })
+  const facts = await deriveClaude([
+    prompt(0), stringReply(1, `${ASK_REPLY} `),
+    prompt(10), stringReply(11, DONE_REPLY), stringReply(12, "   "),
+    prompt(20), stringReply(21, "  "),
+    prompt(30),
+  ])
+  assert.deepEqual(waits(facts).map((wait) => wait.stop.asks), [true, false, null])
+})
+
+test("Claude Code: an ask call on a sidechain line of the root transcript is a subagent's, so no human wait", async () => {
+  const facts = await deriveClaude([
+    prompt(0),
+    toolUse(1, "q1", "AskUserQuestion", { questions: [{ question: QUESTION }] }, { isSidechain: true }),
+    toolResult(9, "q1", ANSWER, { isSidechain: true }),
+  ])
+  assert.deepEqual(waits(facts), [])
+})
