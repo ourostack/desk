@@ -1270,6 +1270,59 @@ test("on Windows, a waiter queued behind a held lock gets a fresh pending-delete
   }
 }))
 
+test("on Windows, refusals separated by a sighting of the held lock are timed apart: 3 s, the lock seen held, 3 s more is not a 6 s refusal", (t) => scratch(async (plain, base) => {
+  const env = fakeWindowsEnv(plain, base)
+  const options = { platform: "win32", runner: fakeWindowsRunner([]) }
+  const original = fs.open
+  // The clock moves 1 s with every open of the lock file and at no other time, so the timing is exact.
+  const realNow = Date.now
+  let clock = realNow()
+  const script = ["EPERM", "EPERM", "EPERM", "EEXIST", "EPERM", "EPERM", "EPERM"]
+  let step = 0
+  const clockFrozen = t.mock.method(Date, "now", () => clock)
+  const refusing = t.mock.method(fs, "open", async (...args) => {
+    if (!String(args[0]).endsWith(".lock")) return original.apply(fs, args)
+    clock += 1000
+    if (step >= script.length) return original.apply(fs, args)
+    throw Object.assign(new Error("scripted"), { code: script[step++] })
+  })
+  const stat = t.mock.method(fs, "stat", async (...args) => (String(args[0]).endsWith(".lock") ? { mtimeMs: clock } : original.apply(fs, args)))
+  try {
+    await setConsent(env, { store: STORE, contribute: true }, options)
+    assert.equal(step, script.length)
+  } finally {
+    stat.mock.restore()
+    refusing.mock.restore()
+    clockFrozen.mock.restore()
+  }
+}))
+
+test("a stale lock that cannot be removed is waited on between tries, not retried in a tight loop", (t) => scratch(async (env) => {
+  const original = fs.open
+  let step = 0
+  const refusing = t.mock.method(fs, "open", async (...args) => {
+    if (!String(args[0]).endsWith(".lock") || step >= 3) return original.apply(fs, args)
+    step += 1
+    throw Object.assign(new Error("exists"), { code: "EEXIST" })
+  })
+  const stat = t.mock.method(fs, "stat", async (...args) => (String(args[0]).endsWith(".lock") ? { mtimeMs: 0 } : original.apply(fs, args)))
+  const unlink = t.mock.method(fs, "unlink", async (...args) => {
+    if (String(args[0]).endsWith(".lock")) throw Object.assign(new Error("held open"), { code: "EPERM" })
+    return original.apply(fs, args)
+  })
+  try {
+    const started = performance.now()
+    await setConsent(env, { store: STORE, contribute: true })
+    assert.equal(unlink.mock.callCount(), 4, "three refused removals, each followed by another try, and the release of the lock taken at last")
+    // Three waits of 15 ms; timers may fire a millisecond early, and a tight loop would finish in far less.
+    assert.ok(performance.now() - started >= 30, "the loop waited between tries")
+  } finally {
+    unlink.mock.restore()
+    stat.mock.restore()
+    refusing.mock.restore()
+  }
+}))
+
 test("on Windows, a lock file whose deletion is still pending is waited for, and a refusal that lasts is surfaced", (t) => scratch(async (plain, base) => {
   const env = fakeWindowsEnv(plain, base)
   const options = { platform: "win32", runner: fakeWindowsRunner([]) }

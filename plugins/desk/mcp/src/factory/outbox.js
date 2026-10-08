@@ -475,10 +475,8 @@ async function withLock(root, file, platform, body) {
         if (statError.code === "ENOENT") continue // already gone; retry the open right away
         throw statError
       }
-      if (stale) {
-        await fsp.unlink(lockFile).catch(() => {})
-        continue
-      }
+      // A stale lock that cannot be removed (Windows refuses while something holds it open) falls through to the wait below, never to a tight retry.
+      if (stale && (await fsp.unlink(lockFile).then(() => true, () => false))) continue
       await sleep(LOCK_RETRY_DELAY_MS)
     }
   }
