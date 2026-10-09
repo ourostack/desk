@@ -23,6 +23,8 @@ import {
   LABEL_LIMITS,
   LABEL_UNAVAILABLE,
   LABEL_WASTES,
+  LABEL_STOP_WHY,
+  STOP_RULES,
   __LABEL_SPECS__,
   checkLabelsAgainstFacts,
   evaluatorDowngrade,
@@ -71,8 +73,11 @@ function expectErrors(value, expected) {
 }
 
 test("the constants carry the brief's exact values", () => {
-  assert.equal(LABELS_SCHEMA, "desk.factory.labels/2")
-  assert.deepEqual(LABELS_SCHEMAS, ["desk.factory.labels/1", LABELS_SCHEMA])
+  assert.equal(LABELS_SCHEMA, "desk.factory.labels/3")
+  assert.deepEqual(LABELS_SCHEMAS, ["desk.factory.labels/1", "desk.factory.labels/2", LABELS_SCHEMA])
+  assert.deepEqual(LABEL_STOP_WHY, ["decision", "approval", "acceptance", "question", "stopped_short", "unknown"])
+  assert.deepEqual(STOP_RULES, { max_tokens: "error_limit", rate_limit: "error_limit", api_error: "error_limit", refusal: "error_limit", interrupted: "interrupted", ask_question: "question", ask_plan: "approval" })
+  assert.ok(Object.isFrozen(LABEL_STOP_WHY) && Object.isFrozen(STOP_RULES))
   assert.deepEqual(LABEL_CONFIDENCE, ["high", "medium", "low"])
   assert.equal(UNKNOWN_LABEL, "unknown")
   assert.ok(Object.isFrozen(LABELS_SCHEMAS) && Object.isFrozen(LABEL_CONFIDENCE))
@@ -479,7 +484,7 @@ test("labels without caught stay valid and labels with a known value are valid",
     assert.deepEqual(validateLabels(value), { ok: true, errors: [] })
   }
   assert.ok(Object.hasOwn(golden().stretches[0], "caught"), "the golden labels carry one placed stretch")
-  assert.equal(LABELS_SCHEMA, "desk.factory.labels/2")
+  assert.equal(LABELS_SCHEMA, "desk.factory.labels/3")
   assert.equal(__LABEL_SPECS__.stretch.caught.check instanceof Function, true)
   assert.equal(__LABEL_SPECS__.stretchV2.caught.check instanceof Function, true)
 })
@@ -562,4 +567,175 @@ test("compareVersions orders evaluator versions as releases", () => {
   assert.ok(compareVersions("3.2.0-rc.1", "3.2.0") < 0)
   assert.equal(compareVersions("3.2.0", "3.2.0"), 0)
   assert.ok(compareVersions("4.0.0", "3.9.9") > 0)
+})
+
+// ---------------------------------------------------------------------------
+// Labels /3: why the agent stopped, one entry per human wait (`stops[]`).
+// ---------------------------------------------------------------------------
+
+// The golden labels as a `/3` file with one stop on the fixture's human wait.
+function v3() {
+  const value = golden()
+  value.schema = "desk.factory.labels/3"
+  value.evaluator.rubric = "4"
+  value.stops = [{ wait: [250000, 600000], why: "acceptance", confidence: "medium", evaluator_version: "3.2.0-alpha.40" }]
+  return value
+}
+
+// The fixture facts with a second human wait and stop facts on both waits (as published facts /4 carry them).
+function stopFacts(end = "end_turn") {
+  const value = facts()
+  const wait = value.intervals.find((interval) => interval.kind === "human_wait")
+  wait.stop = { end, asks: false, pending_agents: false }
+  value.intervals.push({ kind: "human_wait", agent: 0, start_ms: 1300000, end_ms: 1400000, stop: { end: "max_tokens", asks: null, pending_agents: null } })
+  return value
+}
+
+test("a /3 file carries stops, and every why class, confidence and an older version pass", () => {
+  assert.deepEqual(validateLabels(v3()), { ok: true, errors: [] })
+  for (const why of LABEL_STOP_WHY) {
+    const value = v3()
+    value.stops[0].why = why
+    assert.deepEqual(validateLabels(value), { ok: true, errors: [] }, why)
+  }
+  const none = v3()
+  none.stops = []
+  assert.deepEqual(validateLabels(none), { ok: true, errors: [] })
+  const older = v3()
+  older.stops[0].evaluator_version = "3.2.0-alpha.39"
+  assert.deepEqual(validateLabels(older), { ok: true, errors: [] })
+  assert.deepEqual(validateLabelsBytes(Buffer.from(JSON.stringify(v3()))), { ok: true, errors: [] })
+})
+
+test("a /2 file stays valid without stops and refuses them; a /3 file must carry them", () => {
+  assert.deepEqual(validateLabels(golden()), { ok: true, errors: [] })
+  const keyed = golden()
+  keyed.stops = []
+  expectErrors(keyed, [{ code: "unknown_key", path: "" }])
+  const missing = v3()
+  delete missing.stops
+  expectErrors(missing, [{ code: "missing", path: "stops" }])
+  // A wrong schema value is refused once, whichever spec its keys fit.
+  const wrong = v3()
+  wrong.schema = `desk.factory.labels/3 ${SENTINEL}`
+  expectErrors(wrong, [{ code: "pattern", path: "schema" }])
+  const wrongOld = golden()
+  wrongOld.schema = "desk.factory.labels/9"
+  expectErrors(wrongOld, [{ code: "pattern", path: "schema" }])
+})
+
+test("a stop is exactly a wait range, a why class, a confidence and a version, with no free text", () => {
+  const extra = v3()
+  extra.stops[0].note = SENTINEL
+  expectErrors(extra, [{ code: "unknown_key", path: "stops.0" }])
+  const why = v3()
+  why.stops[0].why = SENTINEL
+  expectErrors(why, [{ code: "enum", path: "stops.0.why" }])
+  // `error_limit` and `interrupted` are decided by rule from the stop facts, never by the evaluator.
+  for (const ruled of ["error_limit", "interrupted", "not_known"]) {
+    const value = v3()
+    value.stops[0].why = ruled
+    expectErrors(value, [{ code: "enum", path: "stops.0.why" }])
+  }
+  const sure = v3()
+  sure.stops[0].confidence = SENTINEL
+  expectErrors(sure, [{ code: "enum", path: "stops.0.confidence" }])
+  const version = v3()
+  version.stops[0].evaluator_version = `3.2.0-${SENTINEL}`
+  expectErrors(version, [{ code: "pattern", path: "stops.0.evaluator_version" }])
+  for (const key of ["wait", "why", "confidence", "evaluator_version"]) {
+    const value = v3()
+    delete value.stops[0][key]
+    expectErrors(value, [{ code: "missing", path: `stops.0.${key}` }])
+  }
+  for (const wait of [[250000], [250000, 600000, 1], "250000-600000", [250000, SENTINEL]]) {
+    const value = v3()
+    value.stops[0].wait = wait
+    const result = validateLabels(value)
+    assert.equal(result.ok, false)
+    assert.equal(result.errors.length, 1)
+    assert.equal(result.errors[0].path, "stops.0.wait")
+    noEcho(result)
+  }
+  const backwards = v3()
+  backwards.stops[0].wait = [600000, 250000]
+  expectErrors(backwards, [{ code: "order", path: "stops.0.wait" }])
+  const notList = v3()
+  notList.stops = { wait: [250000, 600000] }
+  expectErrors(notList, [{ code: "type", path: "stops" }])
+})
+
+test("stops are in wait order, at most one per wait, and never newer than the file's evaluator", () => {
+  const two = v3()
+  two.stops.push({ wait: [1300000, 1400000], why: "stopped_short", confidence: "low", evaluator_version: "3.2.0-alpha.40" })
+  assert.deepEqual(validateLabels(two), { ok: true, errors: [] })
+  const reversed = structuredClone(two)
+  reversed.stops.reverse()
+  expectErrors(reversed, [{ code: "order", path: "stops.1" }])
+  const twice = v3()
+  twice.stops.push({ ...twice.stops[0], why: "decision" })
+  expectErrors(twice, [{ code: "duplicate", path: "stops.1" }])
+  // A stop that is unsound on its own is skipped by the order check, so one bad stop is one error.
+  const unsound = structuredClone(two)
+  unsound.stops[0].wait = [600000, 250000]
+  expectErrors(unsound, [{ code: "order", path: "stops.0.wait" }])
+  const newer = v3()
+  newer.stops[0].evaluator_version = "3.2.0-alpha.41"
+  expectErrors(newer, [{ code: "inconsistent", path: "stops.0.evaluator_version" }])
+  // A file version that fails its own check is named once, by that check, and no stop is compared with it.
+  const unsound2 = v3()
+  unsound2.evaluator.plugin_version = SENTINEL
+  unsound2.stops[0].evaluator_version = "9.9.9"
+  expectErrors(unsound2, [{ code: "pattern", path: "evaluator.plugin_version" }])
+  // A stop that is not an object is named once by its own check and skipped by the order check.
+  const bare = v3()
+  bare.stops.unshift(42)
+  const result = validateLabels(bare)
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.errors.map((error) => error.path), ["stops.0"])
+  const facts = v3()
+  facts.unavailable = ["facts_missing"]
+  facts.stretches = []
+  expectErrors(facts, [{ code: "inconsistent", path: "stops" }])
+  facts.stops = []
+  assert.deepEqual(validateLabels(facts), { ok: true, errors: [] })
+})
+
+test("the stops list is capped", () => {
+  const value = v3()
+  value.stops = Array.from({ length: LABEL_LIMITS.stops + 1 }, (_, index) => ({ wait: [index * 2, index * 2 + 1], why: "unknown", confidence: "low", evaluator_version: "3.2.0-alpha.40" }))
+  expectErrors(value, [{ code: "too_many", path: "stops" }])
+})
+
+test("against facts, each stop must name a human wait of the session exactly and lie within it", () => {
+  assert.deepEqual(checkLabelsAgainstFacts(v3(), facts()), { ok: true, errors: [] })
+  assert.deepEqual(checkLabelsAgainstFacts(v3(), stopFacts()), { ok: true, errors: [] })
+  // A turn's exact range is evidence, not a wait.
+  const turn = v3()
+  turn.stops[0].wait = [5000, 9000]
+  assert.deepEqual(checkLabelsAgainstFacts(turn, facts()), { ok: false, errors: [{ code: "evidence_unmatched", path: "stops.0.wait" }] })
+  const shifted = v3()
+  shifted.stops[0].wait = [250000, 600001]
+  assert.deepEqual(checkLabelsAgainstFacts(shifted, facts()), { ok: false, errors: [{ code: "evidence_unmatched", path: "stops.0.wait" }] })
+  const beyond = v3()
+  beyond.stops[0].wait = [FACTS.session.duration_ms, FACTS.session.duration_ms + 1]
+  assert.deepEqual(checkLabelsAgainstFacts(beyond, facts()), { ok: false, errors: [{ code: "range", path: "stops.0.wait" }] })
+  // `/1` and `/2` labels carry no stops and check as before.
+  assert.deepEqual(checkLabelsAgainstFacts(golden(), stopFacts()), { ok: true, errors: [] })
+})
+
+test("against facts, a stop on a wait whose end a rule already decides is inconsistent", () => {
+  for (const end of Object.keys(STOP_RULES)) {
+    const result = checkLabelsAgainstFacts(v3(), stopFacts(end))
+    assert.deepEqual(result, { ok: false, errors: [{ code: "inconsistent", path: "stops.0.why" }] }, end)
+  }
+  for (const end of ["end_turn", "not_recorded"]) assert.deepEqual(checkLabelsAgainstFacts(v3(), stopFacts(end)), { ok: true, errors: [] }, end)
+  const ruled = v3()
+  ruled.stops.push({ wait: [1300000, 1400000], why: "question", confidence: "high", evaluator_version: "3.2.0-alpha.40" })
+  assert.deepEqual(checkLabelsAgainstFacts(ruled, stopFacts()), { ok: false, errors: [{ code: "inconsistent", path: "stops.1.why" }] })
+})
+
+test("the /3 specs carry a real check for every stop key", () => {
+  for (const [name, field] of Object.entries(__LABEL_SPECS__.stop)) assert.equal(typeof field.check, "function", name)
+  assert.deepEqual(Object.keys(__LABEL_SPECS__.stop), ["wait", "why", "confidence", "evaluator_version"])
 })

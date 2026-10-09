@@ -64,12 +64,17 @@ export async function recordStep(env, name, { ok, result, now = new Date() } = {
   return record
 }
 
-/** `dueStep(status, name, now) -> boolean`: true for a step that never ran, or whose last run is at least `MIN_GAP_HOURS[name]` old. */
-export function dueStep(status, name, now) {
+/**
+ * `dueStep(status, name, now, { newWorkAt }) -> boolean`: true for a step that never ran, or whose last run is at least `MIN_GAP_HOURS[name]`
+ * old, or that last ran before `newWorkAt` (milliseconds, or null): work that arrived after the step last ran makes it due at once, whatever
+ * the gap. The evaluator step passes its newest evaluation request, so a finished job never waits out the gap.
+ */
+export function dueStep(status, name, now, { newWorkAt = null } = {}) {
   requireStep(name)
   const nowMs = toTime(now)
   const ranAt = timeOrNull(stepsOf(status)[name]?.last_ran_at)
   if (ranAt === null) return true
+  if (Number.isFinite(newWorkAt) && newWorkAt > ranAt) return true
   const elapsed = nowMs - ranAt
   return elapsed < 0 || elapsed >= MIN_GAP_HOURS[name] * HOUR_MS
 }

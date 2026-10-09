@@ -83,7 +83,7 @@ const baseOpts = (over = {}) => ({
 
 test("constants are the named values", () => {
   assert.equal(HEADLESS_BUDGET_USD, 1)
-  assert.equal(MAX_HEADLESS_JOBS_PER_DAY, 6)
+  assert.equal(MAX_HEADLESS_JOBS_PER_DAY, 30)
   assert.equal(HEADLESS_TIMEOUT_MS, 900000)
   assert.equal(CHILD_ENV_ALLOW.prefixes.includes("LC_"), true)
   assert.equal(CHILD_ENV_ALLOW.names.includes("CLAUDE_CONFIG_DIR"), true)

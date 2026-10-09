@@ -129,7 +129,7 @@
 // whose labels must cite exactly the intervals the store will hold.
 //
 // `toPublishedLabels(labels, { deskVisibility, machineSecret })` is the
-// labels' transform. Local labels (`desk.factory.labels/2` or `/1`, `label-schema.js`)
+// labels' transform. Local labels (`desk.factory.labels/3`, `/2` or `/1`, `label-schema.js`)
 // are already on the published session clock and carry no free text, so
 // only the job changes: a desk that is not known to be private publishes
 // the same keyed job ID as its facts. The file goes to
@@ -622,6 +622,7 @@ export function toPublishedLabels(labels, { deskVisibility, machineSecret } = {}
       ...(Object.hasOwn(stretch, "confidence") ? { confidence: stretch.confidence, evaluator_version: stretch.evaluator_version } : {}),
       ...(Object.hasOwn(stretch, "caught") ? { caught: stretch.caught } : {}),
     })),
+    ...(Object.hasOwn(labels, "stops") ? { stops: labels.stops.map((stop) => ({ wait: [stop.wait[0], stop.wait[1]], why: stop.why, confidence: stop.confidence, evaluator_version: stop.evaluator_version })) } : {}),
     unavailable: [...labels.unavailable],
   }
   return { path: `labels/${job}/${session}.json`, published }

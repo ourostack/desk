@@ -1002,12 +1002,15 @@ requires(factoryEvaluator, "factory-evaluator writes no free text and no time of
   /## Write labels, nothing else[\s\S]+No free text anywhere[\s\S]+times of day/u);
 requires(factoryEvaluator, "factory-evaluator declares what it could not read with the unavailable codes",
   /`session_log_missing`[\s\S]+`facts_missing`[\s\S]+`stretches` is empty/u);
+requires(factoryEvaluator, "factory-evaluator classifies each stop the rules leave open, by authorization, with worked examples and no copied text",
+  /## Classify each stop[\s\S]+`rule` is `null`[\s\S]+\*\*`decision`\*\*[\s\S]+\*\*`approval`\*\*[\s\S]+\*\*`acceptance`\*\*[\s\S]+\*\*`question`\*\*[\s\S]+\*\*`stopped_short`\*\*[\s\S]+\*\*`unknown`\*\*[\s\S]+A "\?" that asks permission the agent already had[\s\S]+is `stopped_short`[\s\S]+Worked examples[\s\S]+Never copy the agent's or the operator's words/u);
 requires(factoryEvaluator, "factory-evaluator hands its labels in through the accept step",
   /## Hand it in[\s\S]+factory\.js evaluate-accept --job/u);
 contract("factory-evaluator stays public-safe", () => {
   const skill = text(factoryEvaluator);
   assert.doesNotMatch(skill, /\b(?:microsoft|azure devops|ado)\b/iu);
-  assert.ok(Buffer.byteLength(skill) <= 8192, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
+  // Rubric 4 adds a second classification (why the agent stopped, with worked examples), so the cap is 12 KiB, not 8.
+  assert.ok(Buffer.byteLength(skill) <= 12288, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
 });
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle records the evaluation request itself on done or cancelled and hands its answer to session-start",
   /transitioning to `done` or `cancelled` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+Both statuses request one: a cancelled job is still a finished job[\s\S]+evaluate --pending[\s\S]+as `desk:session-start`'s factory lines say[\s\S]+Neither status waits for the evaluator/u);
