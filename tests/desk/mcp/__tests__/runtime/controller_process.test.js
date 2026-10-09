@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { createRequire } from "node:module"
 import * as path from "node:path"
@@ -140,15 +140,21 @@ test("a fixture's derived index is deleted only after its readiness controller c
   assert.equal(existsSync(indexDbPath(fixture.desk)), false)
 })
 
-test("a 6,000-document reindex keeps the owning MCP session's tools/list within 200 ms", { timeout: 120000 }, async (t) => {
+test("a 6,000-document reindex keeps the owning MCP session's tools/list within 200 ms", { timeout: 180000 }, async (t) => {
   const fixture = await makeGitDesk("desk-controller-latency-")
-  const session = await readySession(t, fixture)
-  // The controller child holds the index open, so the index is never deleted to force real indexing (Windows refuses, and a live controller's file is not the test's to remove). Instead 5,998 new documents arrive after convergence, built beside the desk and moved in at once, and the forced reindex has to index them all.
-  const staged = path.join(fixture.root, "staged-tips")
-  populate(fixture, staged)
-  renameSync(staged, path.join(fixture.desk, "_meta", "tips"))
+  // The 6,000 documents exist before the session starts, so the controller child indexes all of them from an empty index. Nothing is deleted or moved while the controller runs: it holds the index open and a recursive watch covers the desk, and Windows refuses to delete or rename under both.
+  populate(fixture)
+  const session = await startDesk(fixture, { args: ["--activation-config", writeActivation(fixture)] })
+  t.after(() => closeFixtureAndAwaitController(fixture, [session]))
+  // The handshake comes before admission, and a tool call made while Desk is still admitting is refused with `admitting`. Wait for admission only: `ready` is reached without waiting for convergence when semantic search is unsupported (runtime/desk-session.js:318 returns it, and :375 starts the convergence in the background), so the 6,000 documents are still being indexed.
+  const admitted = await session.statusUntil((status) => status.state === "ready", { deadlineMs: 90000 })
+  assert.notEqual(admitted.readiness?.detail.convergence.status, "succeeded", "indexing is still running when the measurement starts")
+  // Admission started the controller, so there is one for the teardown wait to find.
+  requireControllers(fixture.root)
+  // The forced reindex joins the controller's convergence and returns only when every document is indexed. That can outlast the session helper's 20 s default on a slow Windows box, so the call has its own limit.
+  const reindexTimeoutMs = 150000
   let finished = false
-  const reindex = session.call("desk_reindex", { force: true }).finally(() => { finished = true })
+  const reindex = session.call("desk_reindex", { force: true }, { timeout: reindexTimeoutMs }).finally(() => { finished = true })
   const timings = []
   while (!finished) {
     const { ms, response } = await session.timed("tools/list")
@@ -166,7 +172,7 @@ test("a 6,000-document reindex keeps the owning MCP session's tools/list within 
     closeDb(db)
   }
   t.diagnostic(JSON.stringify({ documents: 6000, requests: timings.length, maxToolsListMs: Math.max(...timings) }))
-  assert.ok(timings.length > 1, "requests overlap the real reindex")
+  assert.ok(timings.length >= 20, `only ${timings.length} requests overlapped the real reindex`)
   assert.ok(Math.max(...timings) <= 200, `owning tools/list took ${Math.max(...timings)} ms during the reindex`)
   assert.notEqual(ownerRecord(fixture).owner.pid, session.child.pid, "the index writer is not the MCP session")
 })
