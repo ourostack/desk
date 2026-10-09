@@ -12,9 +12,127 @@ import { ActivationFailure } from "../../../../../plugins/desk/mcp/src/activatio
 import {
   attachAdmissionWorker, prepareRuntimeInputs, warmNativeModules, resolveAdmissionInputs, reviveError, runAdmissionJob, runInWorker, serializeError,
 } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
+import { resolveStartupDeskRoot } from "../../../../../plugins/desk/mcp/src/runtime/startup-resolve.js"
+import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
+import { resolveBootRoot } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
+
+function makeDesk(folder) {
+  mkdirSync(path.join(folder, "_meta"), { recursive: true })
+  mkdirSync(path.join(folder, "_archive"), { recursive: true })
+  return folder
+}
+
+test("resolve: a captured desk launch folder beats the home fallback and agrees with boot without host variables", async () => {
+  const base = await mkTempRoot("desk-worker-launch-")
+  const home = path.join(base, "home")
+  const fallback = makeDesk(path.join(home, "desk"))
+  const cwd = makeDesk(path.join(base, "opened-desk"))
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state") }
+  const input = { args: {}, env, cwd, homeDir: home }
+  const boot = resolveBootRoot({ env, cwd, homeDir: home })
+  assert.equal(boot.status, "ready")
+  assert.equal(boot.path, cwd)
+  assert.equal(boot.source, "host-project")
+  const startup = resolveStartupDeskRoot(input)
+  assert.equal(startup.root, cwd, `the launch desk must not be masked by ${fallback}`)
+  assert.equal(startup.source, "host-project")
+  const admission = resolveAdmissionInputs(input)
+  assert.equal(admission.root.root, cwd)
+  assert.equal(admission.root.source, "host-project")
+  const worker = await runInWorker({ kind: "resolve", input })
+  assert.deepEqual(worker.root, startup, "captured launch evidence survives the worker boundary")
+})
+
+test("resolve: a non-desk launch folder preserves saved binding, DESK and home defaults", async () => {
+  const base = await mkTempRoot("desk-worker-project-")
+  const home = path.join(base, "home")
+  const fallback = makeDesk(path.join(home, "desk"))
+  const saved = makeDesk(path.join(base, "saved"))
+  const cwd = path.join(base, "ordinary-project")
+  mkdirSync(cwd)
+  const configPath = path.join(base, "activation.json")
+  writeFileSync(configPath, JSON.stringify({
+    schema_version: 1,
+    desk: { root: saved, state_branch: "trunk" },
+    activation: { source_identity: "commit:0123456789abcdef" },
+  }))
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state") }
+  for (const [args, extra, root, source] of [
+    [{ activationConfig: configPath }, {}, saved, "activation-config"],
+    [{}, { DESK: saved }, saved, "env:DESK"],
+    [{}, {}, fallback, "home_fallback"],
+  ]) {
+    const input = { args, env: { ...env, ...extra }, cwd, homeDir: home }
+    for (const resolved of [resolveStartupDeskRoot(input), resolveAdmissionInputs(input).root]) {
+      assert.equal(resolved.root, root)
+      assert.equal(resolved.source, source)
+    }
+    if (args.activationConfig) {
+      const { activation } = resolveAdmissionInputs(input)
+      assert.equal(activation.sourceIdentity, "commit:0123456789abcdef")
+      assert.equal(activation.activationStatus.source, "activation-config")
+      assert.equal(activation.stateBranch, "trunk")
+    }
+  }
+})
+
+test("resolve: explicit and session roots remain authoritative despite a valid desk launch hint", async () => {
+  const base = await mkTempRoot("desk-worker-explicit-launch-")
+  const cwd = makeDesk(path.join(base, "launch"))
+  const explicit = makeDesk(path.join(base, "explicit"))
+  const missing = path.join(base, "missing")
+  for (const key of ["root", "hostSessionRoot"]) {
+    const input = { args: { [key]: explicit }, env: {}, cwd, homeDir: base }
+    assert.equal(resolveAdmissionInputs(input).root.root, explicit)
+    input.args[key] = missing
+    assert.throws(() => resolveStartupDeskRoot(input), (error) => error.code === "DESK_ROOT_UNAVAILABLE" && error.path === missing)
+    const refused = resolveAdmissionInputs(input)
+    assert.equal(refused.rootError.code, "DESK_ROOT_UNAVAILABLE")
+    assert.equal(refused.rootError.path, missing)
+    assert.equal(refused.root, undefined)
+  }
+})
+
+test("resolve: known host project context wins over an unrelated child launch folder", async () => {
+  const base = await mkTempRoot("desk-worker-known-project-")
+  const home = path.join(base, "home")
+  mkdirSync(home)
+  const cwd = makeDesk(path.join(base, "child-desk"))
+  const known = makeDesk(path.join(base, "known-desk"))
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state"), CLAUDE_PROJECT_DIR: known }
+  const input = { args: {}, env, cwd, homeDir: home }
+  assert.equal(resolveStartupDeskRoot(input).root, known)
+  assert.equal(resolveAdmissionInputs(input).root.root, known)
+  const project = path.join(base, "ordinary-project")
+  mkdirSync(project)
+  const saved = makeDesk(path.join(base, "saved"))
+  const nonDeskHost = { ...input, env: { ...env, CLAUDE_PROJECT_DIR: project, DESK: saved } }
+  assert.equal(resolveAdmissionInputs(nonDeskHost).root.root, saved, "a known non-desk project must not be replaced by child cwd")
+})
+
+test("resolve: separate recorded sessions keep their desks despite each other's child launch folders", async () => {
+  const base = await mkTempRoot("desk-worker-launch-sessions-")
+  const home = path.join(base, "home")
+  mkdirSync(home)
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state") }
+  const one = makeDesk(path.join(base, "one"))
+  const two = makeDesk(path.join(base, "two"))
+  assert.equal(recordCopilotSession({ sessionId: "one", folder: one, env }), true)
+  assert.equal(recordCopilotSession({ sessionId: "two", folder: two, env }), true)
+  const inputs = [
+    { args: {}, env: { ...env, COPILOT_AGENT_SESSION_ID: "one" }, cwd: two, homeDir: home },
+    { args: {}, env: { ...env, COPILOT_AGENT_SESSION_ID: "two" }, cwd: one, homeDir: home },
+  ]
+  const results = await Promise.all(inputs.map((input) => runInWorker({ kind: "resolve", input })))
+  for (const [index, root] of [one, two].entries()) {
+    assert.equal(resolveStartupDeskRoot(inputs[index]).root, root)
+    assert.equal(resolveAdmissionInputs(inputs[index]).root.root, root)
+    assert.equal(results[index].root.root, root)
+  }
+})
 
 test("resolve: root, activation and policy, or the error that stopped them, as plain data", async () => {
   const base = await mkTempRoot("desk-worker-resolve-")

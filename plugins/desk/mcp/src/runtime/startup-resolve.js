@@ -17,13 +17,15 @@ function hostProjectFolder(env) {
   return readCopilotSession({ env })?.folder ?? (hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : undefined)
 }
 
-export function resolveStartupDeskRoot({ args, env = process.env, homeDir } = {}) {
+export function resolveStartupDeskRoot({ args, env = process.env, homeDir, cwd } = {}) {
   return resolveDeskRootWithSource({
     activationConfigPath: resolveStartupActivationConfigPath({ args, env }),
+    cwd,
     env,
     explicitRoot: args?.root,
     homeDir,
-    hostProjectRoot: hostProjectFolder(env),
+    // Captured launch evidence is a hint only when the host supplied no project context.
+    hostProjectRoot: hostProjectFolder(env) ?? cwd,
     hostSessionRoot: args?.hostSessionRoot,
   })
 }
