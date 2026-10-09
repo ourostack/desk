@@ -778,6 +778,18 @@ async function buildCredentialLeakFixture() {
   return root
 }
 
+// The text a leak scan reads. A finding's `handle` is ten hex characters of an
+// HMAC under a random per-machine key, so it can contain a 4-character run of
+// a hex secret by chance (it is not derived from the secret in a way that can
+// be reversed, and it is not a field that carries the name). Check its shape,
+// then leave only that field out; every other field is still scanned.
+function scanText(findings) {
+  for (const finding of findings) {
+    if (Object.hasOwn(finding, "handle")) assert.match(finding.handle, /^(task|track)-[0-9a-f]{10}$/u)
+  }
+  return JSON.stringify(findings.map(({ handle, ...rest }) => rest))
+}
+
 function assertNoSubstringLeak(candidate, haystack) {
   for (let len = 4; len <= candidate.length; len += 1) {
     for (let start = 0; start + len <= candidate.length; start += 1) {
@@ -817,14 +829,8 @@ test("redaction holds across every finding a credential-like directory can touch
   assert.ok(findings.some((f) => f.path.endsWith("/<redacted segment>")))
 
   // The whole-result check the review asked for: neither secret, nor any
-  // substring of either longer than 3 characters, appears anywhere. A handle
-  // is ten hex characters of an HMAC under a random key, so it can contain a
-  // 4-character run of a hex secret by chance; check its shape, then leave it
-  // out of the substring scan.
-  for (const finding of findings) {
-    if (Object.hasOwn(finding, "handle")) assert.match(finding.handle, /^(task|track)-[0-9a-f]{10}$/u)
-  }
-  const haystack = JSON.stringify(findings.map(({ handle, ...rest }) => rest))
+  // substring of either longer than 3 characters, appears anywhere.
+  const haystack = scanText(findings)
   assertNoSubstringLeak(TRACK_SECRET, haystack)
   assertNoSubstringLeak(TASK_SECRET, haystack)
 })
@@ -1309,7 +1315,7 @@ test("a single hyphen-less secret-shaped segment is reported and redacted as cre
     findByCode(findings, "track_missing_scope").some((f) => f.path === "<redacted segment>/track.md"),
   )
 
-  const haystack = JSON.stringify(findings)
+  const haystack = scanText(findings)
   assertNoSubstringLeak(TRACK_SECRET, haystack)
   assertNoSubstringLeak(TASK_SECRET, haystack)
 })
@@ -1402,7 +1408,7 @@ test("track_empty on a credential-like track name redacts the segment and leaks 
   const [empty] = findByCode(findings, "track_empty")
   assert.equal(empty.path, "<redacted segment>")
   assert.deepEqual(findByCode(findings, "name_credential_like").map((f) => f.path), ["<redacted segment>"])
-  assertNoSubstringLeak(TRACK_SECRET, JSON.stringify(findings))
+  assertNoSubstringLeak(TRACK_SECRET, scanText(findings))
 })
 
 test("an empty task card is read as a card with no fields", async () => {
@@ -1481,8 +1487,8 @@ test("a password value in a prompt-like, over-long, extension-bearing or track n
   assert.ok(findByCode(findings, "loose_file").some((f) => f.path === "<redacted segment>"))
   assert.ok(findByCode(findings, "stale_task").every((f) => f.path.startsWith("billing-disputes/<redacted segment>/")))
   assert.ok(findByCode(findings, "track_empty").some((f) => f.path === "<redacted segment>"))
-  assertNoSubstringLeak(VALUE, JSON.stringify(findings))
-  assertNoSubstringLeak("pw-hunter", JSON.stringify(findings))
+  assertNoSubstringLeak(VALUE, scanText(findings))
+  assertNoSubstringLeak("pw-hunter", scanText(findings))
 })
 
 test("a password after a dot in a loose file name is redacted and flagged for renaming", async () => {
@@ -1509,6 +1515,6 @@ test("a password after a dot in a loose file name is redacted and flagged for re
     "loose_file billing-disputes/<redacted segment>",
   ])
   for (const finding of findings) assert.match(finding.hint, /its name looks like it contains a secret's value; give it an outcome name when it moves$/)
-  assertNoSubstringLeak("hunter2", JSON.stringify(findings))
-  assertNoSubstringLeak("pw.hunter", JSON.stringify(findings))
+  assertNoSubstringLeak("hunter2", scanText(findings))
+  assertNoSubstringLeak("pw.hunter", scanText(findings))
 })
