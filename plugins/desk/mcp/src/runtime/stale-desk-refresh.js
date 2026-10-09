@@ -16,12 +16,13 @@
 // - Claude Code: `claude plugin update desk@<marketplace>`, the marketplace read from where this Desk is installed.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { appendRepairLog, resolveDeskStateDir } from "./last-start.js"
 import { behindText } from "./stale-desk.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 export const REFRESH_TIMEOUT_MS = 8000
 export const REFRESH_TTL_MS = 60 * 60 * 1000
@@ -152,7 +153,7 @@ function freshStamp(stamp, now) {
 function writeFileAtomic(file, record) {
   const temp = `${file}.${process.pid}.tmp`
   writeFileSync(temp, `${JSON.stringify(record)}\n`, { mode: 0o600 })
-  renameSync(temp, file)
+  renameWithRetry(temp, file)
 }
 
 /**

@@ -12,11 +12,12 @@
 // state directory (`resolveDeskStateDir`), keyed by a hash of the mechanism
 // and the caller's own signature, never inside a desk.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { launchStampKey } from "../factory/filer-launch.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 const THROTTLE_STATE_DIR = "filer-throttle"
 export const DEFAULT_FILER_COOLDOWN_MS = 60 * 60 * 1000
@@ -57,7 +58,7 @@ export function shouldLaunchFiler({
     // `pending` until the filer records an outcome (`factory/filer-launch.js` `endLaunch`): a filer that never starts leaves it set, and
     // the verify step reads it as a drop rather than a measured "no hit".
     writeFileSync(temporary, `${JSON.stringify({ at: now(), pending: true })}\n`, { mode: 0o600 })
-    renameSync(temporary, file)
+    renameWithRetry(temporary, file)
   } catch {
     // Not persisted: the next qualifying event just launches again.
   }

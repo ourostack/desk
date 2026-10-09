@@ -10,9 +10,10 @@
 // Fails open: an unreadable or unwritable record means "not known", never "listed".
 
 import { createHash } from "node:crypto"
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 export const SIGNOFF_LISTED_DIR = "signoff-listed"
 const STALE_MS = 7 * 24 * 60 * 60 * 1000
@@ -70,7 +71,7 @@ export function noteSignoffListed(env, found, { stateDir, now = Date.now } = {})
       mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
       const temp = `${file}.${process.pid}.tmp`
       writeFileSync(temp, `${JSON.stringify({ tasks: [...new Set([...before, ...tasks])].slice(-MAX_KEYS) })}\n`, { mode: 0o600 })
-      renameSync(temp, file)
+      renameWithRetry(temp, file)
       pruneStale(path.dirname(file), now())
     }
     return seen

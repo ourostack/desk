@@ -1202,6 +1202,7 @@ export async function bootOnce({
   }
   for (const entry of migrationEntries) {
     if (entry.state === "unchecked") pending.push(`migration ${entry.id}: not checked in time`)
+    if (entry.state === "bash_unavailable") degraded.push(`migration ${entry.id}: not checked, bash could not run (on Windows, install Git for Windows)`)
     if (entry.state === "restart" || entry.state === "run") degraded.push(`migration ${entry.id}: ${entry.state === "restart" ? "needs a restart" : entry.reason}`)
   }
   const migrationSummary = migrationEntries.map((entry) => ({ id: entry.id, state: entry.state }))

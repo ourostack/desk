@@ -6,10 +6,11 @@
 // `desk-problem-known.js` `knownHitsSince`), never a measured "no hit".
 
 import { createHash } from "node:crypto"
-import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { resolveDeskStateDir } from "../runtime/last-start.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 /** The folder under Desk's state folder that holds the stamps. */
 export const LAUNCH_STAMP_DIR = "filer-throttle"
@@ -38,7 +39,7 @@ export function endLaunch(env, { mechanism, signature }) {
       if (stamp.pending !== true) continue
       const temporary = `${file}.${process.pid}.tmp`
       writeFileSync(temporary, `${JSON.stringify({ at: stamp.at, pending: false })}\n`, { mode: 0o600 })
-      renameSync(temporary, file)
+      renameWithRetry(temporary, file)
     } catch {
       // No stamp, or one that cannot be rewritten: left as it is.
     }
