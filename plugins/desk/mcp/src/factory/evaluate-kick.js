@@ -100,7 +100,7 @@ async function workerRunning(root, now) {
   try {
     const locks = path.join(root, "locks")
     // Windows reports ENOENT for a leaf below a non-directory too.
-    if (process.platform === "win32" && !(await fsp.lstat(locks)).isDirectory()) {
+    if (!(await fsp.lstat(locks)).isDirectory()) {
       throw new Error("factory loop locks path is not a directory")
     }
     const stat = await fsp.lstat(path.join(locks, LOOP_LOCK_NAME))
