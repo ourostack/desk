@@ -508,6 +508,20 @@ test("the ceiling moves with the grant: a step that runs past the old ceiling bu
   assert.deepEqual(exits, [])
 }))
 
+test("the moved ceiling still ends a step that hangs past it", () => scratch(async (ctx) => {
+  const late = []
+  const hung = fakes([])
+  const first = hung.evaluate
+  hung.evaluate = async (env, options) => { await options.extendDeadline(100); return first(env, options) }
+  hung.mirror = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, result: "done" }), 1500))
+  const grants = []
+  const asked = hung.evaluate
+  hung.evaluate = async (env, options) => { grants.push(options.extendDeadline); return asked(env, options) }
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: hung, ceilingMs: 1000, exit: (code) => late.push(code), notify: () => {} })
+  assert.equal(grants.length, 1, "the evaluator step ran and was granted time")
+  assert.deepEqual(late, [0])
+}))
+
 test("the worker ends the process itself if a step hangs past the ceiling, and not when it finishes in time", () => scratch(async (ctx) => {
   const exits = []
   const impls = fakes([])
