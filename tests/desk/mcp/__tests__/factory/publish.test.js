@@ -119,7 +119,7 @@ test("intervals become milliseconds since the session started", () => {
   assert.deepEqual(published.intervals[1], { kind: "tool", agent: 0, tool: "shell", outcome: "error", start_ms: 5000, end_ms: 9000 })
 })
 
-test("an interval outside the session's span is dropped and its field marked unreadable, never clamped", () => {
+test("an interval outside the session's span is dropped and its field marked interval_outside_session_clock, never clamped", () => {
   const value = local()
   value.intervals = [
     { kind: "turn", agent: 0, start: "2026-09-25T07:59:59.999Z", end: "2026-09-25T08:01:00.000Z" },
@@ -132,9 +132,9 @@ test("an interval outside the session's span is dropped and its field marked unr
   // A wait derived before stop facts were recorded says so.
   assert.deepEqual(published.intervals, [{ kind: "human_wait", agent: 0, start_ms: 0, end_ms: 5400000, stop: { end: "not_recorded", asks: null, pending_agents: null } }])
   assert.deepEqual(published.unavailable.slice(2), [
-    { field: "turns", reason: "source_unreadable" },
-    { field: "tool_durations", reason: "source_unreadable" },
-    { field: "permission_waits", reason: "source_unreadable" },
+    { field: "turns", reason: "interval_outside_session_clock" },
+    { field: "tool_durations", reason: "interval_outside_session_clock" },
+    { field: "permission_waits", reason: "interval_outside_session_clock" },
     { field: "job_offsets", reason: "source_unreadable" },
   ])
   assert.equal(validatePublished(published).ok, true)
@@ -149,7 +149,7 @@ test("every interval kind maps its loss to an unavailable field the published sc
     const { published } = publish(value)
     assert.deepEqual(published.intervals, [], kind)
     assert.equal(validatePublished(published).ok, true, kind)
-    assert.ok(published.unavailable.some((entry) => entry.reason === "source_unreadable" && entry.field !== "job_offsets"), kind)
+    assert.ok(published.unavailable.some((entry) => entry.reason === "interval_outside_session_clock" && entry.field !== "job_offsets"), kind)
   }
 })
 

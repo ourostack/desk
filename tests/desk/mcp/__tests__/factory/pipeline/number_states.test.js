@@ -68,8 +68,8 @@ test("stateOf maps an unavailable result to unavailable and reasons lists a mixe
 })
 
 test("fieldsFeeding returns the fields in the table for a formula and effect", () => {
-  assert.deepEqual(fieldsFeeding("active_time_ms", "unavailable"), ["turns", "job_offsets"])
-  assert.deepEqual(fieldsFeeding("active_time_ms", "partial"), ["tool_durations", "job_segments"])
+  assert.deepEqual(fieldsFeeding("active_time_ms", "unavailable"), ["job_offsets"])
+  assert.deepEqual(fieldsFeeding("active_time_ms", "partial"), ["turns", "tool_durations", "job_segments"])
   assert.deepEqual(fieldsFeeding("waits.api_retry_ms", "unavailable"), ["api_retries", "job_offsets"])
   assert.deepEqual(fieldsFeeding("rework_signals.api_retries", "unavailable"), ["api_retries"])
   assert.deepEqual(fieldsFeeding("longest_wait", "partial"), ["turns", "human_waits", "permission_waits", "api_retries", "compaction_waits"])

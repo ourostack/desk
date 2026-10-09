@@ -780,7 +780,7 @@ test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself
     unavailableReason: [
       "host_does_not_record", "log_missing", "log_truncated", "session_open",
       "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
-      "field_absent", "host_records_partly", "withheld_public",
+      "field_absent", "host_records_partly", "withheld_public", "interval_outside_session_clock",
     ],
     sizeClass: ["none", "xs", "s", "m", "l", "xl"],
     turnBasis: ["first", "after_stop", "mid_turn"],
@@ -1026,7 +1026,7 @@ test("more than LIMITS.humanTurns entries fails with too_many, and exactly the l
   assertNoLeak(over)
 })
 
-test("human_turns and outcomes are accepted unavailable fields with every reason, and the unavailable limit is 242", () => {
+test("human_turns and outcomes are accepted unavailable fields with every reason, and the unavailable limit is 264", () => {
   for (const field of ["human_turns", "outcomes"]) {
     for (const reason of ENUMS.unavailableReason) {
       const value = golden()
@@ -1035,8 +1035,8 @@ test("human_turns and outcomes are accepted unavailable fields with every reason
     }
   }
   assert.equal(ENUMS.publishedUnavailableField.length, 22)
-  assert.equal(ENUMS.unavailableReason.length, 11)
-  assert.equal(LIMITS.unavailable, 242)
+  assert.equal(ENUMS.unavailableReason.length, 12)
+  assert.equal(LIMITS.unavailable, 264)
 })
 
 test("a local commit may carry the time the session recorded it, within the session", () => {

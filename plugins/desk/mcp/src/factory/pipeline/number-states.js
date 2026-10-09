@@ -88,8 +88,10 @@ const row = (unavailable, partial = [], feedsNothing) => Object.freeze({
 const nothing = (sentence) => row([], [], sentence)
 
 export const FEEDS = Object.freeze({
+  // Every `turns` flag says some turn intervals are missing (a dropped interval, a cap, a log cut mid-record, an open turn), never that the
+  // session recorded none, so the active time the session did record stands as a partial figure (a lower bound), as for `tool_durations`.
   // Compaction intervals are filed under `turns` when facts are published, so a `turns` gap can drop them: compaction wait stays unavailable and the longest wait partial.
-  turns: row([...ACTIVE_FAMILY, "flow_efficiency", "waits.compaction_ms"], ["lead_contributors", "longest_wait"]),
+  turns: row(["waits.compaction_ms"], [...ACTIVE_FAMILY, "flow_efficiency", "lead_contributors", "longest_wait"]),
   tool_durations: row(["totals.tool_calls", "totals.tool_failures"], [...ACTIVE_FAMILY, "flow_efficiency", "tool_calls_by_kind", "rework_signals.tool_failures", "rework_signals.tool_retries"]),
   human_waits: row(["waits.human_wait_ms"], WAIT_FEED),
   permission_waits: row(["waits.permission_wait_ms"], WAIT_FEED),
@@ -113,6 +115,11 @@ export const FEEDS = Object.freeze({
   human_turns: row([], ["attention"]),
   outcomes: nothing("a job whose entry was cut has no outcome, which every outcome formula already reads as not recorded"),
 })
+
+// Reasons that only ever say part of a field is missing, so a field flagged with one leaves even its `unavailable` formulas partial: the
+// host records the field in part (`host_records_partly`), or the publishing transform dropped the intervals that ran outside the session
+// clock and kept the rest (`interval_outside_session_clock`).
+export const ONLY_PART_REASONS = Object.freeze(["host_records_partly", "interval_outside_session_clock"])
 
 export function fieldsFeeding(formulaId, effect) {
   return Object.entries(FEEDS).filter(([, entry]) => entry[effect].includes(formulaId)).map(([field]) => field)

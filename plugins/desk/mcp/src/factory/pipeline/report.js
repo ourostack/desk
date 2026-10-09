@@ -30,6 +30,7 @@ const FACT_REASON_TEXT = {
   field_absent: "the host's record did not include it",
   host_records_partly: "the host records only some of it, so this is a lower bound",
   withheld_public: "it is withheld because the store is public",
+  interval_outside_session_clock: "some intervals ran outside the span of the session's main log, so they are left out",
 }
 
 // Reasons only the report and the rollups name; the facts enums do not.

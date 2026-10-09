@@ -13,10 +13,13 @@
 //   - No when. `session.duration_ms` is `derived_through - started_at` and
 //     `ended` is whether `ended_at` is set. Every interval becomes
 //     `start_ms`/`end_ms`, milliseconds since `started_at`. An interval that
-//     starts before the session or ends after `derived_through` (clock skew
-//     between a subagent's log and the root's) is dropped, never clamped,
-//     and its field is marked `source_unreadable` (compactions count under
-//     `turns`, subagents under `tool_durations`, as in the derivers). For a
+//     starts before the session or ends after `derived_through` (most often
+//     a subagent still working after the main log's last line, which a live
+//     session's derivation can catch mid-run) is dropped, never clamped,
+//     and its field is marked `interval_outside_session_clock` (compactions
+//     count under `turns`, subagents under `tool_durations`, as in the
+//     derivers). The reason says only that some intervals are missing, so
+//     every figure it reaches is partial, never unavailable. For a
 //     job with a task-card creation time, `session_offset_ms` is
 //     `started_at - task_created_at` (signed: a session may begin before its
 //     task card exists), and each transition's and the observation's
@@ -166,6 +169,9 @@ export const EARLIEST_SESSION_START = "2025-01-01T00:00:00.000Z"
 
 const MIN_SECRET_BYTES = 32
 
+// The reason an interval dropped for running outside the published session clock gives its field.
+const OUTSIDE_SESSION_CLOCK = "interval_outside_session_clock"
+
 // The `unavailable` field an interval kind's data belongs to.
 const INTERVAL_FIELD = Object.freeze({
   turn: "turns",
@@ -211,7 +217,7 @@ function publishIntervals(intervals, startedMs, durationMs, flag) {
     const startMs = Date.parse(interval.start) - startedMs
     const endMs = Date.parse(interval.end) - startedMs
     if (!intervalInSession(startMs, endMs, durationMs)) {
-      flag(INTERVAL_FIELD[interval.kind], "source_unreadable")
+      flag(INTERVAL_FIELD[interval.kind], OUTSIDE_SESSION_CLOCK)
       continue
     }
     const out = { kind: interval.kind, agent: interval.agent }

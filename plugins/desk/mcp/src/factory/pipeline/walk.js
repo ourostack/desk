@@ -268,6 +268,8 @@ export const REASON_CHANGE = Object.freeze({
   session_open: "unseen",
   not_collected_in_slice_1: "unseen",
   source_unreadable: "unseen",
+  // Intervals the publishing transform dropped for running outside the session clock: work the facts do not show.
+  interval_outside_session_clock: "unseen",
   capped: "unseen",
   desk_public: "unseen",
   field_absent: "unseen",

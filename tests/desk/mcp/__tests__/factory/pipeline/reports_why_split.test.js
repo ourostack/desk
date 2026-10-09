@@ -288,7 +288,7 @@ test("an unavailable task figure leaves every part of the split unavailable with
     duration: 60 * MIN,
     intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("interrupted")), span("turn", 0, 30 * MIN, 60 * MIN)],
     jobs: [bound(J("a"), 0, { done: 60 * MIN, length: 60 * MIN })],
-    unavailable: [...CLAUDE_FLAGS, { field: "turns", reason: "source_unreadable" }, { field: "tool_durations", reason: "source_unreadable" }],
+    unavailable: [...CLAUDE_FLAGS, { field: "job_offsets", reason: "source_unreadable" }],
   })
   const walk = walkOf([session], J("a"))
   const none = { class: "unavailable", state: "unavailable", reasons: ["source_unreadable"] }

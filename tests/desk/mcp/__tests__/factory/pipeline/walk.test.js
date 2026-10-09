@@ -498,7 +498,9 @@ test("the overlap split handles work that starts before a wait and runs past its
   assert.deepEqual(parts.map((part) => [part.start_ms / MIN, part.end_ms / MIN, part.class]), [[10, 20, UNLABELED_CLASS], [20, 50, "muda"], [50, 60, UNLABELED_CLASS]])
 })
 
-test("figures read from intervals take the formulas' completeness: a shared session whose turns and tool durations are unreadable (23e26d3f's shape)", () => {
+test("a session that lost a few intervals leaves its jobs' working time partial and a lower bound, never unavailable (23e26d3f's shape)", () => {
+  // The published facts of a long session flag `{turns, source_unreadable}` and `{tool_durations, source_unreadable}` for a handful of
+  // dropped intervals among thousands it kept. The job's working time is what the session recorded, at least.
   const session = facts({
     id: S(30),
     duration: 60 * MIN,
@@ -507,30 +509,28 @@ test("figures read from intervals take the formulas' completeness: a shared sess
     prs: [{ repo: "ourostack/desk", number: 9, agent: 0 }],
     unavailable: [{ field: "turns", reason: "source_unreadable" }, { field: "tool_durations", reason: "source_unreadable" }],
     jobs: [
-      binding(J("a"), 0, { done: 60 * MIN, fields: { agents: [0], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: true }] } }),
-      binding(J("b"), 0, { done: 60 * MIN, fields: { agents: [1], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: true }] } }),
+      binding(J("a"), 0, { done: 60 * MIN, fields: { agents: [0], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: false }] } }),
+      binding(J("b"), 0, { done: 60 * MIN, fields: { agents: [1], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: false }] } }),
     ],
   })
   const whole = [stretch(0, 20 * MIN, "value", null, [[0, 20 * MIN]]), stretch(20 * MIN, 50 * MIN, "muda", "waiting", [[20 * MIN, 50 * MIN]])]
   const { walk, formulas } = walkOf([session], [labelsFile(J("a"), S(30), whole), labelsFile(J("b"), S(30), whole)], J("a"))
-  assert.equal(formulas.active_time_ms.state, "unavailable")
+  assert.equal(formulas.active_time_ms.state, "partial")
   assert.deepEqual(formulas.active_time_ms.reasons, ["source_unreadable"])
-  // The walk never states the intervals more whole than the formulas do.
-  for (const key of ["working_ms", "value_in_working_ms", "agents_working_unlabeled_ms", "top_causes", "longest_gap", "bursts"]) {
-    assert.deepEqual(walk.task[key], { class: "unavailable", state: "unavailable", reasons: ["source_unreadable"] }, key)
-  }
-  assert.deepEqual(walk.task.flow_efficiency, walk.task.working_ms, "unreadable working time has no flow efficiency either")
-  assert.deepEqual(walk.task.active_share_recorded, { class: formulas.flow_efficiency.class, state: formulas.flow_efficiency.state, reasons: formulas.flow_efficiency.reasons })
-  assert.equal(walk.task.waiting_by_waited_on_ms.next_prompt.state, "unavailable")
-  assert.deepEqual(walk.bursts_state, { state: "unavailable", reasons: ["source_unreadable"] })
-  for (const entry of [walk.stackup.working_ms, walk.stackup.idle_ms, walk.stackup.working.class_ms.value, walk.stackup.working.agents_working_unlabeled_ms, ...Object.values(walk.stackup.idle)]) {
-    assert.deepEqual(entry, { class: "unavailable", state: "unavailable", reasons: ["source_unreadable"] })
-  }
+  // Lost intervals hide work: working time is at least this, idle time at most.
+  assert.deepEqual([walk.task.working_ms.state, walk.task.working_ms.value], ["partial", 30 * MIN])
+  assert.ok(walk.task.working_ms.reasons.includes("source_unreadable"))
+  assert.equal(walk.task.working_ms.bound, "lower")
+  assert.deepEqual([walk.task.idle_ms.state, walk.task.idle_ms.value, walk.task.idle_ms.bound], ["partial", 30 * MIN, "upper"])
+  assert.deepEqual([walk.stackup.working_ms.state, walk.stackup.working_ms.value, walk.stackup.working_ms.bound], ["partial", 30 * MIN, "lower"])
+  assert.equal(walk.task.flow_efficiency.state, "partial")
+  assert.equal(walk.task.flow_efficiency.value, 0.5)
+  assert.equal(walk.task.flow_efficiency.bound, "lower")
+  assert.equal(walk.bursts_state.state, "partial")
+  for (const key of ["working_ms", "idle_ms", "flow_efficiency", "longest_gap", "bursts"]) assert.notEqual(walk.task[key].state, "unavailable", key)
   assert.equal(walk.stackup.lead_time_ms.state, "measured", "the card's lead time does not read the intervals")
   // Its one pull request carries no time, so no burst can say how many it holds.
   for (const burst of walk.bursts) assert.deepEqual(burst.prs, { class: "unavailable", state: "unavailable", reasons: ["not_in_published_facts"] })
-  assert.equal(walk.bursts[0].value_ms.state, "partial")
-  assert.deepEqual(walk.bursts[0].value_ms.reasons, ["labels_from_shared_session"])
 })
 
 test("a partial interval record makes the walk's figures partial with the formulas' reasons", () => {
@@ -731,38 +731,48 @@ test("the stack-up bounds a floored job's idle time the same way the task row do
   assert.deepEqual(openWalk.stackup.idle_ms, openWalk.task.idle_ms)
 })
 
-test("the causes rollup leaves out a labeled job whose intervals are unreadable or that has no lead window, and names the reason", () => {
+test("the causes rollup leaves out a labeled job whose intervals are unavailable or that has no lead window, names the reason, and counts one that lost a few intervals as partial", () => {
   const readable = facts({ id: S(45), duration: 10 * MIN, intervals: [span("turn", 0, 0, 5 * MIN), span("human_wait", 0, 5 * MIN, 10 * MIN)], jobs: [binding(J("a"), 0, { done: 10 * MIN })] })
+  // A job clock flag on the session's only timed binding leaves the job's interval figures unavailable.
   const unreadable = facts({
     id: S(46),
     duration: 10 * MIN,
     intervals: [span("turn", 0, 0, 5 * MIN), span("human_wait", 0, 5 * MIN, 10 * MIN)],
-    unavailable: [{ field: "turns", reason: "source_unreadable" }],
+    unavailable: [{ field: "job_offsets", reason: "source_unreadable" }],
     jobs: [binding(J("b"), 0, { done: 10 * MIN })],
   })
   // A third job's intervals are readable but its closing has no time, so it has no lead window to walk.
   const unplaced = facts({ id: S(47), duration: 10 * MIN, intervals: [span("turn", 0, 0, 5 * MIN), span("human_wait", 0, 5 * MIN, 10 * MIN)], jobs: [{ ...binding(J("c"), 0), transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: null }] }] })
+  // A fourth job's session lost a few turn intervals: what it kept still counts, as a partial figure.
+  const lossy = facts({
+    id: S(48),
+    duration: 10 * MIN,
+    intervals: [span("turn", 0, 0, 5 * MIN), span("human_wait", 0, 5 * MIN, 10 * MIN)],
+    unavailable: [{ field: "turns", reason: "source_unreadable" }],
+    jobs: [binding(J("d"), 0, { done: 10 * MIN })],
+  })
   const wait = [stretch(5 * MIN, 10 * MIN, "muda", "waiting", [[5 * MIN, 10 * MIN]])]
-  const sessions = [readable, unreadable, unplaced]
-  const labels = resolveLabels([labelsFile(J("a"), S(45), wait), labelsFile(J("b"), S(46), wait), labelsFile(J("c"), S(47), wait)], sessions)
+  const sessions = [readable, unreadable, unplaced, lossy]
+  const labels = resolveLabels([labelsFile(J("a"), S(45), wait), labelsFile(J("b"), S(46), wait), labelsFile(J("c"), S(47), wait), labelsFile(J("d"), S(48), wait)], sessions)
   const walks = walksOf(sessions, labels)
   const byJob = new Map(walks.map((entry) => [entry.walk.job, entry]))
-  // The first two jobs are finished and fully labeled; only the first has intervals the walk can read.
-  for (const job of [J("a"), J("b")]) assert.equal(byJob.get(job).record.measures.muda_time.state, "measured")
+  // Jobs a, b and d are finished and fully labeled; b has no intervals the walk can read, and d's are partial.
+  for (const job of [J("a"), J("b"), J("d")]) assert.equal(byJob.get(job).record.measures.muda_time.state, "measured")
   assert.equal(Object.hasOwn(byJob.get(J("b")).walk.intervals, "unavailable"), true)
+  assert.deepEqual(byJob.get(J("d")).walk.intervals, { reasons: ["source_unreadable"] })
   const causes = causesRollup({ records: walks.map(({ record }) => record), walks: walks.map(({ walk }) => walk), labels })
-  assert.equal(causes.n, 1)
-  assert.equal(causes.N, 3)
+  assert.equal(causes.n, 2)
+  assert.equal(causes.N, 4)
   assert.equal(causes.state, "partial")
   assert.equal(byJob.get(J("c")).record.measures.muda_time.state, "measured")
   assert.equal(Object.hasOwn(byJob.get(J("c")).walk.intervals, "unavailable"), false)
   assert.equal(Object.hasOwn(byJob.get(J("c")).walk.window, "start_ms"), false)
-  // Each left-out job names why: unreadable intervals, or no lead window.
+  // Each left-out job names why (unavailable intervals, or no lead window), and the partly counted one names its loss.
   assert.deepEqual(causes.reasons, ["job_offsets_unavailable", "source_unreadable"])
   // A ranking of causes has no one direction.
   assert.deepEqual([causes.bound, causes.bound_reason], [null, "bound_not_one_quantity"])
-  for (const row of causes.causes) assert.deepEqual(row.jobs, [J("a")])
-  assert.deepEqual(causes.causes.map((row) => [row.cause, row.total_ms / MIN]), [["waiting:next_prompt", 5]])
+  for (const row of causes.causes) assert.deepEqual(row.jobs, [J("a"), J("d")])
+  assert.deepEqual(causes.causes.map((row) => [row.cause, row.total_ms / MIN]), [["waiting:next_prompt", 10]])
 })
 
 test("each burst splits its inner idle time by the task's causes, as envelopes that add up to its idle_ms", () => {
