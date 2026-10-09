@@ -115,6 +115,7 @@ test("the constants and the Count helper", () => {
   assert.deepEqual(count(-1), U("not_recorded"))
   assert.deepEqual(count(1.5, "x"), U("x"))
   assert.ok(HEADLESS_STATES.includes("sign_in_unknown") && HEADLESS_STATES.includes("disabled_would_bill"))
+  assert.ok(HEADLESS_STATES.includes("no_time_for_a_run"), "the health record keeps the state of a step that had no time for a run")
   assert.deepEqual([...BLOCKING_STATES].sort(), ["no_agent_cli", "no_credentials", "sign_in_unknown", "unsupported_host"])
 })
 

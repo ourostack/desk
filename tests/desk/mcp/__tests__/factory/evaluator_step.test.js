@@ -143,6 +143,7 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
       cost_unreported_runs: 0,
       unsupported_jobs: 0,
       deferred_jobs: 0,
+      deferred_reason: null,
       blocked_days: 0,
     },
     lag: { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [] },
@@ -181,6 +182,7 @@ test("the seventh job in a day is not run and the state is budget_exhausted; the
   assert.equal(evaluator.headless.accepted, MAX_HEADLESS_JOBS_PER_DAY)
   assert.equal(evaluator.waiting, 1)
   assert.equal(evaluator.headless.deferred_jobs, 1)
+  assert.equal(evaluator.headless.deferred_reason, null, "a spent cap is its own state, not a lack of time")
   assert.equal(evaluator.headless.blocked_days, 1)
   assert.equal(options.probes.length, 1, "the sign-in is probed once per step")
 
@@ -247,6 +249,7 @@ test("a rejected answer is counted, retried the next day, and after 3 attempts t
   evaluator = await evaluatorOf(env)
   assert.equal(evaluator.headless.state, "idle")
   assert.equal(evaluator.headless.deferred_jobs, 1)
+  assert.equal(evaluator.headless.deferred_reason, null, "a job already tried today waits by rule, not for lack of time")
   assert.equal(evaluator.waiting, 1)
 
   for (const day of [1, 2]) {
@@ -512,18 +515,24 @@ test("a runner that answers unsupported_host for a job skips it without stopping
   assert.equal(evaluator.headless.jobs, 1)
 }))
 
-test("no new run starts that could not finish before the deadline; the jobs left wait for the next worker", () => scratch(async (env, base) => {
+test("no new run starts that could not finish before the deadline; the jobs left wait for the next worker, and the step says it had no time", () => scratch(async (env, base) => {
   await seedJob(env, base, 1)
   await seedJob(env, base, 2)
   await seedJob(env, base, 3)
   let clock = 1000
   const tooLate = seams({ clock: () => clock, deadline: clock + HEADLESS_TIMEOUT_MS - 1 })
-  assert.deepEqual(await step(env, tooLate), { ok: true, result: "none_could_run" })
+  assert.deepEqual(await step(env, tooLate), { ok: false, result: "no_time_for_a_run" }, "a step that deferred every ready job for lack of time is not a clean run")
   assert.equal(tooLate.runHeadless.calls.length, 0)
   assert.equal(tooLate.probes.length, 0)
   let evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.headless.state, "no_time_for_a_run")
   assert.equal(evaluator.headless.deferred_jobs, 3)
+  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
   assert.equal(evaluator.waiting, 3)
+  const record = (await readStatus(env)).loop.steps.evaluate
+  assert.equal(record.last_result, "no_time_for_a_run")
+  assert.equal(record.failures, 1, "the step record counts it as a failure, so last_ok_at does not move")
+  assert.equal(record.last_ok_at, null)
 
   const exact = seams({
     clock: () => clock,
@@ -533,7 +542,9 @@ test("no new run starts that could not finish before the deadline; the jobs left
   assert.deepEqual(await step(env, exact), { ok: true, result: "ran" })
   assert.equal(exact.runHeadless.calls.length, 1, "after the first run the second no longer fits")
   evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.headless.state, "ran")
   assert.equal(evaluator.headless.deferred_jobs, 2)
+  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run", "the jobs left after a run still say why they wait")
   assert.equal(evaluator.waiting, 2)
 }))
 
@@ -891,13 +902,74 @@ test("the time limit is checked again right before the run, after the sign-in pr
     deadline: clock + HEADLESS_TIMEOUT_MS + 60 * 1000,
     probeSignIn: async () => { clock += 2 * 60 * 1000; return { state: "subscription" } },
   })
-  assert.deepEqual(await step(env, options), { ok: true, result: "none_could_run" })
+  assert.deepEqual(await step(env, options), { ok: false, result: "no_time_for_a_run" })
   assert.equal(options.runHeadless.calls.length, 0, "the probe used up the time the run needed")
   const evaluator = await evaluatorOf(env)
   assert.equal(evaluator.headless.jobs, 0)
   assert.equal(evaluator.headless.deferred_jobs, 1)
+  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
   assert.deepEqual((await readStatus(env)).loop.evaluate.attempts, {})
 }))
+
+// The regression seen on 2026-10-09 with Desk 3.2.0-alpha.247: the loop worker gives the evaluator a deadline 17 minutes after it starts, the facts
+// scan took 131 seconds, so less than the 15 minutes a run needs was left and every one of 18 ready jobs was deferred, while the step looked healthy.
+const SCAN_MS = 131000
+const WORKER_DEADLINE_MS = 17 * 60 * 1000
+
+async function slowScan(env, base, { extendDeadline, jobs = 18 } = {}) {
+  for (let index = 1; index <= jobs; index += 1) await seedJob(env, base, index)
+  let clock = 1000
+  const granted = []
+  const options = seams({
+    clock: () => clock,
+    deadline: clock + WORKER_DEADLINE_MS,
+    requestFinishedJobs: async () => { clock += SCAN_MS; return { requested: [] } },
+    runHeadless: fakeRunner(() => { clock += 10 * 60 * 1000; return { state: "ran", cost_usd: null } }),
+    ...(extendDeadline === undefined ? {} : { extendDeadline: async (ms) => { granted.push(ms); return extendDeadline(ms) } }),
+  })
+  return { options, granted, outcome: await step(env, options) }
+}
+
+test("a facts scan of 131 seconds with 18 ready jobs still starts a run when the caller leaves the scan out of the run window", () => scratch(async (env, base) => {
+  const { options, granted, outcome } = await slowScan(env, base, { extendDeadline: (ms) => ms })
+  assert.deepEqual(outcome, { ok: true, result: "ran" })
+  assert.deepEqual(granted, [SCAN_MS], "the step asks for exactly the time its scan took")
+  assert.equal(options.runHeadless.calls.length, 1, "one 15-minute run fits after the scan; the second no longer does")
+  const evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.scan_ms, SCAN_MS)
+  assert.equal(evaluator.headless.state, "ran")
+  assert.equal(evaluator.headless.jobs, 1)
+  assert.equal(evaluator.headless.deferred_jobs, 17)
+  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
+}))
+
+test("without a caller that leaves the scan out, the same slow scan defers every job and says it had no time", () => scratch(async (env, base) => {
+  const { options, outcome } = await slowScan(env, base)
+  assert.deepEqual(outcome, { ok: false, result: "no_time_for_a_run" })
+  assert.equal(options.runHeadless.calls.length, 0)
+  const evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.headless.state, "no_time_for_a_run")
+  assert.equal(evaluator.headless.deferred_jobs, 18)
+  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
+  assert.equal(evaluator.ready_now, 18, "the jobs stay ready for the next worker")
+}))
+
+test("the step extends its run window only by what the caller grants, never more than the scan took", () => scratch(async (env, base) => {
+  // A grant short of the 11 seconds that were missing leaves no time for a run.
+  let { options, outcome } = await slowScan(env, base, { jobs: 1, extendDeadline: () => 1000 })
+  assert.deepEqual(outcome, { ok: false, result: "no_time_for_a_run" })
+  assert.equal(options.runHeadless.calls.length, 0)
+}))
+
+test("a grant outside zero to the scan's own time is read as the nearest bound, and a grant that is not a number as none", async () => {
+  for (const [name, answer, runs] of [["junk", "x", 0], ["negative", -5, 0], ["not finite", Number.NaN, 0], ["too much", 365 * DAY, 1]]) {
+    await scratch(async (env, base) => {
+      const { options, outcome } = await slowScan(env, base, { jobs: 2, extendDeadline: () => answer })
+      assert.equal(options.runHeadless.calls.length, runs, `${name}: capped at the scan, one run fits and the second does not`)
+      assert.equal(outcome.result, runs === 0 ? "no_time_for_a_run" : "ran", name)
+    })
+  }
+})
 
 // ---------------------------------------------------------------------------
 // The tight loop: the backstop, fresh finishes first, and the label lag.
@@ -1067,9 +1139,10 @@ test("a job at the attempt limit is named apart and never holds the lag, and an 
 test("a job left for want of time still counts as ready now", () => scratch(async (env, base) => {
   await seedJob(env, base, 1)
   const options = seams({ deadline: Date.now() })
-  assert.deepEqual(await step(env, options), { ok: true, result: "none_could_run" })
+  assert.deepEqual(await step(env, options), { ok: false, result: "no_time_for_a_run" })
   const evaluator = await evaluatorOf(env)
   assert.deepEqual([evaluator.waiting, evaluator.ready_now, evaluator.ready_later], [1, 1, 0])
+  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
 }))
 
 test("a job labeled in the step leaves the lag; a step with nothing waiting records none", () => scratch(async (env, base) => {

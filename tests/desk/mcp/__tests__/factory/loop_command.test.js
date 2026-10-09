@@ -10,10 +10,10 @@ import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
 
 import "../_isolated_env.mjs"
-import { LOOP_BUDGET_MS, LOOP_STEP_NAMES, LATER_STEPS_RESERVE_MS, runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
+import { LOOP_BUDGET_MS, LOOP_STEP_NAMES, LATER_STEPS_RESERVE_MS, MAX_SCAN_ALLOWANCE_MS, runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { main, runLoopCommand, SUPPORTED_COMMANDS } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
-import { takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
+import { LOCK_OUTER_AGE_MS, takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
@@ -438,6 +438,66 @@ test("an unreadable status stops the worker before any step runs that would not 
   assert.deepEqual(log, [])
   assert.equal(outcome.steps.evaluate, "not_started")
   await assert.rejects(fs.stat(path.join(await factoryStateRoot(ctx.env), "locks", "loop-worker.running")), "the lock is released")
+}))
+
+test("the evaluator's facts scan is left out of its run window: the budget, the later steps' reserve and the ceiling all move by the time it took", () => scratch(async (ctx) => {
+  const clock = fakeClock()
+  const started = clock.now
+  const log = []
+  const notes = []
+  const impls = fakes(log)
+  const inner = impls.evaluate
+  let granted
+  impls.evaluate = async (env, options) => {
+    // The scan took 131 seconds, then a 15-minute run ran to its limit.
+    clock.advance(131000)
+    granted = await options.extendDeadline(131000)
+    clock.advance(15 * MINUTE)
+    return inner(env, options)
+  }
+  impls.routeIssues = async () => { clock.advance(4 * MINUTE); return { ok: true, result: "done" } }
+  const exits = []
+  const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", clock: clock.read, impls, exit: (code) => exits.push(code), notify: (message) => notes.push(message) })
+  assert.equal(granted, 131000, "the worker grants the scan's whole time")
+  assert.deepEqual(notes, [{ desk_loop_extend_ms: 131000 }], "the launcher is told, so its hard stop moves too")
+  const by = Object.fromEntries(log)
+  assert.equal(by.evaluate.deadline.getTime(), started + LOOP_BUDGET_MS - LATER_STEPS_RESERVE_MS, "the deadline it was given is unchanged; the grant is added to it")
+  assert.equal(outcome.result, "completed", "17m11s plus a 4-minute step is past 20 minutes, but inside the budget moved by the scan")
+  assert.ok(Object.values(outcome.steps).every((code) => code !== "not_started"))
+}))
+
+test("the worker grants a scan at most MAX_SCAN_ALLOWANCE_MS in all, and nothing for a value that is not a time", () => scratch(async (ctx) => {
+  const notes = []
+  const grants = []
+  const impls = fakes([])
+  const inner = impls.evaluate
+  impls.evaluate = async (env, options) => {
+    for (const ask of [-1, Number.NaN, "x", 1000, MAX_SCAN_ALLOWANCE_MS]) grants.push(await options.extendDeadline(ask))
+    return inner(env, options)
+  }
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls, exit: () => {}, notify: (message) => notes.push(message) })
+  assert.deepEqual(grants, [0, 0, 0, 1000, MAX_SCAN_ALLOWANCE_MS - 1000])
+  assert.deepEqual(notes, [{ desk_loop_extend_ms: 1000 }, { desk_loop_extend_ms: MAX_SCAN_ALLOWANCE_MS }])
+  assert.ok(MAX_SCAN_ALLOWANCE_MS + LOOP_BUDGET_MS + 2 * MINUTE < LOCK_OUTER_AGE_MS, "a worker never outlives the lock's outer age, so no second worker takes over a live one")
+}))
+
+test("a notice the launcher cannot take never stops the worker", () => scratch(async (ctx) => {
+  const impls = fakes([])
+  const inner = impls.evaluate
+  impls.evaluate = async (env, options) => { await options.extendDeadline(1000); return inner(env, options) }
+  const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls, notify: () => { throw new Error("channel closed") } })
+  assert.equal(outcome.result, "completed")
+}))
+
+test("the ceiling moves with the grant: a step that runs past the old ceiling but inside the moved one is not cut off", () => scratch(async (ctx) => {
+  const exits = []
+  const impls = fakes([])
+  const inner = impls.evaluate
+  impls.evaluate = async (env, options) => { await options.extendDeadline(4000); return inner(env, options) }
+  impls.mirror = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, result: "done" }), 1500))
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls, ceilingMs: 1000, exit: (code) => exits.push(code), notify: () => {} })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual(exits, [])
 }))
 
 test("the worker ends the process itself if a step hangs past the ceiling, and not when it finishes in time", () => scratch(async (ctx) => {
