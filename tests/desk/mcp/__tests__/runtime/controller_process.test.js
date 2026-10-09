@@ -1,11 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { openDb, closeDb, indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { makeGitDesk, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
+import { assertProcessesGone, controllerPids, processAlive, waitForProcessesGone } from "./_controller_exit.js"
 
 const require = createRequire(import.meta.url)
 const posixOnly = process.platform === "win32" ? "POSIX signal semantics" : false
@@ -35,18 +36,33 @@ function ownerRecord(fixture) {
   return { ...JSON.parse(readFileSync(ownerFile, "utf8")), ownerFile }
 }
 
+// Every session of a fixture is closed together, then the fixture's controller child is waited for. The child outlives its sessions (it ends after its parent's channel drops), holds the derived index open, and Windows will not delete a file a process holds, so nothing may remove the fixture before the child is gone.
+const sessionsByFixture = new Map()
+
+export async function closeFixtureAndAwaitController(fixture, sessions) {
+  const pids = controllerPids([fixture.readinessHome])
+  await Promise.all(sessions.map((session) => session.close()))
+  await waitForProcessesGone(pids)
+  assertProcessesGone(pids)
+}
+
 async function readySession(t, fixture, options = {}) {
   const configPath = writeActivation(fixture)
   const session = await startDesk(fixture, { args: ["--activation-config", configPath], ...options })
-  t.after(() => session.close())
+  if (!sessionsByFixture.has(fixture)) {
+    const sessions = []
+    sessionsByFixture.set(fixture, sessions)
+    t.after(() => closeFixtureAndAwaitController(fixture, sessions))
+  }
+  sessionsByFixture.get(fixture).push(session)
   await session.statusUntil((status) => status.state === "ready" && status.readiness?.detail.convergence.status === "succeeded", { deadlineMs: 90000 })
   return session
 }
 
-function populate(fixture) {
-  // makeGitDesk supplies two Markdown documents; this makes exactly 6,000.
+// makeGitDesk supplies two Markdown documents; this adds 5,998 so there are exactly 6,000.
+function populate(fixture, directory = path.join(fixture.desk, "_meta", "tips")) {
   for (let index = 0; index < 5998; index += 1) {
-    writeFile(path.join(fixture.desk, "_meta", "tips", `entry-${index}.md`), `# Entry ${index}\n\nHarbor navigation reference ${index}. The lighthouse keeper records the crossing.\n`)
+    writeFile(path.join(directory, `entry-${index}.md`), `# Entry ${index}\n\nHarbor navigation reference ${index}. The lighthouse keeper records the crossing.\n`)
   }
 }
 
@@ -64,6 +80,7 @@ export async function removeWithRetry(file, { remove = rmSync, wait = pause, att
   }
 }
 
+// POSIX only: a Windows run cannot delete the index while its controller child holds it open.
 async function removeDerivedIndex(fixture) {
   // Convergence has finished. Force real indexing, not a warm hash-only scan.
   for (const suffix of ["", "-wal", "-shm"]) await removeWithRetry(`${indexDbPath(fixture.desk)}${suffix}`)
@@ -106,11 +123,27 @@ async function assertConnected(sessions) {
   }
 }
 
+test("a fixture's derived index is deleted only after its readiness controller child has exited", { timeout: 120000 }, async (t) => {
+  const fixture = await makeGitDesk("desk-controller-exit-order-")
+  const session = await readySession(t, fixture)
+  const controller = ownerRecord(fixture).owner.pid
+  assert.notEqual(controller, session.child.pid, "the controller is a separate process from the session")
+  assert.equal(processAlive(controller), true, "the controller is running and holds the index while the session is open")
+  assert.deepEqual(controllerPids([fixture.readinessHome]), [controller])
+  await closeFixtureAndAwaitController(fixture, sessionsByFixture.get(fixture))
+  assert.equal(processAlive(controller), false, "the controller has exited before anything is deleted")
+  // A plain delete, with no retry: nothing holds the index now, on any platform.
+  for (const suffix of ["", "-wal", "-shm"]) rmSync(`${indexDbPath(fixture.desk)}${suffix}`, { force: true })
+  assert.equal(existsSync(indexDbPath(fixture.desk)), false)
+})
+
 test("a 6,000-document reindex keeps the owning MCP session's tools/list within 200 ms", { timeout: 120000 }, async (t) => {
   const fixture = await makeGitDesk("desk-controller-latency-")
-  populate(fixture)
   const session = await readySession(t, fixture)
-  await removeDerivedIndex(fixture)
+  // The controller child holds the index open, so the index is never deleted to force real indexing (Windows refuses, and a live controller's file is not the test's to remove). Instead 5,998 new documents arrive after convergence, built beside the desk and moved in at once, and the forced reindex has to index them all.
+  const staged = path.join(fixture.root, "staged-tips")
+  populate(fixture, staged)
+  renameSync(staged, path.join(fixture.desk, "_meta", "tips"))
   let finished = false
   const reindex = session.call("desk_reindex", { force: true }).finally(() => { finished = true })
   const timings = []

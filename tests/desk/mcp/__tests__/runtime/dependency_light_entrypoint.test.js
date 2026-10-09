@@ -21,6 +21,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { performance } from "node:perf_hooks"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { assertProcessesGone, controllerPids, waitForProcessesGone } from "./_controller_exit.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -435,6 +436,8 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } }) + "\n")
     status = JSON.parse((await waitForResponse(id)).result.content[0].text)
   }
+  // The session's readiness controller child outlives the session and holds the derived index open; it is named now, while its owner record exists, and waited for once the session has ended.
+  const controllers = controllerPids([path.join(fixture.root, "home"), path.join(fixture.root, "xdg-cache")])
   const killTimer = setTimeout(() => child.kill("SIGKILL"), 5000)
   try {
     child.stdin.end()
@@ -443,8 +446,10 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
     clearTimeout(killTimer)
   }
   assert.deepEqual(closed, { code: 0, signal: null }, stderr || stdout)
+  await waitForProcessesGone(controllers)
   return {
     code: 0,
+    controllers,
     initialize,
     tools,
     status,
@@ -562,8 +567,10 @@ async function runMcpStatusSession(fixture, {
     })
     return body
   }
+  let controllers = []
   const stopChild = async () => {
     if (closed !== undefined) return
+    controllers = controllerPids([path.join(fixture.root, "home"), path.join(fixture.root, "xdg-cache")])
     const killTimer = setTimeout(() => child.kill("SIGKILL"), 5000)
     try {
       child.stdin.end()
@@ -572,6 +579,7 @@ async function runMcpStatusSession(fixture, {
     } finally {
       clearTimeout(killTimer)
     }
+    await waitForProcessesGone(controllers)
   }
 
   try {
@@ -621,8 +629,10 @@ async function runMcpStatusSession(fixture, {
       slug: "must-not-write",
       title: "Must not write",
     })
+    await stopChild()
     return {
       code: 0,
+      controllers,
       initialize,
       tools,
       initialStatus,
@@ -962,6 +972,7 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
   const convergenceTimeoutMs = process.platform === "win32" ? 60000 : 10000
   const embedding = await createEmbeddingBarrier()
   let fixture
+  let controllers = []
   try {
     fixture = makeFixture({ embeddingEndpoint: embedding.endpoint })
     mkdirSync(path.join(fixture.deskRoot, "ops", "status-check"), { recursive: true })
@@ -994,6 +1005,8 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
         embedding.release()
       },
     })
+    controllers = result.controllers
+    assert.ok(controllers.length > 0, "the converged session had a readiness controller child to wait for")
     assert.equal(result.status.error, undefined, result.stderr || result.stdout)
     assert.equal(result.doctor.error, undefined, result.stderr || result.stdout)
     assert.ok(result.status.id > result.initialStatus.id, "converged status must be a later response")
@@ -1051,6 +1064,8 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
     try {
       await embedding.close()
     } finally {
+      // Windows refuses to delete the index while the controller child holds it open: the child must be gone first, never retried around.
+      assertProcessesGone(controllers)
       if (fixture) rmSync(fixture.root, { recursive: true, force: true })
     }
   }
