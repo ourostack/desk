@@ -110,6 +110,9 @@ properties:
     secrets:
 $secrets_yaml
   template:
+    # Shutdown stops every Desk child (up to 10 s) and then runs Desk's own
+    # push of any unpushed desk writes (up to 60 s) before the gateway exits.
+    terminationGracePeriodSeconds: 90
     scale:
       minReplicas: 1
       maxReplicas: 1

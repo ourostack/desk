@@ -64,7 +64,7 @@ const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((nam
 // shim first on PATH, each fresh from the socket.
 export function deskChildEnv({ config, user, socketPath, baseEnv }) {
   const name = user.name || user.login;
-  const email = `${user.userId}+${user.login}@users.noreply.github.com`;
+  const email = user.userId ? `${user.userId}+${user.login}@users.noreply.github.com` : `${user.login}@users.noreply.github.com`;
   return {
     ...passedThrough(baseEnv),
     PATH: [SHIM_DIR, baseEnv.PATH].filter(Boolean).join(delimiter),
@@ -79,33 +79,101 @@ export function deskChildEnv({ config, user, socketPath, baseEnv }) {
   };
 }
 
+// Desk's own push: the script Desk's detached push worker runs, with no
+// debounce. It takes Desk's sync lock, pushes, and on a rejection pulls with
+// rebase and pushes once more.
+export const deskPushArgs = (config) => [join(config.pluginDir, "mcp", "scripts", "sync-push.js"), "--root", config.cloneDir, "--debounce-ms", "0"];
+
+// The commits in `dir` that origin does not have yet, newest first.
+async function unpushed(dir, git) {
+  try {
+    return (await git(["-C", dir, "rev-list", "@{u}..HEAD"])).split("\n").filter(Boolean);
+  } catch (error) {
+    log(`could not count unpushed desk commits: ${error.message}`);
+    return [];
+  }
+}
+
+// Runs Desk's own push on the clone until origin has every commit or
+// `timeoutMs` runs out. Desk's push returns at once when another push worker
+// holds its lock, so it runs again while commits remain, `retryMs` apart. A
+// push still running at the deadline is killed. Commits still unpushed then
+// are logged by SHA, because the next start clones origin afresh.
+export async function pushDesk({ dir, args, env, git, timeoutMs = 60_000, retryMs = 2_000 }) {
+  const deadline = Date.now() + timeoutMs;
+  let ahead = await unpushed(dir, git);
+  while (ahead.length > 0 && Date.now() < deadline) {
+    const push = spawn(process.execPath, args, { stdio: ["ignore", "ignore", "inherit"], env });
+    const exited = new Promise((resolve) => {
+      push.once("close", resolve);
+      push.once("error", (error) => {
+        log(`could not run Desk's push: ${error.message}`);
+        resolve();
+      });
+    });
+    const timer = setTimeout(() => {
+      log(`Desk's push did not finish within ${timeoutMs / 1000} s; stopping it`);
+      push.kill("SIGKILL");
+    }, Math.max(deadline - Date.now(), 0));
+    await exited;
+    clearTimeout(timer);
+    ahead = await unpushed(dir, git);
+    if (ahead.length > 0 && Date.now() + retryMs < deadline) await new Promise((resolve) => setTimeout(resolve, retryMs));
+    else break;
+  }
+  if (ahead.length > 0) log(`DESK WRITES NOT PUSHED: ${ahead.length} commit(s) in ${dir} are not on origin and will be lost: ${ahead.join(" ")}`);
+  return ahead;
+}
+
+// Stops the gateway without losing desk writes: no new connections or
+// sessions, every Desk child stopped, then Desk's own push of whatever the
+// clone still holds, and only then the token socket that push authenticates
+// through.
+export async function stopGateway({ server, relay, pushDesk: push, closeTokenSocket }) {
+  server.close();
+  await relay?.close();
+  await push?.();
+  await closeTokenSocket?.();
+  server.closeAllConnections();
+}
+
 export async function main(env = process.env) {
   const config = readConfig(env);
-  const cleanups = [];
   let relay = null;
+  let push;
+  let closeTokenSocket;
 
   if (config.appReady) {
     const runtimeDir = mkdtempSync(join(tmpdir(), "desk-hosted-")); // mode 0700
-    cleanups.push(() => rmSync(runtimeDir, { recursive: true, force: true }));
     const socketPath = join(runtimeDir, "git-token.sock");
     const privateKeyPem = readFileSync(config.appKeyFile, "utf8");
     const mint = () => installationToken({ appId: config.appId, privateKeyPem, repo: config.repo });
     const tokenServer = serveTokens({ socketPath, mint });
     await once(tokenServer, "listening");
-    cleanups.push(() => tokenServer.close());
+    closeTokenSocket = () => {
+      tokenServer.close();
+      rmSync(runtimeDir, { recursive: true, force: true });
+    };
 
     const gitEnv = { ...passedThrough(env), GIT_TERMINAL_PROMPT: "0", DESK_TOKEN_SOCKET: socketPath };
-    await ensureClone({ dir: config.cloneDir, repo: config.repo, git: (args, options) => runGit(args, { ...options, env: gitEnv }) });
+    const git = (args, options) => runGit(args, { ...options, env: gitEnv });
+    await ensureClone({ dir: config.cloneDir, repo: config.repo, git });
     log(`desk clone ready at ${config.cloneDir}`);
 
+    // The shutdown push commits a rebase under the last signed-in user, or
+    // the first allowed login if nobody has signed in since this start.
+    let lastUser = { login: config.allowedLogins[0] };
     relay = createRelay({
-      spawnDesk: ({ auth }) =>
-        spawn(process.execPath, deskChildArgs(config), {
+      spawnDesk: ({ auth }) => {
+        lastUser = auth.extra;
+        return spawn(process.execPath, deskChildArgs(config), {
           stdio: "pipe",
           env: deskChildEnv({ config, user: auth.extra, socketPath, baseEnv: env }),
-        }),
+        });
+      },
     });
-    cleanups.push(() => relay.close());
+    push = () =>
+      pushDesk({ dir: config.cloneDir, args: deskPushArgs(config), env: deskChildEnv({ config, user: lastUser, socketPath, baseEnv: env }), git });
   } else {
     log(NOT_SET_UP);
   }
@@ -128,14 +196,18 @@ export async function main(env = process.env) {
   await once(server, "listening");
   log(`listening on ${config.port} for ${config.resource}; GitHub callback ${config.githubCallbackUrl}`);
 
-  const shutdown = async () => {
-    server.close();
-    for (const cleanup of cleanups.reverse()) await cleanup();
-    server.closeAllConnections();
-    process.exit(0);
+  let stopping = null;
+  const shutdown = () => {
+    stopping ??= stopGateway({ server, relay, pushDesk: push, closeTokenSocket }).then(
+      () => process.exit(0),
+      (error) => {
+        log(`shutdown failed: ${error.message}`);
+        process.exit(1);
+      },
+    );
   };
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
   return server;
 }
 

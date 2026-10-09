@@ -5,8 +5,8 @@ The hosted Desk gateway lets claude.ai use Desk as a remote MCP server at `https
 The gateway adds only what a remote host needs:
 
 - **An HTTP endpoint.** Streamable HTTP MCP at `/mcp`, plus `/healthz`.
-- **Sign-in.** It is the OAuth authorization server Claude talks to (dynamic client registration, PKCE, rotating refresh tokens), and it signs users in with the "Ouro Desk" GitHub App. Only the logins in `DESK_ALLOWED_LOGINS` are admitted.
-- **A clone.** At start it clones the desk repository (`arimendelow/desk`) to the container's own disk. Every Desk child works in that clone and commits and pushes through Desk's own write protocol.
+- **Sign-in.** It is the OAuth authorization server Claude talks to (dynamic client registration, PKCE, rotating refresh tokens), and it signs users in with the "Ouro Desk" GitHub App. Before sending the browser to GitHub, it shows a consent page that names the client and the host its sign-in will be sent to, and continues only when the person approves. Only the logins in `DESK_ALLOWED_LOGINS` are admitted.
+- **A clone.** At start it clones the desk repository (`arimendelow/desk`) to the container's own disk. Every Desk child works in that clone and commits and pushes through Desk's own write protocol. On SIGTERM the gateway refuses new sessions, stops every Desk child (SIGKILL after 10 s), runs Desk's own push for up to 60 s so no committed write is left only in the clone, and then exits. Any commit still unpushed is logged by SHA as `DESK WRITES NOT PUSHED`. The image runs the gateway under tini, which reaps Desk's detached workers, and the Container App allows 90 s for shutdown.
 - **Git credentials.** Git and `gh` get short-lived installation tokens for the one desk repository from a Unix socket that only the gateway serves (`bin/git-credential-desk.js`, `bin/gh`). The App's key never enters a Desk child's environment, and no token is stored in the environment, `.git/config` or on disk.
 
 ## What hosted Desk cannot do
@@ -17,7 +17,7 @@ Some Desk tools, doctor repairs and skills need a shell, the host machine or a c
 
 1. In claude.ai, install the Desk plugin and its dependencies (superpowers, plain-language) from the ourostack marketplace.
 2. Open **Settings → Connectors → Add custom connector** and enter `https://desk.ouro.bot/mcp`. Leave the OAuth client fields empty; Claude registers itself.
-3. Connect, then sign in with GitHub as an allowed login (`arimendelow`).
+3. Connect, approve on the Hosted Desk consent page, then sign in with GitHub as an allowed login (`arimendelow`).
 4. Start a chat. Desk's instructions tell the agent to call `desk_status` first.
 
 ## Environment
