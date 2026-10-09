@@ -10,14 +10,14 @@ import { ownerState, readOwnerRecord } from "./owner-record.js"
 import { probeController, probeMissed } from "./hung-controller.js"
 import { validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
 import { request } from "./controller-client.js"
-import { WINDOWS_PROCESS_START_CAP_MS } from "./process-start.js"
 
 const childEntry = fileURLToPath(new URL("./controller-child.js", import.meta.url))
 
-// The time a controller child is given from its spawn to its ready message: the child's own start (node boot, loading the runtime, scanning the workspace) plus, on Windows, the one serial step the other platforms do not have, the process start read through PowerShell, which is capped at WINDOWS_PROCESS_START_CAP_MS. Under load the read alone can take that whole cap, so a Windows child that spent the usual start on everything else and the full cap on the read must still fit; a flat 10 s there failed a lone controller at 10,136 ms (issue 255).
+// The time a controller child is given from its spawn to its ready message: the child's own start (node boot, loading the runtime, scanning the workspace) on every platform. Windows adds the one serial step the others do not have, the process start read through PowerShell, which is capped at 5 s (WINDOWS_PROCESS_START_CAP_MS in process-start.js). The 10 s base plus that cap left 15 s, and a loaded Windows machine took 14.896 s to start a controller (issue 255, job 8), so the Windows window is a flat 30 s, twice the slowest start seen. A child that dies does not wait for this window: its exit or error fails the start at once with its own reason. The window only bounds a child that is alive and silent.
 export const CONTROLLER_START_MS = 10_000
+export const WINDOWS_CONTROLLER_START_MS = 30_000
 export function controllerStartTimeoutMs(platform = process.platform) {
-  return CONTROLLER_START_MS + (platform === "win32" ? WINDOWS_PROCESS_START_CAP_MS : 0)
+  return platform === "win32" ? WINDOWS_CONTROLLER_START_MS : CONTROLLER_START_MS
 }
 
 export function supervisorEndpoint(endpoint, platform = process.platform) {
