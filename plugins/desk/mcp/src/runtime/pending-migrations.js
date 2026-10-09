@@ -40,6 +40,7 @@ import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
+import { resolveBash } from "../util/bash.js"
 import { isGitRepository } from "../util/git-stage.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
@@ -119,18 +120,28 @@ export function readMigrations(pluginRoot) {
 /**
  * runBlock(block, { env, cwd, timeoutMs, outputChars, spawn, platform }) -> Promise<{ status, stdout, stderr, timedOut, unavailable }>
  *
- * Runs one bash block without blocking the event loop, so the hooks' boot
- * checks run alongside it. `unavailable` means bash could not start at all (a
- * host without bash); `timedOut` means the block ran out of time, and then its
+ * Runs one bash block (with the bash `resolveBash` finds in Desk's own environment, not the block's `env`, which a caller may have narrowed) without blocking the event loop, so the hooks' boot
+ * checks run alongside it. `unavailable` means bash could not run the block at
+ * all: no usable bash on the host (`bash` is `null`: on Windows only the WSL relay
+ * exists), bash failed to start, or the WSL relay answered with its own error
+ * instead of running the block (a distro-less relay exits 1, which a Detect would
+ * otherwise read as "not needed"); `timedOut` means the block ran out of time, and then its
  * whole process group is killed, so a `node` it started does not outlive it.
  * Each stream stops growing once it reaches `outputChars`: the hooks keep a
  * bounded amount for one line, and the command line keeps everything.
  */
-export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform }) {
+// What the WSL relay prints when it cannot run bash, on its stderr or stdout.
+const RELAY_FAILURE = /execvpe\(.*\) failed|Windows Subsystem for Linux has no installed distributions/iu
+
+export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }) }) {
   return new Promise((resolve) => {
+    if (bash === null) {
+      resolve({ status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
+      return
+    }
     // On Windows there are no process groups to kill; the block itself is killed.
     const posix = platform !== "win32"
-    const child = spawn("bash", ["-c", block], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    const child = spawn(bash, ["-c", block], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     let stdout = ""
     let stderr = ""
     let timedOut = false
@@ -153,7 +164,8 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
     })
     child.once("close", (code) => {
       clearTimeout(timer)
-      resolve({ status: timedOut ? null : code, stdout, stderr, timedOut, unavailable: false })
+      const relay = !timedOut && code !== 0 && RELAY_FAILURE.test(`${stderr}\n${stdout}`)
+      resolve({ status: timedOut ? null : code, stdout, stderr, timedOut, unavailable: relay })
     })
   })
 }
@@ -177,8 +189,8 @@ export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
  *   "run"         Detect fired but the hook could not run it; `reason` says why
  *   "unchecked"   Detect did not finish in time
  *   "held"        Detect did not fire but printed `held: <reason>`
- * A migration whose Detect does not fire otherwise, or that bash cannot run,
- * is left out.
+ *   "bash_unavailable"  bash could not run its Detect, so nobody knows whether it is needed
+ * A migration whose Detect does not fire otherwise is left out.
  *
  * Index tracing (spec.md §3): none of these bash blocks is meant to touch the
  * Git index — a migration's own contract is that Detect/Safety
@@ -236,7 +248,10 @@ export async function pendingMigrations({
       pending.push({ id, state: "unchecked" })
       continue
     }
-    if (detect.unavailable) continue
+    if (detect.unavailable) {
+      pending.push({ id, state: "bash_unavailable" })
+      continue
+    }
     if (detect.status !== 0) {
       const held = /^held: (.+)$/mu.exec(detect.stdout)
       if (held) pending.push({ id, state: "held", reason: oneLine(held[1]).slice(0, OUTPUT_MAX_CHARS) })
@@ -285,6 +300,8 @@ export function migrationLine(pending, pluginRoot) {
         return `${entry.id} is pending (${oneLine(entry.description)}). Run it now, before other work and without waiting for anyone to answer: ${run()}. It runs to completion on its own; when it is done, tell the human what it printed and ask them to start a new session — with no human in this session, just say in your own output that a restart is needed and carry on.`
       case "ran":
         return `${entry.id} ran at startup. Tell the human in one line: ${entry.report ? `${entry.report} ` : ""}${entry.announce}`
+      case "bash_unavailable":
+        return `${entry.id} could not be checked at startup because bash could not run (on Windows, install Git for Windows; the WSL bash.exe with no distro cannot run Desk's scripts). Tell the human in one line that Desk's migrations are not being checked.`
       case "run":
         return `${entry.id} is pending but did not run at startup because ${entry.reason}. Before other work, ${run()} and follow what it prints.`
       default:

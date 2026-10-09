@@ -1,5 +1,7 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
+
+import { renameWithRetry } from "../../util/rename-retry.js"
 
 import { validateLabelsBytes } from "../label-schema.js"
 import { PATTERNS } from "../schema.js"
@@ -26,13 +28,15 @@ function existingEntry(filePath) {
   return lstatSync(filePath, { throwIfNoEntry: false }) ?? null
 }
 
-function replaceDirectory(source, destination) {
+// Product code, so a rename Windows refuses for a moment (EPERM, EACCES or EBUSY while Defender or the indexer holds the fresh
+// directory) is retried briefly instead of failing the whole build.
+function replaceDirectory(source, destination, rename) {
   const stat = existingEntry(destination)
   if (stat !== null) {
     if (stat.isSymbolicLink()) throw new Error("factory build: outDir must not be a symlink")
-    rmSync(destination, { recursive: true })
+    rmSync(destination, { recursive: true, maxRetries: 5, retryDelay: 50 })
   }
-  renameSync(source, destination)
+  rename(source, destination)
 }
 
 // The job's timeline as `jobs/<job>.json` publishes it. The Lean walk adds, every time on the job clock: the job's workers
@@ -216,7 +220,7 @@ export function storePublicPlugins(storeDir) {
   return [...names].sort(compareText)
 }
 
-export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET_BYTES }) {
+export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET_BYTES, rename = renameWithRetry }) {
   if (typeof storeDir !== "string" || typeof outDir !== "string") throw new TypeError("build: storeDir and outDir must be paths")
   const store = path.resolve(storeDir)
   const out = path.resolve(outDir)
@@ -248,7 +252,7 @@ export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET
       writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas, labels: labels.byJobSession }))
     })
     writeRollups(path.join(temporary, "rollups"), rollups)
-    replaceDirectory(temporary, out)
+    replaceDirectory(temporary, out, rename)
   } catch (error) {
     rmSync(temporary, { recursive: true, force: true })
     throw error

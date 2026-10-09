@@ -20,6 +20,7 @@ import { STORE, scratch } from "./_session_helpers.js"
 import { TOTAL_BUDGET_MS, andonCheck, checks, deskHealthCheck, factoryCheck, labelsCheck, launchCommand, recordSkipped, runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 import { main as factoryStartMain, DEADLINE_MS as factoryDeadlineMs } from "../../../../../plugins/desk/hooks/factory-start.cjs"
+import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
 const PLUGIN = path.dirname(HOOKS)
@@ -377,7 +378,7 @@ module.exports = {
 function runHook(host, env, desk) {
   return host === "copilot"
     ? spawnSync(process.execPath, [path.join(HOOKS, "copilot-session-start.cjs")], { env, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
-    : spawnSync("bash", [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env, encoding: "utf8" })
+    : spawnSync(resolveBash(), [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env, encoding: "utf8" })
 }
 
 // `checks` is the boot pre-checks line a speaking check adds ("\n\nDesk boot pre-checks: ..."). Both hosts add it to the startup
@@ -513,7 +514,7 @@ module.exports = {
     const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk }, overrides)
     const run = host === "copilot"
       ? spawnSync(process.execPath, [path.join(root, "hooks", "copilot-session-start.cjs")], { env: hookEnv, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
-      : spawnSync("bash", [path.join(root, "hooks", "session-start.sh"), path.join(root, "skills", "using-desk", "SKILL.md")], { env: hookEnv, encoding: "utf8" })
+      : spawnSync(resolveBash(), [path.join(root, "hooks", "session-start.sh"), path.join(root, "skills", "using-desk", "SKILL.md")], { env: hookEnv, encoding: "utf8" })
     assert.equal(run.status, 0, run.stderr)
     const parsed = JSON.parse(run.stdout)
     const context = parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext

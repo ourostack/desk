@@ -5,9 +5,10 @@
 // `writeLastStart` and `appendRepairLog` are the two places this module actually writes; each calls `assertNotRealStateUnderTest` (`./test-state-guard.js`) first, refusing a non-temp state directory from what looks like a node:test run. `resolveDeskStateDir` itself stays a plain, side-effect-free function — many tests call it only to compute an expected path — so the guard sits at the write points, not there.
 
 import { createHash } from "node:crypto"
-import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { renameWithRetry } from "../util/rename-retry.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 export const LAST_START_FILE = "last-start.json"
@@ -64,7 +65,7 @@ export function writeLastStart({ stateDir, snapshot, root = null, pid = process.
 function replaceFile(file, record, pid) {
   const temporary = `${file}.${pid}.tmp`
   writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
-  renameSync(temporary, file)
+  renameWithRetry(temporary, file)
 }
 
 /** Append one repair line: `<time> <root> <line>`. */
