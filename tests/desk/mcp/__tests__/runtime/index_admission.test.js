@@ -139,6 +139,94 @@ test("input close waits for the owned controller to finish closing before the en
   assert.equal(exited, true)
 })
 
+async function pendingControllerClose(t, options = {}) {
+  const root = await mkTempRoot("desk-main-close-wait-")
+  const input = new PassThrough()
+  const messages = []
+  const exits = []
+  let release
+  let started
+  const closing = new Promise((resolve) => { release = resolve })
+  const closeStarted = new Promise((resolve) => { started = resolve })
+  const handle = await main({
+    argv: ["--root", root], env: {}, cwd: root, homeDir: root, stateHome: path.join(root, "state"),
+    input, output: new PassThrough(), stderr: { write(text) { messages.push(text); return true } },
+    admissionKickoffMs: 0, runtimeInspector: null,
+    readinessPolicy: { semantic: "unsupported" },
+    runtimeImporter: async () => ({
+      connectOrStartController: async () => ({
+        accepted: true,
+        async close() { started(); await closing },
+      }),
+    }),
+    onClosed: (code = 0) => { exits.push(code) },
+    ...options,
+  })
+  t.after(async () => { release(); input.end(); await handle.closed })
+  const deadline = Date.now() + 5000
+  while (handle.admission.snapshot().state === "admitting" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  assert.equal(handle.admission.snapshot().state, "ready")
+  return { handle, input, release, closeStarted, messages, exits }
+}
+
+test("a stalled controller close ends at the shutdown deadline with a reported failure", { timeout: 10000 }, async (t) => {
+  const closing = await pendingControllerClose(t)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  closing.input.end()
+  await closing.closeStarted
+  t.mock.timers.tick(2999)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(closing.exits, [], "shutdown still waits before its deadline")
+  t.mock.timers.tick(1)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual([...closing.exits], [1], "an incomplete shutdown must not look like a clean exit")
+  assert.match(closing.messages.join(""), /shutdown.*timed out.*3000/u)
+  await closing.handle.closed
+  closing.release()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(closing.exits, [1], "a late controller close must not trigger a second exit")
+})
+
+test("a controller that closes before the deadline exits cleanly without retaining its timer", { timeout: 10000 }, async (t) => {
+  const closing = await pendingControllerClose(t)
+  const timeoutCount = () => process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length
+  const before = timeoutCount()
+  closing.input.end()
+  await closing.closeStarted
+  closing.release()
+  await closing.handle.closed
+  assert.deepEqual(closing.exits, [0])
+  assert.equal(timeoutCount(), before, "normal shutdown must release its referenced deadline timer")
+  assert.doesNotMatch(closing.messages.join(""), /shutdown.*timed out/u)
+})
+
+test("crash handlers keep recording errors during the controller close wait", { timeout: 10000 }, async (t) => {
+  const previous = new Set(process.listeners("uncaughtException"))
+  const previousRejections = new Set(process.listeners("unhandledRejection"))
+  const closing = await pendingControllerClose(t, { crashHandlers: true })
+  const handler = process.listeners("uncaughtException").find((listener) => !previous.has(listener))
+  const rejection = process.listeners("unhandledRejection").find((listener) => !previousRejections.has(listener))
+  assert.equal(typeof handler, "function")
+  assert.equal(typeof rejection, "function")
+  closing.input.end()
+  await closing.closeStarted
+  assert.ok(process.listeners("uncaughtException").includes(handler), "the close wait must retain its crash handler")
+  assert.ok(process.listeners("unhandledRejection").includes(rejection), "the close wait must retain its rejection handler")
+  handler(new Error("error during controller close"))
+  rejection("rejection during controller close")
+  assert.deepEqual(closing.handle.session.context.exceptions.slice(-2).map(({ kind, message }) => ({ kind, message })), [
+    { kind: "uncaught_exception", message: "error during controller close" },
+    { kind: "unhandled_rejection", message: "rejection during controller close" },
+  ])
+  assert.doesNotMatch(closing.messages.join(""), /Desk keeps serving and re-admits/u, "a disposed session must not promise re-admission")
+  closing.release()
+  await closing.handle.closed
+  assert.equal(process.listeners("uncaughtException").includes(handler), false, "the handler is removed after shutdown")
+  assert.equal(process.listeners("unhandledRejection").includes(rejection), false, "the rejection handler is removed after shutdown")
+})
+
 test("with the real runtime inspector and importer, main restores the runtime after the handshake and serves reads", {
   skip: process.versions.modules === "127" ? false : "this platform's committed runtime pack is for Node ABI 127",
 }, async () => {
@@ -181,6 +269,8 @@ test("the entrypoint gives main an onClosed that exits when the host closes stdi
   })
   options.onClosed()
   assert.deepEqual(exits, [0])
+  options.onClosed(1)
+  assert.deepEqual(exits, [0, 1], "the CLI must preserve an incomplete-shutdown failure code")
 })
 
 test("--degraded: integrity codes refuse, read-only codes keep reads, and a crew-state code with --state-branch hands over to Desk", async () => {
