@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.267 — 2026-10-09
+
+Refuse to forward real-profile browser operations when the session's window launch fails. Report the launch error, allow a later call to retry, and preserve a newer opening attempt when an older one fails.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.266 — 2026-10-09
 
 [Desk's shared foundation](skills/using-desk/SKILL.md#alignment-then-ownership) now calls for normal conversation rather than structured question forms and makes clear that acknowledgements after alignment are not new approval gates. Agents still respect genuine human gates and stay in a discussion until the human closes it or says go.

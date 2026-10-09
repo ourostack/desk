@@ -1,1 +1,0 @@
-Refuse to forward real-profile browser operations when the session's window launch fails. Report the launch error, allow a later call to retry, and preserve a newer opening attempt when an older one fails.
