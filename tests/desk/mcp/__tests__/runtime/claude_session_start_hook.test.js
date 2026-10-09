@@ -3,7 +3,7 @@
 import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -179,3 +179,11 @@ test("a migration line from the check is passed through, after the startup line 
 })
 
 both("a migration line from the check", { bootFixture: migrationFixture })
+
+test("a host that closes the output pipe early does not make the hook fail", async () => {
+  const { env } = scratch()
+  const child = spawn(process.execPath, [hook, foundationPath], { env, cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] })
+  child.stdout.destroy()
+  const code = await new Promise((resolve) => child.on("close", resolve))
+  assert.equal(code, 0)
+})

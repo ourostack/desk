@@ -37,6 +37,8 @@ async function startupDirection() {
 }
 
 function emit(additionalContext) {
+  // A host that closes its end of the pipe early would raise an uncaught EPIPE and fail the hook; the hook has nothing left to do then.
+  process.stdout.on("error", () => {});
   process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } })}\n`);
 }
 
