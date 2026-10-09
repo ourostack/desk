@@ -1,8 +1,8 @@
 name: Hosted Desk deploy
 
 # Deploys the hosted Desk gateway (hosted/) to Azure Container App ouro-desk-hosted. Hosted Desk serves only released
-# Desk, so this runs after a successful Desk release, on the release commit at the head of main, and never on an
-# unreleased merge. A change to the gateway alone deploys by hand (workflow_dispatch on main) after it merges.
+# Desk, so this runs after a successful Desk release and deploys the newest Release Desk commit on main, never an
+# unreleased merge. A dispatch deploys that same newest release, so a gateway change ships with the next release.
 #
 # It signs in to Azure with OIDC as identity id-ourowork-github-prod, whose federated credential trusts
 # repo:ourostack/desk:ref:refs/heads/main (hosted/infra/provision.sh). The job therefore names no environment, which
@@ -43,15 +43,28 @@ jobs:
       REGISTRY: ouroworkprodk2aumligevt3e
       APP: ouro-desk-hosted
     steps:
-      # main's head, not the commit the release started from: the release commits to main itself.
+      # The newest release commit on main, not main's head: merges keep landing while a release runs, so main's head
+      # usually carries changelog fragments no release has shipped yet, and a deploy of it would be refused every time.
       - name: Check out main
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
           persist-credentials: false
 
-      # A pending changelog fragment means Desk on this commit has changes no release has carried: a dispatch while a
-      # release is failing, or a Desk merge that landed after the release commit. Hosted Desk serves only released Desk.
+      - name: Check out the newest Desk release
+        run: |
+          set -euo pipefail
+          release="$(git log -1 --grep='^Release Desk ' --format=%H)"
+          if [ -z "$release" ]; then
+            echo "::error title=No Desk release on main::main has no Release Desk commit to deploy."
+            exit 1
+          fi
+          git checkout --quiet --detach "$release"
+          echo "Deploying $(git log -1 --format='%h %s')."
+
+      # A release commit carries no changelog fragment; one here means the release itself went wrong. Hosted Desk serves
+      # only released Desk, so this stays as a check.
       - name: Refuse unreleased Desk
         run: |
           set -euo pipefail
