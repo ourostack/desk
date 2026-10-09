@@ -33,13 +33,22 @@ async function sourceStamp(file) {
 }
 
 /**
- * Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. 6: a Git rename
+ * The re-derive version, written to each session's receipt as `binding_version`: bump it when an ended session must be derived again; sessions
+ * with a lower or missing receipt version re-derive once. A bump that also changes what binding credits moves `BINDING_RULES_VERSION` with it.
+ * The waste evaluator's stop-facts relabel keys on the receipt value 7, so the value only ever counts up and keeps its meaning. 6: a Git rename
  * between two different cards no longer joins them, a focus on a merged task follows the merge, and `segments_capped_ms` also counts time the
  * cap hands to another task, so an older receipt's credit, and its `segments_capped_ms: 0`, is not this binder's. 7: the derivers record
  * each human wait's stop facts, the ask-tool waits and whether the session created each PR (published facts /4), so every ended session
  * still on disk is derived once more to carry them.
  */
 export const BINDING_VERSION = 7
+
+/**
+ * The last re-derive version that changed what binding credits (see `BINDING_VERSION` 6). A receipt at or above it says how this binder bound
+ * the session, so `reconcile` reads its binding and measures as current and capture coverage counts its orphan as derived. Version 7 changed
+ * the facts, not the binding, so a session whose transcript is gone before it re-derives is not stale. Never above `BINDING_VERSION`.
+ */
+export const BINDING_RULES_VERSION = 6
 
 // The Desk task tool calls that can change a card's outcome record: the session's facts carry the record of every task one of them named.
 const LIFECYCLE_CALL = /task_(?:signoff|update|create|archive)$/u
@@ -714,7 +723,7 @@ export async function sweep(env, { quietMs = 600000 } = {}) {
   }
   await writeStatus(env, { retention }).catch(() => undefined)
   // Capture coverage never throws and keeps the previous record when it fails.
-  summary.coverage = await recordCoverage(env, { markers, orphans: summary.orphans, bindingVersion: BINDING_VERSION })
+  summary.coverage = await recordCoverage(env, { markers, orphans: summary.orphans, bindingVersion: BINDING_RULES_VERSION })
   // `route_unverified` counts the Codex markers held inside `held`; `factory.js status` shows it.
   try {
     await writeStatus(env, { held_markers: { route_unverified: summary.route_unverified } })

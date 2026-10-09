@@ -5,7 +5,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -1734,5 +1734,27 @@ test("a commit carries when the session recorded it: the earliest readable time 
     assert.ok(!facts.unavailable.some((entry) => entry.field === "commits"))
   } finally {
     rmSync(old, { recursive: true, force: true })
+  }
+})
+
+test("a PR the session created replaces the store's row for it, and the store's other PRs stay not created", async () => {
+  const lines = readFileSync(path.join(FIXTURES, SESSIONS.full, "events.jsonl"), "utf8").trimEnd().split("\n")
+  const created = [
+    { type: "tool.execution_start", data: { toolCallId: "pr-create", toolName: "bash", arguments: { command: "gh pr create --fill" } }, id: "00000000-0000-4000-8000-00000000c001", timestamp: "2026-09-25T08:00:50.000Z", parentId: null },
+    { type: "tool.execution_complete", data: { toolCallId: "pr-create", success: true, shellExecution: { exitCode: 0 }, result: { content: `${SENTINEL} https://github.com/ourostack/desk/pull/12` } }, id: "00000000-0000-4000-8000-00000000c002", timestamp: "2026-09-25T08:00:52.000Z", parentId: null },
+  ].map((event) => JSON.stringify(event))
+  const home = makeHome({ texts: { [SESSIONS.full]: `${[...lines.slice(0, -1), ...created, lines.at(-1)].join("\n")}\n` } })
+  try {
+    fixtureResolver = fakeCommitResolver()
+    const { facts } = await derive(home, SESSIONS.full)
+    assertValid(facts)
+    assert.ok(!JSON.stringify(facts).includes(SENTINEL))
+    assert.deepEqual(facts.refs.prs, [
+      { repo: "ourostack/desk", number: 7, created: false },
+      { repo: "ourostack/desk", number: 12, agent: 0, at_ms: 52000, created: true },
+      { repo: "ourostack/factory", number: 3, created: false },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
   }
 })

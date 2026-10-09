@@ -628,15 +628,29 @@ function filesUnder(root) {
   })
 }
 
-// A facts file's text with each job's finish day, the one date published facts /4 allow, checked for its exact shape and blanked.
-function withoutFinishDays(file, text, factsDir) {
-  if (!file.startsWith(factsDir)) return text
-  const value = JSON.parse(text)
-  for (const job of value.jobs ?? []) {
-    if (!Object.hasOwn(job, "finished_on")) continue
-    assert.ok(job.finished_on === null || /^\d{4}-\d{2}-\d{2}$/u.test(job.finished_on), `a finish day is a bare day in ${path.basename(file)}`)
-    job.finished_on = null
+// A file's text with every finish day blanked, after checking it is a bare UTC day: the one date published facts /4 allow
+// (`jobs[].finished_on`), and the same day as the reports carry it (`finished_on`, a figure whose `value` is that day).
+function withoutFinishDays(file, text) {
+  if (!file.endsWith(".json")) return text
+  const bareDay = (day) => assert.ok(day === null || /^\d{4}-\d{2}-\d{2}$/u.test(day), `a finish day is a bare day in ${path.basename(file)}`)
+  const blank = (node) => {
+    if (Array.isArray(node)) return node.forEach(blank)
+    if (node === null || typeof node !== "object") return undefined
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "finished_on" && (value === null || typeof value === "string")) {
+        bareDay(value)
+        node[key] = null
+      } else if (key === "finished_on" && value !== null && typeof value === "object" && Object.hasOwn(value, "value")) {
+        bareDay(value.value)
+        value.value = null
+      } else {
+        blank(value)
+      }
+    }
+    return undefined
   }
+  const value = JSON.parse(text)
+  blank(value)
   return JSON.stringify(value)
 }
 
@@ -647,15 +661,14 @@ test("no output file contains a prompt, command, path, date or time-of-day senti
   assert.ok(fresh.derived.inputs.every((root) => root.includes(PATH_SENTINEL)), "the folder names carry the path sentinel")
   const outputs = [...filesUnder(fresh.out), ...filesUnder(path.join(fresh.store, "facts"))]
   assert.ok(outputs.length > 8)
-  const factsDir = path.join(fresh.store, "facts")
   for (const file of outputs) {
-    const text = withoutFinishDays(file, readFileSync(file, "utf8"), factsDir)
+    const text = withoutFinishDays(file, readFileSync(file, "utf8"))
     for (const sentinel of [CLAUDE_SENTINEL, CODEX_SENTINEL, COPILOT_SENTINEL, PATH_SENTINEL]) assert.equal(text.includes(sentinel), false, `${sentinel} in ${path.basename(file)}`)
     assert.equal(/\d{4}-\d{2}-\d{2}/.test(text), false, `a date in ${path.basename(file)}`)
     assert.equal(WHEN.test(text), false, `a date or time of day in ${path.basename(file)}`)
   }
   for (const [, out] of STORES) {
-    for (const file of filesUnder(out)) assert.equal(WHEN.test(readFileSync(file, "utf8")), false, `a date or time of day in ${path.basename(file)}`)
+    for (const file of filesUnder(out)) assert.equal(WHEN.test(withoutFinishDays(file, readFileSync(file, "utf8"))), false, `a date or time of day in ${path.basename(file)}`)
   }
 })
 
