@@ -481,28 +481,47 @@ test("the worker grants a scan at most MAX_SCAN_ALLOWANCE_MS in all, and nothing
   assert.ok(MAX_SCAN_ALLOWANCE_MS + LOOP_BUDGET_MS + 2 * MINUTE < LOCK_OUTER_AGE_MS, "a worker never outlives the lock's outer age, so no second worker takes over a live one")
 }))
 
-test("the default notice goes over the launcher's message channel, and does nothing in a process without one", () => {
+test("the default notice is sent only on a live channel, with a callback, so a closed channel never raises an error event", () => {
   const sent = []
-  const own = Object.getOwnPropertyDescriptor(process, "send")
+  const own = { send: Object.getOwnPropertyDescriptor(process, "send"), connected: Object.getOwnPropertyDescriptor(process, "connected") }
   try {
-    process.send = (message) => { sent.push(message); return true }
+    process.send = (...args) => { sent.push(args); return true }
+    process.connected = true
     notifyLauncher({ desk_loop_extend_ms: 5 })
-    assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }])
-    delete process.send
+    assert.equal(sent.length, 1)
+    assert.deepEqual(sent[0][0], { desk_loop_extend_ms: 5 })
+    assert.equal(typeof sent[0][1], "function", "errors go to a callback, not to process 'error'")
+    assert.doesNotThrow(() => sent[0][1](new Error("ERR_IPC_CHANNEL_CLOSED")))
+    process.connected = false
     notifyLauncher({ desk_loop_extend_ms: 6 })
-    assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }], "a process without a channel sends nothing and does not throw")
+    assert.equal(sent.length, 1, "a channel already closed is not written to")
+    delete process.send
+    notifyLauncher({ desk_loop_extend_ms: 7 })
+    assert.equal(sent.length, 1, "a process without a channel sends nothing")
   } finally {
-    if (own === undefined) delete process.send
-    else Object.defineProperty(process, "send", own)
+    for (const [key, descriptor] of Object.entries(own)) {
+      if (descriptor === undefined) delete process[key]
+      else Object.defineProperty(process, key, descriptor)
+    }
   }
 })
 
-test("a notice the launcher cannot take never stops the worker", () => scratch(async (ctx) => {
+test("a grant refreshes the worker's lock, so the end-of-turn kick still reads a worker that lives past 22 minutes as running", () => scratch(async (ctx) => {
   const impls = fakes([])
   const inner = impls.evaluate
-  impls.evaluate = async (env, options) => { await options.extendDeadline(1000); return inner(env, options) }
-  const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls, notify: () => { throw new Error("channel closed") } })
-  assert.equal(outcome.result, "completed")
+  const lockFile = path.join(await factoryStateRoot(ctx.env), "locks", "loop-worker.running")
+  let before
+  let after
+  impls.evaluate = async (env, options) => {
+    const old = new Date(Date.now() - 30 * MINUTE)
+    await fs.utimes(lockFile, old, old)
+    before = (await fs.stat(lockFile)).mtimeMs
+    assert.equal(await options.extendDeadline(1000), 1000)
+    after = (await fs.stat(lockFile)).mtimeMs
+    return inner(env, options)
+  }
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls, exit: () => {}, notify: () => {} })
+  assert.ok(after - before > 25 * MINUTE, "the lock was rewritten when the time was granted")
 }))
 
 test("the ceiling moves with the grant: a step that runs past the old ceiling but inside the moved one is not cut off", () => scratch(async (ctx) => {
@@ -518,15 +537,13 @@ test("the ceiling moves with the grant: a step that runs past the old ceiling bu
 
 test("the moved ceiling still ends a step that hangs past it", () => scratch(async (ctx) => {
   const late = []
-  const hung = fakes([])
-  const first = hung.evaluate
-  hung.evaluate = async (env, options) => { await options.extendDeadline(100); return first(env, options) }
-  hung.mirror = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, result: "done" }), 1500))
   const grants = []
-  const asked = hung.evaluate
-  hung.evaluate = async (env, options) => { grants.push(options.extendDeadline); return asked(env, options) }
+  const hung = fakes([])
+  const inner = hung.evaluate
+  hung.evaluate = async (env, options) => { grants.push(await options.extendDeadline(100)); return inner(env, options) }
+  hung.mirror = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, result: "done" }), 1500))
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: hung, ceilingMs: 1000, exit: (code) => late.push(code), notify: () => {} })
-  assert.equal(grants.length, 1, "the evaluator step ran and was granted time")
+  assert.deepEqual(grants, [100], "the evaluator step ran and was granted its 100 ms")
   assert.deepEqual(late, [0])
 }))
 

@@ -15,8 +15,10 @@
 //     `CEILING_GRACE_MS` if a step hangs. The evaluator's facts scan is left out of that budget: the step asks
 //     `extendDeadline(scanMs)` once its scan ends, and the worker grants the scan's time (at most
 //     `MAX_SCAN_ALLOWANCE_MS` in all), moves the budget, and with it the later steps' reserve, and the ceiling by
-//     the grant, and tells its launcher (`hooks/loop-start.cjs`, over the message channel it opened) so the hard stop
-//     moves too. A scan that grows with history therefore never leaves less than one run's time.
+//     the grant, tells its launcher (`hooks/loop-start.cjs`, over the message channel it opened, only while it is
+//     open) so the hard stop moves too, and rewrites its lock so the end-of-turn kick still reads it as running.
+//     A scan that ends before the first ceiling (21 minutes after the start) therefore never leaves less than one
+//     run's time; a longer scan is still ended by that ceiling or the launcher's 22-minute hard stop, as before.
 //   - A headless factory session (`DESK_FACTORY_HEADLESS`) starts nothing and writes nothing. `DESK_FACTORY_LOOP`
 //     set to anything but 1, true, on or yes turns the loop off (`disabled`). No state folder, no consenting store
 //     and no desk root each start nothing. Every outcome but a headless session or a missing state folder is recorded
@@ -41,7 +43,7 @@ import { dueStep, recordStep } from "./loop-status.js"
 import { runMirrorStep } from "./mirror-step.js"
 import { listStatusAside, recordWorker } from "./loop-worker-state.js"
 import { factoryStateRoot, readStatus, updateStatus } from "./outbox.js"
-import { processAlive, releaseLock, takeLock, trackChild } from "./process-lock.js"
+import { processAlive, releaseLock, takeLock, touchLock, trackChild } from "./process-lock.js"
 import { runReconcileStep } from "./reconcile-step.js"
 import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
@@ -68,9 +70,12 @@ const answer = (result, extra = {}) => ({ result, ran: 0, skipped: 0, failed: 0,
 // A step's answer, or null when it is not `{ ok: boolean, result: <code> }`.
 const readAnswer = (value) => (isObject(value) && typeof value.ok === "boolean" && typeof value.result === "string" && CODE.test(value.result) ? { ok: value.ok, result: value.result } : null)
 
-/** The default notice to the launcher: a message on the channel it opened, when this process has one; otherwise nothing. */
+/**
+ * The default notice to the launcher: a message on the channel it opened, only while that channel is open. The callback takes any error
+ * (a launcher that ended between the check and the write), which Node would otherwise raise as an `error` event and end this worker with.
+ */
 export function notifyLauncher(message) {
-  if (typeof process.send === "function") process.send(message)
+  if (typeof process.send === "function" && process.connected) process.send(message, () => {})
 }
 
 const swallow = async (fn) => {
@@ -140,7 +145,10 @@ export async function runLoopWorker(env, {
   const functions = { ...DEFAULT_IMPLS, ...impls }
   // The facts-scan time granted so far: the budget, the evaluator's limit and the ceiling all move by it.
   let extension = 0
-  const extendDeadline = (scanMs) => {
+  // Child ids go into the lock file one write at a time, in the order they were reported.
+  let pending = Promise.resolve()
+  const track = (pid, on) => { pending = pending.then(() => trackChild(lock, pid, on)) }
+  const extendDeadline = async (scanMs) => {
     const asked = typeof scanMs === "number" && !Number.isNaN(scanMs) ? Math.floor(scanMs) : 0
     const granted = Math.min(Math.max(0, asked), MAX_SCAN_ALLOWANCE_MS - extension)
     if (granted === 0) return 0
@@ -148,16 +156,13 @@ export async function runLoopWorker(env, {
     clearTimeout(ceiling)
     ceiling = setTimeout(() => exit(0), Math.max(0, started + ceilingMs + extension - clock()))
     ceiling.unref()
-    try {
-      notify({ desk_loop_extend_ms: extension })
-    } catch {
-      // A launcher that cannot be told keeps its own stop; the worker goes on.
-    }
+    notify({ desk_loop_extend_ms: extension })
+    // The kick reads a lock younger than its 22 minutes as a live worker (`KICK_LOCK_AGE_MS`); what is left of this worker after the scan
+    // is shorter than that, so a lock rewritten now keeps the kick from starting a second worker that would only record `busy`.
+    pending = pending.then(() => touchLock(lock))
+    await pending
     return granted
   }
-  // Child ids go into the lock file one write at a time, in the order they were reported.
-  let pending = Promise.resolve()
-  const track = (pid, on) => { pending = pending.then(() => trackChild(lock, pid, on)) }
   const ctx = {
     deskRoot, personPrefix, pluginVersion, attempted: [],
     evaluatorDeadline: new Date(started + budgetMs - LATER_STEPS_RESERVE_MS),

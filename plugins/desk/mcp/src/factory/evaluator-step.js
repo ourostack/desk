@@ -224,7 +224,7 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
   }
   const sweep = await evaluatePending(env, { pluginVersion, now: nowMs })
   // How long the backstop and the sweep took to read the facts: a run starts only with 15 minutes left before the deadline, so a scan that
-  // grows with history shrinks that window, and this number shows it before every step ends with none_could_run.
+  // grows with history shrinks that window, and this number shows it before every step ends with no_time_for_a_run.
   const scanMs = Math.max(0, impl.clock() - clockStart)
   // The caller may leave the scan out of the run window; a grant is read as a whole number from 0 to the scan's own time.
   if (typeof impl.extendDeadline === "function") limitMs += grantOf(await impl.extendDeadline(scanMs), scanMs)

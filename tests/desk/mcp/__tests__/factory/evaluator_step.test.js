@@ -12,6 +12,7 @@ import { osEnv } from "../_os_env.js"
 import { NO_FILE_SYMLINKS } from "../_platform.js"
 
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
+import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { evaluateDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { STOP_FACTS_BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
@@ -940,6 +941,29 @@ test("a facts scan of 131 seconds with 18 ready jobs still starts a run when the
   assert.equal(evaluator.headless.state, "ran")
   assert.equal(evaluator.headless.jobs, 1)
   assert.equal(evaluator.headless.deferred_jobs, 17)
+  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
+}))
+
+test("inside the real loop worker, a 131-second scan with 18 ready jobs starts a run: the worker's grant reaches the step's limit", () => scratch(async (env, base) => {
+  for (let index = 1; index <= 18; index += 1) await seedJob(env, base, index)
+  // One fake clock on the real time for both, so the worker's lock file and the clock agree.
+  let clock = Date.now()
+  const runner = fakeRunner(() => { clock += 10 * 60 * 1000; return { state: "ran", cost_usd: null } })
+  const done = async () => ({ ok: true, result: "done" })
+  const outcome = await runLoopWorker(env, {
+    deskRoot: path.join(base, "desk"), pluginVersion: VERSION, clock: () => clock, exit: () => {}, notify: () => {},
+    impls: {
+      evaluate: (stepEnv, options) => runEvaluatorStep(stepEnv, {
+        ...options, clock: () => clock, runHeadless: runner, findAgentCli: () => "claude", probeSignIn: async () => ({ state: "subscription" }),
+        requestFinishedJobs: async () => { clock += SCAN_MS; return { requested: [] } },
+      }),
+      routeIssues: done, routeLocal: done, mirror: done, reconcile: done, verify: done, measure: done, kick: async () => ({ kicked: false, reason: "test" }),
+    },
+  })
+  assert.equal(outcome.steps.evaluate, "ran")
+  assert.equal(runner.calls.length, 1)
+  const evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.headless.jobs, 1)
   assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
 }))
 
