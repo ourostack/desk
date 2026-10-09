@@ -12,9 +12,13 @@
 // path-shaped fields are. On a crew desk (`--person <alias>`), each path must
 // resolve inside that alias's `desks/<alias>/` write prefix — desk_save never
 // commits on another participant's behalf.
+//
+// A client with no filesystem of its own (claude.ai, through hosted Desk) passes `files` instead: each entry's
+// content is written to its desk-relative path and committed with `paths`. Every entry is checked before any is
+// written, so a refused call writes nothing.
 
 import * as path from "node:path"
-import { existsSync, statSync } from "node:fs"
+import { existsSync, statSync, lstatSync, realpathSync, constants as fsConstants, promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
@@ -25,7 +29,7 @@ import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 // field added to its reads is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks this against the tool's
 // declared schema in tool-schemas.js.
-export const DESK_SAVE_FIELDS = ["paths", "message", "tidy"]
+export const DESK_SAVE_FIELDS = ["paths", "files", "message", "tidy"]
 
 const TIDY_TRAILER = "Desk-Tidy: true"
 
@@ -48,12 +52,108 @@ function pathsInput(value) {
   return parsed
 }
 
+const MAX_FILE_BYTES = 1024 * 1024
+const FILES_SHAPE = "desk_save: `files` must be a non-empty array of { path, content } objects whose path and content are strings"
+// Git reads these in a pathspec as a pattern or as magic, so `git add -- <path>` could stage files the call never wrote.
+const PATHSPEC_SPECIAL = /[*?[\\]|^:/u
+
+function filesInput(value) {
+  let parsed = value
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      throw new Error(`${FILES_SHAPE} (got a string that is not valid JSON)`)
+    }
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    !parsed.every((entry) => entry !== null && typeof entry === "object" && typeof entry.path === "string" && typeof entry.content === "string")
+  ) {
+    throw new Error(FILES_SHAPE)
+  }
+  return parsed
+}
+
+// Why `files` may not write to this desk-relative path, or null when it may. Checked on the path as given and again on where it leads through symlinks.
+function pathRefusal(relativePath) {
+  const parts = relativePath.toLowerCase().split("/").filter((part) => part !== "" && part !== ".")
+  if (parts.length === 0) return "it names no file"
+  if (parts.includes("..")) return "it climbs out of its folder with `..`"
+  if (parts.includes(".git")) return "it is inside a .git folder"
+  if (parts[0] === ".state") return "it is inside .state/, which Desk keeps for itself"
+  if (parts[0] === ".github" && parts[1] === "workflows") return "it is a GitHub Actions workflow, which the desk's push credentials cannot push"
+  if (isLiveCardPath(relativePath)) return "it is a task card; write it with task_update, task_create, task_move or task_archive"
+  return null
+}
+
+// Where `absolute` really leads, through the real path of its deepest existing folder, and what is there now; or the problem that stops a write to it.
+function inspectTarget(absolute) {
+  let ancestor = path.dirname(absolute)
+  let real
+  for (;;) {
+    try {
+      real = realpathSync.native(ancestor)
+      break
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") return { problem: `Desk could not resolve its folder (${error.code})` }
+      ancestor = path.dirname(ancestor)
+    }
+  }
+  if (!statSync(real).isDirectory()) return { problem: "part of the path is a file, not a folder" }
+  const resolved = path.join(real, path.relative(ancestor, absolute))
+  return { resolved, existing: lstatSync(resolved, { throwIfNoEntry: false }) }
+}
+
+// Every `files` entry, checked before any is written. Returns each entry's absolute target.
+function checkFiles(deskRoot, effectiveRoot, files) {
+  const realRoot = realpathSync.native(deskRoot)
+  const realPrefix = path.resolve(realRoot, path.relative(path.resolve(deskRoot), effectiveRoot))
+  const seen = new Set()
+  return files.map(({ path: relativePath, content }) => {
+    const refuse = (why) => new Error(`desk_save: \`files\` cannot write ${relativePath}: ${why}`)
+    if (relativePath.includes("\0")) throw refuse("the path holds a NUL character")
+    if (path.isAbsolute(relativePath)) throw refuse("give the path relative to the desk root")
+    if (PATHSPEC_SPECIAL.test(relativePath)) throw refuse("the path holds *, ?, [ or a backslash, or starts with :, which Git would read as a pattern")
+    const given = pathRefusal(relativePath)
+    if (given !== null) throw refuse(given)
+    if (Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES) throw refuse("the content is over 1 MiB")
+    const absolute = path.resolve(deskRoot, relativePath)
+    if (!isPathContained(effectiveRoot, absolute)) throw refuse("it is outside the resolved write prefix")
+    if (seen.has(absolute)) throw refuse("it is listed twice")
+    seen.add(absolute)
+    const { problem, resolved, existing } = inspectTarget(absolute)
+    if (problem !== undefined) throw refuse(problem)
+    if (!isPathContained(realPrefix, resolved)) throw refuse("it leads outside the desk, or outside the resolved write prefix, through a symbolic link")
+    if (existing?.isSymbolicLink()) throw refuse("the file there is a symbolic link")
+    if (existing !== undefined && !existing.isFile()) throw refuse("what is there is not a file")
+    const leads = pathRefusal(path.relative(realRoot, resolved).split(path.sep).join("/"))
+    if (leads !== null) throw refuse(`it leads through a symbolic link to a path where ${leads}`)
+    return { absolute, content }
+  })
+}
+
+// O_NOFOLLOW: a symbolic link put at the target after the check fails the open instead of being written through.
+async function writeFiles(checked) {
+  for (const { absolute, content } of checked) {
+    await fs.mkdir(path.dirname(absolute), { recursive: true })
+    const handle = await fs.open(absolute, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644)
+    try {
+      await handle.writeFile(content, "utf8")
+    } finally {
+      await handle.close()
+    }
+  }
+}
+
 /**
  * desk_save
  *
  * Input:
  *   {
- *     paths: string[],   // relative to the desk root
+ *     paths?: string[],  // relative to the desk root
+ *     files?: { path: string, content: string }[],  // UTF-8 text to write, then commit; at least one of paths, files
  *     message: string,   // the commit message
  *     tidy?: boolean,    // commit the desk tidy (or its undo): see below
  *   }
@@ -67,6 +167,12 @@ function pathsInput(value) {
  *
  * Refuses (throws) any path that resolves outside the resolved --person
  * write prefix — a crew participant can commit only their own paths.
+ *
+ * `files` (refused with `tidy: true`) are written before staging and join `paths` in the commit. Each path must be
+ * relative, with no `..`, `.git`, a leading `.state/` or `.github/workflows/` (any case), no live task card, no Git
+ * pathspec pattern characters, content of at most 1 MiB, no symbolic link at the target, and must lead, through the
+ * real path of its deepest existing folder, inside the desk and the write prefix. Any failure refuses the whole call
+ * before a byte is written.
  *
  * Stages and commits exactly `paths` with `message`, `git commit -- <paths>`,
  * never `-a`/`-A`. When none of `paths` holds an unstaged change or an
@@ -88,13 +194,20 @@ function tidyTrailer(message) {
 
 export async function desk_save({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
-  const paths = pathsInput(values.paths)
+  if (values.paths === undefined && values.files === undefined) {
+    throw new Error("desk_save: pass `paths` (a non-empty array of path strings), `files`, or both")
+  }
+  const paths = values.paths === undefined ? [] : pathsInput(values.paths)
+  const files = values.files === undefined ? [] : filesInput(values.files)
   const { message } = values
   if (!message || typeof message !== "string") {
     throw new Error("desk_save: `message` is required (string)")
   }
 
   const tidy = values.tidy === true
+  if (tidy && files.length > 0) {
+    throw new Error("desk_save: `files` cannot be combined with tidy: true; a tidy commits moves already staged, so pass only `paths`")
+  }
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
   for (const relativePath of paths) {
     const absolute = path.resolve(deskRoot, relativePath)
@@ -105,6 +218,10 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
     if (!tidy && isLiveCardPath(path.relative(deskRoot, absolute).split(path.sep).join("/"))) {
       throw new Error(`desk_save: remove ${relativePath} from \`paths\` and write the task card with task_update, task_create, task_move or task_archive, which commit it; to commit a tidy that moved cards, pass tidy: true`)
     }
+  }
+  if (files.length > 0) {
+    await writeFiles(checkFiles(deskRoot, effectiveRoot, files))
+    paths.push(...files.map((file) => file.path).filter((p) => !paths.includes(p)))
   }
 
   if (!isGitRepository(deskRoot, spawnGit)) {

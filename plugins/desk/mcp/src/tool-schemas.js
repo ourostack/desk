@@ -225,10 +225,23 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     body: text("Markdown body."),
   }, ["topic", "body"]),
   desk_save: schema({
-    paths: list("The paths to commit, relative to the desk root."),
+    paths: list("The paths to commit, relative to the desk root. Required unless `files` is given."),
+    files: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          path: text("Where to write the file, relative to the desk root."),
+          content: text("The file's full content, as UTF-8 text (at most 1 MiB)."),
+        },
+        required: ["path", "content"],
+        additionalProperties: false,
+      },
+      description: "For a client with no filesystem: files to write and then commit along with `paths`. Each path must be relative, stay inside the desk (and the --person write prefix), and not be in .git, .state/ or .github/workflows/, a task card, a symbolic link or a Git pattern; any refused entry refuses the whole call before anything is written. Not allowed with `tidy: true`. Required unless `paths` is given.",
+    },
     message: text("The commit message."),
     tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards (already staged by task_move, track_rename or git mv) with the old and new path of every move, plus _meta/organization.json. Task cards are accepted only as moves or deletes. Leaves other staged work staged and ends the message with the Desk-Tidy: true trailer."),
-  }, ["paths", "message"]),
+  }, ["message"]),
   desk_search: schema({
     query: text("The search query."),
     limit: LIMIT,
