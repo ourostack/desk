@@ -6,6 +6,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "n
 import * as net from "node:net"
 import * as path from "node:path"
 import { startControllerProcess, reclaimControllerChild, verifyOwnedChild, supervisorEndpoint, releaseSupervisor, controllerStartTimeoutMs, CONTROLLER_START_MS, WINDOWS_CONTROLLER_START_MS } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
+import { electionWaitMsFor } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { WINDOWS_PROCESS_START_CAP_MS } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readiness/contracts.js"
@@ -165,6 +166,15 @@ test("a Windows controller is given a start window with real margin over the slo
   assert.ok(WINDOWS_CONTROLLER_START_MS > CONTROLLER_START_MS + WINDOWS_PROCESS_START_CAP_MS)
 })
 
+test("a session that loses the bind waits longer than the winner's start window on every platform", () => {
+  for (const platform of ["win32", "darwin", "linux"]) {
+    assert.ok(electionWaitMsFor(platform) > controllerStartTimeoutMs(platform), `the election wait outlasts the start window on ${platform}`)
+  }
+  assert.equal(electionWaitMsFor("win32"), WINDOWS_CONTROLLER_START_MS + 2000)
+  assert.equal(electionWaitMsFor("linux"), CONTROLLER_START_MS + 2000)
+  assert.equal(electionWaitMsFor(), electionWaitMsFor(process.platform))
+})
+
 test("a Windows controller child that exits fails the start at once with its own reason, not after the start window", { skip: posixOnly }, async (t) => {
   const root = await mkTempRoot("desk-start-dead-")
   const identity = controllerIdentity({ root, ...readinessContracts(policy) })
@@ -190,7 +200,7 @@ test("a Windows controller child that exits fails the start at once with its own
   await assert.rejects(startControllerProcess(options, { spawn: died("exit"), platform: "win32" }), /exited before admission/u)
   await assert.rejects(startControllerProcess(options, { spawn: died("error"), platform: "win32" }), /spawn failed late/u)
   assert.ok(Date.now() - started < 5000, "a dead child does not wait out the 30 s window")
-  assert.deepEqual(armed.filter((delay) => delay === 30000), [30000, 30000], "the full window was armed, then cleared by the failure")
+  assert.deepEqual(armed.filter((delay) => delay === 30000), [30000, 30000], "the full 30 s window was armed for each start (the failure came from the child, not the timer)")
 })
 
 test("startControllerProcess arms its startup timer with the platform window unless the caller overrides it", { skip: posixOnly }, async (t) => {
