@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { mkTempRoot, recordControllers, removeRootsAfterControllers, requireControllers } from "../_temp_roots.js"
 import { openSession } from "../launch/_mcp_session.js"
-import { processAlive } from "./_controller_exit.js"
+import { processAlive, waitForProcessesGone } from "./_controller_exit.js"
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -113,31 +113,38 @@ test("a session helper records the controller while the session is alive and aga
   }
 })
 
-test("a controller spawned by this test process is sent SIGTERM at teardown, because its parent is still alive and its channel never drops", async () => {
-  const root = await mkTempRoot("desk-teardown-own-child-")
-  // Ends gracefully on SIGTERM, as the controller child does; otherwise it would outlive teardown.
-  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000)"], { stdio: "ignore" })
-  const exited = new Promise((resolve) => child.once("exit", resolve))
+test("a controller is waited for and never signalled, whoever spawned it and whether or not its start time is known", async () => {
+  const holder = startHolder()
   try {
-    await pause(150)
-    writeOwner(root, child.pid, { parent_pid: process.pid })
-    const aliveAtRemoval = []
-    await removeRootsAfterControllers([root], undefined, { remove: async () => { aliveAtRemoval.push(processAlive(child.pid)) } })
-    assert.deepEqual(aliveAtRemoval, [false])
-    await exited
+    const cases = [
+      ["spawned by this test process, start time matches", { parent_pid: process.pid, process_start: "linux:boot:100" }, async () => "linux:boot:100"],
+      ["spawned by this test process, no recorded start time", { parent_pid: process.pid }, async () => "linux:boot:100"],
+      ["spawned by this test process, current start time unreadable", { parent_pid: process.pid, process_start: "linux:boot:100" }, async () => null],
+      ["spawned by someone else", { parent_pid: process.pid + 1 }, async () => null],
+    ]
+    for (const [label, extra, startOf] of cases) {
+      const root = await mkTempRoot("desk-teardown-never-signalled-")
+      writeOwner(root, holder.child.pid, extra)
+      const waited = []
+      await removeRootsAfterControllers([root], undefined, { startOf, waitForGone: async (pids) => { waited.push(pids) }, remove: async () => {} })
+      assert.deepEqual(waited, [[holder.child.pid]], `${label}: waited for`)
+      assert.equal(processAlive(holder.child.pid), true, `${label}: never signalled, so still running`)
+    }
   } finally {
-    if (processAlive(child.pid)) { child.kill("SIGKILL"); await exited }
+    await holder.stop()
   }
 })
 
-test("a controller that someone else spawned is waited for, never signalled", async () => {
-  const root = await mkTempRoot("desk-teardown-foreign-child-")
+test("a controller that outlives the wait fails teardown naming its PID", async () => {
+  const root = await mkTempRoot("desk-teardown-unreaped-")
   const holder = startHolder()
   try {
-    writeOwner(root, holder.child.pid, { parent_pid: process.pid + 1 })
-    const ended = []
-    await removeRootsAfterControllers([root], undefined, { endChild: (pid) => ended.push(pid), waitForGone: async () => {}, remove: async () => {} })
-    assert.deepEqual(ended, [])
+    writeOwner(root, holder.child.pid, { parent_pid: process.pid })
+    await assert.rejects(
+      () => removeRootsAfterControllers([root], undefined, { waitForGone: (pids) => waitForProcessesGone(pids, { timeoutMs: 200 }), remove: async () => {} }),
+      (error) => error.message.includes(String(holder.child.pid)),
+    )
+    assert.equal(processAlive(holder.child.pid), true, "failing is all teardown does")
   } finally {
     await holder.stop()
   }

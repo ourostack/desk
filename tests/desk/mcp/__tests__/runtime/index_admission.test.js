@@ -236,8 +236,15 @@ test("with the real runtime inspector and importer, main restores the runtime af
   mkdirSync(desk)
   writeFileSync(path.join(desk, "task.md"), "# Harbor\n\nThe lighthouse keeper logs ferries.\n")
   const { startInProcess } = await import("./_in_process_desk.js")
+  const { importRuntimeServer, inspectRuntimeDependencyPack } = await import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js")
   const session = await startInProcess({
     argv: ["--root", desk],
+    // The real runtime and inspector, except that the controller is started ephemeral: the client then ends the controller child when this session closes, so the test needs no signal to end it.
+    runtimeImporter: async (given) => {
+      const runtime = await importRuntimeServer(given)
+      return { ...runtime, connectOrStartController: (options) => runtime.connectOrStartController({ ...options, ephemeral: true }) }
+    },
+    runtimeInspector: inspectRuntimeDependencyPack,
     env: { DESK_RUNTIME_CACHE_DIR: path.join(root, "runtime-cache"), HOME: root },
     cwd: root,
     homeDir: root,

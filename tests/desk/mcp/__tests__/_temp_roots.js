@@ -25,16 +25,7 @@ const remember = (records) => {
   for (const record of records) knownControllers.set(record.pid, record)
 }
 
-// A controller whose parent is this very test process cannot see its channel drop, because the parent is still running (an in-process session that spawned the real controller). Production ends it when the host process goes away, so teardown does what that does: SIGTERM, which the controller turns into its normal close (a forced end on Windows).
-const endOwnChild = (pid) => {
-  try {
-    process.kill(pid, "SIGTERM")
-  } catch (error) {
-    if (error.code !== "ESRCH") throw error
-  }
-}
-
-// A recorded PID names the controller only while the process now holding it started when the record says. A reused PID, or one that is gone, needs no wait.
+// A recorded PID names the controller only while the process now holding it started when the record says. A reused PID, or one that is gone, needs no wait. A start time that is unknown on either side cannot rule the process out, so it is waited for. Teardown never signals a process: a session that leaves its controller running must end it itself (an in-process session starts its controller ephemeral), and a controller that outlives the wait fails the test naming its PID.
 async function stillTheController(record, startOf) {
   if (!processAlive(record.pid)) return false
   if (record.processStart === null) return true
@@ -45,11 +36,10 @@ async function stillTheController(record, startOf) {
 /**
  * Remove `roots` once every readiness controller under them, and every one in `known`, has exited. Controllers outlive their sessions and hold the derived index open, and Windows refuses to delete a file a process holds. The wait has a bounded deadline and a failure that names the PIDs. The delete retries are unchanged; the roots are still removed when the wait fails, and every failure is thrown, the wait's first.
  */
-export async function removeRootsAfterControllers(roots, known = knownControllers, { waitForGone = waitForProcessesGone, remove = (root) => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }), startOf = readProcessStart, endChild = endOwnChild } = {}) {
+export async function removeRootsAfterControllers(roots, known = knownControllers, { waitForGone = waitForProcessesGone, remove = (root) => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }), startOf = readProcessStart } = {}) {
   const records = new Map([...(known instanceof Map ? known : [...known].map((pid) => [pid, { pid, processStart: null, parentPid: null }])), ...controllerRecords(roots).map((record) => [record.pid, record])])
   const running = []
   for (const record of records.values()) if (await stillTheController(record, startOf)) running.push(record)
-  for (const record of running) if (record.parentPid === process.pid) endChild(record.pid)
   let waitError
   try {
     await waitForGone(running.map((record) => record.pid))

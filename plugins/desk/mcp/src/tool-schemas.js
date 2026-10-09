@@ -273,7 +273,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     depth: integer("Maximum hop distance; defaults to 4."),
     direction: { type: "string", enum: ["forward", "backward", "both"], description: "Which edges to follow; defaults to both." },
   }, ["start_path"]),
-  desk_reindex: schema({ force: flag("Request a full rebuild; it still joins the shared controller's convergence.") }),
+  desk_reindex: schema({ force: flag("Accepted for compatibility; it changes nothing. Reindex always joins the shared controller's convergence and never deletes a live index.") }),
   desk_status: schema({
     detail: flag("Pass true for the full payload (index, snapshots, vector packs, embedding spec, admission internals; tens of KB). Omit it for the compact answer: one `state` word, why it is not `ready`, what to do, and pointers."),
   }),
