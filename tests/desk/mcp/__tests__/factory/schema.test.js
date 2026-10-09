@@ -1039,6 +1039,14 @@ test("human_turns and outcomes are accepted unavailable fields with every reason
   assert.equal(LIMITS.unavailable, 264)
 })
 
+test("the store playbook's latest statement of the unavailable limit matches the enums", () => {
+  const playbook = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/docs/factory-store-playbook.md"), "utf8")
+  const statements = [...playbook.matchAll(/the limit is (\d+) \((\d+) fields × (\d+) reasons\)/gu)]
+  assert.ok(statements.length > 0, "the playbook states the limit")
+  const [, limit, fields, reasons] = statements.at(-1).map(Number)
+  assert.deepEqual([limit, fields, reasons], [LIMITS.unavailable, ENUMS.publishedUnavailableField.length, ENUMS.unavailableReason.length])
+})
+
 test("a local commit may carry the time the session recorded it, within the session", () => {
   const value = golden()
   const duration = Date.parse(value.session.derived_through) - Date.parse(value.session.started_at)

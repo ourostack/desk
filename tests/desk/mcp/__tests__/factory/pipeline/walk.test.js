@@ -498,10 +498,11 @@ test("the overlap split handles work that starts before a wait and runs past its
   assert.deepEqual(parts.map((part) => [part.start_ms / MIN, part.end_ms / MIN, part.class]), [[10, 20, UNLABELED_CLASS], [20, 50, "muda"], [50, 60, UNLABELED_CLASS]])
 })
 
-test("a session that lost a few intervals leaves its jobs' working time partial and a lower bound, never unavailable (23e26d3f's shape)", () => {
-  // The published facts of a long session flag `{turns, source_unreadable}` and `{tool_durations, source_unreadable}` for a handful of
-  // dropped intervals among thousands it kept. The job's working time is what the session recorded, at least.
-  const session = facts({
+// 23e26d3f's shape: one long session two jobs share, each owning its own workers in unshared segments, labeled by the evaluator for both
+// jobs from the same stretches, and flagged `{turns, source_unreadable}` and `{tool_durations, source_unreadable}` for a handful of
+// dropped intervals among thousands it kept.
+function lossySharedSession(sharedSegments) {
+  return facts({
     id: S(30),
     duration: 60 * MIN,
     agents: [{ n: 0, parent: null, model: "model-alpha" }, { n: 1, parent: 0, model: "model-alpha" }],
@@ -509,18 +510,25 @@ test("a session that lost a few intervals leaves its jobs' working time partial 
     prs: [{ repo: "ourostack/desk", number: 9, agent: 0 }],
     unavailable: [{ field: "turns", reason: "source_unreadable" }, { field: "tool_durations", reason: "source_unreadable" }],
     jobs: [
-      binding(J("a"), 0, { done: 60 * MIN, fields: { agents: [0], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: false }] } }),
-      binding(J("b"), 0, { done: 60 * MIN, fields: { agents: [1], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: false }] } }),
+      binding(J("a"), 0, { done: 60 * MIN, fields: { agents: [0], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: sharedSegments }] } }),
+      binding(J("b"), 0, { done: 60 * MIN, fields: { agents: [1], segments: [{ start_ms: 0, end_ms: 60 * MIN, shared: sharedSegments }] } }),
     ],
   })
-  const whole = [stretch(0, 20 * MIN, "value", null, [[0, 20 * MIN]]), stretch(20 * MIN, 50 * MIN, "muda", "waiting", [[20 * MIN, 50 * MIN]])]
+}
+const lossyLabels = [stretch(0, 20 * MIN, "value", null, [[0, 20 * MIN]]), stretch(20 * MIN, 50 * MIN, "muda", "waiting", [[20 * MIN, 50 * MIN]])]
+
+test("a session that lost a few intervals leaves its jobs' working time partial and a lower bound, never unavailable (23e26d3f's shape: shared labels, unshared segments)", () => {
+  const session = lossySharedSession(false)
+  const whole = lossyLabels
   const { walk, formulas } = walkOf([session], [labelsFile(J("a"), S(30), whole), labelsFile(J("b"), S(30), whole)], J("a"))
   assert.equal(formulas.active_time_ms.state, "partial")
   assert.deepEqual(formulas.active_time_ms.reasons, ["source_unreadable"])
   // Lost intervals hide work: working time is at least this, idle time at most.
   assert.deepEqual([walk.task.working_ms.state, walk.task.working_ms.value], ["partial", 30 * MIN])
-  assert.ok(walk.task.working_ms.reasons.includes("source_unreadable"))
+  // The real 23e26d3f reads the same: its labels come from a session another job's labels share, and its working time is at least this.
+  assert.deepEqual(walk.task.working_ms.reasons, ["labels_from_shared_session", "source_unreadable"])
   assert.equal(walk.task.working_ms.bound, "lower")
+  assert.equal(walk.task.labels_from_shared_session, true)
   assert.deepEqual([walk.task.idle_ms.state, walk.task.idle_ms.value, walk.task.idle_ms.bound], ["partial", 30 * MIN, "upper"])
   assert.deepEqual([walk.stackup.working_ms.state, walk.stackup.working_ms.value, walk.stackup.working_ms.bound], ["partial", 30 * MIN, "lower"])
   assert.equal(walk.task.flow_efficiency.state, "partial")
@@ -531,6 +539,19 @@ test("a session that lost a few intervals leaves its jobs' working time partial 
   assert.equal(walk.stackup.lead_time_ms.state, "measured", "the card's lead time does not read the intervals")
   // Its one pull request carries no time, so no burst can say how many it holds.
   for (const burst of walk.bursts) assert.deepEqual(burst.prs, { class: "unavailable", state: "unavailable", reasons: ["not_in_published_facts"] })
+  assert.equal(walk.bursts[0].value_ms.state, "partial")
+  assert.ok(walk.bursts[0].value_ms.reasons.includes("labels_from_shared_session"))
+})
+
+test("a session that lost a few intervals and whose segments other jobs share leaves working time partial with no direction, never unavailable", () => {
+  const { walk, formulas } = walkOf([lossySharedSession(true)], [labelsFile(J("a"), S(30), lossyLabels), labelsFile(J("b"), S(30), lossyLabels)], J("a"))
+  assert.deepEqual([formulas.active_time_ms.state, formulas.active_time_ms.reasons], ["partial", ["source_unreadable", "worker_shared"]])
+  // Lost intervals pull working time up and a shared worker pulls it down, so the figure keeps its value and states no direction.
+  assert.deepEqual([walk.task.working_ms.state, walk.task.working_ms.value], ["partial", 30 * MIN])
+  assert.deepEqual(walk.task.working_ms.reasons, ["labels_from_shared_session", "source_unreadable", "worker_shared"])
+  assert.deepEqual([walk.task.working_ms.bound, walk.task.working_ms.bound_reason], [null, "bound_reasons_conflict"])
+  for (const key of ["working_ms", "idle_ms", "flow_efficiency", "longest_gap", "bursts"]) assert.notEqual(walk.task[key].state, "unavailable", key)
+  assert.ok(walk.bursts[0].value_ms.reasons.includes("labels_from_shared_session"))
 })
 
 test("a partial interval record makes the walk's figures partial with the formulas' reasons", () => {
