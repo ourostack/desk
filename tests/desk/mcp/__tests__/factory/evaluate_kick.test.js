@@ -128,6 +128,19 @@ test("anything that cannot be read starts nothing", () => scratch(async (env, ba
   await fs.rm(path.join(root, "locks"), { recursive: true, force: true })
   await fs.writeFile(path.join(root, "locks"), "not a folder")
   assert.deepEqual(await evaluationKickDue(env), { due: false, reason: "unreadable" })
+  const spawn = fakeSpawn()
+  assert.deepEqual(await kickLoop(env, { spawn }), { kicked: false, reason: "unreadable" })
+  assert.equal(spawn.calls.length, 0, "an invalid lock directory must not start a worker")
+}))
+
+test("a missing lock directory or missing worker lock still permits a due kick", () => scratch(async (env, base) => {
+  await requestEvaluation(env, { job: JOB, deskRoot: path.join(base, "desk") })
+  const root = await factoryStateRoot(env)
+  const locks = path.join(root, "locks")
+  await fs.rm(locks, { recursive: true, force: true })
+  assert.deepEqual(await evaluationKickDue(env), { due: true, reason: "due" }, "a genuinely absent directory is not malformed")
+  await fs.mkdir(locks)
+  assert.deepEqual(await evaluationKickDue(env), { due: true, reason: "due" }, "a real directory without a worker lock permits the kick")
 }))
 
 test("kickLoop starts the launcher detached with this environment only when due, and a spawn that throws is spawn_failed", () => scratch(async (env, base) => {
