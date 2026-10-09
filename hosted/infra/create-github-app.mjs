@@ -4,7 +4,7 @@
 //
 //   node hosted/infra/create-github-app.mjs [--public-url https://desk.ouro.bot]
 //
-// Open http://localhost:8787/ in a browser signed in to GitHub as an ourostack
+// Open http://127.0.0.1:8787/ in a browser signed in to GitHub as an ourostack
 // owner. The page posts the App's manifest to GitHub; confirming there sends the
 // browser back to /created, where this script converts the one-time code into
 // the App's id, client id, client secret and private key, writes them over the
@@ -23,6 +23,10 @@ import { appJwt } from "../src/github-app.js";
 const ORG = "ourostack";
 const PORT = 8787;
 const DESK_REPO = "arimendelow/desk";
+// The two public addresses the gateway serves sign-in on: its own domain, and
+// the Container App's Azure address used until that domain's DNS exists.
+const DESK_DOMAIN_URL = "https://desk.ouro.bot";
+const AZURE_URL = "https://ouro-desk-hosted.blueflower-44af4710.eastus2.azurecontainerapps.io";
 const TARGET = {
   app: "ouro-desk-hosted",
   resourceGroup: "rg-ouro-work-substrate",
@@ -39,12 +43,16 @@ export const APP_SECRETS = ["desk-app-id", "desk-app-client-id", "desk-app-clien
 // it (ourostack), and the desk repository belongs to arimendelow; a public App
 // installed elsewhere gains nothing, since the gateway mints tokens only for its
 // own repository and admits only its allowed logins.
+//
+// Its callbacks cover the public URL and both known addresses, so moving
+// DESK_PUBLIC_URL from the Azure address to desk.ouro.bot needs no App change.
 export function appManifest({ publicUrl, redirectUrl }) {
   const base = publicUrl.replace(/\/+$/, "");
+  const callbacks = new Set([base, DESK_DOMAIN_URL, AZURE_URL].map((origin) => `${origin}/oauth/github/callback`));
   return {
     name: "Ouro Desk",
     url: base,
-    callback_urls: [`${base}/oauth/github/callback`],
+    callback_urls: [...callbacks],
     redirect_url: redirectUrl,
     public: true,
     request_oauth_on_install: false,
@@ -138,11 +146,17 @@ export function createdHandler({ state, app, resourceGroup, subscription, fetch,
   return async (query) => {
     if (query.get("state") !== state) {
       print("Refused a /created request whose state does not match this run's.");
-      return { ok: false, html: page(`<p>This link does not belong to this run. Start again from http://localhost:${PORT}/.</p>`) };
+      return { ok: false, html: page(`<p>This link does not belong to this run. Start again from http://127.0.0.1:${PORT}/.</p>`) };
+    }
+    let conversion;
+    try {
+      conversion = await convertManifestCode(query.get("code"), { fetch });
+      print(`Created GitHub App ${conversion.slug} (id ${conversion.id}).`);
+    } catch (error) {
+      print(`Failed: ${error.message}`);
+      return { ok: false, html: page(`<p>Failed: ${escapeHtml(error.message)}</p><p>See the terminal.</p>`) };
     }
     try {
-      const conversion = await convertManifestCode(query.get("code"), { fetch });
-      print(`Created GitHub App ${conversion.slug} (id ${conversion.id}).`);
       await setSecrets({ secrets: secretsFromConversion(conversion), app, resourceGroup, subscription, run });
       print(`Stored its credentials in ${app}.`);
       const url = installUrl(conversion);
@@ -153,8 +167,15 @@ export function createdHandler({ state, app, resourceGroup, subscription, fetch,
         html: page(`<p>The Ouro Desk App exists and hosted Desk has its credentials.</p><p>Next, <a href="${escapeHtml(url)}">install it on ${DESK_REPO}</a>. The terminal finishes once it is installed.</p>`),
       };
     } catch (error) {
-      print(`Failed: ${error.message}`);
-      return { ok: false, html: page(`<p>Failed: ${escapeHtml(error.message)}</p><p>See the terminal.</p>`) };
+      // GitHub hands over the client secret and private key only once, and this
+      // script never prints them, so they are lost. The App itself exists.
+      const settings = `https://github.com/organizations/${ORG}/settings/apps/${conversion.slug}`;
+      print(
+        `Failed: ${error.message}\nThe App exists, but its credentials were not stored. Open ${settings}, generate a new ` +
+          `client secret and a new private key, and set them with az containerapp secret set on ${app} ` +
+          `(desk-app-id=${conversion.id}, desk-app-client-id, desk-app-client-secret, desk-app-key).`,
+      );
+      return { ok: false, html: page(`<p>Failed: ${escapeHtml(error.message)}</p><p>See the terminal for how to recover.</p>`) };
     }
   };
 }
@@ -162,7 +183,7 @@ export function createdHandler({ state, app, resourceGroup, subscription, fetch,
 async function main() {
   const { values } = parseArgs({ options: { "public-url": { type: "string", default: process.env.DESK_PUBLIC_URL || "https://desk.ouro.bot" } } });
   const state = randomBytes(16).toString("hex");
-  const origin = `http://localhost:${PORT}`;
+  const origin = `http://127.0.0.1:${PORT}`;
   const manifest = appManifest({ publicUrl: values["public-url"], redirectUrl: `${origin}/created` });
   const print = (line) => process.stdout.write(`${line}\n`);
   const handle = createdHandler({ state, ...TARGET, fetch: globalThis.fetch, run: runCommand, print });

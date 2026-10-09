@@ -63,10 +63,22 @@ Do these once, in order. They run on a machine signed in to `az` with write acce
 
 1. **Provision.** `hosted/infra/provision.sh` creates the Container App `ouro-desk-hosted` and its secrets (the App's as `unset`), mounts the App key, adds the deploy workflow's federated credential, and prints the repository variables to set. It is safe to run again and never overwrites a secret's value. Run it with `DRY_RUN=1` first to see every change it would make. Until `desk.ouro.bot` exists, run it with `DESK_PUBLIC_URL=https://<the app's Azure address>`.
 2. **Set the repository variables** it prints (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `DESK_PUBLIC_URL`) on `ourostack/desk`.
-3. **Create the GitHub App.** Run `node hosted/infra/create-github-app.mjs --public-url <DESK_PUBLIC_URL>` and open `http://localhost:8787/` in a browser signed in to GitHub as an ourostack owner. Confirm on GitHub. The script stores the App's credentials in the Container App without printing them and prints the App's install URL.
+3. **Create the GitHub App.** Run `node hosted/infra/create-github-app.mjs --public-url <DESK_PUBLIC_URL>` and open `http://127.0.0.1:8787/` in a browser signed in to GitHub as an ourostack owner. Confirm on GitHub. The script stores the App's credentials in the Container App without printing them and prints the App's install URL.
 4. **Install the App** on `arimendelow/desk` only, from that URL. The script waits for the installation, restarts the app's revision so the gateway picks up the credentials, and exits.
-5. **Add DNS.** At ouro.bot's DNS (Cloudflare, DNS only), add the `CNAME` and `asuid` `TXT` records that `provision.sh` prints, then run `provision.sh` again to bind `desk.ouro.bot` with a managed certificate.
+5. **Add DNS.** At ouro.bot's DNS (Cloudflare, DNS only), add the `CNAME` and `asuid` `TXT` records that `provision.sh` prints, then run `provision.sh` again to bind `desk.ouro.bot` with a managed certificate. This rerun keeps the app's current public URL.
+
+Run the first provision from a checkout of released `main`, because it builds the first image from the local `HEAD`.
+
+### Move to desk.ouro.bot
+
+A rerun of `provision.sh` keeps the app's current `DESK_PUBLIC_URL` unless one is passed, so a reconcile never moves the live OAuth issuer. Once `desk.ouro.bot` is bound with its certificate, cut over in this order:
+
+1. Run `DESK_PUBLIC_URL=https://desk.ouro.bot hosted/infra/provision.sh`. The issuer, the MCP resource and the GitHub callback move to `desk.ouro.bot`.
+2. Set the `DESK_PUBLIC_URL` repository variable to `https://desk.ouro.bot`, so the deploy's health check follows.
+3. In claude.ai, remove the connector and add `https://desk.ouro.bot/mcp` again, so Claude registers and signs in against the new issuer.
+
+The GitHub App needs no change: its callbacks already list both the Azure address and `desk.ouro.bot`.
 
 ## Deploy
 
-Hosted Desk serves only released Desk. `.github/workflows/hosted-deploy.yml` runs after each successful "Desk release" run, on main's head, and by hand (`workflow_dispatch` on main) for a gateway-only change after it merges. It builds the image with `az acr build`, tagged with the commit SHA, points the app at it, waits for the new revision and fails unless `/healthz` answers 200.
+Hosted Desk serves only released Desk. `.github/workflows/hosted-deploy.yml` runs after each successful "Desk release" run, on main's head, and by hand (`workflow_dispatch` on main) for a gateway-only change after it merges. It refuses a commit whose `plugins/desk/changelog.d/` holds a fragment no release has carried (anything but `README.md`). It builds the image with `az acr build`, tagged with the commit SHA, points the app at it, waits for the new revision and fails unless `/healthz` answers 200.

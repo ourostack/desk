@@ -4,8 +4,12 @@
 #
 #   hosted/infra/provision.sh                 # make the changes
 #   DRY_RUN=1 hosted/infra/provision.sh       # read Azure, print every change instead of making it
-#   DESK_PUBLIC_URL=https://<fqdn> hosted/infra/provision.sh
-#                                             # serve OAuth on the app's Azure address until desk.ouro.bot exists
+#   DESK_PUBLIC_URL=https://<url> hosted/infra/provision.sh
+#                                             # set the public URL (OAuth issuer, resource and GitHub callback)
+#
+# DESK_PUBLIC_URL: a create uses https://desk.ouro.bot unless it is passed. A rerun
+# keeps the app's current value unless it is passed, so a reconcile never moves
+# the live issuer; passing it is the DNS cut-over (hosted/README.md).
 #
 # What it creates or reconciles, all in subscription 261e0bf1-…, resource group
 # rg-ouro-work-substrate:
@@ -46,8 +50,7 @@ APP=ouro-desk-hosted
 DOMAIN=desk.ouro.bot
 FEDERATED_NAME=ourostack-desk-main
 FEDERATED_SUBJECT=repo:ourostack/desk:ref:refs/heads/main
-DESK_PUBLIC_URL="${DESK_PUBLIC_URL:-https://$DOMAIN}"
-DESK_PUBLIC_URL="${DESK_PUBLIC_URL%/}"
+PUBLIC_URL_PASSED="${DESK_PUBLIC_URL:+1}"
 APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -169,8 +172,25 @@ show_spec() {
 }
 
 # --- 1–4. The Container App, its secrets and volumes ---------------------------
+# Present, absent, or stop: any failure other than "not found" (an expired
+# sign-in, throttling) must not be read as absent, which would create the app.
+app_exists=0
+if show_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv 2>&1 >/dev/null)"; then
+  app_exists=1
+elif ! grep -qiE "ResourceNotFound|was not found|could not be found" <<<"$show_error"; then
+  printf 'Could not read Container App %s:\n%s\n' "$APP" "$show_error" >&2
+  exit 1
+fi
+
+if ((app_exists)) && [[ -z "$PUBLIC_URL_PASSED" ]]; then
+  DESK_PUBLIC_URL="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='DESK_PUBLIC_URL'].value | [0]" -o tsv)"
+fi
+DESK_PUBLIC_URL="${DESK_PUBLIC_URL:-https://$DOMAIN}"
+DESK_PUBLIC_URL="${DESK_PUBLIC_URL%/}"
+say "Public URL: $DESK_PUBLIC_URL"
+
 existing_secrets=""
-if az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv >/dev/null 2>&1; then
+if ((app_exists)); then
   say "Container App $APP exists; reconciling it"
   existing_secrets="$(az_read containerapp secret list -n "$APP" -g "$RESOURCE_GROUP" --query "[].name" -o tsv)"
   missing=()

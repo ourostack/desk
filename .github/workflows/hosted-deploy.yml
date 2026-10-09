@@ -9,7 +9,7 @@ name: Hosted Desk deploy
 # would change the token's subject. Repository variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, and
 # DESK_PUBLIC_URL for the health check (the app's Azure address when unset).
 #
-# Steps: build the image in the registry with `az acr build`, tagged with the commit SHA; point the app at it; wait for
+# Steps: refuse a commit whose Desk is not released (a pending changelog fragment); build the image in the registry with `az acr build`, tagged with the commit SHA; point the app at it; wait for
 # the new revision to be ready; then poll /healthz until it answers 200, or fail.
 
 on:
@@ -49,6 +49,18 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+
+      # A pending changelog fragment means Desk on this commit has changes no release has carried: a dispatch while a
+      # release is failing, or a Desk merge that landed after the release commit. Hosted Desk serves only released Desk.
+      - name: Refuse unreleased Desk
+        run: |
+          set -euo pipefail
+          pending="$(find plugins/desk/changelog.d -type f ! -name README.md | sort)"
+          if [ -n "$pending" ]; then
+            echo "::error title=Unreleased Desk on main::plugins/desk/changelog.d holds fragments no release has carried, so this commit is not released Desk. Deploy after the Desk release carries them."
+            echo "$pending"
+            exit 1
+          fi
 
       - name: Sign in to Azure
         uses: azure/login@v2

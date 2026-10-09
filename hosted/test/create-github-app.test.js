@@ -27,11 +27,14 @@ const TARGET = { app: "ouro-desk-hosted", resourceGroup: "rg-ouro-work-substrate
 const AZ_TARGET = ["--name", "ouro-desk-hosted", "--resource-group", "rg-ouro-work-substrate", "--subscription", "sub-id"];
 
 test("the manifest describes the Ouro Desk App with only the permissions hosted Desk needs and no webhook", () => {
-  assert.deepEqual(appManifest({ publicUrl: "https://desk.ouro.bot", redirectUrl: "http://localhost:8787/created" }), {
+  assert.deepEqual(appManifest({ publicUrl: "https://desk.ouro.bot", redirectUrl: "http://127.0.0.1:8787/created" }), {
     name: "Ouro Desk",
     url: "https://desk.ouro.bot",
-    callback_urls: ["https://desk.ouro.bot/oauth/github/callback"],
-    redirect_url: "http://localhost:8787/created",
+    callback_urls: [
+      "https://desk.ouro.bot/oauth/github/callback",
+      "https://ouro-desk-hosted.blueflower-44af4710.eastus2.azurecontainerapps.io/oauth/github/callback",
+    ],
+    redirect_url: "http://127.0.0.1:8787/created",
     public: true,
     request_oauth_on_install: false,
     default_permissions: { contents: "write", pull_requests: "read", metadata: "read" },
@@ -39,14 +42,20 @@ test("the manifest describes the Ouro Desk App with only the permissions hosted 
   });
 });
 
-test("the manifest follows DESK_PUBLIC_URL for a test deploy on the Azure FQDN", () => {
-  const manifest = appManifest({ publicUrl: "https://app.example.azurecontainerapps.io/", redirectUrl: "http://localhost:8787/created" });
-  assert.equal(manifest.url, "https://app.example.azurecontainerapps.io");
-  assert.deepEqual(manifest.callback_urls, ["https://app.example.azurecontainerapps.io/oauth/github/callback"]);
+test("the manifest's callbacks cover both the Azure address and desk.ouro.bot, so the DNS cut-over needs no App change", () => {
+  const both = [
+    "https://desk.ouro.bot/oauth/github/callback",
+    "https://ouro-desk-hosted.blueflower-44af4710.eastus2.azurecontainerapps.io/oauth/github/callback",
+  ];
+  const onAzure = appManifest({ publicUrl: "https://ouro-desk-hosted.blueflower-44af4710.eastus2.azurecontainerapps.io/", redirectUrl: "x" });
+  assert.equal(onAzure.url, "https://ouro-desk-hosted.blueflower-44af4710.eastus2.azurecontainerapps.io");
+  assert.deepEqual(onAzure.callback_urls, [both[1], both[0]]);
+  const elsewhere = appManifest({ publicUrl: "https://test.example", redirectUrl: "x" });
+  assert.deepEqual(elsewhere.callback_urls, ["https://test.example/oauth/github/callback", ...both]);
 });
 
 test("the form page posts the manifest and state to the organization's new-App page and submits itself", () => {
-  const manifest = appManifest({ publicUrl: "https://desk.ouro.bot", redirectUrl: "http://localhost:8787/created" });
+  const manifest = appManifest({ publicUrl: "https://desk.ouro.bot", redirectUrl: "http://127.0.0.1:8787/created" });
   const html = manifestFormPage({ org: "ourostack", manifest, state: "st4te" });
   assert.match(html, /<form[^>]+method="post"[^>]+action="https:\/\/github\.com\/organizations\/ourostack\/settings\/apps\/new\?state=st4te"/);
   const value = html.match(/name="manifest" value="([^"]*)"/)[1];
@@ -183,7 +192,7 @@ test("the /created handler refuses a wrong state before calling GitHub", async (
   assert.equal(fetched, false);
 });
 
-test("a failed az call is reported without the secret values it carried", async () => {
+test("a failed az call is reported without the secret values it carried, with how to recover the lost credentials", async () => {
   const { result, printed } = await created("code=abc&state=st4te", {
     run: async () => {
       throw new Error("az containerapp secret set failed: (AuthorizationFailed) no access");
@@ -191,6 +200,8 @@ test("a failed az call is reported without the secret values it carried", async 
   });
   assert.equal(result.ok, false);
   assert.match(printed, /AuthorizationFailed/);
+  assert.match(printed, /https:\/\/github\.com\/organizations\/ourostack\/settings\/apps\/ouro-desk/);
+  assert.match(printed, /client secret and a new private key/);
   assert.equal(printed.includes(CONVERSION.client_secret), false);
   assert.equal(printed.includes(CONVERSION.pem.split("\n")[1]), false);
 });
