@@ -24,9 +24,9 @@ The plugin starts this evaluator itself, headlessly, from the loop's evaluate st
 Each brief is a JSON file with these fields:
 
 - `job` and `session`: what you are labeling.
-- `evaluator`: the `plugin_version` and `rubric` your labels must carry, copied exactly.
+- `evaluator`: the `plugin_version` and `rubric` your labels must carry, copied exactly. The rubric is `4` when the session's facts record how each turn ended before a wait, and `3` when they do not: under `3` you label stretches only, `stops` has no hints and you write `"stops":[]`.
 - `facts`: the session on the published clock. `duration_ms` is its length and `intervals` are its turns, tool calls, subagents, waits, API retries and compactions, each with `start_ms` and `end_ms` counted from the session's start. `counts` totals tool calls, failures and retries. `null` when the session can never be published.
-- `own_share`: the job's own spans of the session, each `{ start_ms, end_ms }` on the same clock. A session can hold several jobs and only these spans count for this job, so label them and leave the rest as a gap. `null` means Desk cannot tell which part was this job's, so nothing you label can count: write an empty `stretches` list and move on.
+- `own_share`: the job's own spans of the session, each `{ start_ms, end_ms }` on the same clock. A session can hold several jobs and only these spans count for this job, so label them and leave the rest as a gap. Desk never briefs a session whose part for the job it cannot tell, and it refuses labels with no stretches when these spans hold work: an empty answer would read as a job labeled with no waste.
 - `session_log`: the host's session log for this session, or `null` when it is gone.
 - `stops`: one hint per wait for the operator (`human_wait` interval) inside `own_share` (none when it is `null`), in order: its `wait` range, its `stop` facts (how the turn ended, whether the final reply ended in "?" (`asks`), whether the agent's background agents still ran (`pending_agents`); `null` when not recorded) and `rule`, the class Desk already gives that end, or `null` when it is yours to decide.
 - `clock_origin`: the session's start time. A log line at time `t` sits at `t - clock_origin` milliseconds on the session clock. Use it only to line the log up with the intervals; no time of day goes into labels.

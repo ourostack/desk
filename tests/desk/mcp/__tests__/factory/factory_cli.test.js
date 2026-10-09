@@ -33,7 +33,8 @@ import {
   runValidatePrCommand,
 } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
-import { factoryStateRoot, readConsent, readMachineSecret, setConsent, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readConsent, readMachineSecret, setConsent, updateStatus, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { STOP_FACTS_BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import { keyedJobId } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 import { indexJob } from "./_index_helper.js"
 import { osEnv } from "../_os_env.js"
@@ -831,10 +832,15 @@ const EVAL_SESSION = LOCAL_GOLDEN.session.id
 async function seedJob(env, job) {
   const facts = structuredClone(LOCAL_GOLDEN)
   facts.jobs[2].job = job
+  // The job's binding holds the main worker for the whole session, so its own part is known and the session is briefed.
+  facts.jobs[2].agents = [0]
+  facts.jobs[2].segments = [{ start_ms: 0, end_ms: Date.parse(facts.session.ended_at) - Date.parse(facts.session.started_at) }]
   facts.jobs.sort((a, b) => (a.job < b.job ? -1 : 1))
   await setConsent(env, { store: "ourostack/factory", contribute: true })
   await writeLocalFacts(env, "ourostack/factory", facts)
   await indexJob(env, job, `claude-code-${EVAL_SESSION}.json`)
+  // Derived with stop facts, as this machine derives today.
+  await updateStatus(env, (current) => ({ ...current, derivations: { ...current.derivations, [`claude-code-${EVAL_SESSION}.json`]: { store: "ourostack/factory", binding_version: STOP_FACTS_BINDING_VERSION } } }))
 }
 
 test("deskVersion is the installed plugin's version", () => {

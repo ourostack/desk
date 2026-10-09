@@ -239,8 +239,8 @@ function clipStretches(stretches, spans) {
  * `facts_ambiguous`, the first cross-check code (a facts file re-derived
  * after the labels merged can leave them `evidence_unmatched`, for example),
  * `share_unknown` when the facts do not say which part of the session
- * was the job's, or `outside_share` when the labels have stretches but none
- * inside the job's share. A stop label that alone fails the cross-check
+ * was the job's, or `outside_share` when the labels have no stretch
+ * inside the job's share (none at all included). A stop label that alone fails the cross-check
  * (its wait is no longer a human wait of the facts, or a rule now decides
  * it) is dropped from the used entry's `stops`, and the file is still used:
  * that wait reads not labeled until the evaluator labels it again.
@@ -273,8 +273,8 @@ export function resolveLabels(labels, sessions) {
       const clipped = share === null ? [] : clipStretches(entry.stretches, share)
       if (fileErrors.length > 0) reasons.push(fileErrors[0].code)
       else if (share === null) reasons.push("share_unknown")
-      // Stretches, none inside the job's share: the evaluator labeled other jobs' time, which is no reading of this job, never a zero.
-      else if (entry.stretches.length > 0 && clipped.length === 0) reasons.push("outside_share")
+      // No stretch inside the job's share (other jobs' time, or no stretch at all): no reading of this job, never a zero.
+      else if (clipped.length === 0) reasons.push("outside_share")
       else {
         const binding = matches[0].jobs.find((candidate) => candidate.job === entry.job)
         dropped.push(...check.errors.filter((error) => error.path.startsWith("stops.")).map((error) => error.code))
