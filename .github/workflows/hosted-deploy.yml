@@ -5,7 +5,7 @@ name: Hosted Desk deploy
 # unreleased merge. A dispatch deploys that same newest release, so a gateway change ships with the next release.
 #
 # It signs in to Azure with OIDC as identity id-ourowork-github-prod, whose federated credential trusts
-# repo:ourostack/desk:ref:refs/heads/main (hosted/infra/provision.sh). The job therefore names no environment, which
+# repo:ourostack@265728804/desk@1386529300:ref:refs/heads/main (hosted/infra/provision.sh; ourostack's OIDC subjects carry ids). The job therefore names no environment, which
 # would change the token's subject. Repository variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, and
 # DESK_PUBLIC_URL for the health check (the app's Azure address when unset).
 #

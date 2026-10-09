@@ -30,8 +30,9 @@
 #   4. A secret volume that mounts desk-app-key at /secrets/app-key.pem (DESK_APP_KEY_FILE).
 #   5. Custom domain desk.ouro.bot with a managed certificate, once DNS has the
 #      records the script prints (ouro.bot's DNS is not in Azure, so it never writes DNS).
-#   6. Federated credential ourostack-desk-main on identity id-ourowork-github-prod for
-#      subject repo:ourostack/desk:ref:refs/heads/main, so the deploy workflow on main
+#   6. Federated credential ourostack-desk-main-ids on identity id-ourowork-github-prod for
+#      subject repo:ourostack@265728804/desk@1386529300:ref:refs/heads/main (the ourostack
+#      organization puts owner and repository ids in its OIDC subjects), so the deploy workflow on main
 #      signs in with OIDC. The identity already holds Contributor and AcrPush on the
 #      resource group, which covers `az acr build` and `az containerapp update`.
 # It finishes by printing the GitHub repository variables the deploy workflow reads.
@@ -48,8 +49,8 @@ PULL_IDENTITY=ouro-prod-services-mi
 DEPLOY_IDENTITY=id-ourowork-github-prod
 APP=ouro-desk-hosted
 DOMAIN=desk.ouro.bot
-FEDERATED_NAME=ourostack-desk-main
-FEDERATED_SUBJECT=repo:ourostack/desk:ref:refs/heads/main
+FEDERATED_NAME=ourostack-desk-main-ids
+FEDERATED_SUBJECT=repo:ourostack@265728804/desk@1386529300:ref:refs/heads/main
 PUBLIC_URL_PASSED="${DESK_PUBLIC_URL:+1}"
 APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 
@@ -268,6 +269,12 @@ Repository variables for ourostack/desk (.github/workflows/hosted-deploy.yml):
     gh variable set AZURE_CLIENT_ID --repo ourostack/desk --body $deploy_client_id
     gh variable set AZURE_TENANT_ID --repo ourostack/desk --body $tenant_id
     gh variable set AZURE_SUBSCRIPTION_ID --repo ourostack/desk --body $SUBSCRIPTION
-    gh variable set DESK_PUBLIC_URL --repo ourostack/desk --body $DESK_PUBLIC_URL
-Then create the GitHub App: node hosted/infra/create-github-app.mjs --public-url $DESK_PUBLIC_URL
 EOF
+# The deploy's health check calls DESK_PUBLIC_URL, so the variable waits until that URL answers: a custom domain only
+# once it is bound with its certificate. Unset, the check uses the app's Azure address.
+if [[ "$DESK_PUBLIC_URL" != "https://$DOMAIN" || "$bound" == SniEnabled ]]; then
+  echo "    gh variable set DESK_PUBLIC_URL --repo ourostack/desk --body $DESK_PUBLIC_URL"
+else
+  echo "    (leave DESK_PUBLIC_URL unset until $DOMAIN is bound; rerun this script after the DNS records exist)"
+fi
+echo "Then create the GitHub App: node hosted/infra/create-github-app.mjs --public-url $DESK_PUBLIC_URL"
