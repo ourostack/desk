@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.263 — 2026-10-09
+
+On Windows, the WSL bash.exe is now recognised by its path (System32, Sysnative or WindowsApps) as well as its error line, so a relay that fails with no output is reported as unavailable instead of silently skipped, and the "install Git for Windows" hint for a migration bash could not check now appears only on Windows, with "install bash" elsewhere.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.262 — 2026-10-09
 
 On Windows, Claude Code's and Codex's Desk session start no longer depends on which `bash` comes first on PATH: the hook is now a Node script ([`hooks/claude-session-start.cjs`](hooks/claude-session-start.cjs)) like every other Desk hook, and prints exactly what the shell script it replaces printed.
