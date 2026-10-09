@@ -434,8 +434,14 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } }) + "\n")
     status = JSON.parse((await waitForResponse(id)).result.content[0].text)
   }
-  child.kill("SIGTERM")
-  await closePromise
+  const killTimer = setTimeout(() => child.kill("SIGKILL"), 5000)
+  try {
+    child.stdin.end()
+    await closePromise
+  } finally {
+    clearTimeout(killTimer)
+  }
+  assert.deepEqual(closed, { code: 0, signal: null }, stderr || stdout)
   return {
     code: 0,
     initialize,
@@ -557,10 +563,11 @@ async function runMcpStatusSession(fixture, {
   }
   const stopChild = async () => {
     if (closed !== undefined) return
-    const killTimer = setTimeout(() => child.kill("SIGKILL"), 1000)
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), 5000)
     try {
-      child.kill("SIGTERM")
+      child.stdin.end()
       await closePromise
+      assert.deepEqual(closed, { code: 0, signal: null }, sessionError("session did not close cleanly after stdin ended").message)
     } finally {
       clearTimeout(killTimer)
     }
@@ -950,6 +957,8 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
 test("MCP entrypoint serves coherent desk_status from the source mirror after background convergence", {
   skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${hostTarget}`,
 }, async () => {
+  // This functional convergence check includes a cold runtime restore, not just the handshake.
+  const convergenceTimeoutMs = process.platform === "win32" ? 60000 : 10000
   const embedding = await createEmbeddingBarrier()
   let fixture
   try {
@@ -962,9 +971,10 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
     )
 
     const result = await runMcpStatusSession(fixture, {
+      timeoutMs: convergenceTimeoutMs,
       waitForConvergence: true,
       onInitialStatus: async ({ initialize, tools, initialStatus }) => {
-        await embedding.waitForRequest()
+        await embedding.waitForRequest(convergenceTimeoutMs)
         assert.equal(embedding.pending, true, "initial status must arrive while convergence is blocked")
         assert.equal(embedding.released, false)
         assert.equal(embedding.completed, false)
