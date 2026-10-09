@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.248 — 2026-10-09
+
+When several Desk servers start at once on a Windows machine that is busy, the readiness controller now starts reliably instead of timing out. Each of the servers starts a controller, and each controller used to read its own process start time through PowerShell before it tried to bind the pipe. On a loaded machine that read takes seconds, five of them ran at once, and none finished inside the controller's 10 second start-up window, so the start failed with "readiness controller child startup timed out" and the session sat in "admitting" while it retried. On Windows a controller now binds the pipe first, so the ones that lose the election fail at once without the read and only the winner pays for it, and the read is capped at 5 seconds, below the start-up window. A session whose controller lost the election now waits for the winner for up to 10 seconds on Windows, where the winner's read takes seconds, instead of 20 short tries; it gives up at once if the winner has died and left the pipe free. On macOS and Linux the wait stays short (half a second) and the order is unchanged, because a socket file there must not be visible without its owner record for longer than it was.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.247 — 2026-10-09
 
 When a host closes the MCP session's input, Desk now [waits for its owned readiness controller to close](mcp/index.js) before the session exits. The controller's [existing shutdown path](mcp/src/readiness/controller-process.js) waits for its child to exit, so the session no longer exits while that cleanup is still pending.
