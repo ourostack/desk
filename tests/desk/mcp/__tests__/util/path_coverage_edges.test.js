@@ -86,6 +86,21 @@ test("target realpath failures other than ENOENT are refused by relative path an
   assert.deepEqual(await fs.readdir(deskRoot), ["task.md"])
 })
 
+test("an error with no code is not a filesystem error and reaches the caller unchanged", async (t) => {
+  const deskRoot = await temporaryRoot(t)
+  const failure = new Error("fixture lstat failure with no code")
+  const originalLstat = fs.lstat
+  t.mock.method(fs, "lstat", async (candidate, ...options) => {
+    if (candidate === path.join(deskRoot, "task.md")) throw failure
+    return originalLstat(candidate, ...options)
+  })
+  try {
+    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), (error) => error === failure)
+  } finally {
+    t.mock.restoreAll()
+  }
+})
+
 test("confinement rejects the actual win32 cross-drive relative result on any test host", (t) => {
   const relative = path.win32.relative
   const isAbsolute = path.win32.isAbsolute
