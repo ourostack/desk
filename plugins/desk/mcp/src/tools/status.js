@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs"
-import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
@@ -11,7 +10,7 @@ import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
-import { aheadBehindCounts, hasRemoteConfigured, readFetchOkAt, readSyncStatus } from "../runtime/sync-worker.js"
+import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus } from "../runtime/sync-worker.js"
 
 
 // desk_status's one input, `detail`, is read where the answer is shaped for the caller (runtime/desk-session.js, which
@@ -32,8 +31,8 @@ export const DESK_STATUS_FIELDS = ["detail"]
  * itself (`runtime/sync-worker.js`) and the SessionEnd safety net
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
-function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
-  if (!hasRemoteConfigured(deskRoot, spawnGit)) return "no remote configured"
+async function syncStatus({ deskRoot, env }) {
+  if (!await hasRemoteConfiguredAsync(deskRoot)) return "no remote configured"
   const recorded = readSyncStatus({ root: deskRoot, env })
   // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
   const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: readFetchOkAt({ root: deskRoot, env }) })
@@ -42,7 +41,7 @@ function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
   if (recorded?.blocked) {
     return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], ...lastPull }
   }
-  const counts = aheadBehindCounts({ root: deskRoot, spawnGit })
+  const counts = await aheadBehindCountsAsync({ root: deskRoot })
   return {
     blocked: false,
     ahead: counts?.ahead ?? 0,
@@ -131,7 +130,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     // The redacted active-task listing session start and status render (./desk/active-tasks.js).
     active_tasks: root.valid ? activeTasks(root.path) : null,
     factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
-    sync: root.valid ? syncStatus({ deskRoot: root.path, env }) : null,
+    sync: root.valid ? await syncStatus({ deskRoot: root.path, env }) : null,
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
   }
 }

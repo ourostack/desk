@@ -23,9 +23,11 @@ import {
   DEFAULT_DEBOUNCE_MS,
   acquireSyncLock,
   aheadBehindCounts,
+  aheadBehindCountsAsync,
   defaultSpawnWorker,
   finalUnpushedCheck,
   hasRemoteConfigured,
+  hasRemoteConfiguredAsync,
   hostFromEnv,
   queueDeskProblemFiling,
   readSyncStatus,
@@ -257,6 +259,20 @@ test("hasRemoteConfigured and aheadBehindCounts reflect real remote/upstream sta
 
   await writeAndCommit(cloneA, "x.md", "x\n", "x")
   assert.deepEqual(aheadBehindCounts({ root: cloneA, spawnGit: spawnSync }), { ahead: 1, behind: 0 })
+})
+
+test("the asynchronous remote and upstream reads give the same answers as the synchronous ones, and a missing folder reads as no remote", async () => {
+  const plain = await mkPlainRepo()
+  assert.equal(await hasRemoteConfiguredAsync(plain), false)
+  assert.equal(await aheadBehindCountsAsync({ root: plain }), null)
+
+  const { cloneA } = await mkOriginWithClone()
+  assert.equal(await hasRemoteConfiguredAsync(cloneA), true)
+  assert.deepEqual(await aheadBehindCountsAsync({ root: cloneA }), { ahead: 0, behind: 0 })
+  await writeAndCommit(cloneA, "y.md", "y\n", "y")
+  assert.deepEqual(await aheadBehindCountsAsync({ root: cloneA }), { ahead: 1, behind: 0 })
+
+  assert.equal(await hasRemoteConfiguredAsync(path.join(plain, "no-such-folder")), false)
 })
 
 test("aheadBehindCounts falls back to 0 for any count it cannot parse as a number", () => {
