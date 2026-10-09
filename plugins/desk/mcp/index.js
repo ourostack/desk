@@ -218,6 +218,7 @@ export async function main({
   let frontDoor = null
   const session = createDeskSession({
     args,
+    env,
     authorityProviders,
     deskStateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }),
     readinessStateHome: stateHome === undefined ? resolveReadinessStateHome({ env, homeDir }) : path.join(stateHome, "readiness"),

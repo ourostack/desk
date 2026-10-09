@@ -6,6 +6,7 @@
 
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../tool-names.js"
 import { DOCTOR_REPAIRS, TOOL_INPUT_SCHEMAS } from "../tool-schemas.js"
+import { TOOL_ANNOTATIONS } from "./hosted.js"
 
 export { DOCTOR_REPAIRS }
 
@@ -14,6 +15,7 @@ export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.fr
   name,
   description: TOOL_DESCRIPTIONS[name],
   inputSchema: TOOL_INPUT_SCHEMAS[name],
+  annotations: TOOL_ANNOTATIONS[name],
 })))
 
 /**
