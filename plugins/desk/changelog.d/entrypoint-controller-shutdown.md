@@ -1,0 +1,1 @@
+When a host closes the MCP session's input, Desk now [waits for its owned readiness controller to close](mcp/index.js) before the session exits. The controller's [existing shutdown path](mcp/src/readiness/controller-process.js) waits for its child to exit, so the session no longer exits while that cleanup is still pending.
