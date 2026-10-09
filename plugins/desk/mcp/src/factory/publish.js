@@ -35,7 +35,9 @@
 //     publishes `finished_on`, the UTC day (`YYYY-MM-DD`) of the session's
 //     own last transition into that status (`finished_basis:
 //     "transition"`), else of the observation's `at`, the card's `updated`
-//     time, which is an upper bound (`"card_updated"`). Only a source this
+//     time, which is an upper bound (`"card_updated"`); binding never gives
+//     an observation an `updated` time that is not after the card's
+//     `created` time (`binding.js`). Only a source this
 //     file also publishes with an offset counts, so a job with no readable
 //     card creation time, an open job and any job of a desk that withholds
 //     its timing publish `null` for both. A day before the gate's `FINISHED_ON_MIN` (2025-01-01, imported, not copied), or after

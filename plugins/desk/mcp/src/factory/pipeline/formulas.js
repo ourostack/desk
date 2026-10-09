@@ -219,6 +219,9 @@ function currentStatus(timeline) {
   return transition ? measured(transition.to) : unavailable("status_unavailable")
 }
 
+// The reason a done job's lead time runs only to the end of its recorded work: no record gives the time it finished.
+const FINISH_TIME_NOT_KNOWN = "finish_time_not_known"
+
 function leadTime(timeline, status) {
   if (status.value === "cancelled") return unavailable("cancelled")
   if (status.value === "done") {
@@ -232,7 +235,13 @@ function leadTime(timeline, status) {
     if (done) return measured(Math.max(0, done.offset_ms), { censored: false, basis: "first_done_transition" })
     const observedDone = timeline.observations.find((entry) => entry.status === "done" && entry.offset_ms !== null)
     if (observedDone) return declared(Math.max(0, observedDone.offset_ms), { censored: false, basis: "terminal_observation" })
-    return unavailable("job_offsets_unavailable")
+    // Seen done, but no record gives when (a card edited by hand, whose `updated` is no finish time, so binding gives the observation no
+    // time) and no session moved it: the lead window still runs from the card's creation to the end of the job's recorded work, which
+    // the task lasted at least. A done move whose time was lost stays unavailable: its clock could not be read.
+    const untimedObservation = timeline.observations.some((entry) => entry.status === "done" && entry.offset_ms === null)
+    const ends = recordedSpans(timeline).map(([, end]) => end).filter(Number.isFinite)
+    if (!untimedObservation || timeline.transitions.some((entry) => entry.to === "done") || ends.length === 0) return unavailable("job_offsets_unavailable")
+    return inferred(Math.max(0, ...ends), { censored: false, basis: "recorded_work_end", partial: true, partial_reasons: [FINISH_TIME_NOT_KNOWN] })
   }
   // Every other status is open, including a job reopened after an earlier
   // `done` (which stays in the transition history): its lead time is censored.
@@ -267,7 +276,7 @@ function floorLead(lead, timeline) {
   if (spans.length === 0 || !spans.every(Number.isFinite)) return lead
   const span = Math.max(...spans.filter((_, index) => index % 2 === 1)) - Math.min(...spans.filter((_, index) => index % 2 === 0))
   if (!(span > lead.value)) return lead
-  return { ...lead, class: "inferred", value: span, partial: true, partial_reasons: ["card_dates_shorter_than_work"], basis: "recorded_segment_span" }
+  return { ...lead, class: "inferred", value: span, partial: true, partial_reasons: [...new Set(["card_dates_shorter_than_work", ...(lead.partial_reasons ?? [])])].sort(compareText), basis: "recorded_segment_span" }
 }
 
 function longestWait(intervals) {
@@ -324,9 +333,16 @@ function leadContributors({ lead, timingUnavailable, activeInLead, queue, waits,
     return gone.length === 1 ? unavailable(gone[0]) : unavailable("mixed", { reasons: gone })
   }
   entries.sort((left, right) => right.value_ms - left.value_ms || CONTRIBUTOR_ORDER.indexOf(left.key) - CONTRIBUTOR_ORDER.indexOf(right.key))
-  const reasons = [...new Set([...missing, ...sources.flatMap((source) => source.partial_reasons ?? [])])].sort(compareText)
+  const reasons = [...new Set([...missing, ...sources.flatMap((source) => source.partial_reasons ?? []), ...(lead.partial_reasons ?? [])])].sort(compareText)
   const result = inferred(entries, { censored: lead.censored, method: "clipped_to_lead_window" })
   return reasons.length === 0 ? result : { ...result, partial: true, partial_reasons: reasons }
+}
+
+// A figure read over the card's lead window carries that lead time's own partial reasons (a lead time that runs only to the end of the
+// recorded work, `finish_time_not_known`), so it is never read as whole when the window it divides by is not.
+function withLeadReasons(value, lead) {
+  if (lead.partial !== true) return value
+  return { ...value, partial: true, partial_reasons: [...new Set([...(value.partial_reasons ?? []), ...lead.partial_reasons])].sort(compareText) }
 }
 
 function bindingOf(session, job) {
@@ -576,7 +592,7 @@ export function calculateFormulas(timeline) {
   if (windowLead.class === "unavailable") flowEfficiency = unavailable(windowLead.reason)
   else if (cardLead.value === 0) flowEfficiency = unavailable("zero_lead_time")
   else if (activeInLead.class === "unavailable") flowEfficiency = activeInLead
-  else flowEfficiency = withCoverage(inferred(activeInLead.value / cardLead.value, { censored: cardLead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency"))
+  else flowEfficiency = withLeadReasons(withCoverage(inferred(activeInLead.value / cardLead.value, { censored: cardLead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency")), cardLead)
 
   const hosts = {}
   for (const session of sourceSessions) hosts[session.session.host] = (hosts[session.session.host] ?? 0) + 1

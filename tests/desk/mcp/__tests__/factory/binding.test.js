@@ -577,6 +577,36 @@ test("observed: a terminal card is observed at its updated time, a non-terminal 
   assert.equal(observed({ ...CARD, status: `weird-${SENTINEL}` }), null)
 })
 
+// The shape of the card behind finding B1 (clippy/examples-catch-their-own-drift): created in `planning`, moved to `done`, reopened and done
+// again, every edit by hand, so its `updated:` still equals its `created:`. Pairing the final status with that time dated the finish before
+// the work it ended.
+test("observed: a card whose updated time is not after its creation is never observed at it", () => {
+  const created = CARD.created_at
+  const stale = { status: "done", created_at: created, updated_at: created }
+  const observed = (card, events = oneWrite()) => bind(events, { cards: { [`${TRACK}/${SLUG}`]: card } }).jobs[0].observed
+  // Done by hand, with no transition the session saw: no time at all, never the creation time.
+  assert.deepEqual(observed(stale), { status: "done", at: null })
+  assert.deepEqual(observed({ ...stale, updated_at: "2026-09-20T09:00:00.000Z" }), { status: "done", at: null }, "an updated time before creation is no better")
+  // With no readable creation time there is nothing to compare with, so the updated time stands.
+  assert.deepEqual(observed({ ...stale, created_at: null }), { status: "done", at: created })
+  // The session saw it done, reopened and done again: the last transition into the observed status is the time.
+  const reopened = { ...oneWrite(), deskToolCalls: [
+    deskCall({ at: minute(10), status: "done" }),
+    deskCall({ at: minute(20), status: "processing" }),
+    deskCall({ at: minute(40), status: "done" }),
+  ] }
+  assert.deepEqual(observed(stale, reopened), { status: "done", at: minute(40) })
+  // A transition into another status never dates this one.
+  assert.deepEqual(observed(stale, { ...oneWrite(), deskToolCalls: [deskCall({ at: minute(40), status: "processing" })] }), { status: "done", at: null })
+  // A card restamped after the session's last transition is observed at its updated time; one restamped before it, at the transition.
+  assert.deepEqual(observed({ ...stale, updated_at: minute(60) }, reopened), { status: "done", at: minute(60) })
+  assert.deepEqual(observed({ ...stale, updated_at: minute(30) }, reopened), { status: "done", at: minute(40) })
+  // The last transition counts even when the facts' transition cap cuts it from the list.
+  const many = { deskToolCalls: Array.from({ length: LIMITS.jobTransitions + 2 }, (_, n) => deskCall({ at: minute(n), status: "done" })) }
+  const capped = bind(many, { cards: { [`${TRACK}/${SLUG}`]: stale } }).jobs[0]
+  assert.equal(capped.observed.at, minute(LIMITS.jobTransitions + 1))
+})
+
 test("a card without a readable created time gives task_created_at: null", () => {
   const { jobs } = bind(oneWrite(), { cards: { [`${TRACK}/${SLUG}`]: { ...CARD, created_at: null } } })
   assert.equal(jobs[0].task_created_at, null)

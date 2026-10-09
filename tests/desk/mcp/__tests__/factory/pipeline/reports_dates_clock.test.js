@@ -105,7 +105,113 @@ test("sessions that finished the task on different days (a reopened task) give t
   assert.deepEqual(walk.finished_on, { class: "measured", state: "partial", value: "2026-10-07", basis: "transition", reasons: ["reopened"], bound: null, bound_reason: "bound_not_moved" })
 })
 
-test("a later card update does not displace the day of a recorded transition", () => {
+// Finding B1: a card created in planning and edited by hand to done, reopened and done again, kept `updated` equal to `created`, so an old
+// session published the day the card was created as an upper bound on a finish that came two days later.
+test("a finish day the facts prove is earlier than the day the last work ended is no bound: partial, bound null, finish_before_last_work", () => {
+  const leadEnd = 192_171_828
+  const stale = bound(J("a"), 0, { day: "2026-09-29", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 0 }, length: leadEnd })
+  const session = facts({ id: S(40), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [stale] })
+  const { walk } = walkOf([session], J("a"))
+  assert.equal(walk.window.end_ms, leadEnd)
+  assert.deepEqual(walk.finished_on, { class: "declared", state: "partial", value: "2026-09-29", basis: "card_updated", reasons: ["finish_before_last_work", "finish_from_card_update"], bound: null, bound_reason: "bound_reasons_conflict" })
+  assert.deepEqual(walk.task.finished_on, walk.finished_on)
+  assert.deepEqual(walk.stackup.finished_on, walk.finished_on)
+})
+
+// The B1 shape after the binding fix: the card is done but no record gives when, so the facts carry no finish time. The lead time must
+// not go blank: it runs from card creation to the end of the recorded work, a partial lower bound with its own reason.
+test("a done task with no recorded finish time keeps its lead window: the recorded work, at least that, reason finish_time_not_known", () => {
+  const leadEnd = 192_171_828
+  const unknown = bound(J("a"), 0, { day: null, transitions: [], observed: { status: "done", offset_ms: null }, length: leadEnd })
+  const session = facts({ id: S(47), duration: leadEnd, intervals: [span("turn", 0, 0, 10 * MIN), span("turn", 0, leadEnd - 10 * MIN, leadEnd)], jobs: [unknown] })
+  const { walk, formulas } = walkOf([session], J("a"))
+  assert.equal(formulas.lead_time_ms.state, "partial")
+  assert.deepEqual(formulas.lead_time_ms.reasons, ["finish_time_not_known"])
+  assert.equal(formulas.lead_time_ms.value, leadEnd)
+  assert.equal(formulas.active_in_lead_ms.state, "measured")
+  assert.deepEqual([walk.window.start_ms, walk.window.end_ms], [0, leadEnd])
+  assert.equal(walk.stackup.lead_time_ms.bound, "lower")
+  assert.equal(walk.task.lead_time_ms.bound, "lower")
+  for (const key of ["working_ms", "idle_ms"]) assert.notEqual(walk.stackup[key].state, "unavailable", key)
+  assert.equal(walk.stackup.idle_ms.bound, "lower")
+  assert.ok(walk.gaps.length > 0)
+  // The finish day names why it has none.
+  assert.deepEqual(walk.finished_on, { class: "unavailable", state: "unavailable", basis: null, reasons: ["finish_time_not_known"] })
+  // The words hold whether the time never existed or was lost before it could be placed.
+  assert.match(REASON_TEXT.finish_time_not_known, /^no published record places the time the task finished/)
+  // A card cancelled by hand has no lead time to run to the work, so its finish day does not claim one.
+  const cancelled = { ...unknown, observed: { status: "cancelled", offset_ms: null } }
+  const dropped = walkOf([facts({ id: S(53), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [cancelled] })], J("a"))
+  assert.deepEqual(dropped.walk.finished_on.reasons, ["not_in_published_facts"])
+  assert.deepEqual(dropped.formulas.lead_time_ms.reasons, ["cancelled"])
+  // A second session that never read the card adds no reason of its own.
+  const unseen = facts({ id: S(54), duration: 10 * MIN, intervals: [span("turn", 0, 0, 10 * MIN)], jobs: [{ ...unknown, observed: null, length: 10 * MIN }] })
+  assert.deepEqual(walkOf([session, unseen], J("a")).walk.finished_on.reasons, ["finish_time_not_known"])
+  // Work that began before the card was made still floors the lead time, and both reasons stay.
+  const early = facts({ id: S(48), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [{ ...unknown, session_offset_ms: -10 * MIN }] })
+  const floored = walkOf([early], J("a"))
+  assert.deepEqual(floored.formulas.lead_time_ms.reasons, ["card_dates_shorter_than_work", "finish_time_not_known"])
+  assert.deepEqual([floored.walk.window.start_ms, floored.walk.window.end_ms], [-10 * MIN, leadEnd - 10 * MIN])
+  // A done move whose time was lost is a clock that could not be read, not an unknown finish; and with no recorded work there is no window.
+  const lost = facts({ id: S(49), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [{ ...unknown, transitions: [{ to: "done", offset_ms: null }] }] })
+  assert.deepEqual(walkOf([lost], J("a")).formulas.lead_time_ms.reasons, ["job_offsets_unavailable"])
+  const idle = facts({ id: S(50), duration: leadEnd, intervals: [], jobs: [{ ...unknown, segments: [] }] })
+  assert.deepEqual(walkOf([idle], J("a")).formulas.lead_time_ms.reasons, ["job_offsets_unavailable"])
+})
+
+// Work that starts after the card was made leaves the lead time unfloored, so the window figures read the fallback directly: they are
+// partial with its reason, never measured, and the formulas agree with the task row.
+test("a lead time with no recorded finish time keeps flow efficiency and the lead contributors partial", () => {
+  const unknown = bound(J("a"), 30 * MIN, { day: null, transitions: [], observed: { status: "done", offset_ms: null }, length: 60 * MIN })
+  const session = facts({ id: S(51), duration: 60 * MIN, intervals: [span("turn", 0, 0, 20 * MIN), span("human_wait", 0, 20 * MIN, 60 * MIN)], jobs: [unknown] })
+  const { walk, formulas } = walkOf([session], J("a"))
+  assert.equal(formulas.lead_time_ms.value, 90 * MIN)
+  assert.equal(formulas.flow_efficiency.state, "partial")
+  assert.ok(formulas.flow_efficiency.reasons.includes("finish_time_not_known"))
+  assert.equal(formulas.flow_efficiency.value, walk.task.flow_efficiency.value)
+  assert.equal(walk.task.flow_efficiency.state, "partial")
+  assert.equal(formulas.lead_contributors.state, "partial")
+  assert.ok(formulas.lead_contributors.reasons.includes("finish_time_not_known"))
+  // A ratio already partial for its own coverage keeps both reasons.
+  const cut = facts({ id: S(52), duration: 60 * MIN, intervals: [span("turn", 0, 0, 20 * MIN), span("human_wait", 0, 20 * MIN, 60 * MIN)], jobs: [unknown], unavailable: [...CLAUDE_FLAGS, { field: "turns", reason: "host_records_partly" }] })
+  const both = walkOf([cut], J("a")).formulas.flow_efficiency
+  assert.equal(both.state, "partial")
+  assert.ok(both.reasons.includes("finish_time_not_known") && both.reasons.length > 1, JSON.stringify(both.reasons))
+})
+
+test("the guard holds for a measured day too, and only where the facts prove the last work ended on a later day", () => {
+  const day = 24 * 60 * MIN
+  // A transition, then a full day and more of work: the session saw the card move to done that day, so the task finished then or later.
+  const moved = bound(J("a"), 0, { day: "2026-10-05", transitions: [{ to: "done", offset_ms: 10 * MIN }], observed: { status: "done", offset_ms: 10 * MIN }, length: day + 11 * MIN })
+  const late = facts({ id: S(41), duration: day + 11 * MIN, intervals: [span("turn", 0, 0, day + 11 * MIN)], jobs: [moved] })
+  assert.deepEqual(walkOf([late], J("a")).walk.finished_on, { class: "measured", state: "partial", value: "2026-10-05", basis: "transition", reasons: ["finish_before_last_work"], bound: "lower" })
+  // Less than a day of later work may still end on the same UTC day, so the facts prove nothing and the upper bound stands.
+  const near = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 10 * MIN }, length: day + 9 * MIN })
+  const close = facts({ id: S(42), duration: day + 9 * MIN, intervals: [span("turn", 0, 0, day + 9 * MIN)], jobs: [near] })
+  assert.deepEqual(walkOf([close], J("a")).walk.finished_on, { class: "declared", state: "partial", value: "2026-10-05", basis: "card_updated", reasons: ["finish_from_card_update"], bound: "upper" })
+  // Every session's day narrows when the task was created. The last finish alone (14 hours before the work ended) proves nothing; an
+  // earlier session's day pins the creation late enough that the same work ends on a later day.
+  const hour = 60 * MIN
+  const lastFinish = bound(J("a"), 35 * hour, { day: "2026-10-06", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 36 * hour }, length: 15 * hour })
+  const last = facts({ id: S(43), duration: 15 * hour, intervals: [span("turn", 0, 0, 15 * hour)], jobs: [lastFinish] })
+  assert.deepEqual(walkOf([last], J("a")).walk.finished_on.reasons, ["finish_from_card_update"])
+  const firstFinish = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 1 * hour }, length: 2 * hour })
+  const first = facts({ id: S(45), duration: 2 * hour, intervals: [span("turn", 0, 0, 2 * hour)], jobs: [firstFinish] })
+  const both = walkOf([first, last], J("a")).walk.finished_on
+  assert.equal(both.value, "2026-10-06")
+  assert.deepEqual(both.reasons, ["finish_before_last_work", "finish_from_card_update"])
+})
+
+test("a finish day with no published offset for its source is left as it is", () => {
+  const open = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: null } })
+  const session = facts({ id: S(44), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [open] })
+  assert.deepEqual(walkOf([session], J("a")).walk.finished_on.reasons, ["finish_from_card_update"])
+  const untimed = bound(J("a"), 0, { day: "2026-10-05", transitions: [{ to: "done", offset_ms: null }], length: 2 * 24 * 60 * MIN })
+  const moved = facts({ id: S(46), duration: 2 * 24 * 60 * MIN, intervals: [span("turn", 0, 0, 2 * 24 * 60 * MIN)], jobs: [untimed] })
+  assert.deepEqual(walkOf([moved], J("a")).walk.finished_on.reasons, [])
+})
+
+test("a later card update does not displace the day of a recorded transition, and days that contradict each other prove nothing", () => {
   const moved = facts({ id: S(5), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [bound(J("a"), 0, { day: "2026-10-06" })] })
   const looked = facts({ id: S(6), duration: 10 * MIN, intervals: [span("turn", 0, 0, 10 * MIN)], jobs: [bound(J("a"), 24 * 60 * MIN, { day: "2026-10-08", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 24 * 60 * MIN + 5 * MIN } })] })
   const { walk } = walkOf([moved, looked], J("a"))
@@ -374,9 +480,9 @@ test("an ask wait cut by the task's segments is idle only inside them", () => {
 // --- words and directions -------------------------------------------------------------------------------------------------------
 
 test("every new reason has plain words and a decided direction", () => {
-  for (const reason of ["finish_from_card_update", "reopened", "job_offsets_withheld", "not_in_published_facts", "no_segments"]) {
+  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "finish_time_not_known", "job_offsets_withheld", "not_in_published_facts", "no_segments"]) {
     assert.equal(typeof REASON_TEXT[reason], "string", reason)
     assert.ok(!/[_;()]/u.test(REASON_TEXT[reason]), reason)
   }
-  for (const reason of ["finish_from_card_update", "reopened", "not_in_published_facts", "no_segments"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
+  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "finish_time_not_known", "not_in_published_facts", "no_segments"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
 })
