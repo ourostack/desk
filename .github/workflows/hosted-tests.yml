@@ -8,12 +8,14 @@ on:
   pull_request:
     paths:
       - "hosted/**"
+      - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
   push:
     branches:
       - main
     paths:
       - "hosted/**"
+      - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
   workflow_dispatch:
 
