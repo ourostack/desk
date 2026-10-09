@@ -82,6 +82,9 @@ test("hostedInstructions: the foundation without frontmatter, the desk's AGENTS.
   assert.match(hostedSection, /Skip session-start \(session boot\) and the skills listed below/u, "the hosted section itself says what to skip")
   assert.match(hostedSection, /call desk_status first/u)
   assert.match(hostedSection, /work through the Desk tools/u)
+  assert.match(hostedSection, /Don't use this client's built-in memory\./u, "the hosted section keeps durable context out of the client's memory")
+  assert.match(hostedSection, /If the client lets you turn its memory off, do so\./u)
+  assert.match(hostedSection, /tell the user once that Desk keeps their memory in the desk/u)
   assert.ok(text.trimEnd().endsWith(DESK_STATUS_LINE), "ends with the desk_status line")
 })
 
