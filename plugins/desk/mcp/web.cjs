@@ -27,6 +27,8 @@ var PACKAGE = PACKAGE_NAME + "@latest";
 var LEVEL_PACKAGE = "classic-level@1.4.1";
 // Left in an install folder when the reader could not be installed (for example, no prebuilt binary for this platform), so the install is not repeated at every launch.
 var READER_UNAVAILABLE = "reader-unavailable";
+// A marker this old is tried again once, because one transient npm failure should not leave a machine without the reader until the next release.
+var READER_RETRY_MS = 24 * 60 * 60 * 1000;
 var DEFAULT_ARGS = ["--headless", "--isolated"];
 // Options that connect to a browser that already runs; with any of them Desk's headless and isolated defaults do not apply.
 var CONNECT = ["--cdp-endpoint", "--extension", "--endpoint"];
@@ -306,7 +308,14 @@ function readInstall(root, dir) {
   var cli = path.join(modules, "@playwright", "mcp", bin);
   if (!exists(cli)) return null;
   var core = readJson(path.join(modules, "playwright-core", "package.json"));
-  return { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")) || exists(path.join(root, dir, READER_UNAVAILABLE)) };
+  var found = { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")) };
+  if (found.reader) return found;
+  var marker = path.join(root, dir, READER_UNAVAILABLE);
+  if (exists(marker)) {
+    found.reader = true;
+    found.unavailableAt = fs.statSync(marker).mtime.getTime();
+  }
+  return found;
 }
 
 // The install current.json points at, or null.
@@ -430,19 +439,23 @@ function wait(ms) {
 // The installed copy, installing it first when there is none (or, when `reader` is set, none with the token reader). Resolves { installed, fresh } or { error }.
 function ensureInstalled(tools, root, deadline, reader) {
   var installed = readInstalled(root);
-  if (installed !== null && (!reader || installed.reader)) return Promise.resolve({ installed: installed, fresh: false });
+  var retry = installed !== null && installed.unavailableAt !== undefined && tools.clock() - installed.unavailableAt > READER_RETRY_MS;
+  if (installed !== null && (!reader || (installed.reader && !retry))) return Promise.resolve({ installed: installed, fresh: false });
+  // An install that only lacks the reader still works without it, so a failed or crowded retry keeps it.
+  var current = installed === null ? null : { installed: installed, fresh: false };
   var lock = path.join(root, "refresh.lock");
   if (takeLock(lock, tools.clock)) {
     return Promise.resolve().then(function () {
       return install(tools, root, Math.max(deadline - tools.clock(), 1000), reader);
     }).then(function (result) {
       releaseLock(lock);
-      return result.ok ? { installed: result.installed, fresh: true } : { error: result.error };
+      return result.ok ? { installed: result.installed, fresh: true } : current || { error: result.error };
     }, function (error) {
       releaseLock(lock);
       throw error;
     });
   }
+  if (current !== null) return Promise.resolve(current);
   if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it", retry: true });
   return wait(WAIT_STEP_MS).then(function () {
     return ensureInstalled(tools, root, deadline, reader);

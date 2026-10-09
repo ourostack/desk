@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
@@ -311,7 +311,7 @@ test("the holding window is opened by starting the browser directly, with no tok
   const page = decodeURIComponent(argv[2].slice("data:text/html,".length))
   assert.match(page, /<title>Agent window<\/title>/u)
   assert.match(page, /visibilitychange/u)
-  assert.match(page, /document\.hidden\)window\.close\(\)/u)
+  assert.match(page, /document\.hidden\)\{document\.title='Agent window \(closing\)';window\.close\(\)\}/u)
   assert.match(page, /setTimeout\(function\(\)\{window\.close\(\)\},30000\)/u)
   assert.deepEqual(options, { detached: true, stdio: "ignore", shell: false, windowsHide: true, env: { PATH: "/usr/bin" } })
   assert.equal(calls.at(-1), "unref", "the browser is left to run on its own")
@@ -957,11 +957,80 @@ test("a reader that cannot be installed leaves the browser installed, marked, an
   await again.close()
 })
 
-test("an install that fails even without the reader is the usual install failure", posixOnly, async () => {
+/** A machine whose install has the reader marked unavailable, `ageMs` ago. */
+async function markedMachine(ageMs) {
+  const machine = await realMachine({ reader: false, launch: { requireModule: undefined } })
+  const marker = path.join(machine.state, "installs", "1-1-a", "reader-unavailable")
+  touch(marker)
+  const then = new Date(Date.now() - ageMs)
+  utimesSync(marker, then, then)
+  return machine
+}
+
+const DAY = 24 * 60 * 60 * 1000
+
+test("a marker younger than a day is not retried", posixOnly, async () => {
+  const machine = await markedMachine(DAY - 60 * 60 * 1000)
+  const calls = []
+  const host = session(machine, { npmSpawn: installNpm(calls) })
+  await host.handshake()
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  assert.deepEqual(calls, [])
+  await host.close()
+})
+
+test("a marker older than a day is retried once, and the reader installs when npm works now", posixOnly, async () => {
+  const machine = await markedMachine(DAY + 60 * 1000)
+  const calls = []
+  const host = session(machine, { npmSpawn: installNpm(calls), requireModule: () => levelStub([[tokenKey(), latin(TOKEN)]]) })
+  await host.handshake()
+  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].slice(-2), ["@playwright/mcp@latest", "classic-level@1.4.1"])
+  const installed = browser.readInstalled(machine.state)
+  assert.equal(existsSync(path.join(installed.dir, "node_modules", "classic-level", "package.json")), true)
+  assert.equal(installed.unavailableAt, undefined)
+  await host.close()
+})
+
+test("a retry that fails again writes a fresh marker, and a retry that cannot install anything keeps the working install", posixOnly, async () => {
+  const machine = await markedMachine(2 * DAY)
+  const calls = []
+  const host = session(machine, { npmSpawn: installNpm(calls, { readerFails: true }) })
+  await host.handshake()
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  assert.equal(calls.length, 2)
+  const installed = browser.readInstalled(machine.state)
+  assert.notEqual(installed.dir, path.join(machine.state, "installs", "1-1-a"))
+  assert.ok(Date.now() - statSync(path.join(installed.dir, "reader-unavailable")).mtimeMs < DAY, "the marker was rewritten")
+  await host.close()
+
+  const down = await markedMachine(2 * DAY)
+  const downCalls = []
+  const offline = session(down, { npmSpawn: installNpm(downCalls, { allFail: true }) })
+  await offline.handshake()
+  assert.equal(JSON.parse(textOf(await offline.call(2))).code, "browser_token_unreadable", "the old install still starts")
+  assert.equal(downCalls.length, 2)
+  assert.equal(browser.readInstalled(down.state).dir, path.join(down.state, "installs", "1-1-a"))
+  await offline.close()
+})
+
+test("a stale marker does not make a launch wait for another session's install", posixOnly, async () => {
+  const machine = await markedMachine(2 * DAY)
+  touch(path.join(machine.state, "refresh.lock"), JSON.stringify({ pid: process.pid, at: Date.now() }))
+  const calls = []
+  const host = session(machine, { npmSpawn: installNpm(calls) })
+  await host.handshake()
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  assert.deepEqual(calls, [])
+  await host.close()
+})
+
+test("an install that has no reader keeps working when the reader cannot be installed at all", posixOnly, async () => {
   const machine = await realMachine({ reader: false })
   const host = session(machine, { npmSpawn: installNpm([], { allFail: true }) })
   await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "install_failed")
+  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
   await host.close()
 })
 
