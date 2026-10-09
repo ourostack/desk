@@ -2,11 +2,12 @@
 //
 // Four things live here: the flag, the short list of tools and doctor repairs a hosted Desk refuses (each with the reason a person can act on), the MCP annotations every tool carries so a host such as claude.ai can tell reading from writing, and the MCP instructions that stand in for session start in a hosted chat.
 //
-// The front door imports this before the runtime pack is restored, so it imports only `node:` modules and the tool names.
+// The front door imports this before the runtime pack is restored, so it imports only `node:` modules, the tool names and the dependency-free AGENTS.md reader.
 
-import { closeSync, openSync, readFileSync, readSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { TOOL_NAMES } from "../tool-names.js"
+import { readAgentsMd } from "./agents-md.js"
 
 /** True when `env.DESK_HOSTED` is set and is neither empty nor `0`, compared exactly as given (no trimming). */
 export function isHosted(env) {
@@ -67,8 +68,6 @@ export const TOOL_ANNOTATIONS = Object.freeze(Object.fromEntries(TOOL_NAMES.map(
   Object.freeze({ readOnlyHint: READ_ONLY.has(name), destructiveHint: DESTRUCTIVE.has(name) }),
 ])))
 
-// The same cap boot uses for AGENTS.md (runtime/boot-text.js). That module imports the factory and the frontmatter parser, too much for the front door, so the file is read here with node:fs alone.
-const AGENTS_MD_CAP_BYTES = 16 * 1024
 const DESK_STATUS_FIRST = "Start by calling desk_status: it is this session's startup status block."
 
 /**
@@ -79,15 +78,15 @@ export function hostedInstructions({ root, pluginRoot }) {
   const sections = []
   const foundation = typeof pluginRoot === "string" ? readText(path.join(pluginRoot, "skills", "using-desk", "SKILL.md")) : null
   if (foundation !== null) sections.push(foundation.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "").trim())
-  const agents = typeof root === "string" ? readCapped(path.join(root, "AGENTS.md"), AGENTS_MD_CAP_BYTES) : null
+  const agents = typeof root === "string" ? readOptional(() => readAgentsMd(root)) : null
   if (agents !== null) {
-    const note = agents.truncated ? `\n\n(AGENTS.md is longer than 16 KiB; the rest stays in ${agents.file}.)` : ""
+    const note = agents.truncated ? `\n\n(AGENTS.md is longer than 16 KiB; the rest stays in ${agents.path}.)` : ""
     sections.push(`# This desk's AGENTS.md\n\n${agents.text.trim()}${note}`)
   }
   const list = (entries) => Object.entries(entries).map(([name, reason]) => `- \`${name}\`: ${reason}`).join("\n")
   sections.push([
     "# Hosted Desk",
-    "This Desk runs as a hosted service: there is no shell, git or plugin script here, so the session-start hook has not run and these are unavailable.",
+    "This Desk runs as a hosted service: there is no shell, git or plugin script here, so the session-start hook has not run. These instructions carry the startup the foundation above asks for. Skip session-start (session boot) and the skills listed below, call desk_status first, and work through the Desk tools.",
     `Tools Desk refuses here:\n${list(HOSTED_UNAVAILABLE)}`,
     `desk_doctor repairs Desk refuses here:\n${list(HOSTED_UNAVAILABLE_REPAIRS)}`,
     `Skills to skip, because they need a shell:\n${list(HOSTED_SHELL_SKILLS)}`,
@@ -97,34 +96,14 @@ export function hostedInstructions({ root, pluginRoot }) {
 }
 
 function readText(file) {
-  try {
-    return readFileSync(file, "utf8")
-  } catch {
-    return null
-  }
+  return readOptional(() => readFileSync(file, "utf8"))
 }
 
-// At most `cap` bytes of `file`, cut at the last line break inside the cap so a rule is never shown half-written (or, with none, at a character boundary), as boot does.
-function readCapped(file, cap) {
-  let fd
+// A file that cannot be read (missing, a directory, no permission) is left out of the instructions, never fatal.
+function readOptional(read) {
   try {
-    fd = openSync(file, "r")
+    return read()
   } catch {
     return null
-  }
-  try {
-    const buffer = Buffer.alloc(cap + 1)
-    const bytesRead = readSync(fd, buffer, 0, cap + 1, 0)
-    if (bytesRead <= cap) return { file, text: buffer.toString("utf8", 0, bytesRead), truncated: false }
-    let end = buffer.subarray(0, cap).lastIndexOf(0x0a)
-    if (end === -1) {
-      end = cap
-      while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1
-    }
-    return { file, text: buffer.toString("utf8", 0, end), truncated: true }
-  } catch {
-    return null
-  } finally {
-    closeSync(fd)
   }
 }

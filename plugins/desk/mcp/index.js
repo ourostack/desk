@@ -13,6 +13,7 @@
 // own root/activation context without needing a bespoke Desk CLI.
 
 // Every module imported below must stay loadable on Node releases older than the engines floor (the Node 16 matrix test in __tests__/runtime/never_exit_before_handshake.test.js proves it), because ES module imports load before any code here runs. The version check itself is the first thing main() does.
+import { spawn } from "node:child_process"
 import { readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import * as path from "node:path"
@@ -158,7 +159,7 @@ export async function main({
   offload = runInWorker,
   crashHandlers = false,
   hung,
-  hostedSync = syncHostedDesk,
+  spawnDetached = spawn,
   onClosed = () => {},
 }) {
   // The tools find the installed plugin (its hooks and the plugins beside it) through DESK_PLUGIN_ROOT. Claude's launcher sets it; Copilot's and Codex's configs pass no environment, and the server's code runs from a source mirror with no `hooks/` beside it, so every host gets this entrypoint's own plugin folder here.
@@ -254,14 +255,26 @@ export async function main({
     kicked = true
     session.start()
   }
-  // A hosted Desk (DESK_HOSTED) has no session-start hook: its initialize answer carries the startup instructions, and once the first tools/list is answered it pulls the desk the way boot would.
+  // A hosted Desk (DESK_HOSTED) has no session-start hook: its initialize answer carries the startup instructions, and once the first tools/list is answered it pulls the desk the way session start does.
   const hosted = isHosted(env)
   const hostedRoot = hosted && hasText(args.root) ? path.resolve(cwd, args.root) : null
+  // Desk's own session-sync CLI, as a detached child: its git calls block, and they must never block the thread that answers the host.
   const startHostedSync = () => {
     if (hostedRoot === null) return
-    Promise.resolve()
-      .then(() => hostedSync({ root: hostedRoot, env: plainEnv }))
-      .catch((error) => stderr.write(`[desk-mcp] hosted desk sync failed: ${describeError(error)}\n`))
+    const failed = (error) => stderr.write(`[desk-mcp] hosted desk sync failed to start: ${describeError(error)}\n`)
+    try {
+      const child = spawnDetached(process.execPath, [path.join(mcpRoot, "scripts", "session-sync.js"), "--root", hostedRoot], {
+        cwd: hostedRoot,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+        env: plainEnv,
+      })
+      child.on("error", failed)
+      child.unref()
+    } catch (error) {
+      failed(error)
+    }
   }
   frontDoor = startFrontDoor({
     input,
@@ -286,12 +299,6 @@ export async function main({
     onClosed()
   })
   return { frontDoor, session, admission: session.admission, closed }
-}
-
-// Desk's own desk sync (the pull boot runs), loaded only when a hosted session needs it so the front door stays light.
-async function syncHostedDesk(options) {
-  const { syncWorkspace } = await import("./src/runtime/session-sync.js")
-  return syncWorkspace(options)
 }
 
 // A cheap look at the runtime target before the handshake: the support matrix and the pack files, without hashing or unpacking the archive. Null when inspection itself fails (admission reports that later).

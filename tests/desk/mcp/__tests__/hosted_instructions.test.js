@@ -3,7 +3,9 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { main } from "../../../../plugins/desk/mcp/index.js"
@@ -18,6 +20,7 @@ import { syncStatusPath } from "../../../../plugins/desk/mcp/src/runtime/sync-wo
 import { mkTempRoot } from "./_temp_roots.js"
 import { osEnv } from "./_os_env.js"
 
+const SYNC_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp/scripts/session-sync.js")
 const DESK_STATUS_LINE = "Start by calling desk_status: it is this session's startup status block."
 
 function collect(output) {
@@ -74,7 +77,11 @@ test("hostedInstructions: the foundation without frontmatter, the desk's AGENTS.
     assert.ok(text.includes(name), `names ${name}`)
     assert.ok(text.includes(reason), `gives the reason for ${name}`)
   }
-  assert.match(text, /Hosted Desk/u)
+  const hostedSection = text.slice(text.indexOf("# Hosted Desk"))
+  assert.match(hostedSection, /^# Hosted Desk$/mu)
+  assert.match(hostedSection, /Skip session-start \(session boot\) and the skills listed below/u, "the hosted section itself says what to skip")
+  assert.match(hostedSection, /call desk_status first/u)
+  assert.match(hostedSection, /work through the Desk tools/u)
   assert.ok(text.trimEnd().endsWith(DESK_STATUS_LINE), "ends with the desk_status line")
 })
 
@@ -133,7 +140,10 @@ function startHosted({ desk, pluginRoot, env = { DESK_HOSTED: "1" }, admissionKi
     admissionKickoffMs,
     runtimeInspector: null,
     runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
-    hostedSync: async (options) => { syncs.push(options); return { state: "synced" } },
+    spawnDetached: (command, args, options) => {
+      syncs.push({ command, args, options })
+      return Object.assign(new EventEmitter(), { unref() { syncs.at(-1).unrefed = true } })
+    },
   })
   return { input, lines, syncs, started }
 }
@@ -151,13 +161,24 @@ test("in hosted mode, main answers initialize with the hosted instructions at on
   send(input, { id: 3, method: "tools/list" })
   await wait(20)
   assert.equal(syncs.length, 1)
-  assert.equal(syncs[0].root, desk)
-  assert.equal(syncs[0].env.DESK_HOSTED, "1")
+  assert.equal(syncs[0].command, process.execPath)
+  assert.deepEqual(syncs[0].args, [SYNC_SCRIPT, "--root", desk], "Desk's own session-sync CLI, with --root")
+  assert.equal(syncs[0].options.detached, true)
+  assert.equal(syncs[0].options.stdio, "ignore")
+  assert.equal(syncs[0].options.env.DESK_HOSTED, "1", "the child gets the server's environment")
+  assert.equal(syncs[0].unrefed, true, "the sync never keeps the server alive")
   input.end()
   await handle.closed
 })
 
-test("a failing hosted sync is reported on stderr and never ends the session", async () => {
+for (const [label, spawnDetached] of [
+  ["a spawn that throws", () => { throw new Error("spawn EAGAIN") }],
+  ["a child that fails to start", () => {
+    const child = Object.assign(new EventEmitter(), { unref() {} })
+    setImmediate(() => child.emit("error", new Error("spawn EAGAIN")))
+    return child
+  }],
+]) test(`${label} is reported on stderr and never ends the session`, async () => {
   const { desk, pluginRoot } = await scratchDesk()
   const input = new PassThrough()
   const output = new PassThrough()
@@ -175,14 +196,14 @@ test("a failing hosted sync is reported on stderr and never ends the session", a
     admissionKickoffMs: 60000,
     runtimeInspector: null,
     runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
-    hostedSync: async () => { throw new Error("remote unreachable") },
+    spawnDetached,
   })
   send(input, { id: 1, method: "tools/list" })
   await wait(20)
   send(input, { id: 2, method: "ping" })
   await wait(20)
   assert.deepEqual(lines[1].result, {})
-  assert.ok(errors.some((text) => text.includes("remote unreachable")))
+  assert.ok(errors.some((text) => text.includes("hosted desk sync failed to start: spawn EAGAIN")))
   input.end()
   await handle.closed
 })
@@ -218,7 +239,7 @@ test("a hosted session started without --root sends instructions without AGENTS.
     admissionKickoffMs: 60000,
     runtimeInspector: null,
     runtimeImporter: async () => assert.fail("not reached"),
-    hostedSync: async (options) => { syncs.push(options) },
+    spawnDetached: (...call) => { syncs.push(call) },
   })
   send(input, { id: 1, method: "initialize", params: {} })
   send(input, { id: 2, method: "tools/list" })
@@ -230,7 +251,7 @@ test("a hosted session started without --root sends instructions without AGENTS.
   await handle.closed
 })
 
-test("by default a hosted session runs Desk's own desk sync after the handshake", async () => {
+test("by default a hosted session runs Desk's own session-sync CLI after the handshake", async () => {
   const { root, desk, pluginRoot } = await scratchDesk()
   assert.equal(spawnSync("git", ["init", "-q", desk]).status, 0)
   const env = osEnv({ DESK_PLUGIN_ROOT: pluginRoot, DESK_HOSTED: "1", HOME: root, XDG_STATE_HOME: path.join(root, "xdg-state") })
