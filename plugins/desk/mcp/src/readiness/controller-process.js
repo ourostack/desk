@@ -26,7 +26,7 @@ export function supervisorEndpoint(endpoint, platform = process.platform) {
 }
 
 /** The only process that can terminate a controller is the parent holding its actual child handle. */
-export async function startControllerProcess(options, { spawn = fork, timeoutMs = controllerStartTimeoutMs(), createServer = net.createServer, socketTimeoutMs = 10000 } = {}) {
+export async function startControllerProcess(options, { spawn = fork, platform = process.platform, timeoutMs = controllerStartTimeoutMs(platform), createServer = net.createServer, socketTimeoutMs = 10000 } = {}) {
   const { identity, endpoint, stateDir } = options
   const supervisor = { endpoint: supervisorEndpoint(endpoint), token: randomUUID() }
   validateControllerEndpoint(supervisor.endpoint)
