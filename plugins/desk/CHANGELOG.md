@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.264 — 2026-10-09
+
+A hosted Desk now tells the agent not to use its client's built-in memory, such as claude.ai's or ChatGPT's: durable context belongs in the desk. The agent turns the client's memory off if the client lets it, and otherwise tells the user once how to turn it off.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.263 — 2026-10-09
 
 On Windows, the WSL bash.exe is now recognised by its path (System32, Sysnative or WindowsApps) as well as its error line, so a relay that fails with no output is reported as unavailable instead of silently skipped, and the "install Git for Windows" hint for a migration bash could not check now appears only on Windows, with "install bash" elsewhere.

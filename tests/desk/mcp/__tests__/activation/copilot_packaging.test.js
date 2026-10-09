@@ -416,7 +416,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.263"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.264"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())

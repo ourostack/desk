@@ -1,1 +1,0 @@
-A hosted Desk now tells the agent not to use its client's built-in memory, such as claude.ai's or ChatGPT's: durable context belongs in the desk. The agent turns the client's memory off if the client lets it, and otherwise tells the user once how to turn it off.
