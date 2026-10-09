@@ -37,6 +37,7 @@
 
 import { readdirSync, readFileSync } from "node:fs"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
+import * as os from "node:os"
 import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
 import { isGitRepository } from "../util/git-stage.js"
@@ -342,6 +343,45 @@ export async function startupMigrationLine({
 }
 
 // ---------------------------------------------------------------------------
+// `scripts/migrations.js roots [--engine <prefix>]`: other plugins' migration folders in the Agency cache
+// ---------------------------------------------------------------------------
+
+/**
+ * The plugin folders under Agency's cache whose `migrations/` the driver should walk, one per plugin. Agency keeps
+ * every fetch of every plugin source under `~/.local/agency/plugins/cache/entries/<dir_name>/` and maps each source
+ * spec to its folder in `cache_index.json` (`entries[spec].dir_name`, `fetched_at`). The rule:
+ *   - only specs that start with the running engine's prefix (`copilot:` by default);
+ *   - never Desk's own plugin (its migrations run from the startup hooks, and the cache holds several old copies);
+ *   - one folder per plugin name (from the folder's `plugin.json`), the one with the newest `fetched_at`;
+ *   - only folders that have a `migrations/` folder.
+ * An unreadable index has no roots. Result is sorted by plugin name.
+ */
+export function agencyMigrationRoots({ home, engine = "copilot" }) {
+  const cache = path.join(home, ".local", "agency", "plugins", "cache")
+  let entries
+  try {
+    entries = Object.entries(JSON.parse(readFileSync(path.join(cache, "cache_index.json"), "utf8")).entries)
+  } catch {
+    return []
+  }
+  const newest = new Map()
+  for (const [spec, entry] of entries) {
+    if (!spec.startsWith(`${engine}:`) || !/^[A-Za-z0-9._-]+$/u.test(String(entry?.dir_name))) continue
+    const dir = path.join(cache, "entries", entry.dir_name)
+    let name
+    try {
+      name = JSON.parse(readFileSync(path.join(dir, "plugin.json"), "utf8")).name
+      readdirSync(path.join(dir, "migrations"))
+    } catch {
+      continue
+    }
+    const fetched = Number(entry.fetched_at) || 0
+    if (name !== "desk" && !(newest.get(name)?.fetched >= fetched)) newest.set(name, { dir, fetched })
+  }
+  return [...newest.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, { dir }]) => dir)
+}
+
+// ---------------------------------------------------------------------------
 // `scripts/migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]`
 // ---------------------------------------------------------------------------
 
@@ -378,7 +418,12 @@ function parseRunArgs(argv) {
  * code and never undoes the staging. `spawnGit` is a test-only seam, passed
  * through unchanged.
  */
-export async function runMigrationCli({ argv, env = process.env, io, pluginRoot, cwd, spawn, spawnGit = spawnSync }) {
+export async function runMigrationCli({ argv, env = process.env, io, pluginRoot, cwd, spawn, spawnGit = spawnSync, home = env.HOME || os.homedir() }) {
+  if (argv[0] === "roots") {
+    const engine = argv[1] === "--engine" && argv[2] ? argv[2] : "copilot"
+    for (const root of agencyMigrationRoots({ home, engine })) io.stdout.write(`${root}\n`)
+    return 0
+  }
   let args
   try {
     args = parseRunArgs(argv)
