@@ -142,6 +142,11 @@ test("a done task with no recorded finish time keeps its lead window: the record
   const floored = walkOf([early], J("a"))
   assert.deepEqual(floored.formulas.lead_time_ms.reasons, ["card_dates_shorter_than_work", "finish_time_not_known"])
   assert.deepEqual([floored.walk.window.start_ms, floored.walk.window.end_ms], [-10 * MIN, leadEnd - 10 * MIN])
+  // A done move whose time was lost is a clock that could not be read, not an unknown finish; and with no recorded work there is no window.
+  const lost = facts({ id: S(49), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [{ ...unknown, transitions: [{ to: "done", offset_ms: null }] }] })
+  assert.deepEqual(walkOf([lost], J("a")).formulas.lead_time_ms.reasons, ["job_offsets_unavailable"])
+  const idle = facts({ id: S(50), duration: leadEnd, intervals: [], jobs: [{ ...unknown, segments: [] }] })
+  assert.deepEqual(walkOf([idle], J("a")).formulas.lead_time_ms.reasons, ["job_offsets_unavailable"])
 })
 
 test("the guard holds for a measured day too, and only where the facts prove the last work ended on a later day", () => {

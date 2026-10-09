@@ -234,10 +234,12 @@ function leadTime(timeline, status) {
     if (done) return measured(Math.max(0, done.offset_ms), { censored: false, basis: "first_done_transition" })
     const observedDone = timeline.observations.find((entry) => entry.status === "done" && entry.offset_ms !== null)
     if (observedDone) return declared(Math.max(0, observedDone.offset_ms), { censored: false, basis: "terminal_observation" })
-    // Done, but no record gives when (a card edited by hand, so its `updated` is no finish time): the lead window still runs from the
-    // card's creation to the end of the job's recorded work, which the task lasted at least.
+    // Seen done, but no record gives when (a card edited by hand, whose `updated` is no finish time, so binding gives the observation no
+    // time) and no session moved it: the lead window still runs from the card's creation to the end of the job's recorded work, which
+    // the task lasted at least. A done move whose time was lost stays unavailable: its clock could not be read.
+    const untimedObservation = timeline.observations.some((entry) => entry.status === "done" && entry.offset_ms === null)
     const ends = recordedSpans(timeline).map(([, end]) => end).filter(Number.isFinite)
-    if (ends.length === 0) return unavailable("job_offsets_unavailable")
+    if (!untimedObservation || timeline.transitions.some((entry) => entry.to === "done") || ends.length === 0) return unavailable("job_offsets_unavailable")
     return inferred(Math.max(0, ...ends), { censored: false, basis: "recorded_work_end", partial: true, partial_reasons: [FINISH_TIME_NOT_KNOWN] })
   }
   // Every other status is open, including a job reopened after an earlier
