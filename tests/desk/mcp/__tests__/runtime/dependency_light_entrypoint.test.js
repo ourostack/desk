@@ -327,6 +327,7 @@ async function importEntrypointWithoutNodeModules(fixture) {
 }
 
 async function importRuntimeServerWithoutConnecting(fixture) {
+  // This check includes a cold runtime restore, not just the server import.
   return spawnNode([
     "--input-type=module",
     "--eval",
@@ -341,7 +342,7 @@ async function importRuntimeServerWithoutConnecting(fixture) {
   ], {
     cwd: fixture.mcpRoot,
     env: fixtureEnv(fixture),
-    timeoutMs: 10000,
+    timeoutMs: process.platform === "win32" ? 60000 : 10000,
   })
 }
 
