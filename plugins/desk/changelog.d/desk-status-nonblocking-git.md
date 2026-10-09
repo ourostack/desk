@@ -1,0 +1,1 @@
+desk_status no longer blocks the thread that answers the host while it reads Git state, and a single missed readiness controller check no longer marks a live controller unavailable: the check is repeated twice more before the controller counts as lost.
