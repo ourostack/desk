@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.257 — 2026-10-09
+
+Desk's path refusals now name the path relative to the desk root, with forward slashes on every platform, instead of an absolute filesystem path, so an agent on the hosted desk can pass it straight back to `desk_save` or a task tool; a path that leaves the desk through a symbolic link says "resolves outside the desk (via a symbolic link)" without printing where it leads, and a missing or unusable desk root is called "the desk root".
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.256 — 2026-10-09
 
 Fixes `desk-web` running the isolated headless browser in Agency and Copilot sessions even when a plugin such as ms-desk declares `desk.browser`: the declaration scan took any session without `COPILOT_PLUGIN_ROOT` (which Copilot does not pass to MCP servers) for Claude Code and read Claude's plugin registry, so it never saw the plugin beside Desk, and it now follows the main Desk server's rule, where a session without `CLAUDE_PLUGIN_ROOT` is Copilot's and reads the plugin folders beside Desk.
