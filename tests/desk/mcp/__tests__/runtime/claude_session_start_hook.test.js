@@ -10,6 +10,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { bootFixtureEnv } from "../_boot_fixture.js"
+import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/u, "")
 const hook = path.join(plugin, "hooks", "claude-session-start.cjs")
@@ -132,9 +133,9 @@ function spawnRead() {
   return spawnSync(process.execPath, ["-e", "process.stdout.write(require('node:fs').readFileSync(process.argv[1], 'utf8'))", path.join(plugin, "hooks", "hooks.json")], { encoding: "utf8" }).stdout
 }
 
-// Golden comparison against the shell script this hook replaced, for the same fixtures. It needs a working bash and jq, so the shell's own output is the real thing.
-const tool = (name, args) => { try { return spawnSync(name, args, { encoding: "utf8" }).status === 0 } catch { return false } }
-const haveReference = tool("bash", ["-c", "command -v jq >/dev/null"])
+// Golden comparison against the shell script this hook replaced, for the same fixtures. It needs a working bash (found the way Desk finds one, never the WSL relay) and jq. Without jq the old script escaped its JSON by hand, which is not the output it was written to give, so a host with no jq skips these cases on purpose rather than comparing against that fallback.
+const bash = resolveBash()
+const haveReference = bash !== null && (() => { try { return spawnSync(bash, ["-c", "command -v jq >/dev/null"], { encoding: "utf8" }).status === 0 } catch { return false } })()
 const golden = { skip: haveReference ? false : "needs a working bash and jq for the reference script" }
 
 // The one difference allowed on Windows: jq.exe writes its final newline as CRLF (its output is in text mode), where the Node hook writes LF. Both are JSON whitespace; only the CR directly before the final LF is dropped, and nothing else is normalised.
@@ -144,7 +145,7 @@ function both(label, { extra = {}, args = [foundationPath], prepare = () => ({})
   test(`golden: ${label} matches the shell script's output`, golden, () => {
     const { env, dir } = scratch(extra, bootFixture)
     const withPrepared = { ...env, ...prepare(dir) }
-    const reference = spawnSync("bash", [legacy, ...args], { env: withPrepared, encoding: "utf8", cwd: ROOT })
+    const reference = spawnSync(bash, [legacy, ...args], { env: withPrepared, encoding: "utf8", cwd: ROOT })
     const actual = runNode(args, withPrepared)
     assert.equal(reference.status, 0, reference.stderr)
     assert.equal(actual.status, 0, actual.stderr)
@@ -191,4 +192,23 @@ test("a host that closes the output pipe early does not make the hook fail", asy
   child.stdout.destroy()
   const code = await new Promise((resolve) => child.on("close", resolve))
   assert.equal(code, 0)
+})
+
+// The real migration check, not a fixture: with a bash that fails the way the WSL relay with no distro does, each migration's Detect cannot run, and the line pending-migrations.js composes for that reaches the agent through this hook. It does not depend on the line's wording past its meaning. A Windows host resolves Git's bash and never the PATH one, so this stands in only where `bash` comes from PATH.
+const realMigrationFixture = path.join(ROOT, "real-migration-fixture.cjs")
+writeFileSync(realMigrationFixture, "module.exports = { checks: [], startFactory: async () => true };\n")
+
+test("a migration Detect that cannot run because bash is the WSL relay is reported through the hook, not hidden", { skip: process.platform === "win32" }, () => {
+  const { env, dir } = scratch({}, realMigrationFixture)
+  const bin = path.join(dir, "relay-bin")
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(path.join(bin, "bash"), "#!/bin/sh\necho '<3>WSL (9 - Relay) ERROR: CreateProcessCommon:818: execvpe(/bin/bash) failed: No such file or directory' >&2\nexit 1\n")
+  chmodSync(path.join(bin, "bash"), 0o755)
+  const result = runNode([foundationPath], { ...env, PATH: `${bin}${path.delimiter}${env.PATH}` })
+  assert.equal(result.status, 0, result.stderr)
+  const text = context(result.stdout)
+  const line = text.indexOf("Desk migrations:")
+  assert.ok(line > text.indexOf("Desk startup:"))
+  assert.ok(line < text.indexOf("The human supplies intent"))
+  assert.match(text, /could not be checked at startup because bash could not run/u)
 })
