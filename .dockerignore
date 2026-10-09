@@ -1,0 +1,7 @@
+# Docker build context for the hosted Desk gateway image (hosted/Dockerfile):
+# only Desk's plugin and the gateway, without installed dependencies.
+*
+!plugins/desk
+!hosted
+**/node_modules
+hosted/test
