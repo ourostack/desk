@@ -483,10 +483,18 @@ test("the worker grants a scan at most MAX_SCAN_ALLOWANCE_MS in all, and nothing
 
 test("the default notice goes over the launcher's message channel, and does nothing in a process without one", () => {
   const sent = []
-  notifyLauncher({ desk_loop_extend_ms: 5 }, { send: (message) => sent.push(message) })
-  assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }])
-  notifyLauncher({ desk_loop_extend_ms: 5 }, {})
-  assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }], "a process without a channel sends nothing and does not throw")
+  const own = Object.getOwnPropertyDescriptor(process, "send")
+  try {
+    process.send = (message) => { sent.push(message); return true }
+    notifyLauncher({ desk_loop_extend_ms: 5 })
+    assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }])
+    delete process.send
+    notifyLauncher({ desk_loop_extend_ms: 6 })
+    assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }], "a process without a channel sends nothing and does not throw")
+  } finally {
+    if (own === undefined) delete process.send
+    else Object.defineProperty(process, "send", own)
+  }
 })
 
 test("a notice the launcher cannot take never stops the worker", () => scratch(async (ctx) => {

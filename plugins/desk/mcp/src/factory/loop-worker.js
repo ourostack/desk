@@ -68,9 +68,9 @@ const answer = (result, extra = {}) => ({ result, ran: 0, skipped: 0, failed: 0,
 // A step's answer, or null when it is not `{ ok: boolean, result: <code> }`.
 const readAnswer = (value) => (isObject(value) && typeof value.ok === "boolean" && typeof value.result === "string" && CODE.test(value.result) ? { ok: value.ok, result: value.result } : null)
 
-/** The default notice to the launcher: a message on the channel it opened, when `proc` (default: this process) has one; otherwise nothing. */
-export function notifyLauncher(message, proc = process) {
-  if (typeof proc.send === "function") proc.send(message)
+/** The default notice to the launcher: a message on the channel it opened, when this process has one; otherwise nothing. */
+export function notifyLauncher(message) {
+  if (typeof process.send === "function") process.send(message)
 }
 
 const swallow = async (fn) => {
