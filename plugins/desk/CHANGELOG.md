@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.251 — 2026-10-09
+
+A session that lost a few intervals no longer blanks the working time of every task it served. One long Claude Code session's published facts said `{turns, source_unreadable}` because the publishing transform had dropped 7 of its 35,934 intervals, all from one subagent still working after the main log's last line, and the formulas read any `turns` flag as "this session recorded no turns", so 11 tasks whose only session it was published working time, idle time and flow efficiency as unavailable. Every `turns` flag now leaves the active-time family and flow efficiency partial, a lower bound, never unavailable, as a `tool_durations` gap already did ([`number-states.js`](mcp/src/factory/pipeline/number-states.js)). An interval the publishing transform drops for running outside the session clock is now flagged with its own reason, `interval_outside_session_clock`, instead of `source_unreadable` ([`publish.js`](mcp/src/factory/publish.js)); like `host_records_partly`, it only ever makes a figure partial, working time at least and idle time at most ([`walk.js`](mcp/src/factory/pipeline/walk.js)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.250 — 2026-10-09
 
 Desk can now run as a hosted service. With `DESK_HOSTED=1`, the MCP server refuses the few tools and doctor repairs that only make sense on a machine the operator owns (`improvement_next`, `desk_recall`, `desk_similar`, and the doctor repairs `reclaim_controller` and `prune_readiness_state`), and each refusal says why. A hosted session has no session-start hook, so Desk's initialize answer now carries the startup itself: the using-desk foundation, the desk's AGENTS.md, and what a hosted Desk refuses and why, ending with the instruction to call desk_status first. Once the host has listed the tools, a hosted Desk pulls the desk in the background the way boot does. A session without the flag behaves as before.
