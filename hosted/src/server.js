@@ -1,13 +1,12 @@
 // The gateway's HTTP surface: the MCP SDK's OAuth endpoints for Claude, the
-// GitHub sign-in callback, a health check, and /mcp, which relays each
+// consent form's target and the GitHub sign-in callback, a health check, and /mcp, which relays each
 // authenticated MCP request to a Desk child unchanged.
 import express from "express";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { githubCallbackHandler } from "./auth/github.js";
-
-const escapeHtml = (text) =>
-  String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+import { consentHandler } from "./auth/provider.js";
+import { page, sendPage } from "./auth/pages.js";
 
 // `unavailable`, when set, is the reason the gateway cannot sign anyone in
 // or start Desk yet: /authorize and /mcp answer 503 with it while the rest
@@ -21,12 +20,7 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.get("/healthz", (_req, res) => res.type("text").send("ok"));
 
   if (unavailable) {
-    app.all("/authorize", (_req, res) => {
-      res
-        .status(503)
-        .type("html")
-        .send(`<!doctype html><html><head><meta charset="utf-8"><title>Desk sign-in</title></head><body><p>${escapeHtml(unavailable)}</p></body></html>`);
-    });
+    app.all(["/authorize", "/oauth/consent"], (_req, res) => sendPage(res, page(503, unavailable)));
   }
 
   app.use(
@@ -38,6 +32,7 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
       clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
     }),
   );
+  app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider));
   app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback }));
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resource));

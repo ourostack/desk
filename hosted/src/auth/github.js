@@ -2,18 +2,11 @@
 // GitHub App's user authorization. The GitHub user token is used once, to read
 // the login, and then dropped; it is never stored or handed to anyone.
 import { seal, unseal, TTL } from "./seal.js";
+import { page, sendPage } from "./pages.js";
 
 const AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
-
-const escapeHtml = (text) =>
-  String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-
-const page = (status, message) => ({
-  status,
-  html: `<!doctype html><html><head><meta charset="utf-8"><title>Desk sign-in</title></head><body><p>${escapeHtml(message)}</p></body></html>`,
-});
 
 // `log` receives one line per refused or failed sign-in: the error code and
 // client id only.
@@ -101,10 +94,9 @@ export function githubCallbackHandler({ githubCallback }) {
       const text = (value) => (typeof value === "string" ? value : undefined);
       const outcome = await githubCallback({ code: text(req.query.code), state: text(req.query.state), error: text(req.query.error) });
       if (outcome.redirectTo) return res.redirect(302, outcome.redirectTo);
-      res.status(outcome.status).type("html").send(outcome.html);
+      sendPage(res, outcome);
     } catch {
-      const failure = page(502, "Sign-in failed while talking to GitHub. Start again from Claude.");
-      res.status(failure.status).type("html").send(failure.html);
+      sendPage(res, page(502, "Sign-in failed while talking to GitHub. Start again from Claude."));
     }
   };
 }

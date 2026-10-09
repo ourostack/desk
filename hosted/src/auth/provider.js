@@ -1,7 +1,8 @@
 // The gateway's OAuth authorization server for Claude, as the MCP SDK's
 // OAuthServerProvider. The SDK's router serves the endpoints, checks PKCE and
 // client secrets; this provider issues and checks sealed client ids, codes and
-// tokens, and hands identity to GitHub sign-in.
+// tokens, asks the person to approve each client, and hands identity to
+// GitHub sign-in.
 //
 // Everything is stateless. Two limits follow, accepted for v0 (one user,
 // short-lived codes, 30-day refresh tokens, key rotation revokes everything):
@@ -12,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { CustomOAuthError, InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { seal, unseal, derive, TTL } from "./seal.js";
 import { createGitHubSignIn } from "./github.js";
+import { consentPage, page, sendPage } from "./pages.js";
 
 const CLAUDE_CALLBACKS = new Set(["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"]);
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
@@ -112,9 +114,24 @@ export function createProvider({ key, issuer, github, allowedLogins, log = stder
     clientsStore,
     githubCallback: signIn.githubCallback,
 
+    // Every client registers itself, so the person approves each sign-in
+    // on a page that names the client and where its code will go. The
+    // request travels sealed in the Approve form; nothing is stored.
     async authorize(client, { state, scopes, redirectUri, codeChallenge }, res) {
-      const pending = seal("pending", { clientId: client.client_id, redirectUri, codeChallenge, state, scopes }, { key, ttlSec: TTL.pending });
-      res.redirect(302, signIn.authorizeUrl(pending));
+      const consent = seal("consent", { clientId: client.client_id, redirectUri, codeChallenge, state, scopes }, { key, ttlSec: TTL.consent });
+      sendPage(res, consentPage({ clientName: client.client_name, redirectUri, consent }));
+    },
+
+    // The Approve form's POST. Returns `{ redirectTo }` (GitHub sign-in,
+    // carrying the request as a sealed pending state) or a page to show.
+    approve(consent) {
+      const request = unseal("consent", consent, { key });
+      if (!request) {
+        log("consent refused: invalid_consent");
+        return page(400, "This sign-in link has expired or is not valid. Start again from Claude.");
+      }
+      const { exp: _exp, ...pending } = request;
+      return { redirectTo: signIn.authorizeUrl(seal("pending", pending, { key, ttlSec: TTL.pending })) };
     },
 
     async challengeForAuthorizationCode(client, code) {
@@ -149,5 +166,17 @@ export function createProvider({ key, issuer, github, allowedLogins, log = stder
         extra: { login: access.login, userId: access.userId, name: access.name },
       };
     },
+  };
+}
+
+// The Express route for the consent page's Approve form.
+export function consentHandler(provider) {
+  return (req, res) => {
+    const outcome = provider.approve(typeof req.body?.consent === "string" ? req.body.consent : undefined);
+    if (outcome.redirectTo) {
+      res.setHeader("cache-control", "no-store");
+      return res.redirect(303, outcome.redirectTo);
+    }
+    sendPage(res, outcome);
   };
 }

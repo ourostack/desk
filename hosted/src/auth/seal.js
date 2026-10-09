@@ -6,7 +6,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 // How long each kind of token lives, in seconds. A client id never expires.
-export const TTL = { pending: 600, code: 60, access: 3600, refresh: 30 * 24 * 3600 };
+export const TTL = { consent: 600, pending: 600, code: 60, access: 3600, refresh: 30 * 24 * 3600 };
 
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 

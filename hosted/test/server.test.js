@@ -29,7 +29,7 @@ async function start(t, { unavailable } = {}) {
     },
   };
   const app = createApp({ provider, relay, githubCallback: provider.githubCallback, issuer: ISSUER, resource: RESOURCE, unavailable });
-  const server = app.listen(0);
+  const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => {
     server.closeAllConnections();
@@ -137,12 +137,26 @@ test("the GitHub callback route is mounted", async (t) => {
   assert.match(await response.text(), /expired or is not valid/);
 });
 
+test("the consent route is mounted and refuses an invalid consent", async (t) => {
+  const { base } = await start(t);
+  const response = await fetch(`${base}/oauth/consent`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "consent=forged",
+    redirect: "manual",
+  });
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /expired or is not valid/);
+});
+
 test("when the GitHub App is not set up, /healthz still answers and /authorize and /mcp answer 503", async (t) => {
   const { base, reached } = await start(t, { unavailable: NOT_SET_UP });
   assert.equal((await fetch(`${base}/healthz`)).status, 200);
   const authorize = await fetch(`${base}/authorize?response_type=code&client_id=x`, { redirect: "manual" });
   assert.equal(authorize.status, 503);
   assert.match(await authorize.text(), new RegExp(NOT_SET_UP));
+  const consent = await fetch(`${base}/oauth/consent`, { method: "POST", body: new URLSearchParams({ consent: "x" }), redirect: "manual" });
+  assert.equal(consent.status, 503);
   const mcp = await mcpPost(base, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, accessToken());
   assert.equal(mcp.status, 503);
   assert.match((await mcp.json()).error.message, new RegExp(NOT_SET_UP));

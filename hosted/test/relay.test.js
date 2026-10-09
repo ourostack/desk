@@ -34,7 +34,7 @@ async function start(t, { beforeSpawn, ...options } = {}) {
     const login = req.get("x-test-login") ?? "arimendelow";
     return relay.handle(req, res, { token: "t", clientId: "c", scopes: [], extra: { login } });
   });
-  const server = app.listen(0);
+  const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const url = `http://127.0.0.1:${server.address().port}/mcp`;
   t.after(async () => {

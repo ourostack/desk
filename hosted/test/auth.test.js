@@ -6,7 +6,7 @@ import express from "express";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { seal, unseal } from "../src/auth/seal.js";
-import { createProvider } from "../src/auth/provider.js";
+import { createProvider, consentHandler } from "../src/auth/provider.js";
 import { githubCallbackHandler } from "../src/auth/github.js";
 
 const KEY = "test-key-0123456789abcdef0123456789abcdef";
@@ -78,12 +78,13 @@ async function start(t, github = fakeGitHub()) {
     }),
   );
   app.get("/oauth/github/callback", githubCallbackHandler(provider));
+  app.post("/oauth/consent", express.urlencoded({ extended: false }), consentHandler(provider));
   app.all(
     "/mcp",
     requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL(MCP_URL)) }),
     (req, res) => res.json(req.auth),
   );
-  const server = app.listen(0);
+  const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => {
     server.closeAllConnections();
@@ -119,23 +120,44 @@ const tokenRequest = (base, params) =>
     return { status: response.status, body };
   });
 
-// Runs Claude's side of sign-in up to the authorization code: register,
-// authorize, then GitHub's redirect back to our callback.
-async function signIn(base, { githubCode = "gh-code", metadata } = {}) {
-  const client = (await register(base, metadata)).body;
-  const { verifier, challenge } = pkce();
+// Opens the consent page for a fresh authorization request and returns the
+// response and the sealed consent value its Approve form carries.
+async function consentPage(base, client, { challenge = "challenge", redirectUri = client.redirect_uris[0] } = {}) {
   const authorize = new URL(`${base}/authorize`);
   authorize.search = new URLSearchParams({
     response_type: "code",
     client_id: client.client_id,
-    redirect_uri: client.redirect_uris[0],
+    redirect_uri: redirectUri,
     code_challenge: challenge,
     code_challenge_method: "S256",
     state: "claude-state",
     resource: MCP_URL,
   });
-  const toGitHub = await fetch(authorize, { redirect: "manual" });
-  assert.equal(toGitHub.status, 302);
+  const response = await fetch(authorize, { redirect: "manual" });
+  const html = await response.text();
+  const consent = html.match(/name="consent" value="([^"]+)"/)?.[1];
+  return { response, html, consent };
+}
+
+// Approves on the consent page: the form POST the browser sends.
+const approve = (base, consent) =>
+  fetch(`${base}/oauth/consent`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ consent }),
+    redirect: "manual",
+  });
+
+// Runs Claude's side of sign-in up to the authorization code: register,
+// authorize, approve on the consent page, then GitHub's redirect back to our
+// callback.
+async function signIn(base, { githubCode = "gh-code", metadata } = {}) {
+  const client = (await register(base, metadata)).body;
+  const { verifier, challenge } = pkce();
+  const { response, consent } = await consentPage(base, client, { challenge });
+  assert.equal(response.status, 200);
+  const toGitHub = await approve(base, consent);
+  assert.equal(toGitHub.status, 303);
   const githubUrl = new URL(toGitHub.headers.get("location"));
   const callback = await fetch(
     `${base}/oauth/github/callback?${new URLSearchParams({ code: githubCode, state: githubUrl.searchParams.get("state") })}`,
@@ -233,7 +255,76 @@ test("registration accepts claude.com and loopback redirects on any port", async
   }
 });
 
-test("authorize sends the browser to GitHub with a sealed pending state", async (t) => {
+test("authorize shows a consent page naming the client and where it will be sent, not a redirect", async (t) => {
+  const { base, github } = await start(t);
+  const client = (await register(base, { client_name: "Claude" })).body;
+  const { response, html, consent } = await consentPage(base, client);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("location"), null);
+  assert.match(response.headers.get("content-type"), /text\/html/);
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  assert.match(response.headers.get("cache-control"), /no-store/);
+  assert.match(html, /Connect Claude to Hosted Desk\?/);
+  assert.match(html, /After you sign in with GitHub, it will be sent to claude\.ai\./);
+  assert.match(html, /<form method="post" action="\/oauth\/consent">/);
+  assert.match(html, /<button type="submit">Approve<\/button>/);
+  const sealed = unseal("consent", consent, { key: KEY });
+  assert.equal(sealed.clientId, client.client_id);
+  assert.equal(sealed.redirectUri, CLAUDE_CALLBACK);
+  assert.equal(sealed.state, "claude-state");
+  assert.ok(sealed.exp - Date.now() / 1000 <= 600 && sealed.exp - Date.now() / 1000 > 590, "the consent seal lives 600 s");
+  assert.equal(unseal("pending", consent, { key: KEY }), null, "a consent seal is not a pending state");
+  assert.equal(github.calls.length, 0);
+});
+
+test("the consent page names an unnamed client 'an app' and a loopback redirect by host and port", async (t) => {
+  const { base } = await start(t);
+  const client = (await register(base, { client_name: undefined, redirect_uris: ["http://127.0.0.1:33418/callback"] })).body;
+  const { response, html } = await consentPage(base, client);
+  assert.equal(response.status, 200);
+  assert.match(html, /Connect an app to Hosted Desk\?/);
+  assert.match(html, /it will be sent to 127\.0\.0\.1:33418\./);
+});
+
+test("the consent page escapes a hostile client name", async (t) => {
+  const { base } = await start(t);
+  const hostile = `<script>alert("x")</script><img src=x onerror='y'>&`;
+  const client = (await register(base, { client_name: hostile })).body;
+  const { html } = await consentPage(base, client);
+  assert.ok(!html.includes("<script>"), "no raw script tag");
+  assert.ok(!html.includes("<img"), "no raw img tag");
+  assert.match(html, /Connect &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;&lt;img src=x onerror=&#39;y&#39;&gt;&amp; to Hosted Desk\?/);
+});
+
+test("a consent POST that is tampered, expired, of another kind or missing gets 400 and no redirect", async (t) => {
+  const { base, github } = await start(t);
+  const client = (await register(base)).body;
+  const { consent } = await consentPage(base, client);
+  const [body, signature] = consent.split(".");
+  const forgedBody = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(body, "base64url")), redirectUri: "http://127.0.0.1:1/x" })).toString("base64url");
+  const request = { clientId: client.client_id, redirectUri: CLAUDE_CALLBACK, codeChallenge: "c", state: "s" };
+  const refused = [
+    `${forgedBody}.${signature}`,
+    seal("consent", request, { key: KEY, ttlSec: -1 }),
+    seal("consent", request, { key: `${KEY}-other`, ttlSec: 600 }),
+    seal("pending", request, { key: KEY, ttlSec: 600 }),
+    "junk",
+  ];
+  for (const value of refused) {
+    const response = await approve(base, value);
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get("location"), null);
+    assert.equal(response.headers.get("x-frame-options"), "DENY");
+    assert.match(await response.text(), /expired or is not valid/);
+  }
+  const missing = await fetch(`${base}/oauth/consent`, { method: "POST", redirect: "manual" });
+  assert.equal(missing.status, 400);
+  assert.equal(github.calls.length, 0);
+  assert.ok(logs.some((line) => line === "consent refused: invalid_consent"));
+});
+
+test("approving on the consent page sends the browser to GitHub with a sealed pending state", async (t) => {
   const { base } = await start(t);
   const { client, githubUrl } = await signIn(base);
   assert.equal(githubUrl.origin + githubUrl.pathname, "https://github.com/login/oauth/authorize");
