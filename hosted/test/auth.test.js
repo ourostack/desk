@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
@@ -41,14 +41,28 @@ function fakeGitHub(users = { "gh-code": { login: "arimendelow", id: 16390116, n
   return { fetch, calls };
 }
 
+// Every provider logs here instead of stderr; the suite checks after each
+// test that no log line carries a token, code or secret.
+const logs = [];
+const issued = new Set();
+
 function makeProvider(github = fakeGitHub()) {
   return createProvider({
     key: KEY,
     issuer: ISSUER,
     github: { ...GITHUB, fetch: github.fetch },
     allowedLogins: ["arimendelow"],
+    log: (line) => logs.push(line),
   });
 }
+
+afterEach(() => {
+  for (const line of logs) {
+    for (const secret of [...issued, "gho_", GITHUB.clientSecret]) assert.ok(!line.includes(secret), `log line leaks a secret: ${line}`);
+  }
+  logs.length = 0;
+  issued.clear();
+});
 
 // Mounts the SDK's OAuth router with our provider, the GitHub callback and a
 // bearer-protected /mcp, the way the gateway will.
@@ -89,7 +103,9 @@ async function register(base, metadata = {}) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ client_name: "Claude", redirect_uris: [CLAUDE_CALLBACK], ...metadata }),
   });
-  return { status: response.status, body: await response.json() };
+  const body = await response.json();
+  if (body.client_secret) issued.add(body.client_secret);
+  return { status: response.status, body };
 }
 
 const tokenRequest = (base, params) =>
@@ -97,7 +113,11 @@ const tokenRequest = (base, params) =>
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
-  }).then(async (response) => ({ status: response.status, body: await response.json() }));
+  }).then(async (response) => {
+    const body = await response.json();
+    for (const token of [body.access_token, body.refresh_token, params.code, params.refresh_token]) if (token) issued.add(token);
+    return { status: response.status, body };
+  });
 
 // Runs Claude's side of sign-in up to the authorization code: register,
 // authorize, then GitHub's redirect back to our callback.
@@ -171,6 +191,14 @@ test("a registered client is recovered from its id, and the id carries no secret
   assert.deepEqual(client.redirect_uris, [CLAUDE_CALLBACK]);
   assert.equal(client.client_secret, body.client_secret);
   assert.equal(await provider.clientsStore.getClient("forged"), undefined);
+});
+
+test("two identical registrations get different client ids and secrets", async (t) => {
+  const { base } = await start(t);
+  const first = (await register(base)).body;
+  const second = (await register(base)).body;
+  assert.notEqual(first.client_id, second.client_id);
+  assert.notEqual(first.client_secret, second.client_secret);
 });
 
 test("a public client registers without a secret", async (t) => {
@@ -282,6 +310,8 @@ test("a GitHub login outside the allowed set gets a 403 page and no code", async
   assert.equal(callback.headers.get("location"), null);
   assert.match(callback.headers.get("content-type"), /text\/html/);
   assert.match(await callback.text(), /This Desk is not open to mallory\./);
+  assert.ok(logs.some((line) => line.startsWith("sign-in refused: login_not_allowed client ")));
+  assert.ok(!logs.some((line) => line.includes("mallory")));
 });
 
 test("the callback refuses a forged or expired pending state", async (t) => {
@@ -359,15 +389,20 @@ test("a code exchanged with another redirect, by another client or after expiry 
   });
   const code = new URL(callback.headers.get("location")).searchParams.get("code");
   const exchange = (overrides) =>
-    tokenRequest(base, {
-      grant_type: "authorization_code",
-      client_id: client.client_id,
-      client_secret: client.client_secret,
-      code,
-      code_verifier: verifier,
-      redirect_uri: CLAUDE_CALLBACK,
-      ...overrides,
-    });
+    tokenRequest(
+      base,
+      Object.fromEntries(
+        Object.entries({
+          grant_type: "authorization_code",
+          client_id: client.client_id,
+          client_secret: client.client_secret,
+          code,
+          code_verifier: verifier,
+          redirect_uri: CLAUDE_CALLBACK,
+          ...overrides,
+        }).filter(([, value]) => value !== undefined),
+      ),
+    );
   const other = (await register(base, { client_name: "Other" })).body;
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const expired = seal(
@@ -377,6 +412,7 @@ test("a code exchanged with another redirect, by another client or after expiry 
   );
   const cases = {
     "redirect mismatch": await exchange({ redirect_uri: "https://claude.com/api/mcp/auth_callback" }),
+    "redirect omitted": await exchange({ redirect_uri: undefined }),
     "another client": await exchange({ client_id: other.client_id, client_secret: other.client_secret }),
     expired: await exchange({ code: expired }),
     "refresh as code": await exchange({ code: seal("refresh", {}, { key: KEY, ttlSec: 60 }) }),
@@ -385,4 +421,5 @@ test("a code exchanged with another redirect, by another client or after expiry 
     assert.equal(reply.status, 400, name);
     assert.equal(reply.body.error, "invalid_grant", name);
   }
+  assert.ok(logs.includes(`token refused: invalid_grant client ${client.client_id}`));
 });

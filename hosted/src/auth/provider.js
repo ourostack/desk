@@ -27,7 +27,12 @@ function isAllowedRedirect(uri) {
   return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname) && !url.username && !url.password;
 }
 
-export function createProvider({ key, issuer, github, allowedLogins }) {
+const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message}\n`);
+
+// `log` receives one line per refused sign-in or token request. Lines carry
+// the error code and client id only, never a token, code, secret or GitHub
+// response.
+export function createProvider({ key, issuer, github, allowedLogins, log = stderrLog }) {
   if (!key) throw new Error("createProvider needs a signing key");
   const signIn = createGitHubSignIn({
     key,
@@ -36,6 +41,7 @@ export function createProvider({ key, issuer, github, allowedLogins }) {
     callbackUrl: new URL("/oauth/github/callback", issuer).href,
     allowedLogins,
     fetch: github.fetch,
+    log,
   });
 
   const clientSecret = (clientId) => derive("client_secret", clientId, { key });
@@ -43,13 +49,16 @@ export function createProvider({ key, issuer, github, allowedLogins }) {
   const clientsStore = {
     // The SDK generates an id and secret before calling this; both are
     // replaced. The id seals the client's registration (never its secret) and
-    // the secret is derived from the id, so neither needs storing.
+    // the secret is derived from the id, so neither needs storing. A random
+    // nonce makes every registration's id and secret its own, even for the
+    // same metadata.
     registerClient(client) {
       const { redirect_uris: redirectUris, token_endpoint_auth_method, client_name } = client;
       if (!redirectUris.length || !redirectUris.every(isAllowedRedirect)) {
+        log("registration refused: invalid_redirect_uri");
         throw new CustomOAuthError("invalid_redirect_uri", "Redirect URIs must be Claude's callback or a loopback address.");
       }
-      const clientId = seal("client", { redirect_uris: redirectUris, token_endpoint_auth_method, client_name }, { key });
+      const clientId = seal("client", { redirect_uris: redirectUris, token_endpoint_auth_method, client_name, nonce: randomUUID() }, { key });
       const registered = { ...client, client_id: clientId };
       if (token_endpoint_auth_method === "none") {
         delete registered.client_secret;
@@ -64,7 +73,8 @@ export function createProvider({ key, issuer, github, allowedLogins }) {
     getClient(clientId) {
       const registration = unseal("client", clientId, { key });
       if (!registration) return undefined;
-      const client = { ...registration, client_id: clientId };
+      const { nonce: _nonce, ...metadata } = registration;
+      const client = { ...metadata, client_id: clientId };
       if (registration.token_endpoint_auth_method !== "none") {
         client.client_secret = clientSecret(clientId);
         client.client_secret_expires_at = 0;
@@ -73,11 +83,16 @@ export function createProvider({ key, issuer, github, allowedLogins }) {
     },
   };
 
+  function refuseGrant(client, message) {
+    log(`token refused: invalid_grant client ${client.client_id}`);
+    return new InvalidGrantError(message);
+  }
+
   // Unseals a code or refresh token issued to this client, or refuses it.
   function grantFor(kind, client, token) {
     const grant = unseal(kind, token, { key });
     if (!grant || grant.clientId !== client.client_id || !allowedLogins.includes(grant.login)) {
-      throw new InvalidGrantError(`The ${kind === "code" ? "authorization code" : "refresh token"} is not valid.`);
+      throw refuseGrant(client, `The ${kind === "code" ? "authorization code" : "refresh token"} is not valid.`);
     }
     return grant;
   }
@@ -108,8 +123,10 @@ export function createProvider({ key, issuer, github, allowedLogins }) {
 
     async exchangeAuthorizationCode(client, code, _codeVerifier, redirectUri) {
       const grant = grantFor("code", client, code);
-      if (redirectUri !== undefined && redirectUri !== grant.redirectUri) {
-        throw new InvalidGrantError("redirect_uri does not match the authorization request.");
+      // The SDK always fixes a redirect URI at authorization, so the
+      // exchange must name the same one.
+      if (redirectUri !== grant.redirectUri) {
+        throw refuseGrant(client, "redirect_uri is missing or does not match the authorization request.");
       }
       return issueTokens(grant);
     },
@@ -120,7 +137,10 @@ export function createProvider({ key, issuer, github, allowedLogins }) {
 
     async verifyAccessToken(token) {
       const access = unseal("access", token, { key });
-      if (!access || !allowedLogins.includes(access.login)) throw new InvalidTokenError("The access token is not valid.");
+      if (!access || !allowedLogins.includes(access.login)) {
+        log("access token refused: invalid_token");
+        throw new InvalidTokenError("The access token is not valid.");
+      }
       return {
         token,
         clientId: access.clientId,
