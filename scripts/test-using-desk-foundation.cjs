@@ -316,6 +316,8 @@ function main() {
     /When the human opens a conversation, stay in it; authorized background work may continue, and nothing new starts on that topic until they close it or say go \(`interaction-style`\)/u,
     /context size.*not (?:a )?reasons? to stop/iu,
     /frontload in one batch[^.]*present(?:ing)? (?:its|the) decisions as one group with your recommendations[\s\S]*later decisions come one group at a time/iu,
+    /Converse in normal chat, not structured question forms/u,
+    /After alignment, acknowledgements are not new approval gates/u,
   ]);
 
   assertSectionConcepts(section(skill, "Coaching the collaboration"), [
@@ -500,10 +502,10 @@ function main() {
   assert.doesNotMatch(skill, /historical data|carries no number|estimate/iu, "the estimate rule belongs to evidence-discipline");
   assert.doesNotMatch(skill, /own actions link/iu, "the own-action citation rule belongs to evidence-discipline");
 
-  // Rules owned elsewhere: send approval (operator-voice-comments), the form-tool ban (operator preference),
-  // human pull request approval (repository policy) and the hard-wrap rule (Plain Language).
+  // Rules owned elsewhere: send approval (operator-voice-comments), human pull request approval
+  // (repository policy) and the hard-wrap rule (Plain Language).
   assert.doesNotMatch(skill, /hard-wrap|physical line/iu, "the hard-wrap rule belongs to Plain Language");
-  assert.doesNotMatch(skill, /ask_user|form-style|form tool/iu, "the form-tool ban is an operator preference");
+  assert.doesNotMatch(skill, /ask_user|AskUserQuestion/u, "the shared conversation rule must not name a harness-specific question tool");
   assert.doesNotMatch(skill, /human (?:PR|pull request) approval|approve the pull request/iu, "human PR approval is repository policy");
   assert.doesNotMatch(skill, /approv\w* (?:of )?(?:that |the )?content|in the (?:human's|operator's) (?:name|voice)/iu, "send approval belongs to operator-voice-comments");
 
