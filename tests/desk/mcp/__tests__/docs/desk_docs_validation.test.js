@@ -76,6 +76,8 @@ function browserPolicyBody() {
     "Target.createTarget({ url, background: true })",
     "Use status, doctor, and release for the exact lease.",
     "A lease exposes only its owned targets.",
+    "A plugin's desk.browser declaration makes desk-web drive the real profile. Work only in that window's tabs, and call `browser_close` when done.",
+    "The bring-to-front rule does not apply to the one new window desk-web opens for you.",
   ].join("\n")
 }
 
@@ -305,6 +307,7 @@ test("browser focus validation requires broker routing and rejects unsafe discov
   assert.ok(staleErrors.some((error) => error.includes("cross-lease page selection")))
   assert.ok(staleErrors.some((error) => error.includes("plugin-relative broker executable")))
   assert.ok(staleErrors.some((error) => error.includes("bare PATH command")))
+  assert.ok(staleErrors.some((error) => error.includes("real browser profile")))
 })
 
 test("canonical RFC validation is structural rather than prose-locking", () => {
