@@ -6,6 +6,7 @@ import { createRequire } from "node:module"
 import * as path from "node:path"
 import { openDb, closeDb, indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { makeGitDesk, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
+import { requireControllers } from "../_temp_roots.js"
 import { assertProcessesGone, controllerPids, processAlive, waitForProcessesGone } from "./_controller_exit.js"
 
 const require = createRequire(import.meta.url)
@@ -56,6 +57,8 @@ async function readySession(t, fixture, options = {}) {
   }
   sessionsByFixture.get(fixture).push(session)
   await session.statusUntil((status) => status.state === "ready" && status.readiness?.detail.convergence.status === "succeeded", { deadlineMs: 90000 })
+  // Convergence succeeded, so a controller must exist; an empty list would make the wait at teardown pass for nothing.
+  requireControllers(fixture.root)
   return session
 }
 

@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { mkTempRoot } from "../_temp_roots.js"
+import { mkTempRoot, recordControllers } from "../_temp_roots.js"
 
 export const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 export const pluginRoot = path.resolve(mcpRoot, "..")
@@ -99,7 +99,11 @@ export function runHandshake({ command, args = [], env, cwd, timeoutMs = 20000 }
       if (settled) return
       settled = true
       clearTimeout(timer)
-      const done = () => (error ? reject(error) : resolve(value))
+      const done = () => {
+        // The session has ended, but its controller may still be shutting down with its owner record not yet removed.
+        recordControllers(cwd, env?.HOME)
+        return error ? reject(error) : resolve(value)
+      }
       if (child.exitCode !== null || child.signalCode !== null) {
         done()
         return
@@ -142,6 +146,8 @@ export function runHandshake({ command, args = [], env, cwd, timeoutMs = 20000 }
           handshakeMs = Date.now() - started
           send(child, 3, "tools/call", { name: "desk_status", arguments: { detail: true } })
         } else if (message.id === 3) {
+          // The session is still alive here; a controller it started deletes its owner record as it ends.
+          recordControllers(cwd, env?.HOME)
           finish(null, {
             initialize: responses.get(1),
             tools: responses.get(2),
