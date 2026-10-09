@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.266 — 2026-10-09
+
+[Desk's shared foundation](skills/using-desk/SKILL.md#alignment-then-ownership) now calls for normal conversation rather than structured question forms and makes clear that acknowledgements after alignment are not new approval gates. Agents still respect genuine human gates and stay in a discussion until the human closes it or says go.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.265 — 2026-10-09
 
 desk_status no longer blocks the thread that answers the host while it reads Git state, and a single missed readiness controller check no longer marks a live controller unavailable: the check is repeated twice more before the controller counts as lost.
