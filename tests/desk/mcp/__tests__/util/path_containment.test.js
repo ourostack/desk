@@ -260,3 +260,59 @@ test("resolveWriteTarget propagates non-missing filesystem errors", { skip: NO_P
     await fs.chmod(blocked, 0o700)
   }
 })
+
+test("resolveWriteTarget refuses a path that runs under a file, at depth 1 and 2, and names the file", async () => {
+  const root = await makeRoot()
+  await fs.writeFile(path.join(root, "README.md"), "# readme\n")
+  await assert.rejects(
+    resolveWriteTarget({ deskRoot: root, person: null, segments: ["README.md", "x.md"] }),
+    (error) => !error.code && error.message.includes("runs under a file, not a folder") && error.message.includes(path.join(root, "README.md")),
+  )
+  await assert.rejects(
+    resolveWriteTarget({ deskRoot: root, person: null, segments: ["README.md", "sub", "x.md"] }),
+    (error) => !error.code && error.message.includes(path.join(root, "README.md")),
+  )
+  await fs.mkdir(path.join(root, "dir"))
+  await fs.writeFile(path.join(root, "dir", "file.md"), "x")
+  await assert.rejects(
+    resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "file.md", "x.md"] }),
+    (error) => !error.code && error.message.includes(path.join(root, "dir", "file.md")),
+  )
+  await assert.rejects(
+    resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "file.md", "a", "x.md"] }),
+    /runs under a file/u,
+  )
+})
+
+test("resolveWriteTarget still allows a missing folder, an existing folder and an existing file as the last segment", async () => {
+  const root = await makeRoot()
+  await fs.mkdir(path.join(root, "dir"))
+  await fs.writeFile(path.join(root, "dir", "file.md"), "x")
+  assert.equal(await resolveWriteTarget({ deskRoot: root, person: null, segments: ["missing", "deeper", "x.md"] }), path.join(root, "missing", "deeper", "x.md"))
+  assert.equal(await resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "new", "x.md"] }), path.join(root, "dir", "new", "x.md"))
+  assert.equal(await resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "file.md"] }), path.join(root, "dir", "file.md"))
+  assert.equal(await resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir"] }), path.join(root, "dir"))
+})
+
+test("resolveWriteTarget refuses a person-scoped path that runs under a file", async () => {
+  const root = await makeRoot()
+  await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  await fs.writeFile(path.join(root, "desks", "ari", "notes.md"), "x")
+  await assert.rejects(
+    resolveWriteTarget({ deskRoot: root, person: "ari", segments: ["notes.md", "x.md"] }),
+    /runs under a file, not a folder/u,
+  )
+})
+
+test("resolveWriteTarget judges a link in the middle by what it leads to", { skip: NO_POSIX_MODES }, async () => {
+  const root = await makeRoot()
+  await fs.mkdir(path.join(root, "real"))
+  await fs.writeFile(path.join(root, "real", "file.md"), "x")
+  await fs.symlink(path.join(root, "real"), path.join(root, "dirlink"))
+  await fs.symlink(path.join(root, "real", "file.md"), path.join(root, "filelink"))
+  assert.equal(await resolveWriteTarget({ deskRoot: root, person: null, segments: ["dirlink", "x.md"] }), path.join(root, "dirlink", "x.md"))
+  await assert.rejects(
+    resolveWriteTarget({ deskRoot: root, person: null, segments: ["filelink", "x.md"] }),
+    /runs under a file/u,
+  )
+})
