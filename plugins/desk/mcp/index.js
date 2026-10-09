@@ -35,6 +35,7 @@ import { runInWorker } from "./src/runtime/admission-worker.js"
 import { importInChunks } from "./src/runtime/chunked-import.js"
 import { createDeskSession, LAUNCHER_READ_ONLY_CODES } from "./src/runtime/desk-session.js"
 import { startFrontDoor } from "./src/runtime/front-door.js"
+import { hostedInstructions, isHosted } from "./src/runtime/hosted.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "./src/runtime/last-start.js"
 import {
   createRuntimeDiagnostic,
@@ -157,6 +158,7 @@ export async function main({
   offload = runInWorker,
   crashHandlers = false,
   hung,
+  hostedSync = syncHostedDesk,
   onClosed = () => {},
 }) {
   // The tools find the installed plugin (its hooks and the plugins beside it) through DESK_PLUGIN_ROOT. Claude's launcher sets it; Copilot's and Codex's configs pass no environment, and the server's code runs from a source mirror with no `hooks/` beside it, so every host gets this entrypoint's own plugin folder here.
@@ -252,12 +254,25 @@ export async function main({
     kicked = true
     session.start()
   }
+  // A hosted Desk (DESK_HOSTED) has no session-start hook: its initialize answer carries the startup instructions, and once the first tools/list is answered it pulls the desk the way boot would.
+  const hosted = isHosted(env)
+  const hostedRoot = hosted && hasText(args.root) ? path.resolve(cwd, args.root) : null
+  const startHostedSync = () => {
+    if (hostedRoot === null) return
+    Promise.resolve()
+      .then(() => hostedSync({ root: hostedRoot, env: plainEnv }))
+      .catch((error) => stderr.write(`[desk-mcp] hosted desk sync failed: ${describeError(error)}\n`))
+  }
   frontDoor = startFrontDoor({
     input,
     output,
     serverVersion,
+    instructions: hosted ? hostedInstructions({ root: hostedRoot, pluginRoot: env.DESK_PLUGIN_ROOT }) : undefined,
     callTool: (call) => session.callTool(call),
-    onHandshake: kick,
+    onHandshake: () => {
+      kick()
+      startHostedSync()
+    },
   })
   // A client that never sends tools/list still gets admission.
   const kickoff = setTimeout(kick, admissionKickoffMs)
@@ -271,6 +286,12 @@ export async function main({
     onClosed()
   })
   return { frontDoor, session, admission: session.admission, closed }
+}
+
+// Desk's own desk sync (the pull boot runs), loaded only when a hosted session needs it so the front door stays light.
+async function syncHostedDesk(options) {
+  const { syncWorkspace } = await import("./src/runtime/session-sync.js")
+  return syncWorkspace(options)
 }
 
 // A cheap look at the runtime target before the handshake: the support matrix and the pack files, without hashing or unpacking the archive. Null when inspection itself fails (admission reports that later).
