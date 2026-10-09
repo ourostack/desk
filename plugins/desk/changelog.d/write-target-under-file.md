@@ -1,1 +1,0 @@
-Every Desk tool that writes a card, track, lesson or friction entry now refuses a path that runs under an existing file (for example `README.md/x.md`) with a clear message naming the file, the same way on every platform. Windows used to fail with a raw `EEXIST` error here, and macOS and Linux with `ENOTDIR`.

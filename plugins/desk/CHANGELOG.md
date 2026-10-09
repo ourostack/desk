@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.253 — 2026-10-09
+
+Every Desk tool that writes a card, track, lesson or friction entry now refuses a path that runs under an existing file (for example `README.md/x.md`) with a clear message naming the file, the same way on every platform. Windows used to fail with a raw `EEXIST` error here, and macOS and Linux with `ENOTDIR`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.252 — 2026-10-09
 
 A finished task's published finish day can no longer come from the day its card was created. Binding observed a done or cancelled card at the card's `updated` time, and a card edited by hand keeps `updated` equal to `created`, so one task that was created in planning on 29 September and finished on 2 October published "finished on or before 29 September" ([`binding.js`](mcp/src/factory/binding.js)). A terminal card is now observed at the later of the session's own last move of the card into that status and the card's `updated` time, and an `updated` time that is not after `created` never counts; with neither, the observation has no time and the session publishes no finish day. Such a task keeps its lead time: when a done task has no recorded finish time, the lead window runs from the card's creation to the end of its recorded work, a partial lower bound with the reason `finish_time_not_known` ([`formulas.js`](mcp/src/factory/pipeline/formulas.js)), and its finish day is unavailable with the same reason. The reports also check every finish day against the work ([`walk.js`](mcp/src/factory/pipeline/walk.js)): when the published facts prove the day is earlier than the UTC day the task's lead window ends, `timeline.finished_on` and every row that carries it gain the reason `finish_before_last_work`. A day from a recorded move to done then becomes a lower bound ("finished on or after"), and a day from a card update has no bound. The factory site shows these directions only once the store's finish-date rules know both reasons (ourostack/factory change "Desk finish reasons"); until it lands, the site still reads a guarded card-update day as "on or before".
