@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.265 — 2026-10-09
+
+desk_status no longer blocks the thread that answers the host while it reads Git state, and a single missed readiness controller check no longer marks a live controller unavailable: the check is repeated twice more before the controller counts as lost.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.264 — 2026-10-09
 
 A hosted Desk now tells the agent not to use its client's built-in memory, such as claude.ai's or ChatGPT's: durable context belongs in the desk. The agent turns the client's memory off if the client lets it, and otherwise tells the user once how to turn it off.
