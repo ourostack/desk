@@ -280,6 +280,8 @@ export const REASON_CHANGE = Object.freeze({
   finish_from_card_update: "card_update",
   // The latest of several finishes is the task's final finish, exact as such.
   reopened: "reopened",
+  // A finish day the facts prove is earlier than the day the last work ended: it bounds nothing, and the true day may be earlier or later.
+  finish_before_last_work: "before_last_work",
   // Next-prompt time whose why is not known may belong to any class.
   [PARTLY_CLASSIFIED]: "unclassified",
 })
@@ -316,7 +318,7 @@ export const BOUND_DIRECTIONS = Object.freeze({
   // another job may be missing from it, so it holds at least these.
   list: { open: "lower", unseen: "lower", unplaced: "lower", overcount: "lower", unattributed: "lower" },
   // A finish day: the card's last update is on or after the day the task finished.
-  finish: { card_update: "upper" },
+  finish: { card_update: "upper", before_last_work: "both" },
   // A class of next-prompt waiting (the split by why): an evidence figure, which the time not yet classified can only add to.
   why: { open: "lower", floor: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower", unclassified: "lower" },
 })
@@ -581,7 +583,7 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
     const byCause = idleFigures(idleWithin(idle, from, to), { base: [], coverage, intervals, placement })
     walk.gaps.push({ start_ms: from, end_ms: to, waited_on: waitedOn, idle_by_waited_on_ms: byCause, idle_by_why_ms: whySplit(held.parts, from, to, byCause.next_prompt).by_why })
   }
-  walk.finished_on = finishedOn(timeline, formulas)
+  walk.finished_on = finishedOn(timeline, formulas, window)
   walk.human_turns_state = turnsListState(timeline, additions)
   // The formulas' coverage of the job's public pull requests, with the list's own count.
   const prs = formulas.references.parts.public_prs
@@ -719,7 +721,7 @@ const TERMINAL = new Set(["done", "cancelled"])
  * could not be read (`job_offsets_unavailable`), or older facts and sessions that did not see the card end, so the published facts carry
  * no day (`not_in_published_facts`).
  */
-function finishedOn(timeline, formulas) {
+function finishedOn(timeline, formulas, window) {
   const none = (reasons) => ({ ...figure("unavailable", null, reasons), basis: null })
   if (formulas.status.state === "unavailable") return none(["status_unavailable"])
   if (!TERMINAL.has(formulas.status.value)) return none(["open_job"])
@@ -738,9 +740,41 @@ function finishedOn(timeline, formulas) {
   const moved = days.filter((entry) => entry.basis === "transition")
   const chosen = moved.length > 0 ? moved : days
   const value = chosen.map((entry) => entry.day).sort(compareText).at(-1)
-  const reasons = [...(moved.length === 0 ? ["finish_from_card_update"] : []), ...(new Set(moved.map((entry) => entry.day)).size > 1 ? ["reopened"] : [])]
+  const before = finishBeforeLastWork(value, bindings, window)
+  const reasons = [...(moved.length === 0 ? ["finish_from_card_update"] : []), ...(new Set(moved.map((entry) => entry.day)).size > 1 ? ["reopened"] : []), ...(before ? ["finish_before_last_work"] : [])]
   const basis = moved.length > 0 ? "transition" : "card_updated"
   return { ...bounded(figure(reasons.length === 0 ? "measured" : "partial", value, reasons, moved.length > 0 ? "measured" : "declared"), "finish"), basis }
+}
+
+const DAY_MS = 24 * 60 * 60_000
+
+// The job-clock instant a session's finish day was read from: its last transition into the status it observed (`transition`), else its
+// observation (`card_updated`); `null` when the facts do not publish one.
+function finishOffset(binding) {
+  if (binding.finished_basis === "card_updated") return binding.observed?.offset_ms ?? null
+  const offsets = binding.transitions.filter((entry) => entry.to === binding.observed?.status && entry.offset_ms !== null).map((entry) => entry.offset_ms)
+  return offsets.length === 0 ? null : Math.max(...offsets)
+}
+
+/**
+ * `finishBeforeLastWork(value, bindings, window) -> boolean`: whether the facts prove that the finish day `value` is earlier than the UTC day
+ * the lead window ends (task creation + `window.end_ms`). Published facts give no time of day, but each session's day and the offset it was
+ * read from place the task's creation in that day minus the offset; all of them together give its earliest possible instant, and the
+ * window's end is a later day for certain when that instant plus `end_ms` reaches the day after `value`. A day the facts cannot place, days
+ * that contradict each other, or a task with no lead window are never flagged, so this never invents a doubt; whatever the source, a finish
+ * it flags is no bound.
+ */
+function finishBeforeLastWork(value, bindings, window) {
+  if (!Object.hasOwn(window, "end_ms")) return false
+  const starts = bindings.flatMap(({ binding }) => {
+    const offset = typeof binding.finished_on === "string" ? finishOffset(binding) : null
+    return offset === null ? [] : [Date.parse(`${binding.finished_on}T00:00:00Z`) - offset]
+  })
+  if (starts.length === 0) return false
+  const earliest = Math.max(...starts)
+  // Days that place the creation in no common instant contradict each other, and prove nothing.
+  if (earliest >= Math.min(...starts) + DAY_MS) return false
+  return earliest + window.end_ms >= Date.parse(`${value}T00:00:00Z`) + DAY_MS
 }
 
 const flagsOf = (session, field) => session.unavailable.filter((entry) => entry.field === field).map((entry) => entry.reason)

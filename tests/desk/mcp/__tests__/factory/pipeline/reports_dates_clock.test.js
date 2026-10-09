@@ -105,7 +105,49 @@ test("sessions that finished the task on different days (a reopened task) give t
   assert.deepEqual(walk.finished_on, { class: "measured", state: "partial", value: "2026-10-07", basis: "transition", reasons: ["reopened"], bound: null, bound_reason: "bound_not_moved" })
 })
 
-test("a later card update does not displace the day of a recorded transition", () => {
+// Finding B1: a card created in planning and edited by hand to done, reopened and done again, kept `updated` equal to `created`, so an old
+// session published the day the card was created as an upper bound on a finish that came two days later.
+test("a finish day the facts prove is earlier than the day the last work ended is no bound: partial, bound null, finish_before_last_work", () => {
+  const leadEnd = 192_171_828
+  const stale = bound(J("a"), 0, { day: "2026-09-29", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 0 }, length: leadEnd })
+  const session = facts({ id: S(40), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [stale] })
+  const { walk } = walkOf([session], J("a"))
+  assert.equal(walk.window.end_ms, leadEnd)
+  assert.deepEqual(walk.finished_on, { class: "declared", state: "partial", value: "2026-09-29", basis: "card_updated", reasons: ["finish_before_last_work", "finish_from_card_update"], bound: null, bound_reason: "bound_reasons_conflict" })
+  assert.deepEqual(walk.task.finished_on, walk.finished_on)
+  assert.deepEqual(walk.stackup.finished_on, walk.finished_on)
+})
+
+test("the guard holds for a measured day too, and only where the facts prove the last work ended on a later day", () => {
+  const day = 24 * 60 * MIN
+  // A transition, then a full day and more of work: the day it names cannot be the finish.
+  const moved = bound(J("a"), 0, { day: "2026-10-05", transitions: [{ to: "done", offset_ms: 10 * MIN }], observed: { status: "done", offset_ms: 10 * MIN }, length: day + 11 * MIN })
+  const late = facts({ id: S(41), duration: day + 11 * MIN, intervals: [span("turn", 0, 0, day + 11 * MIN)], jobs: [moved] })
+  assert.deepEqual(walkOf([late], J("a")).walk.finished_on, { class: "measured", state: "partial", value: "2026-10-05", basis: "transition", reasons: ["finish_before_last_work"], bound: null, bound_reason: "bound_reasons_conflict" })
+  // Less than a day of later work may still end on the same UTC day, so the facts prove nothing and the upper bound stands.
+  const near = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 10 * MIN }, length: day + 9 * MIN })
+  const close = facts({ id: S(42), duration: day + 9 * MIN, intervals: [span("turn", 0, 0, day + 9 * MIN)], jobs: [near] })
+  assert.deepEqual(walkOf([close], J("a")).walk.finished_on, { class: "declared", state: "partial", value: "2026-10-05", basis: "card_updated", reasons: ["finish_from_card_update"], bound: "upper" })
+  // Every session's day narrows when the task was created. The last finish alone (14 hours before the work ended) proves nothing; an
+  // earlier session's day pins the creation late enough that the same work ends on a later day.
+  const hour = 60 * MIN
+  const lastFinish = bound(J("a"), 35 * hour, { day: "2026-10-06", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 36 * hour }, length: 15 * hour })
+  const last = facts({ id: S(43), duration: 15 * hour, intervals: [span("turn", 0, 0, 15 * hour)], jobs: [lastFinish] })
+  assert.deepEqual(walkOf([last], J("a")).walk.finished_on.reasons, ["finish_from_card_update"])
+  const firstFinish = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 1 * hour }, length: 2 * hour })
+  const first = facts({ id: S(45), duration: 2 * hour, intervals: [span("turn", 0, 0, 2 * hour)], jobs: [firstFinish] })
+  const both = walkOf([first, last], J("a")).walk.finished_on
+  assert.equal(both.value, "2026-10-06")
+  assert.deepEqual(both.reasons, ["finish_before_last_work", "finish_from_card_update"])
+})
+
+test("a finish day with no published offset for its source is left as it is", () => {
+  const open = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: null } })
+  const session = facts({ id: S(44), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [open] })
+  assert.deepEqual(walkOf([session], J("a")).walk.finished_on.reasons, ["finish_from_card_update"])
+})
+
+test("a later card update does not displace the day of a recorded transition, and days that contradict each other prove nothing", () => {
   const moved = facts({ id: S(5), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [bound(J("a"), 0, { day: "2026-10-06" })] })
   const looked = facts({ id: S(6), duration: 10 * MIN, intervals: [span("turn", 0, 0, 10 * MIN)], jobs: [bound(J("a"), 24 * 60 * MIN, { day: "2026-10-08", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 24 * 60 * MIN + 5 * MIN } })] })
   const { walk } = walkOf([moved, looked], J("a"))
@@ -374,9 +416,9 @@ test("an ask wait cut by the task's segments is idle only inside them", () => {
 // --- words and directions -------------------------------------------------------------------------------------------------------
 
 test("every new reason has plain words and a decided direction", () => {
-  for (const reason of ["finish_from_card_update", "reopened", "job_offsets_withheld", "not_in_published_facts", "no_segments"]) {
+  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "job_offsets_withheld", "not_in_published_facts", "no_segments"]) {
     assert.equal(typeof REASON_TEXT[reason], "string", reason)
     assert.ok(!/[_;()]/u.test(REASON_TEXT[reason]), reason)
   }
-  for (const reason of ["finish_from_card_update", "reopened", "not_in_published_facts", "no_segments"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
+  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "not_in_published_facts", "no_segments"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
 })

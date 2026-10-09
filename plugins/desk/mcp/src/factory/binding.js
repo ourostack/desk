@@ -78,8 +78,11 @@
 //     status change on a card that is not one of the session's jobs is not
 //     recorded. `task_created_at` is the card's `created`, or `null` when
 //     unreadable. `observed` is the card's status now — `{ status, at }`, `at`
-//     being the card's `updated` for a terminal status (`done`, `cancelled`)
-//     and otherwise `null` — or `null` when the card has no valid status.
+//     being, for a terminal status (`done`, `cancelled`), the later of the
+//     session's last transition into that status and the card's `updated`
+//     from the same read, an `updated` not after the card's `created` never
+//     counting (`observedTime`), else `null`; and `null` for any other status
+//     — or `null` when the card has no valid status.
 //     Jobs and transitions are capped at the facts limits.
 //   - `boundBy` maps a job ID to `focus` or `inferred`, for the jobs worker 0
 //     is in. `disagrees` lists the declared jobs with a stretch that holds
@@ -141,6 +144,19 @@ const SCP_REMOTE = /^([^@/\s]+@)?([^:/\s]{2,}):\/?([^/].*)$/u
 const WINDOWS_PATH = /^[A-Za-z]:[\\/]/u
 const URL_REMOTE = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?(\/.*)?$/iu
 const HTTPS_SCHEMES = new Set(["ssh", "git", "git+ssh", "ssh+git"])
+
+// When a card read with a terminal `status` is known to have held it: the later of the session's own last transition into that status and the
+// card's `updated` from the same read, or `null`. An `updated` that is not after the card's `created` was never restamped since the card was
+// made (a card edited by hand), so it cannot date a status the card reached later, and pairing it with the status the read gave would date
+// the finish before the work it ended; it counts only when the card has no readable `created` to compare with. Every transition counts, even
+// one the facts' cap later cuts from the list.
+function observedTime(card, status, transitions) {
+  const created = isTime(card.created_at) ? Date.parse(card.created_at) : null
+  const stamped = isTime(card.updated_at) && (created === null || Date.parse(card.updated_at) > created) ? card.updated_at : null
+  const moved = transitions.filter((transition) => transition.to === status).map((transition) => transition.at)
+  const candidates = [...moved, ...(stamped === null ? [] : [stamped])]
+  return candidates.length === 0 ? null : candidates.reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest))
+}
 
 // ---------------------------------------------------------------------------
 // Job IDs.
@@ -568,8 +584,7 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
     if (own.has(0)) for (const event of kept) if (event.key === key) basis.add(KIND_BASIS[event.kind])
     const { card } = task
     const status = ENUMS.jobStatus.includes(card.status) ? card.status : null
-    let observedAt = null
-    if (status !== null && TERMINAL.has(status) && isTime(card.updated_at)) observedAt = card.updated_at
+    const observedAt = status !== null && TERMINAL.has(status) ? observedTime(card, status, task.transitions) : null
     const segments = timeline.segments.filter((segment) => segment.key === key).map((segment) => ({ start_ms: segment.start - startedMs, end_ms: segment.end - startedMs }))
     const id = jobId({ deskRemote: remote, personPrefix, track: task.birth.track, slug: task.birth.slug })
     ids.set(key, id)

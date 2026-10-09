@@ -66,6 +66,7 @@ const REPORT_REASON_TEXT = {
   // A task's finish day.
   finish_from_card_update: "the day comes from the task card's last update, so the task finished on or before it",
   reopened: "the task was finished more than once, so this is the day it last finished",
+  finish_before_last_work: "this day is earlier than the day the task's last recorded work ended, so it is not a bound and the task may have finished earlier or later",
   job_offsets_withheld: "the desk withholds this task's timing because its remote is public",
   // Why the agent stopped before a wait for the next prompt, when it is not known, and the split by why.
   could_not_tell: "the evaluator read this wait's evidence and could not tell why the agent stopped",
