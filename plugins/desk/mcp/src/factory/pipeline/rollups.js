@@ -376,11 +376,10 @@ function compactions(sources, split) {
 
 // One labeled session's time per Pareto row, and what each row's labels say about themselves: `confidence[waste]` is the time by
 // confidence, or `null` when the file records none; `versions[waste]` the labels' versions. `all_versions` and `recorded` answer for a
-// row with no time, which the whole file speaks to. A file records a confidence only when it is `/2` (every `/2` stretch carries one)
-// and has a stretch: a file with no stretches recorded nothing, so its rows read as not recorded, never as a sound zero. Its own
-// evaluator version still speaks for it.
+// row with no time, which the whole file speaks to. A file records a confidence only when it is `/2` or later (every such stretch
+// carries one). Every entry here has a stretch: `resolveLabels` never uses a file with none inside the job's share.
 function sessionWaste(entry) {
-  const recorded = entry.schema !== LABELS_SCHEMAS[0] && entry.stretches.length > 0
+  const recorded = entry.schema !== LABELS_SCHEMAS[0]
   const totals = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, 0]))
   const confidence = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, recorded ? Object.fromEntries(LABEL_CONFIDENCE.map((level) => [level, 0])) : null]))
   const versions = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, []]))
@@ -394,7 +393,6 @@ function sessionWaste(entry) {
     if (!versions[stretch.waste].includes(version)) versions[stretch.waste].push(version)
     if (recorded) confidence[stretch.waste][stretch.confidence] += duration
   }
-  if (allVersions.size === 0) allVersions.add(entry.evaluator.plugin_version)
   return { totals, confidence, versions, all_versions: [...allVersions], recorded, can_say_unknown: entry.schema !== LABELS_SCHEMAS[0], ...correctedWaiting(entry.corrected) }
 }
 
