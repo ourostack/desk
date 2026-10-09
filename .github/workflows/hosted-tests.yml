@@ -1,0 +1,53 @@
+name: Hosted gateway tests
+
+# The hosted Desk gateway's own test suite (hosted/, `node --test`). It runs only when the gateway changes, so it is
+# not one of main's required checks: a required check from a path-filtered workflow would never report on other pull
+# requests and would block them.
+
+on:
+  pull_request:
+    paths:
+      - "hosted/**"
+      - ".github/workflows/hosted-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "hosted/**"
+      - ".github/workflows/hosted-tests.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  hosted-tests:
+    name: Hosted gateway tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: hosted/package-lock.json
+
+      - name: Install dependencies
+        working-directory: hosted
+        run: npm ci
+
+      - name: Run the gateway tests
+        working-directory: hosted
+        run: npm test
