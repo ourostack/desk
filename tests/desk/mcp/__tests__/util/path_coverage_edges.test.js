@@ -53,7 +53,7 @@ test("write confinement refuses an escaping platform resolution before filesyste
   syncBuiltinESMExports()
   try {
     await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["leaf"] }), {
-      message: `desk-mcp: write target is outside effective write root: ${outside}`,
+      message: "desk-mcp: write target is outside effective write root: leaf",
     })
     assert.equal(stat.mock.calls.length, 0)
   } finally {
@@ -64,7 +64,7 @@ test("write confinement refuses an escaping platform resolution before filesyste
   assert.deepEqual(await fs.readdir(deskRoot), [])
 })
 
-test("target realpath failures other than ENOENT reach the caller unchanged", async (t) => {
+test("target realpath failures other than ENOENT are refused by relative path and code", async (t) => {
   const deskRoot = await temporaryRoot(t)
   const target = path.join(deskRoot, "task.md")
   await fs.writeFile(target, "unchanged\n")
@@ -77,13 +77,28 @@ test("target realpath failures other than ENOENT reach the caller unchanged", as
     return originalRealpath(candidate, ...options)
   })
   try {
-    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), (error) => error === failure)
+    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), { message: "desk-mcp: cannot read task.md (EACCES)" })
     assert.deepEqual(observed, [deskRoot, target])
   } finally {
     t.mock.restoreAll()
   }
   assert.equal(await fs.readFile(target, "utf8"), "unchanged\n")
   assert.deepEqual(await fs.readdir(deskRoot), ["task.md"])
+})
+
+test("an error with no code is not a filesystem error and reaches the caller unchanged", async (t) => {
+  const deskRoot = await temporaryRoot(t)
+  const failure = new Error("fixture lstat failure with no code")
+  const originalLstat = fs.lstat
+  t.mock.method(fs, "lstat", async (candidate, ...options) => {
+    if (candidate === path.join(deskRoot, "task.md")) throw failure
+    return originalLstat(candidate, ...options)
+  })
+  try {
+    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), (error) => error === failure)
+  } finally {
+    t.mock.restoreAll()
+  }
 })
 
 test("confinement rejects the actual win32 cross-drive relative result on any test host", (t) => {

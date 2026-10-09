@@ -59,7 +59,7 @@ test("context preserves an unexpected canonical-file stat error", async (t) => {
   t.mock.method(fs, "stat", async () => { throw failure })
   syncBuiltinESMExports()
   try {
-    await assert.rejects(resolveSuperpowersContext({ ...input, deskRoot: root, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") }), (error) => error === failure)
+    await assert.rejects(resolveSuperpowersContext({ ...input, deskRoot: root, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") }), { message: "desk-mcp: cannot read the desk root (EACCES)" })
   } finally {
     t.mock.restoreAll()
     syncBuiltinESMExports()

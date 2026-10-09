@@ -64,7 +64,7 @@ test("no-create resolution retains escaping target symlink refusal", async () =>
   mkdirSync(personRoot, { recursive: true })
   mkdirSync(path.join(fixtureRoot, "elsewhere"))
   symlinkSync(path.join(fixtureRoot, "elsewhere"), path.join(personRoot, "track"), "dir")
-  await assert.rejects(() => resolveWriteTarget(target({ createPersonRoot: false })), /write target resolves outside/u)
+  await assert.rejects(() => resolveWriteTarget(target({ createPersonRoot: false })), /desks\/member\/track resolves outside effective write root|desks\/member\/track resolves outside the desk \(via a symbolic link\)/u)
 })
 
 test("no-create resolution retains alias traversal refusal", async () => {
@@ -97,7 +97,7 @@ test("an explicit provider progress target refuses a symlink that escapes the pe
   symlinkSync(path.join(fixtureRoot, "elsewhere"), path.join(personRoot, "track"), "dir")
   await assert.rejects(
     () => resolveWriteTarget(target({ segments: progressSegments, createPersonRoot: false })),
-    /write target resolves outside/u,
+    /desks\/member\/track resolves outside effective write root|desks\/member\/track resolves outside the desk \(via a symbolic link\)/u,
   )
 })
 
