@@ -346,13 +346,21 @@ export async function startupMigrationLine({
 // `scripts/migrations.js roots [--engine <prefix>]`: other plugins' migration folders in the Agency cache
 // ---------------------------------------------------------------------------
 
+// Agency stores `fetched_at` as integer epoch seconds; an ISO date string is accepted too so a format change cannot make the oldest fetch look newest. Anything else counts as 0.
+function fetchedSeconds(value) {
+  const number = Number(value)
+  if (Number.isFinite(number)) return number
+  const parsed = Date.parse(value) / 1000
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 /**
  * The plugin folders under Agency's cache whose `migrations/` the driver should walk, one per plugin. Agency keeps
  * every fetch of every plugin source under `~/.local/agency/plugins/cache/entries/<dir_name>/` and maps each source
  * spec to its folder in `cache_index.json` (`entries[spec].dir_name`, `fetched_at`). The rule:
  *   - only specs that start with the running engine's prefix (`copilot:` by default);
  *   - never Desk's own plugin (its migrations run from the startup hooks, and the cache holds several old copies);
- *   - one folder per plugin name (from the folder's `plugin.json`), the one with the newest `fetched_at`;
+ *   - one folder per plugin name (from the folder's `plugin.json`, else its `agency.json`), the one with the newest `fetched_at`;
  *   - only folders that have a `migrations/` folder.
  * An unreadable index has no roots. Result is sorted by plugin name.
  */
@@ -366,17 +374,25 @@ export function agencyMigrationRoots({ home, engine = "copilot" }) {
   }
   const newest = new Map()
   for (const [spec, entry] of entries) {
-    if (!spec.startsWith(`${engine}:`) || !/^[A-Za-z0-9._-]+$/u.test(String(entry?.dir_name))) continue
-    const dir = path.join(cache, "entries", entry.dir_name)
+    const dirName = entry?.dir_name
+    if (!spec.startsWith(`${engine}:`) || typeof dirName !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/u.test(dirName)) continue
+    const dir = path.join(cache, "entries", dirName)
     let name
+    for (const manifest of ["plugin.json", "agency.json"]) {
+      try {
+        name = JSON.parse(readFileSync(path.join(dir, manifest), "utf8")).name
+      } catch {
+        name = undefined
+      }
+      if (typeof name === "string") break
+    }
     try {
-      name = JSON.parse(readFileSync(path.join(dir, "plugin.json"), "utf8")).name
       readdirSync(path.join(dir, "migrations"))
     } catch {
       continue
     }
-    const fetched = Number(entry.fetched_at) || 0
-    if (name !== "desk" && !(newest.get(name)?.fetched >= fetched)) newest.set(name, { dir, fetched })
+    const fetched = fetchedSeconds(entry.fetched_at)
+    if (typeof name === "string" && name !== "desk" && !(newest.get(name)?.fetched >= fetched)) newest.set(name, { dir, fetched })
   }
   return [...newest.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, { dir }]) => dir)
 }
