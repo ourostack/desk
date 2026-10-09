@@ -269,6 +269,12 @@ Repository variables for ourostack/desk (.github/workflows/hosted-deploy.yml):
     gh variable set AZURE_CLIENT_ID --repo ourostack/desk --body $deploy_client_id
     gh variable set AZURE_TENANT_ID --repo ourostack/desk --body $tenant_id
     gh variable set AZURE_SUBSCRIPTION_ID --repo ourostack/desk --body $SUBSCRIPTION
-    gh variable set DESK_PUBLIC_URL --repo ourostack/desk --body $DESK_PUBLIC_URL
-Then create the GitHub App: node hosted/infra/create-github-app.mjs --public-url $DESK_PUBLIC_URL
 EOF
+# The deploy's health check calls DESK_PUBLIC_URL, so the variable waits until that URL answers: a custom domain only
+# once it is bound with its certificate. Unset, the check uses the app's Azure address.
+if [[ "$DESK_PUBLIC_URL" != "https://$DOMAIN" || "$bound" == SniEnabled ]]; then
+  echo "    gh variable set DESK_PUBLIC_URL --repo ourostack/desk --body $DESK_PUBLIC_URL"
+else
+  echo "    (leave DESK_PUBLIC_URL unset until $DOMAIN is bound; rerun this script after the DNS records exist)"
+fi
+echo "Then create the GitHub App: node hosted/infra/create-github-app.mjs --public-url $DESK_PUBLIC_URL"
