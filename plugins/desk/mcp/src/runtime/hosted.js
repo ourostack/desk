@@ -68,6 +68,8 @@ export const TOOL_ANNOTATIONS = Object.freeze(Object.fromEntries(TOOL_NAMES.map(
   Object.freeze({ readOnlyHint: READ_ONLY.has(name), destructiveHint: DESTRUCTIVE.has(name) }),
 ])))
 
+// A hosted client's own memory (claude.ai's, ChatGPT's) would split durable context between the client and the desk.
+const CLIENT_MEMORY = "Don't use this client's built-in memory. Durable context, preferences and task state live in the desk, written through Desk's tools, and the desk wins over anything the client's memory recalls. Never save to that memory. If the client lets you turn its memory off, do so. If it doesn't and its memory is on, tell the user once that Desk keeps their memory in the desk and that they can turn the client's memory off in its settings."
 const DESK_STATUS_FIRST = "Start by calling desk_status: it is this session's startup status block."
 
 /**
@@ -87,6 +89,7 @@ export function hostedInstructions({ root, pluginRoot }) {
   sections.push([
     "# Hosted Desk",
     "This Desk runs as a hosted service: there is no shell, git or plugin script here, so the session-start hook has not run. These instructions carry the startup the foundation above asks for. Skip session-start (session boot) and the skills listed below, call desk_status first, and work through the Desk tools.",
+    CLIENT_MEMORY,
     `Tools Desk refuses here:\n${list(HOSTED_UNAVAILABLE)}`,
     `desk_doctor repairs Desk refuses here:\n${list(HOSTED_UNAVAILABLE_REPAIRS)}`,
     `Skills to skip, because they need a shell:\n${list(HOSTED_SHELL_SKILLS)}`,
