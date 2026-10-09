@@ -20,7 +20,6 @@ import { runHook as syncRunHook } from "../../../../../plugins/desk/hooks/lib/sy
 import { bootFixtureEnv } from "../_boot_fixture.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
 import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
-import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
@@ -75,7 +74,7 @@ module.exports = { startFactory: async () => { fs.appendFileSync(${JSON.stringif
     const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }, fixture)
     const run = (flag) => host === "copilot"
       ? spawnSync(process.execPath, [path.join(HOOKS, "copilot-session-start.cjs")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
-      : spawnSync(resolveBash(), [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, encoding: "utf8" })
+      : spawnSync(process.execPath, [path.join(HOOKS, "claude-session-start.cjs"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: flag }, encoding: "utf8" })
     const headless = run("1")
     assert.equal(headless.status, 0, headless.stderr)
     assert.equal(headless.stdout, "")
@@ -89,7 +88,7 @@ module.exports = { startFactory: async () => { fs.appendFileSync(${JSON.stringif
 test("the start hook script and the helper agree on every flag value, whitespace included", () => scratch(async ({ env, desk }) => {
   const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }
   for (const value of ["1", "true", "0", "", " ", " 0 ", " 1 ", "no"]) {
-    const run = spawnSync(resolveBash(), [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: value }, encoding: "utf8" })
+    const run = spawnSync(process.execPath, [path.join(HOOKS, "claude-session-start.cjs"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env: { ...hookEnv, DESK_FACTORY_HEADLESS: value }, encoding: "utf8" })
     assert.equal(run.status, 0)
     assert.equal(run.stdout === "", isHeadlessFactorySession({ DESK_FACTORY_HEADLESS: value }), JSON.stringify(value))
   }

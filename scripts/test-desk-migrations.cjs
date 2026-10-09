@@ -1099,7 +1099,7 @@ function hookContexts() {
     delete env.CLAUDE_CONFIG_DIR;
     delete env.AGENCY_TOML;
     fs.mkdirSync(env.HOME);
-    const claude = spawnSync(BASH, [path.join(deskRoot, "hooks", "session-start.sh")], { cwd: scratch, env, encoding: "utf8" });
+    const claude = spawnSync(process.execPath, [path.join(deskRoot, "hooks", "claude-session-start.cjs")], { cwd: scratch, env, encoding: "utf8" });
     assert.equal(claude.status, 0, claude.stderr);
     const copilot = spawnSync(process.execPath, [path.join(deskRoot, "hooks", "copilot-session-start.cjs")], { cwd: scratch, env, encoding: "utf8" });
     assert.equal(copilot.status, 0, copilot.stderr);
@@ -1129,7 +1129,7 @@ test(`startup hooks ${marketplace.name === "ouroboros-skills" ? "open with the m
 function startupContexts(desk, home, extraEnv = {}) {
   const env = { ...process.env, HOME: home, DESK: desk, DESK_IDENTITY: "nobody-in-the-registry", CLAUDE_PLUGIN_ROOT: deskRoot, PLUGIN_ROOT: deskRoot, ...extraEnv };
   for (const key of [...HOST_BINDING_VARS, "CLAUDE_CONFIG_DIR", "AGENCY_TOML"]) if (!["DESK", "DESK_IDENTITY", "CLAUDE_PLUGIN_ROOT"].includes(key) && !(key in extraEnv)) delete env[key];
-  const claude = spawnSync(BASH, [path.join(deskRoot, "hooks", "session-start.sh")], { cwd: home, env, encoding: "utf8" });
+  const claude = spawnSync(process.execPath, [path.join(deskRoot, "hooks", "claude-session-start.cjs")], { cwd: home, env, encoding: "utf8" });
   assert.equal(claude.status, 0, claude.stderr);
   const copilot = spawnSync(process.execPath, [path.join(deskRoot, "hooks", "copilot-session-start.cjs")], { cwd: home, env, input: JSON.stringify({ cwd: home }), encoding: "utf8" });
   assert.equal(copilot.status, 0, copilot.stderr);

@@ -451,8 +451,8 @@ function effectiveClaudeStartup(repoRoot) {
   const deskRoot = fs.mkdtempSync(path.join(os.tmpdir(), "desk-claude-startup-"));
   try {
     const result = spawnSync(
-      "bash",
-      [path.join(repoRoot, "plugins", "desk", "hooks", "session-start.sh")],
+      process.execPath,
+      [path.join(repoRoot, "plugins", "desk", "hooks", "claude-session-start.cjs")],
       {
         cwd: repoRoot,
         encoding: "utf8",
@@ -613,7 +613,7 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
     errors.push("startup-composition Copilot agent source must describe runtime injection from the Desk-owned sessionStart hook");
   }
 
-  const sessionStartHook = readText(repoRoot, "plugins/desk/hooks/session-start.sh");
+  const sessionStartHook = readText(repoRoot, "plugins/desk/hooks/claude-session-start.cjs");
   // A hook-side partial scan duplicates desk:session-start, adds boot work, and can disagree with synchronized workspace state.
   if (/find\s+.*task\.md|(^|[;&|]\s*|\$\()\s*(git|gh|curl)\s/mu.test(sessionStartHook)) {
     errors.push("startup-composition Claude hook must not scan tasks or run git, gh, or curl");

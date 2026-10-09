@@ -130,7 +130,7 @@ const hostManifestFixtureFiles = [
   "plugins/desk/hooks/hooks.json",
   "plugins/desk/hooks/copilot-hooks.json",
   "plugins/desk/hooks/copilot-session-start.cjs",
-  "plugins/desk/hooks/session-start.sh",
+  "plugins/desk/hooks/claude-session-start.cjs",
   "plugins/desk/skills/humanize/LICENSE",
   "plugins/desk/skills/humanize/SKILL.md",
   "plugins/desk/skills/session-start/SKILL.md",
@@ -1678,7 +1678,7 @@ test("root host verifier reports each startup-composition drift and hook failure
     },
     {
       label: "Claude hook that runs git and returns no context",
-      mutate: (root) => writeText(root, "plugins/desk/hooks/session-start.sh", "git --version >/dev/null 2>&1 || true\necho '{}'\n"),
+      mutate: (root) => writeText(root, "plugins/desk/hooks/claude-session-start.cjs", "const note = `\ngit --version\n`\nprocess.stdout.write(\"{}\")\n"),
       patterns: [
         /startup-composition Claude hook must not scan tasks or run git, gh, or curl/u,
         /startup-composition claude must include the canonical using-desk body exactly once; found 0/u,
@@ -1687,7 +1687,7 @@ test("root host verifier reports each startup-composition drift and hook failure
     },
     {
       label: "Claude hook failure",
-      mutate: (root) => writeText(root, "plugins/desk/hooks/session-start.sh", "echo broken >&2\nexit 1\n"),
+      mutate: (root) => writeText(root, "plugins/desk/hooks/claude-session-start.cjs", "process.stderr.write(\"broken\\n\")\nprocess.exit(1)\n"),
       patterns: [/Claude SessionStart hook failed: broken/u],
     },
     {

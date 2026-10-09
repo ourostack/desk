@@ -50,6 +50,7 @@
         // Registered in hooks.json and copilot-hooks.json.
         "factory-end.cjs",
         "sync-end.cjs",
+        "claude-session-start.cjs",
         "copilot-session-start.cjs",
         "copilot-boot-prompt.cjs",
         // Started by path, never imported: factory-start.cjs and loop-start.cjs detached by boot-checks `startFactory`, and boot-checks.cjs itself as a command (--repair, --compatible, --fast-forward, --ack, --revoke) by the hooks, the docs and the doctor.
