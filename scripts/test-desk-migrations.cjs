@@ -1206,6 +1206,15 @@ test("startup hooks stay silent about migrations when none is pending", () => {
   }
 });
 
+test("session-start-migrations walks the Agency plugin cache by its selection rule, once per migration id", () => {
+  const skill = fs.readFileSync(path.join(deskRoot, "skills", "session-start-migrations", "SKILL.md"), "utf8");
+  assert.match(skill, /migrations\.js roots/u, "the discovery roots must name the command that applies the Agency cache rule");
+  for (const field of ["cache_index.json", "entries[spec].dir_name", "fetched_at", "`copilot:`", "newest `fetched_at`", "skips Desk's own plugin"]) {
+    assert.ok(skill.includes(field), `the skill must name ${field}`);
+  }
+  assert.match(skill, /dedupe by migration `id`/u, "a migration found under two roots must run once");
+});
+
 let failures = 0;
 for (const { name, body } of tests) {
   try {
