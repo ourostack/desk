@@ -94,6 +94,43 @@ test("installationToken fails with the status when GitHub refuses, and a later c
   assert.equal(github.calls.length, 2);
 });
 
+test("installationToken gives up on a GitHub call that does not answer within its timeout, and a later call tries again", async () => {
+  const signals = [];
+  // A GitHub that never answers, except by honouring the request's abort signal.
+  const hanging = (_url, init) => {
+    signals.push(init.signal);
+    return new Promise((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(init.signal.reason)));
+  };
+  const options = { appId: "4", privateKeyPem: PEM, repo: "arimendelow/hangs", fetch: hanging, timeoutMs: 50 };
+  // AbortSignal.timeout does not hold the process open; the gateway's server does, and this timer stands in for it.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    await assert.rejects(installationToken(options), { name: "TimeoutError" });
+    await assert.rejects(installationToken(options), { name: "TimeoutError" });
+  } finally {
+    clearInterval(keepAlive);
+  }
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every((signal) => signal instanceof AbortSignal));
+});
+
+test("installationToken's GitHub calls time out after 10 s by default", async () => {
+  const timeouts = [];
+  const original = AbortSignal.timeout;
+  AbortSignal.timeout = (ms) => {
+    timeouts.push(ms);
+    return original.call(AbortSignal, ms);
+  };
+  try {
+    const clock = { now: Date.parse("2026-10-08T12:00:00Z") };
+    const github = fakeGitHub(clock);
+    await installationToken({ appId: "5", privateKeyPem: PEM, repo: "arimendelow/desk", fetch: github.fetch, now: () => clock.now });
+  } finally {
+    AbortSignal.timeout = original;
+  }
+  assert.deepEqual(timeouts, [10_000, 10_000]);
+});
+
 function readLine(socketPath) {
   return new Promise((resolve, reject) => {
     let text = "";

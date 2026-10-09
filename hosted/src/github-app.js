@@ -6,6 +6,9 @@ import { createSign } from "node:crypto";
 
 const API = "https://api.github.com";
 const REFRESH_BEFORE_MS = 5 * 60_000;
+// A GitHub call that has not answered by then fails, so a hung request
+// cannot hold up every Git and gh call that waits on the token.
+const CALL_TIMEOUT_MS = 10_000;
 
 const base64url = (value) => Buffer.from(typeof value === "string" ? value : JSON.stringify(value)).toString("base64url");
 
@@ -17,9 +20,10 @@ export function appJwt({ appId, privateKeyPem, now = Math.floor(Date.now() / 100
   return `${unsigned}.${signature.toString("base64url")}`;
 }
 
-async function call(fetch, path, jwt, init = {}) {
+async function call(fetch, path, jwt, init = {}, timeoutMs = CALL_TIMEOUT_MS) {
   const response = await fetch(`${API}${path}`, {
     ...init,
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       accept: "application/vnd.github+json",
       authorization: `Bearer ${jwt}`,
@@ -32,13 +36,11 @@ async function call(fetch, path, jwt, init = {}) {
   return response.json();
 }
 
-async function mint({ appId, privateKeyPem, repo, fetch, now }) {
+async function mint({ appId, privateKeyPem, repo, fetch, now, timeoutMs }) {
   const jwt = appJwt({ appId, privateKeyPem, now: Math.floor(now() / 1000) });
-  const installation = await call(fetch, `/repos/${repo}/installation`, jwt);
-  const granted = await call(fetch, `/app/installations/${installation.id}/access_tokens`, jwt, {
-    method: "POST",
-    body: JSON.stringify({ repositories: [repo.split("/")[1]], permissions: { contents: "write", pull_requests: "read" } }),
-  });
+  const installation = await call(fetch, `/repos/${repo}/installation`, jwt, {}, timeoutMs);
+  const body = JSON.stringify({ repositories: [repo.split("/")[1]], permissions: { contents: "write", pull_requests: "read" } });
+  const granted = await call(fetch, `/app/installations/${installation.id}/access_tokens`, jwt, { method: "POST", body }, timeoutMs);
   return { token: granted.token, expiresAt: Date.parse(granted.expires_at) };
 }
 
@@ -47,13 +49,14 @@ const cache = new Map();
 
 // Returns `{ token, expiresAt }` (expiresAt in milliseconds since the epoch).
 // A token is reused until five minutes before it expires; concurrent callers
-// share one request, and a failed request is not cached.
-export function installationToken({ appId, privateKeyPem, repo, fetch = globalThis.fetch, now = Date.now }) {
+// share one request, and a failed request (or one that timed out) is not
+// cached.
+export function installationToken({ appId, privateKeyPem, repo, fetch = globalThis.fetch, now = Date.now, timeoutMs = CALL_TIMEOUT_MS }) {
   const key = `${appId}\0${repo}`;
   const cached = cache.get(key);
   if (cached?.pending) return cached.pending;
   if (cached && cached.expiresAt - REFRESH_BEFORE_MS > now()) return Promise.resolve(cached);
-  const pending = mint({ appId, privateKeyPem, repo, fetch, now }).then(
+  const pending = mint({ appId, privateKeyPem, repo, fetch, now, timeoutMs }).then(
     (minted) => {
       cache.set(key, minted);
       return minted;
