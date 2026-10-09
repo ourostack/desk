@@ -436,6 +436,11 @@ function wait(ms) {
   });
 }
 
+// npm's error text with any credential removed: the user and password of a registry address, and an auth token setting.
+function scrub(text) {
+  return String(text).replace(/\/\/[^\s/@]+@/g, "//<redacted>@").replace(/(_auth\w*|_password)\s*=\s*\S+/gi, "$1=<redacted>");
+}
+
 // The installed copy, installing it first when there is none (or, when `reader` is set, none with the token reader). Resolves { installed, fresh } or { error }.
 function ensureInstalled(tools, root, deadline, reader) {
   var installed = readInstalled(root);
@@ -449,13 +454,17 @@ function ensureInstalled(tools, root, deadline, reader) {
       return install(tools, root, Math.max(deadline - tools.clock(), 1000), reader);
     }).then(function (result) {
       releaseLock(lock);
+      if (!result.ok && current !== null) tools.stderr.write("[web] could not install the connection reader (" + scrub(result.error) + "); keeping the install without it\n");
       return result.ok ? { installed: result.installed, fresh: true } : current || { error: result.error };
     }, function (error) {
       releaseLock(lock);
       throw error;
     });
   }
-  if (current !== null) return Promise.resolve(current);
+  if (current !== null) {
+    tools.stderr.write("[web] another Desk session is installing; keeping the install without the connection reader\n");
+    return Promise.resolve(current);
+  }
   if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it", retry: true });
   return wait(WAIT_STEP_MS).then(function () {
     return ensureInstalled(tools, root, deadline, reader);
@@ -672,7 +681,7 @@ function start(o, io) {
   }
   var real = declaration.state === "declared";
   var holding = null;
-  var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
+  var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
     return failure(io, "node_spawn_failed",
       "Desk found Node " + selection.node.version + " at " + node + " but could not start it: " + describe(error) + ", so the browser is unavailable",

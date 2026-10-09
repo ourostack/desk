@@ -254,7 +254,7 @@ test("connecting names the missing profile, the missing extension and an unreada
 
   const noReader = await real.connect(connectOptions(root, { requireModule: () => { throw new Error("Cannot find module 'classic-level'") } }))
   assert.equal(noReader.payload.code, "browser_token_unreadable")
-  assert.match(noReader.payload.fix, /Delete .*install/u)
+  assert.match(noReader.payload.fix, /^Check that this machine can reach the npm registry, then retry\. If the problem persists after npm works, delete .*install .* installs the browser again\.$/u)
   const plain = await real.connect(connectOptions(root, { requireModule: () => { throw "plain refusal" } }))
   assert.match(plain.payload.summary, /plain refusal/u)
   const noReaderDefault = await real.connect(connectOptions(root))
@@ -1023,15 +1023,26 @@ test("a stale marker does not make a launch wait for another session's install",
   await host.handshake()
   assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
   assert.deepEqual(calls, [])
+  assert.match(host.stderr.join(""), /another Desk session is installing; keeping the install without the connection reader/u)
   await host.close()
 })
 
-test("an install that has no reader keeps working when the reader cannot be installed at all", posixOnly, async () => {
+test("when the reader cannot be installed the existing install is kept and npm's reason goes to stderr without credentials", posixOnly, async () => {
   const machine = await realMachine({ reader: false })
-  const host = session(machine, { npmSpawn: installNpm([], { allFail: true }) })
+  const npmSpawn = installNpm([], { allFail: true })
+  const noisy = (file, argv) => {
+    const child = npmSpawn(file, argv)
+    child.stderr.write("npm error code E401\nnpm error auth failed for https://me:hunter2@registry.example/ _authToken=abc123\n")
+    return child
+  }
+  const host = session(machine, { npmSpawn: noisy })
   await host.handshake()
-  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
+  assert.equal(textOf(await host.call(2)), "ran browser_navigate", "the stubbed reader stands in; only the kept install is under test")
   await host.close()
+  const err = host.stderr.join("")
+  assert.match(err, /could not install the connection reader \(.*\); keeping the install without it/u)
+  assert.equal(/hunter2|abc123|me:/u.test(err), false)
+  assert.match(err, /<redacted>/u)
 })
 
 test("a refresh keeps the token reader on an install that has one, and leaves it off otherwise", posixOnly, async () => {

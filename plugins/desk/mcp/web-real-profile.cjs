@@ -208,7 +208,7 @@ function connect(o) {
   } catch (error) {
     return Promise.resolve({ payload: o.unavailable("browser_token_unreadable",
       "Desk could not load the reader for the Playwright Extension's connection token (" + describe(error) + "), so the browser is unavailable",
-      o.reconnectFix("Delete " + o.installed.dir + " so Desk installs the browser again")) });
+      o.reconnectFix("Check that this machine can reach the npm registry") + " If the problem persists after npm works, delete " + o.installed.dir + " so Desk installs the browser again.") });
   }
   return Promise.resolve().then(function () {
     return readExtensionToken(path.join(path.dirname(statePath), profile), { level: level, tmpdir: either(o.tmpdir, os.tmpdir()) });
