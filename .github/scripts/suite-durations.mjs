@@ -1,8 +1,8 @@
 // Keeps the shard duration table (suite-durations.json) honest.
 // Usage:
-//   node suite-durations.mjs refresh <folder>... [--tests-root <folder>] [--table <file>]   average the per-file times in every results.json found under the folders into the table
+//   node suite-durations.mjs refresh <folder>... [--tests-root <folder>] [--table <file>]   take the median of the per-file times in every results.json found under the folders into the table
 //   node suite-durations.mjs check [--tests-root <folder>] [--table <file>] [--strict]       fail when the table names a test file that no longer exists; --strict also fails for a test file the table lacks
-// The folders are what `gh run download <run> -p "windows-standard-shard-*"` produces. Average several runs to smooth out runner noise.
+// The folders are what `gh run download <run> -p "windows-standard-shard-*"` produces. Use several runs: the median ignores a single slow one.
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -18,6 +18,12 @@ const findResults = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMa
 })
 
 const mean = (values) => (values.length === 0 ? 1 : values.reduce((a, b) => a + b, 0) / values.length)
+// The median, so one run that was slow (a loaded runner, a retry) cannot set a file's weight.
+const median = (values) => {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = sorted.length >> 1
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
 
 // Problems with a table against the test files that exist: `stale` entries name a file that is gone (a rename or delete the table missed), `unlisted` files fall back to the default weight, `invalid` entries are not a positive number.
 export function checkTable(table, testsRoot = defaultTests) {
@@ -33,7 +39,7 @@ export function checkTable(table, testsRoot = defaultTests) {
   }
 }
 
-// Average seconds per file over every results.json under the folders, for files that still exist.
+// Median seconds per file over every results.json under the folders, for files that still exist.
 export function refreshTable(folders, testsRoot = defaultTests, previous = { files: {} }) {
   const suite = new Set(suiteFiles(testsRoot))
   const samples = new Map()
@@ -47,14 +53,14 @@ export function refreshTable(folders, testsRoot = defaultTests, previous = { fil
   // A file with no new sample keeps its old weight; a file with none at all is left to the default.
   for (const file of [...suite].sort()) {
     const seen = samples.get(file)
-    if (seen) files[file] = Math.round((seen.reduce((a, b) => a + b, 0) / seen.length) * 10) / 10
+    if (seen) files[file] = Math.round(median(seen) * 10) / 10
     else if (previous.files?.[file] !== undefined) files[file] = previous.files[file]
   }
   return {
-    note: "Seconds each Windows suite test file took in CI (standard-user shard results), averaged over the source runs. Refresh with: node .github/scripts/suite-durations.mjs refresh <downloaded shard artifact folders>. A file missing here gets defaultSeconds.",
+    note: "Seconds each Windows suite test file took in CI (standard-user shard results), the median over the source runs. Refresh with: node .github/scripts/suite-durations.mjs refresh <downloaded shard artifact folders>. A file missing here gets defaultSeconds.",
     generated: new Date().toISOString().slice(0, 10),
     inputs: inputs.length,
-    // The mean, not the median: most files take a second or two, but a new file that is slow is far likelier than a new file that is faster than typical, and a heavy guess only costs a little balance.
+    // The mean of the per-file medians, not their median: most files take a second or two, but a new file that is slow is far likelier than a new file that is faster than typical, and a heavy guess only costs a little balance.
     defaultSeconds: Math.max(1, Math.round(mean(Object.values(files)))),
     files,
   }

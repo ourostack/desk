@@ -95,7 +95,7 @@ test("checkTable names stale, unlisted and invalid entries", () => {
   }
 })
 
-test("refresh averages the runs, drops files that are gone and keeps an old weight for a file with no new sample", () => {
+test("refresh takes the median of the runs, drops files that are gone and keeps an old weight for a file with no new sample", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-durations-"))
   try {
     for (const f of ["a", "b", "c"]) writeFileSync(path.join(dir, `${f}.test.js`), "")
@@ -106,6 +106,20 @@ test("refresh averages the runs, drops files that are gone and keeps an old weig
     assert.deepEqual(out.files, { "a.test.js": 15, "b.test.js": 7 })
     assert.equal(out.inputs, 2)
     assert.throws(() => refreshTable([], dir))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("refresh takes the median per file, so one outlier run does not set the weight", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-durations-median-"))
+  try {
+    writeFileSync(path.join(dir, "a.test.js"), "")
+    for (const [name, ms] of [["one", 40000], ["two", 36000], ["three", 800000], ["four", 38000]]) {
+      mkdirSync(path.join(dir, "r", name), { recursive: true })
+      writeFileSync(path.join(dir, "r", name, "results.json"), JSON.stringify({ results: [{ file: "a.test.js", ms }] }))
+    }
+    assert.deepEqual(refreshTable([path.join(dir, "r")], dir).files, { "a.test.js": 39 })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

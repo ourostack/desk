@@ -37,11 +37,11 @@ jobs:
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
       fail-fast: false
-      # At most three shards of one run hold a Windows runner at once. The organisation shares about 20 concurrent jobs across every repository, and a full set of shards per pull request let three or four open pull requests starve other repositories' queues. The eight shards (about 20 minutes each, from suite-durations.json) are still all queued, so they run in three waves (3, 3 and 2) and the run takes about 60 minutes instead of about 20, but never holds more than three runners. A test in scripts/windows_suite_cap.test.js pins this number.
+      # At most three shards of one run hold a Windows runner at once. The organisation shares about 20 concurrent jobs across every repository, and a full set of shards per pull request let three or four open pull requests starve other repositories' queues. The eight shards (about 7 minutes of tests each, from suite-durations.json) are still all queued, so they run in three waves (3, 3 and 2). Each job also spends a few minutes on setup, so the capped run takes roughly 30 to 45 minutes (45 minutes in the run that measured it, with runner queueing) instead of about 15, but never holds more than three runners. A test in scripts/windows_suite_cap.test.js pins this number.
       max-parallel: 3
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
-        # Eight shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 213 minutes of test time in all, so six shards cannot get under 34 minutes each). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments and the verdict agree.
+        # Eight shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 53 minutes of test time in all, the median over recent runs since #227 made private-store writes cheap, so each of the eight shards is predicted at about 7 minutes of tests). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments and the verdict agree.
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Check out repository
