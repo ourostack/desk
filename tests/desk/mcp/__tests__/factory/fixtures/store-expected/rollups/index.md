@@ -211,6 +211,6 @@ Sign-off: not recorded in any session of this store.
 - Jobs: 2; open: 1.
 - Unattributed sessions: 1 of 4 (4000 ms of 36000 ms session time).
 - Jobs fully labeled: 0; partially labeled: 1; unlabeled: 0.
-- Labels files: 1; used: 1; unused: none.
+- Labels files: 1; used: 1; unused: none; stop labels dropped: none.
 - Job class: every job is other; published facts do not carry the task card's kind.
 - Search waste: unavailable; published facts do not carry the organization signal.

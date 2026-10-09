@@ -617,13 +617,13 @@ function stopClassifier(timeline, labels) {
   timeline.source_sessions.forEach((session) => {
     const used = labels.byJobSession.get(`${timeline.job}/${session.session.id}`)
     const stops = new Map((used?.stops ?? []).map((stop) => [`${stop.wait[0]}:${stop.wait[1]}`, stop]))
-    sessions.set(`${session.session.host}/${session.session.id}`, { shared: ownShare(session, timeline.job) !== null, stops })
+    sessions.set(`${session.session.host}/${session.session.id}`, { shareKnown: ownShare(session, timeline.job) !== null, stops })
   })
   const notKnown = (reason, source = "none", confidence = null) => ({ why: NOT_KNOWN, why_source: source, confidence, reason })
   return (wait) => {
     if (wait.stop !== null && Object.hasOwn(STOP_RULES, wait.stop.end)) return { why: STOP_RULES[wait.stop.end], why_source: "rule", confidence: RULE_CONFIDENCE, reason: null }
     const session = sessions.get(`${wait.host}/${wait.session}`)
-    if (!session.shared) return notKnown("outside_own_share")
+    if (!session.shareKnown) return notKnown("outside_own_share")
     const label = session.stops.get(`${wait.range[0]}:${wait.range[1]}`)
     if (label !== undefined) return label.why === STOP_UNKNOWN ? notKnown("could_not_tell", "evaluator", label.confidence) : { why: label.why, why_source: "evaluator", confidence: label.confidence, reason: null }
     return notKnown(wait.stop === null ? "not_in_published_facts" : "not_labeled")
@@ -1080,7 +1080,8 @@ export function causesRollup({ records, walks, labels }) {
   const total = rows.reduce((sum, row) => sum + row.total_ms, 0)
   const references = (parts) => parts.map((part) => ({ part, rank: part.start_ms - part.end_ms, job: part.job, start_ms: part.start_ms })).sort((left, right) => compareFields(left, right, ["rank", "job", "start_ms"])).slice(0, CAUSE_REFERENCES).map((entry) => entry.part)
   // The parent row lists its sub-causes, the classes first in `WHY_SPLIT` order; they are not ranked beside it, so the ranking and its
-  // total are unchanged. The not-known sub-cause names the reasons that hold its time.
+  // total are unchanged. The not-known sub-cause names the reasons that hold its time; while it has any, each class is a lower bound.
+  const unclassified = children.get(NOT_KNOWN).total_ms > 0
   const childRows = () => WHY_SPLIT.filter((why) => children.get(why).total_ms > 0).map((why) => {
     const child = children.get(why)
     return {
@@ -1092,7 +1093,8 @@ export function causesRollup({ records, walks, labels }) {
       share: child.total_ms / total,
       jobs: [...child.jobs].sort(compareText),
       spans: references(child.parts),
-      ...(why === NOT_KNOWN ? { reasons: [...child.reasons].sort(compareText) } : {}),
+      // A class's job-hours are at least this while any of its parent's time is not known; the not-known row names its reasons.
+      ...(why === NOT_KNOWN ? { reasons: [...child.reasons].sort(compareText) } : unclassified ? { reasons: [PARTLY_CLASSIFIED], bound: "lower" } : { reasons: [] }),
     }
   })
   let running = 0

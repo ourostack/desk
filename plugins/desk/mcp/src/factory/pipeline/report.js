@@ -69,9 +69,9 @@ const REPORT_REASON_TEXT = {
   job_offsets_withheld: "the desk withholds this task's timing because its remote is public",
   // Why the agent stopped before a wait for the next prompt, when it is not known, and the split by why.
   could_not_tell: "the evaluator read this wait's evidence and could not tell why the agent stopped",
-  stop_not_recorded: "no record of the agent's stop holds this time: the host does not record stops, or no recorded wait covers the moment",
+  stop_not_recorded: "no recorded wait for the operator covers this time, so there is no record of why the agent stopped, and some hosts do not record stops",
   outside_own_share: "the facts do not say which part of the session was this task's, so the evaluator does not judge this wait for it",
-  stop_partly_classified: "why the agent stopped is not known for some of this waiting, so each reason's time is at least this much",
+  stop_partly_classified: "why the agent stopped is not known for some of this waiting, and some of that may belong here, so this is at least this much",
 }
 
 // What the independent evaluator's labels file can declare unreadable, and the codes of the check of labels against facts.

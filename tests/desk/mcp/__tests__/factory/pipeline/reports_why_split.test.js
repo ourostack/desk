@@ -6,7 +6,7 @@ import assert from "node:assert/strict"
 import { calculateFormulas } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js"
 import { normalizePublished } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
 import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
-import { jobRecord, resolveLabels } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
+import { computeRollups, jobRecord, resolveLabels } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
 import { timelineAdditions } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/stretches.js"
 import { buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 import { NOT_KNOWN_REASONS, REASON_CHANGE, WHY_CLASSES, WHY_SPLIT, bounded, causesRollup, figure, jobWalk, stackupRollup, tasksRollup } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/walk.js"
@@ -156,6 +156,10 @@ test("labels made before the facts were derived again whose stops now conflict w
   assert.equal(labels.byJobSession.has(`${J("a")}/${S(4)}`), true, "the stretches still match their facts, so the file is used")
   assert.deepEqual(labels.unused, [])
   assert.deepEqual(labels.byJobSession.get(`${J("a")}/${S(4)}`).stops, [], "only the stops that conflict are left out")
+  // The dropped stops are counted by the check's code, beside the unused files, so the relabel backlog shows.
+  assert.deepEqual(labels.stops_dropped, [{ reason: "evidence_unmatched", stops: 1 }, { reason: "inconsistent", stops: 1 }])
+  const coverage = computeRollups({ records: walks.map(({ record }) => record), sessions: [session], labels }).coverage
+  assert.deepEqual(coverage.labels.stops_dropped, labels.stops_dropped)
   const walk = walks[0].walk
   assert.deepEqual(whyOf(walk), [[10, "interrupted", "rule", "high", []], [40, "not_known", "none", null, ["not_labeled"]]])
   assert.equal(walk.task.value_in_working_ms.value, 10 * MIN)
@@ -164,6 +168,7 @@ test("labels made before the facts were derived again whose stops now conflict w
   const broken = labelsFile(J("a"), S(4), [stretch(0, 10 * MIN, "value", null, [[0, 9 * MIN]])], [stopLabel(40 * MIN, 60 * MIN, "acceptance")])
   const again = walksOf([session], [broken])
   assert.deepEqual(again.labels.unused, [{ reason: "evidence_unmatched", files: 1 }])
+  assert.deepEqual(again.labels.stops_dropped, [], "a file left unused drops no stop on its own")
   assert.deepEqual(whyOf(again.walks[0].walk)[1], [40, "not_known", "none", null, ["not_labeled"]])
 })
 
@@ -378,7 +383,15 @@ test("the causes rollup splits waiting for the next prompt into sub-cause rows b
   assert.equal(child.share, child.total_ms / causes.total_ms)
   assert.deepEqual(child.spans, [{ job: J("a"), start_ms: 10 * MIN, end_ms: 30 * MIN }])
   assert.deepEqual(parent.children.at(-1).reasons, ["could_not_tell", "not_labeled"])
-  assert.equal(Object.hasOwn(child, "reasons"), false)
+  // While some of it is not known, each class's job-hours are at least its figure, and say so.
+  for (const row of parent.children.slice(0, -1)) assert.deepEqual([row.reasons, row.bound], [["stop_partly_classified"], "lower"], row.cause)
+  assert.equal(Object.hasOwn(parent.children.at(-1), "bound"), false)
+  // With every wait classified, the classes are exact.
+  const whole = facts({ id: S(18), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("rate_limit")), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("b"), 0, { done: 60 * MIN, length: 60 * MIN })] })
+  const exact = walksOf([whole], [labelsFile(J("b"), S(18), [stretch(0, 10 * MIN, "value", null, [[0, 10 * MIN]])], [])])
+  const exactCauses = causesRollup({ records: exact.walks.map(({ record }) => record), walks: exact.walks.map(({ walk }) => walk), labels: exact.labels })
+  const [only] = exactCauses.causes.find((row) => row.cause === "waiting:next_prompt").children
+  assert.deepEqual([only.cause, only.reasons, Object.hasOwn(only, "bound")], ["waiting:next_prompt:error_limit", [], false])
   // Other causes have no children.
   assert.ok(causes.causes.filter((row) => row.cause !== "waiting:next_prompt").every((row) => !Object.hasOwn(row, "children")))
 })
@@ -386,6 +399,8 @@ test("the causes rollup splits waiting for the next prompt into sub-cause rows b
 // --- words and directions ----------------------------------------------------------------------------------------------------
 
 test("every new reason has plain words, and a class is at least its figure while some waiting is not classified", () => {
+  assert.equal(REASON_TEXT.stop_not_recorded, "no recorded wait for the operator covers this time, so there is no record of why the agent stopped, and some hosts do not record stops")
+  assert.equal(REASON_TEXT.stop_partly_classified, "why the agent stopped is not known for some of this waiting, and some of that may belong here, so this is at least this much")
   for (const reason of ["could_not_tell", "stop_not_recorded", "outside_own_share", "stop_partly_classified", "not_labeled", "not_in_published_facts"]) {
     assert.equal(typeof REASON_TEXT[reason], "string", reason)
     assert.ok(!/[_;()]/u.test(REASON_TEXT[reason]), reason)
