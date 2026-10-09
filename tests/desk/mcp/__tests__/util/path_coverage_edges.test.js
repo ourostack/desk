@@ -64,7 +64,7 @@ test("write confinement refuses an escaping platform resolution before filesyste
   assert.deepEqual(await fs.readdir(deskRoot), [])
 })
 
-test("target realpath failures other than ENOENT reach the caller unchanged", async (t) => {
+test("target realpath failures other than ENOENT are refused by relative path and code", async (t) => {
   const deskRoot = await temporaryRoot(t)
   const target = path.join(deskRoot, "task.md")
   await fs.writeFile(target, "unchanged\n")
@@ -77,7 +77,7 @@ test("target realpath failures other than ENOENT reach the caller unchanged", as
     return originalRealpath(candidate, ...options)
   })
   try {
-    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), (error) => error === failure)
+    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), { message: "desk-mcp: cannot read task.md (EACCES)" })
     assert.deepEqual(observed, [deskRoot, target])
   } finally {
     t.mock.restoreAll()

@@ -384,8 +384,19 @@ export const EFFECTIVE_ROOT_MISSING = "desk-mcp: effective write root does not e
 // tool. Returns null for a path that is not inside the desk, so no refusal ever prints where that path is.
 function deskRelative(deskRoot, candidate) {
   const relative = path.relative(path.resolve(deskRoot), candidate)
-  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null
-  return relative.split(path.sep).join("/")
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null
+  // The desk root itself has no relative spelling; a path inside the desk always has a name to print.
+  return relative === "" ? "the desk root" : relative.split(path.sep).join("/")
+}
+
+// A filesystem error another refusal does not already cover (a link loop, a folder the process may not read), as a Desk refusal that names the
+// path relative to the desk and keeps the error code readable. Node's own message carries the absolute path, so only its leading description is
+// kept. An error with no code is not a filesystem error and is returned as it came.
+function readRefusal(deskRoot, candidate, error) {
+  if (typeof error?.code !== "string") return error
+  const message = String(error.message)
+  const reason = message.startsWith(`${error.code}: `) ? message.split(", ")[0] : error.code
+  return new Error(`desk-mcp: cannot read ${deskRelative(deskRoot, candidate)} (${reason})`)
 }
 
 export async function resolveWriteTarget({
@@ -453,7 +464,7 @@ async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot 
   for (const [index, segment] of rootSegments.entries()) {
     lexicalCursor = path.join(lexicalCursor, segment)
     realCursor = path.join(realCursor, segment)
-    const stat = await lstatIfExists(lexicalCursor)
+    const stat = await lstatIfExists(deskRoot, lexicalCursor)
     if (stat === null) {
       if (createPersonRoot === false) {
         throw new Error(`${EFFECTIVE_ROOT_MISSING}: ${deskRelative(deskRoot, lexicalCursor)}`)
@@ -476,8 +487,7 @@ async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot 
     }
   }
 
-  const resolvedRoot = await fs.realpath(effectiveRoot)
-  return resolvedRoot
+  return realpathOrSymlinkError(deskRoot, effectiveRoot)
 }
 
 async function validateExistingTarget({
@@ -489,14 +499,14 @@ async function validateExistingTarget({
   let cursor = effectiveRoot
   for (const [index, segment] of segments.entries()) {
     cursor = path.join(cursor, segment)
-    const stat = await lstatIfExists(cursor)
+    const stat = await lstatIfExists(deskRoot, cursor)
     if (stat === null) return
 
     const resolved = await realpathOrSymlinkError(deskRoot, cursor)
     if (!isPathContained(realEffectiveRoot, resolved)) {
       // Nothing in the segments can climb (validateWriteSegment refuses `..`), so a path that leaves is always leaving through a link. Say whether
       // it leaves the desk or only the person folder, and never where it leads.
-      const where = isPathContained(await fs.realpath(deskRoot), resolved) ? "effective write root" : "the desk"
+      const where = isPathContained(await realpathOrSymlinkError(deskRoot, deskRoot), resolved) ? "effective write root" : "the desk"
       throw new Error(
         `desk-mcp: ${deskRelative(deskRoot, cursor)} resolves outside ${where} (via a symbolic link)`,
       )
@@ -504,7 +514,7 @@ async function validateExistingTarget({
     // Something on the way to the last segment must be a folder. Windows reports a path under a file as missing and
     // POSIX reports ENOTDIR, so the next lstat would differ by platform (and mkdir would fail with a raw error):
     // stop at the file here, with the same refusal everywhere. A link is judged by what it leads to.
-    if (index < segments.length - 1 && !(stat.isSymbolicLink() ? await fs.stat(resolved) : stat).isDirectory()) {
+    if (index < segments.length - 1 && !(stat.isSymbolicLink() ? await statOrRefusal(deskRoot, cursor, resolved) : stat).isDirectory()) {
       throw new Error(
         `desk-mcp: write target runs under a file, not a folder: ${deskRelative(deskRoot, cursor)}`,
       )
@@ -519,12 +529,20 @@ async function realDirectory(candidate) {
     stat = await fs.stat(candidate)
   } catch (error) {
     if (error?.code === "ENOENT") throw new Error("desk-mcp: the desk root does not exist")
-    throw error
+    throw readRefusal(candidate, candidate, error)
   }
   if (!stat.isDirectory()) {
     throw new Error("desk-mcp: the desk root is not a directory")
   }
-  return fs.realpath(candidate)
+  return realpathOrSymlinkError(candidate, candidate)
+}
+
+async function statOrRefusal(deskRoot, candidate, target) {
+  try {
+    return await fs.stat(target)
+  } catch (error) {
+    throw readRefusal(deskRoot, candidate, error)
+  }
 }
 
 async function realpathOrSymlinkError(deskRoot, candidate) {
@@ -534,16 +552,16 @@ async function realpathOrSymlinkError(deskRoot, candidate) {
     if (error?.code === "ENOENT") {
       throw new Error(`desk-mcp: broken symlink in write target: ${deskRelative(deskRoot, candidate)}`)
     }
-    throw error
+    throw readRefusal(deskRoot, candidate, error)
   }
 }
 
-async function lstatIfExists(candidate) {
+async function lstatIfExists(deskRoot, candidate) {
   try {
     return await fs.lstat(candidate)
   } catch (error) {
     if (error?.code === "ENOENT") return null
-    throw error
+    throw readRefusal(deskRoot, candidate, error)
   }
 }
 

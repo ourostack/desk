@@ -241,7 +241,7 @@ test("resolveWriteTarget rejects a symlink to the effective root parent", async 
   )
 })
 
-test("resolveWriteTarget propagates non-missing filesystem errors", { skip: NO_POSIX_MODES }, async () => {
+test("resolveWriteTarget refuses non-missing filesystem errors by relative path", { skip: NO_POSIX_MODES }, async () => {
   const root = await makeRoot()
   const blocked = path.join(root, "blocked")
   await fs.mkdir(blocked)
@@ -254,7 +254,7 @@ test("resolveWriteTarget propagates non-missing filesystem errors", { skip: NO_P
         person: null,
         segments: ["blocked", "task.md"],
       }),
-      (error) => error?.code === "EACCES",
+      { message: "desk-mcp: cannot read blocked/task.md (EACCES: permission denied)" },
     )
   } finally {
     await fs.chmod(blocked, 0o700)

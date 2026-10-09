@@ -111,15 +111,60 @@ test("a desk root that is missing or is a file is refused as the desk root, with
   assert.equal(await refusalOf({ deskRoot: file, segments: ["t.md"] }, root), "desk-mcp: the desk root is not a directory")
 })
 
-test("a desk root error other than a missing one reaches the caller unchanged", { skip: NO_POSIX_MODES }, async () => {
+test("a desk root that cannot be read is refused as the desk root, with its error code and no path", { skip: NO_POSIX_MODES }, async () => {
   const { root } = await scene()
   const closed = path.join(root, "closed")
   await fs.mkdir(path.join(closed, "desk"), { recursive: true })
   await fs.chmod(closed, 0o000)
   try {
-    await assert.rejects(resolveWriteTarget({ deskRoot: path.join(closed, "desk"), segments: ["t.md"] }), { code: "EACCES" })
+    assert.equal(
+      await refusalOf({ deskRoot: path.join(closed, "desk"), segments: ["t.md"] }, root),
+      "desk-mcp: cannot read the desk root (EACCES: permission denied)",
+    )
   } finally {
     await fs.chmod(closed, 0o700)
+  }
+})
+
+test("a symbolic link loop is refused by its desk-relative path with ELOOP, and so is a folder that cannot be read", { skip: NO_POSIX_MODES }, async () => {
+  const { root } = await scene()
+  await fs.mkdir(path.join(root, "t"))
+  await fs.symlink("b", path.join(root, "t", "a"))
+  await fs.symlink("a", path.join(root, "t", "b"))
+  assert.equal(
+    await refusalOf({ deskRoot: root, segments: ["t", "a", "x.md"] }, root),
+    "desk-mcp: cannot read t/a (ELOOP: too many symbolic links encountered)",
+  )
+  await fs.mkdir(path.join(root, "closed", "inner"), { recursive: true })
+  await fs.symlink(path.join(root, "closed", "inner", "gone"), path.join(root, "t", "dangling"))
+  await fs.chmod(path.join(root, "closed"), 0o000)
+  try {
+    assert.equal(
+      await refusalOf({ deskRoot: root, segments: ["t", "dangling", "x.md"] }, root),
+      "desk-mcp: cannot read t/dangling (EACCES: permission denied)",
+    )
+    assert.equal(
+      await refusalOf({ deskRoot: root, segments: ["closed", "inner", "x.md"] }, root),
+      "desk-mcp: cannot read closed/inner (EACCES: permission denied)",
+    )
+  } finally {
+    await fs.chmod(path.join(root, "closed"), 0o700)
+  }
+})
+
+test("a link whose target cannot be inspected is refused by the link's desk-relative path", { skip: NO_POSIX_MODES }, async (t) => {
+  const { root } = await scene()
+  await fs.mkdir(path.join(root, "real"))
+  await fs.symlink(path.join(root, "real"), path.join(root, "dirlink"))
+  const stat = fs.stat
+  t.mock.method(fs, "stat", async (candidate, ...rest) => {
+    if (candidate === path.join(root, "real")) throw Object.assign(new Error(`EIO: i/o error, stat '${candidate}'`), { code: "EIO" })
+    return stat(candidate, ...rest)
+  })
+  try {
+    assert.equal(await refusalOf({ deskRoot: root, segments: ["dirlink", "x.md"] }, root), "desk-mcp: cannot read dirlink (EIO: i/o error)")
+  } finally {
+    t.mock.restoreAll()
   }
 })
 
