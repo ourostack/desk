@@ -22,9 +22,12 @@ function refuse(res, status, code, message) {
   res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
 }
 
+// `spawnDesk({ auth, sessionId })` returns the Desk child for a new session,
+// or a promise of it; `auth` is the SDK AuthInfo of the initializing request.
 export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, callTimeoutMs = 200_000 }) {
   // Insertion order is recency order: touching a session moves it to the end.
   const sessions = new Map();
+  let starting = 0;
 
   function touch(session) {
     if (session.closed) return;
@@ -58,8 +61,7 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   }
 
-  function startDesk(session) {
-    const child = spawnDesk({ login: session.login, sessionId: session.id });
+  function attachDesk(session, child) {
     session.child = child;
     session.exited = new Promise((resolve) => {
       child.once("close", resolve);
@@ -102,12 +104,15 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     return timer;
   }
 
-  function openSession(login) {
-    const session = { id: randomUUID(), login, pending: new Map(), closed: false, child: null, exited: Promise.resolve() };
+  function openSession(id, login, child) {
+    const session = { id, login, pending: new Map(), closed: false, initialized: false, child: null, exited: Promise.resolve() };
     session.transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => session.id,
-      onsessioninitialized: () => startDesk(session),
+      onsessioninitialized: () => {
+        session.initialized = true;
+      },
     });
+    attachDesk(session, child);
     session.transport.onmessage = (message) => {
       if (isJSONRPCRequest(message)) session.pending.set(message.id, startDeadline(session, message.id));
       session.child.stdin.write(JSON.stringify(message) + "\n");
@@ -145,13 +150,26 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
       return refuse(res, 400, -32000, "Bad Request: No valid session ID provided");
     }
     if (typeof login !== "string" || login === "") return refuse(res, 403, -32000, "Forbidden: token has no login");
-    if (sessions.size >= maxSessions && !reapIdle()) {
+    if (sessions.size + starting >= maxSessions && !reapIdle()) {
       return refuse(res, 503, -32000, "Service Unavailable: every session is busy");
     }
-    const session = openSession(login);
+    // The Desk child starts before the transport sees the initialize, so it
+    // is ready for the first message; a spawn still in progress holds its slot.
+    const id = randomUUID();
+    let child;
+    starting += 1;
+    try {
+      child = await spawnDesk({ auth, sessionId: id });
+    } catch (error) {
+      log(`could not start Desk for a new session: ${error.message}`);
+      return refuse(res, 502, -32000, "Bad Gateway: Desk could not be started; try again shortly.");
+    } finally {
+      starting -= 1;
+    }
+    const session = openSession(id, login, child);
     await session.transport.handleRequest(req, res, req.body);
     // The transport refused the initialize (a bad header, say) without starting a session.
-    if (session.child === null) closeSession(session, "initialize refused");
+    if (!session.initialized) closeSession(session, "initialize refused");
   }
 
   async function close() {

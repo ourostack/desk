@@ -5,8 +5,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { delimiter, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProvider } from "./auth/provider.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
@@ -18,6 +18,9 @@ export const NOT_SET_UP = "Hosted Desk is not set up yet: its GitHub App is miss
 const APP_SETTINGS = ["DESK_APP_ID", "DESK_APP_KEY_FILE", "DESK_APP_CLIENT_ID", "DESK_APP_CLIENT_SECRET"];
 // The only parts of the gateway's own environment a Git or Desk child gets.
 const PASSED_THROUGH = ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "TMPDIR"];
+
+// The gh shim's directory, put first on a Desk child's PATH.
+const SHIM_DIR = fileURLToPath(new URL("../bin", import.meta.url));
 
 const log = (message) => process.stderr.write(`desk-hosted: ${message}\n`);
 const isSet = (value) => typeof value === "string" && value.trim() !== "" && value.trim() !== "unset";
@@ -56,12 +59,15 @@ export const deskChildArgs = (config) => [join(config.pluginDir, "mcp", "index.j
 const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((name) => baseEnv[name] !== undefined).map((name) => [name, baseEnv[name]]));
 
 // A Desk child's whole environment. Its detached push worker inherits it, so
-// it carries the token socket; it never carries the App's key or secrets.
-export function deskChildEnv({ config, user, token, socketPath, baseEnv }) {
+// it carries the token socket; it never carries a token, the App's key or its
+// secrets. Git gets tokens through the credential helper and gh through the
+// shim first on PATH, each fresh from the socket.
+export function deskChildEnv({ config, user, socketPath, baseEnv }) {
   const name = user.name || user.login;
   const email = `${user.userId}+${user.login}@users.noreply.github.com`;
   return {
     ...passedThrough(baseEnv),
+    PATH: [SHIM_DIR, baseEnv.PATH].filter(Boolean).join(delimiter),
     GIT_TERMINAL_PROMPT: "0",
     DESK_HOSTED: "1",
     DESK: config.cloneDir,
@@ -69,7 +75,6 @@ export function deskChildEnv({ config, user, token, socketPath, baseEnv }) {
     GIT_COMMITTER_NAME: name,
     GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_EMAIL: email,
-    GH_TOKEN: token,
     DESK_TOKEN_SOCKET: socketPath,
   };
 }
@@ -93,32 +98,14 @@ export async function main(env = process.env) {
     await ensureClone({ dir: config.cloneDir, repo: config.repo, git: (args, options) => runGit(args, { ...options, env: gitEnv }) });
     log(`desk clone ready at ${config.cloneDir}`);
 
-    // spawnDesk runs synchronously inside the relay, so the token and the
-    // user's identity are fetched before a new session reaches it.
-    const users = new Map();
-    let token = null;
-    const deskRelay = createRelay({
-      spawnDesk: ({ login }) =>
+    relay = createRelay({
+      spawnDesk: ({ auth }) =>
         spawn(process.execPath, deskChildArgs(config), {
           stdio: "pipe",
-          env: deskChildEnv({ config, user: users.get(login), token, socketPath, baseEnv: env }),
+          env: deskChildEnv({ config, user: auth.extra, socketPath, baseEnv: env }),
         }),
     });
-    cleanups.push(() => deskRelay.close());
-    relay = {
-      async handle(req, res, auth) {
-        if (req.headers["mcp-session-id"] === undefined) {
-          users.set(auth.extra.login, auth.extra);
-          try {
-            token = (await mint()).token;
-          } catch (error) {
-            log(`could not mint an installation token: ${error.message}`);
-            return res.status(502).json({ jsonrpc: "2.0", error: { code: -32000, message: "Desk could not get GitHub access; try again shortly." }, id: null });
-          }
-        }
-        return deskRelay.handle(req, res, auth);
-      },
-    };
+    cleanups.push(() => relay.close());
   } else {
     log(NOT_SET_UP);
   }

@@ -11,12 +11,17 @@ const PROTOCOL = "2025-06-18";
 
 // Starts a relay behind Express with a fixture Desk child per session. The
 // test's token login comes from the x-test-login header (default arimendelow).
-async function start(t, options = {}) {
+// spawnDesk is async, as the gateway's is.
+// `beforeSpawn(auth)`, when given, runs (and may delay or fail) before each
+// child starts, the way the gateway fetches a token first.
+async function start(t, { beforeSpawn, ...options } = {}) {
   const children = [];
   const spawned = [];
   const relay = createRelay({
     ...options,
-    spawnDesk({ login, sessionId }) {
+    async spawnDesk({ auth, sessionId }) {
+      await beforeSpawn?.(auth);
+      const login = auth.extra.login;
       const child = spawn(process.execPath, [FIXTURE], { stdio: "pipe", env: { ...process.env, ECHO_LOGIN: login } });
       const closed = once(child, "close");
       children.push({ child, closed });
@@ -110,6 +115,36 @@ test("two sessions get two children", async (t) => {
   assert.equal(children.length, 2);
   assert.notEqual(children[0].child.pid, children[1].child.pid);
   assert.equal(relay.size(), 2);
+});
+
+test("two concurrent initializes for different logins each get a child of their own login", async (t) => {
+  const delays = { arimendelow: 150, someone: 0 };
+  const { url, spawned } = await start(t, { beforeSpawn: (auth) => new Promise((resolve) => setTimeout(resolve, delays[auth.extra.login])) });
+  const [ari, other] = await Promise.all([post(url, initialize(), { login: "arimendelow" }), post(url, initialize(), { login: "someone" })]);
+  assert.equal(ari.status, 200);
+  assert.equal(other.status, 200);
+  assert.deepEqual(
+    spawned.map(({ login, sessionId }) => [login, sessionId]).sort(),
+    [["arimendelow", ari.sessionId], ["someone", other.sessionId]].sort(),
+  );
+  for (const [reply, login] of [[ari, "arimendelow"], [other, "someone"]]) {
+    await post(url, { jsonrpc: "2.0", method: "notifications/initialized" }, { sessionId: reply.sessionId, login });
+    const call = await post(url, callTool(2, "echo", { text: "hi" }), { sessionId: reply.sessionId, login });
+    assert.equal(call.messages[0].result.content[0].text, `${login}:hi`);
+  }
+});
+
+test("a spawn that fails answers the initialize with 502 and opens no session", async (t) => {
+  const { relay, url, children } = await start(t, { beforeSpawn: async () => Promise.reject(new Error("no installation token")) });
+  const stderr = t.mock.method(process.stderr, "write", () => true);
+  const reply = await post(url, initialize());
+  stderr.mock.restore();
+  assert.match(String(stderr.mock.calls[0]?.arguments[0]), /could not start Desk for a new session: no installation token/);
+  assert.equal(reply.status, 502);
+  assert.equal(reply.messages[0].error.code, -32000);
+  assert.equal(reply.sessionId, null);
+  assert.equal(relay.size(), 0);
+  assert.equal(children.length, 0);
 });
 
 test("an unknown session id answers 404", async (t) => {

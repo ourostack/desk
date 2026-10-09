@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { readConfig, deskChildEnv, deskChildArgs } from "../src/main.js";
 
 const FULL = {
@@ -48,12 +49,11 @@ test("a Desk child runs Desk's MCP server on the clone", () => {
   assert.deepEqual(deskChildArgs(readConfig(FULL)), ["/app/plugins/desk/mcp/index.js", "--root", "/data/desk"]);
 });
 
-test("a Desk child's environment carries the user's Git identity and tokens, and no App secret", () => {
+test("a Desk child's environment carries the user's Git identity, the token socket and the gh shim, and no token or App secret", () => {
   const base = { ...FULL, PATH: "/usr/bin", HOME: "/home/desk", OTHER_SECRET: "x" };
   const env = deskChildEnv({
     config: readConfig(FULL),
     user: { login: "arimendelow", userId: 16390116, name: "Ari Mendelow" },
-    token: "ghs_installation",
     socketPath: "/run/desk/git-token.sock",
     baseEnv: base,
   });
@@ -63,9 +63,9 @@ test("a Desk child's environment carries the user's Git identity and tokens, and
   assert.equal(env.GIT_COMMITTER_NAME, "Ari Mendelow");
   assert.equal(env.GIT_AUTHOR_EMAIL, "16390116+arimendelow@users.noreply.github.com");
   assert.equal(env.GIT_COMMITTER_EMAIL, "16390116+arimendelow@users.noreply.github.com");
-  assert.equal(env.GH_TOKEN, "ghs_installation");
+  assert.equal(env.GH_TOKEN, undefined, "gh gets a fresh token per call from the shim instead");
   assert.equal(env.DESK_TOKEN_SOCKET, "/run/desk/git-token.sock");
-  assert.equal(env.PATH, "/usr/bin");
+  assert.deepEqual(env.PATH.split(":"), [fileURLToPath(new URL("../bin", import.meta.url)), "/usr/bin"], "the gh shim comes first on PATH");
   assert.equal(env.HOME, "/home/desk");
   for (const value of Object.values(env)) {
     for (const secret of ["signing-key", "client-secret", "/secrets/app.pem", "x"]) assert.notEqual(value, secret);
@@ -77,7 +77,6 @@ test("a user without a display name commits under their login", () => {
   const env = deskChildEnv({
     config: readConfig(FULL),
     user: { login: "arimendelow", userId: 16390116, name: null },
-    token: "t",
     socketPath: "/s",
     baseEnv: {},
   });
