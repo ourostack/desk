@@ -211,7 +211,7 @@ test("a running owner that is only busy gets one longer handshake and is joined,
   t.after(() => running.close())
   const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
   // Name a running process other than this one as the owner, and answer the first handshake too late.
-  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" })
   t.after(() => killAndWait(sleeper))
   await new Promise((resolve) => sleeper.once("spawn", resolve))
   // With that process's own start time, so the record names it exactly, as its owner's own record would.

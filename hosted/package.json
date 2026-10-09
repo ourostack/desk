@@ -1,0 +1,17 @@
+{
+  "name": "@ourostack/desk-hosted",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hosted Desk gateway: serves Desk's own stdio MCP server to claude.ai as a remote MCP server.",
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

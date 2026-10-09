@@ -98,7 +98,12 @@ export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl 
 
 async function workerRunning(root, now) {
   try {
-    const stat = await fsp.lstat(path.join(root, "locks", LOOP_LOCK_NAME))
+    const locks = path.join(root, "locks")
+    // Windows reports ENOENT for a leaf below a non-directory too.
+    if (!(await fsp.lstat(locks)).isDirectory()) {
+      throw new Error("factory loop locks path is not a directory")
+    }
+    const stat = await fsp.lstat(path.join(locks, LOOP_LOCK_NAME))
     return now - stat.mtimeMs < KICK_LOCK_AGE_MS
   } catch (error) {
     if (error.code === "ENOENT") return false

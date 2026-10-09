@@ -615,6 +615,7 @@ test("coverage counts unattributed sessions and time, label use, and the two sig
       files: 9,
       used: 7,
       unused: [{ reason: "evidence_unmatched", files: 1 }, { reason: "facts_missing", files: 1 }],
+      stops_dropped: [],
       jobs_labeled: 4,
       jobs_partially_labeled: 1,
       jobs_unlabeled: 0,
@@ -902,7 +903,7 @@ test("the rollups page prints states, n of N and plain reasons, and a tool kind 
   assert.match(text, /\| Tool kind \| State \| Calls \| Failures \| Sessions counted \(n of N\) \| Why not whole \|/u)
   assert.match(text, /\| shell \| not recorded \| not recorded \| not recorded \| 0 of 2 \| the host does not record it and the session log was missing \|/u)
   assert.match(text, /Muda time: 14000 ms \(partial\) across 4 of 6 jobs fully labeled; excluded: the job is not finished \(1 job\), only some sessions supplied it \(1 job\)\./u)
-  assert.match(text, /unused: the labeled evidence no longer matches the facts \(1 file\), the session's facts are missing \(1 file\)\./u)
+  assert.match(text, /unused: the labeled evidence no longer matches the facts \(1 file\), the session's facts are missing \(1 file\); stop labels dropped: none\./u)
   for (const row of text.split("\n").filter((line) => /^\| [a-z_]+( \(quality\))? \| (measured|partial|not recorded) \|/u.test(line))) {
     assert.match(row, /\| \d+ of \d+ \|/u, row)
   }

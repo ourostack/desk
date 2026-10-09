@@ -97,7 +97,7 @@ test("a hung controller is reported with its owner and endpoint, never signalled
 
 test("a socket that refuses, or is gone, while its owner runs is unreachable, not refused or missing", { skip: posixOnly }, async (t) => {
   const context = await fixture(t, "desk-hung-unreachable-")
-  const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" })
   t.after(() => killAndWait(owner))
   const dead = await silentChild(context.endpoint)
   dead.kill("SIGKILL")

@@ -17,6 +17,8 @@ const localControllers = new Map()
 const ABANDONED_RECHECK_MS = 50
 // A running owner that is only busy gets one longer handshake before the session gives up on it for this attempt.
 const LIVE_OWNER_HANDSHAKE_MS = 1000
+// A controller that lost the bind knows another controller is starting; it waits for that one before it gives up on the election. On Windows the winner reads its process start through PowerShell after binding, which takes seconds, so the wait is twice the 5 s the read is capped at (process-start.js), which also covers a winner that bound late. Elsewhere the winner publishes within milliseconds and the wait stays short.
+const ELECTION_WAIT_MS = { win32: 10_000, darwin: 500, linux: 500 }
 const controllerStarts = new Map()
 const privateDirectoryValidators = {
   win32: Object,
@@ -49,6 +51,7 @@ export async function connectOrStartController({
   onRepair = () => {},
   startController = startReadinessController,
   env = process.env,
+  electionWaitMs = ELECTION_WAIT_MS[process.platform],
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
@@ -80,6 +83,7 @@ export async function connectOrStartController({
         identity,
         stateDir,
         startController,
+        electionWaitMs,
       })
       controllerStarts.set(identity.id, start)
     }
@@ -113,6 +117,7 @@ async function startOrReuseController({
   identity,
   stateDir,
   startController,
+  electionWaitMs,
 }) {
   const existing = await tryHandshake({ endpoint, identity, stateDir })
   if (existing) {
@@ -141,7 +146,7 @@ async function startOrReuseController({
     if (!isControllerElectionCollision(error)) {
       throw error
     }
-    await waitForHandshake({ endpoint, identity, stateDir })
+    await waitForHandshake({ endpoint, identity, stateDir, waitMs: electionWaitMs })
   }
 }
 
@@ -223,9 +228,18 @@ async function tryHandshake({ endpoint, identity, stateDir, timeoutMs = 100 }) {
   }
 }
 
-async function waitForHandshake({ endpoint, identity, stateDir }) {
+function pipeIsFree(endpoint) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(endpoint)
+    socket.once("connect", () => { socket.destroy(); resolve(false) })
+    socket.once("error", (error) => resolve(error.code === "ENOENT" || error.code === "ECONNREFUSED"))
+  })
+}
+
+async function waitForHandshake({ endpoint, identity, stateDir, waitMs }) {
   let lastError
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  const deadline = Date.now() + waitMs
+  while (true) {
     try {
       const result = await tryHandshake({ endpoint, identity, stateDir })
       if (result) {
@@ -235,6 +249,12 @@ async function waitForHandshake({ endpoint, identity, stateDir }) {
     } catch (error) {
       if (error.code === "controller_semantic_mismatch") throw error
       lastError = error
+    }
+    if (Date.now() >= deadline) break
+    // A winner that died leaves the pipe free; no handshake will come, so the session gives up now and is elected again on its next attempt.
+    if (await pipeIsFree(endpoint)) {
+      lastError = new Error("readiness controller election winner is gone")
+      break
     }
     await new Promise((resolve) => setTimeout(resolve, 25))
   }

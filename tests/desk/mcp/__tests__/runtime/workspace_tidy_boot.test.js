@@ -186,7 +186,7 @@ test("existing repair locks expose the exact pending resource without stealing i
   assert.match(line, /repair lock/)
 })
 
-for (const host of ["copilot", "claude"]) test(`R5 actual ${host} hook process cancels its stalled inspection child before the whole-check budget`, async () => {
+for (const host of ["copilot", "claude"]) test(`R5 actual ${host} hook process cancels its stalled inspection child before the whole-check budget`, async (t) => {
   const f = await fixture()
   const plugin = path.resolve(fileURLToPath(hookPath), "../..")
   const preload = path.join(f.root, "stall-inspection.cjs")
@@ -202,7 +202,7 @@ const born = Date.now();
 const children = [];
 cp.spawn = function(file, args, options) {
   if (!/(?:^|[\\\\/])(?:git|perl)(?:\\.exe)?$/.test(file)) return original.apply(this, arguments);
-  const child = original(process.execPath, ["-e", "setInterval(() => {}, 1000)"], options);
+  const child = original(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], options);
   children.push({pid: child.pid, spawned: Date.now()});
   child.once("close", () => { children.find(x => x.pid === child.pid).closed = Date.now(); });
   return child;
@@ -212,6 +212,12 @@ process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.strin
 `)
   const child = spawn(host === "claude" ? "bash" : process.execPath, [path.join(plugin, "hooks", host === "claude" ? "session-start.sh" : "copilot-session-start.cjs")], {
     env: bootFixtureEnv({ ...f.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk, NODE_OPTIONS: `--require=${preload}` }, overrides), stdio: ["pipe", "pipe", "pipe"],
+  })
+  // Whatever happens, the hook process does not outlive the test. Its stand-in children end with it or, if it is killed hard, by their own 10 minute limit.
+  t.after(() => {
+    if (child.exitCode !== null || child.signalCode !== null) return
+    child.kill("SIGKILL")
+    return once(child, "close")
   })
   let output = ""
   child.stdout.on("data", (chunk) => { output += chunk })

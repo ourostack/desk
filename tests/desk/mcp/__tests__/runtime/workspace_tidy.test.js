@@ -53,11 +53,15 @@ async function worktree(f, branch = "topic") {
   git(f.repo, "worktree", "add", "-b", branch, directory, "main")
   const admin = git(directory, "rev-parse", "--absolute-git-dir")
   const info = await fs.stat(directory)
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
-  await once(child, "spawn")
-  const start = await readProcessStart(child.pid)
-  child.kill()
-  await once(child, "exit")
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" })
+  let start
+  try {
+    await once(child, "spawn")
+    start = await readProcessStart(child.pid)
+  } finally {
+    child.kill()
+    if (child.exitCode === null && child.signalCode === null) await once(child, "exit")
+  }
   const record = {
     version: 2, task: path.relative(f.desk, f.card), owner: "task/attempt-1", disposition: "remove",
     repository: git(f.repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
@@ -678,15 +682,15 @@ test("R2 revoked release before cleanup preserves a live reacquired consumer", a
   await tidy.revokeWorkspaceRelease({
     repository: w.record.repository, worktree: w.directory, branch: w.record.branch, owner: w.record.owner,
   })
-  const consumer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { cwd: w.directory, stdio: "ignore" })
-  await once(consumer, "spawn")
+  const consumer = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { cwd: w.directory, stdio: "ignore" })
   try {
+    await once(consumer, "spawn")
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
     assert.equal(result.removed.length, 0)
     assert.match(result.left[0].reason, /ownership/)
     assert.ok((await fs.stat(w.directory)).isDirectory())
     assert.equal(consumer.exitCode, null)
-  } finally { consumer.kill(); await once(consumer, "exit") }
+  } finally { consumer.kill(); if (consumer.exitCode === null && consumer.signalCode === null) await once(consumer, "exit") }
 })
 
 test("R2 raw receipt revocation after final status is observed before removal", async () => {
@@ -698,7 +702,7 @@ test("R2 raw receipt revocation after final status is observed before removal", 
     const result = await tidyInspectionGit(cwd, args)
     if (args[0] === "status" && ++count === 2) {
       await fs.unlink(w.receipt)
-      consumer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { cwd: w.directory, stdio: "ignore" })
+      consumer = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { cwd: w.directory, stdio: "ignore" })
       await once(consumer, "spawn")
     }
     return result

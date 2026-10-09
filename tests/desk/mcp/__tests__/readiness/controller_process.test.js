@@ -1,10 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { fork, spawn } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
-import { startControllerProcess, reclaimControllerChild, verifyOwnedChild, supervisorEndpoint, releaseSupervisor } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
+import { startControllerProcess, reclaimControllerChild, verifyOwnedChild, supervisorEndpoint, releaseSupervisor, controllerStartTimeoutMs, CONTROLLER_START_MS } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
+import { WINDOWS_PROCESS_START_CAP_MS } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readiness/contracts.js"
 import { probeController } from "../../../../../plugins/desk/mcp/src/readiness/hung-controller.js"
@@ -150,6 +152,49 @@ test("unverified, legacy and incomplete controller records are never sent to a s
     { ownerVerified: true, record: { owner: { kind: "session" } } },
     { ownerVerified: true, record: { owner: { kind: "controller_child" }, supervisor: {} } },
   ]) assert.deepEqual(await reclaimControllerChild(probe), { reclaimed: false, reason: "not_verified_child" })
+})
+
+test("a Windows controller is given its capped process start read on top of the base start window", () => {
+  assert.equal(controllerStartTimeoutMs("linux"), 10000)
+  assert.equal(controllerStartTimeoutMs("darwin"), 10000)
+  assert.equal(controllerStartTimeoutMs("win32"), 15000)
+  assert.equal(controllerStartTimeoutMs("win32"), CONTROLLER_START_MS + WINDOWS_PROCESS_START_CAP_MS)
+  assert.equal(controllerStartTimeoutMs(), controllerStartTimeoutMs(process.platform))
+})
+
+test("startControllerProcess arms its startup timer with the platform window unless the caller overrides it", { skip: posixOnly }, async (t) => {
+  const root = await mkTempRoot("desk-start-window-")
+  const identity = controllerIdentity({ root, ...readinessContracts(policy) })
+  const endpoint = deriveControllerEndpoint({ identity })
+  const stateDir = path.join(root, "readiness", identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const options = { identity, endpoint, stateDir, policy, embed: null, ephemeral: true }
+  const realSetTimeout = globalThis.setTimeout
+  const armed = []
+  // Fire any startup-sized timer at once so the test does not wait out the window; every other timer is real.
+  t.mock.method(globalThis, "setTimeout", (fn, delay, ...rest) => {
+    if (delay >= 1000) armed.push(delay)
+    return delay >= 10000 ? realSetTimeout(fn, 0) : realSetTimeout(fn, delay, ...rest)
+  })
+  const neverReady = () => {
+    const child = new EventEmitter()
+    child.pid = 424242
+    child.send = () => true
+    child.unref = () => {}
+    child.kill = () => { queueMicrotask(() => child.emit("exit")); return true }
+    return child
+  }
+  for (const platform of ["win32", "linux", "darwin"]) {
+    armed.length = 0
+    await assert.rejects(startControllerProcess(options, { spawn: neverReady, platform }), /startup timed out/u)
+    assert.equal(armed.at(-1), platform === "win32" ? 15000 : 10000, `the default window on ${platform}`)
+  }
+  armed.length = 0
+  await assert.rejects(startControllerProcess(options, { spawn: neverReady }), /startup timed out/u)
+  assert.equal(armed.at(-1), controllerStartTimeoutMs(), "the real platform is the default")
+  armed.length = 0
+  await assert.rejects(startControllerProcess(options, { spawn: neverReady, timeoutMs: 12345 }), /startup timed out/u)
+  assert.equal(armed.at(-1), 12345, "an explicit timeoutMs still wins")
 })
 
 for (const [name, script, expected] of [
