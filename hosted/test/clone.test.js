@@ -72,6 +72,7 @@ function fakeRemote(t) {
   const bare = join(remotes, "arimendelow", "desk.git");
   mkdirSync(bare, { recursive: true });
   execFileSync("git", ["init", "--bare", "-q", "-b", "main", bare]);
+  execFileSync("git", ["-C", bare, "config", "uploadpack.allowFilter", "true"]);
   const seed = join(root, "seed");
   execFileSync("git", ["init", "-q", "-b", "main", seed]);
   writeFileSync(join(seed, "AGENTS.md"), "# Desk\n");
@@ -106,6 +107,8 @@ test("ensureClone clones the desk once and points Git at the credential helper",
   assert.deepEqual(config(dir, "credential.https://github.com.helper"), ["", `!node '${HELPER}'`]);
   assert.deepEqual(config(dir, "credential.useHttpPath"), ["false"]);
   assert.deepEqual(config(dir, "pull.rebase"), ["true"]);
+  assert.deepEqual(config(dir, "remote.origin.partialclonefilter"), ["blob:none"], "a partial clone: blobs come on demand");
+  assert.deepEqual(config(dir, "remote.origin.promisor"), ["true"]);
 
   const cloneCall = calls.find((args) => args.includes("clone"));
   assert.ok(cloneCall.includes("credential.helper="), "the clone clears inherited helpers");

@@ -136,7 +136,7 @@ test("shutdown before the GitHub App is set up only stops the server", async () 
   assert.deepEqual(order, ["close", "closeAll"]);
 });
 
-// A bare remote, a clone of it holding one unpushed desk write, and a newer
+// A bare remote, a partial clone of it holding one unpushed desk write, and a newer
 // commit on the remote that the clone has not seen, so a plain push is
 // rejected and Desk must pull with rebase and push again.
 function deskWithUnpushedWrite(t) {
@@ -146,14 +146,17 @@ function deskWithUnpushedWrite(t) {
   const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
   const bare = join(root, "remote.git");
   git("init", "--bare", "-q", "-b", "main", bare);
+  git("-C", bare, "config", "uploadpack.allowFilter", "true");
   const other = join(root, "other");
   git("clone", "-q", bare, other);
   writeFileSync(join(other, "AGENTS.md"), "# Desk\n");
   git(...id, "-C", other, "add", ".");
   git(...id, "-C", other, "commit", "-q", "-m", "seed");
   git("-C", other, "push", "-q", "origin", "main");
+  // A blob-less partial clone, as the gateway makes.
   const dir = join(root, "desk");
-  git("clone", "-q", bare, dir);
+  git("clone", "-q", "--filter=blob:none", `file://${bare}`, dir);
+  assert.equal(git("-C", dir, "config", "remote.origin.promisor"), "true");
   writeFileSync(join(other, "remote.md"), "elsewhere\n");
   git(...id, "-C", other, "add", ".");
   git(...id, "-C", other, "commit", "-q", "-m", "a write from elsewhere");

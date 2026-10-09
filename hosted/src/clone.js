@@ -31,7 +31,10 @@ async function configure(dir, git) {
 }
 
 // Clones https://github.com/<repo>.git into `dir` when `dir` is absent or
-// empty. An existing clone is left as it is (Desk's own boot syncs it); only
+// empty. The clone is partial (no blobs until Git needs them), which keeps the
+// first start short; Desk's push, with its pull-rebase retry, works the same
+// on it, and Git fetches any missing blob through the credential helper.
+// An existing clone is left as it is (Desk's own boot syncs it); only
 // its credential settings are written again, so they follow this gateway's
 // install location.
 export async function ensureClone({ dir, repo, git = runGit }) {
@@ -40,7 +43,7 @@ export async function ensureClone({ dir, repo, git = runGit }) {
     throw new Error(`${dir} holds files but is not a Git checkout; refusing to clone over it.`);
   }
   if (!present) {
-    await git(["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`, "clone", "--quiet", `https://github.com/${repo}.git`, dir]);
+    await git(["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`, "clone", "--quiet", "--filter=blob:none", `https://github.com/${repo}.git`, dir]);
   }
   await configure(dir, git);
 }
