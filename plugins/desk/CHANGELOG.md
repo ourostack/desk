@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.254 — 2026-10-09
+
+The session-start migrations driver now finds migrations that other plugins ship when Agency installed them. Agency keeps every plugin it fetches under `~/.local/agency/plugins/cache/entries/<dir_name>/`, indexed by `cache_index.json`, and the skill's list of roots did not include it, so a migration shipped by an overlay such as `ms-desk` was never found in an Agency session. `node <desk plugin>/mcp/scripts/migrations.js roots [--engine <prefix>]` now prints the folders to walk: one per plugin, the entry with the newest `fetched_at`, only specs for the running engine (`copilot:` by default), and never Desk's own plugin, whose migrations the startup hooks already run and whose old copies the cache keeps. The skill also dedupes by migration id, so a migration found under two roots runs once.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.253 — 2026-10-09
 
 Every Desk tool that writes a card, track, lesson or friction entry now refuses a path that runs under an existing file (for example `README.md/x.md`) with a clear message naming the file, the same way on every platform. Windows used to fail with a raw `EEXIST` error here, and macOS and Linux with `ENOTDIR`.
