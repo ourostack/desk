@@ -34,7 +34,7 @@ jobs:
       BASE: main
       UPSTREAM: obra/superpowers
       # Every CI workflow that gates a pull request; each also accepts workflow_dispatch.
-      CI_WORKFLOWS: desk-mcp-tests.yml,desk-windows-suite.yml,validate-skills.yml
+      CI_WORKFLOWS: desk-mcp-tests.yml,desk-windows-suite.yml,hosted-tests.yml,validate-skills.yml
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Check out main
