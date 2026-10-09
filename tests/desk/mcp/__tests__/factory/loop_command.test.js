@@ -10,7 +10,7 @@ import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
 
 import "../_isolated_env.mjs"
-import { LOOP_BUDGET_MS, LOOP_STEP_NAMES, LATER_STEPS_RESERVE_MS, MAX_SCAN_ALLOWANCE_MS, runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
+import { LOOP_BUDGET_MS, LOOP_STEP_NAMES, LATER_STEPS_RESERVE_MS, MAX_SCAN_ALLOWANCE_MS, notifyLauncher, runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { main, runLoopCommand, SUPPORTED_COMMANDS } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { LOCK_OUTER_AGE_MS, takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
@@ -480,6 +480,14 @@ test("the worker grants a scan at most MAX_SCAN_ALLOWANCE_MS in all, and nothing
   assert.deepEqual(notes, [{ desk_loop_extend_ms: 1000 }, { desk_loop_extend_ms: MAX_SCAN_ALLOWANCE_MS }])
   assert.ok(MAX_SCAN_ALLOWANCE_MS + LOOP_BUDGET_MS + 2 * MINUTE < LOCK_OUTER_AGE_MS, "a worker never outlives the lock's outer age, so no second worker takes over a live one")
 }))
+
+test("the default notice goes over the launcher's message channel, and does nothing in a process without one", () => {
+  const sent = []
+  notifyLauncher({ desk_loop_extend_ms: 5 }, { send: (message) => sent.push(message) })
+  assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }])
+  notifyLauncher({ desk_loop_extend_ms: 5 }, {})
+  assert.deepEqual(sent, [{ desk_loop_extend_ms: 5 }], "a process without a channel sends nothing and does not throw")
+})
 
 test("a notice the launcher cannot take never stops the worker", () => scratch(async (ctx) => {
   const impls = fakes([])
