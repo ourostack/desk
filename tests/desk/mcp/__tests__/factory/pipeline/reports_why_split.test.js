@@ -134,13 +134,13 @@ test("every rule end gives its class: a token cap, a rate limit, an API error an
   for (const [end, why] of Object.entries(rules)) {
     const session = facts({ id: S(2), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf(end)), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("a"), 0, { done: 60 * MIN, length: 60 * MIN })] })
     // A label on a rule-decided wait never overrides the rule.
-    const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(2), [], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])
+    const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(2), [stretch(10 * MIN, 30 * MIN, "muda", "waiting", [[10 * MIN, 30 * MIN]])], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])
     assert.deepEqual(whyOf(walk), [[10, why, "rule", "high", []]], end)
   }
   // A stop the deriver could not read, or an ordinary end of turn, is the evaluator's to judge.
   const unread = facts({ id: S(3), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("not_recorded")), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("a"), 0, { done: 60 * MIN, length: 60 * MIN })] })
   assert.deepEqual(whyOf(walkOf([unread], J("a"))), [[10, "not_known", "none", null, ["not_labeled"]]])
-  assert.deepEqual(whyOf(walkOf([unread], J("a"), [labelsFile(J("a"), S(3), [], [stopLabel(10 * MIN, 30 * MIN, "decision", "medium")])])), [[10, "decision", "evaluator", "medium", []]])
+  assert.deepEqual(whyOf(walkOf([unread], J("a"), [labelsFile(J("a"), S(3), [stretch(10 * MIN, 30 * MIN, "muda", "waiting", [[10 * MIN, 30 * MIN]])], [stopLabel(10 * MIN, 30 * MIN, "decision", "medium")])])), [[10, "decision", "evaluator", "medium", []]])
 })
 
 test("labels made before the facts were derived again whose stops now conflict with the facts give no class: the wait reads not labeled until the relabel lands, and the stretches still count", () => {
@@ -179,7 +179,7 @@ test("a wait the task's segments cut takes the label of the whole wait it is par
     intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 50 * MIN, stopOf("end_turn")), span("turn", 0, 50 * MIN, 60 * MIN)],
     jobs: [bound(J("a"), 0, { done: 30 * MIN, length: 30 * MIN })],
   })
-  const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(5), [], [stopLabel(10 * MIN, 50 * MIN, "acceptance")])])
+  const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(5), [stretch(10 * MIN, 50 * MIN, "muda", "waiting", [[10 * MIN, 50 * MIN]])], [stopLabel(10 * MIN, 50 * MIN, "acceptance")])])
   assert.deepEqual(walk.waits.map((entry) => [entry.start_ms / MIN, entry.end_ms / MIN, entry.why, entry.why_source]), [[10, 30, "acceptance", "evaluator"]])
 })
 
@@ -191,7 +191,7 @@ test("older facts carry no stop: their waits are not known (not in the published
     intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN), span("turn", 0, 30 * MIN, 40 * MIN), wait(40 * MIN, 60 * MIN), span("turn", 0, 60 * MIN, 80 * MIN)],
     jobs: [{ job: J("a"), basis: ["desk_tool"], session_offset_ms: 0, agents: [0], segments: [{ start_ms: 0, end_ms: 80 * MIN }], transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: 80 * MIN }], observed: { status: "done", offset_ms: 80 * MIN } }],
   })
-  assert.deepEqual(whyOf(walkOf([session], J("a"), [labelsFile(J("a"), S(6), [], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])), [
+  assert.deepEqual(whyOf(walkOf([session], J("a"), [labelsFile(J("a"), S(6), [stretch(10 * MIN, 30 * MIN, "muda", "waiting", [[10 * MIN, 30 * MIN]])], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])), [
     [10, "acceptance", "evaluator", "high", []],
     [40, "not_known", "none", null, ["not_in_published_facts"]],
   ])
@@ -203,7 +203,7 @@ test("a wait in a session whose share of the task the facts do not record is not
     return binding
   }
   const session = facts({ id: S(7), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), wait(30 * MIN, 40 * MIN, stopOf("rate_limit")), span("turn", 0, 40 * MIN, 60 * MIN)], jobs: [unsegmented(J("a")), unsegmented(J("b"))] })
-  const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(7), [], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])
+  const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(7), [stretch(10 * MIN, 30 * MIN, "muda", "waiting", [[10 * MIN, 30 * MIN]])], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])
   assert.deepEqual(whyOf(walk), [[10, "not_known", "none", null, ["outside_own_share"]], [30, "error_limit", "rule", "high", []]])
 })
 
@@ -249,7 +249,7 @@ test("the task's next-prompt waiting splits by why and adds up: the classes plus
 
 test("with every wait classified, each class is measured", () => {
   const session = facts({ id: S(9), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 40 * MIN), wait(40 * MIN, 50 * MIN, stopOf("refusal")), span("turn", 0, 50 * MIN, 60 * MIN)], jobs: [bound(J("a"), 0, { done: 60 * MIN, length: 60 * MIN })] })
-  const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(9), [], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])
+  const walk = walkOf([session], J("a"), [labelsFile(J("a"), S(9), [stretch(10 * MIN, 30 * MIN, "muda", "waiting", [[10 * MIN, 30 * MIN]])], [stopLabel(10 * MIN, 30 * MIN, "acceptance")])])
   for (const why of WHY_SPLIT) assert.equal(walk.task.next_prompt_by_why_ms[why].state, "measured", why)
   assert.deepEqual(values(walk.task.next_prompt_by_why_ms), { stopped_short: 0, question: 0, error_limit: 10 * MIN, interrupted: 0, decision: 0, approval: 0, acceptance: 20 * MIN, not_known: 0 })
 })
