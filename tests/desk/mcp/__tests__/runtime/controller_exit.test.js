@@ -1,18 +1,21 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
+import { rm } from "node:fs/promises"
+import * as os from "node:os"
 import * as path from "node:path"
 import { assertProcessesGone, controllerPids, processAlive, waitForProcessesGone } from "./_controller_exit.js"
-import { mkTempRoot } from "../_temp_roots.js"
 
 const record = (root, name, body) => {
   mkdirSync(path.join(root, name), { recursive: true })
   writeFileSync(path.join(root, name, "owner.json"), typeof body === "string" ? body : JSON.stringify(body))
 }
 
-test("controllerPids names only the controller children whose owner record is readable", async () => {
-  const root = await mkTempRoot("desk-controller-exit-")
+test("controllerPids names only the controller children whose owner record is readable", async (t) => {
+  // Not an owned temp root: the teardown waits for every controller PID under an owned root, and these records name made-up PIDs.
+  const root = mkdtempSync(path.join(realpathSync(os.tmpdir()), "desk-controller-exit-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
   record(root, "a", { owner: { kind: "controller_child", pid: 111 } })
   record(root, "b", { owner: { kind: "controller_child", pid: 111 } })
   record(root, "c", { owner: { kind: "mcp_session", pid: 222 } })

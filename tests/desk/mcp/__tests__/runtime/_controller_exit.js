@@ -5,8 +5,13 @@ import * as path from "node:path"
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The PIDs of the readiness controller children whose owner.json lies under any of `roots`. A missing or half-written record names no one. */
-export function controllerPids(roots, { depth = 8, read = readFileSync, list = readdirSync } = {}) {
-  const found = new Set()
+export function controllerPids(roots, options) {
+  return [...new Set(controllerRecords(roots, options).map((record) => record.pid))]
+}
+
+/** Like controllerPids, but one `{ pid, processStart, parentPid }` per record: the start time the controller recorded (null when it recorded none) and the PID of the process that spawned it. */
+export function controllerRecords(roots, { depth = 8, read = readFileSync, list = readdirSync } = {}) {
+  const found = []
   const walk = (directory, remaining) => {
     let entries
     try {
@@ -22,7 +27,7 @@ export function controllerPids(roots, { depth = 8, read = readFileSync, list = r
       } else if (entry.name === "owner.json") {
         try {
           const { owner } = JSON.parse(read(file, "utf8"))
-          if (owner?.kind === "controller_child" && Number.isInteger(owner.pid)) found.add(owner.pid)
+          if (owner?.kind === "controller_child" && Number.isInteger(owner.pid)) found.push({ pid: owner.pid, processStart: typeof owner.process_start === "string" ? owner.process_start : null, parentPid: Number.isInteger(owner.parent_pid) ? owner.parent_pid : null })
         } catch (error) {
           if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error
         }
@@ -30,7 +35,7 @@ export function controllerPids(roots, { depth = 8, read = readFileSync, list = r
     }
   }
   for (const root of roots) walk(root, depth)
-  return [...found]
+  return found
 }
 
 /** Whether a process with this PID exists. Signal 0 sends nothing: ESRCH means gone, EPERM means it exists but belongs to someone else. */
