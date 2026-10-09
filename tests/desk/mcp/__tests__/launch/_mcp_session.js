@@ -3,6 +3,7 @@
 // Callers pass an isolated environment (see isolatedEnv in _mcp_handshake.js), so the spawned process never writes into the real ~/.cache or ~/.local/state.
 
 import { spawn } from "node:child_process"
+import { recordControllers } from "../_temp_roots.js"
 
 /**
  * Spawn `command args`, complete the initialize handshake and the first tools/list, and return a session.
@@ -77,7 +78,10 @@ export async function openSession({ command, args = [], env, cwd, timeoutMs = 20
     let last
     for (;;) {
       last = (await call("desk_status", { detail: true })).payload
-      if (predicate(last)) return last
+      if (predicate(last)) {
+        note()
+        return last
+      }
       if (Date.now() > deadline) {
         throw new Error(`desk_status did not reach the expected state within ${deadlineMs} ms; the server's last stderr: ${stderr.slice(-700).replace(/\s+/gu, " ")} ; last: state=${last.state} admission=${JSON.stringify(last.admission?.state)}\nfull last status:\n${JSON.stringify(last, null, 2)}\nstderr:\n${stderr}`)
       }
@@ -85,10 +89,18 @@ export async function openSession({ command, args = [], env, cwd, timeoutMs = 20
     }
   }
 
+  // The session's controller children, noted while it is alive: the temp-root teardown waits for them before it deletes the fixture.
+  const note = () => recordControllers(cwd, env?.HOME)
+
   function close() {
+    note()
     if (exited) return Promise.resolve(exited)
     return new Promise((resolve) => {
-      child.once("exit", (code, signal) => resolve({ code, signal }))
+      child.once("exit", (code, signal) => {
+        // The controller can still be shutting down, with its owner record not yet removed.
+        note()
+        resolve({ code, signal })
+      })
       child.stdin.end()
       setTimeout(() => { if (!exited) child.kill("SIGTERM") }, 2000).unref()
     })
@@ -122,6 +134,7 @@ export async function openSession({ command, args = [], env, cwd, timeoutMs = 20
     call,
     statusUntil,
     close,
+    controllers: note,
     stderr: () => stderr,
   }
 }
