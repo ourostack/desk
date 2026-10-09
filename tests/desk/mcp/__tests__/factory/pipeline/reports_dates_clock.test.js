@@ -145,6 +145,9 @@ test("a finish day with no published offset for its source is left as it is", ()
   const open = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: null } })
   const session = facts({ id: S(44), duration: 60 * MIN, intervals: [span("turn", 0, 0, 60 * MIN)], jobs: [open] })
   assert.deepEqual(walkOf([session], J("a")).walk.finished_on.reasons, ["finish_from_card_update"])
+  const untimed = bound(J("a"), 0, { day: "2026-10-05", transitions: [{ to: "done", offset_ms: null }], length: 2 * 24 * 60 * MIN })
+  const moved = facts({ id: S(46), duration: 2 * 24 * 60 * MIN, intervals: [span("turn", 0, 0, 2 * 24 * 60 * MIN)], jobs: [untimed] })
+  assert.deepEqual(walkOf([moved], J("a")).walk.finished_on.reasons, [])
 })
 
 test("a later card update does not displace the day of a recorded transition, and days that contradict each other prove nothing", () => {

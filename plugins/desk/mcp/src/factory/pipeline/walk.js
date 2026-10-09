@@ -751,8 +751,8 @@ const DAY_MS = 24 * 60 * 60_000
 // The job-clock instant a session's finish day was read from: its last transition into the status it observed (`transition`), else its
 // observation (`card_updated`); `null` when the facts do not publish one.
 function finishOffset(binding) {
-  if (binding.finished_basis === "card_updated") return binding.observed?.offset_ms ?? null
-  const offsets = binding.transitions.filter((entry) => entry.to === binding.observed?.status && entry.offset_ms !== null).map((entry) => entry.offset_ms)
+  if (binding.finished_basis === "card_updated") return binding.observed.offset_ms
+  const offsets = binding.transitions.filter((entry) => entry.to === binding.observed.status).map((entry) => entry.offset_ms).filter(Number.isFinite)
   return offsets.length === 0 ? null : Math.max(...offsets)
 }
 
