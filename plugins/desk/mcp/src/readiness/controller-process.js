@@ -10,8 +10,15 @@ import { ownerState, readOwnerRecord } from "./owner-record.js"
 import { probeController, probeMissed } from "./hung-controller.js"
 import { validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
 import { request } from "./controller-client.js"
+import { WINDOWS_PROCESS_START_CAP_MS } from "./process-start.js"
 
 const childEntry = fileURLToPath(new URL("./controller-child.js", import.meta.url))
+
+// The time a controller child is given from its spawn to its ready message: the child's own start (node boot, loading the runtime, scanning the workspace) plus, on Windows, the one serial step the other platforms do not have, the process start read through PowerShell, which is capped at WINDOWS_PROCESS_START_CAP_MS. Under load the read alone can take that whole cap, so a Windows child that spent the usual start on everything else and the full cap on the read must still fit; a flat 10 s there failed a lone controller at 10,136 ms (issue 255).
+export const CONTROLLER_START_MS = 10_000
+export function controllerStartTimeoutMs(platform = process.platform) {
+  return CONTROLLER_START_MS + (platform === "win32" ? WINDOWS_PROCESS_START_CAP_MS : 0)
+}
 
 export function supervisorEndpoint(endpoint, platform = process.platform) {
   const id = randomUUID()
@@ -19,7 +26,7 @@ export function supervisorEndpoint(endpoint, platform = process.platform) {
 }
 
 /** The only process that can terminate a controller is the parent holding its actual child handle. */
-export async function startControllerProcess(options, { spawn = fork, timeoutMs = 10000, createServer = net.createServer, socketTimeoutMs = 10000 } = {}) {
+export async function startControllerProcess(options, { spawn = fork, timeoutMs = controllerStartTimeoutMs(), createServer = net.createServer, socketTimeoutMs = 10000 } = {}) {
   const { identity, endpoint, stateDir } = options
   const supervisor = { endpoint: supervisorEndpoint(endpoint), token: randomUUID() }
   validateControllerEndpoint(supervisor.endpoint)

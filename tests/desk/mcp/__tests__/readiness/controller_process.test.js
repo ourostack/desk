@@ -4,7 +4,8 @@ import { fork, spawn } from "node:child_process"
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
-import { startControllerProcess, reclaimControllerChild, verifyOwnedChild, supervisorEndpoint, releaseSupervisor } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
+import { startControllerProcess, reclaimControllerChild, verifyOwnedChild, supervisorEndpoint, releaseSupervisor, controllerStartTimeoutMs, CONTROLLER_START_MS } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
+import { WINDOWS_PROCESS_START_CAP_MS } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readiness/contracts.js"
 import { probeController } from "../../../../../plugins/desk/mcp/src/readiness/hung-controller.js"
@@ -150,6 +151,14 @@ test("unverified, legacy and incomplete controller records are never sent to a s
     { ownerVerified: true, record: { owner: { kind: "session" } } },
     { ownerVerified: true, record: { owner: { kind: "controller_child" }, supervisor: {} } },
   ]) assert.deepEqual(await reclaimControllerChild(probe), { reclaimed: false, reason: "not_verified_child" })
+})
+
+test("a Windows controller is given its capped process start read on top of the base start window", () => {
+  assert.equal(controllerStartTimeoutMs("linux"), CONTROLLER_START_MS)
+  assert.equal(controllerStartTimeoutMs("darwin"), CONTROLLER_START_MS)
+  assert.equal(controllerStartTimeoutMs("win32"), CONTROLLER_START_MS + WINDOWS_PROCESS_START_CAP_MS)
+  assert.ok(controllerStartTimeoutMs("win32") >= WINDOWS_PROCESS_START_CAP_MS + CONTROLLER_START_MS)
+  assert.equal(controllerStartTimeoutMs(), controllerStartTimeoutMs(process.platform))
 })
 
 for (const [name, script, expected] of [
