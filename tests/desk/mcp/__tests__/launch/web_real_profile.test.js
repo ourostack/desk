@@ -381,16 +381,24 @@ test("the holding window is opened by starting the browser directly, with no tok
   assert.deepEqual(stderr, [])
 })
 
-test("a browser that will not start is reported on stderr and the call goes on", async () => {
+test("a synchronous window launch failure is reported and refuses opening", async () => {
   const stderr = []
   const out = { write: (text) => stderr.push(text) }
-  await real.openWindow({ spawn: () => { throw new Error("EACCES") }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 1 })
-  const child = fakeBrowserProcess()
-  await real.openWindow({ spawn: () => { setImmediate(() => child.emit("error", new Error("ENOENT"))); return child }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 20 })
+  await assert.rejects(real.openWindow({ spawn: () => { throw new Error("EACCES") }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 1 }), /EACCES/u)
   assert.match(stderr.join(""), /could not open a new browser window: EACCES/u)
+})
+
+test("an asynchronous window launch failure is reported and refuses opening", async () => {
+  const stderr = []
+  const out = { write: (text) => stderr.push(text) }
+  const child = fakeBrowserProcess()
+  await assert.rejects(real.openWindow({ spawn: () => { setImmediate(() => child.emit("error", new Error("ENOENT"))); return child }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 20 }), /ENOENT/u)
   assert.match(stderr.join(""), /could not open a new browser window: ENOENT/u)
+})
+
+test("a healthy window still uses the default opening wait", async () => {
   const quick = Date.now()
-  await real.openWindow({ spawn: () => fakeBrowserProcess(), executable: "x", profile: "Default", env: {}, stderr: out })
+  await real.openWindow({ spawn: () => fakeBrowserProcess(), executable: "x", profile: "Default", env: {}, stderr: { write() {} } })
   assert.ok(Date.now() - quick >= 900, "the default wait is about a second")
 })
 
@@ -469,6 +477,40 @@ test("the tabs hooks open the window once per connection, answer browser_close t
   tabs.afterCall({ name: "browser_snapshot" }, false)
   await tabs.cleanup(api)
   assert.deepEqual(calls, ["list", "list"])
+})
+
+test("a failed window attempt answers locally, performs no cleanup, and can be retried", async () => {
+  const failed = { isError: true, content: [{ type: "text", text: "window unavailable" }] }
+  let opens = 0
+  const calls = []
+  const tabs = real.ownTabs(async () => ++opens === 1 ? failed : undefined)
+  const api = { callTool: async (...args) => { calls.push(args); return tabsText(0) } }
+  assert.equal(await tabs.beforeCall({ name: "browser_navigate" }, api), failed)
+  await tabs.cleanup(api)
+  assert.deepEqual(calls, [], "failure never makes cleanup start a browser connection")
+  assert.equal(await tabs.beforeCall({ name: "browser_snapshot" }, api), null)
+  assert.equal(opens, 2, "the next call makes one new opening attempt")
+})
+
+test("an old failed opening does not clear a newer attempt after browser_close", async () => {
+  const failed = { isError: true, content: [{ type: "text", text: "window unavailable" }] }
+  const complete = []
+  let opens = 0
+  const tabs = real.ownTabs(() => {
+    opens += 1
+    return new Promise((resolve) => complete.push(resolve))
+  })
+  const api = { callTool: async () => tabsText(0) }
+  const old = tabs.beforeCall({ name: "browser_navigate" }, api)
+  await tabs.beforeCall({ name: "browser_close" }, api)
+  const current = tabs.beforeCall({ name: "browser_snapshot" }, api)
+  complete[0](failed)
+  assert.equal(await old, failed)
+  const joined = tabs.beforeCall({ name: "browser_navigate" }, api)
+  assert.equal(opens, 2, "the current attempt is still shared after the old failure")
+  complete[1]()
+  assert.equal(await current, null)
+  assert.equal(await joined, null)
 })
 
 // ---- the launcher in the real profile ----
@@ -647,6 +689,37 @@ function session(machine, extra = {}) {
 
 const textOf = (message) => message.result.content[0].text
 const tabEvents = (machine) => machine.events.filter((event) => event.startsWith("child:tools/call browser_tabs") || event.startsWith("child:tools/call browser_close") || event.startsWith("child:stdin") || event.startsWith("child:killed") || event.startsWith("kill:"))
+
+test("a window launch error never forwards the operation and a later call retries", posixOnly, async () => {
+  let opens = 0
+  const machine = await realMachine({
+    launch: {
+      openSpawn: () => {
+        opens += 1
+        if (opens === 1) throw new Error("EACCES")
+        return fakeBrowserProcess()
+      },
+    },
+  })
+  const host = session(machine)
+  try {
+    await host.handshake()
+    const failed = await host.call(10)
+    assert.equal(failed.result.isError, true)
+    const payload = JSON.parse(textOf(failed))
+    assert.equal(payload.code, "browser_window_unavailable")
+    assert.match(payload.summary, /EACCES/u)
+    assert.match(payload.fix, /Do not use another window/u)
+    assert.equal(machine.events.includes("child:tools/call browser_navigate"), false)
+    assert.deepEqual(tabEvents(machine), [])
+    const retried = await host.call(11)
+    assert.equal(retried.result.isError, undefined)
+    assert.equal(opens, 2)
+    assert.equal(machine.events.filter((event) => event === "child:tools/call browser_navigate").length, 1)
+  } finally {
+    await host.close()
+  }
+})
 
 /** The launcher with a browser that ends at once, for the launches that hand stdio straight to Playwright MCP. */
 async function direct(machine, extra = {}) {
