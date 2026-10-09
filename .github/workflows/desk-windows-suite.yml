@@ -37,7 +37,7 @@ jobs:
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
       fail-fast: false
-      # At most three shards of one run hold a Windows runner at once. The organisation shares about 20 concurrent jobs across every repository, and six shards per pull request let three or four open pull requests starve other repositories' queues. The shards are still all queued, so the run takes longer (about 70 minutes instead of 50) but never holds more than three runners. A test in scripts/windows_suite_cap.test.js pins this number.
+      # At most three shards of one run hold a Windows runner at once. The organisation shares about 20 concurrent jobs across every repository, and a full set of shards per pull request let three or four open pull requests starve other repositories' queues. The eight shards (about 20 minutes each, from suite-durations.json) are still all queued, so they run in three waves (3, 3 and 2) and the run takes about 60 minutes instead of about 20, but never holds more than three runners. A test in scripts/windows_suite_cap.test.js pins this number.
       max-parallel: 3
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
