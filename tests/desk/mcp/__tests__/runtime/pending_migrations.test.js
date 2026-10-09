@@ -184,6 +184,48 @@ test("relay detection does not read the localized sentence: only the relay's deb
   }
 })
 
+const RELAYS = ["C:\\Windows\\System32\\bash.exe", "c:\\WINDOWS\\Sysnative\\bash.exe", "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe"]
+const viaRelay = (bash, spawnFn) => runBlock("x", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, bash, spawn: spawnFn })
+
+test("a WSL relay chosen by path that fails with no output is unavailable, whatever language it speaks (no distro prints only a localized sentence on stderr)", async () => {
+  for (const bash of RELAYS) {
+    const run = await viaRelay(bash, relaySpawn("stderr", "Das Windows-Subsystem fuer Linux hat keine installierten Distributionen."))
+    assert.equal(run.unavailable, true, bash)
+    assert.equal(run.status, 1)
+    assert.equal((await viaRelay(bash, relaySpawn("stdout", "", 1))).unavailable, true, `${bash}: silent exit 1`)
+    assert.equal((await viaRelay(bash, relaySpawn("stdout", RELAY_ERROR, 1))).unavailable, true, `${bash}: execvpe line`)
+  }
+})
+
+test("a WSL relay with a working distro still gives a real result: exit 0, or a non-zero exit with real stdout", async () => {
+  for (const bash of RELAYS) {
+    assert.equal((await viaRelay(bash, relaySpawn("stdout", "", 0))).unavailable, false, `${bash}: exit 0`)
+    const real = await viaRelay(bash, relaySpawn("stdout", "held: waiting", 1))
+    assert.equal(real.unavailable, false, `${bash}: real stdout`)
+    assert.equal(real.stdout, "held: waiting")
+  }
+})
+
+test("a bash that is not the relay and exits 1 with no output is a real Detect result", async () => {
+  assert.equal((await viaRelay("C:\\Program Files\\Git\\bin\\bash.exe", relaySpawn("stdout", "", 1))).unavailable, false)
+})
+
+test("the bash hint names Git for Windows only on Windows, in both lines", async () => {
+  const entry = [{ id: "09-x", state: "bash_unavailable" }]
+  assert.match(migrationLine(entry, "/p", "win32"), /\(on Windows, install Git for Windows; the WSL bash\.exe with no distro cannot run Desk's scripts\)/u)
+  for (const platform of ["darwin", "linux"]) {
+    const line = migrationLine(entry, "/p", platform)
+    assert.match(line, /bash could not run \(install bash\)/u)
+    assert.doesNotMatch(line, /Git for Windows|WSL/u)
+  }
+  assert.match(migrationLine(entry, "/p"), process.platform === "win32" ? /Git for Windows/u : /install bash/u, "defaults to the running platform")
+  const root = await plugin([{ id: "09-x", detect: "exit 1" }])
+  const down = relaySpawn("stderr", RELAY_ERROR)
+  const options = { pluginRoot: root, env: process.env, cwd: root, budgetMs: 10_000, spawn: down }
+  assert.match(await startupMigrationLine({ ...options, platform: "win32" }), /install Git for Windows/u)
+  assert.doesNotMatch(await startupMigrationLine({ ...options, platform: "linux" }), /Git for Windows/u)
+})
+
 test("a Detect that could not run is shown at startup by name, never read as not needed (hook path)", async () => {
   const root = await plugin([{ id: "09-x", detect: "exit 1" }])
   const spawnRelay = relaySpawn("stderr", RELAY_ERROR)

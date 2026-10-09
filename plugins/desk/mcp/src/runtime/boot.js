@@ -78,7 +78,7 @@ import { improvementPerson } from "../desk/improvement-person.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
-import { pendingMigrations, migrationLine } from "./pending-migrations.js"
+import { pendingMigrations, migrationLine, bashHint } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { resolveStartupStateBranch } from "./startup-resolve.js"
@@ -1048,7 +1048,7 @@ function buildInstructionItems(ctx) {
   const namedBlockers = taskQuery !== null && task?.status === "resolved" ? repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state)) : []
   if (namedBlockers.length > 0) add(askThenHandOff(namedBlockers, task.task))
   for (const entry of migrationEntries) {
-    add(migrationLine([entry], ctx.pluginRoot).replace(/^Desk migrations: /u, ""))
+    add(migrationLine([entry], ctx.pluginRoot, ctx.platform).replace(/^Desk migrations: /u, ""))
   }
   add(
     `Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`,
@@ -1166,6 +1166,7 @@ export async function bootOnce({
   jq = commandRunner("jq"),
   pluginRoot = DESK_PLUGIN_ROOT,
   migrationsFn = pendingMigrations,
+  platform = process.platform,
   syncFn = syncWorkspace,
   activeTasksFn = activeTasks,
   walkFn = walkTaskCards,
@@ -1202,7 +1203,7 @@ export async function bootOnce({
   }
   for (const entry of migrationEntries) {
     if (entry.state === "unchecked") pending.push(`migration ${entry.id}: not checked in time`)
-    if (entry.state === "bash_unavailable") degraded.push(`migration ${entry.id}: not checked, bash could not run (on Windows, install Git for Windows)`)
+    if (entry.state === "bash_unavailable") degraded.push(`migration ${entry.id}: not checked, bash could not run (${bashHint(platform)})`)
     if (entry.state === "restart" || entry.state === "run") degraded.push(`migration ${entry.id}: ${entry.state === "restart" ? "needs a restart" : entry.reason}`)
   }
   const migrationSummary = migrationEntries.map((entry) => ({ id: entry.id, state: entry.state }))
@@ -1225,7 +1226,7 @@ export async function bootOnce({
     ] }
   }
   if (stopForMigration) {
-    const instructions = migrationEntries.map((entry) => migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
+    const instructions = migrationEntries.map((entry) => migrationLine([entry], pluginRoot, platform).replace(/^Desk migrations: /u, ""))
     return { ...emptyResult({ status: "degraded", degraded, pending, root, host }), instructions, migrations: migrationSummary }
   }
 
@@ -1409,7 +1410,7 @@ export async function bootOnce({
   const staleFinding = await staleDesk
   const releaseFinding = await releaseAlert
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
