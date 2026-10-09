@@ -46,7 +46,7 @@
 // pass it.
 
 import { randomUUID } from "node:crypto"
-import { spawn, spawnSync } from "node:child_process"
+import { execFile, spawn, spawnSync } from "node:child_process"
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -210,8 +210,31 @@ export function hasRemoteConfigured(root, spawnGit) {
 export function aheadBehindCounts({ root, spawnGit }) {
   const result = run(spawnGit, root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
   if (result.status !== 0 || typeof result.stdout !== "string") return null
-  const [behind, ahead] = result.stdout.trim().split(/\s+/u).map((value) => Number.parseInt(value, 10))
+  return parseAheadBehind(result.stdout)
+}
+
+function parseAheadBehind(stdout) {
+  const [behind, ahead] = stdout.trim().split(/\s+/u).map((value) => Number.parseInt(value, 10))
   return { ahead: Number.isFinite(ahead) ? ahead : 0, behind: Number.isFinite(behind) ? behind : 0 }
+}
+
+// The same two reads without blocking the caller's thread: desk_status runs on the thread that answers the host, and a synchronous Git spawn there holds every other request for as long as the spawn takes (a few hundred milliseconds on a busy machine, more where a scanner inspects each new process).
+function runAsync(root, args) {
+  return new Promise((resolve) => {
+    execFile("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, env: gitEnv(), windowsHide: true }, (error, stdout) => {
+      resolve({ status: error ? 1 : 0, stdout })
+    })
+  })
+}
+
+export async function hasRemoteConfiguredAsync(root) {
+  const result = await runAsync(root, ["remote"])
+  return result.status === 0 && result.stdout.trim() !== ""
+}
+
+export async function aheadBehindCountsAsync({ root }) {
+  const result = await runAsync(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+  return result.status === 0 ? parseAheadBehind(result.stdout) : null
 }
 
 function canPush(root, spawnGit) {

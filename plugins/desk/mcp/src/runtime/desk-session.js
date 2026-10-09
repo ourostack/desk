@@ -50,6 +50,9 @@ const GATE_WAIT_MS = 10000
 const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
 const WRITE_PING_MS = 1000
+// A status check that fails is repeated this many more times, this far apart, before the controller counts as lost. One failed request proves little: a busy controller or machine can miss a 2 s window, and a pipe can refuse one connection under load, while the controller is alive. A controller that is really gone fails every attempt, and a controller process that exits is reported at once by its exit event, so the repeats only delay a loss nothing else reported.
+const CONTROLLER_RECHECKS = 2
+const CONTROLLER_RECHECK_MS = 250
 const CONTROLLER_FAILURE = /readiness controller|ECONNREFUSED|ECONNRESET|ENOENT|EPIPE|ETIMEDOUT|EADDRINUSE/u
 
 // Launcher codes (--degraded) that still allow reads: write identity or the checkout state is unproven. Every other code is an integrity failure: the running code or its authority data cannot be trusted, so every data tool refuses.
@@ -118,6 +121,7 @@ export function createDeskSession(deps) {
     launcher = null,
     hung: hungOptions = {},
     statusRunLimitMs = STATUS_RUN_LIMIT_MS,
+    controllerRecheckMs = CONTROLLER_RECHECK_MS,
     env = process.env,
   } = deps
   const hungPolicy = {
@@ -432,13 +436,22 @@ export function createDeskSession(deps) {
   async function checkController() {
     const controller = context.admission?.controller
     if (typeof controller?.status !== "function") return null
-    try {
-      await controller.status()
-      return null
-    } catch (error) {
-      forgetController()
-      return controllerLostOutcome(error)
+    let failure
+    for (let attempt = 0; attempt <= CONTROLLER_RECHECKS; attempt += 1) {
+      if (attempt > 0 && controllerRecheckMs > 0) await new Promise((resolve) => setTimeout(resolve, controllerRecheckMs).unref())
+      // Replaced or forgotten while waiting (its exit event, a write that found it silent, a re-election): the newer path owns the outcome.
+      if (disposed || context.admission?.controller !== controller) return null
+      try {
+        await controller.status()
+        return null
+      } catch (error) {
+        failure = error
+      }
     }
+    // The last request can outlive the controller: if it exited and another was elected meanwhile, this stale chain must not close the new one or degrade the session.
+    if (disposed || context.admission?.controller !== controller) return null
+    forgetController()
+    return controllerLostOutcome(failure)
   }
 
   let checking = null
