@@ -33,11 +33,20 @@ const LOGIN = "e2e-user";
 const TRACK = "e2e";
 const SLUG = "scratch-card";
 
-function git(args, options = {}) {
-  const result = spawnSync("git", args, { encoding: "utf8", ...options });
+// Every Git call the test makes reads no global or system config, so a
+// developer's own settings (signing, hooks, URL rewrites) never reach it.
+const HERMETIC_GIT = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+const runGit = (args) => spawnSync("git", args, { encoding: "utf8", env: { ...process.env, ...HERMETIC_GIT } });
+
+function git(args) {
+  const result = runGit(args);
   assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
+
+const gitSucceeds = (args) => runGit(args).status === 0;
+// The clone's HEAD reflog subjects, oldest first.
+const reflog = (dir) => git(["-C", dir, "reflog", "show", "--format=%gs", "HEAD"]).split("\n").filter(Boolean).reverse();
 
 const originLog = (origin) => git(["--git-dir", origin, "log", "--format=%H %P %s", "main"]).split("\n").filter(Boolean);
 const originSubjects = (origin) => originLog(origin).map((line) => line.split(" ").slice(2).join(" "));
@@ -108,6 +117,7 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
   let token;
   let client;
   const openClients = new Set();
+  const savedEnv = {};
 
   async function connect() {
     const transport = new StreamableHTTPClientTransport(new URL("/mcp", baseUrl), {
@@ -134,16 +144,29 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
     mkdirSync(bin);
 
     // Desk's in-process task_create below writes its state under this
-    // process's HOME and XDG folders; keep them in the scratch folder.
-    for (const [name, dir] of [["XDG_STATE_HOME", "state"], ["XDG_CONFIG_HOME", "config"], ["XDG_CACHE_HOME", "cache"], ["XDG_DATA_HOME", "data"]]) {
-      process.env[name] = join(scratch, "seed-env", dir);
+    // process's HOME and XDG folders and runs Git with this process's
+    // environment; point all of it into the scratch folder first.
+    const seedEnv = join(scratch, "seed-env");
+    const testEnv = {
+      HOME: join(seedEnv, "home"),
+      XDG_STATE_HOME: join(seedEnv, "state"),
+      XDG_CONFIG_HOME: join(seedEnv, "config"),
+      XDG_CACHE_HOME: join(seedEnv, "cache"),
+      XDG_DATA_HOME: join(seedEnv, "data"),
+      ...HERMETIC_GIT,
+    };
+    mkdirSync(testEnv.HOME, { recursive: true });
+    for (const [name, value] of Object.entries(testEnv)) {
+      savedEnv[name] = process.env[name];
+      process.env[name] = value;
     }
     await seedDesk({ scratch, origin });
 
-    // The gateway clones https://github.com/<repo>.git; Git, reading this
-    // HOME, fetches and pushes the bare origin instead.
+    // The gateway clones https://github.com/<repo>.git; Git, reading only
+    // this config, fetches and pushes the bare origin instead.
+    const gitConfig = join(home, ".gitconfig");
     writeFileSync(
-      join(home, ".gitconfig"),
+      gitConfig,
       `[url "${pathToFileURL(origin).href}"]\n\tinsteadOf = https://github.com/${REPO}.git\n[init]\n\tdefaultBranch = main\n`,
     );
     // The gh the shim runs: refuses, so nothing reaches GitHub.
@@ -160,6 +183,8 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
       env: {
         PATH: `${bin}:${process.env.PATH}`,
         HOME: home,
+        GIT_CONFIG_GLOBAL: gitConfig,
+        GIT_CONFIG_NOSYSTEM: "1",
         TMPDIR: process.env.TMPDIR ?? tmpdir(),
         PORT: String(port),
         DESK_PUBLIC_URL: baseUrl,
@@ -194,10 +219,17 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
 
   after(async () => {
     await Promise.all([...openClients].map((open) => open.close().catch(() => {})));
-    if (gateway && gateway.exitCode === null) {
+    if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
       const exited = new Promise((resolve) => gateway.once("exit", resolve));
       gateway.kill("SIGTERM");
+      // The gateway's shutdown pushes the desk; one that hangs is killed so the suite still ends.
+      const kill = setTimeout(() => gateway.kill("SIGKILL"), 15_000);
       await exited;
+      clearTimeout(kill);
+    }
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
     }
     if (!scratch) return;
     // DESK_E2E_KEEP=1 keeps the scratch folder, with the gateway's log, for a look afterwards.
@@ -253,7 +285,8 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
   it("rebases onto a commit pushed elsewhere first, and both land on origin", async () => {
     const elsewhere = pushFromElsewhere({ scratch, origin, file: "elsewhere.md" });
     // The gateway's clone has not seen it, so Desk's push is rejected and has to pull and rebase.
-    assert.equal(spawnSync("git", ["-C", cloneDir, "cat-file", "-e", `${elsewhere}^{commit}`]).status === 0, false);
+    assert.equal(gitSucceeds(["-C", cloneDir, "cat-file", "-e", `${elsewhere}^{commit}`]), false);
+    const seen = reflog(cloneDir).length;
 
     const { result, body } = await call("task_update", { track: TRACK, slug: SLUG, note: "Second hosted update, after a push from elsewhere." });
     assert.notEqual(result.isError, true, JSON.stringify(body));
@@ -263,6 +296,12 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
       return parent === elsewhere && subject.join(" ") === `task_update: ${TRACK}/${SLUG}`;
     });
     assert.deepEqual(originSubjects(origin).slice(0, 2), [`task_update: ${TRACK}/${SLUG}`, "elsewhere: elsewhere.md"]);
+    // The clone's reflog since the call: Desk committed on the old tip first,
+    // and only then (its push rejected) pulled with rebase. A pull before the
+    // commit would put the rebase first.
+    const since = reflog(cloneDir).slice(seen);
+    assert.match(since[0] ?? "", new RegExp(`^commit: task_update: ${TRACK}/${SLUG}`), since.join("\n"));
+    assert.ok(since.slice(1).some((entry) => /rebase/.test(entry)), `no rebase after the commit:\n${since.join("\n")}`);
   });
 
   it("still pushes a task_update when the session closes right after it", async () => {
@@ -271,6 +310,8 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
     const { result, body } = await call("task_update", { track: TRACK, slug: SLUG, note: "Written just before the session closed." }, session.client);
     assert.notEqual(result.isError, true, JSON.stringify(body));
     const head = git(["-C", cloneDir, "rev-parse", "HEAD"]);
+    // Desk's push waits out a 2 s debounce, so the commit is not on origin yet when the session closes.
+    assert.notEqual(git(["--git-dir", origin, "rev-parse", "main"]), head, "the push landed before the session closed; the test proves nothing");
     const { sessionId } = session.transport;
     await session.transport.terminateSession();
     await session.client.close();
@@ -299,7 +340,7 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
     const { result, body } = await call("desk_save", { files: [{ path: rel, content }], message: "save notes from claude.ai" });
     assert.notEqual(result.isError, true, JSON.stringify(body));
     assert.equal(body.status, "committed");
-    await until("the desk_save commit on origin", () => spawnSync("git", ["--git-dir", origin, "cat-file", "-e", `main:${rel}`]).status === 0);
+    await until("the desk_save commit on origin", () => gitSucceeds(["--git-dir", origin, "cat-file", "-e", `main:${rel}`]));
     assert.equal(git(["--git-dir", origin, "show", `main:${rel}`]) + "\n", content);
   });
 });
