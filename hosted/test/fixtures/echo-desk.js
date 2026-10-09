@@ -1,7 +1,10 @@
 // A fake Desk child for relay tests. It speaks MCP over stdio the way Desk's
 // front door does: one JSON-RPC object per line on stdout, logs on stderr.
 // Tools: "echo" answers with its text argument; "hang" never answers.
+// With ECHO_IGNORE_SIGTERM set it ignores SIGTERM, like a stuck Desk.
 import { createInterface } from "node:readline";
+
+if (process.env.ECHO_IGNORE_SIGTERM) process.on("SIGTERM", () => {});
 
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 

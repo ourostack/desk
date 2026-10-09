@@ -24,10 +24,13 @@ function refuse(res, status, code, message) {
 
 // `spawnDesk({ auth, sessionId })` returns the Desk child for a new session,
 // or a promise of it; `auth` is the SDK AuthInfo of the initializing request.
-export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, callTimeoutMs = 200_000 }) {
+// `close()` stops every child: SIGTERM first, then SIGKILL for any child still
+// running after `killAfterMs`.
+export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, callTimeoutMs = 200_000, killAfterMs = 10_000 }) {
   // Insertion order is recency order: touching a session moves it to the end.
   const sessions = new Map();
   let starting = 0;
+  let closing = false;
 
   function touch(session) {
     if (session.closed) return;
@@ -114,6 +117,16 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     });
     attachDesk(session, child);
     session.transport.onmessage = (message) => {
+      // A request can reach a session that closed while the transport was
+      // handling it; answer it rather than leave it to the child that is gone.
+      if (session.closed) {
+        if (!isJSONRPCRequest(message)) return;
+        const error = { code: -32603, message: "Desk session ended before answering; reconnect to start a new one." };
+        session.transport
+          .send({ jsonrpc: "2.0", id: message.id, error })
+          .catch((sendError) => log(`could not answer request ${message.id}: ${sendError.message}`));
+        return;
+      }
       if (isJSONRPCRequest(message)) session.pending.set(message.id, startDeadline(session, message.id));
       session.child.stdin.write(JSON.stringify(message) + "\n");
     };
@@ -150,6 +163,7 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
       return refuse(res, 400, -32000, "Bad Request: No valid session ID provided");
     }
     if (typeof login !== "string" || login === "") return refuse(res, 403, -32000, "Forbidden: token has no login");
+    if (closing) return refuse(res, 503, -32000, "Service Unavailable: the gateway is shutting down; reconnect shortly.");
     if (sessions.size + starting >= maxSessions && !reapIdle()) {
       return refuse(res, 503, -32000, "Service Unavailable: every session is busy");
     }
@@ -172,10 +186,22 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     if (!session.initialized) closeSession(session, "initialize refused");
   }
 
+  // Refuses new sessions from now on and stops every child, resolving once
+  // each one has exited.
   async function close() {
+    closing = true;
     const all = [...sessions.values()];
     for (const session of all) closeSession(session, "gateway closing");
-    await Promise.all(all.map((session) => session.exited));
+    await Promise.all(
+      all.map(async (session) => {
+        const kill = setTimeout(() => {
+          log(`session ${session.id} Desk process ignored SIGTERM for ${killAfterMs / 1000} s; sending SIGKILL`);
+          session.child?.kill("SIGKILL");
+        }, killAfterMs);
+        await session.exited;
+        clearTimeout(kill);
+      }),
+    );
   }
 
   return { handle, close, size: () => sessions.size };

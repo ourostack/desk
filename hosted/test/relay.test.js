@@ -14,7 +14,7 @@ const PROTOCOL = "2025-06-18";
 // spawnDesk is async, as the gateway's is.
 // `beforeSpawn(auth)`, when given, runs (and may delay or fail) before each
 // child starts, the way the gateway fetches a token first.
-async function start(t, { beforeSpawn, ...options } = {}) {
+async function start(t, { beforeSpawn, childEnv = {}, ...options } = {}) {
   const children = [];
   const spawned = [];
   const relay = createRelay({
@@ -22,7 +22,7 @@ async function start(t, { beforeSpawn, ...options } = {}) {
     async spawnDesk({ auth, sessionId }) {
       await beforeSpawn?.(auth);
       const login = auth.extra.login;
-      const child = spawn(process.execPath, [FIXTURE], { stdio: "pipe", env: { ...process.env, ECHO_LOGIN: login } });
+      const child = spawn(process.execPath, [FIXTURE], { stdio: "pipe", env: { ...process.env, ...childEnv, ECHO_LOGIN: login } });
       const closed = once(child, "close");
       children.push({ child, closed });
       spawned.push({ login, sessionId });
@@ -240,4 +240,48 @@ test("an answered call's deadline does not close the session", async (t) => {
   mock.timers.tick(5_000);
   assert.equal(relay.size(), 1);
   assert.equal((await post(url, callTool(3, "echo", { text: "y" }), { sessionId })).messages[0].result.content[0].text, "arimendelow:y");
+});
+
+test("a request that reaches a session just after it closed gets an error, not silence", async (t) => {
+  const { relay, url, children } = await start(t);
+  const sessionId = await open(url);
+  // The child goes away while the relay is passing it the first of two
+  // requests, so the second reaches a session that has already closed.
+  const { child } = children[0];
+  const write = child.stdin.write.bind(child.stdin);
+  child.stdin.write = (data, ...rest) => {
+    if (JSON.parse(data).id === 11) {
+      child.emit("close", null, "SIGKILL");
+      return true;
+    }
+    return write(data, ...rest);
+  };
+  const reply = await post(url, [callTool(11, "echo", { text: "x" }), callTool(12, "hang")], { sessionId });
+  assert.equal(reply.status, 200);
+  assert.deepEqual(reply.messages.map((message) => message.id).sort(), [11, 12]);
+  for (const message of reply.messages) assert.equal(typeof message.error.code, "number");
+  assert.equal(relay.size(), 0);
+});
+
+test("close() stops every child, and one that ignores SIGTERM gets SIGKILL after killAfterMs", async (t) => {
+  const { relay, url, children } = await start(t, { childEnv: { ECHO_IGNORE_SIGTERM: "1" }, killAfterMs: 300 });
+  await open(url);
+  const stderr = t.mock.method(process.stderr, "write", () => true);
+  const started = Date.now();
+  await relay.close();
+  stderr.mock.restore();
+  assert.ok(Date.now() - started >= 250, "SIGTERM came first and was given its time");
+  assert.match(String(stderr.mock.calls[0]?.arguments[0]), /Desk process ignored SIGTERM for 0\.3 s; sending SIGKILL/);
+  const [, signal] = await children[0].closed;
+  assert.equal(signal, "SIGKILL");
+  assert.equal(relay.size(), 0);
+});
+
+test("after close() starts, a new session is refused with 503", async (t) => {
+  const { relay, url, children } = await start(t);
+  await relay.close();
+  const reply = await post(url, initialize());
+  assert.equal(reply.status, 503);
+  assert.match(reply.messages[0].error.message, /shutting down/);
+  assert.equal(children.length, 0);
 });
