@@ -18,15 +18,16 @@ function hostProjectFolder(env) {
 }
 
 export function resolveStartupDeskRoot({ args, env = process.env, homeDir, cwd } = {}) {
+  const hostProjectRoot = hostProjectFolder(env)
   return resolveDeskRootWithSource({
     activationConfigPath: resolveStartupActivationConfigPath({ args, env }),
     cwd,
     env,
     explicitRoot: args?.root,
     homeDir,
-    // Captured launch evidence is a hint only when the host supplied no project context.
-    hostProjectRoot: hostProjectFolder(env) ?? cwd,
+    hostProjectRoot,
     hostSessionRoot: args?.hostSessionRoot,
+    projectRootHint: hostProjectRoot === undefined ? cwd : undefined,
   })
 }
 

@@ -25,6 +25,95 @@ function makeDesk(folder) {
   return folder
 }
 
+for (const scenario of [
+  { name: "unavailable saved binding", association: "activation", unavailable: true, error: "DESK_ROOT_UNAVAILABLE" },
+  { name: "valid saved binding", association: "activation", source: "activation-config" },
+  { name: "unavailable DESK", association: "env", unavailable: true, error: "DESK_ROOT_UNAVAILABLE" },
+  { name: "valid DESK", association: "env", source: "env:DESK" },
+  { name: "malformed activation", association: "activation", malformed: true, error: "ACTIVATION_CONFIG_INVALID" },
+]) {
+  for (const entrypoint of ["boot", "admission"]) {
+    test(`association: ${entrypoint} does not let a valid cwd mask ${scenario.name}`, async () => {
+      const base = await mkTempRoot("desk-launch-association-")
+      const home = path.join(base, "home")
+      mkdirSync(home)
+      const cwd = makeDesk(path.join(base, "launch"))
+      const associated = path.join(base, "associated")
+      if (!scenario.unavailable) makeDesk(associated)
+      const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state") }
+      if (scenario.association === "activation") {
+        const config = path.join(base, "activation.json")
+        writeFileSync(config, scenario.malformed ? "{" : JSON.stringify({
+          schema_version: 1,
+          desk: { root: associated, state_branch: "trunk" },
+        }))
+        env.DESK_ACTIVATION_CONFIG = config
+      } else {
+        env.DESK = associated
+      }
+      const input = { args: {}, env, cwd, homeDir: home }
+      if (entrypoint === "boot") {
+        const result = resolveBootRoot(input)
+        if (scenario.error) {
+          assert.equal(result.status, "degraded")
+          assert.equal(result.reason, scenario.error)
+          if (!scenario.malformed) assert.equal(result.path, associated)
+        } else {
+          assert.equal(result.status, "ready")
+          assert.equal(result.path, associated)
+          assert.equal(result.source, scenario.source)
+        }
+      } else {
+        const result = resolveAdmissionInputs(input)
+        if (scenario.error) {
+          assert.equal(result.rootError?.code, scenario.error)
+          assert.equal(result.root, undefined)
+          assert.equal(result.activation, undefined, "a refused association must not attach its policy to cwd")
+          if (!scenario.malformed) assert.equal(result.rootError.path, associated)
+        } else {
+          assert.equal(result.root.root, associated)
+          assert.equal(result.root.source, scenario.source)
+          if (scenario.association === "activation") assert.equal(result.activation.stateBranch, "trunk")
+        }
+      }
+    })
+  }
+}
+
+test("association: known host project context retains precedence over saved binding and DESK", async () => {
+  const base = await mkTempRoot("desk-launch-known-association-")
+  const known = makeDesk(path.join(base, "known"))
+  const cwd = makeDesk(path.join(base, "launch"))
+  const config = path.join(base, "activation.json")
+  writeFileSync(config, JSON.stringify({ schema_version: 1, desk: { root: path.join(base, "missing-saved") } }))
+  for (const extra of [
+    { DESK_ACTIVATION_CONFIG: config },
+    { DESK: path.join(base, "missing-env") },
+  ]) {
+    const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state"), CLAUDE_PROJECT_DIR: known, ...extra }
+    const input = { args: {}, env, cwd, homeDir: base }
+    assert.equal(resolveBootRoot(input).path, known)
+    assert.equal(resolveAdmissionInputs(input).root.root, known)
+  }
+  const project = path.join(base, "ordinary-host-project")
+  mkdirSync(project)
+  const home = path.join(base, "home")
+  const fallback = makeDesk(path.join(home, "desk"))
+  const input = { args: {}, env: { HOME: home, CLAUDE_PROJECT_DIR: project }, cwd, homeDir: home }
+  assert.equal(resolveBootRoot(input).path, fallback, "known non-desk host context must not be replaced by child cwd")
+  assert.equal(resolveAdmissionInputs(input).root.root, fallback)
+})
+
+test("association: empty host project context leaves cwd as a generic hint in boot and admission", async () => {
+  const base = await mkTempRoot("desk-launch-empty-context-")
+  const cwd = makeDesk(path.join(base, "launch"))
+  for (const value of ["", "   "]) {
+    const input = { args: {}, env: { HOME: base, CLAUDE_PROJECT_DIR: value }, cwd, homeDir: base }
+    assert.equal(resolveBootRoot(input).path, cwd)
+    assert.equal(resolveAdmissionInputs(input).root.root, cwd)
+  }
+})
+
 test("resolve: a captured desk launch folder beats the home fallback and agrees with boot without host variables", async () => {
   const base = await mkTempRoot("desk-worker-launch-")
   const home = path.join(base, "home")
