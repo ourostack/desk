@@ -1,1 +1,0 @@
-The `desk_reindex` tool description and its `force` input no longer say `force` drops the database and rebuilds from scratch. They now say what the tool does: it asks the shared readiness controller to bring the lexical index up to date and waits for it, and `force` is accepted for compatibility but changes nothing, because a live index is never deleted.
