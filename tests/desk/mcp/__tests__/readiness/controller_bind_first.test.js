@@ -25,15 +25,34 @@ async function fixture(t, prefix) {
   const endpoint = deriveControllerEndpoint({ identity })
   const stateDir = path.join(root, "state", identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-  t.after(() => rmSync(endpoint, { force: true }))
+  // A POSIX socket leaves a file behind. A Windows named pipe is not a file: removing its path throws EINVAL, and a throwing after hook stops every hook registered after it, which left the winner's server open and kept the test process alive forever.
+  t.after(() => {
+    try { rmSync(endpoint, { force: true }) } catch { /* the pipe goes with its server */ }
+  })
   return { root, identity, endpoint, stateDir, stateHome: path.join(root, "state") }
 }
 
 const accepting = (endpoint) => new Promise((resolve) => {
   const socket = net.createConnection(endpoint)
-  socket.once("connect", () => { socket.destroy(); resolve(true) })
-  socket.once("error", () => resolve(false))
+  const timer = setTimeout(() => { socket.destroy(); resolve(false) }, 2000)
+  socket.once("connect", () => { clearTimeout(timer); socket.destroy(); resolve(true) })
+  socket.once("error", () => { clearTimeout(timer); resolve(false) })
 })
+
+// Close a controller at the end of a test, waiting at most 10 s, so a controller that cannot close fails the hook instead of hanging it.
+const closeBounded = (controller) => Promise.race([
+  controller.close(),
+  new Promise((_, reject) => setTimeout(() => reject(new Error("the controller did not close within 10 s")), 10_000).unref()),
+])
+
+// Wait until the endpoint accepts, for at most 10 s, so a controller that never binds fails the test instead of hanging it.
+async function untilAccepting(endpoint) {
+  const deadline = Date.now() + 10_000
+  while (!(await accepting(endpoint))) {
+    assert.ok(Date.now() < deadline, "the endpoint never started accepting")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
 
 test("with the bind first, the process start is read after the pipe is bound, and only by the controller that bound it", { timeout: 60_000 }, async (t) => {
   const { identity, endpoint, stateDir } = await fixture(t, "desk-bindfirst-")
@@ -42,7 +61,7 @@ test("with the bind first, the process start is read after the pipe is bound, an
     identity, endpoint, stateDir, ephemeral: true, exitRelease: quietExit(), bindBeforeProcessStart: true,
     ownProcessStart: async () => { reads.push(await accepting(endpoint)); return "win32:2026-10-08T00:00:00.000Z" },
   })
-  t.after(() => winner.close())
+  t.after(() => closeBounded(winner))
   assert.deepEqual(reads, [true], "the read ran once, with the endpoint already accepting")
   assert.equal(winner.owner.process_start, "win32:2026-10-08T00:00:00.000Z")
   let lost = 0
@@ -60,7 +79,7 @@ test("without the bind first, the process start is read before the bind, as befo
     identity, endpoint, stateDir, ephemeral: true, exitRelease: quietExit(), bindBeforeProcessStart: false,
     ownProcessStart: async () => { reads.push(await accepting(endpoint)); return null },
   })
-  t.after(() => controller.close())
+  t.after(() => closeBounded(controller))
   assert.deepEqual(reads, [false], "the endpoint was not yet bound when the read ran")
   assert.equal(controller.owner.process_start, undefined)
 })
@@ -72,7 +91,7 @@ test("the bind-first default follows the platform: Windows binds first, the othe
     identity, endpoint, stateDir, ephemeral: true, exitRelease: quietExit(),
     ownProcessStart: async () => { reads.push(await accepting(endpoint)); return null },
   })
-  t.after(() => controller.close())
+  t.after(() => closeBounded(controller))
   assert.deepEqual(reads, [process.platform === "win32"])
 })
 
@@ -94,14 +113,15 @@ test("a session that lost the bind waits for a winner that is still starting, an
     identity: late.identity, endpoint: late.endpoint, stateDir: late.stateDir, ephemeral: true, exitRelease: quietExit(), bindBeforeProcessStart: true,
     ownProcessStart: () => new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
   })
-  while (!(await accepting(late.endpoint))) await new Promise((resolve) => setTimeout(resolve, 10))
+  t.after(async () => { try { await closeBounded(await starting) } catch { /* it never started */ } })
+  await untilAccepting(late.endpoint)
   const client = await connectOrStartController({ root: late.root, stateHome: late.stateHome, ephemeral: true, startController: inUse, electionWaitMs: 10_000 })
   const winner = await starting
   try {
     assert.equal((await client.status()).state, "CONTROL_READY")
   } finally {
     await client.close()
-    await winner.close()
+    await closeBounded(winner)
   }
 
   const nobody = await fixture(t, "desk-election-nobody-")
@@ -121,7 +141,8 @@ test("a session that handshakes while the winner has bound the pipe but not publ
     identity, endpoint, stateDir, ephemeral: true, exitRelease: quietExit(), bindBeforeProcessStart: true,
     ownProcessStart: async () => { await gate; return null },
   })
-  while (!(await accepting(endpoint))) await new Promise((resolve) => setTimeout(resolve, 10))
+  t.after(async () => { release(); try { await closeBounded(await starting) } catch { /* it never started */ } })
+  await untilAccepting(endpoint)
   const inUse = () => { throw Object.assign(new Error("listen EADDRINUSE: address already in use"), { code: "EADDRINUSE" }) }
   await assert.rejects(
     connectOrStartController({ root, stateHome, ephemeral: true, startController: inUse, electionWaitMs: 300 }),
@@ -130,7 +151,7 @@ test("a session that handshakes while the winner has bound the pipe but not publ
   )
   release()
   const winner = await starting
-  t.after(() => winner.close())
+  t.after(() => closeBounded(winner))
   const client = await connectOrStartController({ root, stateHome, ephemeral: true, startController: inUse, electionWaitMs: 300 })
   try {
     assert.equal((await client.status()).state, "CONTROL_READY")
