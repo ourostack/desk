@@ -1,11 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { jobId } from "../../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { renameWithRetry } from "../../../../../../plugins/desk/mcp/src/util/rename-retry.js"
 import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
@@ -38,6 +39,36 @@ function scratch(run) {
     rmSync(root, { recursive: true, force: true })
   }
 }
+
+// Windows refuses the tmp-to-final rename with EPERM for a moment while Defender or the indexer holds the fresh directory open.
+const refuse = () => Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" })
+
+test("a build whose final rename Windows refuses once with EPERM retries it and publishes the same output", () => scratch((root) => {
+  const out = path.join(root, "out")
+  mkdirSync(out)
+  writeFileSync(path.join(out, "stale.txt"), "old")
+  const attempts = []
+  const rename = (source, destination) => renameWithRetry(source, destination, {
+    platform: "win32",
+    sleep: () => {},
+    rename: (from, to) => {
+      attempts.push(path.basename(from).replace(/\d+$/u, "N"))
+      if (attempts.length === 1) throw refuse()
+      renameSync(from, to)
+    },
+  })
+  assert.deepEqual(build({ storeDir: STORE, outDir: out, rename }), { jobs: 2, sessions: 4 })
+  assert.deepEqual(attempts, ["out.factory-tmp-N", "out.factory-tmp-N"])
+  assert.equal(existsSync(path.join(out, "stale.txt")), false)
+  assert.equal(Buffer.compare(readFileSync(path.join(out, "README.md")), readFileSync(path.join(EXPECTED, "README.md"))), 0)
+}))
+
+test("a build whose rename stays refused throws the error and leaves no temporary directory", () => scratch((root) => {
+  const out = path.join(root, "out")
+  const rename = (source, destination) => renameWithRetry(source, destination, { platform: "win32", sleep: () => {}, rename: () => { throw refuse() } })
+  assert.throws(() => build({ storeDir: STORE, outDir: out, rename }), { code: "EPERM" })
+  assert.deepEqual(readdirSync(root), [])
+}))
 
 test("build matches every golden output byte for byte and returns exact counts", () => scratch((root) => {
   const out = path.join(root, "out")

@@ -5,9 +5,10 @@
 // It is written only when a `resource` call writes a row (`recordCleanupCard`), which also drops every card that has no open row left or is gone. It holds no due-ness: boot recomputes that from the card itself
 // each time (active-tasks.js), so a card finished by any path is picked up. Because the index is per machine, only the machine that recorded a row reminds about it.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { lastStartRootKey, resolveDeskStateDir } from "../runtime/last-start.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 import { openResources } from "./resources.js"
 
@@ -47,5 +48,5 @@ export function recordCleanupCard(deskRoot, folder, hasOpen, env) {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.${process.pid}.tmp`
   writeFileSync(temporary, `${JSON.stringify({ schema_version: 1, cards })}\n`, { mode: 0o600 })
-  renameSync(temporary, file)
+  renameWithRetry(temporary, file)
 }

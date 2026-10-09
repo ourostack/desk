@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -138,13 +139,61 @@ test("runBlock reports the exit, the output, a timeout that kills the whole bloc
   if (process.platform !== "win32") assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
   const missing = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
   assert.deepEqual(missing, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
-  const windows = await runBlock("sleep 5", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32" })
+  const windows = await runBlock("sleep 5", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "bash" })
   assert.equal(windows.timedOut, true, "without process groups the block itself is killed")
   // A block that exits between its timer and its close event is not killed twice.
   const gone = await runBlock("sleep 1", { env: process.env, cwd: process.cwd(), timeoutMs: 100, spawn: (command, args, options) => Object.defineProperty(spawn(command, args, options), "pid", { value: 2 ** 22 + 12345 }) })
   assert.equal(gone.timedOut, true)
   const chatty = await runBlock("yes | head -c 100000", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
   assert.ok(chatty.stdout.length < 100_000, "output is kept bounded")
+})
+
+test("runBlock runs the block with the bash it is given, which on Windows defaults to the one resolveBash finds, never the WSL relay", async () => {
+  const seen = []
+  const spy = (command, args, options) => { seen.push(command); return spawn("bash", args, options) }
+  await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy, bash: "C:\\Git\\bin\\bash.exe" })
+  await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy })
+  await runBlock("exit 0", { env: {}, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy })
+  assert.deepEqual(seen, ["C:\\Git\\bin\\bash.exe", resolveBash(), resolveBash()])
+})
+
+const RELAY_ERROR = "<3>WSL (9 - Relay) ERROR: CreateProcessCommon:818: execvpe(/bin/bash) failed: No such file or directory"
+const relaySpawn = (stream, text, code = 1) => () => spawn(process.execPath, ["-e", `process.${stream}.write(${JSON.stringify(text)}); process.exit(${code})`], { stdio: ["ignore", "pipe", "pipe"] })
+
+test("runBlock without a usable bash (relay only, bash is null) is unavailable and spawns nothing", async () => {
+  const run = await runBlock("exit 0", { env: {}, cwd: process.cwd(), timeoutMs: 1000, bash: null, spawn: () => assert.fail("must not spawn") })
+  assert.deepEqual(run, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
+})
+
+test("a relay failure on stderr or stdout makes the block unavailable, but only when it failed", async () => {
+  for (const [stream, text] of [["stderr", RELAY_ERROR], ["stdout", "Windows Subsystem for Linux has no installed distributions."]]) {
+    const run = await runBlock("x", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: relaySpawn(stream, text) })
+    assert.equal(run.unavailable, true, stream)
+    assert.equal(run.status, 1)
+  }
+  const fine = await runBlock("x", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: relaySpawn("stdout", "execvpe(x) failed is just text", 0) })
+  assert.equal(fine.unavailable, false)
+  const plain = await runBlock("x", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: relaySpawn("stdout", "no", 1) })
+  assert.equal(plain.unavailable, false)
+})
+
+test("a Detect that could not run is shown at startup by name, never read as not needed (hook path)", async () => {
+  const root = await plugin([{ id: "09-x", detect: "exit 1" }])
+  const spawnRelay = relaySpawn("stderr", RELAY_ERROR)
+  const pending = await pendingMigrations({ pluginRoot: root, env: process.env, cwd: root, budgetMs: 10_000, spawn: spawnRelay })
+  assert.deepEqual(pending, [{ id: "09-x", state: "bash_unavailable" }])
+  const line = migrationLine(pending, root)
+  assert.match(line, /^Desk migrations: 09-x could not be checked at startup because bash could not run/u)
+  assert.match(await startupMigrationLine({ pluginRoot: root, env: process.env, cwd: root, budgetMs: 10_000, spawn: spawnRelay }), /09-x could not be checked at startup because bash could not run/u)
+})
+
+test("the migrations CLI reports a relay-only Detect as an error, not as nothing to do", async () => {
+  const root = await plugin([{ id: "09-x", detect: "exit 1" }])
+  const out = { stdout: "", stderr: "" }
+  const code = await runMigrationCli({ argv: ["run", "09-x"], env: process.env, io: { stdout: { write: (t) => { out.stdout += t } }, stderr: { write: (t) => { out.stderr += t } } }, pluginRoot: root, cwd: root, spawn: relaySpawn("stderr", RELAY_ERROR) })
+  assert.equal(code, 1)
+  assert.match(out.stderr, /bash is required/u)
+  assert.doesNotMatch(out.stdout, /not needed/u)
 })
 
 test("shellQuote keeps a path with spaces and quotes one word", () => {
@@ -213,7 +262,7 @@ test("pendingMigrations keeps to its budget: slow blocks and an exhausted budget
     assert.deepEqual(await pendingMigrations({ pluginRoot: one, cwd: one, budgetMs: 1_000, now }), expected)
   }
   const missingBash = await plugin([{ id: "01-a" }])
-  assert.deepEqual(await pendingMigrations({ pluginRoot: missingBash, cwd: missingBash, spawn: noBash }), [], "a host without bash gets no line")
+  assert.deepEqual(await pendingMigrations({ pluginRoot: missingBash, cwd: missingBash, spawn: noBash }), [{ id: "01-a", state: "bash_unavailable" }], "a host without bash is named, not skipped")
   assert.equal(MIGRATION_BUDGET_MS, 2_000)
 })
 
