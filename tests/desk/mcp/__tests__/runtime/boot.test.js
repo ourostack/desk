@@ -1605,9 +1605,15 @@ test("bootOnce: agent-work, unchecked and ran migrations become instructions whi
 
 test("bootOnce: a migration bash could not check degrades boot and is named, so it never reads as ready", async () => {
   const root = await mkDeskWorkspace()
-  const result = await healthyBoot(root, { migrationsFn: async () => [{ id: "09-x", state: "bash_unavailable" }] })
+  const result = await healthyBoot(root, { platform: "win32", migrationsFn: async () => [{ id: "09-x", state: "bash_unavailable" }] })
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.includes("migration 09-x: not checked, bash could not run (on Windows, install Git for Windows)"))
+  const elsewhere = await healthyBoot(root, { platform: "linux", migrationsFn: async () => [{ id: "09-x", state: "bash_unavailable" }] })
+  assert.ok(elsewhere.degraded.includes("migration 09-x: not checked, bash could not run (install bash)"))
+  assert.ok(elsewhere.instructions.every((line) => !/Git for Windows/u.test(line)))
+  assert.ok(result.instructions.some((line) => /Git for Windows/u.test(line)))
+  const stopped = await healthyBoot(root, { platform: "linux", migrationsFn: async () => [{ id: "09-x", state: "bash_unavailable" }, { id: "09-y", state: "run", reason: "r" }] })
+  assert.ok(stopped.instructions.some((line) => line.startsWith("09-x") && line.includes("(install bash)")))
   assert.deepEqual(result.migrations, [{ id: "09-x", state: "bash_unavailable" }])
   assert.ok(result.instructions.some((line) => line.startsWith("09-x could not be checked at startup")))
 })

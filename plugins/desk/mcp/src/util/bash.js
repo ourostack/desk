@@ -5,7 +5,7 @@ const WIN = path.win32
 
 // `bash.exe` in System32 or WindowsApps is the WSL relay. With no distro installed it starts, prints "execvpe(/bin/bash) failed" and
 // exits 1, so a script run through it fails without ever running.
-function isWslRelay(file) {
+export function isWslRelay(file) {
   return /\\(?:windows\\(?:system32|sysnative)|windowsapps)\\/iu.test(file)
 }
 

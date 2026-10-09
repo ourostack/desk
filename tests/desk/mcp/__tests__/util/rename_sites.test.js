@@ -20,12 +20,19 @@ const RETRIED = [
   "activation/support-matrix.js",
 ]
 
+const ALLOWED = {
+  "runtime/sync-worker.js": ["renameSync(temporary, lockPath)"],
+  "runtime/stale-desk-refresh.js": ['fs.renameSync(cfg.stamp + ".run.tmp", cfg.stamp)'],
+}
+
 test("the state-file writers retry their final rename instead of calling renameSync", () => {
   for (const file of RETRIED) {
     const text = readFileSync(path.join(src, file), "utf8")
     assert.match(text, /renameWithRetry\(/u, `${file} retries its rename`)
-    // The sync lock takeover and the detached refresh runner script keep their own rename on purpose; nothing else may.
-    const bare = text.split("\n").filter((line) => /(?<![.\w])renameSync\(/u.test(line))
-    assert.equal(bare.length, file === "runtime/sync-worker.js" ? 1 : 0, `${file}: ${bare.join(" | ")}`)
+    // Any `renameSync(` call counts, including `fs.renameSync(`. Two are kept on purpose, each allowed by its exact line: the sync lock takeover, and
+    // the line inside the detached refresh runner's RUNNER_SOURCE string.
+    const bare = text.split("\n").filter((line) => /\brenameSync\(/u.test(line) && !ALLOWED[file]?.includes(line.trim()))
+    assert.equal(bare.length, 0, `${file}: ${bare.join(" | ")}`)
+    assert.equal(text.split("\n").filter((line) => /\brenameSync\(/u.test(line)).length, ALLOWED[file]?.length ?? 0, `${file} keeps exactly its allowed renames`)
   }
 })

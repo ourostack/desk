@@ -1,0 +1,1 @@
+On Windows, the WSL bash.exe is now recognised by its path (System32, Sysnative or WindowsApps) as well as its error line, so a relay that fails with no output is reported as unavailable instead of silently skipped, and the "install Git for Windows" hint for a migration bash could not check now appears only on Windows, with "install bash" elsewhere.

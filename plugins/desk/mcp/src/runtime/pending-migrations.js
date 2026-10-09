@@ -40,7 +40,7 @@ import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
-import { resolveBash } from "../util/bash.js"
+import { isWslRelay, resolveBash } from "../util/bash.js"
 import { isGitRepository } from "../util/git-stage.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
@@ -130,9 +130,9 @@ export function readMigrations(pluginRoot) {
  * Each stream stops growing once it reaches `outputChars`: the hooks keep a
  * bounded amount for one line, and the command line keeps everything.
  */
-// What the WSL relay prints when it cannot run bash, on its stderr or stdout. This is its debug line, which no Windows language translates; the
-// friendly "no installed distributions" sentence is localized, and the relay's exit code and path cannot stand in for it, because a relay with a distro runs
-// the block for real and a Detect that exits 1 there means "not needed".
+// What the WSL relay prints when it cannot run bash, on its stderr or stdout. This is its debug line, which no Windows language translates. It is
+// not proof of "no distro": a machine with one registered distro that has no /bin/bash prints it too. A relay with no distro at all most likely
+// prints only the localized "no installed distributions" sentence, which cannot be matched across languages, so a relay is also recognised by its path.
 const RELAY_FAILURE = /execvpe\(.*\) failed/iu
 
 export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }) }) {
@@ -166,7 +166,13 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
     })
     child.once("close", (code) => {
       clearTimeout(timer)
-      const relay = !timedOut && code !== 0 && RELAY_FAILURE.test(`${stderr}\n${stdout}`)
+      // A relay with a working distro runs the block for real: exit 0, or a non-zero exit that printed something, is a genuine result. A relay that
+      // failed with nothing on stdout is treated as unavailable, even though a distro that has bash and a Detect that legitimately exits 1 with no
+      // output looks the same. That ambiguity resolves toward the loud degraded state ("could not be checked") over a silent "not needed", because
+      // a skipped migration nobody hears about is the worse failure. Desk never picks the relay itself (`resolveBash` returns null instead), so
+      // this only matters when a caller injects one. Any other bash is judged by the relay's debug line alone.
+      const failed = !timedOut && code !== 0
+      const relay = failed && ((isWslRelay(bash) && stdout === "") || RELAY_FAILURE.test(`${stderr}\n${stdout}`))
       resolve({ status: timedOut ? null : code, stdout, stderr, timedOut, unavailable: relay })
     })
   })
@@ -286,11 +292,17 @@ export async function pendingMigrations({
   return pending
 }
 
+/** What to do when bash could not run: the Git for Windows hint belongs to Windows only; elsewhere the fix is to install bash. */
+export function bashHint(platform, long = false) {
+  if (platform !== "win32") return "install bash"
+  return long ? "on Windows, install Git for Windows; the WSL bash.exe with no distro cannot run Desk's scripts" : "on Windows, install Git for Windows"
+}
+
 /**
  * The one `Desk migrations:` startup line for `pending`, addressed to the
  * agent, or "" when nothing is pending.
  */
-export function migrationLine(pending, pluginRoot) {
+export function migrationLine(pending, pluginRoot, platform = process.platform) {
   const parts = pending.map((entry) => {
     const run = (options) => `run \`${migrationCommand(pluginRoot, entry.id, options)}\``
     switch (entry.state) {
@@ -303,7 +315,7 @@ export function migrationLine(pending, pluginRoot) {
       case "ran":
         return `${entry.id} ran at startup. Tell the human in one line: ${entry.report ? `${entry.report} ` : ""}${entry.announce}`
       case "bash_unavailable":
-        return `${entry.id} could not be checked at startup because bash could not run (on Windows, install Git for Windows; the WSL bash.exe with no distro cannot run Desk's scripts). Tell the human in one line that Desk's migrations are not being checked.`
+        return `${entry.id} could not be checked at startup because bash could not run (${bashHint(platform, true)}). Tell the human in one line that Desk's migrations are not being checked.`
       case "run":
         return `${entry.id} is pending but did not run at startup because ${entry.reason}. Before other work, ${run()} and follow what it prints.`
       default:
@@ -334,12 +346,12 @@ async function defaultFileProblem() {
  * every other migrated mechanism uses.
  */
 export async function startupMigrationLine({
-  pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn, spawnGit, host, fileProblem = defaultFileProblem,
+  pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn, spawnGit, host, fileProblem = defaultFileProblem, platform = process.platform,
 }) {
   const drifts = []
   try {
     const pending = await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn, spawnGit, host, onIndexDrift: (block) => drifts.push(block) })
-    return [migrationLine(pending, pluginRoot), ...drifts].filter((part) => part !== "").join("\n")
+    return [migrationLine(pending, pluginRoot, platform), ...drifts].filter((part) => part !== "").join("\n")
   } catch (error) {
     const reason = oneLine(error?.message ?? String(error))
     let file = "not filed: filer_unavailable"
