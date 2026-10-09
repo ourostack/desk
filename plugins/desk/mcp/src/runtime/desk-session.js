@@ -448,6 +448,8 @@ export function createDeskSession(deps) {
         failure = error
       }
     }
+    // The last request can outlive the controller: if it exited and another was elected meanwhile, this stale chain must not close the new one or degrade the session.
+    if (disposed || context.admission?.controller !== controller) return null
     forgetController()
     return controllerLostOutcome(failure)
   }

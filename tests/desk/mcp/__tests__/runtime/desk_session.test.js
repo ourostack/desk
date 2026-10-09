@@ -470,6 +470,41 @@ test("a controller that fails every repeat of the status check is lost, and one 
   assert.equal(exits, 1, "the exit event took over: the repeats stopped without asking a controller that was already forgotten")
 })
 
+test("a controller replaced while its last status request is pending is not closed or reported lost by the stale check", async (t) => {
+  const listeners = []
+  const closed = []
+  let connections = 0
+  let attempts = 0
+  let failLast
+  const runtime = fakeRuntime({
+    connectOrStartController: async () => {
+      const id = (connections += 1)
+      return {
+        accepted: true,
+        onExit(listener) { listeners.push(listener); return () => {} },
+        async close() { closed.push(id) },
+        status() {
+          if (id !== 1) return Promise.resolve({})
+          attempts += 1
+          if (attempts < 3) return Promise.reject(new Error("readiness controller request timed out: status"))
+          return new Promise((_, reject) => { failLast = () => reject(new Error("readiness controller request timed out: status")) })
+        },
+      }
+    },
+  })
+  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1 })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status" })
+  await waitUntil(() => attempts === 3)
+  listeners[0]()
+  await waitUntil(() => connections === 2)
+  await session.admission.refresh()
+  failLast()
+  await flush()
+  await flush()
+  assert.deepEqual([connections, closed, session.admission.snapshot().state], [2, [1], "ready"], "only the exited controller was closed; the new one serves")
+})
+
 test("disposing the session during the repeats ends the check without a verdict", async (t) => {
   const runtime = fakeRuntime({
     connectOrStartController: async () => ({ accepted: true, async status() { throw new Error("readiness controller request timed out: status") } }),
