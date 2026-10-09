@@ -163,7 +163,11 @@ test("desk_save refuses a `files` path outside the person prefix on a crew desk"
 
 test("desk_save refuses a `files` path whose parent is a file, or whose target is a folder", async () => {
   const root = await gitDesk()
-  await assertRefused(root, { path: "README.md/x.md", content: "x" })
+  // Windows reports ENOENT, not ENOTDIR, under a file, so this refusal must come from desk_save's own check on every platform.
+  for (const bad of ["README.md/x.md", "README.md/sub/x.md"]) {
+    await assertRefused(root, { path: bad, content: "x" })
+    await assert.rejects(save(root, { files: [{ path: bad, content: "x" }], message: "refuse" }), /part of the path is a file, not a folder/u)
+  }
   await fs.mkdir(path.join(root, "folder"))
   await assertRefused(root, { path: "folder", content: "x" })
 })

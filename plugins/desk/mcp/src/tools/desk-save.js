@@ -88,9 +88,23 @@ function pathRefusal(relativePath) {
   return null
 }
 
+// Whether a folder on the way to `relativePath` is really a file. resolveWriteTarget refuses that on POSIX, where the OS says ENOTDIR, but
+// Windows says ENOENT under a file, so the path would reach mkdir. Walking down from the desk root stops at the first missing folder or
+// the first file, which reads the same on every platform. A link ends the walk too: following links is resolveWriteTarget's job.
+function fileInPath(deskRoot, relativePath) {
+  let dir = deskRoot
+  for (const segment of relativePath.split("/").filter((part) => part !== "" && part !== ".").slice(0, -1)) {
+    dir = path.join(dir, segment)
+    const stat = lstatSync(dir, { throwIfNoEntry: false })
+    if (stat === undefined || stat.isSymbolicLink()) return false
+    if (!stat.isDirectory()) return true
+  }
+  return false
+}
+
 // Where `absolute` really leads, through the real path of its deepest existing folder, and what is there now.
-// resolveWriteTarget has already refused a path with a file in the middle of it and a link it cannot resolve, so what is left is a missing
-// tail. Any other error (no permission, say) is not caught here: it ends the call, so nothing is written.
+// fileInPath and resolveWriteTarget have already refused a path with a file in the middle of it and a link it cannot resolve, so what is
+// left is a missing tail. Any other error (no permission, say) is not caught here: it ends the call, so nothing is written.
 function inspectTarget(absolute) {
   let ancestor = path.dirname(absolute)
   while (lstatSync(ancestor, { throwIfNoEntry: false }) === undefined) ancestor = path.dirname(ancestor)
@@ -116,6 +130,7 @@ async function checkFiles(deskRoot, person, effectiveRoot, files) {
     if (!isPathContained(effectiveRoot, absolute)) throw refuse("it is outside the resolved write prefix")
     if (seen.has(absolute)) throw refuse("it is listed twice")
     seen.add(absolute)
+    if (fileInPath(deskRoot, relativePath)) throw refuse("part of the path is a file, not a folder")
     try {
       await resolveWriteTarget({ deskRoot, person, segments: path.relative(effectiveRoot, absolute).split(path.sep) })
     } catch (error) {
