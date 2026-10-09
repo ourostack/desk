@@ -17,7 +17,7 @@ const localControllers = new Map()
 const ABANDONED_RECHECK_MS = 50
 // A running owner that is only busy gets one longer handshake before the session gives up on it for this attempt.
 const LIVE_OWNER_HANDSHAKE_MS = 1000
-// A controller that lost the bind knows another controller is starting; it waits for that one before it gives up on the election. On Windows the winner reads its process start through PowerShell after binding, which takes seconds, so the wait matches the time a controller is given to start (controller-process.js, 10 s). Elsewhere the winner publishes within milliseconds and the wait stays short.
+// A controller that lost the bind knows another controller is starting; it waits for that one before it gives up on the election. On Windows the winner reads its process start through PowerShell after binding, which takes seconds, so the wait is twice the 5 s the read is capped at (process-start.js), which also covers a winner that bound late. Elsewhere the winner publishes within milliseconds and the wait stays short.
 const ELECTION_WAIT_MS = { win32: 10_000, darwin: 500, linux: 500 }
 const controllerStarts = new Map()
 const privateDirectoryValidators = {

@@ -14,8 +14,9 @@ import { execFile } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import { win32 as winPath } from "node:path"
 
-// The Windows read stays below the 10 s a controller is given to start (controller-process.js): a slow read returns null and the controller starts without a process start, instead of making every session wait out the window.
-const EXEC_TIMEOUT_MS = { darwin: 5_000, win32: 5_000 }
+// A slow Windows read returns null and the controller starts without a process start, instead of making every session wait out the window. A Windows controller is given this long on top of the base start window for the read (controller-process.js).
+export const WINDOWS_PROCESS_START_CAP_MS = 5_000
+const EXEC_TIMEOUT_MS = { darwin: 5_000, win32: WINDOWS_PROCESS_START_CAP_MS }
 
 /** Run `file args` and resolve with its stdout, or null when it fails, times out or cannot run. */
 export function runForText(file, args, { timeout, env }) {
