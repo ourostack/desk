@@ -330,7 +330,7 @@ test("the agent's tabs are closed from the first until none is left, and nothing
     if (args.action === "close") open -= 1
     return tabsText(open)
   })
-  assert.deepEqual(calls.map(([, args]) => args), [{ action: "list" }, { action: "close", index: 0 }, { action: "list" }, { action: "close", index: 0 }, { action: "list" }, { action: "close", index: 0 }, { action: "list" }])
+  assert.deepEqual(calls.map(([, args]) => args), [{ action: "list" }, { action: "close", index: 0 }, { action: "close", index: 0 }, { action: "close", index: 0 }], "one list, then one close per tab, and no list afterwards")
   assert.ok(calls.every(([name, , ms]) => name === "browser_tabs" && ms > 0))
   assert.equal(calls[0][2], 2500)
   const timed = []
@@ -345,30 +345,32 @@ test("closing tabs stops at an error, a failed close or the limit, and never thr
   const failed = []
   await real.closeOwnTabs(async (name, args) => { failed.push(args.action); return args.action === "list" ? tabsText(2) : { isError: true, content: [] } })
   assert.deepEqual(failed, ["list", "close"])
-  let lists = 0
-  await real.closeOwnTabs(async (name, args) => { if (args.action === "list") lists += 1; return tabsText(1) })
-  assert.equal(lists, 50)
+  let closes = 0
+  await real.closeOwnTabs(async (name, args) => { if (args.action === "close") closes += 1; return tabsText(500) })
+  assert.equal(closes, 50)
   await real.closeOwnTabs(async () => { throw new Error("the browser ended") })
   await real.closeOwnTabs(async (name, args) => { if (args.action === "close") throw new Error("timed out"); return tabsText(1) })
 })
 
-test("the tabs hooks close tabs before browser_close and at the end, and only after the connection was used", posixOnly, async () => {
+test("the tabs hooks answer browser_close themselves, close tabs only for a used connection, and do nothing at the end after a close", posixOnly, async () => {
   const calls = []
   const api = { callTool: async (name, args) => { calls.push(args.action); return tabsText(0) } }
   const tabs = real.ownTabs()
   await tabs.cleanup(api)
   assert.deepEqual(calls, [], "a session that never called the browser has no tabs to close")
-  await tabs.beforeCall({ name: "browser_close" }, api)
+  const unused = await tabs.beforeCall({ name: "browser_close" }, api)
+  assert.match(unused.content[0].text, /is closed/u, "browser_close is answered here, not passed on")
   assert.deepEqual(calls, [])
-  await tabs.beforeCall({ name: "browser_navigate" }, api)
+  assert.equal(await tabs.beforeCall({ name: "browser_navigate" }, api), null)
   assert.deepEqual(calls, [])
-  await tabs.beforeCall({ name: "browser_close" }, api)
+  const closed = await tabs.beforeCall({ name: "browser_close" }, api)
+  assert.equal(closed, unused)
   assert.deepEqual(calls, ["list"], "browser_close closes the tabs first")
   await tabs.cleanup(api)
-  assert.deepEqual(calls, ["list"], "browser_close left nothing to close")
-  await tabs.beforeCall({ name: "browser_snapshot" }, api)
+  assert.deepEqual(calls, ["list"], "the end of the session after a close does nothing more")
+  assert.equal(await tabs.beforeCall({ name: "browser_snapshot" }, api), null)
   await tabs.cleanup(api)
-  assert.deepEqual(calls, ["list", "list"])
+  assert.deepEqual(calls, ["list", "list"], "a call after a close starts a new connection that is cleaned up again")
 })
 
 // ---- the launcher in the real profile ----
@@ -637,24 +639,42 @@ test("the token is replaced in a JSON-escaped form too", posixOnly, async () => 
   assert.equal(host.raw.join("").includes(odd), false)
 })
 
-test("browser_close closes every tab of the agent first, then passes the call on", posixOnly, async () => {
+test("browser_close closes every tab of the agent and is answered without reaching the browser", posixOnly, async () => {
   const machine = await realMachine({ tabs: 2 })
   const host = session(machine)
   await host.handshake()
   await host.call(2)
-  await host.call(3, "browser_close")
+  const answer = await host.call(3, "browser_close")
+  assert.match(textOf(answer), /is closed/u)
   assert.deepEqual(tabEvents(machine), [
     "child:tools/call browser_tabs list",
     "child:tools/call browser_tabs close",
-    "child:tools/call browser_tabs list",
     "child:tools/call browser_tabs close",
-    "child:tools/call browser_tabs list",
-    "child:tools/call browser_close",
   ])
+  assert.equal(machine.stub.spawns[0].child.tabs, 0)
   await host.close()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
-  assert.equal(machine.stub.spawns[0].child.tabs, 0)
+  assert.deepEqual(tabEvents(machine), [
+    "child:tools/call browser_tabs list",
+    "child:tools/call browser_tabs close",
+    "child:tools/call browser_tabs close",
+    "child:stdin closed",
+  ], "ending after browser_close does nothing more to the browser, so no second connect page opens")
   assert.equal(host.messages.filter((message) => message.id === 3).length, 1)
+})
+
+test("a browser call after browser_close connects again and its tabs are closed at the end", posixOnly, async () => {
+  const machine = await realMachine({ tabs: 1 })
+  const host = session(machine)
+  await host.handshake()
+  await host.call(2)
+  await host.call(3, "browser_close")
+  assert.equal(textOf(await host.call(4)), "ran browser_navigate")
+  host.stdin.end()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+  assert.equal(machine.events.filter((event) => event === "child:tools/call browser_navigate").length, 2)
+  assert.equal(machine.events.filter((event) => event === "child:tools/call browser_close").length, 0)
+  assert.equal(machine.stub.spawns[0].child.tabs, 0)
 })
 
 test("the host closing stdin closes the agent's tabs before the browser is told to stop", posixOnly, async () => {
@@ -667,7 +687,6 @@ test("the host closing stdin closes the agent's tabs before the browser is told 
   assert.deepEqual(tabEvents(machine), [
     "child:tools/call browser_tabs list",
     "child:tools/call browser_tabs close",
-    "child:tools/call browser_tabs list",
     "child:stdin closed",
   ])
   assert.deepEqual(host.exits, [0])
@@ -685,7 +704,6 @@ test("a stop signal closes the tabs, then stops the browser and ends the launche
     assert.deepEqual(tabEvents(machine), [
       "child:tools/call browser_tabs list",
       "child:tools/call browser_tabs close",
-      "child:tools/call browser_tabs list",
       `child:killed ${signal}`,
       `kill:${signal}`,
     ])

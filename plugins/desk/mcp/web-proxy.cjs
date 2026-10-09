@@ -114,7 +114,7 @@ function describeDiff(diff) {
 // Serve the host on stdin/stdout until it closes stdin, or the child ends this process.
 //
 // options.ready resolves { launch: { node, indexFile, args, env } } when Playwright MCP can start, or { payload } (a degraded payload) when it cannot; it never rejects.
-// options.beforeCall(params, api), when given, runs before each tools/call goes to the browser, which waits for the promise it returns; it never rejects. options.cleanup(api), when given, runs once the host is done (it closed stdin or sent a stop signal) and before the browser is told to stop; it never rejects and gets options.cleanupMs (default 8 seconds) to finish. `api.callTool(name, arguments, ms)` calls a browser tool on the proxy's own behalf and resolves its result, or rejects when it errors, times out or the browser ends. A launch's `secrets` (strings) are replaced with <redacted> in everything the proxy writes to the host or to stderr.
+// options.beforeCall(params, api), when given, runs before each tools/call goes to the browser and resolves null to pass the call on, or a tool result to answer the call with instead (the call then never reaches the browser); it never rejects. options.cleanup(api), when given, runs once the host is done (it closed stdin or sent a stop signal) and before the browser is told to stop; it never rejects and gets options.cleanupMs (default 8 seconds) to finish. `api.callTool(name, arguments, ms)` calls a browser tool on the proxy's own behalf and resolves its result, or rejects when it errors, times out or the browser ends. A launch's `secrets` (strings) are replaced with <redacted> in everything the proxy writes to the host or to stderr.
 // options.catalog is the tools/list answer, and options.catalogVersion names the Playwright MCP release it was taken from. options.retry() starts the install again and returns a new ready promise, and options.abort() ends a running install; options.progressMs sets the progress interval. options.timeoutPayload, options.spawnPayload(error) and options.exitPayload(code, signal) build the degraded payloads for a call that waited too long, a child that would not start and a child that ended.
 function serve(options) {
   var stdin = options.stdin;
@@ -250,8 +250,9 @@ function serve(options) {
         dispatch(entry);
         return;
       }
-      options.beforeCall(entry.params, api).then(function () {
-        dispatch(entry);
+      options.beforeCall(entry.params, api).then(function (local) {
+        if (local === null) dispatch(entry);
+        else send({ id: entry.id, result: local });
       });
     }
 

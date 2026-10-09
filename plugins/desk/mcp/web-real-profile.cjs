@@ -263,24 +263,26 @@ function countTabs(result) {
   return lines === null ? 0 : lines.length;
 }
 
-// Closes every tab this connection controls, one at a time from the first, and resolves when none is left, a call fails or the limit is reached. `call(name, arguments, ms)` resolves a tool's result; each call gets `callMs` (TAB_CALL_MS by default). Never rejects.
+// Closes every tab this connection controls and resolves when they are closed, a call fails or the limit is reached. It lists the tabs once and then closes that many from the first, with no list afterwards, because Playwright MCP opens a new connect page (a new window) when it is asked about a connection that has no page left. `call(name, arguments, ms)` resolves a tool's result; each call gets `callMs` (TAB_CALL_MS by default). Never rejects.
 function closeOwnTabs(call, callMs) {
   var ms = either(callMs, TAB_CALL_MS);
-  function next(closed) {
-    if (closed >= MAX_TABS) return Promise.resolve();
-    return call("browser_tabs", { action: "list" }, ms).then(function (listed) {
-      if (listed.isError || countTabs(listed) === 0) return null;
-      return call("browser_tabs", { action: "close", index: 0 }, ms).then(function (result) {
-        return result.isError ? null : next(closed + 1);
-      });
+  function close(left) {
+    if (left <= 0) return Promise.resolve();
+    return call("browser_tabs", { action: "close", index: 0 }, ms).then(function (result) {
+      return result.isError ? null : close(left - 1);
     });
   }
-  return next(0).then(null, function () {
+  return call("browser_tabs", { action: "list" }, ms).then(function (listed) {
+    return listed.isError ? null : close(Math.min(countTabs(listed), MAX_TABS));
+  }).then(null, function () {
     // The browser is gone or too slow; there is nothing more to close.
   });
 }
 
-// The hooks the proxy calls for the agent's tabs. Any call but `browser_close` marks the connection as used; `browser_close` closes the tabs first and then goes on to disconnect; the cleanup at the end of the session closes them only if the connection was used.
+// What `browser_close` answers once the agent's window is closed. The call is not passed on: with no page left, Playwright MCP would open a new connect page, and with it a new window nobody owns. The next browser call connects again, in a new window.
+var CLOSED = { content: [{ type: "text", text: "The browser window this session opened is closed. The next browser call opens a new one." }] };
+
+// The hooks the proxy calls for the agent's tabs. Any call but `browser_close` marks the connection as used; `browser_close` closes the tabs and answers itself; the cleanup at the end of the session closes the tabs only if the connection was used since the last close, and so does nothing after a `browser_close`.
 function ownTabs(callMs) {
   var used = false;
   function cleanup(api) {
@@ -292,9 +294,11 @@ function ownTabs(callMs) {
     beforeCall: function (params, api) {
       if (params.name !== "browser_close") {
         used = true;
-        return Promise.resolve();
+        return Promise.resolve(null);
       }
-      return cleanup(api);
+      return cleanup(api).then(function () {
+        return CLOSED;
+      });
     },
     cleanup: cleanup
   };
