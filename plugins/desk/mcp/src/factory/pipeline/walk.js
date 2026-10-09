@@ -738,7 +738,8 @@ function finishedOn(timeline, formulas, window) {
       if (!Object.hasOwn(binding, "finished_on")) return ["not_in_published_facts"]
       if (binding.session_offset_ms === null) return ["job_offsets_unavailable"]
       // The session saw the card end but no record gives when (`binding.js` gives such an observation no time).
-      if (binding.observed !== null && TERMINAL.has(binding.observed.status) && binding.observed.offset_ms === null) return ["finish_time_not_known"]
+      // Only for `done`: a cancelled job has no lead time to run to the end of its work, so the reason's words would not fit it.
+      if (binding.observed !== null && binding.observed.status === "done" && binding.observed.offset_ms === null) return ["finish_time_not_known"]
       return []
     })
     return none(reasons.length > 0 ? reasons : ["not_in_published_facts"])

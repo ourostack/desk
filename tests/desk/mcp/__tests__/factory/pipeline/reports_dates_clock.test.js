@@ -137,6 +137,16 @@ test("a done task with no recorded finish time keeps its lead window: the record
   assert.ok(walk.gaps.length > 0)
   // The finish day names why it has none.
   assert.deepEqual(walk.finished_on, { class: "unavailable", state: "unavailable", basis: null, reasons: ["finish_time_not_known"] })
+  // The words hold whether the time never existed or was lost before it could be placed.
+  assert.match(REASON_TEXT.finish_time_not_known, /^no published record places the time the task finished/)
+  // A card cancelled by hand has no lead time to run to the work, so its finish day does not claim one.
+  const cancelled = { ...unknown, observed: { status: "cancelled", offset_ms: null } }
+  const dropped = walkOf([facts({ id: S(53), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [cancelled] })], J("a"))
+  assert.deepEqual(dropped.walk.finished_on.reasons, ["not_in_published_facts"])
+  assert.deepEqual(dropped.formulas.lead_time_ms.reasons, ["cancelled"])
+  // A second session that never read the card adds no reason of its own.
+  const unseen = facts({ id: S(54), duration: 10 * MIN, intervals: [span("turn", 0, 0, 10 * MIN)], jobs: [{ ...unknown, observed: null, length: 10 * MIN }] })
+  assert.deepEqual(walkOf([session, unseen], J("a")).walk.finished_on.reasons, ["finish_time_not_known"])
   // Work that began before the card was made still floors the lead time, and both reasons stay.
   const early = facts({ id: S(48), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [{ ...unknown, session_offset_ms: -10 * MIN }] })
   const floored = walkOf([early], J("a"))
@@ -147,6 +157,26 @@ test("a done task with no recorded finish time keeps its lead window: the record
   assert.deepEqual(walkOf([lost], J("a")).formulas.lead_time_ms.reasons, ["job_offsets_unavailable"])
   const idle = facts({ id: S(50), duration: leadEnd, intervals: [], jobs: [{ ...unknown, segments: [] }] })
   assert.deepEqual(walkOf([idle], J("a")).formulas.lead_time_ms.reasons, ["job_offsets_unavailable"])
+})
+
+// Work that starts after the card was made leaves the lead time unfloored, so the window figures read the fallback directly: they are
+// partial with its reason, never measured, and the formulas agree with the task row.
+test("a lead time with no recorded finish time keeps flow efficiency and the lead contributors partial", () => {
+  const unknown = bound(J("a"), 30 * MIN, { day: null, transitions: [], observed: { status: "done", offset_ms: null }, length: 60 * MIN })
+  const session = facts({ id: S(51), duration: 60 * MIN, intervals: [span("turn", 0, 0, 20 * MIN), span("human_wait", 0, 20 * MIN, 60 * MIN)], jobs: [unknown] })
+  const { walk, formulas } = walkOf([session], J("a"))
+  assert.equal(formulas.lead_time_ms.value, 90 * MIN)
+  assert.equal(formulas.flow_efficiency.state, "partial")
+  assert.ok(formulas.flow_efficiency.reasons.includes("finish_time_not_known"))
+  assert.equal(formulas.flow_efficiency.value, walk.task.flow_efficiency.value)
+  assert.equal(walk.task.flow_efficiency.state, "partial")
+  assert.equal(formulas.lead_contributors.state, "partial")
+  assert.ok(formulas.lead_contributors.reasons.includes("finish_time_not_known"))
+  // A ratio already partial for its own coverage keeps both reasons.
+  const cut = facts({ id: S(52), duration: 60 * MIN, intervals: [span("turn", 0, 0, 20 * MIN), span("human_wait", 0, 20 * MIN, 60 * MIN)], jobs: [unknown], unavailable: [...CLAUDE_FLAGS, { field: "turns", reason: "host_records_partly" }] })
+  const both = walkOf([cut], J("a")).formulas.flow_efficiency
+  assert.equal(both.state, "partial")
+  assert.ok(both.reasons.includes("finish_time_not_known") && both.reasons.length > 1, JSON.stringify(both.reasons))
 })
 
 test("the guard holds for a measured day too, and only where the facts prove the last work ended on a later day", () => {

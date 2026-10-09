@@ -219,7 +219,7 @@ function currentStatus(timeline) {
 }
 
 // The reason a done job's lead time runs only to the end of its recorded work: no record gives the time it finished.
-export const FINISH_TIME_NOT_KNOWN = "finish_time_not_known"
+const FINISH_TIME_NOT_KNOWN = "finish_time_not_known"
 
 function leadTime(timeline, status) {
   if (status.value === "cancelled") return unavailable("cancelled")
@@ -332,9 +332,16 @@ function leadContributors({ lead, timingUnavailable, activeInLead, queue, waits,
     return gone.length === 1 ? unavailable(gone[0]) : unavailable("mixed", { reasons: gone })
   }
   entries.sort((left, right) => right.value_ms - left.value_ms || CONTRIBUTOR_ORDER.indexOf(left.key) - CONTRIBUTOR_ORDER.indexOf(right.key))
-  const reasons = [...new Set([...missing, ...sources.flatMap((source) => source.partial_reasons ?? [])])].sort(compareText)
+  const reasons = [...new Set([...missing, ...sources.flatMap((source) => source.partial_reasons ?? []), ...(lead.partial_reasons ?? [])])].sort(compareText)
   const result = inferred(entries, { censored: lead.censored, method: "clipped_to_lead_window" })
   return reasons.length === 0 ? result : { ...result, partial: true, partial_reasons: reasons }
+}
+
+// A figure read over the card's lead window carries that lead time's own partial reasons (a lead time that runs only to the end of the
+// recorded work, `finish_time_not_known`), so it is never read as whole when the window it divides by is not.
+function withLeadReasons(value, lead) {
+  if (lead.partial !== true) return value
+  return { ...value, partial: true, partial_reasons: [...new Set([...(value.partial_reasons ?? []), ...lead.partial_reasons])].sort(compareText) }
 }
 
 function bindingOf(session, job) {
@@ -584,7 +591,7 @@ export function calculateFormulas(timeline) {
   if (windowLead.class === "unavailable") flowEfficiency = unavailable(windowLead.reason)
   else if (cardLead.value === 0) flowEfficiency = unavailable("zero_lead_time")
   else if (activeInLead.class === "unavailable") flowEfficiency = activeInLead
-  else flowEfficiency = withCoverage(inferred(activeInLead.value / cardLead.value, { censored: cardLead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency"))
+  else flowEfficiency = withLeadReasons(withCoverage(inferred(activeInLead.value / cardLead.value, { censored: cardLead.censored, method: "active_in_lead_ms/lead_time_ms" }), activeCoverage("flow_efficiency")), cardLead)
 
   const hosts = {}
   for (const session of sourceSessions) hosts[session.session.host] = (hosts[session.session.host] ?? 0) + 1

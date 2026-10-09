@@ -49,7 +49,7 @@ const REPORT_REASON_TEXT = {
   zero_lead_time: "the job's lead time is zero",
   over_budget_after_binning: "the swimlane file is still larger than its size budget after every run of intervals was merged, because the intervals its stretches cite do not fit",
   labels_from_shared_session: "the labels come from a session several jobs share, so they may count another job's time",
-  finish_time_not_known: "no record gives the time the task finished, so its lead time runs to the end of its recorded work and is at least that",
+  finish_time_not_known: "no published record places the time the task finished, so its lead time runs to the end of its recorded work and is at least that",
   card_dates_shorter_than_work: "the task card's dates are shorter than the work its sessions recorded, so the lead time is at least that recorded span",
   session_work_unattributed: "a session of this task did work that no task's binding claims, so that time stays under cause not recorded and some of it may have been another task's",
   // Why a partial figure's `bound` is null: no direction is known.
