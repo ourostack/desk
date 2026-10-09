@@ -131,14 +131,76 @@ test("the installed plugin folders come from the host's own plugin list", async 
     "desk@ourostack": [{ scope: "user", installPath: desk, version: "3.2.0-alpha.1" }],
     "overlay@internal": [{ scope: "user", installPath: overlay, version: "2.0.0" }],
   } }))
-  assert.deepEqual(real.pluginDirs({ env: { DESK_PLUGIN_ROOT: desk }, homeDir: home }), [desk, overlay])
-  assert.deepEqual(real.pluginDirs({ env: { DESK_PLUGIN_ROOT: desk, CLAUDE_CONFIG_DIR: path.join(root, "none") }, homeDir: home }), [])
+  assert.deepEqual(real.pluginDirs({ env: { DESK_PLUGIN_ROOT: desk, CLAUDE_PLUGIN_ROOT: desk }, homeDir: home }), [desk, overlay])
+  assert.deepEqual(real.pluginDirs({ env: { DESK_PLUGIN_ROOT: desk, CLAUDE_PLUGIN_ROOT: desk, CLAUDE_CONFIG_DIR: path.join(root, "none") }, homeDir: home }), [])
   const copilot = path.join(root, "copilot", "installed")
   mkdirSync(path.join(copilot, "desk"), { recursive: true })
   mkdirSync(path.join(copilot, "ms-desk"), { recursive: true })
   assert.deepEqual(real.pluginDirs({ env: { COPILOT_PLUGIN_ROOT: path.join(copilot, "desk") }, homeDir: home }).sort(), [path.join(copilot, "desk"), path.join(copilot, "ms-desk")])
   assert.deepEqual(real.pluginDirs({ env: { COPILOT_PLUGIN_ROOT: path.join(root, "nowhere", "desk") }, homeDir: home }), [])
-  assert.deepEqual(real.pluginDirs({ env: {}, homeDir: path.join(root, "empty-home") }), [])
+  // With no variable at all, Desk's root is this checkout's own folder and the host is Copilot's: the folders beside it are listed, with no Claude registry read.
+  assert.ok(real.pluginDirs({ env: {}, homeDir: path.join(root, "empty-home") }).includes(path.resolve(mcpRoot, "..")))
+})
+
+const DECLARES = { browser: { channel: "msedge", profileAccountDomain: "microsoft.com" } }
+
+/** An Agency or Copilot session folder with `desk` and `ms-desk` side by side; ms-desk declares the browser when `declares` is true. */
+function sessionLayout(root, declares = true) {
+  const session = path.join(root, "session")
+  mkdirSync(path.join(session, "desk"), { recursive: true })
+  pluginDir(session, "ms-desk", declares ? DECLARES : {})
+  return session
+}
+
+test("a Copilot or Agency session finds the declaration with neither host variable set", async () => {
+  const root = await mkTempRoot("real-host-")
+  const home = path.join(root, "home")
+  const session = sessionLayout(root)
+  const declared = { state: "declared", channel: "msedge", domain: "microsoft.com" }
+  // Agency: no COPILOT_PLUGIN_ROOT, no CLAUDE_PLUGIN_ROOT; Desk's root comes from DESK_PLUGIN_ROOT, which the launcher sets.
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: path.join(session, "desk") }, homeDir: home }), declared)
+  // Plain Copilot: the same layout, with COPILOT_PLUGIN_ROOT set.
+  assert.deepEqual(real.readDeclaration({ env: { COPILOT_PLUGIN_ROOT: path.join(session, "desk") }, homeDir: home }), declared)
+  // A blank variable counts as unset.
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: path.join(session, "desk"), CLAUDE_PLUGIN_ROOT: "  " }, homeDir: home }), declared)
+})
+
+test("a Claude Code session reads the plugin registry", async () => {
+  const root = await mkTempRoot("real-host-claude-")
+  const home = path.join(root, "home")
+  const cache = path.join(home, ".claude", "plugins", "cache")
+  const desk = path.join(cache, "desk")
+  const overlay = pluginDir(cache, "overlay", DECLARES)
+  mkdirSync(desk, { recursive: true })
+  touch(path.join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
+    "desk@ourostack": [{ scope: "user", installPath: desk, version: "3.2.0-alpha.1" }],
+    "overlay@internal": [{ scope: "user", installPath: overlay, version: "2.0.0" }],
+  } }))
+  const declared = { state: "declared", channel: "msedge", domain: "microsoft.com" }
+  // With CLAUDE_PLUGIN_ROOT set, as Claude Code sets it.
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: desk, CLAUDE_PLUGIN_ROOT: desk }, homeDir: home }), declared)
+  // Without it, Desk's place in Claude's plugin store still says Claude.
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: desk }, homeDir: home }), declared)
+  // A relocated Claude config folder is Claude's store too.
+  const config = path.join(root, "config")
+  touch(path.join(config, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "overlay@internal": [{ scope: "user", installPath: overlay, version: "2.0.0" }] } }))
+  const elsewhere = path.join(config, "plugins", "cache", "desk")
+  mkdirSync(elsewhere, { recursive: true })
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: elsewhere, CLAUDE_CONFIG_DIR: config }, homeDir: home }), declared)
+})
+
+test("with no declaring plugin anywhere, every host gives none", async () => {
+  const root = await mkTempRoot("real-host-none-")
+  const home = path.join(root, "home")
+  const session = sessionLayout(root, false)
+  const desk = path.join(home, ".claude", "plugins", "cache", "desk")
+  mkdirSync(desk, { recursive: true })
+  touch(path.join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "desk@ourostack": [{ scope: "user", installPath: desk, version: "3.2.0-alpha.1" }] } }))
+  const none = { state: "none" }
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: path.join(session, "desk") }, homeDir: home }), none)
+  assert.deepEqual(real.readDeclaration({ env: { COPILOT_PLUGIN_ROOT: path.join(session, "desk") }, homeDir: home }), none)
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: desk, CLAUDE_PLUGIN_ROOT: desk }, homeDir: home }), none)
+  assert.deepEqual(real.readDeclaration({ env: { DESK_PLUGIN_ROOT: desk }, homeDir: home }), none)
 })
 
 // ---- the profile ----
