@@ -173,17 +173,36 @@ test("idle sessions close after idleMs", async (t) => {
   assert.equal((await post(url, callTool(2, "echo", { text: "x" }), { sessionId })).status, 404);
 });
 
-test("a call that hangs past idleMs gets a JSON-RPC error and the session closes", async (t) => {
+test("a call Desk does not answer within callTimeoutMs gets a JSON-RPC error and the session closes", async (t) => {
   mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => mock.timers.reset());
-  const { relay, url, children } = await start(t, { idleMs: 60_000 });
+  const { relay, url, children } = await start(t, { callTimeoutMs: 200_000 });
   const sessionId = await open(url);
   const response = await send(url, callTool(9, "hang"), { sessionId });
-  mock.timers.tick(60_000);
+  mock.timers.tick(199_000);
+  assert.equal(relay.size(), 1);
+  mock.timers.tick(1_000);
   const reply = await collect(response);
-  assert.equal(reply.messages[0].id, 9);
-  assert.equal(typeof reply.messages[0].error.code, "number");
+  assert.deepEqual(reply.messages, [
+    {
+      jsonrpc: "2.0",
+      id: 9,
+      error: { code: -32001, message: "Desk did not answer within 200 s; the session was closed. Reconnect to start a new one." },
+    },
+  ]);
   const [, signal] = await children[0].closed;
   assert.equal(signal, "SIGTERM");
   assert.equal(relay.size(), 0);
+  assert.equal((await post(url, callTool(10, "echo", { text: "x" }), { sessionId })).status, 404);
+});
+
+test("an answered call's deadline does not close the session", async (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  const { relay, url } = await start(t, { callTimeoutMs: 1_000 });
+  const sessionId = await open(url);
+  assert.equal((await post(url, callTool(2, "echo", { text: "x" }), { sessionId })).status, 200);
+  mock.timers.tick(5_000);
+  assert.equal(relay.size(), 1);
+  assert.equal((await post(url, callTool(3, "echo", { text: "y" }), { sessionId })).messages[0].result.content[0].text, "arimendelow:y");
 });

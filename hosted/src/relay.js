@@ -3,7 +3,8 @@
 // The relay moves JSON-RPC messages between them unchanged: a message from the
 // client becomes one line on the child's stdin, and each line on the child's
 // stdout goes back to the client. It reads only message ids, to know which
-// requests the child still owes an answer when the child goes away.
+// requests the child still owes an answer when the child goes away or a call
+// runs past its deadline.
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -21,7 +22,7 @@ function refuse(res, status, code, message) {
   res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
 }
 
-export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000 }) {
+export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, callTimeoutMs = 200_000 }) {
   // Insertion order is recency order: touching a session moves it to the end.
   const sessions = new Map();
 
@@ -35,17 +36,20 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000 }
   }
 
   // Ends a session once: answers every request the child still owes with a
-  // JSON-RPC error, closes the transport and stops the child.
-  function closeSession(session, reason) {
+  // JSON-RPC error, closes the transport and stops the child. `errors` gives
+  // the error for particular request ids; the rest get a generic one.
+  function closeSession(session, reason, errors = new Map()) {
     if (session.closed) return;
     session.closed = true;
     sessions.delete(session.id);
     clearTimeout(session.idleTimer);
-    const answers = [...session.pending].map((id) =>
-      session.transport
-        .send({ jsonrpc: "2.0", id, error: { code: -32603, message: `Desk session ended before answering (${reason})` } })
-        .catch((error) => log(`could not answer request ${id}: ${error.message}`)),
-    );
+    const answers = [...session.pending.keys()].map((id) => {
+      clearTimeout(session.pending.get(id));
+      const error = errors.get(id) ?? { code: -32603, message: `Desk session ended before answering (${reason})` };
+      return session.transport
+        .send({ jsonrpc: "2.0", id, error })
+        .catch((sendError) => log(`could not answer request ${id}: ${sendError.message}`));
+    });
     session.pending.clear();
     Promise.all(answers)
       .then(() => session.transport.close())
@@ -77,20 +81,35 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000 }
         log(`session ${session.id} dropped a stdout line that is not JSON`);
         return;
       }
-      if (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) session.pending.delete(message.id);
+      if (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) {
+        clearTimeout(session.pending.get(message.id));
+        session.pending.delete(message.id);
+      }
       touch(session);
       session.transport.send(message).catch((error) => log(`session ${session.id} send: ${error.message}`));
     });
   }
 
+  // A call Desk has not answered within callTimeoutMs ends its session, so
+  // the client gets an answer before ingress drops the request and a
+  // reconnect starts a fresh Desk.
+  function startDeadline(session, id) {
+    const timer = setTimeout(() => {
+      const message = `Desk did not answer within ${callTimeoutMs / 1000} s; the session was closed. Reconnect to start a new one.`;
+      closeSession(session, "call timed out", new Map([[id, { code: -32001, message }]]));
+    }, callTimeoutMs);
+    timer.unref?.();
+    return timer;
+  }
+
   function openSession(login) {
-    const session = { id: randomUUID(), login, pending: new Set(), closed: false, child: null, exited: Promise.resolve() };
+    const session = { id: randomUUID(), login, pending: new Map(), closed: false, child: null, exited: Promise.resolve() };
     session.transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => session.id,
       onsessioninitialized: () => startDesk(session),
     });
     session.transport.onmessage = (message) => {
-      if (isJSONRPCRequest(message)) session.pending.add(message.id);
+      if (isJSONRPCRequest(message)) session.pending.set(message.id, startDeadline(session, message.id));
       session.child.stdin.write(JSON.stringify(message) + "\n");
     };
     session.transport.onclose = () => closeSession(session, "transport closed");
