@@ -2,10 +2,11 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { agencyMigrationRoots, runMigrationCli } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
 
-const deskPluginRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../../../plugins/desk")
+const deskPluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk")
 
 // A synthetic Agency cache: `fixtures` is [{ spec, dir, name, fetched_at, migrations }].
 async function agencyHome(fixtures, { index = true } = {}) {
