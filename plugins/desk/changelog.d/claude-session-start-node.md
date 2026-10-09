@@ -1,1 +1,0 @@
-On Windows, Claude Code's and Codex's Desk session start no longer depends on which `bash` comes first on PATH: the hook is now a Node script ([`hooks/claude-session-start.cjs`](hooks/claude-session-start.cjs)) like every other Desk hook, and prints exactly what the shell script it replaces printed.

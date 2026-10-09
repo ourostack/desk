@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.262 — 2026-10-09
+
+On Windows, Claude Code's and Codex's Desk session start no longer depends on which `bash` comes first on PATH: the hook is now a Node script ([`hooks/claude-session-start.cjs`](hooks/claude-session-start.cjs)) like every other Desk hook, and prints exactly what the shell script it replaces printed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.261 — 2026-10-09
 
 On Windows, a migration that bash could not check now makes session start report Desk as degraded and name it, instead of leaving it out of the summary, and the WSL relay is now recognized by its language-independent error line rather than an English sentence. Copilot's session record, the sync status file, the release and stale-Desk caches, the filer throttle and launch stamps, the sign-off list and the support-matrix generator now retry their final rename for about a second when Defender or the search indexer briefly holds the file, instead of failing with EPERM.
