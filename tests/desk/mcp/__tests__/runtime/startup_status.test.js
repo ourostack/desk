@@ -22,10 +22,22 @@ async function session(t, { semantic = "background", handler, statusDelayMs = 0 
   const probeRelease = deferred()
   const state = { controller: null, convergence: null, initial: null, context: null, desk: null }
   let delayed = false
-  const read = async () => {
+  let nextDelayMs = 0
+  // One desk_status answer, whatever its detail is.
+  const readOnce = async () => {
     const response = await state.desk.call("desk_status", { detail: true })
     assert.equal(response.isError, false, JSON.stringify(response.payload))
     return response.payload
+  }
+  // desk_status answers within a short budget (STATUS_BUDGET_MS in desk-session.js). On a loaded machine its runtime status computation can miss that budget, and the call then serves the last detail it has, marked `status_detail`. A test that asserts on `readiness.detail` reads until the detail is one this call computed, so it never judges a cached one.
+  const read = async () => {
+    const deadline = Date.now() + 15_000
+    for (;;) {
+      const payload = await readOnce()
+      if (isCurrentDetail(payload)) return payload
+      if (Date.now() > deadline) throw new Error(`desk_status never served a current detail; last: ${JSON.stringify(payload)}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
   }
   t.after(async () => {
     probeRelease.resolve()
@@ -40,7 +52,9 @@ async function session(t, { semantic = "background", handler, statusDelayMs = 0 
     embed: { fetch: async () => new Response(JSON.stringify({ embedding: Array(768).fill(0.1) })) },
   })
   return {
-    root, state, read, probeEntered, probeRelease,
+    root, state, read, readOnce, probeEntered, probeRelease,
+    // The next runtime status is read now and arrives `ms` later, as on a loaded machine.
+    delayNextStatus(ms) { nextDelayMs = ms },
     async start() {
       state.desk = await startInProcess({
         argv: ["--root", root], env: {}, readinessPolicy: { semantic },
@@ -52,6 +66,11 @@ async function session(t, { semantic = "background", handler, statusDelayMs = 0 
             if (request.name === "desk_status" && statusDelayMs > 0 && !delayed) {
               delayed = true
               await new Promise((resolve) => setTimeout(resolve, statusDelayMs))
+            }
+            if (request.name === "desk_status" && nextDelayMs > 0) {
+              const ms = nextDelayMs
+              nextDelayMs = 0
+              await new Promise((resolve) => setTimeout(resolve, ms))
             }
             return result
           },
@@ -111,6 +130,11 @@ for (const available of [false, true]) {
     // Readiness advances independently of the diagnostic tool.
     assert.equal((await fixture.state.controller.barrier({ capability: "semantic" })).current, available)
     const requestCount = requests
+    // The runtime status of this read arrives late (a loaded machine), so the first answer carries the earlier pending detail, marked cached.
+    fixture.delayNextStatus(300)
+    const late = await fixture.readOnce()
+    assert.match(late.status_detail, /^cached: /u)
+    assert.equal(late.readiness.detail.controller_state, "LEXICAL_CONVERGING")
     const settled = await fixture.read()
     assert.equal(requests, requestCount, "status must not probe or initiate convergence")
     assert.equal(settled.readiness.detail.controller_state, available ? "READY" : "LEXICAL_READY")
