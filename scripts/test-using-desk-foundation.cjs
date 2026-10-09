@@ -101,7 +101,7 @@ function withStartupSandbox(body) {
 }
 
 function runClaudeHook({ env, cwd, projectDir, args = [] }) {
-  const result = spawnSync("bash", [path.join(pluginRoot, "hooks", "session-start.sh"), ...args], {
+  const result = spawnSync(process.execPath, [path.join(pluginRoot, "hooks", "claude-session-start.cjs"), ...args], {
     cwd,
     encoding: "utf8",
     env: projectDir ? { ...env, CLAUDE_PROJECT_DIR: projectDir } : env,

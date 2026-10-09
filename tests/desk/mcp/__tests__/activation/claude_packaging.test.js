@@ -56,8 +56,8 @@ function runSessionStartHook() {
   const deskRoot = mkdtempSync(path.join(tmpdir(), "desk-claude-startup-"))
   try {
     const result = spawnSync(
-      "bash",
-      [path.join(repoRoot, "plugins", "desk", "hooks", "session-start.sh")],
+      process.execPath,
+      [path.join(repoRoot, "plugins", "desk", "hooks", "claude-session-start.cjs")],
       {
         cwd: repoRoot,
         encoding: "utf8",
@@ -415,7 +415,7 @@ test("Claude hook and MCP configuration stay plugin-relative and non-manual", ()
   assert.equal(hooks.hooks.SessionStart[0].matcher, "startup|resume|clear|compact")
   assert.equal(
     hooks.hooks.SessionStart[0].hooks[0].command,
-    "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh ${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md",
+    'node "${CLAUDE_PLUGIN_ROOT}/hooks/claude-session-start.cjs" "${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md"',
   )
   // Desk starts through its cross-platform bootstrap, found through the host-expanded plugin root or the working directory.
   const desk = mcp.mcpServers.desk
@@ -439,7 +439,7 @@ test("hooks.json registers sync-end.cjs under SessionEnd, not Stop (M4-6 Part 3,
 })
 
 test("Claude SessionStart injects the full Desk foundation once without scanning tasks", () => {
-  const hook = readText("plugins", "desk", "hooks", "session-start.sh")
+  const hook = readText("plugins", "desk", "hooks", "claude-session-start.cjs")
   const startup = runSessionStartHook()
   const foundation = readText("plugins", "desk", "skills", "using-desk", "SKILL.md").trimEnd()
 
@@ -473,7 +473,7 @@ test("Claude SessionStart with no desk routes to bootstrap instead of offering t
     delete env.CLAUDE_PLUGIN_DATA
     delete env.DESK_ACTIVATION_CONFIG
     delete env.CODEX_HOME
-    const result = spawnSync("bash", [path.join(repoRoot, "plugins", "desk", "hooks", "session-start.sh")], {
+    const result = spawnSync(process.execPath, [path.join(repoRoot, "plugins", "desk", "hooks", "claude-session-start.cjs")], {
       cwd: repoRoot,
       encoding: "utf8",
       env,

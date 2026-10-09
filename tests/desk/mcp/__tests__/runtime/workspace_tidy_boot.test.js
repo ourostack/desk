@@ -134,7 +134,7 @@ test("both actual startup hooks include exactly one boot line without changing t
   for (const host of ["copilot", "claude"]) {
     const result = host === "copilot"
       ? execFileSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { env, input: JSON.stringify({ cwd: f.desk }), encoding: "utf8" })
-      : execFileSync("bash", [path.join(plugin, "hooks", "session-start.sh")], { env, encoding: "utf8" })
+      : execFileSync(process.execPath, [path.join(plugin, "hooks", "claude-session-start.cjs")], { env, encoding: "utf8" })
     const parsed = JSON.parse(result)
     const context = parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext
     assert.equal((context.match(/Desk boot pre-checks:/gu) ?? []).length, 1)
@@ -210,7 +210,7 @@ cp.spawn = function(file, args, options) {
 require("node:module").syncBuiltinESMExports();
 process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.stringify({born, exited:Date.now(), children})));
 `)
-  const child = spawn(host === "claude" ? "bash" : process.execPath, [path.join(plugin, "hooks", host === "claude" ? "session-start.sh" : "copilot-session-start.cjs")], {
+  const child = spawn(process.execPath, [path.join(plugin, "hooks", host === "claude" ? "claude-session-start.cjs" : "copilot-session-start.cjs")], {
     env: bootFixtureEnv({ ...f.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk, NODE_OPTIONS: `--require=${preload}` }, overrides), stdio: ["pipe", "pipe", "pipe"],
   })
   // Whatever happens, the hook process does not outlive the test. Its stand-in children end with it or, if it is killed hard, by their own 10 minute limit.

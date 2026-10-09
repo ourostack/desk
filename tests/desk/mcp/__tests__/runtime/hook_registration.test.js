@@ -80,3 +80,19 @@ test("the plain-language hook the unused-code check lists is the one its registr
   const hooks = registered(["plugins", "plain-language", "hooks", "hooks.json"], ["plugins", "plain-language", "hooks", "copilot-hooks.json"])
   assert.deepEqual([...hooks].sort(), [...knip.workspaces["plugins/plain-language/hooks"].entry].sort())
 })
+
+// On Windows a bare `bash` resolves through PATH, and a standard user can have the WSL relay bash.exe first with no distro installed, where it exits 1. Every registered Desk hook command is Node, so none depends on which shell comes first.
+test("no command in hooks.json or copilot-hooks.json starts with bash or sh", () => {
+  const claude = JSON.parse(read("plugins", "desk", "hooks", "hooks.json"))
+  const copilot = JSON.parse(read("plugins", "desk", "hooks", "copilot-hooks.json"))
+  const commands = [
+    ...Object.values(claude.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks.map((hook) => hook.command))),
+    ...Object.values(copilot.hooks).flatMap((hooks) => hooks.flatMap((hook) => [hook.bash, hook.powershell])),
+  ]
+  assert.ok(commands.length >= 10)
+  for (const command of commands) {
+    assert.equal(typeof command, "string")
+    assert.doesNotMatch(command, /^\s*(?:bash|sh|\/bin\/(?:ba)?sh)(?:\s|$|\.exe)/iu, `${command} starts a shell`)
+    assert.match(command, /^node\s/u, `${command} must start with node`)
+  }
+})

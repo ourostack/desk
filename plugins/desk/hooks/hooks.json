@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh ${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-session-start.cjs\" \"${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md\"",
             "timeout": 10
           }
         ]

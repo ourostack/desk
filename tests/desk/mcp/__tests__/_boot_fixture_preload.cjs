@@ -9,7 +9,7 @@
 
 const path = require("node:path");
 
-if (/(copilot-session-start\.cjs|resolve-desk-root\.js)$/u.test(process.argv[1] ?? "") && process.env.DESK_TEST_BOOT_FIXTURE) {
+if (/(claude-session-start\.cjs|copilot-session-start\.cjs|resolve-desk-root\.js)$/u.test(process.argv[1] ?? "") && process.env.DESK_TEST_BOOT_FIXTURE) {
   const fixture = require(process.env.DESK_TEST_BOOT_FIXTURE);
   const boot = require(path.resolve(__dirname, "../../../../plugins/desk/hooks/lib/boot-checks.cjs"));
   if (fixture.checks) boot.checks.splice(0, boot.checks.length, ...fixture.checks);
