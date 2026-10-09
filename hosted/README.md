@@ -45,7 +45,14 @@ npm ci
 npm test
 ```
 
-The workflow `.github/workflows/hosted-tests.yml` runs them on every pull request and push that touches `hosted/`.
+The end-to-end test (`test/e2e.test.js`) runs the real gateway with the real Desk plugin against a scratch desk, with no network. It is skipped unless `DESK_E2E=1`, and it needs Desk's dependencies installed:
+
+```sh
+(cd plugins/desk/mcp && npm ci)
+cd hosted && DESK_E2E=1 npm test
+```
+
+The workflow `.github/workflows/hosted-tests.yml` runs every test, the end-to-end test included, on each pull request and push that touches `hosted/`.
 
 ## Build the image
 
