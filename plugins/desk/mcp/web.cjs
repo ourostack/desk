@@ -438,7 +438,12 @@ function wait(ms) {
 
 // npm's error text with any credential removed: the user and password of a registry address, and an auth token setting.
 function scrub(text) {
-  return String(text).replace(/\/\/[^\s/@]+@/g, "//<redacted>@").replace(/(_auth\w*|_password)\s*=\s*\S+/gi, "$1=<redacted>");
+  return String(text)
+    .replace(/\/\/\S*@/g, "//<redacted>@")
+    .replace(/\b(Bearer|Basic)\s+\S+/gi, "$1 <redacted>")
+    .replace(/\bnpm_[A-Za-z0-9]{20,}/g, "<redacted>")
+    .replace(/\b(token|password)=[^&\s]*/gi, "$1=<redacted>")
+    .replace(/(_auth\w*|_password)\s*=\s*\S+/gi, "$1=<redacted>");
 }
 
 // The installed copy, installing it first when there is none (or, when `reader` is set, none with the token reader). Resolves { installed, fresh } or { error }.

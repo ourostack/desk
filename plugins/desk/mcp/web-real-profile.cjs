@@ -200,7 +200,7 @@ function connect(o) {
   var missing = function () {
     return { payload: o.unavailable("browser_extension_missing",
       "The Playwright Extension is not installed in the " + app + " profile " + profile + " (the one signed in to @" + declaration.domain + "), so the browser is unavailable",
-      o.reconnectFix("Install the Playwright Extension in that profile from " + INSTALL_URL)) };
+      o.reconnectFix("If the extension is not installed, install it in that profile from " + INSTALL_URL + "; if it is already installed, click its toolbar icon once to open its page")) };
   };
   var level;
   try {

@@ -245,6 +245,7 @@ test("connecting names the missing profile, the missing extension and an unreada
   const noExtension = await real.connect(connectOptions(root, { requireModule: modules([]) }))
   assert.equal(noExtension.payload.code, "browser_extension_missing")
   assert.ok(noExtension.payload.fix.includes(real.INSTALL_URL))
+  assert.match(noExtension.payload.fix, /if it is already installed, click its toolbar icon once to open its page, then retry\.$/u)
   assert.match(noExtension.payload.summary, /profile Profile 3/u)
   assert.equal((await real.connect(connectOptions(root, { requireModule: modules([[tokenKey(), latin("")]]) }))).payload.code, "browser_extension_missing")
 
@@ -1032,7 +1033,7 @@ test("when the reader cannot be installed the existing install is kept and npm's
   const npmSpawn = installNpm([], { allFail: true })
   const noisy = (file, argv) => {
     const child = npmSpawn(file, argv)
-    child.stderr.write("npm error code E401\nnpm error auth failed for https://me:hunter2@registry.example/ _authToken=abc123\n")
+    child.stderr.write("npm error code E401 auth failed for https://me:hunter2@registry.example/ _authToken=abc123 Authorization: Bearer bearer111 and Basic basic222 leaked npm_abcdefghijklmnopqrstuvwxyz0123 here GET https://registry.example/x?token=query333&ok=1 and ?password=query444 end https://u:p@ss/word@registry.example/pkg\n")
     return child
   }
   const host = session(machine, { npmSpawn: noisy })
@@ -1041,7 +1042,8 @@ test("when the reader cannot be installed the existing install is kept and npm's
   await host.close()
   const err = host.stderr.join("")
   assert.match(err, /could not install the connection reader \(.*\); keeping the install without it/u)
-  assert.equal(/hunter2|abc123|me:/u.test(err), false)
+  assert.equal(/hunter2|abc123|me:|bearer111|basic222|npm_abcdef|query333|query444|p@ss|ss\/word/u.test(err), false)
+  assert.match(err, /ok=1/u)
   assert.match(err, /<redacted>/u)
 })
 
