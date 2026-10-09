@@ -249,17 +249,20 @@ var OPEN_WAIT_MS = 1000;
 
 // Opens a new, focused window in the running browser, with the declared profile, and resolves when it should exist. The browser is started directly (no shell) with the launcher's own environment, which holds no token, and is left to run on its own. `o.spawn`, `o.executable`, `o.profile`, `o.env`, `o.stderr`, `o.waitMs`.
 function openWindow(o) {
-  return new Promise(function (resolve) {
+  return new Promise(function (resolve, reject) {
+    var timer = setTimeout(resolve, either(o.waitMs, OPEN_WAIT_MS));
+    function failed(error) {
+      clearTimeout(timer);
+      o.stderr.write("[web] could not open a new browser window: " + describe(error) + "\n");
+      reject(error);
+    }
     try {
       var child = o.spawn(o.executable, ["--new-window", "--profile-directory=" + o.profile, "data:text/html," + encodeURIComponent(HOLDING_PAGE)], { detached: true, stdio: "ignore", shell: false, windowsHide: true, env: o.env });
-      child.on("error", function (error) {
-        o.stderr.write("[web] could not open a new browser window: " + describe(error) + "\n");
-      });
+      child.on("error", failed);
       child.unref();
     } catch (error) {
-      o.stderr.write("[web] could not open a new browser window: " + describe(error) + "\n");
+      failed(error);
     }
-    setTimeout(resolve, either(o.waitMs, OPEN_WAIT_MS));
   });
 }
 
@@ -299,7 +302,7 @@ function closeOwnTabs(call, callMs) {
 // What `browser_close` answers once the agent's window is closed. The call is not passed on (see the header).
 var CLOSED = { content: [{ type: "text", text: "The browser window this session opened is closed. The next browser call opens a new one." }] };
 
-// The hooks the proxy calls for the agent's window and tabs. `open()` opens the holding window. Before a call (other than `browser_close`) the window is opened once per connection; `afterCall` marks the connection as used only when a call succeeded, so cleanup never starts a connection. `browser_close` closes the tabs and answers itself, and the next call starts a new connection. The cleanup at the end of the session closes the tabs only if the connection was used since the last close.
+// The hooks the proxy calls for the agent's window and tabs. `open()` opens the holding window or resolves an error tool result. Before a call (other than `browser_close`) the window is opened once per connection; `afterCall` marks the connection as used only when a call succeeded, so cleanup never starts a connection. `browser_close` closes the tabs and answers itself, and the next call starts a new connection. The cleanup at the end of the session closes the tabs only if the connection was used since the last close.
 function ownTabs(open, callMs) {
   var used = false;
   var opening = null;
@@ -317,7 +320,12 @@ function ownTabs(open, callMs) {
         });
       }
       if (opening === null) opening = open();
-      return opening.then(function () {
+      var attempt = opening;
+      return attempt.then(function (result) {
+        if (result && result.isError) {
+          if (opening === attempt) opening = null;
+          return result;
+        }
         return null;
       });
     },

@@ -800,7 +800,10 @@ function start(o, io) {
   var own = real ? realProfile.ownTabs(function () {
     var browserEnv = withNodeFirst(env, node, platform);
     delete browserEnv.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
-    return realProfile.openWindow({ spawn: either(o.openSpawn, childProcess.spawn), executable: holding.executable, profile: holding.profile, env: browserEnv, stderr: io.stderr, waitMs: o.openWaitMs });
+    return realProfile.openWindow({ spawn: either(o.openSpawn, childProcess.spawn), executable: holding.executable, profile: holding.profile, env: browserEnv, stderr: io.stderr, waitMs: o.openWaitMs }).then(null, function (error) {
+      var payload = degraded("browser_window_unavailable", "Desk could not open this session's browser window: " + describe(error) + ". The browser operation was not forwarded.", retryFix("Resolve the window-launch error. Do not use another window as a fallback"));
+      return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }] };
+    });
   }, o.tabCallMs) : {};
   // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return proxy.serve({
