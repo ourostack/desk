@@ -60,7 +60,9 @@ test("the hook prints the SessionStart envelope: the startup line first, then th
   const foundation = text.indexOf("The human supplies intent")
   assert.ok(text.startsWith("Desk startup:"), "the startup line leads")
   assert.ok(text.indexOf("The boot has not run yet") < foundation)
-  assert.ok(text.endsWith(`Desk RFC: ${plugin}/docs/agentic-engineering-v2-rfc.md\n`))
+  // The separator follows the plugin root's own spelling: a Windows root keeps its backslashes.
+  const sep = plugin.includes("\\") ? "\\" : "/"
+  assert.ok(text.endsWith(`Desk RFC: ${plugin}${sep}docs${sep}agentic-engineering-v2-rfc.md\n`))
 })
 
 test("the foundation path defaults to the plugin's own when the host passes none, and the plugin root to the hook's own folder", () => {
@@ -135,6 +137,9 @@ const tool = (name, args) => { try { return spawnSync(name, args, { encoding: "u
 const haveReference = tool("bash", ["-c", "command -v jq >/dev/null"])
 const golden = { skip: haveReference ? false : "needs a working bash and jq for the reference script" }
 
+// The one difference allowed on Windows: jq.exe writes its final newline as CRLF (its output is in text mode), where the Node hook writes LF. Both are JSON whitespace; only the CR directly before the final LF is dropped, and nothing else is normalised.
+const lineEnding = (stdout) => (process.platform === "win32" ? stdout.replace(/\r\n$/u, "\n") : stdout)
+
 function both(label, { extra = {}, args = [foundationPath], prepare = () => ({}), bootFixture = fixture } = {}) {
   test(`golden: ${label} matches the shell script's output`, golden, () => {
     const { env, dir } = scratch(extra, bootFixture)
@@ -145,7 +150,7 @@ function both(label, { extra = {}, args = [foundationPath], prepare = () => ({})
     assert.equal(actual.status, 0, actual.stderr)
     if (reference.stdout === "") return assert.equal(actual.stdout, "")
     assert.deepEqual(JSON.parse(actual.stdout), JSON.parse(reference.stdout))
-    assert.equal(actual.stdout, reference.stdout, "byte for byte, including the trailing newline")
+    assert.equal(actual.stdout, lineEnding(reference.stdout), "byte for byte, including the trailing newline")
   })
 }
 
