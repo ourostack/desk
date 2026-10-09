@@ -378,7 +378,7 @@ export function agencyMigrationRoots({ home, engine = "copilot" }) {
     const fetched = Number(entry.fetched_at) || 0
     if (name !== "desk" && !(newest.get(name)?.fetched >= fetched)) newest.set(name, { dir, fetched })
   }
-  return [...newest.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, { dir }]) => dir)
+  return [...newest.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, { dir }]) => dir)
 }
 
 // ---------------------------------------------------------------------------

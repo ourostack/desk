@@ -65,6 +65,14 @@ function readMigrationNames(root) {
   return readdirSync(path.join(root, "migrations")).filter((name) => name.endsWith(".md")).map((name) => name.replace(/\.md$/u, ""))
 }
 
+test("roots come out sorted by plugin name whatever order the index lists them in", async () => {
+  const fixture = await agencyHome([
+    { spec: "copilot:github:org/z:plugins/zed@main", dir: "zed", name: "zed", fetched_at: 1 },
+    { spec: "copilot:github:org/a:plugins/alpha@main", dir: "alpha", name: "alpha", fetched_at: 1 },
+  ])
+  assert.deepEqual(agencyMigrationRoots({ home: fixture.home }), [fixture.folder("alpha"), fixture.folder("zed")])
+})
+
 test("a missing or unreadable index has no roots, and another engine prefix selects its own specs", async () => {
   assert.deepEqual(agencyMigrationRoots({ home: (await agencyHome([], { index: false })).home }), [])
   const fixture = await agencyHome([{ spec: "claude:github:org/x:plugins/x@main", dir: "x", name: "x", fetched_at: 1 }])
