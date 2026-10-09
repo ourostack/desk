@@ -88,21 +88,13 @@ function pathRefusal(relativePath) {
   return null
 }
 
-// Where `absolute` really leads, through the real path of its deepest existing folder, and what is there now; or the problem that stops a write to it.
+// Where `absolute` really leads, through the real path of its deepest existing folder, and what is there now.
+// resolveWriteTarget has already refused a path with a file in the middle of it and a link it cannot resolve, so what is left is a missing
+// tail. Any other error (no permission, say) is not caught here: it ends the call, so nothing is written.
 function inspectTarget(absolute) {
   let ancestor = path.dirname(absolute)
-  let real
-  for (;;) {
-    try {
-      real = realpathSync.native(ancestor)
-      break
-    } catch (error) {
-      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") return { problem: `Desk could not resolve its folder (${error.code})` }
-      ancestor = path.dirname(ancestor)
-    }
-  }
-  if (!statSync(real).isDirectory()) return { problem: "part of the path is a file, not a folder" }
-  const resolved = path.join(real, path.relative(ancestor, absolute))
+  while (lstatSync(ancestor, { throwIfNoEntry: false }) === undefined) ancestor = path.dirname(ancestor)
+  const resolved = path.join(realpathSync.native(ancestor), path.relative(ancestor, absolute))
   return { resolved, existing: lstatSync(resolved, { throwIfNoEntry: false }) }
 }
 
@@ -129,8 +121,7 @@ async function checkFiles(deskRoot, person, effectiveRoot, files) {
     } catch (error) {
       throw refuse(error.message)
     }
-    const { problem, resolved, existing } = inspectTarget(absolute)
-    if (problem !== undefined) throw refuse(problem)
+    const { resolved, existing } = inspectTarget(absolute)
     if (existing?.isSymbolicLink()) throw refuse("the file there is a symbolic link")
     if (existing !== undefined && !existing.isFile()) throw refuse("what is there is not a file")
     const leads = pathRefusal(path.relative(realRoot, resolved).split(path.sep).join("/"))
