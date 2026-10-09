@@ -875,8 +875,8 @@ test("a gap that holds other_task and another cause keeps the dominant waited_on
   assert.equal(gap.idle_by_waited_on_ms.next_prompt.value, 30 * MIN)
   assert.equal(gap.idle_by_waited_on_ms.other_task.value, 10 * MIN)
   assert.equal(valueSum(Object.values(gap.idle_by_waited_on_ms)), gap.end_ms - gap.start_ms)
-  // The longest gap keeps its shape: its split lives on the gap in the job file.
-  assert.deepEqual(walk.task.longest_gap.value, { start_ms: 10 * MIN, end_ms: 50 * MIN, duration_ms: 40 * MIN, waited_on: "next_prompt" })
+  // The longest gap keeps its shape, with why the agent stopped (its wait carries no stop facts and no label): its split lives on the gap in the job file.
+  assert.deepEqual(walk.task.longest_gap.value, { start_ms: 10 * MIN, end_ms: 50 * MIN, duration_ms: 40 * MIN, waited_on: "next_prompt", why: "not_known" })
 })
 
 test("a session's work no binding holds stays unknown, and other_task and unknown are partial with session_work_unattributed", () => {
@@ -1002,7 +1002,7 @@ test("each reason pulls each kind of figure one way, and a ratio takes its numer
     assert.deepEqual(bounded(partial(["some_new_reason"]), kind), { ...partial(["some_new_reason"]), bound: null, bound_reason: "bound_direction_undecided" }, kind)
     assert.equal(bounded(partial(["censored", "some_new_reason"]), kind).bound_reason, "bound_direction_undecided", kind)
   }
-  assert.deepEqual(Object.keys(BOUND_DIRECTIONS).sort(), ["count", "evidence", "finish", "idle", "labeled", "lead", "list", "other_task", "other_task_capped", "placement", "unknown", "working"])
+  assert.deepEqual(Object.keys(BOUND_DIRECTIONS).sort(), ["count", "evidence", "finish", "idle", "labeled", "lead", "list", "other_task", "other_task_capped", "placement", "unknown", "why", "working"])
   // Ratios: a floored closed job's flow efficiency is at most its figure; with unlabeled sessions too, both parts say at most.
   const floored = facts({
     id: S(67),

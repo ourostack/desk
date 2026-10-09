@@ -184,7 +184,7 @@ function countReasons(reasons, noun) {
 // owns the whole session, as the timeline reads it. Anything else (a
 // subagent-only binding, or one of several bindings without segments) has
 // no known share: `null`, never the whole session.
-function ownShare(session, job) {
+export function ownShare(session, job) {
   const binding = session.jobs.find((candidate) => candidate.job === job)
   if (!Object.hasOwn(binding, "segments")) {
     return !Object.hasOwn(binding, "agents") && session.jobs.length === 1 ? [[0, session.session.duration_ms]] : null
@@ -228,7 +228,7 @@ function clipStretches(stretches, spans) {
 }
 
 /**
- * `resolveLabels(labels, sessions) -> { files, byJobSession, unused }`:
+ * `resolveLabels(labels, sessions) -> { files, byJobSession, unused, stops_dropped }`:
  * matches already-valid labels (`validateLabelsBytes`) with the store's
  * normalized sessions. Labels are used when exactly one facts file holds
  * their session and `checkLabelsAgainstFacts` passes; `byJobSession` maps
@@ -240,7 +240,12 @@ function clipStretches(stretches, spans) {
  * after the labels merged can leave them `evidence_unmatched`, for example),
  * `share_unknown` when the facts do not say which part of the session
  * was the job's, or `outside_share` when the labels have stretches but none
- * inside the job's share. Each used entry also carries, not enumerable, its `corrected` stretches (`correctStretches`).
+ * inside the job's share. A stop label that alone fails the cross-check
+ * (its wait is no longer a human wait of the facts, or a rule now decides
+ * it) is dropped from the used entry's `stops`, and the file is still used:
+ * that wait reads not labeled until the evaluator labels it again.
+ * `stops_dropped` counts those stops by the check's code (`{ reason, stops }`),
+ * so the relabel backlog shows beside the unused files. Each used entry also carries, not enumerable, its `corrected` stretches (`correctStretches`).
  * `sharedLabels` holds the `<job>/<session id>` keys whose labels come from a shared session (see `sharedLabels`).
  */
 export function resolveLabels(labels, sessions) {
@@ -252,6 +257,7 @@ export function resolveLabels(labels, sessions) {
   const byJobSession = new Map()
   const reasons = []
   const usedBySession = new Map()
+  const dropped = []
   for (const entry of labels) {
     const matches = sessionsById.get(entry.session) ?? []
     if (entry.unavailable.includes("facts_missing")) reasons.push("facts_missing")
@@ -259,15 +265,20 @@ export function resolveLabels(labels, sessions) {
     else if (matches.length > 1) reasons.push("facts_ambiguous")
     else {
       const check = checkLabelsAgainstFacts(entry, matches[0])
-      const share = check.ok ? ownShare(matches[0], entry.job) : null
+      // A stop that no longer matches its facts (labels made before the facts were derived again: its wait moved, or a rule now
+      // decides it) is left out on its own; the file's stretches still count when they match.
+      const fileErrors = check.errors.filter((error) => !error.path.startsWith("stops."))
+      const staleStops = new Set(check.errors.filter((error) => error.path.startsWith("stops.")).map((error) => Number(error.path.split(".")[1])))
+      const share = fileErrors.length === 0 ? ownShare(matches[0], entry.job) : null
       const clipped = share === null ? [] : clipStretches(entry.stretches, share)
-      if (!check.ok) reasons.push(check.errors[0].code)
+      if (fileErrors.length > 0) reasons.push(fileErrors[0].code)
       else if (share === null) reasons.push("share_unknown")
       // Stretches, none inside the job's share: the evaluator labeled other jobs' time, which is no reading of this job, never a zero.
       else if (entry.stretches.length > 0 && clipped.length === 0) reasons.push("outside_share")
       else {
         const binding = matches[0].jobs.find((candidate) => candidate.job === entry.job)
-        const used = { ...entry, stretches: clipped }
+        dropped.push(...check.errors.filter((error) => error.path.startsWith("stops.")).map((error) => error.code))
+        const used = { ...entry, stretches: clipped, ...(Object.hasOwn(entry, "stops") ? { stops: entry.stops.filter((stop, index) => !staleStops.has(index)) } : {}) }
         // The corrected stretches ride along, not enumerable, so every existing total keeps reading the labels as written.
         Object.defineProperty(used, "corrected", { value: correctStretches(clipped, matches[0], binding), enumerable: false })
         byJobSession.set(`${entry.job}/${entry.session}`, used)
@@ -275,7 +286,7 @@ export function resolveLabels(labels, sessions) {
       }
     }
   }
-  return { files: labels.length, byJobSession, unused: countReasons(reasons, "files"), sharedLabels: sharedLabels(usedBySession) }
+  return { files: labels.length, byJobSession, unused: countReasons(reasons, "files"), stops_dropped: countReasons(dropped, "stops"), sharedLabels: sharedLabels(usedBySession) }
 }
 
 // The `<job>/<session id>` keys whose labels may describe another job's work: the session holds other jobs too, and either this job's
@@ -707,6 +718,9 @@ function coverage(records, sessions, labels) {
       files: labels.files,
       used: labels.files - labels.unused.reduce((total, entry) => total + entry.files, 0),
       unused: labels.unused,
+      // Stop labels left out of used files because they no longer match their facts (`resolveLabels`); none for a label set built
+      // without them.
+      stops_dropped: labels.stops_dropped ?? [],
       jobs_labeled: muda.filter(counted).length,
       jobs_partially_labeled: muda.filter((value) => value.excluded === "partial").length,
       jobs_unlabeled: muda.filter((value) => value.excluded === "not_labeled").length,
@@ -863,7 +877,7 @@ export function renderRollupsMarkdown(rollups) {
     `- Jobs: ${cover.jobs}; open: ${cover.jobs_open}.`,
     `- Unattributed sessions: ${cover.unattributed_sessions} of ${cover.sessions_with_facts} (${cover.unattributed_session_time_ms} ms of ${cover.session_time_ms} ms session time).`,
     `- Jobs fully labeled: ${cover.labels.jobs_labeled}; partially labeled: ${cover.labels.jobs_partially_labeled}; unlabeled: ${cover.labels.jobs_unlabeled}.`,
-    `- Labels files: ${cover.labels.files}; used: ${cover.labels.used}; unused: ${reasonsText(cover.labels.unused, "files", "file")}.`,
+    `- Labels files: ${cover.labels.files}; used: ${cover.labels.used}; unused: ${reasonsText(cover.labels.unused, "files", "file")}; stop labels dropped: ${reasonsText(cover.labels.stops_dropped, "stops", "stop")}.`,
     `- Job class: every job is ${cover.job_class.assigned}; published facts do not carry the task card's kind.`,
     "- Search waste: unavailable; published facts do not carry the organization signal.",
     "",

@@ -223,8 +223,8 @@ test("each after-stop wait is listed on the job clock with its stop facts and th
   const session = facts(fields)
   const { walk, additions } = walkOf([session], J("a"))
   assert.deepEqual(walk.waits, [
-    { host: "claude-code", session: S(24), start_ms: 15 * MIN, end_ms: 45 * MIN, next_prompt_ms: 30 * MIN, stop: { end: "end_turn", asks: true, pending_agents: false }, reasons: [] },
-    { host: "claude-code", session: S(24), start_ms: 55 * MIN, end_ms: 95 * MIN, next_prompt_ms: 40 * MIN, stop: { end: "rate_limit", asks: false, pending_agents: false }, reasons: [] },
+    { host: "claude-code", session: S(24), worker: 0, start_ms: 15 * MIN, end_ms: 45 * MIN, next_prompt_ms: 30 * MIN, stop: { end: "end_turn", asks: true, pending_agents: false }, why: "not_known", why_source: "none", confidence: null, reasons: ["not_labeled"] },
+    { host: "claude-code", session: S(24), worker: 0, start_ms: 55 * MIN, end_ms: 95 * MIN, next_prompt_ms: 40 * MIN, stop: { end: "rate_limit", asks: false, pending_agents: false }, why: "error_limit", why_source: "rule", confidence: "high", reasons: [] },
   ])
   // A prompt joins the wait it ends: the same session, end_ms == at_ms.
   assert.equal(additions.human_turns.length, 2)
@@ -232,7 +232,7 @@ test("each after-stop wait is listed on the job clock with its stop facts and th
   assert.equal(sum(walk.waits.map((entry) => entry.next_prompt_ms)), walk.task.waiting_by_waited_on_ms.next_prompt.value)
 
   const old = facts({ id: S(25), schema: "desk.factory.published/3", duration: 40 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN), span("turn", 0, 30 * MIN, 40 * MIN)], jobs: [older(J("b"), 0, 40 * MIN)] })
-  assert.deepEqual(walkOf([old], J("b")).walk.waits, [{ host: "claude-code", session: S(25), start_ms: 10 * MIN, end_ms: 30 * MIN, next_prompt_ms: 20 * MIN, stop: null, reasons: ["not_in_published_facts"] }])
+  assert.deepEqual(walkOf([old], J("b")).walk.waits, [{ host: "claude-code", session: S(25), worker: 0, start_ms: 10 * MIN, end_ms: 30 * MIN, next_prompt_ms: 20 * MIN, stop: null, why: "not_known", why_source: "none", confidence: null, reasons: ["not_in_published_facts"] }])
 })
 
 test("a wait's next-prompt time is only its idle part: another worker's work while it waits is not in it", () => {
@@ -277,7 +277,7 @@ test("next-prompt time a labeled wait holds outside every human wait is the part
 test("without a lead window a wait has no next-prompt time, and says why", () => {
   const session = facts({ id: S(30), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("a"), 0, { status: "cancelled" })] })
   const { walk } = walkOf([session], J("a"))
-  assert.deepEqual(walk.waits, [{ host: "claude-code", session: S(30), start_ms: 10 * MIN, end_ms: 30 * MIN, next_prompt_ms: null, stop: { end: "end_turn", asks: false, pending_agents: false }, reasons: ["cancelled"] }])
+  assert.deepEqual(walk.waits, [{ host: "claude-code", session: S(30), worker: 0, start_ms: 10 * MIN, end_ms: 30 * MIN, next_prompt_ms: null, stop: { end: "end_turn", asks: false, pending_agents: false }, why: "not_known", why_source: "none", confidence: null, reasons: ["cancelled", "not_labeled"] }])
   assert.deepEqual(walk.waits_state, { state: "unavailable", reasons: ["cancelled"] })
 })
 
@@ -291,7 +291,7 @@ test("when the task's next-prompt figure is unavailable, no wait publishes a num
   })
   const { walk } = walkOf([session], J("a"))
   assert.equal(walk.task.waiting_by_waited_on_ms.next_prompt.state, "unavailable")
-  assert.deepEqual(walk.waits.map((entry) => [entry.next_prompt_ms, entry.reasons]), [[null, ["source_unreadable"]]])
+  assert.deepEqual(walk.waits.map((entry) => [entry.next_prompt_ms, entry.reasons]), [[null, ["not_labeled", "source_unreadable"]]])
   assert.deepEqual(walk.waits_state, { state: "unavailable", reasons: ["source_unreadable"] })
 })
 
@@ -308,7 +308,7 @@ test("when the task's next-prompt figure is partial, the waits' list state says 
   assert.equal(figure.state, "partial")
   assert.deepEqual(walk.waits_state, { state: "partial", reasons: figure.reasons, bound: figure.bound })
   assert.equal(walk.waits[0].next_prompt_ms, 20 * MIN, "a partial figure still has its value, and each wait its share")
-  assert.deepEqual(walk.waits[0].reasons, [], "the list state carries the figure's reasons, not each stop")
+  assert.deepEqual(walk.waits[0].reasons, ["not_labeled"], "the list state carries the figure's reasons; a wait's own reasons hold only why its why is not known")
 
   const open = facts({ id: S(42), duration: 60 * MIN, intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)], jobs: [bound(J("b"), 0, { status: "processing", day: null, observed: { status: "processing", offset_ms: 0 } })] })
   const { walk: still } = walkOf([open], J("b"))
@@ -353,10 +353,10 @@ test("a subagent's ask wait is idle through its parent's turn around it, but not
   })
   const { walk } = walkOf([session], J("a"))
   assert.equal(walk.task.working_ms.value, 30 * MIN)
-  assert.deepEqual(walk.waits, [], "only a root wait is an after-stop wait")
-  // Its idle time is next-prompt time that no wait holds.
-  assert.equal(walk.next_prompt_unheld_ms, walk.task.waiting_by_waited_on_ms.next_prompt.value)
-  assert.equal(walk.next_prompt_unheld_ms, 30 * MIN)
+  // The subagent's recorded ask wait is listed with its worker, so it holds its own idle time and no time is left that no wait holds.
+  assert.deepEqual(walk.waits.map((entry) => [entry.worker, entry.next_prompt_ms, entry.why]), [[1, 30 * MIN, "question"]])
+  assert.equal(walk.next_prompt_unheld_ms, 0)
+  assert.equal(walk.task.waiting_by_waited_on_ms.next_prompt.value, 30 * MIN)
 })
 
 test("an ask wait cut by the task's segments is idle only inside them", () => {

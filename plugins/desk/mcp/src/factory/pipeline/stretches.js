@@ -261,19 +261,25 @@ export function askIdle(timeline) {
 }
 
 /**
- * `jobWaits(timeline) -> waits`: every after-stop wait of the job on the job clock: each root (worker 0) `human_wait` interval the job's
- * binding holds (cut to its segments, so a wait the segments cut is one entry per part), as `{ host, session, start_ms, end_ms, stop }`, where `stop` is the facts' record of how the turn
- * ended (facts `/4`), or `null` when the facts carry none. In start order. A session without a job offset places none.
+ * `jobWaits(timeline) -> waits`: every wait of the job on the operator on the job clock: each `human_wait` interval the job's binding
+ * holds, of any worker (the root's after-stop waits, and an ask-tool wait of whichever worker asked), cut to the binding's segments, so a
+ * wait the segments cut is one entry per part. Each is `{ host, session, worker, start_ms, end_ms, stop, range }`, where `stop` is the
+ * facts' record of how the turn ended (facts `/4`), or `null` when the facts carry none, and `range` is the whole interval's
+ * `[start_ms, end_ms]` on the session clock, which an evaluator's stop label names. In start order. A session without a job offset places
+ * none.
  */
 export function jobWaits(timeline) {
   const waits = []
   timeline.source_sessions.forEach((session, index) => {
     const offset = timeline.sessions[index].offset_ms
     if (offset === null) return
-    for (const interval of boundIntervals(session, bindingOf(session, timeline.job))) {
-      if (interval.kind !== "human_wait" || interval.agent !== 0) continue
+    const binding = bindingOf(session, timeline.job)
+    for (const interval of session.intervals) {
+      if (interval.kind !== "human_wait") continue
       const stop = Object.hasOwn(interval, "stop") ? { end: interval.stop.end, asks: interval.stop.asks, pending_agents: interval.stop.pending_agents } : null
-      waits.push({ host: session.session.host, session: session.session.id, start_ms: offset + interval.start_ms, end_ms: offset + interval.end_ms, stop })
+      for (const part of boundIntervals({ intervals: [interval] }, binding)) {
+        waits.push({ host: session.session.host, session: session.session.id, worker: interval.agent, start_ms: offset + part.start_ms, end_ms: offset + part.end_ms, stop, range: [interval.start_ms, interval.end_ms] })
+      }
     }
   })
   return waits.sort(byStart)
