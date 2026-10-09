@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.250 — 2026-10-09
+
+Desk can now run as a hosted service. With `DESK_HOSTED=1`, the MCP server refuses the few tools and doctor repairs that only make sense on a machine the operator owns (`improvement_next`, `desk_recall`, `desk_similar`, and the doctor repairs `reclaim_controller` and `prune_readiness_state`), and each refusal says why. A hosted session has no session-start hook, so Desk's initialize answer now carries the startup itself: the using-desk foundation, the desk's AGENTS.md, and what a hosted Desk refuses and why, ending with the instruction to call desk_status first. Once the host has listed the tools, a hosted Desk pulls the desk in the background the way boot does. A session without the flag behaves as before.
+
+Every tool in the list Desk sends to a host now also carries `readOnlyHint` and `destructiveHint` annotations, so a host such as claude.ai can tell reading from writing and can ask before `desk_save`, `task_archive`, `task_move` or `track_rename`. `desk_save` also takes `files`, a list of `{ path, content }` entries, so a client with no filesystem can write and commit desk files in one call; every entry is checked before anything is written, and a path that leaves the desk, reaches into `.git`, `.state/` or `.github/workflows/`, names a task card or goes through a symbolic link out of the desk is refused.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.249 — 2026-10-09
 
 After a host closes MCP input, [session shutdown](mcp/index.js) keeps its crash handlers active while waiting for the owned controller to close. The wait now has a three-second outer deadline: an incomplete close is reported on stderr and exits with failure rather than leaving the session hanging or reporting a clean exit. Normal shutdown still waits for controller cleanup and clears the deadline when it finishes.
