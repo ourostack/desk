@@ -1,1 +1,0 @@
-The [evaluation kick](mcp/src/factory/evaluate-kick.js) now checks that its worker-lock directory is a real directory before checking for a running worker, using the same path on every platform. A malformed path refuses the kick instead of being mistaken for a missing lock on Windows and starting a worker. Genuinely missing lock state still permits a due kick.
