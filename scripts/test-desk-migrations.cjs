@@ -1206,6 +1206,12 @@ test("startup hooks stay silent about migrations when none is pending", () => {
   }
 });
 
+test("session-start-migrations walks the Agency plugin cache, where Agency installs overlay plugins", () => {
+  const skill = fs.readFileSync(path.join(deskRoot, "skills", "session-start-migrations", "SKILL.md"), "utf8");
+  assert.match(skill, /~\/\.local\/agency\/plugins\/cache\/entries\/<id>\//u, "the discovery roots must name the Agency cache entries");
+  assert.match(skill, /cache_index\.json/u, "the skill must say how the cache index maps a plugin source to its folder");
+});
+
 let failures = 0;
 for (const { name, body } of tests) {
   try {
