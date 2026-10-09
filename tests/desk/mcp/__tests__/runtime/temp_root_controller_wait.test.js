@@ -9,9 +9,9 @@ import { processAlive } from "./_controller_exit.js"
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function writeOwner(root, pid, name = "readiness") {
+function writeOwner(root, pid, extra = {}, name = "readiness") {
   mkdirSync(path.join(root, "home", name), { recursive: true })
-  writeFileSync(path.join(root, "home", name, "owner.json"), JSON.stringify({ owner: { kind: "controller_child", pid } }))
+  writeFileSync(path.join(root, "home", name, "owner.json"), JSON.stringify({ owner: { kind: "controller_child", pid, ...extra } }))
 }
 
 // A real process that stays alive until told to stop, the stand-in for a readiness controller child.
@@ -111,4 +111,60 @@ test("a session helper records the controller while the session is alive and aga
   } finally {
     await holder.stop()
   }
+})
+
+test("a controller spawned by this test process is sent SIGTERM at teardown, because its parent is still alive and its channel never drops", async () => {
+  const root = await mkTempRoot("desk-teardown-own-child-")
+  // Ends gracefully on SIGTERM, as the controller child does; otherwise it would outlive teardown.
+  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  const exited = new Promise((resolve) => child.once("exit", resolve))
+  try {
+    await pause(150)
+    writeOwner(root, child.pid, { parent_pid: process.pid })
+    const aliveAtRemoval = []
+    await removeRootsAfterControllers([root], undefined, { remove: async () => { aliveAtRemoval.push(processAlive(child.pid)) } })
+    assert.deepEqual(aliveAtRemoval, [false])
+    await exited
+  } finally {
+    if (processAlive(child.pid)) { child.kill("SIGKILL"); await exited }
+  }
+})
+
+test("a controller that someone else spawned is waited for, never signalled", async () => {
+  const root = await mkTempRoot("desk-teardown-foreign-child-")
+  const holder = startHolder()
+  try {
+    writeOwner(root, holder.child.pid, { parent_pid: process.pid + 1 })
+    const ended = []
+    await removeRootsAfterControllers([root], undefined, { endChild: (pid) => ended.push(pid), waitForGone: async () => {}, remove: async () => {} })
+    assert.deepEqual(ended, [])
+  } finally {
+    await holder.stop()
+  }
+})
+
+test("a PID reused by another process after the controller exited is not waited for", async () => {
+  const root = await mkTempRoot("desk-teardown-pid-reuse-")
+  const holder = startHolder()
+  try {
+    writeOwner(root, holder.child.pid, { process_start: "linux:boot:100" })
+    const waited = []
+    const options = { waitForGone: async (pids) => { waited.push(pids) }, remove: async () => {} }
+    await removeRootsAfterControllers([root], undefined, { ...options, startOf: async () => "linux:boot:999" })
+    await removeRootsAfterControllers([root], undefined, { ...options, startOf: async () => "linux:boot:100" })
+    await removeRootsAfterControllers([root], undefined, { ...options, startOf: async () => null })
+    assert.deepEqual(waited, [[], [holder.child.pid], [holder.child.pid]], "a different start time means a different process; the same, or an unreadable one, still counts")
+  } finally {
+    await holder.stop()
+  }
+})
+
+test("when the wait and a removal both fail, both errors are thrown, the wait's first", async () => {
+  const waitFailure = new Error("controller 7 is still running")
+  const removeFailure = new Error("EPERM: desk-index.sqlite")
+  await assert.rejects(
+    () => removeRootsAfterControllers(["a"], undefined, { waitForGone: async () => { throw waitFailure }, remove: async () => { throw removeFailure } }),
+    (error) => error instanceof AggregateError && error.errors[0] === waitFailure && error.errors[1] === removeFailure && /controller 7 is still running; and EPERM/.test(error.message),
+  )
+  await assert.rejects(() => removeRootsAfterControllers(["a"], undefined, { waitForGone: async () => {}, remove: async () => { throw removeFailure } }), removeFailure)
 })
