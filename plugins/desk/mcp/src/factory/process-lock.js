@@ -114,14 +114,26 @@ export async function releaseLock({ file, token }) {
  * `trackChild(lock, pid, started)`: adds (`started` true) or removes a child process id in the lock's `children`, only while the file
  * still holds the holder's token. It records ids and signals nothing. Never rejects: a lock that cannot be updated just does not list the id.
  */
-export async function trackChild({ file, token }, pid, started) {
+export async function trackChild(lock, pid, started) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return
+  await rewrite(lock, (record) => {
+    const others = (Array.isArray(record.children) ? record.children : []).filter((child) => child !== pid)
+    return { ...record, children: (started ? [...others, pid] : others).slice(-MAX_CHILDREN) }
+  })
+}
+
+/** `touchLock({ file, token })`: rewrites the lock unchanged, so its modification time is now, only while it still holds the holder's own token. */
+export async function touchLock(lock) {
+  await rewrite(lock, (record) => record)
+}
+
+// Replaces the lock's record with `change(record)` through a temporary file, only while it holds `token`; bookkeeping only, so nothing throws.
+async function rewrite({ file, token }, change) {
   try {
     const record = JSON.parse(await fsp.readFile(file, "utf8"))
-    if (record.token !== token || !Number.isSafeInteger(pid) || pid <= 0) return
-    const others = (Array.isArray(record.children) ? record.children : []).filter((child) => child !== pid)
-    const children = (started ? [...others, pid] : others).slice(-MAX_CHILDREN)
+    if (record.token !== token) return
     const temporary = `${file}.${randomBytes(4).toString("hex")}.tmp`
-    await fsp.writeFile(temporary, JSON.stringify({ ...record, children }), { mode: 0o600 })
+    await fsp.writeFile(temporary, JSON.stringify(change(record)), { mode: 0o600 })
     await fsp.rename(temporary, file)
   } catch {
     // Bookkeeping only.

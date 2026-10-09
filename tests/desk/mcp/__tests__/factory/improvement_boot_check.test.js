@@ -71,6 +71,11 @@ test("the evaluator line says the plugin does the work, and gives the last resul
   assert.match(labelsLine({ ...base, evaluator: { state: "ran", expired_total: 1, gave_up: 1 } }), /; 1 has been tried three times without an accepted result; 1 evaluation request expired and is counted$/u)
   assert.equal(labelsLine({ ...base, evaluator: { state: "unrecognized", expired_total: null, gave_up: null } }), "Factory evaluator: 3 finished jobs wait for labels (oldest 5 days); the plugin labels them in the background, last result not recognised by this version")
   assert.equal(labelsLine({ ...base, evaluator: { state: "disabled", expired_total: null, gave_up: null } }), "Factory evaluator: switched off on this machine; 3 finished jobs wait for labels (oldest 5 days)")
+  assert.equal(
+    labelsLine({ ...base, evaluator: { state: "no_time_for_a_run", expired_total: null, gave_up: null } }),
+    "Factory evaluator: 3 finished jobs wait for labels (oldest 5 days); the plugin labels them in the background, last result no_time_for_a_run (no run could finish before the loop's time limit)",
+    "a step that deferred every job for lack of time is named, never shown as a clean result",
+  )
 })
 
 test("a blocked evaluator line names the state, never starts anything, and claims a card only when one is open", () => {

@@ -249,7 +249,7 @@ export function hasContributingStore(env = process.env) {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const MAX_REQUEST_READS = 200
-const EVALUATOR_STATES = new Set(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host"])
+const EVALUATOR_STATES = new Set(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host", "no_time_for_a_run"])
 // The states in which a card opens after two blocked days (the evaluator step's blocked states that a person can change).
 const CARD_STATES = new Set(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
 
@@ -276,7 +276,7 @@ export function labelsLine({ count, oldest_days: oldest = null, evaluator = null
   }
   const waiting = `${count} finished ${count === 1 ? "job waits" : "jobs wait"} for labels${age}`
   if (state === "disabled") return ["Factory evaluator: switched off on this machine", waiting, ...gaveUp, ...unsupported, ...expired].join("; ")
-  const last = state === null ? "no result recorded yet" : state === "unrecognized" ? "last result not recognised by this version" : `last result ${state}`
+  const last = state === null ? "no result recorded yet" : state === "unrecognized" ? "last result not recognised by this version" : state === "no_time_for_a_run" ? "last result no_time_for_a_run (no run could finish before the loop's time limit)" : `last result ${state}`
   return [`Factory evaluator: ${waiting}`, `the plugin labels them in the background, ${last}`, ...gaveUp, ...unsupported, ...expired].join("; ")
 }
 

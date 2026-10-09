@@ -18,12 +18,20 @@
 // The hard stop: `HARD_STOP_MS` (just past the worker's own 20-minute budget) after the start, the launcher
 // stops the one child it started, through that child's handle, never by a process id it looked up and never by a
 // name, and exits 0. A child that ends first cancels the timer.
+//
+// The hard stop moves with the worker's budget: the worker leaves the evaluator's facts scan out of its budget
+// (mcp/src/factory/loop-worker.js) and says so on the one message channel the launcher opens, as
+// `{ desk_loop_extend_ms: <total ms granted> }`. The launcher moves the stop to `HARD_STOP_MS` plus that total after
+// the start, capped at `MAX_EXTENSION_MS`; a notice that is not a whole number of milliseconds, or that would bring the
+// stop earlier, changes nothing.
 
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 // The worker's budget is 20 minutes (mcp/src/factory/loop-worker.js); its own process ends itself a minute later.
 const HARD_STOP_MS = 22 * 60 * 1000;
+// The most the worker leaves out of its budget for the facts scan (loop-worker.js `MAX_SCAN_ALLOWANCE_MS`, the same number).
+const MAX_EXTENSION_MS = 5 * 60 * 60 * 1000;
 const FACTORY_CLI = path.join(__dirname, "..", "mcp", "scripts", "factory.js");
 
 const isHeadless = (env) => { try { return require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
@@ -38,7 +46,7 @@ async function resolvePerson({ deskRoot, env }) {
 /** Resolves `{ started, ... }` when the worker has ended, or the hard stop has stopped it. */
 async function main({
   env = process.env, spawnImpl = spawn, resolveRoot: findRoot = resolveRoot, resolvePerson: findPerson = resolvePerson,
-  setTimer = setTimeout, clearTimer = clearTimeout, hardStopMs = HARD_STOP_MS,
+  setTimer = setTimeout, clearTimer = clearTimeout, hardStopMs = HARD_STOP_MS, clock = Date.now,
 } = {}) {
   if (isHeadless(env)) return { started: false, reason: "headless_session" };
   if (!isEnabled(env)) return { started: false, reason: "disabled" };
@@ -52,24 +60,38 @@ async function main({
   return new Promise((resolve) => {
     let child;
     let timer;
+    let extension = 0;
     const finish = (value) => { clearTimer(timer); resolve(value); };
     try {
-      child = spawnImpl(process.execPath, args, { stdio: "ignore", windowsHide: true, env });
+      child = spawnImpl(process.execPath, args, { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true, env });
     } catch {
       resolve({ started: false, reason: "spawn_failed" });
       return;
     }
+    const started = clock();
+    const arm = (ms) => {
+      timer = setTimer(() => {
+        try { child.kill(); } catch { /* already gone */ }
+        resolve({ started: true, stopped: true });
+      }, ms);
+      timer?.unref?.();
+    };
     child.once("error", () => finish({ started: false, reason: "spawn_failed" }));
     child.once("exit", () => finish({ started: true, stopped: false }));
-    timer = setTimer(() => {
-      try { child.kill(); } catch { /* already gone */ }
-      resolve({ started: true, stopped: true });
-    }, hardStopMs);
-    timer?.unref?.();
+    child.on("message", (message) => {
+      const asked = message !== null && typeof message === "object" ? message.desk_loop_extend_ms : undefined;
+      if (!Number.isSafeInteger(asked) || asked < 0) return;
+      const next = Math.min(asked, MAX_EXTENSION_MS);
+      if (next <= extension) return;
+      extension = next;
+      clearTimer(timer);
+      arm(Math.max(0, started + hardStopMs + extension - clock()));
+    });
+    arm(hardStopMs);
   });
 }
 
-module.exports = { main, HARD_STOP_MS };
+module.exports = { main, HARD_STOP_MS, MAX_EXTENSION_MS };
 
 if (require.main === module) {
   main().then(() => process.exit(0), () => process.exit(0));

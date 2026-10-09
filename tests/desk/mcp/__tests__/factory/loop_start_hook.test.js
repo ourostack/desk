@@ -16,7 +16,8 @@ import { promises as fs } from "node:fs"
 import { factoryStateRoot, readStatus, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, scratch } from "./_session_helpers.js"
-import { main as loopMain, HARD_STOP_MS as loopHardStopMs } from "../../../../../plugins/desk/hooks/loop-start.cjs"
+import { main as loopMain, HARD_STOP_MS as loopHardStopMs, MAX_EXTENSION_MS } from "../../../../../plugins/desk/hooks/loop-start.cjs"
+import { MAX_SCAN_ALLOWANCE_MS } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
@@ -73,7 +74,7 @@ test("the launcher starts nothing when the loop is switched off, when no desk is
   assert.deepEqual(spawned, [])
 })
 
-test("the launcher runs the loop command for the bound desk and person in its own Node, with ignored stdio, and returns when the worker exits", async () => {
+test("the launcher runs the loop command for the bound desk and person in its own Node, with ignored stdio and a message channel, and returns when the worker exits", async () => {
   const { main } = launcher()
   const spawned = []
   const child = fakeChild()
@@ -85,7 +86,7 @@ test("the launcher runs the loop command for the bound desk and person in its ow
   const [command, args, options] = spawned[0]
   assert.equal(command, process.execPath)
   assert.deepEqual(args, [FACTORY_CLI, "loop", "--desk", "/the/desk", "--person-prefix", "desks/ari"])
-  assert.equal(options.stdio, "ignore")
+  assert.deepEqual(options.stdio, ["ignore", "ignore", "ignore", "ipc"], "no output, and one channel the worker uses to move the hard stop")
   assert.equal(options.env, env)
   assert.equal(options.windowsHide, true)
   assert.equal(timers.pending.length, 1)
@@ -125,6 +126,30 @@ test("the hard stop fires after the budget plus a short grace, ends only the chi
   }
   assert.deepEqual(child.killed, [[]], "one stop, on the handle, no process-id lookup")
   assert.deepEqual(signalled, [], "nothing is signalled by id or by name")
+})
+
+test("the worker's notice moves the hard stop by the time its facts scan took, up to the cap, and never earlier", async () => {
+  const { main, HARD_STOP_MS } = launcher()
+  const child = fakeChild()
+  const timers = fakeTimers()
+  let now = 1_000_000
+  const done = main({ env: interactive(), spawnImpl: () => child, ...found(), setTimer: timers.set, clearTimer: timers.clear, clock: () => now })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(timers.pending.length, 1)
+  now += 131000
+  child.emit("message", { desk_loop_extend_ms: 131000 })
+  assert.deepEqual(timers.cleared, [timers.pending[0]], "the first hard stop is cancelled")
+  assert.equal(timers.pending.length, 2)
+  assert.equal(timers.pending[1].ms, HARD_STOP_MS, "re-armed for the original stop plus the scan, counted from the start")
+  for (const junk of [{ desk_loop_extend_ms: -1 }, { desk_loop_extend_ms: "x" }, { desk_loop_extend_ms: 1.5 }, { other: 1 }, null, "text", { desk_loop_extend_ms: 1000 }]) child.emit("message", junk)
+  assert.equal(timers.pending.length, 2, "a malformed notice, or one that would bring the stop earlier, changes nothing")
+  child.emit("message", { desk_loop_extend_ms: 100 * 60 * 60 * 1000 })
+  assert.equal(timers.pending.length, 3)
+  assert.equal(timers.pending[2].ms, HARD_STOP_MS + MAX_EXTENSION_MS - 131000, "capped at the worker's own scan allowance")
+  assert.equal(MAX_EXTENSION_MS, MAX_SCAN_ALLOWANCE_MS, "the launcher and the worker agree on the cap")
+  timers.pending[2].fn()
+  assert.deepEqual(await done, { started: true, stopped: true })
+  assert.deepEqual(child.killed, [[]])
 })
 
 test("a child that cannot start, or a handle that cannot be stopped, still ends the launcher quietly", async () => {

@@ -7,7 +7,7 @@ import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { LOCK_OUTER_AGE_MS, processAlive, releaseLock, takeLock, trackChild } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
+import { LOCK_OUTER_AGE_MS, processAlive, releaseLock, takeLock, touchLock, trackChild } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 
 async function scratch(run) {
   const root = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-process-lock-")))
@@ -61,6 +61,21 @@ test("release removes the lock only while it holds the holder's own token", () =
   await releaseLock(lock)
   await assert.rejects(fs.stat(lock.file))
   await releaseLock(lock)
+}))
+
+test("touching a lock rewrites it unchanged for its own holder only, and a lock that is gone is left alone", () => scratch(async (root) => {
+  const lock = await takeLock(root, { name: "t.running", record: { children: [7] } })
+  const old = new Date(Date.now() - 60 * 60 * 1000)
+  await fs.utimes(lock.file, old, old)
+  const record = await read(lock)
+  await touchLock({ file: lock.file, token: "not-mine" })
+  assert.ok(Date.now() - (await fs.stat(lock.file)).mtimeMs > 50 * 60 * 1000, "another token does not refresh it")
+  await touchLock(lock)
+  assert.ok(Date.now() - (await fs.stat(lock.file)).mtimeMs < 60 * 1000, "its holder refreshes it")
+  assert.deepEqual(await read(lock), record, "the record is unchanged")
+  await releaseLock(lock)
+  await touchLock(lock)
+  await assert.rejects(fs.stat(lock.file), "a released lock is not written back")
 }))
 
 test("child ids are added and removed in the lock file, only for the holder's own token, and bad input changes nothing", () => scratch(async (root) => {

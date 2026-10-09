@@ -12,7 +12,13 @@
 //     its recorded process is not alive or it is older than 6 hours. Nothing is ever matched by name or signalled.
 //   - A fixed time budget: no step starts after `LOOP_BUDGET_MS` (20 minutes); the evaluator step gets a deadline
 //     that leaves `LATER_STEPS_RESERVE_MS` for the later steps; and the process ends itself at the budget plus
-//     `CEILING_GRACE_MS` if a step hangs.
+//     `CEILING_GRACE_MS` if a step hangs. The evaluator's facts scan is left out of that budget: the step asks
+//     `extendDeadline(scanMs)` once its scan ends, and the worker grants the scan's time (at most
+//     `MAX_SCAN_ALLOWANCE_MS` in all), moves the budget, and with it the later steps' reserve, and the ceiling by
+//     the grant, tells its launcher (`hooks/loop-start.cjs`, over the message channel it opened, only while it is
+//     open) so the hard stop moves too, and rewrites its lock so the end-of-turn kick still reads it as running.
+//     A scan that ends before the first ceiling (21 minutes after the start) therefore never leaves less than one
+//     run's time; a longer scan is still ended by that ceiling or the launcher's 22-minute hard stop, as before.
 //   - A headless factory session (`DESK_FACTORY_HEADLESS`) starts nothing and writes nothing. `DESK_FACTORY_LOOP`
 //     set to anything but 1, true, on or yes turns the loop off (`disabled`). No state folder, no consenting store
 //     and no desk root each start nothing. Every outcome but a headless session or a missing state folder is recorded
@@ -37,7 +43,7 @@ import { dueStep, recordStep } from "./loop-status.js"
 import { runMirrorStep } from "./mirror-step.js"
 import { listStatusAside, recordWorker } from "./loop-worker-state.js"
 import { factoryStateRoot, readStatus, updateStatus } from "./outbox.js"
-import { processAlive, releaseLock, takeLock, trackChild } from "./process-lock.js"
+import { processAlive, releaseLock, takeLock, touchLock, trackChild } from "./process-lock.js"
 import { runReconcileStep } from "./reconcile-step.js"
 import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
@@ -52,6 +58,9 @@ export const LOOP_BUDGET_MS = 20 * 60 * 1000
 export const LATER_STEPS_RESERVE_MS = 3 * 60 * 1000
 // The process ends itself this long after the budget if a step is still running.
 const CEILING_GRACE_MS = 60 * 1000
+// The most facts-scan time the worker leaves out of its budget, in all. With the budget and the grace it keeps a worker well inside the
+// lock's 6-hour outer age (`LOCK_OUTER_AGE_MS`), so no second worker ever takes over a live one. `hooks/loop-start.cjs` holds the same number.
+export const MAX_SCAN_ALLOWANCE_MS = 5 * 60 * 60 * 1000
 const LOCK_NAME = LOOP_LOCK_NAME
 const CODE = /^[a-z0-9][a-z0-9_:-]{0,63}$/u
 
@@ -60,6 +69,14 @@ const answer = (result, extra = {}) => ({ result, ran: 0, skipped: 0, failed: 0,
 
 // A step's answer, or null when it is not `{ ok: boolean, result: <code> }`.
 const readAnswer = (value) => (isObject(value) && typeof value.ok === "boolean" && typeof value.result === "string" && CODE.test(value.result) ? { ok: value.ok, result: value.result } : null)
+
+/**
+ * The default notice to the launcher: a message on the channel it opened, only while that channel is open. The callback takes any error
+ * (a launcher that ended between the check and the write), which Node would otherwise raise as an `error` event and end this worker with.
+ */
+export function notifyLauncher(message) {
+  if (typeof process.send === "function" && process.connected) process.send(message, () => {})
+}
 
 const swallow = async (fn) => {
   try {
@@ -85,7 +102,7 @@ async function routeStep(env, ctx, impls) {
 // `newWorkAt(env)` is due as soon as work newer than its last run arrives: an evaluation request makes the evaluator step due at once, and so
 // does a queue still draining (`evaluateDue`).
 const STEPS = Object.freeze([
-  { name: "evaluate", newWorkAt: newestRequestAt, due: (status, now, newWorkAt) => evaluateDue(status, now, { newWorkAt }), run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.evaluatorDeadline, deskRoot: ctx.deskRoot, onChild: ctx.onChild, onChildExit: ctx.onChildExit }) },
+  { name: "evaluate", newWorkAt: newestRequestAt, due: (status, now, newWorkAt) => evaluateDue(status, now, { newWorkAt }), run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.evaluatorDeadline, deskRoot: ctx.deskRoot, onChild: ctx.onChild, onChildExit: ctx.onChildExit, extendDeadline: ctx.extendDeadline }) },
   { name: "route", run: routeStep },
   { name: "mirror", run: (env, ctx, impls) => impls.mirror(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }) },
   { name: "reconcile", run: (env, ctx, impls) => impls.reconcile(env, { now: ctx.now, desks: [ctx.deskRoot], personPrefix: ctx.personPrefix }) },
@@ -98,13 +115,13 @@ export const LOOP_STEP_NAMES = Object.freeze(STEPS.map(({ name }) => name))
 const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, routeIssues: runRouteIssuesStep, routeLocal: runRouteLocalStep, mirror: runMirrorStep, reconcile: runReconcileStep, verify: runVerifyStep, measure: runMeasureStep, kick: kickLoop }
 
 /**
- * `runLoopWorker(env, { deskRoot, personPrefix, pluginVersion, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl, impls }) -> result`
- * (see the header). `clock` (milliseconds), `alive`, `exit`, `readStatusImpl` and `impls` (the step functions) are seams for tests.
+ * `runLoopWorker(env, { deskRoot, personPrefix, pluginVersion, clock, alive, budgetMs, ceilingMs, exit, notify, readStatusImpl, impls }) -> result`
+ * (see the header). `clock` (milliseconds), `alive`, `exit`, `notify` (the notice to the launcher), `readStatusImpl` and `impls` (the step functions) are seams for tests.
  * Throws a `TypeError` for a `deskRoot` that is neither null nor absolute or a `personPrefix` that is not `""` or `desks/<alias>`.
  */
 export async function runLoopWorker(env, {
   deskRoot, personPrefix = "", pluginVersion, clock = Date.now, alive = processAlive, budgetMs = LOOP_BUDGET_MS,
-  ceilingMs = budgetMs + CEILING_GRACE_MS, exit = process.exit, readStatusImpl = readStatus, updateStatusImpl = updateStatus, impls = {},
+  ceilingMs = budgetMs + CEILING_GRACE_MS, exit = process.exit, notify = notifyLauncher, readStatusImpl = readStatus, updateStatusImpl = updateStatus, impls = {},
 }) {
   if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   checkPersonPrefix(personPrefix, "runLoopWorker")
@@ -122,18 +139,36 @@ export async function runLoopWorker(env, {
   const lock = await takeLock(root, { name: LOCK_NAME, alive, clock, record: { children: [] } })
   if (lock === null) return ended(answer("busy"))
 
-  const ceiling = setTimeout(() => exit(0), ceilingMs)
+  const started = clock()
+  let ceiling = setTimeout(() => exit(0), ceilingMs)
   ceiling.unref()
   const functions = { ...DEFAULT_IMPLS, ...impls }
-  const started = clock()
+  // The facts-scan time granted so far: the budget, the evaluator's limit and the ceiling all move by it.
+  let extension = 0
   // Child ids go into the lock file one write at a time, in the order they were reported.
   let pending = Promise.resolve()
   const track = (pid, on) => { pending = pending.then(() => trackChild(lock, pid, on)) }
+  const extendDeadline = async (scanMs) => {
+    const asked = typeof scanMs === "number" && !Number.isNaN(scanMs) ? Math.floor(scanMs) : 0
+    const granted = Math.min(Math.max(0, asked), MAX_SCAN_ALLOWANCE_MS - extension)
+    if (granted === 0) return 0
+    extension += granted
+    clearTimeout(ceiling)
+    ceiling = setTimeout(() => exit(0), Math.max(0, started + ceilingMs + extension - clock()))
+    ceiling.unref()
+    notify({ desk_loop_extend_ms: extension })
+    // The kick reads a lock younger than its 22 minutes as a live worker (`KICK_LOCK_AGE_MS`); what is left of this worker after the scan
+    // is shorter than that, so a lock rewritten now keeps the kick from starting a second worker that would only record `busy`.
+    pending = pending.then(() => touchLock(lock))
+    await pending
+    return granted
+  }
   const ctx = {
     deskRoot, personPrefix, pluginVersion, attempted: [],
     evaluatorDeadline: new Date(started + budgetMs - LATER_STEPS_RESERVE_MS),
     onChild: (pid) => track(pid, true),
     onChildExit: (pid) => track(pid, false),
+    extendDeadline,
   }
   const outcome = answer("completed")
   // A status file that the reader moves aside and reads as empty must not look like a machine that never ran: it would restart the evaluator's daily cap.
@@ -141,7 +176,7 @@ export async function runLoopWorker(env, {
   try {
     let stopped = null
     for (const step of STEPS) {
-      if (stopped === null && clock() >= started + budgetMs) stopped = "budget_spent"
+      if (stopped === null && clock() >= started + budgetMs + extension) stopped = "budget_spent"
       let status
       if (stopped === null) {
         try {

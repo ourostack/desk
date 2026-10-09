@@ -41,7 +41,7 @@ const FUTURE_ALLOWANCE_MINUTES = 5
 const RECORD_SCHEMA = "desk.factory.loop/1"
 
 /** Every state code the evaluator step writes; a stored state outside the list reads `unavailable` in the record. */
-export const HEADLESS_STATES = Object.freeze(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host"])
+export const HEADLESS_STATES = Object.freeze(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host", "no_time_for_a_run"])
 /** The states an agent can fix; only these open `loop_alarm:headless_blocked` (a spent cap, a switch and per-token billing are shown, never carded). */
 export const BLOCKING_STATES = Object.freeze(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
 const BLOCKED_DAYS_FOR_ALARM = 2

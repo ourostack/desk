@@ -41,7 +41,7 @@ const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
 
 /** The loop worker's lock file name under `<state>/locks/` (`loop-worker.js`). */
 export const LOOP_LOCK_NAME = "loop-worker.running"
-/** A worker lock younger than this is a worker still running (the launcher's hard stop is 22 minutes); an older one is left to the worker's own takeover. */
+/** A worker lock younger than this is a worker still running (the launcher's hard stop is 22 minutes, and a worker granted facts-scan time rewrites its lock then, with less than this left to run); an older one is left to the worker's own takeover. */
 export const KICK_LOCK_AGE_MS = 22 * 60 * 1000
 /** The launcher the kick starts, the one the session-start hook starts. */
 export const LOOP_START_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "hooks", "loop-start.cjs")
