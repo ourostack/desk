@@ -209,7 +209,7 @@ test("explicit provider progress that escapes the person root through a symlink 
   symlinkSync(elsewhere, path.join(input.iterationPath, "escape"), "dir")
   input.progressPath = path.join(input.iterationPath, "escape", "superpowers-progress.md")
   const resolveContext = await loadResolver()
-  await assert.rejects(() => resolveContext(input), /write target resolves outside/u)
+  await assert.rejects(() => resolveContext(input), /resolves outside the desk \(via a symbolic link\)/u)
 })
 
 test("same-basename provider progress in different tasks never shares a ruling store", async () => {
@@ -366,7 +366,7 @@ test("context refuses a missing person root without provisioning it", async () =
   const personRoot = path.join(input.deskRoot, "desks", "member")
   rmSync(personRoot, { recursive: true })
   const resolveContext = await loadResolver()
-  await assert.rejects(() => resolveContext(input), { message: `desk-mcp: effective write root does not exist: ${personRoot}` })
+  await assert.rejects(() => resolveContext(input), { message: "desk-mcp: effective write root does not exist: desks/member" })
   assert.equal(existsSync(personRoot), false)
 })
 

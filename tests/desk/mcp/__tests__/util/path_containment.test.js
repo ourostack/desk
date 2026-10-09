@@ -122,7 +122,7 @@ test("resolveWriteTarget rejects a desk root that is not a directory", async () 
       person: null,
       segments: ["track.md"],
     }),
-    /desk root is not a directory/i,
+    /^Error: desk-mcp: the desk root is not a directory$/i,
   )
 })
 
@@ -261,22 +261,22 @@ test("resolveWriteTarget propagates non-missing filesystem errors", { skip: NO_P
   }
 })
 
-test("resolveWriteTarget refuses a path that runs under a file, at depth 1 and 2, and names the file", async () => {
+test("resolveWriteTarget refuses a path that runs under a file, at depth 1 and 2, and names the file relative to the desk", async () => {
   const root = await makeRoot()
   await fs.writeFile(path.join(root, "README.md"), "# readme\n")
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["README.md", "x.md"] }),
-    (error) => !error.code && error.message.includes("runs under a file, not a folder") && error.message.includes(path.join(root, "README.md")),
+    (error) => !error.code && error.message.includes("runs under a file, not a folder") && error.message.endsWith(": README.md"),
   )
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["README.md", "sub", "x.md"] }),
-    (error) => !error.code && error.message.includes(path.join(root, "README.md")),
+    (error) => !error.code && error.message.endsWith(": README.md"),
   )
   await fs.mkdir(path.join(root, "dir"))
   await fs.writeFile(path.join(root, "dir", "file.md"), "x")
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "file.md", "x.md"] }),
-    (error) => !error.code && error.message.includes(path.join(root, "dir", "file.md")),
+    (error) => !error.code && error.message.endsWith(": dir/file.md"),
   )
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "file.md", "a", "x.md"] }),

@@ -375,6 +375,19 @@ export function personPrefix(deskRoot, person) {
 
 // ── Confined write targets ───────────────────────────────────────────────────
 
+// The message a caller can match on to tell a person folder that is not there yet from any other refusal (task_focus reads a missing one as a
+// missing card). Callers compare against this constant, never a copy of its text.
+export const EFFECTIVE_ROOT_MISSING = "desk-mcp: effective write root does not exist"
+
+// A path as the caller names it: relative to the desk root, with forward slashes on every platform. Refusals print this and never an absolute
+// path, because a caller on the hosted desk has no filesystem to act on one, and a relative path can go straight back to desk_save or a task
+// tool. Returns null for a path that is not inside the desk, so no refusal ever prints where that path is.
+function deskRelative(deskRoot, candidate) {
+  const relative = path.relative(path.resolve(deskRoot), candidate)
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null
+  return relative.split(path.sep).join("/")
+}
+
 export async function resolveWriteTarget({
   deskRoot,
   person = null,
@@ -393,7 +406,7 @@ export async function resolveWriteTarget({
   // Segment validation makes this invariant redundant by construction; retain the lexical boundary as defense in depth if validation evolves.
   /* node:coverage ignore next 3 */
   if (!isPathContained(effectiveRoot, target)) {
-    throw new Error(`desk-mcp: write target is outside effective write root: ${target}`)
+    throw new Error(`desk-mcp: write target is outside effective write root: ${deskRelative(deskRoot, target) ?? segments.join("/")}`)
   }
 
   const realEffectiveRoot = await prepareEffectiveRoot({
@@ -402,6 +415,7 @@ export async function resolveWriteTarget({
     createPersonRoot,
   })
   await validateExistingTarget({
+    deskRoot,
     effectiveRoot,
     realEffectiveRoot,
     segments,
@@ -428,7 +442,7 @@ export function validateWriteSegment(segment) {
 
 async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot }) {
   const lexicalDeskRoot = path.resolve(deskRoot)
-  const realDeskRoot = await realDirectory(lexicalDeskRoot, "desk root")
+  const realDeskRoot = await realDirectory(lexicalDeskRoot)
   if (effectiveRoot === lexicalDeskRoot) return realDeskRoot
 
   const relativeRoot = path.relative(lexicalDeskRoot, effectiveRoot)
@@ -442,22 +456,22 @@ async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot 
     const stat = await lstatIfExists(lexicalCursor)
     if (stat === null) {
       if (createPersonRoot === false) {
-        throw new Error(`desk-mcp: effective write root does not exist: ${lexicalCursor}`)
+        throw new Error(`${EFFECTIVE_ROOT_MISSING}: ${deskRelative(deskRoot, lexicalCursor)}`)
       }
       // A missing person root is not created here: a call that fails afterwards (a task that does not exist, a name
       // the rules refuse) would leave an empty `desks/<alias>/` behind. The write itself creates it with its
       // parent folders; nothing below a missing folder exists, so there is nothing more to check.
       return path.join(realCursor, ...rootSegments.slice(index + 1))
     }
-    const resolved = await realpathOrSymlinkError(lexicalCursor)
+    const resolved = await realpathOrSymlinkError(deskRoot, lexicalCursor)
     if (resolved !== realCursor) {
       throw new Error(
-        `desk-mcp: effective write root resolves outside its canonical person path: ${lexicalCursor}`,
+        `desk-mcp: effective write root resolves outside its canonical person path: ${deskRelative(deskRoot, lexicalCursor)}`,
       )
     }
     if (!stat.isDirectory()) {
       throw new Error(
-        `desk-mcp: effective write root component is not a directory: ${lexicalCursor}`,
+        `desk-mcp: effective write root component is not a directory: ${deskRelative(deskRoot, lexicalCursor)}`,
       )
     }
   }
@@ -467,6 +481,7 @@ async function prepareEffectiveRoot({ deskRoot, effectiveRoot, createPersonRoot 
 }
 
 async function validateExistingTarget({
+  deskRoot,
   effectiveRoot,
   realEffectiveRoot,
   segments,
@@ -477,10 +492,13 @@ async function validateExistingTarget({
     const stat = await lstatIfExists(cursor)
     if (stat === null) return
 
-    const resolved = await realpathOrSymlinkError(cursor)
+    const resolved = await realpathOrSymlinkError(deskRoot, cursor)
     if (!isPathContained(realEffectiveRoot, resolved)) {
+      // Nothing in the segments can climb (validateWriteSegment refuses `..`), so a path that leaves is always leaving through a link. Say whether
+      // it leaves the desk or only the person folder, and never where it leads.
+      const where = isPathContained(await fs.realpath(deskRoot), resolved) ? "effective write root" : "the desk"
       throw new Error(
-        `desk-mcp: write target resolves outside effective write root: ${cursor}`,
+        `desk-mcp: ${deskRelative(deskRoot, cursor)} resolves outside ${where} (via a symbolic link)`,
       )
     }
     // Something on the way to the last segment must be a folder. Windows reports a path under a file as missing and
@@ -488,26 +506,33 @@ async function validateExistingTarget({
     // stop at the file here, with the same refusal everywhere. A link is judged by what it leads to.
     if (index < segments.length - 1 && !(stat.isSymbolicLink() ? await fs.stat(resolved) : stat).isDirectory()) {
       throw new Error(
-        `desk-mcp: write target runs under a file, not a folder: ${cursor}`,
+        `desk-mcp: write target runs under a file, not a folder: ${deskRelative(deskRoot, cursor)}`,
       )
     }
   }
 }
 
-async function realDirectory(candidate, label) {
-  const stat = await fs.stat(candidate)
+// The desk root is named "the desk root" and never by its path: it is where the desk is, not a path the caller asked for.
+async function realDirectory(candidate) {
+  let stat
+  try {
+    stat = await fs.stat(candidate)
+  } catch (error) {
+    if (error?.code === "ENOENT") throw new Error("desk-mcp: the desk root does not exist")
+    throw error
+  }
   if (!stat.isDirectory()) {
-    throw new Error(`desk-mcp: ${label} is not a directory: ${candidate}`)
+    throw new Error("desk-mcp: the desk root is not a directory")
   }
   return fs.realpath(candidate)
 }
 
-async function realpathOrSymlinkError(candidate) {
+async function realpathOrSymlinkError(deskRoot, candidate) {
   try {
     return await fs.realpath(candidate)
   } catch (error) {
     if (error?.code === "ENOENT") {
-      throw new Error(`desk-mcp: broken symlink in write target: ${candidate}`)
+      throw new Error(`desk-mcp: broken symlink in write target: ${deskRelative(deskRoot, candidate)}`)
     }
     throw error
   }

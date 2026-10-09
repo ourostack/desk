@@ -11,7 +11,7 @@
 // session's main agent because a subagent shares the session's server.
 
 import { readMarkdown, pathExists } from "../util/fm.js"
-import { resolveWriteTarget, validateWriteSegment } from "../util/paths.js"
+import { EFFECTIVE_ROOT_MISSING, resolveWriteTarget, validateWriteSegment } from "../util/paths.js"
 import { recentProgress } from "./task-body.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 
@@ -45,7 +45,7 @@ export async function findCard({ deskRoot, person, track, slug }) {
     try {
       file = await resolveWriteTarget({ deskRoot, person, segments, createPersonRoot: false })
     } catch (error) {
-      if (!String(error?.message).startsWith("desk-mcp: effective write root does not exist")) throw error
+      if (!String(error?.message).startsWith(EFFECTIVE_ROOT_MISSING)) throw error
       return null
     }
     if (await pathExists(file)) return { file, archived: segments[1] === "_archive" }

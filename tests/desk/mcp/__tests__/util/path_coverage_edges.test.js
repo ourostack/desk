@@ -53,7 +53,7 @@ test("write confinement refuses an escaping platform resolution before filesyste
   syncBuiltinESMExports()
   try {
     await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["leaf"] }), {
-      message: `desk-mcp: write target is outside effective write root: ${outside}`,
+      message: "desk-mcp: write target is outside effective write root: leaf",
     })
     assert.equal(stat.mock.calls.length, 0)
   } finally {

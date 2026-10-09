@@ -81,7 +81,7 @@ test("equivalent-name symlinks cannot escape lesson or friction roots", async ()
         deskRoot: root,
         input: { topic: "CON", body: "Must stay confined." },
       }),
-      /resolves outside effective write root/,
+      /resolves outside the desk \(via a symbolic link\)/,
     )
 
     const outsideFriction = path.join(outside, "friction.md")
@@ -94,7 +94,7 @@ test("equivalent-name symlinks cannot escape lesson or friction roots", async ()
         deskRoot: root,
         input: { track: "t1", theme: "caf", body: "Must stay confined." },
       }),
-      /resolves outside effective write root/,
+      /resolves outside the desk \(via a symbolic link\)/,
     )
   } finally {
     await fs.rm(outside, { recursive: true, force: true })
