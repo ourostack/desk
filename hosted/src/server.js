@@ -32,7 +32,7 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
       clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
     }),
   );
-  app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider));
+  app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider, { issuer }));
   app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback }));
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resource));

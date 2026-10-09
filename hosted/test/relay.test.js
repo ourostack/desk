@@ -285,3 +285,28 @@ test("after close() starts, a new session is refused with 503", async (t) => {
   assert.match(reply.messages[0].error.message, /shutting down/);
   assert.equal(children.length, 0);
 });
+
+test("a session still starting when close() runs is refused with 503 and its child is killed", async (t) => {
+  let spawnStarted;
+  const started = new Promise((resolve) => (spawnStarted = resolve));
+  let releaseSpawn;
+  const released = new Promise((resolve) => (releaseSpawn = resolve));
+  const { relay, url, children } = await start(t, {
+    beforeSpawn: async () => {
+      spawnStarted();
+      await released;
+    },
+  });
+  const reply = post(url, initialize());
+  await started;
+  const closing = relay.close();
+  releaseSpawn();
+  const answer = await reply;
+  await closing;
+  assert.equal(answer.status, 503);
+  assert.match(answer.messages[0].error.message, /shutting down/);
+  assert.equal(children.length, 1);
+  const [, signal] = await children[0].closed;
+  assert.equal(signal, "SIGKILL");
+  assert.equal(relay.size(), 0);
+});

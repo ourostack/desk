@@ -141,12 +141,23 @@ test("the consent route is mounted and refuses an invalid consent", async (t) =>
   const { base } = await start(t);
   const response = await fetch(`${base}/oauth/consent`, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: ISSUER },
     body: "consent=forged",
     redirect: "manual",
   });
   assert.equal(response.status, 400);
   assert.match(await response.text(), /expired or is not valid/);
+});
+
+test("the consent route checks the POST came from the gateway's own origin", async (t) => {
+  const { base } = await start(t);
+  const response = await fetch(`${base}/oauth/consent`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" },
+    body: "consent=forged",
+    redirect: "manual",
+  });
+  assert.equal(response.status, 403);
 });
 
 test("when the GitHub App is not set up, /healthz still answers and /authorize and /mcp answer 503", async (t) => {

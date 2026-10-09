@@ -78,7 +78,7 @@ async function start(t, github = fakeGitHub()) {
     }),
   );
   app.get("/oauth/github/callback", githubCallbackHandler(provider));
-  app.post("/oauth/consent", express.urlencoded({ extended: false }), consentHandler(provider));
+  app.post("/oauth/consent", express.urlencoded({ extended: false }), consentHandler(provider, { issuer: ISSUER }));
   app.all(
     "/mcp",
     requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL(MCP_URL)) }),
@@ -139,11 +139,12 @@ async function consentPage(base, client, { challenge = "challenge", redirectUri 
   return { response, html, consent };
 }
 
-// Approves on the consent page: the form POST the browser sends.
-const approve = (base, consent) =>
+// Approves on the consent page: the form POST the browser sends, which a
+// browser marks as coming from the gateway's own page.
+const approve = (base, consent, headers = { "sec-fetch-site": "same-origin" }) =>
   fetch(`${base}/oauth/consent`, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
     body: new URLSearchParams({ consent }),
     redirect: "manual",
   });
@@ -318,10 +319,46 @@ test("a consent POST that is tampered, expired, of another kind or missing gets 
     assert.equal(response.headers.get("x-frame-options"), "DENY");
     assert.match(await response.text(), /expired or is not valid/);
   }
-  const missing = await fetch(`${base}/oauth/consent`, { method: "POST", redirect: "manual" });
+  const missing = await fetch(`${base}/oauth/consent`, { method: "POST", headers: { "sec-fetch-site": "same-origin" }, redirect: "manual" });
   assert.equal(missing.status, 400);
   assert.equal(github.calls.length, 0);
   assert.ok(logs.some((line) => line === "consent refused: invalid_consent"));
+});
+
+test("a consent POST from the gateway's own page is accepted by Sec-Fetch-Site or, without it, by Origin", async (t) => {
+  const { base } = await start(t);
+  const client = (await register(base)).body;
+  for (const headers of [{ "sec-fetch-site": "same-origin" }, { origin: ISSUER }, { "sec-fetch-site": "same-origin", origin: ISSUER }]) {
+    const { consent } = await consentPage(base, client);
+    const response = await approve(base, consent, headers);
+    assert.equal(response.status, 303, JSON.stringify(headers));
+    assert.match(response.headers.get("location"), /^https:\/\/github\.com\/login\/oauth\/authorize\?/);
+  }
+});
+
+test("a consent POST from another site, or with no origin evidence, gets 403 and no redirect", async (t) => {
+  const { base, github } = await start(t);
+  const client = (await register(base)).body;
+  const refused = [
+    { "sec-fetch-site": "cross-site" },
+    { "sec-fetch-site": "same-site" },
+    { "sec-fetch-site": "none" },
+    { "sec-fetch-site": "cross-site", origin: ISSUER },
+    { origin: "https://evil.example" },
+    { origin: "null" },
+    { origin: `${ISSUER}.evil.example` },
+    {},
+  ];
+  for (const headers of refused) {
+    const { consent } = await consentPage(base, client);
+    const response = await approve(base, consent, headers);
+    assert.equal(response.status, 403, JSON.stringify(headers));
+    assert.equal(response.headers.get("location"), null);
+    assert.equal(response.headers.get("x-frame-options"), "DENY");
+    assert.match(await response.text(), /Approve on the Hosted Desk page itself/);
+  }
+  assert.equal(github.calls.length, 0);
+  assert.ok(logs.some((line) => line === "consent refused: cross_origin"));
 });
 
 test("approving on the consent page sends the browser to GitHub with a sealed pending state", async (t) => {

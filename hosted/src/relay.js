@@ -180,6 +180,13 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     } finally {
       starting -= 1;
     }
+    // close() ran while this child was starting: it has served nothing, so
+    // it is killed outright rather than left running past the shutdown.
+    if (closing) {
+      child.on?.("error", () => {});
+      child.kill("SIGKILL");
+      return refuse(res, 503, -32000, "Service Unavailable: the gateway is shutting down; reconnect shortly.");
+    }
     const session = openSession(id, login, child);
     await session.transport.handleRequest(req, res, req.body);
     // The transport refused the initialize (a bad header, say) without starting a session.

@@ -113,6 +113,7 @@ export function createProvider({ key, issuer, github, allowedLogins, log = stder
   return {
     clientsStore,
     githubCallback: signIn.githubCallback,
+    log,
 
     // Every client registers itself, so the person approves each sign-in
     // on a page that names the client and where its code will go. The
@@ -169,9 +170,26 @@ export function createProvider({ key, issuer, github, allowedLogins, log = stder
   };
 }
 
-// The Express route for the consent page's Approve form.
-export function consentHandler(provider) {
+// Whether a POST came from a page on the gateway's own origin. A browser
+// sends Sec-Fetch-Site on every request it makes; one that does not falls
+// back to Origin, which every browser sends on a cross-origin POST. A request
+// with neither is refused.
+function fromOwnOrigin(req, issuerOrigin) {
+  const site = req.get("sec-fetch-site");
+  if (site !== undefined) return site === "same-origin";
+  return req.get("origin") === issuerOrigin;
+}
+
+// The Express route for the consent page's Approve form. Only the gateway's
+// own page may submit it, so another site cannot post a consent it fetched
+// and skip the page the person is meant to see.
+export function consentHandler(provider, { issuer }) {
+  const issuerOrigin = new URL(issuer).origin;
   return (req, res) => {
+    if (!fromOwnOrigin(req, issuerOrigin)) {
+      provider.log("consent refused: cross_origin");
+      return sendPage(res, page(403, "This approval did not come from the Hosted Desk page. Approve on the Hosted Desk page itself, starting again from Claude."));
+    }
     const outcome = provider.approve(typeof req.body?.consent === "string" ? req.body.consent : undefined);
     if (outcome.redirectTo) {
       res.setHeader("cache-control", "no-store");
