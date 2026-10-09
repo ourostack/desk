@@ -189,3 +189,15 @@ test("recordStep restarts damaged counters from zero and never concatenates them
   await writeStatus(env, { loop: { steps: { route: { runs: Number.MAX_SAFE_INTEGER + 2 } } } })
   assert.equal((await recordStep(env, "route", { ok: true, result: "ok", now: at("2026-10-05T11:00:00Z") })).runs, 1)
 }))
+
+test("dueStep is due at once for work newer than the step's last run, whatever the gap, and only then", () => {
+  const ran = "2026-10-05T10:00:00.000Z"
+  const status = { loop: { steps: { evaluate: { last_ran_at: ran } } } }
+  const now = at("2026-10-05T10:10:00Z")
+  assert.equal(dueStep(status, "evaluate", now), false, "inside the 1-hour gap")
+  assert.equal(dueStep(status, "evaluate", now, { newWorkAt: Date.parse(ran) + 1 }), true, "a request after the last run")
+  assert.equal(dueStep(status, "evaluate", now, { newWorkAt: Date.parse(ran) }), false, "a request the last run already saw")
+  assert.equal(dueStep(status, "evaluate", now, { newWorkAt: null }), false)
+  assert.equal(dueStep(status, "evaluate", now, { newWorkAt: Number.NaN }), false, "a time that does not read makes nothing due")
+  assert.equal(dueStep({}, "evaluate", now, { newWorkAt: 0 }), true, "a step that never ran is due anyway")
+})

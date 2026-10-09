@@ -32,7 +32,7 @@ import { osEnv } from "../_os_env.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
-const PUBLISHED = JSON.parse(readFileSync(path.join(here, "fixtures", "published-golden.json"), "utf8"))
+const PUBLISHED = JSON.parse(readFileSync(path.join(here, "fixtures", "published-golden-v4.json"), "utf8"))
 const LABELS = JSON.parse(readFileSync(path.join(here, "fixtures", "labels-golden.json"), "utf8"))
 const STORE = "ourostack/factory"
 const JOB = LABELS.job
@@ -117,6 +117,20 @@ test("toPublishedLabels shares no object with its input and never mutates it", (
   published.unavailable.push("facts_missing")
   published.evaluator.rubric = "2"
   assert.deepEqual(input, LABELS)
+})
+
+test("a /3 file's stops publish field by field, unshared with the input, and a /2 file publishes without the key", () => {
+  const input = labels()
+  input.schema = "desk.factory.labels/3"
+  input.evaluator.rubric = "4"
+  input.stops = [{ wait: [250000, 600000], why: "stopped_short", confidence: "low", evaluator_version: "3.2.0-alpha.40" }]
+  const { published } = toPublishedLabels(input, { deskVisibility: "private" })
+  assert.deepEqual(published.stops, input.stops)
+  assert.deepEqual(Object.keys(published), ["schema", "job", "session", "evaluator", "stretches", "stops", "unavailable"])
+  assert.deepEqual(validateLabelsBytes(serializePublished(published)), { ok: true, errors: [] })
+  published.stops[0].wait[0] = 1
+  assert.equal(input.stops[0].wait[0], 250000)
+  assert.equal(Object.hasOwn(toPublishedLabels(labels(), { deskVisibility: "private" }).published, "stops"), false)
 })
 
 test("a stretch's catch point publishes as written, and a stretch without one publishes without the key", () => {

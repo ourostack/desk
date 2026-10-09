@@ -2,7 +2,7 @@
 //
 // Every fresh Desk install gets a browser through the `web` MCP server. The launcher starts a copy of `@playwright/mcp` installed in Desk's state folder, installs it on first use, and refreshes it from the `@latest` channel in a detached process after start. Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every browser_* tool lists as unavailable and every call answers with a status, a code and a fix, mirroring `desk`'s own bootstrap. No test reaches a registry: the chosen Node's npm is a fake (`npm-cli.js` beside a link to this Node) that installs a stub package, reports a version, fails, or hangs on request, and logs every call. In-process tests inject the platform, environment, file checks, spawn and stdio, so every branch (including the Windows layouts) is measured on any host. Spawned tests run the real Claude inline launcher, the Copilot entry point and concurrent launches against a fixture plugin.
 
-import { test } from "node:test"
+import { afterEach, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
@@ -34,7 +34,7 @@ function touch(file, contents = "") {
   return file
 }
 
-// The browser a fake install leaves behind: a stub MCP server. It answers initialize, and answers tools/call with the options it was started with. FAKE_CLI_MODE picks a behavior: list_changed (a tools/list_changed notification, a log notification, noise and an answer to a request nobody made before each answer), rpcerror (answers a call with a JSON-RPC error), crash (exits 3 on a call), slow (never answers a call; logs a cancel to stderr), stubborn (ignores stdin closing), badinit (answers initialize with an error), dieearly (exits 4 a moment after initialize arrives), extra (lists one more tool), badlist (answers tools/list with an error), ping (pings the host before answering initialize), chunky (writes each answer in two pieces), roots (asks the host for roots before answering initialize).
+// The browser a fake install leaves behind: a stub MCP server. It answers initialize, and answers tools/call with the options it was started with. FAKE_CLI_MODE picks a behavior: list_changed (a tools/list_changed notification, a log notification, noise and an answer to a request nobody made before each answer), rpcerror (answers a call with a JSON-RPC error), crash (exits 3 on a call), slow (never answers a call; logs a cancel to stderr), stubborn (ignores stdin closing), badinit (answers initialize with an error), dieearly (exits 4 a moment after initialize arrives), extra (lists one more tool), badlist (answers tools/list with an error), ping (pings the host before answering initialize), chunky (writes each answer in two pieces), roots (asks the host for roots before answering initialize), noinit (never answers initialize).
 const STUB_CLI = `
 const args = process.argv.slice(2)
 const mode = process.env.FAKE_CLI_MODE || "ok"
@@ -58,6 +58,7 @@ process.stdin.on("data", (chunk) => {
     const message = JSON.parse(line)
     if (message.method === "initialize") {
       if (mode === "badinit") { send({ id: message.id, error: { code: -32000, message: "no handshake today" } }); continue }
+      if (mode === "noinit") continue
       if (mode === "dieearly") { setTimeout(() => process.exit(4), 300); continue }
       if (mode === "roots") send({ id: 99, method: "roots/list" })
       if (mode === "ping") send({ id: 55, method: "ping" })
@@ -84,7 +85,7 @@ process.stdin.on("data", (chunk) => {
   }
 })
 process.stdin.on("end", () => { if (mode !== "stubborn") process.exit(0) })
-if (mode === "stubborn") setInterval(() => {}, 1000)
+if (mode === "stubborn") setTimeout(() => {}, 600000)
 `
 
 // A fake npm: `install` writes a stub @playwright/mcp (and playwright-core) into --prefix, `view` prints a version, `config get registry` prints a registry. FAKE_NPM_MODE picks a failure (grandchild starts a second process and hangs, writing its pid to FAKE_NPM_GRANDCHILD), FAKE_NPM_VERSION the version, FAKE_NPM_DELAY_MS a pause, and FAKE_NPM_LOG receives one JSON line per call.
@@ -95,11 +96,11 @@ const mode = process.env.FAKE_NPM_MODE || "ok"
 const version = process.env.FAKE_NPM_VERSION || "0.0.82"
 if (process.env.FAKE_NPM_LOG) fs.appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ args, retries: process.env.npm_config_fetch_retries, timeout: process.env.npm_config_fetch_timeout, path: process.env.PATH }) + "\\n")
 function main() {
-  if (mode === "hang") { setInterval(() => {}, 1000); return }
+  if (mode === "hang") { setTimeout(() => {}, 600000); return }
   if (mode === "grandchild") {
-    const grandchild = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+    const grandchild = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" })
     fs.writeFileSync(process.env.FAKE_NPM_GRANDCHILD, String(grandchild.pid))
-    setInterval(() => {}, 1000)
+    setTimeout(() => {}, 600000)
     return
   }
   if (mode === "failall" || (mode === "fail" && args[0] !== "config")) { process.stderr.write("npm error code ENOTCONN\\nnpm error network unreachable\\n"); process.exit(1) }
@@ -264,8 +265,23 @@ function host(options) {
     call: (id, name = "browser_navigate", args = { url: "https://example.com" }) => session.ask(id, "tools/call", { name, arguments: args }),
     close: () => { stdin.end(); return running },
   }
+  sessions.push(session)
   return session
 }
+
+// Every host a test opened is ended after that test, even when an assertion threw first: stdin closes, and a stop signal ends an install or a browser that is still going. A browser child left running keeps its pipes open, and the test file's process then never exits.
+const sessions = []
+afterEach(async () => {
+  for (const session of sessions.splice(0)) {
+    session.stdin.end()
+    session.signals.emit("SIGTERM")
+    let timer
+    const gave = new Promise((resolve) => { timer = setTimeout(() => resolve("stuck"), 10000) })
+    const outcome = await Promise.race([session.running, gave])
+    clearTimeout(timer)
+    assert.notEqual(outcome, "stuck", "the launcher ended after its host closed")
+  }
+})
 
 // ---- the package follows its channel ----
 
@@ -535,6 +551,61 @@ test("a registry that hangs is cut off at the first-install time limit", posixOn
   assert.ok(Date.now() - started < 10000)
   assert.deepEqual(exits, [])
   assert.match(errors.join(""), /\(npm install timed out after 1 seconds\)/u)
+})
+
+test("an npm call that times out is ended with everything it started", posixOnly, async (t) => {
+  const grandchildFile = path.join(await mkTempRoot("desk-web-timeoutgrand-"), "pid")
+  const m = await machine("desk-web-timeout-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile }, firstInstallMs: 2000 })
+  const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+  let ended = false
+  t.after(() => { if (!ended && existsSync(grandchildFile)) { const pid = Number(readFileSync(grandchildFile, "utf8")); if (alive(pid)) process.kill(pid, "SIGKILL") } })
+  const running = launchDegraded(m.options)
+  const helper = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
+  assert.equal(alive(helper), true, "the helper runs while npm is within its limit")
+  const { errors } = await running
+  assert.match(errors.join(""), /timed out/u)
+  await until(() => !alive(helper), "the helper npm started to end")
+  ended = true
+})
+
+test("a POSIX tree stop falls back to the npm process when its process group is gone", posixOnly, () => {
+  const killed = []
+  browser.stopTree({ platform: "linux", children: [] }, { pid: 2147483646, kill: (signal) => killed.push(signal) }, "SIGKILL")
+  assert.deepEqual(killed, ["SIGKILL"])
+})
+
+test("a Windows tree stop runs taskkill from SystemRoot and falls back to the npm process when taskkill cannot end it", () => {
+  assert.equal(browser.taskkillPath({ SystemRoot: "D:\\Win" }), "D:\\Win\\System32\\taskkill.exe")
+  assert.equal(browser.taskkillPath({ SYSTEMROOT: "relative", windir: "E:\\W" }), "E:\\W\\System32\\taskkill.exe")
+  assert.equal(browser.taskkillPath({ PATH: "x" }), "C:\\Windows\\System32\\taskkill.exe")
+  const run = (spawnKiller) => {
+    const calls = []
+    const killed = []
+    const child = { pid: 42, kill: (signal) => killed.push(signal) }
+    browser.stopTree({ platform: "win32", env: { SystemRoot: "D:\\Win" }, spawn: (...argv) => { calls.push(argv); return spawnKiller() } }, child, "SIGKILL")
+    return { calls, killed }
+  }
+  const ended = run(() => { const killer = new EventEmitter(); setImmediate(() => killer.emit("exit", 0)); return killer })
+  assert.deepEqual(ended.calls, [["D:\\Win\\System32\\taskkill.exe", ["/PID", "42", "/T", "/F"], { stdio: "ignore", windowsHide: true }]])
+  const failed = new EventEmitter()
+  const failedRun = run(() => failed)
+  failed.emit("exit", 128)
+  assert.deepEqual(failedRun.killed, ["SIGKILL"])
+  const missing = new EventEmitter()
+  const missingRun = run(() => missing)
+  missing.emit("error", new Error("spawn ENOENT"))
+  assert.deepEqual(missingRun.killed, ["SIGKILL"])
+  assert.deepEqual(run(() => { throw new Error("spawn EMFILE") }).killed, ["SIGKILL"])
+  let spawned = 0
+  for (const ended of [{ exitCode: 0 }, { exitCode: null, signalCode: "SIGKILL" }]) {
+    const child = { pid: 42, kill: () => {}, ...ended }
+    browser.stopTree({ platform: "win32", env: {}, spawn: () => { spawned += 1; return new EventEmitter() } }, child, "SIGKILL")
+  }
+  assert.equal(spawned, 0, "an npm that already ended is not taskkilled, because its pid may belong to another process now")
+  const done = new EventEmitter()
+  const doneRun = run(() => done)
+  done.emit("exit", 0)
+  assert.deepEqual(doneRun.killed, [])
 })
 
 test("npm that cannot be spawned, or fails to start, is reported like any other install failure", posixOnly, async () => {
@@ -935,16 +1006,32 @@ test("an install that fails answers held and later calls with the code and the f
 })
 
 test("a call that waits longer than the hold limit is answered with a retry hint, and the next call gets the browser the install finished", posixOnly, async () => {
-  const m = await machine("desk-web-holdlimit-", { env: { FAKE_NPM_DELAY_MS: "1200" }, holdMs: 100 })
+  // The extra tool makes the launcher write its "tool list differs" line, and it does that only after the browser has answered its handshake and the launcher has started sending it calls. Waiting for that line, not just for the install, keeps the 100 ms hold limit from also applying to a browser that is still starting.
+  const m = await machine("desk-web-holdlimit-", { env: { FAKE_NPM_DELAY_MS: "1200", FAKE_CLI_MODE: "extra" }, holdMs: 100 })
   const h = host(m.options)
   await h.handshake()
   const early = await h.call(2)
   assert.equal(toolPayload(early).code, "browser_not_ready")
   assert.equal(early.result.isError, true)
   assert.match(toolPayload(early).fix, /again in a minute/u)
-  await until(() => /@playwright\/mcp 0/u.test(h.errors.join("")), "the install to finish")
+  await until(() => /tool list differs/u.test(h.errors.join("")), "the browser to finish starting")
   assert.match((await h.call(3)).result.content[0].text, /^ran browser_navigate/u)
   await h.close()
+})
+
+test("a call that arrives while the installed browser has not answered its handshake is answered at the hold limit, and closing the host stops that browser", posixOnly, async () => {
+  const m = await machine("desk-web-noinit-", { env: { FAKE_CLI_MODE: "noinit" }, holdMs: 100, closeMs: 10000 })
+  const browsers = []
+  const h = host({ ...m.options, spawn: (...argv) => { const child = spawn(...argv); browsers.push(child); return child } })
+  await h.handshake()
+  const first = await h.call(2)
+  assert.equal(toolPayload(first).code, "browser_not_ready")
+  await until(() => browsers.length === 1, "the install to finish and the browser to start")
+  const second = await h.call(3)
+  assert.equal(toolPayload(second).code, "browser_not_ready", "the browser still has not answered, so the call is bounded again")
+  assert.equal(browsers[0].exitCode, null, "the browser is still running while the host is open")
+  await h.close()
+  assert.equal(browsers[0].exitCode, 0, "closing the host closed the browser's stdin and it ended")
 })
 
 test("the first-use server answers the protocol itself: ping, initialize with and without a version, unknown methods, bad lines", posixOnly, async () => {
@@ -1267,11 +1354,17 @@ test("a real install error stays the answer for every later call, with no second
 
 // ---- stop signals end the install ----
 
-test("a stop signal during the first install ends npm and everything it started, then ends the launcher with that signal", posixOnly, async () => {
+test("a stop signal during the first install ends npm and everything it started, then ends the launcher with that signal", posixOnly, async (t) => {
   const grandchildFile = path.join(await mkTempRoot("desk-web-grand-"), "pid")
   const m = await machine("desk-web-signal-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile } })
   const npms = []
   const h = host({ ...m.options, npmSpawn: (...argv) => { const child = spawn(...argv); npms.push(child); return child } })
+  let ended = false
+  t.after(() => {
+    h.stdin.end()
+    h.signals.emit("SIGTERM")
+    if (!ended && existsSync(grandchildFile)) { try { process.kill(Number(readFileSync(grandchildFile, "utf8")), "SIGKILL") } catch { /* already gone */ } }
+  })
   await h.handshake()
   const grandchild = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
   const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
@@ -1281,6 +1374,7 @@ test("a stop signal during the first install ends npm and everything it started,
   assert.deepEqual(h.kills, ["SIGHUP"])
   await until(() => npms[0].exitCode !== null || npms[0].signalCode !== null, "npm to end")
   await until(() => !alive(grandchild), "the helper to end")
+  ended = true
   assert.equal(h.signals.listenerCount("SIGHUP"), 0, "the handlers are removed")
 })
 

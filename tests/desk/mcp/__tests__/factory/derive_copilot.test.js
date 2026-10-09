@@ -5,7 +5,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -261,8 +261,9 @@ test("human waits run from an interaction's end to the next human prompt, never 
     // (48.2) or skill-injected (48.6) messages, and not across the resumes
     // at 55, 80 and 94.
     assert.deepEqual(intervalsOf(facts, "human_wait"), [
-      { kind: "human_wait", agent: 0, ...span(43, 44) },
-      { kind: "human_wait", agent: 0, ...span(74, 75.2) },
+      { kind: "human_wait", agent: 0, ...span(43, 44), stop: { end: "end_turn", asks: false, pending_agents: null } },
+      // The operator aborted the turn (73) before it ended.
+      { kind: "human_wait", agent: 0, ...span(74, 75.2), stop: { end: "interrupted", asks: null, pending_agents: null } },
     ])
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -322,9 +323,9 @@ test("refs come from this session's session_refs rows, validated", async () => {
     const { facts, events } = await derive(home, SESSIONS.full)
     assert.deepEqual(facts.refs, {
       prs: [
-        { repo: "ourostack/desk", number: 7 },
-        { repo: "ourostack/desk", number: 12 },
-        { repo: "ourostack/factory", number: 3 },
+        { repo: "ourostack/desk", number: 7, created: false },
+        { repo: "ourostack/desk", number: 12, created: false },
+        { repo: "ourostack/factory", number: 3, created: false },
       ],
       commits: [
         { repo: "ourostack/desk", sha: "abcdef0000000000000000000000000000000001" },
@@ -399,7 +400,7 @@ test("an open session: open turn, orphan tool, failed subagent, truncated last l
     assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "claude-opus-5-5" }, { n: 1, parent: 0, model: "unknown" }])
     assert.deepEqual(intervalsOf(facts, "subagent"), [{ kind: "subagent", agent: 0, ...span(6, 8) }])
     assert.deepEqual(intervalsOf(facts, "turn"), [{ kind: "turn", agent: 0, ...span(2, 11) }])
-    assert.deepEqual(intervalsOf(facts, "human_wait"), [{ kind: "human_wait", agent: 0, ...span(11, 20) }])
+    assert.deepEqual(intervalsOf(facts, "human_wait"), [{ kind: "human_wait", agent: 0, ...span(11, 20), stop: { end: "end_turn", asks: null, pending_agents: null } }])
     assert.deepEqual(facts.counts.tool_calls, { shell: 1, agent: 1 })
     assert.deepEqual(facts.counts.tool_failures, { agent: 1 })
     assert.deepEqual(facts.unavailable, [
@@ -1065,11 +1066,12 @@ async function refsOf({ repository = "octo-org/widgets", cwd = null, context = {
 
 test("a bare PR number takes the session's repository; without a valid one it is unresolved", async () => {
   let { refs } = await refsOf({ refs: [["pr", "5"], ["pr", "0"], ["pr", "99999999999999999999"], ["issue", "3"], ["pr", "ourostack/desk#8"]] })
-  assert.deepEqual(refs.prs, [{ repo: "octo-org/widgets", number: 5 }, { repo: "ourostack/desk", number: 8 }])
+  // Copilot records no PR creation, so no PR is marked created.
+  assert.deepEqual(refs.prs, [{ repo: "octo-org/widgets", number: 5, created: false }, { repo: "ourostack/desk", number: 8, created: false }])
   assert.deepEqual(refs.unresolved, { prs: 0, commits: 0 })
   for (const repository of [null, `${SENTINEL} free text`, "a/b/c"]) {
     ;({ refs } = await refsOf({ repository, refs: [["pr", "5"], ["pr", "6"], ["pr", "ourostack/desk#8"]] }))
-    assert.deepEqual(refs.prs, [{ repo: "ourostack/desk", number: 8 }], String(repository))
+    assert.deepEqual(refs.prs, [{ repo: "ourostack/desk", number: 8, created: false }], String(repository))
     assert.deepEqual(refs.unresolved, { prs: 2, commits: 0 }, String(repository))
   }
 })
@@ -1732,5 +1734,27 @@ test("a commit carries when the session recorded it: the earliest readable time 
     assert.ok(!facts.unavailable.some((entry) => entry.field === "commits"))
   } finally {
     rmSync(old, { recursive: true, force: true })
+  }
+})
+
+test("a PR the session created replaces the store's row for it, and the store's other PRs stay not created", async () => {
+  const lines = readFileSync(path.join(FIXTURES, SESSIONS.full, "events.jsonl"), "utf8").trimEnd().split("\n")
+  const created = [
+    { type: "tool.execution_start", data: { toolCallId: "pr-create", toolName: "bash", arguments: { command: "gh pr create --fill" } }, id: "00000000-0000-4000-8000-00000000c001", timestamp: "2026-09-25T08:00:50.000Z", parentId: null },
+    { type: "tool.execution_complete", data: { toolCallId: "pr-create", success: true, shellExecution: { exitCode: 0 }, result: { content: `${SENTINEL} https://github.com/ourostack/desk/pull/12` } }, id: "00000000-0000-4000-8000-00000000c002", timestamp: "2026-09-25T08:00:52.000Z", parentId: null },
+  ].map((event) => JSON.stringify(event))
+  const home = makeHome({ texts: { [SESSIONS.full]: `${[...lines.slice(0, -1), ...created, lines.at(-1)].join("\n")}\n` } })
+  try {
+    fixtureResolver = fakeCommitResolver()
+    const { facts } = await derive(home, SESSIONS.full)
+    assertValid(facts)
+    assert.ok(!JSON.stringify(facts).includes(SENTINEL))
+    assert.deepEqual(facts.refs.prs, [
+      { repo: "ourostack/desk", number: 7, created: false },
+      { repo: "ourostack/desk", number: 12, agent: 0, at_ms: 52000, created: true },
+      { repo: "ourostack/factory", number: 3, created: false },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
   }
 })

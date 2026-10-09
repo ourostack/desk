@@ -296,8 +296,8 @@ test("timeline additions place workers, human turns and pull requests on the job
   ])
   assert.deepEqual(additions.human_turns, [{ host: "claude-code", session: S(13), at_ms: 2 * MIN + 1000, basis: "first", window_ms: null, prompt_class: "short", output_class: "short" }])
   assert.deepEqual(additions.prs, [
-    { host: "claude-code", session: S(13), repo: "ourostack/desk", number: 2, worker: 0, at_ms: 7 * MIN },
-    { host: "claude-code", session: S(13), repo: "ourostack/desk", number: 1, worker: 1 },
+    { host: "claude-code", session: S(13), repo: "ourostack/desk", number: 2, worker: 0, at_ms: 7 * MIN, created: null },
+    { host: "claude-code", session: S(13), repo: "ourostack/desk", number: 1, worker: 1, created: null },
   ])
 })
 
@@ -315,7 +315,7 @@ test("a public desk's session, which carries no job offset and no pull request t
   const timeline = buildTimelines([session])[0]
   const additions = timelineAdditions(timeline)
   assert.deepEqual(additions.human_turns, [])
-  assert.deepEqual(additions.prs, [{ host: "claude-code", session: S(14), repo: "ourostack/desk", number: 3 }])
+  assert.deepEqual(additions.prs, [{ host: "claude-code", session: S(14), repo: "ourostack/desk", number: 3, created: null }])
   assert.equal(sessionDetail(timeline, 0, labels), null)
 })
 
@@ -875,8 +875,8 @@ test("a gap that holds other_task and another cause keeps the dominant waited_on
   assert.equal(gap.idle_by_waited_on_ms.next_prompt.value, 30 * MIN)
   assert.equal(gap.idle_by_waited_on_ms.other_task.value, 10 * MIN)
   assert.equal(valueSum(Object.values(gap.idle_by_waited_on_ms)), gap.end_ms - gap.start_ms)
-  // The longest gap keeps its shape: its split lives on the gap in the job file.
-  assert.deepEqual(walk.task.longest_gap.value, { start_ms: 10 * MIN, end_ms: 50 * MIN, duration_ms: 40 * MIN, waited_on: "next_prompt" })
+  // The longest gap keeps its shape, with why the agent stopped (its wait carries no stop facts and no label): its split lives on the gap in the job file.
+  assert.deepEqual(walk.task.longest_gap.value, { start_ms: 10 * MIN, end_ms: 50 * MIN, duration_ms: 40 * MIN, waited_on: "next_prompt", why: "not_known" })
 })
 
 test("a session's work no binding holds stays unknown, and other_task and unknown are partial with session_work_unattributed", () => {
@@ -1002,7 +1002,7 @@ test("each reason pulls each kind of figure one way, and a ratio takes its numer
     assert.deepEqual(bounded(partial(["some_new_reason"]), kind), { ...partial(["some_new_reason"]), bound: null, bound_reason: "bound_direction_undecided" }, kind)
     assert.equal(bounded(partial(["censored", "some_new_reason"]), kind).bound_reason, "bound_direction_undecided", kind)
   }
-  assert.deepEqual(Object.keys(BOUND_DIRECTIONS).sort(), ["count", "evidence", "idle", "labeled", "lead", "other_task", "other_task_capped", "placement", "unknown", "working"])
+  assert.deepEqual(Object.keys(BOUND_DIRECTIONS).sort(), ["count", "evidence", "finish", "idle", "labeled", "lead", "list", "other_task", "other_task_capped", "placement", "unknown", "why", "working"])
   // Ratios: a floored closed job's flow efficiency is at most its figure; with unlabeled sessions too, both parts say at most.
   const floored = facts({
     id: S(67),

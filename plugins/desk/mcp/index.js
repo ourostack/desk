@@ -263,10 +263,10 @@ export async function main({
   kickoff.unref?.()
   // Once the server is up, nothing that throws later may end the process: the session records it, degrades and keeps serving.
   const removeCrashHandlers = crashHandlers ? installCrashHandlers({ session, stderr }) : () => {}
-  const closed = frontDoor.closed.then(() => {
+  const closed = frontDoor.closed.then(async () => {
     clearTimeout(kickoff)
     removeCrashHandlers()
-    session.dispose()
+    await session.dispose()
     onClosed()
   })
   return { frontDoor, session, admission: session.admission, closed }

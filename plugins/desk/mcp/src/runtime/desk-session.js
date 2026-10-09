@@ -181,7 +181,7 @@ export function createDeskSession(deps) {
     if (context.admission) context.admission = { ...context.admission, controller: null }
     if (controller) context.controllerLost = true
     context.semanticCurrent = false
-    Promise.resolve().then(() => controller?.close?.()).catch(() => {})
+    return Promise.resolve().then(() => controller?.close?.()).catch(() => {})
   }
 
   function watchController(controller) {
@@ -831,7 +831,7 @@ export function createDeskSession(deps) {
       admission.dispose()
       closeHeadWatch()
       if (headTimer !== null) clearTimeout(headTimer)
-      forgetController()
+      return forgetController()
     },
   }
 }

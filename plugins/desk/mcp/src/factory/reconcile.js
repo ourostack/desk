@@ -33,7 +33,7 @@
 // time cut to the job exactly as the pipeline publishes it, `jobActiveMs`, never a segment's wall span; `not_recorded` where the pipeline would
 // publish nothing or the facts cannot be read, `withheld` on a desk not known to be private) and `bound_by`, from the local receipt: `focus`,
 // `inferred`, `subagent_only` (a current receipt with no entry for the job: only subagents worked it) or `not_recorded` (a receipt older
-// than BINDING_VERSION, or none). `counts.bound_by` counts the story entries each way. The top-level `sessions` lists each story session once
+// than BINDING_RULES_VERSION, or none). `counts.bound_by` counts the story entries each way. The top-level `sessions` lists each story session once
 // with the receipt's two measures, `segments_capped_ms` and `repository_evidence_unavailable` (the receipt's `repo_unresolved`: directories
 // that no longer exist), each a measure that is `not_recorded` when the receipt predates it; `counts` gives their totals. `counts.mentioned`
 // is a total over the sessions that recorded their own activity for this desk (`sessions`; `sessions_not_recorded` counts this desk's sessions in
@@ -47,7 +47,7 @@
 //                  is never blamed on a marker: nothing ties an unbound marker to a task. A real commit inside
 //                  the own activity of a session bound to another task is `counts.mentioned`, not a mismatch.
 //   not_opted_in, route_changed, held, log_missing   the bound session's marker, pipeline order
-//   stale_binding  receipt below BINDING_VERSION: `binding_version_<n>` when the session's marker is there (the next sweep derives it again),
+//   stale_binding  receipt below BINDING_RULES_VERSION: `binding_version_<n>` when the session's marker is there (the next sweep derives it again),
 //                  else an `orphan_` detail saying whether the orphan pass can still rebuild it (see `staleDetail`)
 //   receipt_too_old  no bound session, and a real commit that no recorded own activity owns but a session of this desk overlaps whose receipt
 //                  predates `own_activity` (it names this desk, or binds one of its tasks): it may have made the commit, so `not_bound` would be untrue
@@ -88,7 +88,7 @@ import * as path from "node:path"
 import { OWN_ACTIVITY_SPANS, checkPersonPrefix, jobId, taskCommitRule } from "./binding.js"
 import { allTasks, consentDecision, consentRecords, factoryStateDir, readState } from "./boot-check.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
-import { BINDING_VERSION, ORPHAN_HUNG_STRIKES } from "./derive-run.js"
+import { BINDING_RULES_VERSION, ORPHAN_HUNG_STRIKES } from "./derive-run.js"
 import { deskTimingKept, deskVisibilityOf, freshVisibility, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { createDeskReaders, gitEnv, parseNameStatus, readDeskRemote } from "./desk-repo.js"
 import { ownVersion } from "./local-status.js"
@@ -362,9 +362,9 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   // the receipt still names this desk).
   const sessionInfo = new Map()
 
-  // The receipt of a derived session, or `null`; a receipt is current from BINDING_VERSION on, and only a current one says how jobs were bound.
+  // The receipt of a derived session, or `null`; a receipt is current from BINDING_RULES_VERSION on (a later re-derive bump changed the facts, not the binding), and only a current one says how jobs were bound.
   const receiptOf = (name) => (isPlainObject(status.derivations?.[name]) ? status.derivations[name] : null)
-  const isCurrent = (receipt) => receipt !== null && receipt.binding_version >= BINDING_VERSION
+  const isCurrent = (receipt) => receipt !== null && receipt.binding_version >= BINDING_RULES_VERSION
   const boundByOf = (name, job) => {
     const receipt = receiptOf(name)
     if (!isCurrent(receipt) || !isPlainObject(receipt.bound_by)) return NOT_RECORDED

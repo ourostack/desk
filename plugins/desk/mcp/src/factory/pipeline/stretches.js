@@ -1,7 +1,7 @@
 // The evaluator's stretches as the Lean walk reads them: what each waiting
 // stretch waited on, the honest split of waiting time during which the job's
-// own workers were working, and each job's stretches, workers, human turns
-// and pull requests on the job clock.
+// own workers were working, and each job's stretches, workers, human turns,
+// pull requests, after-stop waits and ask-tool idle time on the job clock.
 //
 // Rules:
 //   - A stretch's evidence ranges resolve to the session's fact intervals
@@ -49,6 +49,12 @@ import { boundIntervals, union } from "./timeline.js"
 
 /** What a `waiting` stretch waited on, in tie-break order. */
 export const WAITED_ON = Object.freeze(["next_prompt", "api_retry", "tool_failure", "long_tool_call", "unknown"])
+
+/**
+ * How a turn ends when the agent asks the operator through a tool (`intervals[kind=human_wait].stop.end`, facts `/4`): a question tool or
+ * a plan for approval. The operator's answer is the next prompt, so the time inside such a wait is idle, not working (`askIdle`).
+ */
+export const ASK_ENDS = Object.freeze(["ask_question", "ask_plan"])
 
 /** A successful tool call at least this long is a wait on the call (`long_tool_call`): five minutes. */
 export const LONG_TOOL_CALL_MS = 5 * 60 * 1000
@@ -222,6 +228,63 @@ export function correctStretches(stretches, session, binding) {
   })
 }
 
+// The parts of `wait` (an interval of `session`) during which no other worker of the job did work: its own worker, and an ancestor's turn or
+// tool call that holds it (a parent's turn around the subagent that asks), are the wait itself, and a `subagent` interval only stands for
+// the subagent's own intervals, as in the honest correction.
+function idleParts(wait, work, parentOf) {
+  const others = work.filter((interval) => interval.agent !== wait.agent
+    && !(ancestorOf(parentOf, interval.agent, wait.agent) && interval.start_ms <= wait.start_ms && interval.end_ms >= wait.end_ms)
+    && interval.start_ms < wait.end_ms && interval.end_ms > wait.start_ms)
+  return splitBySpans(wait.start_ms, wait.end_ms, union(others)).outside
+}
+
+/**
+ * `askIdle(timeline) -> Map<"host/session", spans>`: for each placed session of the job, the idle time inside its ask-tool waits (a
+ * `human_wait` whose `stop.end` is in `ASK_ENDS`) as merged `[start, end]` pairs on the job clock: the agent was waiting on the operator's
+ * answer, so that time is not working time, except where another worker of the job did work meanwhile. Only the job's own share of each
+ * wait counts (the binding's workers, worker 0 cut to its segments).
+ */
+export function askIdle(timeline) {
+  const out = new Map()
+  timeline.source_sessions.forEach((session, index) => {
+    const offset = timeline.sessions[index].offset_ms
+    if (offset === null) return
+    const held = boundIntervals(session, bindingOf(session, timeline.job))
+    const asks = held.filter((interval) => interval.kind === "human_wait" && ASK_ENDS.includes(interval.stop?.end))
+    if (asks.length === 0) return
+    const work = held.filter((interval) => WORK_KINDS.has(interval.kind))
+    const parentOf = new Map(session.agents.map((agent) => [agent.n, agent.parent]))
+    const spans = asks.flatMap((wait) => idleParts(wait, work, parentOf)).map(([start, end]) => ({ start_ms: offset + start, end_ms: offset + end }))
+    out.set(`${session.session.host}/${session.session.id}`, union(spans))
+  })
+  return out
+}
+
+/**
+ * `jobWaits(timeline) -> waits`: every wait of the job on the operator on the job clock: each `human_wait` interval the job's binding
+ * holds, of any worker (the root's after-stop waits, and an ask-tool wait of whichever worker asked), cut to the binding's segments, so a
+ * wait the segments cut is one entry per part. Each is `{ host, session, worker, start_ms, end_ms, stop, range }`, where `stop` is the
+ * facts' record of how the turn ended (facts `/4`), or `null` when the facts carry none, and `range` is the whole interval's
+ * `[start_ms, end_ms]` on the session clock, which an evaluator's stop label names. In start order. A session without a job offset places
+ * none.
+ */
+export function jobWaits(timeline) {
+  const waits = []
+  timeline.source_sessions.forEach((session, index) => {
+    const offset = timeline.sessions[index].offset_ms
+    if (offset === null) return
+    const binding = bindingOf(session, timeline.job)
+    for (const interval of session.intervals) {
+      if (interval.kind !== "human_wait") continue
+      const stop = Object.hasOwn(interval, "stop") ? { end: interval.stop.end, asks: interval.stop.asks, pending_agents: interval.stop.pending_agents } : null
+      for (const part of boundIntervals({ intervals: [interval] }, binding)) {
+        waits.push({ host: session.session.host, session: session.session.id, worker: interval.agent, start_ms: offset + part.start_ms, end_ms: offset + part.end_ms, stop, range: [interval.start_ms, interval.end_ms] })
+      }
+    }
+  })
+  return waits.sort(byStart)
+}
+
 // An interval as a detail file lists it, on the job clock.
 function laneInterval(interval, offset) {
   const entry = { kind: interval.kind, worker: interval.agent, start_ms: offset + interval.start_ms, end_ms: offset + interval.end_ms }
@@ -387,18 +450,28 @@ function detailStretches(corrected, { session, offset, entry, position }) {
   })
 }
 
-// Each pull request once: the earliest timed mention when any session times it, else the first by host and session. Timed entries come
-// first, earliest first; untimed ones after, by repository and number.
+// Each pull request once. One a session created is the earliest creating call, timed first, and has no time when no creating call was
+// timed: a mention's time never stands for its opening. Any other is the earliest timed mention when any session times it, else the
+// first by host and session. `created` is `true` when any session created it, else `false` when any session's facts say so, else `null`
+// (facts before `/4` do not say). Timed entries come first, earliest first; untimed ones after, by repository and number.
 function firstOfEachPr(prs) {
+  const created = new Map()
+  for (const pr of prs) {
+    const prKey = `${pr.repo}#${pr.number}`
+    if (pr.created === true || (pr.created === false && created.get(prKey) !== true)) created.set(prKey, pr.created)
+  }
   const seen = new Set()
   const key = (pr) => ({ ...pr, untimed: Number(!Object.hasOwn(pr, "at_ms")), time: pr.at_ms ?? 0 })
   const order = ["untimed", "time", "repo", "number", "host", "session"]
-  return [...prs].sort((left, right) => compareFields(key(left), key(right), order)).filter((pr) => {
-    const key = `${pr.repo}#${pr.number}`
-    if (seen.has(key)) return false
-    seen.add(key)
+  // A pull request a session created is placed only by a creating call: a mention's time is not its opening.
+  const creating = prs.filter((pr) => created.get(`${pr.repo}#${pr.number}`) !== true || pr.created === true)
+  const first = creating.sort((left, right) => compareFields(key(left), key(right), order)).filter((pr) => {
+    const prKey = `${pr.repo}#${pr.number}`
+    if (seen.has(prKey)) return false
+    seen.add(prKey)
     return true
   })
+  return first.map((pr) => ({ ...pr, created: created.get(`${pr.repo}#${pr.number}`) ?? null }))
 }
 
 const byStart = (left, right) => compareFields(left, right, ["start_ms", "end_ms", "host", "session"])
@@ -411,7 +484,8 @@ const byStart = (left, right) => compareFields(left, right, ["start_ms", "end_ms
  *   - `human_turns`: the human turns whose time falls in the job's own segments (the attention formula's rule), with their basis, window
  *     and size classes.
  *   - `prs`: the job's pull requests (the formulas' ownership rule), each once, with the worker that opened it and `at_ms` only when the
- *     facts carry them (a public desk's facts withhold both).
+ *     facts carry them (a public desk's facts withhold both), and `created`: whether a session of the job created it (`true`), only
+ *     mentioned it (`false`), or `null` when its facts predate `/4`. A created one's `at_ms` is only ever a creating call's time.
  */
 export function timelineAdditions(timeline) {
   const agents = []
@@ -429,6 +503,7 @@ export function timelineAdditions(timeline) {
     for (const pr of session.refs.prs) {
       if (!jobOwnsPullRequest(session, binding, pr)) continue
       const entry = { host, session: id, repo: pr.repo, number: pr.number }
+      if (Object.hasOwn(pr, "created")) entry.created = pr.created
       if (Object.hasOwn(pr, "agent")) entry.worker = pr.agent
       if (Object.hasOwn(pr, "at_ms") && offset !== null) entry.at_ms = offset + pr.at_ms
       prs.push(entry)

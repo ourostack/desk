@@ -2,9 +2,10 @@
 // its stack-up of lead time, its compact answer, and the causes of waste
 // ranked by time. Every figure is a number-state envelope, `{ state, value,
 // reasons }`, with `value` absent when the state is `unavailable`; a zero is
-// always a measured zero, never missing data. No who, no when: every time is
-// on a job's own clock (milliseconds since its card was created), and
-// nothing here orders jobs against each other.
+// always a measured zero, never missing data. No who: every time is on a
+// job's own clock (milliseconds since its card was created), and the one date
+// is each task's UTC finish day (`finished_on`), as the published facts carry
+// it. Nothing here orders jobs against each other.
 //
 // Rules:
 //   - The lead window is the span the job's lead time measures: from the
@@ -20,9 +21,17 @@
 //     intervals, less, in each session, the time that session's evaluator
 //     labeled `waiting` (after the honest correction: the work was stopped,
 //     and no other worker of the job was working), so one session's wait
-//     never hides another's work. Idle time is the rest of the window, and
-//     "waiting" means idle time and nothing else. A job with no labels yet
-//     counts all of its recorded work as working.
+//     never hides another's work. Time inside an ask-tool wait (a
+//     `human_wait` whose `stop.end` is `ask_question` or `ask_plan`: the
+//     agent asked the operator through a question or plan tool and waited
+//     for the answer) is not working time either, except where another
+//     worker of the job worked meanwhile; the facts' `human_wait` makes it
+//     `next_prompt`. That rule lowers working time and flow efficiency for
+//     tasks whose agents asked through those tools, which before it counted
+//     the operator's think time inside the tool call as work. Idle time is
+//     the rest of the window, and "waiting" means idle time and nothing
+//     else. A job with no labels yet counts all of its recorded work as
+//     working.
 //   - Each idle moment has one `waited_on`, the first of `IDLE_WAITED_ON`
 //     that claims it: `next_prompt` (a labeled wait on it, or the facts'
 //     `human_wait`: the agent had stopped and the next prompt had not come,
@@ -111,6 +120,42 @@
 //     `job_offsets_unavailable` for a session the job clock cannot place).
 //     A human turn outside the lead window is in no burst, and a tool call
 //     counts in the burst where it starts.
+//   - Each wait on the operator (every `human_wait` interval the job holds,
+//     of any worker: the root's after-stop waits and any worker's ask-tool
+//     wait) is listed in `waits` with its `worker`, the facts' record of how
+//     the turn ended (`stop`, `null` before facts `/4`) and
+//     `next_prompt_ms`, the idle `next_prompt` time inside the lead window
+//     it holds. A moment two waits hold goes to the earlier, so the waits'
+//     times plus the `next_prompt` time no wait holds (a labeled wait that
+//     runs past every human wait) are the task's
+//     `waiting_by_waited_on_ms.next_prompt` exactly.
+//   - Each wait says why the agent stopped (`why`, `why_source`,
+//     `confidence`; `stopClassifier`): by rule from its stop facts, else by
+//     the evaluator's stop label for exactly that human wait, else
+//     `not_known` with its reason in `reasons` (`NOT_KNOWN_REASONS`). The
+//     task's next-prompt waiting is split by why (`WHY_SPLIT`) on each gap
+//     and burst (`idle_by_why_ms`), on its task and stack-up rows
+//     (`next_prompt_by_why_ms`, and on the task row its not-known part by
+//     reason, `not_known_by_reason_ms`, where the time no wait holds is
+//     `stop_not_recorded`), on its longest gap (`why`) and as sub-causes
+//     of `waiting:next_prompt` in `rollups/causes.json` (`children`). The
+//     parts add up to the figure they split and carry its state, reasons
+//     and bound; while any of it is not known, each class is a lower bound
+//     (`stop_partly_classified`). Stops are idle time: they never enter a
+//     class or waste total. `waits_state` is that
+//     figure's state, reasons and bound; when it is unavailable, every
+//     `next_prompt_ms` is `null` with its reasons. A wait the task's
+//     segments cut is listed once per part. A prompt joins the wait it ends
+//     by session and `end_ms == at_ms`.
+//   - `finished_on` is the task's UTC finish day from the published facts,
+//     on the job file and on its `rollups/tasks.json` and
+//     `rollups/stackup.json` rows: measured from a session's own transition,
+//     an upper bound from the card's last update, the latest day when
+//     sessions disagree (`reopened`), and unavailable with its reason
+//     otherwise (`finishedOn`).
+//   - `human_turns_state` and `prs_state` say how whole the job's lists of
+//     operator prompts and pull requests are, so a list that was not
+//     recorded never reads as empty: a partial list is a lower bound.
 //   - A cause is `waiting:<waited_on>` for idle time, and for a labeled
 //     waste of working time `<waste>:<detail>`: for defects, the failed tool
 //     kind its evidence rests on most; otherwise `all`. `rollups/causes.json`
@@ -120,10 +165,10 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { LABEL_WASTES, UNKNOWN_LABEL } from "../label-schema.js"
+import { LABEL_WASTES, STOP_RULES, UNKNOWN_LABEL } from "../label-schema.js"
 import { recordedSpans } from "./formulas.js"
-import { ROLLUPS_SCHEMA, pluginVersion } from "./rollups.js"
-import { CAUSE_REFERENCES, UNLABELED_CLASS, causeKey, compareFields, jobStretches, mostTime } from "./stretches.js"
+import { ROLLUPS_SCHEMA, ownShare, pluginVersion } from "./rollups.js"
+import { CAUSE_REFERENCES, UNLABELED_CLASS, askIdle, causeKey, compareFields, jobStretches, jobWaits, mostTime } from "./stretches.js"
 import { ACTIVE_KINDS, boundIntervals, duration, intervalInSession, union } from "./timeline.js"
 
 /** An idle gap at least this long ends a work burst: 15 minutes. */
@@ -131,6 +176,29 @@ export const BURST_IDLE_GAP_MS = 15 * 60 * 1000
 
 /** What idle time waited on, in the order a moment two causes could claim is given to one, and a gap's tie broken (see the header). */
 export const IDLE_WAITED_ON = Object.freeze(["next_prompt", "api_retry", "tool_failure", "long_tool_call", "queue_before_start", "no_session", "other_task", "unknown"])
+
+/**
+ * Why the agent stopped before a wait for the next prompt, in the order the page stacks them (the actionable classes first, then the
+ * human gates): a class the evaluator decides (`stopped_short`, `decision`, `approval`, `acceptance`, `question`) or a rule decides from
+ * the stop facts (`STOP_RULES`: `error_limit`, `interrupted`, an open question tool's `question`, a plan tool's `approval`).
+ */
+export const WHY_CLASSES = Object.freeze(["stopped_short", "question", "error_limit", "interrupted", "decision", "approval", "acceptance"])
+const NOT_KNOWN = "not_known"
+/** Every key of a split by why: the classes, then the time whose why is not known. */
+export const WHY_SPLIT = Object.freeze([...WHY_CLASSES, NOT_KNOWN])
+/**
+ * Why a wait's why is not known: the evaluator has not labeled it (`not_labeled`: an open task, labels pending, or a stop label that no
+ * longer matches its facts), looked and could not tell (`could_not_tell`), no recorded wait holds the time (`stop_not_recorded`), the facts
+ * do not say which part of the session was the task's (`outside_own_share`), or older facts carry no stop and no label classified it
+ * (`not_in_published_facts`).
+ */
+export const NOT_KNOWN_REASONS = Object.freeze(["not_labeled", "could_not_tell", "stop_not_recorded", "outside_own_share", "not_in_published_facts"])
+// The confidence of a class a rule gives: the stop facts decide it mechanically.
+const RULE_CONFIDENCE = "high"
+// The evaluator's stop label for "could not tell".
+const STOP_UNKNOWN = "unknown"
+// A class figure while some of its next-prompt time is not classified: the class may hold some of the rest.
+const PARTLY_CLASSIFIED = "stop_partly_classified"
 
 /** The stack-up's labeled segments, in the order wall-clock time is given to them where stretches overlap. */
 const STACKUP_CLASSES = Object.freeze(["value", "support"])
@@ -205,6 +273,15 @@ export const REASON_CHANGE = Object.freeze({
   field_absent: "unseen",
   host_records_partly: "unseen",
   withheld_public: "unseen",
+  // A list the facts do not carry (older facts) or cannot place on the job (no segments) leaves its entries unseen.
+  not_in_published_facts: "unseen",
+  no_segments: "unseen",
+  // A finish day from the card's last update: the card can be edited after the task is done.
+  finish_from_card_update: "card_update",
+  // The latest of several finishes is the task's final finish, exact as such.
+  reopened: "reopened",
+  // Next-prompt time whose why is not known may belong to any class.
+  [PARTLY_CLASSIFIED]: "unclassified",
 })
 const UNDECIDED = "undecided"
 const changeOf = (reason) => REASON_CHANGE[reason] ?? UNDECIDED
@@ -235,6 +312,13 @@ export const BOUND_DIRECTIONS = Object.freeze({
   other_task_capped: { open: "lower", floor: "lower", unseen: "upper", part_labeled: "lower", unplaced: "lower", unattributed: "lower", overcount: "lower" },
   placement: { open: "lower", floor: "lower", unplaced: "upper" },
   count: { open: "lower", unseen: "both", unplaced: "both" },
+  // A list of recorded entries (operator prompts, pull requests): whatever the facts did not record, could not place or withheld for
+  // another job may be missing from it, so it holds at least these.
+  list: { open: "lower", unseen: "lower", unplaced: "lower", overcount: "lower", unattributed: "lower" },
+  // A finish day: the card's last update is on or after the day the task finished.
+  finish: { card_update: "upper" },
+  // A class of next-prompt waiting (the split by why): an evidence figure, which the time not yet classified can only add to.
+  why: { open: "lower", floor: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower", unclassified: "lower" },
 })
 
 // The direction `reasons` give a figure of `kind`: "lower", "upper", "both", "none", or "undecided" when a reason is not named.
@@ -380,7 +464,8 @@ const isAgentsWorking = (stretch) => stretch.class === UNLABELED_CLASS
 
 /**
  * The job's working time on the job clock: each session's active intervals less that session's labeled waiting (the time its evaluator
- * found the work stopped, after the honest correction), merged across sessions, so one session's wait never hides another's work.
+ * found the work stopped, after the honest correction) and its ask-tool waits (`askIdle`: the agent was waiting on the operator's answer),
+ * merged across sessions, so one session's wait never hides another's work.
  */
 function workingSpans(timeline, stretches) {
   const bySession = new Map()
@@ -389,7 +474,8 @@ function workingSpans(timeline, stretches) {
     const key = `${interval.host}/${interval.session_id}`
     bySession.set(key, [...(bySession.get(key) ?? []), interval])
   }
-  return spansOf([...bySession.entries()].flatMap(([key, intervals]) => subtract(spansOf(intervals), spansOf(stretches.filter((stretch) => isWaiting(stretch) && `${stretch.host}/${stretch.session}` === key)))))
+  const asked = askIdle(timeline)
+  return spansOf([...bySession.entries()].flatMap(([key, intervals]) => subtract(spansOf(intervals), spansOf([...stretches.filter((stretch) => isWaiting(stretch) && `${stretch.host}/${stretch.session}` === key), ...(asked.get(key) ?? [])]))))
 }
 
 /**
@@ -472,8 +558,16 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
   const [start, end] = hasWindow ? [window.start_ms, window.end_ms] : [raw.at(0)?.start_ms ?? 0, raw.at(-1)?.end_ms ?? 0]
   const idle = idleCauses(start, end, working, sessions, stretches, timeline.intervals, sessionAttribution(timeline))
   const walk = { job: timeline.job, window, stretches, coverage, intervals, working, idle }
+  // The task's own next-prompt figure, as `waiting_by_waited_on_ms.next_prompt` states it: the waits are its parts.
+  const nextPrompt = hasWindow ? idleFigures(idle, { base: window.reasons, coverage, intervals, placement }).next_prompt : figure("unavailable", null, window.reasons)
+  const held = waitsHeld(jobWaits(timeline), idle.next_prompt, nextPrompt, stopClassifier(timeline, labels))
+  walk.waits = held.waits
+  walk.waits_state = listState(nextPrompt)
+  walk.next_prompt_unheld_ms = held.unheld_ms
+  // Each wait's next-prompt time by its why, and the time no wait holds, as merged spans (see `waitsHeld`).
+  walk.why_parts = held.parts
   const counts = burstCounts(raw, timeline, turns, additions)
-  const context = { timeline, stretches, coverage, labels, formulas, additions, idle, intervals, placement }
+  const context = { timeline, stretches, coverage, labels, formulas, additions, idle, intervals, placement, parts: held.parts }
   walk.bursts = raw.map((burst, index) => burstEntry(burst, counts[index], context))
   walk.bursts_state = { state: Object.hasOwn(intervals, "unavailable") ? "unavailable" : intervals.reasons.length === 0 ? "measured" : "partial", reasons: sortedUnique(intervals.unavailable ?? intervals.reasons) }
   const edges = [start, ...raw.flatMap((burst) => [burst.start_ms, burst.end_ms]), end]
@@ -482,12 +576,195 @@ export function jobWalk({ timeline, formulas, additions }, labels, finished) {
     const [from, to] = [edges[index], edges[index + 1]]
     if (to <= from) continue
     const waitedOn = mostTime(IDLE_WAITED_ON, new Map(IDLE_WAITED_ON.map((cause) => [cause, within(idle[cause], from, to)])))
-    // The split of the whole gap by cause, stated as the task's split is, so a gap that holds several causes is exact.
-    walk.gaps.push({ start_ms: from, end_ms: to, waited_on: waitedOn, idle_by_waited_on_ms: idleFigures(idleWithin(idle, from, to), { base: [], coverage, intervals, placement }) })
+    // The split of the whole gap by cause, stated as the task's split is, so a gap that holds several causes is exact; its next-prompt
+    // part split again by why, stated as that part is.
+    const byCause = idleFigures(idleWithin(idle, from, to), { base: [], coverage, intervals, placement })
+    walk.gaps.push({ start_ms: from, end_ms: to, waited_on: waitedOn, idle_by_waited_on_ms: byCause, idle_by_why_ms: whySplit(held.parts, from, to, byCause.next_prompt).by_why })
   }
-  walk.stackup = stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels })
+  walk.finished_on = finishedOn(timeline, formulas)
+  walk.human_turns_state = turnsListState(timeline, additions)
+  // The formulas' coverage of the job's public pull requests, with the list's own count.
+  const prs = formulas.references.parts.public_prs
+  walk.prs_state = bounded(figure(prs.state, additions.prs.length, prs.reasons, "measured"), "list")
+  walk.stackup = stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels, walk })
   walk.task = taskRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, labels, walk })
   return walk
+}
+
+// A figure's state as a list states it (`waits_state`, like `bursts_state`): its state, reasons and, when partial, its bound.
+function listState(number) {
+  const out = { state: number.state, reasons: number.reasons }
+  if (Object.hasOwn(number, "bound")) out.bound = number.bound
+  if (Object.hasOwn(number, "bound_reason")) out.bound_reason = number.bound_reason
+  return out
+}
+
+/**
+ * `stopClassifier(timeline, labels) -> (wait) -> { why, why_source, confidence, reason }`: why the agent stopped before `wait` (a
+ * `jobWaits` entry), first match wins:
+ *   - a rule, when the wait's `stop.end` is one `STOP_RULES` decides (`why_source: "rule"`, high confidence);
+ *   - not known, `outside_own_share`, when the facts do not say which part of the session was the task's (`ownShare`), so no evaluator
+ *     judges the wait for it;
+ *   - the evaluator's stop label whose `wait` is exactly the whole `human_wait` interval the entry is part of (`range`), from the session's
+ *     used labels (`resolveLabels` leaves out a stop label that no longer matches its facts): its class and confidence, or not known,
+ *     `could_not_tell`, for its `unknown`;
+ *   - not known, `not_in_published_facts`, for a wait of older facts, which carry no stop;
+ *   - otherwise not known, `not_labeled`.
+ * `reason` is `null` for a class.
+ */
+function stopClassifier(timeline, labels) {
+  const sessions = new Map()
+  timeline.source_sessions.forEach((session) => {
+    const used = labels.byJobSession.get(`${timeline.job}/${session.session.id}`)
+    const stops = new Map((used?.stops ?? []).map((stop) => [`${stop.wait[0]}:${stop.wait[1]}`, stop]))
+    sessions.set(`${session.session.host}/${session.session.id}`, { shareKnown: ownShare(session, timeline.job) !== null, stops })
+  })
+  const notKnown = (reason, source = "none", confidence = null) => ({ why: NOT_KNOWN, why_source: source, confidence, reason })
+  return (wait) => {
+    if (wait.stop !== null && Object.hasOwn(STOP_RULES, wait.stop.end)) return { why: STOP_RULES[wait.stop.end], why_source: "rule", confidence: RULE_CONFIDENCE, reason: null }
+    const session = sessions.get(`${wait.host}/${wait.session}`)
+    if (!session.shareKnown) return notKnown("outside_own_share")
+    const label = session.stops.get(`${wait.range[0]}:${wait.range[1]}`)
+    if (label !== undefined) return label.why === STOP_UNKNOWN ? notKnown("could_not_tell", "evaluator", label.confidence) : { why: label.why, why_source: "evaluator", confidence: label.confidence, reason: null }
+    return notKnown(wait.stop === null ? "not_in_published_facts" : "not_labeled")
+  }
+}
+
+// The key of a wait's next-prompt time in the split's parts: its class, or `not_known:<reason>`.
+const partKey = (why, reason) => (reason === null ? why : `${NOT_KNOWN}:${reason}`)
+
+/**
+ * Each wait (`jobWaits`) as `timeline.waits` publishes it, `{ host, session, worker, start_ms, end_ms, next_prompt_ms, stop, why,
+ * why_source, confidence, reasons }`, with the why `classify` gives it (`stopClassifier`) and `next_prompt_ms`, the idle `next_prompt`
+ * time inside the lead window it holds. A moment two waits hold (concurrent sessions) goes to the first in start order, so the waits'
+ * times plus `unheld_ms`, the `next_prompt` time no wait holds, are the task's `next_prompt` waiting exactly. Only a labeled wait that
+ * runs past every human wait holds time no wait holds, since every worker's `human_wait` is listed. `reasons` holds the why's reason when
+ * it is not known. When the task's figure (`number`, `waiting_by_waited_on_ms.next_prompt`) is unavailable, as it is without a lead window
+ * or with unreadable intervals, no wait has a number: `next_prompt_ms` is `null` and the wait's reasons gain the figure's. A partial figure
+ * keeps each wait's share; the list's `waits_state` carries its state and bound. `parts` maps each class, and each `not_known:<reason>`
+ * (the time no wait holds as `not_known:stop_not_recorded`), to the merged spans of next-prompt time it holds, whatever the figure's state,
+ * so each gap and burst can split its own next-prompt time.
+ */
+function waitsHeld(waits, nextPrompt, number, classify) {
+  const unavailable = number.state === "unavailable"
+  const pieces = new Map()
+  const add = (key, spans) => pieces.set(key, [...(pieces.get(key) ?? []), ...spans])
+  let taken = []
+  const out = waits.map((wait) => {
+    const mine = subtract(clip(nextPrompt, wait.start_ms, wait.end_ms), taken)
+    taken = spansOf([...taken, ...mine])
+    const why = classify(wait)
+    add(partKey(why.why, why.reason), mine)
+    const own = why.reason === null ? [] : [why.reason]
+    return {
+      host: wait.host,
+      session: wait.session,
+      worker: wait.worker,
+      start_ms: wait.start_ms,
+      end_ms: wait.end_ms,
+      next_prompt_ms: unavailable ? null : duration(mine),
+      stop: wait.stop,
+      why: why.why,
+      why_source: why.why_source,
+      confidence: why.confidence,
+      reasons: unavailable ? sortedUnique([...own, ...number.reasons]) : own,
+    }
+  })
+  const unheld = subtract(nextPrompt, spansOf(waits))
+  add(partKey(NOT_KNOWN, "stop_not_recorded"), unheld)
+  const parts = new Map([...pieces.entries()].map(([key, spans]) => [key, spansOf(spans)]))
+  return { waits: out, unheld_ms: unavailable ? null : duration(unheld), parts }
+}
+
+/**
+ * `whySplit(parts, from, to, number) -> { by_why, by_reason }`: the next-prompt time in [from, to] by why (`WHY_SPLIT`) and its not-known
+ * part by reason (`NOT_KNOWN_REASONS`), each a figure stated as `number` (that span's next-prompt figure) is, so the parts never claim more
+ * than it: unavailable with its reasons when it is, else with its state, reasons and bound. While any of the time is not known, each class
+ * is also partial, a lower bound (`stop_partly_classified`); the not-known figures are exact parts of `number`. The values add up to
+ * `number`'s.
+ */
+function whySplit(parts, from, to, number) {
+  if (number.state === "unavailable") {
+    const none = figure("unavailable", null, number.reasons)
+    return { by_why: Object.fromEntries(WHY_SPLIT.map((why) => [why, none])), by_reason: Object.fromEntries(NOT_KNOWN_REASONS.map((reason) => [reason, none])) }
+  }
+  const time = (key) => within(parts.get(key) ?? [], from, to)
+  const reasonTimes = NOT_KNOWN_REASONS.map((reason) => [reason, time(partKey(NOT_KNOWN, reason))])
+  const unknown = reasonTimes.reduce((total, [, value]) => total + value, 0)
+  const part = (value) => bounded(figure(number.state, value, number.reasons), "evidence")
+  const classReasons = [...number.reasons, ...(unknown > 0 ? [PARTLY_CLASSIFIED] : [])]
+  const classFigure = (value) => bounded(figure(classReasons.length === 0 ? "measured" : "partial", value, classReasons), "why")
+  return {
+    by_why: { ...Object.fromEntries(WHY_CLASSES.map((why) => [why, classFigure(time(why))])), [NOT_KNOWN]: part(unknown) },
+    by_reason: Object.fromEntries(reasonTimes.map(([reason, value]) => [reason, part(value)])),
+  }
+}
+
+// The why holding most of a gap's next-prompt time, ties to the first in `WHY_SPLIT`.
+function gapWhy(parts, from, to) {
+  const times = new Map(WHY_CLASSES.map((why) => [why, within(parts.get(why) ?? [], from, to)]))
+  times.set(NOT_KNOWN, NOT_KNOWN_REASONS.reduce((total, reason) => total + within(parts.get(partKey(NOT_KNOWN, reason)) ?? [], from, to), 0))
+  return mostTime(WHY_SPLIT, times)
+}
+
+const TERMINAL = new Set(["done", "cancelled"])
+
+/**
+ * `finishedOn(timeline, formulas) -> envelope`: the UTC day the task finished, `{ class, state, value, basis, reasons }` with `bound` when
+ * partial, read from each session's published `finished_on` (facts `/4`). Only a task whose status is `done` or `cancelled` has one. A day
+ * from a session's own transition (`basis: "transition"`) is measured and outranks a day from the card's last update (`card_updated`),
+ * which is an upper bound (`finish_from_card_update`) because a card can be edited after the task is done. When sessions moved the card to
+ * its end on different days (a reopened task), the latest wins, with the reason `reopened`. Unavailable, with `basis: null`, for an open
+ * task (`open_job`), a status not recorded (`status_unavailable`), a public desk (`job_offsets_withheld`), a session whose job clock
+ * could not be read (`job_offsets_unavailable`), or older facts and sessions that did not see the card end, so the published facts carry
+ * no day (`not_in_published_facts`).
+ */
+function finishedOn(timeline, formulas) {
+  const none = (reasons) => ({ ...figure("unavailable", null, reasons), basis: null })
+  if (formulas.status.state === "unavailable") return none(["status_unavailable"])
+  if (!TERMINAL.has(formulas.status.value)) return none(["open_job"])
+  const bindings = timeline.source_sessions.map((session) => ({ session, binding: session.jobs.find((candidate) => candidate.job === timeline.job) }))
+  const days = bindings.filter(({ binding }) => typeof binding.finished_on === "string").map(({ binding }) => ({ day: binding.finished_on, basis: binding.finished_basis }))
+  if (days.length === 0) {
+    // A `/4` session that read the job clock but did not see the card end publishes no day for its own part, so it names no reason.
+    const reasons = bindings.flatMap(({ session, binding }) => {
+      if (session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")) return ["job_offsets_withheld"]
+      if (!Object.hasOwn(binding, "finished_on")) return ["not_in_published_facts"]
+      if (binding.session_offset_ms === null) return ["job_offsets_unavailable"]
+      return []
+    })
+    return none(reasons.length > 0 ? reasons : ["not_in_published_facts"])
+  }
+  const moved = days.filter((entry) => entry.basis === "transition")
+  const chosen = moved.length > 0 ? moved : days
+  const value = chosen.map((entry) => entry.day).sort(compareText).at(-1)
+  const reasons = [...(moved.length === 0 ? ["finish_from_card_update"] : []), ...(new Set(moved.map((entry) => entry.day)).size > 1 ? ["reopened"] : [])]
+  const basis = moved.length > 0 ? "transition" : "card_updated"
+  return { ...bounded(figure(reasons.length === 0 ? "measured" : "partial", value, reasons, moved.length > 0 ? "measured" : "declared"), "finish"), basis }
+}
+
+const flagsOf = (session, field) => session.unavailable.filter((entry) => entry.field === field).map((entry) => entry.reason)
+
+/**
+ * The list state of the job's operator prompts (`human_turns_state`): how whole `human_turns` is, so a task with none recorded never reads
+ * as having had none. Each session either gives its list, with the host's own flags on it (`host_records_partly`, `capped`,
+ * `log_truncated`, ...), or gives none: a public desk (`desk_public`), a session the job clock cannot place (`job_offsets_unavailable`), no
+ * list (the host's flag, such as `host_does_not_record`, or `not_in_published_facts` for older facts) or no segments to place the turns on
+ * (`no_segments`). Unavailable when no session gives a list, partial (a lower bound) when some do not or a list is flagged.
+ */
+function turnsListState(timeline, additions) {
+  const parts = timeline.source_sessions.map((session, index) => {
+    if (session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")) return { lacking: ["desk_public"] }
+    if (timeline.sessions[index].offset_ms === null) return { lacking: ["job_offsets_unavailable"] }
+    const flags = flagsOf(session, "human_turns")
+    if (!Array.isArray(session.human_turns)) return { lacking: flags.length > 0 ? flags : ["not_in_published_facts"] }
+    const binding = session.jobs.find((candidate) => candidate.job === timeline.job)
+    if (!Array.isArray(binding.segments) || binding.segments.length === 0) return { lacking: ["no_segments"] }
+    return { flags }
+  })
+  const reasons = parts.flatMap((part) => part.lacking ?? part.flags)
+  if (parts.every((part) => Object.hasOwn(part, "lacking"))) return figure("unavailable", null, reasons)
+  return bounded(figure(reasons.length === 0 ? "measured" : "partial", additions.human_turns.length, reasons, "measured"), "list")
 }
 
 // What each burst holds, counted once each: its sessions and workers (every interval it overlaps), its tool calls (each in the burst
@@ -555,13 +832,16 @@ function burstEntry(burst, count, context) {
   const sessions = [...count.sessions].sort(compareText)
   const labeled = burstLabels(sessions, context)
   const working = duration(burst.spans)
+  // The idle time inside the burst by the same causes as the task's split, stated as the task's are.
+  const idle = idleFigures(idleWithin(context.idle, burst.start_ms, burst.end_ms), { base: [], coverage: context.coverage, intervals: context.intervals, placement: context.placement })
   return {
     start_ms: burst.start_ms,
     end_ms: burst.end_ms,
     working_ms: working,
     idle_ms: burst.end_ms - burst.start_ms - working,
-    // The idle time inside the burst by the same causes as the task's split, stated as the task's are.
-    idle_by_waited_on_ms: idleFigures(idleWithin(context.idle, burst.start_ms, burst.end_ms), { base: [], coverage: context.coverage, intervals: context.intervals, placement: context.placement }),
+    idle_by_waited_on_ms: idle,
+    // Its next-prompt part by why, stated as that part is.
+    idle_by_why_ms: whySplit(context.parts, burst.start_ms, burst.end_ms, idle.next_prompt).by_why,
     sessions,
     agents: count.agents.size,
     tool_calls: count.tools,
@@ -617,8 +897,8 @@ function idleFigures(idle, { base, coverage, intervals, placement }) {
   }))
 }
 
-function stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle }) {
-  const row = { job: timeline.job, desk_version: pluginVersion(timeline.source_sessions), status: statusFigure(formulas), lead_time_ms: bounded(window.lead, "lead") }
+function stackupRow({ timeline, formulas, window, stretches, coverage, placement, intervals, working, idle, walk }) {
+  const row = { job: timeline.job, desk_version: pluginVersion(timeline.source_sessions), status: statusFigure(formulas), finished_on: walk.finished_on, lead_time_ms: bounded(window.lead, "lead") }
   if (!Object.hasOwn(window, "start_ms")) {
     const none = figure("unavailable", null, window.reasons)
     row.working_ms = none
@@ -630,6 +910,7 @@ function stackupRow({ timeline, formulas, window, stretches, coverage, placement
       not_labeled_ms: none,
     }
     row.idle = Object.fromEntries(IDLE_WAITED_ON.map((cause) => [cause, none]))
+    row.next_prompt_by_why_ms = Object.fromEntries(WHY_SPLIT.map((why) => [why, none]))
     return row
   }
   const base = window.reasons
@@ -645,6 +926,7 @@ function stackupRow({ timeline, formulas, window, stretches, coverage, placement
     not_labeled_ms: bounded(covered(segments.not_labeled, base, intervals), "working"),
   }
   row.idle = idleFigures(idle, { base, coverage, intervals, placement })
+  row.next_prompt_by_why_ms = whySplit(walk.why_parts, window.start_ms, window.end_ms, row.idle.next_prompt).by_why
   return row
 }
 
@@ -675,10 +957,28 @@ function jobCauses(walk) {
     .map(({ rank, ...entry }) => entry)
 }
 
+// The parent cause the split by why divides, and its sub-causes' prefix.
+const NEXT_PROMPT_CAUSE = "waiting:next_prompt"
+
+/**
+ * The job's next-prompt waiting in its lead window by why (`WHY_SPLIT`), as spans on the job clock: each class's, and the not-known
+ * time's with the reasons that hold some of it. They add up to the job's `waiting:next_prompt` cause.
+ */
+function jobWhyCauses(walk) {
+  const { window, why_parts: parts } = walk
+  const clipped = (key) => clip(parts.get(key) ?? [], window.start_ms, window.end_ms)
+  const unknown = NOT_KNOWN_REASONS.map((reason) => ({ reason, spans: clipped(partKey(NOT_KNOWN, reason)) })).filter((entry) => entry.spans.length > 0)
+  return [
+    ...WHY_CLASSES.map((why) => ({ why, spans: clipped(why), reasons: [] })),
+    { why: NOT_KNOWN, spans: spansOf(unknown.flatMap((entry) => entry.spans)), reasons: unknown.map((entry) => entry.reason) },
+  ]
+}
+
 function taskRow({ timeline, formulas, window, coverage, placement, intervals, working, idle, labels, walk }) {
   const row = {
     job: timeline.job,
     status: statusFigure(formulas),
+    finished_on: walk.finished_on,
     lead_time_ms: bounded(window.lead, "lead"),
     labels_from_shared_session: timeline.sessions.some((session) => labels.sharedLabels?.has(`${timeline.job}/${session.id}`)),
     active_share_recorded: boundedRatio(fromResult(formulas.flow_efficiency), window.lead.reasons),
@@ -688,6 +988,8 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
     const none = figure("unavailable", null, window.reasons)
     for (const key of keys) row[key] = none
     row.waiting_by_waited_on_ms = Object.fromEntries(IDLE_WAITED_ON.map((cause) => [cause, none]))
+    row.next_prompt_by_why_ms = Object.fromEntries(WHY_SPLIT.map((why) => [why, none]))
+    row.not_known_by_reason_ms = Object.fromEntries(NOT_KNOWN_REASONS.map((reason) => [reason, none]))
     return row
   }
   const base = window.reasons
@@ -703,11 +1005,15 @@ function taskRow({ timeline, formulas, window, coverage, placement, intervals, w
   if (lead === 0) row.flow_efficiency = figure("unavailable", null, ["zero_lead_time"])
   else row.flow_efficiency = row.working_ms.state === "unavailable" ? row.working_ms : boundedRatio(known(row.working_ms.value / lead, row.working_ms.reasons), window.lead.reasons)
   row.waiting_by_waited_on_ms = idleFigures(idle, { base, coverage, intervals, placement })
+  // The next-prompt waiting by why the agent stopped, and its not-known part by reason: they add up to it.
+  const split = whySplit(walk.why_parts, window.start_ms, window.end_ms, row.waiting_by_waited_on_ms.next_prompt)
+  row.next_prompt_by_why_ms = split.by_why
+  row.not_known_by_reason_ms = split.by_reason
   row.agents_working_unlabeled_ms = labeledFigure(segments.times.agents_working)
   row.top_causes = ranked(covered(jobCauses(walk).slice(0, TOP_CAUSES).map(({ cause, total_ms: total }) => ({ cause, total_ms: total, hours: total / MS_PER_HOUR })), base, coverage, intervals))
   const longest = [...walk.gaps].sort((left, right) => (right.end_ms - right.start_ms) - (left.end_ms - left.start_ms) || left.start_ms - right.start_ms)[0]
   // Its bound is its length's, an idle time.
-  row.longest_gap = longest === undefined ? figure("unavailable", null, ["no_wait_intervals"]) : bounded(covered({ start_ms: longest.start_ms, end_ms: longest.end_ms, duration_ms: longest.end_ms - longest.start_ms, waited_on: longest.waited_on }, base, intervals), "idle")
+  row.longest_gap = longest === undefined ? figure("unavailable", null, ["no_wait_intervals"]) : bounded(covered({ start_ms: longest.start_ms, end_ms: longest.end_ms, duration_ms: longest.end_ms - longest.start_ms, waited_on: longest.waited_on, why: longest.waited_on === "next_prompt" ? gapWhy(walk.why_parts, longest.start_ms, longest.end_ms) : null }, base, intervals), "idle")
   row.bursts = bounded(covered(walk.bursts.length, base, intervals), "count")
   return row
 }
@@ -721,13 +1027,15 @@ export function stackupRollup(walks) {
     idle_waited_on: IDLE_WAITED_ON,
     classes: STACKUP_CLASSES,
     working_wastes: WORKING_WASTES,
+    // The keys of `next_prompt_by_why_ms`, in the order the page stacks them.
+    why: WHY_SPLIT,
     jobs: [...walks].sort((left, right) => compareText(left.job, right.job)).map((walk) => walk.stackup),
   }
 }
 
 /** `tasksRollup(walks) -> document`: `rollups/tasks.json`, each job's compact answer, by job ID. */
 export function tasksRollup(walks) {
-  return { schema: ROLLUPS_SCHEMA, waited_on: IDLE_WAITED_ON, jobs: [...walks].sort((left, right) => compareText(left.job, right.job)).map((walk) => walk.task) }
+  return { schema: ROLLUPS_SCHEMA, waited_on: IDLE_WAITED_ON, why: WHY_SPLIT, not_known_reasons: NOT_KNOWN_REASONS, jobs: [...walks].sort((left, right) => compareText(left.job, right.job)).map((walk) => walk.task) }
 }
 
 /**
@@ -755,8 +1063,40 @@ export function causesRollup({ records, walks, labels }) {
       causes.set(entry.cause, row)
     }
   }
+  // The sub-causes of waiting for the next prompt, by why: each job's own time, as its parent's is.
+  const children = new Map(WHY_SPLIT.map((why) => [why, { total_ms: 0, jobs: new Set(), parts: [], reasons: new Set() }]))
+  for (const record of counted) {
+    for (const entry of jobWhyCauses(walkOf.get(record.job))) {
+      const child = children.get(entry.why)
+      const time = duration(entry.spans)
+      if (time === 0) continue
+      child.total_ms += time
+      child.jobs.add(record.job)
+      child.parts.push(...entry.spans.map(([start, end]) => ({ job: record.job, start_ms: start, end_ms: end })))
+      for (const reason of entry.reasons) child.reasons.add(reason)
+    }
+  }
   const rows = [...causes.values()].map((entry) => ({ ...entry, rank: -entry.total_ms })).sort((left, right) => compareFields(left, right, ["rank", "cause"]))
   const total = rows.reduce((sum, row) => sum + row.total_ms, 0)
+  const references = (parts) => parts.map((part) => ({ part, rank: part.start_ms - part.end_ms, job: part.job, start_ms: part.start_ms })).sort((left, right) => compareFields(left, right, ["rank", "job", "start_ms"])).slice(0, CAUSE_REFERENCES).map((entry) => entry.part)
+  // The parent row lists its sub-causes, the classes first in `WHY_SPLIT` order; they are not ranked beside it, so the ranking and its
+  // total are unchanged. The not-known sub-cause names the reasons that hold its time; while it has any, each class is a lower bound.
+  const unclassified = children.get(NOT_KNOWN).total_ms > 0
+  const childRows = () => WHY_SPLIT.filter((why) => children.get(why).total_ms > 0).map((why) => {
+    const child = children.get(why)
+    return {
+      cause: `${NEXT_PROMPT_CAUSE}:${why}`,
+      parent: NEXT_PROMPT_CAUSE,
+      waste: "waiting",
+      total_ms: child.total_ms,
+      hours: child.total_ms / MS_PER_HOUR,
+      share: child.total_ms / total,
+      jobs: [...child.jobs].sort(compareText),
+      spans: references(child.parts),
+      // A class's job-hours are at least this while any of its parent's time is not known; the not-known row names its reasons.
+      ...(why === NOT_KNOWN ? { reasons: [...child.reasons].sort(compareText) } : unclassified ? { reasons: [PARTLY_CLASSIFIED], bound: "lower" } : { reasons: [] }),
+    }
+  })
   let running = 0
   // A counted job whose labels may count another job's time makes the ranking partial.
   const shared = counted.some((record) => walkOf.get(record.job).task.labels_from_shared_session)
@@ -785,7 +1125,8 @@ export function causesRollup({ records, walks, labels }) {
         share: row.total_ms / total,
         cumulative_share: running / total,
         jobs: [...row.jobs].sort(compareText),
-        spans: row.parts.map((part) => ({ part, rank: part.start_ms - part.end_ms, job: part.job, start_ms: part.start_ms })).sort((left, right) => compareFields(left, right, ["rank", "job", "start_ms"])).slice(0, CAUSE_REFERENCES).map((entry) => entry.part),
+        spans: references(row.parts),
+        ...(row.cause === NEXT_PROMPT_CAUSE ? { children: childRows() } : {}),
       }
     }),
   }

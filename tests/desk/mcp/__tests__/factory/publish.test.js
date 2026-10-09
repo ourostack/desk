@@ -27,7 +27,9 @@ import { SESSIONS, buildSessionStore, defaultStoreRows, fakeCommitResolver } fro
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "fixtures")
 const LOCAL_GOLDEN = JSON.parse(readFileSync(path.join(FIXTURES, "local-golden.json"), "utf8"))
-const PUBLISHED_GOLDEN_TEXT = readFileSync(path.join(FIXTURES, "published-golden.json"), "utf8")
+// The golden local file as this transform publishes it, `/4`. (`published-golden.json` is the same session as an older Desk published it,
+// `/2`, which the gate's own tests keep reading: a stored file stays valid.)
+const PUBLISHED_GOLDEN_TEXT = readFileSync(path.join(FIXTURES, "published-golden-v4.json"), "utf8")
 const SENTINEL = "SENTINEL-7f3a"
 
 const SECRET = Buffer.alloc(32, 7)
@@ -36,6 +38,17 @@ const visibility = (repo) => VISIBILITY[repo] ?? "unknown"
 
 function local() {
   return structuredClone(LOCAL_GOLDEN)
+}
+
+// The published text with each job's finish day, the one date `/4` allows, checked for its exact shape and blanked, so a test can show that
+// no other date leaves.
+function textWithoutFinishDays(published) {
+  const value = structuredClone(published)
+  for (const job of value.jobs) {
+    assert.ok(job.finished_on === null || /^\d{4}-\d{2}-\d{2}$/u.test(job.finished_on), "a finish day is a bare day")
+    job.finished_on = null
+  }
+  return serializePublished(value)
 }
 
 function publish(value, options = {}) {
@@ -116,7 +129,8 @@ test("an interval outside the session's span is dropped and its field marked unr
     { kind: "human_wait", agent: 0, start: "2026-09-25T08:00:00.000Z", end: "2026-09-25T09:30:00.000Z" },
   ]
   const { published } = publish(value)
-  assert.deepEqual(published.intervals, [{ kind: "human_wait", agent: 0, start_ms: 0, end_ms: 5400000 }])
+  // A wait derived before stop facts were recorded says so.
+  assert.deepEqual(published.intervals, [{ kind: "human_wait", agent: 0, start_ms: 0, end_ms: 5400000, stop: { end: "not_recorded", asks: null, pending_agents: null } }])
   assert.deepEqual(published.unavailable.slice(2), [
     { field: "turns", reason: "source_unreadable" },
     { field: "tool_durations", reason: "source_unreadable" },
@@ -147,6 +161,8 @@ test("job offsets are measured from the task card's creation, signed", () => {
     session_offset_ms: 86400000,
     transitions: [{ to: "processing", offset_ms: 86700000 }, { to: "done", offset_ms: 90000000 }],
     observed: { status: "done", offset_ms: 90000500 },
+    finished_on: "2026-09-25",
+    finished_basis: "transition",
   })
   assert.equal(published.jobs[1].session_offset_ms, -1800000, "a session may begin before its task card exists")
 })
@@ -165,6 +181,8 @@ test("a job without task_created_at publishes no offsets, drops its transitions 
     session_offset_ms: null,
     transitions: [],
     observed: { status: "done", offset_ms: null },
+    finished_on: null,
+    finished_basis: null,
   })
   assert.deepEqual(published.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" })
 })
@@ -193,8 +211,8 @@ test("an offset beyond the cap is treated as unreadable, so a bad creation time 
   }]
   const { published } = publish(value)
   assert.deepEqual(published.jobs, [
-    { job: "c0ffee00c0ffee00c0ffee00c0ffee00", basis: ["desk_tool"], session_offset_ms: null, transitions: [], observed: { status: "done", offset_ms: null } },
-    { job: "d0ffee00c0ffee00c0ffee00c0ffee00", basis: ["desk_tool"], session_offset_ms: 0, transitions: [{ to: "done", offset_ms: 3600000 }], observed: { status: "done", offset_ms: 3600000 } },
+    { job: "c0ffee00c0ffee00c0ffee00c0ffee00", basis: ["desk_tool"], session_offset_ms: null, transitions: [], observed: { status: "done", offset_ms: null }, finished_on: null, finished_basis: null },
+    { job: "d0ffee00c0ffee00c0ffee00c0ffee00", basis: ["desk_tool"], session_offset_ms: 0, transitions: [{ to: "done", offset_ms: 3600000 }], observed: { status: "done", offset_ms: 3600000 }, finished_on: "2026-09-25", finished_basis: "transition" },
   ])
   assert.deepEqual(published.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" })
   assert.equal(validatePublished(published).ok, true)
@@ -215,7 +233,7 @@ test("an offset exactly at the cap is kept", () => {
 test("private, unknown, repo-less and unresolved references are dropped and counted; public ones are kept", () => {
   const { published, dropped } = publish(local())
   assert.deepEqual(published.refs, {
-    prs: [{ repo: "ourostack/desk", number: 9 }],
+    prs: [{ repo: "ourostack/desk", number: 9, created: false }],
     commits: [{ repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa" }],
     private: { prs: 3, commits: 3, plugins: 0 },
   })
@@ -229,7 +247,7 @@ test("only an exact \"public\" keeps a reference; the visibility check sees each
   value.refs.prs.push({ repo: "ourostack/desk", number: 10 })
   const { published, dropped } = publish(value, { visibility: (repo) => { seen.push(repo); return answers[repo] } })
   assert.deepEqual(seen, ["ourostack/desk", "private-org/private-repo", "someone/unknown-repo"])
-  assert.deepEqual(published.refs.prs, [{ repo: "private-org/private-repo", number: 3 }])
+  assert.deepEqual(published.refs.prs, [{ repo: "private-org/private-repo", number: 3, created: false }])
   assert.deepEqual(published.refs.commits, [{ repo: "private-org/private-repo", sha: "fc6ea8a0000000000000000000000000000000bb" }])
   assert.deepEqual(dropped, { prs: 4, commits: 3, plugins: 1 }, "the desk plugin's source is ourostack/desk, which is not exactly public here")
 })
@@ -323,7 +341,7 @@ test("a date inside a model id or plugin name loses its hyphens so no date shape
   assert.equal(published.agents[0].model, "gpt-4o-20240806")
   assert.equal(published.agents[1].model, "x-202408060102", "a date shape the first rewrite uncovers is rewritten too")
   assert.equal(published.plugins[0].name, "notes-20260925")
-  assert.equal(DATE_SHAPE.test(serializePublished(published)), false)
+  assert.equal(DATE_SHAPE.test(textWithoutFinishDays(published)), false)
   assert.equal(validatePublished(published).ok, true)
 })
 
@@ -556,6 +574,8 @@ test("a public or unknown desk publishes keyed job IDs, no job timing and desk_p
       session_offset_ms: null,
       transitions: [],
       observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null },
+      finished_on: null,
+      finished_basis: null,
     })).sort((a, b) => (a.job < b.job ? -1 : 1)), deskVisibility)
     const keys = published.jobs.map((job) => job.job)
     assert.deepEqual(keys, [...keys].sort(), "sorted by keyed ID")
@@ -608,7 +628,7 @@ test("a reference repeated in the local file is published once and not counted a
   value.refs.prs.push({ repo: "ourostack/desk", number: 9 })
   value.refs.commits.push({ repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa" })
   const { published, dropped } = publish(value)
-  assert.deepEqual(published.refs.prs, [{ repo: "ourostack/desk", number: 9 }])
+  assert.deepEqual(published.refs.prs, [{ repo: "ourostack/desk", number: 9, created: false }])
   assert.equal(published.refs.commits.length, 1)
   assert.deepEqual(dropped, { prs: 3, commits: 3, plugins: 0 })
   assert.equal(validatePublished(published).ok, true)
@@ -644,7 +664,7 @@ function* leaves(value, keys = []) {
 function assertNothingLeaves(published, label) {
   const text = serializePublished(published)
   assert.deepEqual(validatePublishedBytes(text), { ok: true, errors: [] }, label)
-  assert.equal(DATE_SHAPE.test(text), false, `${label}: a date-shaped substring`)
+  assert.equal(DATE_SHAPE.test(textWithoutFinishDays(published)), false, `${label}: a date-shaped substring outside a finish day`)
   assert.equal(text.includes(SENTINEL), false, `${label}: a sentinel`)
   assert.equal(/contributor|operator|hostname/u.test(text), false, `${label}: an identity key`)
   for (const leaf of leaves(JSON.parse(text))) {
@@ -869,7 +889,7 @@ test("toPublished carries jobs[].agents and refs.prs[].agent, for private and pr
   const { published } = publish(value)
   assert.deepEqual(published.jobs[0].agents, [0, 1])
   assert.equal(Object.hasOwn(published.jobs[1], "agents"), false, "a job without agents publishes none")
-  assert.deepEqual(published.refs.prs[0], { repo: "ourostack/desk", number: 9, agent: 1 })
+  assert.deepEqual(published.refs.prs[0], { repo: "ourostack/desk", number: 9, agent: 1, created: false })
   assert.equal(validatePublished(published).ok, true)
   const protectedOut = publish(value, { deskVisibility: "public", machineSecret: SECRET }).published
   const keyedFirst = protectedOut.jobs.find((job) => job.job === createHmac("sha256", SECRET).update(value.jobs[0].job).digest("hex").slice(0, 32))

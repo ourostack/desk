@@ -15,7 +15,7 @@ import { main, runLoopCommand, SUPPORTED_COMMANDS } from "../../../../../plugins
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
-import { factoryStateRoot, readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const STORE = "ourostack/factory"
 const MINUTE = 60 * 1000
@@ -43,6 +43,7 @@ function fakeClock() {
 
 // Fake steps in the shape of the real ones; the ones that record themselves do so, as the real ones do.
 function fakes(log, { clock, over = {} } = {}) {
+  const kicks = []
   const selfRecording = (name, key = name) => async (env, options) => {
     log.push([key, options])
     const { ok, result } = over[key]?.result ?? { ok: true, result: "done" }
@@ -56,7 +57,10 @@ function fakes(log, { clock, over = {} } = {}) {
   const impls = {
     evaluate: selfRecording("evaluate"), routeIssues: collector("routeIssues"), routeLocal: collector("routeLocal"),
     mirror: selfRecording("mirror"), reconcile: selfRecording("reconcile"), verify: selfRecording("verify"), measure: selfRecording("measure"),
+    // The kick that drains the queue never starts a process in a test.
+    kick: async () => { kicks.push(1); return { kicked: false, reason: "test" } },
   }
+  impls.kicks = kicks
   for (const [key, value] of Object.entries(over)) if (value.throws) impls[key] = async () => { log.push([key]); throw new Error("PRIVATE boom") }
   return impls
 }
@@ -201,6 +205,53 @@ test("the worker does not remove a lock that now belongs to someone else", () =>
   }
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
   assert.equal(JSON.parse(await fs.readFile(lockFile, "utf8")).token, "another-worker")
+}))
+
+test("a worker whose evaluator step labeled a job kicks the next one once its lock is free; other results and a failing kick start nothing more", () => scratch(async (ctx) => {
+  const root = await factoryStateRoot(ctx.env)
+  const lockFile = path.join(root, "locks", "loop-worker.running")
+  const ran = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  let lockAtKick = null
+  let blindReads = 0
+  ran.kick = async (env) => {
+    assert.equal(env, ctx.env)
+    lockAtKick = await fs.stat(lockFile).then(() => "held", () => "free")
+    return { kicked: true, reason: "due" }
+  }
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { accepted_last_step: 1 } }))
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: ran })
+  assert.equal(lockAtKick, "free")
+  // A step whose runs all labeled nothing (timed out, over budget, failed or rejected) kicks nothing.
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { accepted_last_step: 0 } }))
+  const unlabeled = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: unlabeled, clock: () => Date.now() + 3600 * 1000 + 60 * 1000 })
+  assert.deepEqual(unlabeled.kicks, [])
+  // A status that cannot be read after the run kicks nothing either.
+  const blind = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: blind, clock: () => Date.now() + 9 * 3600 * 1000, readStatusImpl: async () => { blindReads += 1; if (blindReads > 6) throw new Error("PRIVATE"); return {} } })
+  assert.deepEqual(blind.kicks, [])
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { accepted_last_step: 1 } }))
+  const done = fakes([])
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: done, clock: () => Date.now() + 2 * 3600 * 1000 })
+  assert.deepEqual(done.kicks, [], "a step that labeled nothing kicks nothing")
+  const failing = fakes([], { over: { evaluate: { result: { ok: true, result: "ran" } } } })
+  failing.kick = async () => { throw new Error("PRIVATE kick") }
+  const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: failing, clock: () => Date.now() + 4 * 3600 * 1000 })
+  assert.equal(outcome.steps.evaluate, "ran")
+}))
+
+test("inside the gap, the evaluator step runs again while the queue drains, and not once it is drained", () => scratch(async (ctx) => {
+  const now = Date.now()
+  const log = []
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "ran", now: new Date(now - 60 * 1000) })
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { ready_now: 1, ready_later: 0, accepted_last_step: 1, headless: { day: new Date(now).toISOString().slice(0, 10), jobs: 1 } } }))
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: fakes(log), clock: () => now })
+  assert.equal(names(log)[0], "evaluate")
+  const drained = []
+  await updateStatus(ctx.env, (current) => ({ ...current, evaluator: { ...current.evaluator, ready_now: 0 } }))
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "ran", now: new Date(now) })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: fakes(drained), clock: () => now + 60 * 1000 })
+  assert.equal(names(drained).includes("evaluate"), false)
 }))
 
 test("the child ids the evaluator step reports are listed in the lock while they run and removed when they exit, and nothing is signalled", () => scratch(async (ctx) => {
@@ -433,4 +484,27 @@ test("main prints one JSON line for the loop command and exits 1 only when a ste
   assert.deepEqual(JSON.parse(out[0]), { result: "disabled", ran: 0, skipped: 0, failed: 0, steps: {} })
   assert.ok(out[0].endsWith("\n"))
   assert.doesNotMatch(out[0], /desk-for-test|\//u)
+}))
+
+test("an evaluation request newer than the evaluator step's last run makes the step run inside its gap, and the step is given the desk", () => scratch(async (ctx) => {
+  const clock = fakeClock()
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: new Date(clock.now - 10 * MINUTE) })
+  const log = []
+  await run(ctx, log, { clock: clock.read })
+  assert.equal(names(log).includes("evaluate"), false, "inside its gap with no newer request")
+  await requestEvaluation(ctx.env, { job: "ab".repeat(16), deskRoot: ctx.desk })
+  const again = []
+  await run(ctx, again, { clock: clock.read })
+  assert.equal(names(again)[0], "evaluate")
+  assert.equal(Object.fromEntries(again).evaluate.deskRoot, ctx.desk)
+}))
+
+test("requests that cannot be read make nothing due early", () => scratch(async (ctx) => {
+  const clock = fakeClock()
+  await recordStep(ctx.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: new Date(clock.now - 10 * MINUTE) })
+  const root = await factoryStateRoot(ctx.env)
+  await fs.writeFile(path.join(root, "evaluate-requests"), "not a folder")
+  const log = []
+  const outcome = await run(ctx, log, { clock: clock.read })
+  assert.equal(outcome.steps.evaluate, "skipped")
 }))

@@ -1,13 +1,13 @@
 ---
 name: factory-evaluator
-description: For `desk:observer` labeling the waste in a finished job's sessions from evaluator briefs that Desk prepared when the task reached `done`. Classifies each stretch of a session as value, support, muda or unknown with a confidence, names the waste, flags mura and muri, cites evidence as exact fact intervals and writes labels with no free text. Do NOT use for evaluating a release, for reviewing a pull request, or for any job observer did or helped with.
+description: For `desk:observer` labeling the waste in a finished job's sessions from evaluator briefs that Desk prepared when the task reached `done`. Classifies each stretch of a session as value, support, muda or unknown with a confidence, names the waste, flags mura and muri, classifies why the agent stopped before each wait for the operator, cites evidence as exact fact intervals and writes labels with no free text. Do NOT use for evaluating a release, for reviewing a pull request, or for any job observer did or helped with.
 ---
 
 # Label a finished job's waste
 
-Rubric version: 3
+Rubric version: 4
 
-You are a fresh `observer` with none of the working agent's context. Desk gives you one brief file per session of a finished job. For each brief, read the evidence, label the session's stretches, and write labels the factory can publish. Your labels are evidence for the job's report and for kaizen; they are never a verdict on anyone.
+You are a fresh `observer` with none of the working agent's context. Desk gives you one brief file per session of a finished job. For each brief, read the evidence, label the session's stretches, classify why the agent stopped before each wait for the operator, and write labels the factory can publish. Your labels are evidence for the job's report and for kaizen; they are never a verdict on anyone.
 
 ## How you get started
 
@@ -28,6 +28,7 @@ Each brief is a JSON file with these fields:
 - `facts`: the session on the published clock. `duration_ms` is its length and `intervals` are its turns, tool calls, subagents, waits, API retries and compactions, each with `start_ms` and `end_ms` counted from the session's start. `counts` totals tool calls, failures and retries. `null` when the session can never be published.
 - `own_share`: the job's own spans of the session, each `{ start_ms, end_ms }` on the same clock. A session can hold several jobs and only these spans count for this job, so label them and leave the rest as a gap. `null` means Desk cannot tell which part was this job's, so nothing you label can count: write an empty `stretches` list and move on.
 - `session_log`: the host's session log for this session, or `null` when it is gone.
+- `stops`: one hint per wait for the operator (`human_wait` interval) inside `own_share` (none when it is `null`), in order: its `wait` range, its `stop` facts (how the turn ended, whether the final reply ended in "?" (`asks`), whether the agent's background agents still ran (`pending_agents`); `null` when not recorded) and `rule`, the class Desk already gives that end, or `null` when it is yours to decide.
 - `clock_origin`: the session's start time. A log line at time `t` sits at `t - clock_origin` milliseconds on the session clock. Use it only to line the log up with the intervals; no time of day goes into labels.
 - `unavailable`: what you cannot read.
 - `output`: where you write the labels.
@@ -65,6 +66,32 @@ Two flags apply to any stretch, `true` or `false`:
 - **`mura`** (unevenness): the stretch's pace was irregular, with bursts and stalls, or parallel work collided.
 - **`muri`** (overburden): the agent or a person was overloaded, with too much context, too many parallel threads or a task beyond what was set up.
 
+## Classify each stop
+
+A stop is why the agent ended its turn and waited for the operator's next prompt. Classify one stop for each hint in `stops` whose `rule` is `null`. Never write one for a hint whose `rule` is set: Desk already decided it from how the turn ended, and the store refuses a second answer. Stops describe waits, which are idle time; they change no stretch.
+
+Read the agent's final message before the wait (at or just before `wait[0]`) and the operator's next prompt (at `wait[1]`), then ask whether the agent's authorization covered the next step and whether anything blocked it. The `stop` facts are hints: a question mark or a pending agent never decides a class.
+
+- **`decision`**: a choice only the operator can make, such as scope, priority, a risk ruling or a trade-off outside the agent's authorization.
+- **`approval`**: permission the agent may not grant itself, such as spending, sending in the operator's name, a destructive change, a merge without standing authorization or a plan.
+- **`acceptance`**: the work reached a deliverable that needs the operator's sign-off or review.
+- **`question`**: information only the operator has, that is not a decision or a permission.
+- **`stopped_short`**: the authorization covered the next step and nothing blocked it: "want me to continue?", a progress note mid-plan, optional follow-ups it could have done, or waiting on its own background agent without arranging to be woken.
+- **`unknown`**: you read the evidence and could not tell.
+
+A "?" that asks permission the agent already had, such as asking to run tests the task authorized, is `stopped_short`, not `question`. Judge by the authorization, never by the punctuation.
+
+Worked examples, described rather than quoted:
+
+- The last step is done and reported with its pull request; the next prompt reviews it: `acceptance`.
+- One step of an approved five-step plan is done and the agent asks whether to go on; the reply is a one-word go-ahead: `stopped_short`, `high`.
+- Two designs with different costs that the brief did not settle are laid out; the operator picks one: `decision`.
+- The agent asks to merge with no standing merge authorization; the operator says yes: `approval`.
+- The agent asks for an account name only the operator knows: `question`.
+- The agent's background build is running and it ends its turn without arranging to be woken; the operator asks whether it is done: `stopped_short`.
+
+Give each stop a `confidence` as for stretches and the brief's `plugin_version` as its `evaluator_version`. At most one stop per wait, in wait order, `wait` copied exactly from the hint. Never copy the agent's or the operator's words.
+
 ## Cite evidence
 
 Every stretch cites at least one evidence range, and every range is an interval's `[start_ms, end_ms]` copied exactly from `facts.intervals`. The store rejects any other range. Evidence may cite any interval of the session, not only one inside the stretch: a defect stretch may rest on an earlier failed tool call. List each range once per stretch.
@@ -74,14 +101,15 @@ Every stretch cites at least one evidence range, and every range is an interval'
 Write exactly this shape to `output`:
 
 ```json
-{"schema":"desk.factory.labels/2","job":"<job>","session":"<session id>","evaluator":{"plugin_version":"<from the brief>","model":"<your model ID>","rubric":"<from the brief>"},"stretches":[{"start_ms":0,"end_ms":1000,"class":"muda","waste":"waiting","mura":false,"muri":false,"evidence":[[0,1000]],"confidence":"high","evaluator_version":"<from the brief>"}],"unavailable":[]}
+{"schema":"desk.factory.labels/3","job":"<job>","session":"<session id>","evaluator":{"plugin_version":"<from the brief>","model":"<your model ID>","rubric":"<from the brief>"},"stretches":[{"start_ms":0,"end_ms":1000,"class":"muda","waste":"waiting","mura":false,"muri":false,"evidence":[[0,1000]],"confidence":"high","evaluator_version":"<from the brief>"}],"stops":[{"wait":[1000,5000],"why":"stopped_short","confidence":"medium","evaluator_version":"<from the brief>"}],"unavailable":[]}
 ```
 
 - No free text anywhere: no notes, reasons, quotes, names, paths or times of day. Every string is an enum value, an ID from the brief, or your model ID exactly as the host names it.
 - Every stretch ends within `facts.duration_ms`.
-- Every stretch carries `confidence` and `evaluator_version`, the brief's `plugin_version` copied exactly.
+- Every stretch and every stop carries `confidence` and `evaluator_version`, the brief's `plugin_version` copied exactly.
+- `stops` is always present, empty when no wait is yours to classify or `facts` is `null`.
 - Do not write `caught`: Desk places each `defects` stretch by where the defect was caught, from the job's own record, when it accepts your labels.
-- Copy the brief's `unavailable` codes into `unavailable`. `session_log_missing` means you labeled from the facts alone. `facts_missing` means there is nothing to cite, so `stretches` is empty.
+- Copy the brief's `unavailable` codes into `unavailable`. `session_log_missing` means you labeled from the facts alone. `facts_missing` means there is nothing to cite, so `stretches` is empty, and so is `stops`.
 
 ## Hand it in
 

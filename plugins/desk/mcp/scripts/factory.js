@@ -52,6 +52,7 @@ import { pathToFileURL } from "node:url"
 import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
+import { kickLoop } from "../src/factory/evaluate-kick.js"
 import { orphanPassLine, ownVersion, publishedJobId } from "../src/factory/local-status.js"
 import { factoryStateDir } from "../src/factory/boot-check.js"
 import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
@@ -121,8 +122,12 @@ export async function runFlushCommand({ argv, env, runner }) {
   return flush(env, { store: options.get("store"), runner: runner ?? ghRunner({ env }) })
 }
 
-/** `finalize --job <job> [--job <job> ...]` (at most eight): finalizes each job in turn; prints `{ jobs: { <job>: result } }`. */
-export async function runFinalizeCommand({ argv, env, runner }) {
+/**
+ * `finalize --job <job> [--job <job> ...]` (at most eight): finalizes each job in turn; prints `{ jobs: { <job>: result } }`. Finalize has just
+ * derived the finished jobs' sessions, so it then starts the loop worker when the evaluator step is due (`kickLoop`, `evaluate-kick.js`): a
+ * job's evaluation starts at the end of the turn that finished it. A kick that fails changes nothing printed. `kick` is a seam for tests.
+ */
+export async function runFinalizeCommand({ argv, env, runner, kick = kickLoop }) {
   const jobs = []
   let malformed = argv.length === 0
   for (let index = 0; index < argv.length; index += 2) {
@@ -134,6 +139,11 @@ export async function runFinalizeCommand({ argv, env, runner }) {
   const { finalize, ghRunner } = await import("../src/factory/flush.js")
   const results = {}
   for (const job of jobs) results[job] = await finalize(env, { job, runner: runner ?? ghRunner({ env }) })
+  try {
+    await kick(env)
+  } catch {
+    // The next end of a turn or session start starts the worker instead.
+  }
   return { jobs: results }
 }
 

@@ -104,6 +104,41 @@ test("the default stateHome follows HOME and XDG_STATE_HOME", async () => {
   assert.equal(existsSync(path.join(root, "xdg-state", "ouroboros-skills", "desk", "last-start.json")), true)
 })
 
+test("input close waits for the owned controller to finish closing before the entrypoint exits", { timeout: 10000 }, async (t) => {
+  const root = await mkTempRoot("desk-main-close-controller-")
+  const input = new PassThrough()
+  let release
+  let started
+  let exited = false
+  const closing = new Promise((resolve) => { release = resolve })
+  const closeStarted = new Promise((resolve) => { started = resolve })
+  const handle = await main({
+    argv: ["--root", root], env: {}, cwd: root, homeDir: root, stateHome: path.join(root, "state"),
+    input, output: new PassThrough(), stderr: { write() { return true } },
+    admissionKickoffMs: 0, runtimeInspector: null,
+    readinessPolicy: { semantic: "unsupported" },
+    runtimeImporter: async () => ({
+      connectOrStartController: async () => ({
+        accepted: true,
+        async close() { started(); await closing },
+      }),
+    }),
+    onClosed: () => { exited = true },
+  })
+  t.after(async () => { release(); input.end(); await handle.closed })
+  const deadline = Date.now() + 5000
+  while (handle.admission.snapshot().state === "admitting" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  assert.equal(handle.admission.snapshot().state, "ready")
+  input.end()
+  await closeStarted
+  assert.equal(exited, false, "a controller can still own fixture files while its close is pending")
+  release()
+  await handle.closed
+  assert.equal(exited, true)
+})
+
 test("with the real runtime inspector and importer, main restores the runtime after the handshake and serves reads", {
   skip: process.versions.modules === "127" ? false : "this platform's committed runtime pack is for Node ABI 127",
 }, async () => {

@@ -63,6 +63,15 @@ const REPORT_REASON_TEXT = {
   facts_missing: "the session's facts are missing",
   no_facts: "no facts file matches the labels",
   facts_ambiguous: "more than one facts file matches the labels",
+  // A task's finish day.
+  finish_from_card_update: "the day comes from the task card's last update, so the task finished on or before it",
+  reopened: "the task was finished more than once, so this is the day it last finished",
+  job_offsets_withheld: "the desk withholds this task's timing because its remote is public",
+  // Why the agent stopped before a wait for the next prompt, when it is not known, and the split by why.
+  could_not_tell: "the evaluator read this wait's evidence and could not tell why the agent stopped",
+  stop_not_recorded: "no recorded wait for the operator covers this time, so there is no record of why the agent stopped, and some hosts do not record stops",
+  outside_own_share: "the facts do not say which part of the session was this task's, so the evaluator does not judge this wait for it",
+  stop_partly_classified: "why the agent stopped is not known for some of this waiting, and some of that may belong here, so this is at least this much",
 }
 
 // What the independent evaluator's labels file can declare unreadable, and the codes of the check of labels against facts.
@@ -72,6 +81,8 @@ const LABEL_REASON_TEXT = {
   job_unbound: "the session is not bound to the job",
   range: "a labeled stretch runs past the session",
   evidence_unmatched: "the labeled evidence no longer matches the facts",
+  // The store's meaning (ourostack/factory site/src/format.js), in this map's punctuation; the check against facts also writes it for a stop on a wait a rule already decides.
+  inconsistent: "the labels contradict themselves or the facts, for example stops or waste listed while those facts are marked missing, a stop judged by a newer evaluator than the labels file, or a stop on a wait a rule already decides, so they are left unused",
   share_unknown: "the facts do not record which part of the session was the job's",
   outside_share: "the labels cover none of the job's own part of the session",
 }

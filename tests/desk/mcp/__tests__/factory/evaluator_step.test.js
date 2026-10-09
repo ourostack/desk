@@ -12,9 +12,11 @@ import { osEnv } from "../_os_env.js"
 import { NO_FILE_SYMLINKS } from "../_platform.js"
 
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
+import { evaluateDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
+import { STOP_FACTS_BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
 import { labelsBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
-import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, listEvaluationRequests, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts, writeLocalLabels, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -56,8 +58,10 @@ async function seedJob(env, base, index, { host = "claude-code", hosts = [host] 
   return job
 }
 
+// The current labels form (labels /3 under rubric 4), with no stops: the fixture's one wait is left unclassified.
 function labelsFor(brief) {
-  return { ...structuredClone(LABELS), job: brief.job, session: brief.session.id, unavailable: ["session_log_missing"] }
+  const { unavailable, ...head } = structuredClone(LABELS)
+  return { ...head, schema: "desk.factory.labels/3", job: brief.job, session: brief.session.id, evaluator: { ...head.evaluator, rubric: "4" }, stops: [], unavailable: ["session_log_missing"] }
 }
 
 // A fake runner. `script(call, count)` answers `{ state, cost_usd }`; `write` makes the evaluator answer.
@@ -125,6 +129,10 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
     expired_total: 0,
     gave_up: 0,
     waiting: 0,
+    ready_now: 0,
+    ready_later: 0,
+    accepted_last_step: 1,
+    scan_ms: evaluator.scan_ms,
     headless: {
       state: "ran",
       day: new Date(DAY0).toISOString().slice(0, 10),
@@ -137,6 +145,7 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
       deferred_jobs: 0,
       blocked_days: 0,
     },
+    lag: { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [] },
   })
   const record = (await readStatus(env)).loop.steps.evaluate
   assert.equal(record.last_result, "ran")
@@ -597,6 +606,8 @@ test("the caller's contract is checked", () => scratch(async (env) => {
   await assert.rejects(step(env, { pluginVersion: VERSION }), TypeError, "a deadline is required")
   await assert.rejects(step(env, { pluginVersion: VERSION, deadline: null }), TypeError, "a deadline is required")
   await assert.rejects(step(env), TypeError)
+  await assert.rejects(step(env, { pluginVersion: VERSION, deadline: Date.now(), deskRoot: "relative" }), TypeError)
+  await assert.rejects(step(env, { pluginVersion: VERSION, deadline: Date.now(), deskRoot: 7 }), TypeError)
 }))
 
 test("the runner is told the folder of each session log the briefs name", () => scratch(async (env, base) => {
@@ -886,4 +897,184 @@ test("the time limit is checked again right before the run, after the sign-in pr
   assert.equal(evaluator.headless.jobs, 0)
   assert.equal(evaluator.headless.deferred_jobs, 1)
   assert.deepEqual((await readStatus(env)).loop.evaluate.attempts, {})
+}))
+
+// ---------------------------------------------------------------------------
+// The tight loop: the backstop, fresh finishes first, and the label lag.
+// ---------------------------------------------------------------------------
+
+// Labels of an older rubric for a seeded job's first session, with a marker whose log is still on disk, so it is relabeled.
+async function labeledUnderRubric3(env, base, index) {
+  const job = await seedJob(env, base, index)
+  const session = sessionId(index * 10)
+  const { unavailable, ...old } = structuredClone(LABELS)
+  for (const stretch of old.stretches) delete stretch.caught
+  await writeLocalLabels(env, STORE, { ...old, job, session, unavailable })
+  const log = path.join(base, `log-${index}.jsonl`)
+  await fs.writeFile(log, "{}\n")
+  await writeMarker(env, {
+    schema_version: 1, host: "claude-code", session_id: session, log_path: log, cwd: base, desk_root: null,
+    end_reason: "prompt_input_exit", ended_at: "2026-09-25T09:30:00.000Z", plugins: [{ name: "desk", version: "1.0.0" }], updated_at: new Date().toISOString(),
+  })
+  // The session's facts were derived with stop facts, so the rubric-4 relabel may run.
+  const name = `claude-code-${session}.json`
+  await updateStatus(env, (current) => ({ ...current, derivations: { ...current.derivations, [name]: { store: STORE, binding_version: STOP_FACTS_BINDING_VERSION } } }))
+  return job
+}
+
+test("a finished job with no request is found by the backstop and labeled in the same step", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  const root = await factoryStateRoot(env)
+  await fs.rm(path.join(root, "evaluate-requests", `${job}.json`))
+  const options = seams({ deskRoot: path.join(base, "desk") })
+  assert.deepEqual(await step(env, options), { ok: true, result: "ran" })
+  assert.equal(options.runHeadless.calls.length, 1)
+  assert.deepEqual(await listEvaluationRequests(env), [], "labeled, so the request it recorded is cleared")
+}))
+
+test("a backstop that fails never stops the step: the requests already waiting run", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  const options = seams({ requestFinishedJobs: async () => { throw new Error("SENTINEL backstop") } })
+  assert.deepEqual(await step(env, options), { ok: true, result: "ran" })
+  assert.equal(JSON.stringify(await readStatus(env)).includes("SENTINEL"), false)
+}))
+
+test("fresh finishes run before relabels, and the oldest finish first", () => scratch(async (env, base) => {
+  const relabel = await labeledUnderRubric3(env, base, 1)
+  const newer = await seedJob(env, base, 2)
+  const older = await seedJob(env, base, 3)
+  const root = await factoryStateRoot(env)
+  const at = (job, finished) => fs.writeFile(path.join(root, "evaluate-requests", `${job}.json`), JSON.stringify({ schema_version: 1, job, desk_root: path.join(base, "desk"), requested_at: "2026-09-25T09:00:00.000Z", finished_at: finished }))
+  await at(relabel, "2026-09-20T00:00:00.000Z")
+  await at(newer, "2026-09-25T10:00:00.000Z")
+  await at(older, "2026-09-24T10:00:00.000Z")
+  const options = seams()
+  await step(env, options)
+  assert.deepEqual(options.runHeadless.calls.map((call) => call.job.job), [older, newer, relabel])
+}))
+
+test("the lag names the oldest finished job still unlabeled, counts them, and leaves out relabels", () => scratch(async (env, base) => {
+  await labeledUnderRubric3(env, base, 1)
+  const first = await seedJob(env, base, 2)
+  const second = await seedJob(env, base, 3)
+  const root = await factoryStateRoot(env)
+  await fs.writeFile(path.join(root, "evaluate-requests", `${first}.json`), JSON.stringify({ schema_version: 1, job: first, desk_root: path.join(base, "desk"), requested_at: "2026-09-25T09:00:00.000Z", finished_at: "2026-09-24T10:00:00.000Z" }))
+  // Every run fails, so nothing is labeled and both fresh finishes stay unlabeled.
+  await step(env, seams({ runHeadless: fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false }) }))
+  const { lag } = await evaluatorOf(env)
+  assert.deepEqual(lag, { at: new Date(DAY0).toISOString(), unlabeled_jobs: 2, oldest_finished_at: "2026-09-24T10:00:00.000Z", unsupported_jobs: [], gave_up_jobs: [] })
+  assert.ok(second)
+}))
+
+test("only a step that accepted a job's labels counts as labeling: a timeout, a spent run budget, a failed run and a rejected answer do not", () => scratch(async (env, base) => {
+  const outcomes = [
+    ["timeout", fakeRunner(() => ({ state: "timeout", cost_usd: null }), { write: false })],
+    ["budget_exceeded", fakeRunner(() => ({ state: "budget_exceeded", cost_usd: 1 }), { write: false })],
+    ["failed", fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false })],
+    ["rejected", async (call) => {
+      for (const file of call.briefPaths) await fs.writeFile(JSON.parse(await fs.readFile(file, "utf8")).output, JSON.stringify({ schema: "desk.factory.labels/3" }))
+      return { state: "ran", cost_usd: 0.1, detail: null }
+    }],
+  ]
+  for (const [index, [name, runner]] of outcomes.entries()) {
+    await seedJob(env, base, index + 1)
+    assert.deepEqual(await step(env, seams({ runHeadless: runner, now: DAY0 + index * DAY })), { ok: true, result: "ran" }, name)
+    const evaluator = await evaluatorOf(env)
+    assert.equal(evaluator.accepted_last_step, 0, name)
+    assert.equal(evaluateDue(await readStatus(env), new Date(DAY0 + index * DAY + 60 * 1000), { kick: true }), false, `${name}: no drain`)
+  }
+  await seedJob(env, base, 9)
+  const options = seams({ now: DAY0 + 5 * DAY })
+  await step(env, options)
+  assert.equal((await evaluatorOf(env)).accepted_last_step, options.runHeadless.calls.length, "every run that day was accepted")
+  assert.ok(options.runHeadless.calls.length > 0)
+}))
+
+test("the step records how long its facts scan took, so the shrinking start window shows", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  let now = 0
+  const clock = () => now
+  const requestFinishedJobs = async () => { now += 4000; return { requested: [] } }
+  await step(env, seams({ clock, requestFinishedJobs, runHeadless: fakeRunner(async () => { now += 60000; return { state: "ran", cost_usd: 0.1 } }) }))
+  assert.equal((await evaluatorOf(env)).scan_ms, 4000)
+}))
+
+test("a finished job whose share keeps growing in a session that stays open is labeled again at most once a UTC day", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  const name = `claude-code-${sessionId(10)}.json`
+  const grown = async (minutes) => {
+    const facts = structuredClone(LOCAL)
+    facts.session.id = sessionId(10)
+    facts.session.ended_at = null
+    facts.session.end_reason = null
+    facts.session.derived_through = new Date(Date.parse(LOCAL.session.derived_through) + minutes * 60 * 1000).toISOString()
+    facts.jobs = [{ ...facts.jobs[0], job }]
+    await writeLocalFacts(env, STORE, facts)
+  }
+  await grown(0)
+  const runs = []
+  const options = (day) => seams({ now: DAY0 + day * DAY, deskRoot: path.join(base, "desk"), runHeadless: fakeRunner((call) => { runs.push(day); return { state: "ran", cost_usd: 0.1 } }) })
+  await step(env, options(0))
+  assert.deepEqual(runs, [0], "labeled at its finish")
+  // The session runs on and is derived again twice the same day: the job's share grew, so it needs labels again, but it already ran today.
+  await grown(10)
+  await step(env, { ...options(0), now: DAY0 + 2 * 3600 * 1000 })
+  await grown(20)
+  await step(env, { ...options(0), now: DAY0 + 4 * 3600 * 1000 })
+  assert.deepEqual(runs, [0])
+  await step(env, options(1))
+  assert.deepEqual(runs, [0, 1], "once the next day")
+  await step(env, { ...options(1), now: DAY0 + DAY + 3600 * 1000 })
+  assert.deepEqual(runs, [0, 1], "and not again that day: its evidence has not changed")
+  assert.equal((await evaluatorOf(env)).gave_up, 0)
+  assert.ok(name)
+}))
+
+test("a job whose unlabeled session the runner cannot label is named apart and never holds the lag; its labelable session still runs", () => scratch(async (env, base) => {
+  const mixed = await seedJob(env, base, 1, { hosts: ["claude-code", "copilot-cli"] })
+  const copilot = await seedJob(env, base, 2, { host: "copilot-cli" })
+  const options = seams()
+  assert.deepEqual(await step(env, options), { ok: true, result: "ran" })
+  assert.deepEqual(options.runHeadless.calls.map((call) => call.job.job), [mixed])
+  const evaluator = await evaluatorOf(env)
+  assert.deepEqual(evaluator.lag, { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [mixed, copilot], gave_up_jobs: [] })
+  assert.deepEqual([evaluator.waiting, evaluator.ready_now, evaluator.ready_later], [2, 0, 0], "both wait, and neither can run here")
+  // The accepted run starts the job's attempts again, keeping today's date.
+  assert.deepEqual((await readStatus(env)).loop.evaluate.attempts[mixed], { attempts: 0, last_day: new Date(DAY0).toISOString().slice(0, 10) })
+}))
+
+test("a job at the attempt limit is named apart and never holds the lag, and an accepted run starts the count again", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  const failing = seams({ runHeadless: fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false }) })
+  for (const day of [0, 1]) await step(env, { ...failing, now: DAY0 + day * DAY })
+  let evaluator = await evaluatorOf(env)
+  assert.deepEqual([evaluator.lag.unlabeled_jobs, evaluator.ready_now, evaluator.ready_later], [1, 0, 1], "tried today, so it runs again tomorrow")
+  await step(env, { ...failing, now: DAY0 + 2 * DAY })
+  evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.gave_up, 1)
+  assert.deepEqual(evaluator.lag, { at: new Date(DAY0 + 2 * DAY).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [job] })
+  assert.deepEqual([evaluator.ready_now, evaluator.ready_later], [0, 0])
+
+  // A second job fails twice, then is accepted: its count starts again, so it never reaches the limit.
+  const other = await seedJob(env, base, 2, { hosts: ["claude-code", "copilot-cli"] })
+  for (const day of [3, 4]) await step(env, { ...failing, now: DAY0 + day * DAY })
+  assert.equal((await readStatus(env)).loop.evaluate.attempts[other].attempts, 2)
+  await step(env, seams({ now: DAY0 + 5 * DAY }))
+  assert.equal((await readStatus(env)).loop.evaluate.attempts[other].attempts, 0)
+  assert.deepEqual((await evaluatorOf(env)).lag.gave_up_jobs, [job])
+}))
+
+test("a job left for want of time still counts as ready now", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  const options = seams({ deadline: Date.now() })
+  assert.deepEqual(await step(env, options), { ok: true, result: "none_could_run" })
+  const evaluator = await evaluatorOf(env)
+  assert.deepEqual([evaluator.waiting, evaluator.ready_now, evaluator.ready_later], [1, 1, 0])
+}))
+
+test("a job labeled in the step leaves the lag; a step with nothing waiting records none", () => scratch(async (env, base) => {
+  await step(env, seams())
+  await seedJob(env, base, 1)
+  await step(env, seams({ now: DAY0 + DAY }))
+  assert.deepEqual((await evaluatorOf(env)).lag, { at: new Date(DAY0 + DAY).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [] })
 }))

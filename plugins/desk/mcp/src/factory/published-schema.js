@@ -137,11 +137,8 @@ export const PUBLISHED_SCHEMA_V3 = "desk.factory.published/3"
 /** Every published schema value a reader accepts: the legacy `/1`, `/2` and `/3`, and the current one. */
 export const PUBLISHED_SCHEMAS = Object.freeze(["desk.factory.published/1", "desk.factory.published/2", PUBLISHED_SCHEMA_V3, PUBLISHED_SCHEMA])
 
-/** The schema a file with no `/3`-only content is still published as, so an unchanged session keeps its bytes. */
-export const PUBLISHED_SCHEMA_V2 = PUBLISHED_SCHEMAS[1]
-
-/** The earliest finish day a published job may carry. */
-const FINISHED_ON_MIN = "2025-01-01"
+/** The earliest finish day a published job may carry. The publishing transform withholds an earlier day by this same value, so it never writes one the gate refuses. */
+export const FINISHED_ON_MIN = "2025-01-01"
 
 /** An ISO calendar date anywhere in a string. */
 export const DATE_SHAPE = /\d{4}-\d{2}-\d{2}/u
