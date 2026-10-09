@@ -20,7 +20,7 @@
 import * as path from "node:path"
 import { existsSync, statSync, lstatSync, realpathSync, constants as fsConstants, promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { personPrefix, isPathContained } from "../util/paths.js"
+import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
@@ -106,12 +106,13 @@ function inspectTarget(absolute) {
   return { resolved, existing: lstatSync(resolved, { throwIfNoEntry: false }) }
 }
 
-// Every `files` entry, checked before any is written. Returns each entry's absolute target.
-function checkFiles(deskRoot, effectiveRoot, files) {
+// Every `files` entry, checked before any is written. Returns each entry's absolute target. Containment and symbolic links
+// are resolveWriteTarget's job (the one confined-write helper the other write tools use); the checks here are the ones it lacks.
+async function checkFiles(deskRoot, person, effectiveRoot, files) {
   const realRoot = realpathSync.native(deskRoot)
-  const realPrefix = path.resolve(realRoot, path.relative(path.resolve(deskRoot), effectiveRoot))
   const seen = new Set()
-  return files.map(({ path: relativePath, content }) => {
+  const checked = []
+  for (const { path: relativePath, content } of files) {
     const refuse = (why) => new Error(`desk_save: \`files\` cannot write ${relativePath}: ${why}`)
     if (relativePath.includes("\0")) throw refuse("the path holds a NUL character")
     if (path.isAbsolute(relativePath)) throw refuse("give the path relative to the desk root")
@@ -123,15 +124,20 @@ function checkFiles(deskRoot, effectiveRoot, files) {
     if (!isPathContained(effectiveRoot, absolute)) throw refuse("it is outside the resolved write prefix")
     if (seen.has(absolute)) throw refuse("it is listed twice")
     seen.add(absolute)
+    try {
+      await resolveWriteTarget({ deskRoot, person, segments: path.relative(effectiveRoot, absolute).split(path.sep) })
+    } catch (error) {
+      throw refuse(error.message)
+    }
     const { problem, resolved, existing } = inspectTarget(absolute)
     if (problem !== undefined) throw refuse(problem)
-    if (!isPathContained(realPrefix, resolved)) throw refuse("it leads outside the desk, or outside the resolved write prefix, through a symbolic link")
     if (existing?.isSymbolicLink()) throw refuse("the file there is a symbolic link")
     if (existing !== undefined && !existing.isFile()) throw refuse("what is there is not a file")
     const leads = pathRefusal(path.relative(realRoot, resolved).split(path.sep).join("/"))
     if (leads !== null) throw refuse(`it leads through a symbolic link to a path where ${leads}`)
-    return { absolute, content }
-  })
+    checked.push({ absolute, content })
+  }
+  return checked
 }
 
 // O_NOFOLLOW: a symbolic link put at the target after the check fails the open instead of being written through.
@@ -220,7 +226,7 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
     }
   }
   if (files.length > 0) {
-    await writeFiles(checkFiles(deskRoot, effectiveRoot, files))
+    await writeFiles(await checkFiles(deskRoot, person, effectiveRoot, files))
     paths.push(...files.map((file) => file.path).filter((p) => !paths.includes(p)))
   }
 
