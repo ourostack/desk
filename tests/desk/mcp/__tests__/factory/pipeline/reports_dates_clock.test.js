@@ -118,12 +118,38 @@ test("a finish day the facts prove is earlier than the day the last work ended i
   assert.deepEqual(walk.stackup.finished_on, walk.finished_on)
 })
 
+// The B1 shape after the binding fix: the card is done but no record gives when, so the facts carry no finish time. The lead time must
+// not go blank: it runs from card creation to the end of the recorded work, a partial lower bound with its own reason.
+test("a done task with no recorded finish time keeps its lead window: the recorded work, at least that, reason finish_time_not_known", () => {
+  const leadEnd = 192_171_828
+  const unknown = bound(J("a"), 0, { day: null, transitions: [], observed: { status: "done", offset_ms: null }, length: leadEnd })
+  const session = facts({ id: S(47), duration: leadEnd, intervals: [span("turn", 0, 0, 10 * MIN), span("turn", 0, leadEnd - 10 * MIN, leadEnd)], jobs: [unknown] })
+  const { walk, formulas } = walkOf([session], J("a"))
+  assert.equal(formulas.lead_time_ms.state, "partial")
+  assert.deepEqual(formulas.lead_time_ms.reasons, ["finish_time_not_known"])
+  assert.equal(formulas.lead_time_ms.value, leadEnd)
+  assert.equal(formulas.active_in_lead_ms.state, "measured")
+  assert.deepEqual([walk.window.start_ms, walk.window.end_ms], [0, leadEnd])
+  assert.equal(walk.stackup.lead_time_ms.bound, "lower")
+  assert.equal(walk.task.lead_time_ms.bound, "lower")
+  for (const key of ["working_ms", "idle_ms"]) assert.notEqual(walk.stackup[key].state, "unavailable", key)
+  assert.equal(walk.stackup.idle_ms.bound, "lower")
+  assert.ok(walk.gaps.length > 0)
+  // The finish day names why it has none.
+  assert.deepEqual(walk.finished_on, { class: "unavailable", state: "unavailable", basis: null, reasons: ["finish_time_not_known"] })
+  // Work that began before the card was made still floors the lead time, and both reasons stay.
+  const early = facts({ id: S(48), duration: leadEnd, intervals: [span("turn", 0, 0, leadEnd)], jobs: [{ ...unknown, session_offset_ms: -10 * MIN }] })
+  const floored = walkOf([early], J("a"))
+  assert.deepEqual(floored.formulas.lead_time_ms.reasons, ["card_dates_shorter_than_work", "finish_time_not_known"])
+  assert.deepEqual([floored.walk.window.start_ms, floored.walk.window.end_ms], [-10 * MIN, leadEnd - 10 * MIN])
+})
+
 test("the guard holds for a measured day too, and only where the facts prove the last work ended on a later day", () => {
   const day = 24 * 60 * MIN
-  // A transition, then a full day and more of work: the day it names cannot be the finish.
+  // A transition, then a full day and more of work: the session saw the card move to done that day, so the task finished then or later.
   const moved = bound(J("a"), 0, { day: "2026-10-05", transitions: [{ to: "done", offset_ms: 10 * MIN }], observed: { status: "done", offset_ms: 10 * MIN }, length: day + 11 * MIN })
   const late = facts({ id: S(41), duration: day + 11 * MIN, intervals: [span("turn", 0, 0, day + 11 * MIN)], jobs: [moved] })
-  assert.deepEqual(walkOf([late], J("a")).walk.finished_on, { class: "measured", state: "partial", value: "2026-10-05", basis: "transition", reasons: ["finish_before_last_work"], bound: null, bound_reason: "bound_reasons_conflict" })
+  assert.deepEqual(walkOf([late], J("a")).walk.finished_on, { class: "measured", state: "partial", value: "2026-10-05", basis: "transition", reasons: ["finish_before_last_work"], bound: "lower" })
   // Less than a day of later work may still end on the same UTC day, so the facts prove nothing and the upper bound stands.
   const near = bound(J("a"), 0, { day: "2026-10-05", basis: "card_updated", transitions: [], observed: { status: "done", offset_ms: 10 * MIN }, length: day + 9 * MIN })
   const close = facts({ id: S(42), duration: day + 9 * MIN, intervals: [span("turn", 0, 0, day + 9 * MIN)], jobs: [near] })
@@ -419,9 +445,9 @@ test("an ask wait cut by the task's segments is idle only inside them", () => {
 // --- words and directions -------------------------------------------------------------------------------------------------------
 
 test("every new reason has plain words and a decided direction", () => {
-  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "job_offsets_withheld", "not_in_published_facts", "no_segments"]) {
+  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "finish_time_not_known", "job_offsets_withheld", "not_in_published_facts", "no_segments"]) {
     assert.equal(typeof REASON_TEXT[reason], "string", reason)
     assert.ok(!/[_;()]/u.test(REASON_TEXT[reason]), reason)
   }
-  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "not_in_published_facts", "no_segments"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
+  for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "finish_time_not_known", "not_in_published_facts", "no_segments"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
 })

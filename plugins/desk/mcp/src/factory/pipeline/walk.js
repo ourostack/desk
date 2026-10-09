@@ -255,6 +255,8 @@ export const REASON_CHANGE = Object.freeze({
   censored: "open",
   open_job: "open",
   card_dates_shorter_than_work: "floor",
+  // A done job whose finish time no record gives: its lead window runs to the end of the recorded work, as a floor does.
+  finish_time_not_known: "floor",
   labels_from_shared_session: "shared",
   partial: "part_labeled",
   job_offsets_unavailable: "unplaced",
@@ -280,7 +282,8 @@ export const REASON_CHANGE = Object.freeze({
   finish_from_card_update: "card_update",
   // The latest of several finishes is the task's final finish, exact as such.
   reopened: "reopened",
-  // A finish day the facts prove is earlier than the day the last work ended: it bounds nothing, and the true day may be earlier or later.
+  // A finish day the facts prove is earlier than the day the last work ended: the task finished on that day or later. Alone (a day from a
+  // recorded move to done) that is a lower bound; with a card update's upper bound, the two pull both ways and the day has no bound.
   finish_before_last_work: "before_last_work",
   // Next-prompt time whose why is not known may belong to any class.
   [PARTLY_CLASSIFIED]: "unclassified",
@@ -317,8 +320,8 @@ export const BOUND_DIRECTIONS = Object.freeze({
   // A list of recorded entries (operator prompts, pull requests): whatever the facts did not record, could not place or withheld for
   // another job may be missing from it, so it holds at least these.
   list: { open: "lower", unseen: "lower", unplaced: "lower", overcount: "lower", unattributed: "lower" },
-  // A finish day: the card's last update is on or after the day the task finished.
-  finish: { card_update: "upper", before_last_work: "both" },
+  // A finish day: the card's last update is on or after the day the task finished; work that went on past the day says it is on or after.
+  finish: { card_update: "upper", before_last_work: "lower" },
   // A class of next-prompt waiting (the split by why): an evidence figure, which the time not yet classified can only add to.
   why: { open: "lower", floor: "lower", unseen: "lower", part_labeled: "lower", unplaced: "lower", unclassified: "lower" },
 })
@@ -718,8 +721,9 @@ const TERMINAL = new Set(["done", "cancelled"])
  * which is an upper bound (`finish_from_card_update`) because a card can be edited after the task is done. When sessions moved the card to
  * its end on different days (a reopened task), the latest wins, with the reason `reopened`. Unavailable, with `basis: null`, for an open
  * task (`open_job`), a status not recorded (`status_unavailable`), a public desk (`job_offsets_withheld`), a session whose job clock
- * could not be read (`job_offsets_unavailable`), or older facts and sessions that did not see the card end, so the published facts carry
- * no day (`not_in_published_facts`).
+ * could not be read (`job_offsets_unavailable`), a session that saw the card end with no record of when (`finish_time_not_known`: a card
+ * edited by hand, whose `updated` is no finish time), or older facts and sessions that did not see the card end, so the published facts
+ * carry no day (`not_in_published_facts`).
  */
 function finishedOn(timeline, formulas, window) {
   const none = (reasons) => ({ ...figure("unavailable", null, reasons), basis: null })
@@ -733,6 +737,8 @@ function finishedOn(timeline, formulas, window) {
       if (session.unavailable.some((entry) => entry.field === "job_offsets" && entry.reason === "desk_public")) return ["job_offsets_withheld"]
       if (!Object.hasOwn(binding, "finished_on")) return ["not_in_published_facts"]
       if (binding.session_offset_ms === null) return ["job_offsets_unavailable"]
+      // The session saw the card end but no record gives when (`binding.js` gives such an observation no time).
+      if (binding.observed !== null && TERMINAL.has(binding.observed.status) && binding.observed.offset_ms === null) return ["finish_time_not_known"]
       return []
     })
     return none(reasons.length > 0 ? reasons : ["not_in_published_facts"])

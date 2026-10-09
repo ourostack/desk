@@ -218,6 +218,9 @@ function currentStatus(timeline) {
   return transition ? measured(transition.to) : unavailable("status_unavailable")
 }
 
+// The reason a done job's lead time runs only to the end of its recorded work: no record gives the time it finished.
+export const FINISH_TIME_NOT_KNOWN = "finish_time_not_known"
+
 function leadTime(timeline, status) {
   if (status.value === "cancelled") return unavailable("cancelled")
   if (status.value === "done") {
@@ -231,7 +234,11 @@ function leadTime(timeline, status) {
     if (done) return measured(Math.max(0, done.offset_ms), { censored: false, basis: "first_done_transition" })
     const observedDone = timeline.observations.find((entry) => entry.status === "done" && entry.offset_ms !== null)
     if (observedDone) return declared(Math.max(0, observedDone.offset_ms), { censored: false, basis: "terminal_observation" })
-    return unavailable("job_offsets_unavailable")
+    // Done, but no record gives when (a card edited by hand, so its `updated` is no finish time): the lead window still runs from the
+    // card's creation to the end of the job's recorded work, which the task lasted at least.
+    const ends = recordedSpans(timeline).map(([, end]) => end).filter(Number.isFinite)
+    if (ends.length === 0) return unavailable("job_offsets_unavailable")
+    return inferred(Math.max(0, ...ends), { censored: false, basis: "recorded_work_end", partial: true, partial_reasons: [FINISH_TIME_NOT_KNOWN] })
   }
   // Every other status is open, including a job reopened after an earlier
   // `done` (which stays in the transition history): its lead time is censored.
@@ -266,7 +273,7 @@ function floorLead(lead, timeline) {
   if (spans.length === 0 || !spans.every(Number.isFinite)) return lead
   const span = Math.max(...spans.filter((_, index) => index % 2 === 1)) - Math.min(...spans.filter((_, index) => index % 2 === 0))
   if (!(span > lead.value)) return lead
-  return { ...lead, class: "inferred", value: span, partial: true, partial_reasons: ["card_dates_shorter_than_work"], basis: "recorded_segment_span" }
+  return { ...lead, class: "inferred", value: span, partial: true, partial_reasons: [...new Set(["card_dates_shorter_than_work", ...(lead.partial_reasons ?? [])])].sort(compareText), basis: "recorded_segment_span" }
 }
 
 function longestWait(intervals) {
