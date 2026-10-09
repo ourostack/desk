@@ -1,10 +1,11 @@
 import { firstPassFormula, reworkFormula, signoffFormula } from "./outcomes.js"
 import { attentionFormula } from "./attention.js"
 import { ACTIVE_KINDS, bindingsOverlap, duration, overlappingBindings, union } from "./timeline.js"
-import { fieldsFeeding, reasonsOf, withState } from "./number-states.js"
+import { ONLY_PART_REASONS, fieldsFeeding, reasonsOf, withState } from "./number-states.js"
 
 const WAIT_KINDS = Object.freeze(["human_wait", "permission_wait", "api_retry", "compaction"])
-const PARTLY = "host_records_partly"
+// Reasons that leave a field incomplete, never missing (`ONLY_PART_REASONS`).
+const ONLY_PART = new Set(ONLY_PART_REASONS)
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const CONTRIBUTOR_ORDER = Object.freeze([
   "active_in_lead_ms",
@@ -102,9 +103,9 @@ function fieldCoverage(sessions, fields, partialFields, split = new Set(), share
   let splitCount = 0
   let sharedCount = 0
   for (const session of sessions) {
-    // A host that records a number only in part leaves it incomplete, never missing.
-    const missing = session.unavailable.filter((entry) => fields.includes(entry.field) && entry.reason !== PARTLY)
-    const incomplete = session.unavailable.filter((entry) => partialFields.includes(entry.field) || (fields.includes(entry.field) && entry.reason === PARTLY))
+    // A host that records a number only in part, or a few intervals dropped outside the session clock, leaves it incomplete, never missing.
+    const missing = session.unavailable.filter((entry) => fields.includes(entry.field) && !ONLY_PART.has(entry.reason))
+    const incomplete = session.unavailable.filter((entry) => partialFields.includes(entry.field) || (fields.includes(entry.field) && ONLY_PART.has(entry.reason)))
     const divided = split.has(session)
     if (divided) splitCount += 1
     const overlapping = shared.has(session)
@@ -167,7 +168,7 @@ function tokenTotalFor(type, sessions, split) {
   const fields = fieldsFeeding(formulaId, "unavailable")
   const partialFields = fieldsFeeding(formulaId, "partial")
   const checked = new Map(sessions.map((session) => {
-    const flagged = session.unavailable.some((entry) => fields.includes(entry.field) && entry.reason !== PARTLY)
+    const flagged = session.unavailable.some((entry) => fields.includes(entry.field) && !ONLY_PART.has(entry.reason))
     const absent = session.models.length === 0 || session.models.some((model) => model.tokens[type] === null || model.tokens[type] === undefined)
     return [session, { unavailable: flagged || !absent ? session.unavailable : [...session.unavailable, { field: "tokens", reason: "field_absent" }], counts: session.models.reduce((total, model) => total + model.tokens[type], 0) }]
   }))

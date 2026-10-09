@@ -71,10 +71,14 @@ export const ENUMS = Object.freeze({
   // `log_truncated` is a log that ends mid-record; `capped` is data a deriver
   // trimmed to a schema limit; `desk_public` is job timing the transform
   // withholds because the desk's own remote is (or may be) public.
+  // `interval_outside_session_clock` is an interval the publishing transform
+  // dropped because it ran outside the published session clock (a subagent
+  // still working after the main log's last line): the rest of the field's
+  // intervals are whole, so it only ever makes a figure partial.
   unavailableReason: Object.freeze([
     "host_does_not_record", "log_missing", "log_truncated", "session_open",
     "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
-    "field_absent", "host_records_partly", "withheld_public",
+    "field_absent", "host_records_partly", "withheld_public", "interval_outside_session_clock",
   ]),
   // The size class of a character count (`sizeClass` in `derive-common.js`), and how a human turn relates to the agent's last stop.
   sizeClass: Object.freeze(["none", "xs", "s", "m", "l", "xl"]),

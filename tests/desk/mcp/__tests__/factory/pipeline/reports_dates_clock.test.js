@@ -287,7 +287,7 @@ test("when the task's next-prompt figure is unavailable, no wait publishes a num
     duration: 60 * MIN,
     intervals: [span("turn", 0, 0, 10 * MIN), wait(10 * MIN, 30 * MIN, stopOf("end_turn")), span("turn", 0, 30 * MIN, 60 * MIN)],
     jobs: [bound(J("a"), 0)],
-    unavailable: [...CLAUDE_FLAGS, { field: "turns", reason: "source_unreadable" }, { field: "tool_durations", reason: "source_unreadable" }],
+    unavailable: [...CLAUDE_FLAGS, { field: "job_offsets", reason: "source_unreadable" }],
   })
   const { walk } = walkOf([session], J("a"))
   assert.equal(walk.task.waiting_by_waited_on_ms.next_prompt.state, "unavailable")

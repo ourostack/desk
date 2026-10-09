@@ -98,7 +98,7 @@ import { covered, retryCoverage, splitSessions } from "./formulas.js"
 import { outcomeSections } from "./report.js"
 import { AGENTS_WORKING, UNLABELED_CLASS, correctStretches } from "./stretches.js"
 import { bindingsOverlap } from "./timeline.js"
-import { NUMBER_STATES, fieldsFeeding, withState } from "./number-states.js"
+import { NUMBER_STATES, ONLY_PART_REASONS, fieldsFeeding, withState } from "./number-states.js"
 import { reasonText } from "./report.js"
 import { compareVersions } from "./versions.js"
 
@@ -603,9 +603,9 @@ function byGrouping(records, groupings, summarize) {
 }
 
 // What one session adds to a fact-level total, read from the table in number-states.js. `fields` are the published fields that feed the number and `count(session)` is the session's own count, or `null` when the session recorded none.
-//   - A session with a flag on any feeding field other than `host_records_partly` supplied nothing usable: it is left out of `n` and of the value, and its reasons are listed.
+//   - A session with a flag on any feeding field other than a partial-only reason (`ONLY_PART_REASONS`: `host_records_partly`, `interval_outside_session_clock`) supplied nothing usable: it is left out of `n` and of the value, and its reasons are listed.
 //   - A session with a null count and no such flag is left out the same way, as `field_absent`.
-//   - A session flagged only `host_records_partly` supplied a lower bound: it is left out of `n`, so the number is partial, but its count stays in the value.
+//   - A session flagged only with partial-only reasons supplied a lower bound: it is left out of `n`, so the number is partial, but its count stays in the value.
 // `value` is the key absent, never 0 and never null, when no session supplied a count. The state is measured when `n === N`, partial when a value exists and `n < N`, and unavailable when no session supplied a count.
 // A rollup number that is not measured always names why; the one place that refuses one that does not.
 export function assertNamed(number) {
@@ -625,7 +625,7 @@ function totalOf(sessions, fields, count) {
     const flags = session.unavailable.filter((entry) => fields.includes(entry.field))
     const counted = count(session)
     for (const flag of flags) reasons.add(flag.reason)
-    if (flags.some((flag) => flag.reason !== PARTLY)) continue
+    if (flags.some((flag) => !ONLY_PART_REASONS.includes(flag.reason))) continue
     if (counted === null) {
       reasons.add("field_absent")
       continue

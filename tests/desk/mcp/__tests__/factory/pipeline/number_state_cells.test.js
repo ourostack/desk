@@ -8,7 +8,7 @@ import { ENUMS } from "../../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { calculateFormulas } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js"
 import { computeRollups } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
 import { buildJobTimeline } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
-import { FEEDS, FORMULA_IDS, NOT_FED, NUMBER_STATES, fieldsFeeding } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/number-states.js"
+import { FEEDS, FORMULA_IDS, NOT_FED, NUMBER_STATES, ONLY_PART_REASONS, fieldsFeeding } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/number-states.js"
 import { HOST_FLAGS, hostFlagsFor } from "../../../../../../plugins/desk/mcp/src/factory/host-flags.js"
 
 const JOB = "cccccccccccccccccccccccccccccccc"
@@ -138,7 +138,7 @@ test("every cell: a flagged input never yields a bare measured", (t) => {
   let walked = 0
   for (const { field, effect, id, host } of cells) {
     for (const reason of ENUMS.unavailableReason) {
-      const partly = reason === PARTLY
+      const partly = ONLY_PART_REASONS.includes(reason)
       const flag = [field, reason]
       const label = `${host} ${field}/${reason} -> ${id}`
       // Every covering session flagged.
@@ -200,18 +200,21 @@ test("the composite references result is never measured while a part is not, wit
   }
 })
 
-test("a host_records_partly entry keeps the value and gives partial under every unavailable row", (t) => {
+test("a host_records_partly or interval_outside_session_clock entry keeps the value and gives partial under every unavailable row", (t) => {
   const { problems, check } = walkProblems()
   let walked = 0
-  for (const [field, entry] of Object.entries(FEEDS)) {
-    for (const id of entry.unavailable) {
-      for (const host of ENUMS.host) {
-        const result = resultOf(formulasOf([sessionOf(host, 0, [[field, PARTLY]])]), id)
-        const label = `${host} ${field} -> ${id}`
-        check(result.state === "partial", `${label}: expected partial, got ${result.state}`)
-        check(result.value !== null, `${label}: the value was dropped`)
-        check(result.reasons.includes(PARTLY), `${label}: the reason is missing`)
-        walked += 1
+  assert.deepEqual(ONLY_PART_REASONS, [PARTLY, "interval_outside_session_clock"])
+  for (const reason of ONLY_PART_REASONS) {
+    for (const [field, entry] of Object.entries(FEEDS)) {
+      for (const id of entry.unavailable) {
+        for (const host of ENUMS.host) {
+          const result = resultOf(formulasOf([sessionOf(host, 0, [[field, reason]])]), id)
+          const label = `${host} ${field}/${reason} -> ${id}`
+          check(result.state === "partial", `${label}: expected partial, got ${result.state}`)
+          check(result.value !== null, `${label}: the value was dropped`)
+          check(result.reasons.includes(reason), `${label}: the reason is missing`)
+          walked += 1
+        }
       }
     }
   }

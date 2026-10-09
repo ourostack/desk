@@ -288,20 +288,55 @@ test("missing tool durations make active-time values partial, never complete and
   assert.deepEqual(formulas.lead_contributors.value.find((entry) => entry.key === "active_in_lead_ms"), { key: "active_in_lead_ms", value_ms: 6000, share: 6000 / 14000, partial: true, uncovered_sessions: 1 })
 })
 
-test("active time is unavailable only when every timed session lacks its turns, with the turns reason", () => {
+test("active time with turn and tool-duration gaps on every timed session is partial with both reasons, never unavailable", () => {
   const lacking = structuredClone(sessions[0])
   lacking.unavailable.push({ field: "turns", reason: "log_truncated" }, { field: "tool_durations", reason: "capped" })
   const formulas = calculateFormulas(buildJobTimeline(CLOSED, [lacking]))
   for (const field of ["active_time_ms", "active_in_lead_ms", "active_before_card_ms", "busy_time_ms", "parallelism", "concurrent_sessions", "concurrent_agents", "flow_efficiency"]) {
-    assert.deepEqual(formulas[field], S({ class: "unavailable", value: null, reason: "log_truncated" }, "unavailable", ["log_truncated"]), field)
+    assert.equal(formulas[field].state, "partial", field)
+    assert.deepEqual(formulas[field].reasons, ["capped", "log_truncated"], field)
   }
-  assert.equal(formulas.lead_contributors.value.some((entry) => entry.key === "active_in_lead_ms"), false)
+  assert.equal(formulas.lead_contributors.value.some((entry) => entry.key === "active_in_lead_ms"), true)
 
   // One session without turns and one with only a tool-duration gap: both are uncovered, neither decides alone.
   const toolGap = structuredClone(sessions[2])
   toolGap.unavailable.push({ field: "tool_durations", reason: "session_open" })
   const mixed = calculateFormulas(buildJobTimeline(CLOSED, [lacking, toolGap]))
   assert.deepEqual(mixed.active_time_ms, { class: "measured", value: 14000, partial: true, uncovered_sessions: 2, partial_reasons: ["capped", "log_truncated", "session_open"], state: "partial", reasons: ["capped", "log_truncated", "session_open"] })
+})
+
+test("a session whose turns lost some intervals keeps the active time it recorded, as a partial figure with the reason, never unavailable", () => {
+  // Every `turns` flag a deriver or the publishing transform writes (a dropped skewed interval, a cap, a log cut mid-record, an open
+  // turn, an interval outside the session clock) says some turn intervals are missing, never that the session recorded none.
+  const whole = calculateFormulas(buildJobTimeline(CLOSED, [structuredClone(sessions[0])]))
+  for (const reason of ["source_unreadable", "capped", "log_truncated", "session_open", "interval_outside_session_clock"]) {
+    const gap = structuredClone(sessions[0])
+    gap.unavailable.push({ field: "turns", reason })
+    const formulas = calculateFormulas(buildJobTimeline(CLOSED, [gap]))
+    for (const field of ["active_time_ms", "active_in_lead_ms", "active_before_card_ms", "busy_time_ms", "parallelism", "concurrent_sessions", "concurrent_agents", "flow_efficiency"]) {
+      assert.equal(formulas[field].state, "partial", `${reason} ${field}`)
+      assert.deepEqual(formulas[field].value, whole[field].value, `${reason} ${field}`)
+      assert.ok(formulas[field].reasons.includes(reason), `${reason} ${field}`)
+    }
+    assert.equal(formulas.lead_contributors.value.some((entry) => entry.key === "active_in_lead_ms"), true, reason)
+  }
+})
+
+test("an interval dropped because it ran outside the session clock leaves every figure it feeds partial, never unavailable", () => {
+  const whole = calculateFormulas(buildJobTimeline(CLOSED, [structuredClone(sessions[0])]))
+  const gap = structuredClone(sessions[0])
+  gap.unavailable.push(...["turns", "tool_durations", "human_waits", "api_retries"].map((field) => ({ field, reason: "interval_outside_session_clock" })))
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, [gap]))
+  for (const [name, result, before] of [
+    ["active_time_ms", formulas.active_time_ms, whole.active_time_ms],
+    ["api_retries", formulas.rework_signals.api_retries, whole.rework_signals.api_retries],
+    ["human_wait_ms", formulas.waits.human_wait_ms, whole.waits.human_wait_ms],
+    ["api_retry_ms", formulas.waits.api_retry_ms, whole.waits.api_retry_ms],
+  ]) {
+    assert.equal(result.state, "partial", name)
+    assert.deepEqual(result.value, before.value, name)
+    assert.ok(result.reasons.includes("interval_outside_session_clock"), name)
+  }
 })
 
 test("the API retry signal is unavailable when no session records retries and partial when some do not", () => {
