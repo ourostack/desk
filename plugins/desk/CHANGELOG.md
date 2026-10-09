@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.256 — 2026-10-09
+
+Fixes `desk-web` running the isolated headless browser in Agency and Copilot sessions even when a plugin such as ms-desk declares `desk.browser`: the declaration scan took any session without `COPILOT_PLUGIN_ROOT` (which Copilot does not pass to MCP servers) for Claude Code and read Claude's plugin registry, so it never saw the plugin beside Desk, and it now follows the main Desk server's rule, where a session without `CLAUDE_PLUGIN_ROOT` is Copilot's and reads the plugin folders beside Desk.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.255 — 2026-10-09
 
 The background loop's evaluator step now starts a run even when its facts scan is slow. The loop worker gave the evaluator a deadline 17 minutes after it started, a run needs 15 minutes, and the scan of finished jobs runs first; once the scan took more than 2 minutes (131 seconds was seen with 18 jobs ready), every job was deferred and no run ever started, while the step still looked healthy. The scan's time is now left out of the loop's budget: once the scan ends, the [loop worker](mcp/src/factory/loop-worker.js) grants that time (at most 5 hours in all) and moves the evaluator's limit, the budget, the 3 minutes kept for the later steps and its own ceiling by it, and it tells the [launcher](hooks/loop-start.cjs) over a message channel, only while that channel is open, so the launcher's hard stop moves by the same amount. This covers any scan that ends before the worker's first ceiling, 21 minutes after it starts; a longer scan is still ended by that ceiling, as before. The worker also rewrites its lock when it is granted time, so the end-of-turn kick still sees it as running and does not start a second worker that would only record `busy`. The daily ceiling of 30 runs, one run per job per UTC day and the one-hour spacing are unchanged. Jobs left only because no run would finish in time are now recorded as `evaluator.headless.deferred_reason: "no_time_for_a_run"`, and a step that ran nothing for that reason records the state and result `no_time_for_a_run` as a failed step instead of a clean `none_could_run`, so `factory.js status`, the health record and the session-start line show it.
