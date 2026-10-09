@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.261 — 2026-10-09
+
+On Windows, a migration that bash could not check now makes session start report Desk as degraded and name it, instead of leaving it out of the summary, and the WSL relay is now recognized by its language-independent error line rather than an English sentence. Copilot's session record, the sync status file, the release and stale-Desk caches, the filer throttle and launch stamps, the sign-off list and the support-matrix generator now retry their final rename for about a second when Defender or the search indexer briefly holds the file, instead of failing with EPERM.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.260 — 2026-10-09
 
 On Windows, Desk's migration check now runs with Git for Windows' bash instead of whichever `bash` comes first on PATH, and when only the WSL relay `bash.exe` exists it says at session start that bash could not run and names the migration, instead of treating it as "not needed". The factory report build, the last-start record and the cleanup index now retry their final rename for about a second when Defender or the search indexer briefly holds the file, instead of failing with EPERM. Session-start hooks that the host launches with a bare `bash` are not changed by this.
