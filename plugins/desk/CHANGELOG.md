@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.260 — 2026-10-09
+
+On Windows, Desk's migration check now runs with Git for Windows' bash instead of whichever `bash` comes first on PATH, and when only the WSL relay `bash.exe` exists it says at session start that bash could not run and names the migration, instead of treating it as "not needed". The factory report build, the last-start record and the cleanup index now retry their final rename for about a second when Defender or the search indexer briefly holds the file, instead of failing with EPERM. Session-start hooks that the host launches with a bare `bash` are not changed by this.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.259 — 2026-10-09
 
 The `desk_reindex` tool description and its `force` input no longer say `force` drops the database and rebuilds from scratch. They now say what the tool does: it asks the shared readiness controller to bring the lexical index up to date and waits for it, and `force` is accepted for compatibility but changes nothing, because a live index is never deleted.
