@@ -9,6 +9,7 @@ import {
   semanticContractDiagnostic, stableStringify, validatePrivateDirectory,
 } from "./identity.js"
 import { ownerState } from "./owner-record.js"
+import { controllerStartTimeoutMs } from "./process-start.js"
 import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
@@ -17,8 +18,9 @@ const localControllers = new Map()
 const ABANDONED_RECHECK_MS = 50
 // A running owner that is only busy gets one longer handshake before the session gives up on it for this attempt.
 const LIVE_OWNER_HANDSHAKE_MS = 1000
-// A controller that lost the bind knows another controller is starting; it waits for that one before it gives up on the election. On Windows the winner reads its process start through PowerShell after binding, which takes seconds, so the wait is twice the 5 s the read is capped at (process-start.js), which also covers a winner that bound late. Elsewhere the winner publishes within milliseconds and the wait stays short.
-const ELECTION_WAIT_MS = { win32: 10_000, darwin: 500, linux: 500 }
+// A controller that lost the bind knows another controller is starting; it waits for that one before it gives up on the election and retries on admission backoff. The winner can take its whole start window to publish (controllerStartTimeoutMs: node boot, the runtime, the workspace scan and, on Windows, the capped process start read), so the wait is that window plus a margin on every platform, derived from it so the two cannot drift apart. A winner that dies frees the pipe and ends the wait at once, so the long wait costs nothing when no winner is coming.
+const ELECTION_MARGIN_MS = 2_000
+export const electionWaitMsFor = (platform = process.platform) => controllerStartTimeoutMs(platform) + ELECTION_MARGIN_MS
 const controllerStarts = new Map()
 const privateDirectoryValidators = {
   win32: Object,
@@ -51,7 +53,7 @@ export async function connectOrStartController({
   onRepair = () => {},
   startController = startReadinessController,
   env = process.env,
-  electionWaitMs = ELECTION_WAIT_MS[process.platform],
+  electionWaitMs = electionWaitMsFor(process.platform),
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)

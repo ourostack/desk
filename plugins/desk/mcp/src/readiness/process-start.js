@@ -18,6 +18,13 @@ import { win32 as winPath } from "node:path"
 export const WINDOWS_PROCESS_START_CAP_MS = 5_000
 const EXEC_TIMEOUT_MS = { darwin: 5_000, win32: WINDOWS_PROCESS_START_CAP_MS }
 
+// The time a controller child is given from its spawn to its ready message: the child's own start (node boot, loading the runtime, scanning the workspace) on every platform. Windows adds the one serial step the others do not have, the process start read through PowerShell, which is capped at 5 s (WINDOWS_PROCESS_START_CAP_MS above). The 10 s base plus that cap left 15 s, and a loaded Windows machine took 14.896 s to start a controller (issue 255, job 8), so the Windows window is a flat 30 s, twice the slowest start seen. A child that dies does not wait for this window: its exit or error fails the start at once with its own reason. The window only bounds a child that is alive and silent.
+export const CONTROLLER_START_MS = 10_000
+export const WINDOWS_CONTROLLER_START_MS = 30_000
+export function controllerStartTimeoutMs(platform = process.platform) {
+  return platform === "win32" ? WINDOWS_CONTROLLER_START_MS : CONTROLLER_START_MS
+}
+
 /** Run `file args` and resolve with its stdout, or null when it fails, times out or cannot run. */
 export function runForText(file, args, { timeout, env }) {
   return new Promise((resolve) => {
