@@ -80,6 +80,18 @@ test("a Desk child's environment carries the user's Git identity, the token sock
   for (const key of Object.keys(env)) assert.ok(!key.startsWith("DESK_APP") && key !== "DESK_SIGNING_KEY" && key !== "OTHER_SECRET", key);
 });
 
+test("a Desk child keeps the gateway's Git config location settings, so an operator or a test can pin which Git config applies", () => {
+  const env = deskChildEnv({
+    config: readConfig(FULL),
+    user: { login: "arimendelow" },
+    socketPath: "/s",
+    baseEnv: { GIT_CONFIG_GLOBAL: "/etc/desk/gitconfig", GIT_CONFIG_NOSYSTEM: "1", GIT_DIR: "/elsewhere" },
+  });
+  assert.equal(env.GIT_CONFIG_GLOBAL, "/etc/desk/gitconfig");
+  assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
+  assert.equal(env.GIT_DIR, undefined, "other Git settings stay out");
+});
+
 test("a user without a display name commits under their login", () => {
   const env = deskChildEnv({
     config: readConfig(FULL),

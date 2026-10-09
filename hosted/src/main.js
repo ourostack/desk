@@ -17,7 +17,9 @@ import { serveTokens } from "./token-socket.js";
 export const NOT_SET_UP = "Hosted Desk is not set up yet: its GitHub App is missing.";
 const APP_SETTINGS = ["DESK_APP_ID", "DESK_APP_KEY_FILE", "DESK_APP_CLIENT_ID", "DESK_APP_CLIENT_SECRET"];
 // The only parts of the gateway's own environment a Git or Desk child gets.
-const PASSED_THROUGH = ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "TMPDIR"];
+// The two Git config locations let whoever starts the gateway pin which Git
+// config every child reads (the end-to-end test uses them to stay hermetic).
+const PASSED_THROUGH = ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"];
 
 // The gh shim's directory, put first on a Desk child's PATH.
 const SHIM_DIR = fileURLToPath(new URL("../bin", import.meta.url));

@@ -8,12 +8,14 @@ on:
   pull_request:
     paths:
       - "hosted/**"
+      - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
   push:
     branches:
       - main
     paths:
       - "hosted/**"
+      - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
   workflow_dispatch:
 
@@ -42,12 +44,21 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
-          cache-dependency-path: hosted/package-lock.json
+          cache-dependency-path: |
+            hosted/package-lock.json
+            plugins/desk/mcp/package-lock.json
 
       - name: Install dependencies
         working-directory: hosted
         run: npm ci
 
-      - name: Run the gateway tests
+      # The end-to-end test runs the real Desk plugin from this checkout.
+      - name: Install Desk's dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      - name: Run the gateway tests, end to end included
         working-directory: hosted
+        env:
+          DESK_E2E: "1"
         run: npm test
