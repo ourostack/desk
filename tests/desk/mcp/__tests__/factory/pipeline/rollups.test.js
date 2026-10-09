@@ -430,6 +430,18 @@ test("in the Pareto the first job by ID keeps shared time whatever it labeled it
   assert.equal(row.jobs, 4, "job 8 adds nothing to the row, so it is not counted")
 })
 
+test("a labels file with no stretches is unused as outside_share, so an empty answer never reads as a job labeled with no waste", () => {
+  const sessions = fixtureSessions()
+  const labels = fixtureLabels()
+  const used = labels.find((entry) => entry.session === S(1))
+  const empty = { ...used, stretches: [], stops: [] }
+  const resolved = resolveLabels([...labels.filter((entry) => entry !== used), empty], sessions)
+  assert.equal(resolved.byJobSession.has(`${used.job}/${S(1)}`), false)
+  assert.deepEqual(resolved.unused.find((entry) => entry.reason === "outside_share"), { reason: "outside_share", files: 1 })
+  const record = buildTimelines(sessions).map((timeline) => jobRecord({ timeline, formulas: calculateFormulas(timeline) }, resolved.byJobSession)).find((entry) => entry.job === used.job)
+  assert.notEqual(record.measures.muda_time.state, "measured", "the job is not read as labeled with zero waste")
+})
+
 test("labels with stretches but none inside the job's share are unused, so the job is not labeled, never a zero", () => {
   const { resolved, records } = sharedSession({ agents: [0], segments: [{ start_ms: 0, end_ms: 5000 }] }, { agents: [0], segments: [{ start_ms: 5000, end_ms: 10000 }] })
   assert.equal(resolved.unused.find((entry) => entry.reason === "outside_share"), undefined)
@@ -444,9 +456,10 @@ test("labels with stretches but none inside the job's share are unused, so the j
   const job8 = buildTimelines(sessions).map((timeline) => jobRecord({ timeline, formulas: calculateFormulas(timeline) }, outside.byJobSession)).find((entry) => entry.job === J("8"))
   assert.deepEqual(job8.measures.muda_time, { excluded: "not_labeled" })
   assert.equal(records.find((entry) => entry.job === J("8")).measures.muda_time.state, "measured")
-  // A file with no stretches at all (the evaluator found nothing to label) is still used.
+  // A file with no stretches at all is no reading of the job either, never a zero.
   const empty = resolveLabels([...labels, { ...onlyEarly, stretches: [] }], sessions)
-  assert.equal(empty.byJobSession.has(`${J("8")}/${S(1)}`), true)
+  assert.equal(empty.byJobSession.has(`${J("8")}/${S(1)}`), false)
+  assert.deepEqual(empty.unused.find((entry) => entry.reason === "outside_share"), { reason: "outside_share", files: 1 })
 })
 
 test("a Pareto whose labeled jobs carry no muda has no shares, not zero shares", () => {
@@ -513,21 +526,23 @@ test("where every label is /2, each row records its time by confidence, adding u
   assert.deepEqual(row("motion").confidence_ms, { high: 0, medium: 0, low: 0 })
   assert.deepEqual(row("motion").evaluator_versions, ["3.1.0", "3.1.1"])
   for (const entry of overall.wastes) assert.equal(entry.confidence_ms.high + entry.confidence_ms.medium + entry.confidence_ms.low, entry.total_ms, entry.waste)
-  // A session labeled with no stretches at all recorded no confidence: its rows read as not recorded, never as a sound 0 / 0 / 0, and
-  // the file's own evaluator version is still listed.
+  // A session labeled with no stretches at all is no reading of its job: the file is unused, so the job reads not labeled, never a sound
+  // zero, and none of its rows counts it.
   const empty = labelsWithV2().map((entry) => (entry.session === S(1) ? { ...entry, stretches: [] } : entry))
-  const version = empty.find((entry) => entry.session === S(1)).evaluator.plugin_version
-  const bare = rollupsOf(empty, (entry) => entry.job === J("1")).muda.groupings.overall.all
-  assert.deepEqual(bare.wastes.find((entry) => entry.waste === "unknown"), { waste: "unknown", total_ms: 0, share: null, cumulative_share: null, jobs: 0, evaluator_versions: [version] })
-  assert.match(renderRollupsMarkdown(rollupsOf(empty, (entry) => entry.job === J("1"))), new RegExp(`\\| unknown \\| 0 ms \\| n/a \\| n/a \\| 0 \\| not recorded \\| ${version.replaceAll(".", "\\.")} \\|`, "u"))
-  // So does an empty file of either version beside /2 ones: a row with no time is judged by every file, and an empty one recorded nothing.
+  const resolved = resolveLabels(empty, fixtureSessions())
+  assert.equal(resolved.byJobSession.has(`${J("1")}/${S(1)}`), false)
+  assert.deepEqual(resolved.unused.find((entry) => entry.reason === "outside_share"), { reason: "outside_share", files: 1 })
+  const bare = rollupsOf(empty, (entry) => entry.job === J("1"))
+  assert.equal(bare.muda.groupings.overall.all.muda_time_ms, null, "no labeled time, not zero waste")
+  assert.ok(bare.muda.groupings.overall.all.wastes.every((entry) => entry.jobs === 0 && entry.share === null), "no row counts the job")
+  // An empty file beside /2 ones is unused, so the zero rows stay the sound zeros of the files that are used.
   const allV2 = fixtureLabels().map((entry) => ({ ...entry, schema: "desk.factory.labels/2", stretches: entry.stretches.map((stretch) => ({ ...stretch, confidence: "high", evaluator_version: entry.evaluator.plugin_version })) }))
   const zeroRows = (files) => rollupsOf(files).muda.groupings.overall.all.wastes.filter((entry) => entry.total_ms === 0)
   assert.ok(zeroRows(allV2).length > 0 && zeroRows(allV2).every((entry) => Object.hasOwn(entry, "confidence_ms")), "with every file /2 and labeled, a zero row is a sound zero")
   for (const schema of ["desk.factory.labels/1", "desk.factory.labels/2"]) {
     const withEmpty = allV2.map((entry) => (entry.session === S(1) ? { ...entry, schema, stretches: [] } : entry))
     assert.ok(zeroRows(withEmpty).length > 0, schema)
-    assert.ok(zeroRows(withEmpty).every((entry) => !Object.hasOwn(entry, "confidence_ms")), schema)
+    assert.ok(zeroRows(withEmpty).every((entry) => Object.hasOwn(entry, "confidence_ms")), schema)
   }
 })
 

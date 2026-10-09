@@ -53,7 +53,10 @@ async function seedJob(env, base, index, { host = "claude-code", hosts = [host] 
     facts.session.host = sessionHost
     facts.jobs = [{ ...facts.jobs[0], job }]
     await writeLocalFacts(env, STORE, facts)
-    await indexJob(env, job, `${sessionHost}-${facts.session.id}.json`)
+    const name = `${sessionHost}-${facts.session.id}.json`
+    await indexJob(env, job, name)
+    // Derived as this machine derives today, with stop facts, so the brief asks for the current rubric.
+    await updateStatus(env, (current) => ({ ...current, derivations: { ...current.derivations, [name]: { store: STORE, binding_version: STOP_FACTS_BINDING_VERSION } } }))
   }
   await requestEvaluation(env, { job, deskRoot: path.join(base, "desk") })
   return job
@@ -416,13 +419,15 @@ test("a headless session starts nothing, not even the probe, and writes no state
   await seedJob(env, base, 1)
   const root = await factoryStateRoot(env)
   const before = await fs.readdir(root)
+  // The seed's derive receipt is the only state there is; the step adds none.
+  const statusBefore = await fs.readFile(path.join(root, "status.json"), "utf8")
   const options = seams()
   assert.deepEqual(await step({ ...env, DESK_FACTORY_HEADLESS: "1" }, options), { ok: false, result: "headless_session" })
   assert.equal(options.runHeadless.calls.length, 0)
   assert.equal(options.probes.length, 0)
   assert.equal(options.found.length, 0)
   assert.deepEqual(await fs.readdir(root), before)
-  await assert.rejects(fs.stat(path.join(root, "status.json")))
+  assert.equal(await fs.readFile(path.join(root, "status.json"), "utf8"), statusBefore)
   assert.equal((await listRequests(root)).length, 1, "the request is untouched")
 
   for (const value of ["", "0"]) {

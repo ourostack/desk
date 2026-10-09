@@ -239,8 +239,8 @@ function clipStretches(stretches, spans) {
  * `facts_ambiguous`, the first cross-check code (a facts file re-derived
  * after the labels merged can leave them `evidence_unmatched`, for example),
  * `share_unknown` when the facts do not say which part of the session
- * was the job's, or `outside_share` when the labels have stretches but none
- * inside the job's share. A stop label that alone fails the cross-check
+ * was the job's, or `outside_share` when the labels have no stretch
+ * inside the job's share (none at all included). A stop label that alone fails the cross-check
  * (its wait is no longer a human wait of the facts, or a rule now decides
  * it) is dropped from the used entry's `stops`, and the file is still used:
  * that wait reads not labeled until the evaluator labels it again.
@@ -273,8 +273,8 @@ export function resolveLabels(labels, sessions) {
       const clipped = share === null ? [] : clipStretches(entry.stretches, share)
       if (fileErrors.length > 0) reasons.push(fileErrors[0].code)
       else if (share === null) reasons.push("share_unknown")
-      // Stretches, none inside the job's share: the evaluator labeled other jobs' time, which is no reading of this job, never a zero.
-      else if (entry.stretches.length > 0 && clipped.length === 0) reasons.push("outside_share")
+      // No stretch inside the job's share (other jobs' time, or no stretch at all): no reading of this job, never a zero.
+      else if (clipped.length === 0) reasons.push("outside_share")
       else {
         const binding = matches[0].jobs.find((candidate) => candidate.job === entry.job)
         dropped.push(...check.errors.filter((error) => error.path.startsWith("stops.")).map((error) => error.code))
@@ -376,11 +376,10 @@ function compactions(sources, split) {
 
 // One labeled session's time per Pareto row, and what each row's labels say about themselves: `confidence[waste]` is the time by
 // confidence, or `null` when the file records none; `versions[waste]` the labels' versions. `all_versions` and `recorded` answer for a
-// row with no time, which the whole file speaks to. A file records a confidence only when it is `/2` (every `/2` stretch carries one)
-// and has a stretch: a file with no stretches recorded nothing, so its rows read as not recorded, never as a sound zero. Its own
-// evaluator version still speaks for it.
+// row with no time, which the whole file speaks to. A file records a confidence only when it is `/2` or later (every such stretch
+// carries one). Every entry here has a stretch: `resolveLabels` never uses a file with none inside the job's share.
 function sessionWaste(entry) {
-  const recorded = entry.schema !== LABELS_SCHEMAS[0] && entry.stretches.length > 0
+  const recorded = entry.schema !== LABELS_SCHEMAS[0]
   const totals = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, 0]))
   const confidence = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, recorded ? Object.fromEntries(LABEL_CONFIDENCE.map((level) => [level, 0])) : null]))
   const versions = Object.fromEntries(PARETO_WASTES.map((waste) => [waste, []]))
@@ -394,7 +393,6 @@ function sessionWaste(entry) {
     if (!versions[stretch.waste].includes(version)) versions[stretch.waste].push(version)
     if (recorded) confidence[stretch.waste][stretch.confidence] += duration
   }
-  if (allVersions.size === 0) allVersions.add(entry.evaluator.plugin_version)
   return { totals, confidence, versions, all_versions: [...allVersions], recorded, can_say_unknown: entry.schema !== LABELS_SCHEMAS[0], ...correctedWaiting(entry.corrected) }
 }
 
