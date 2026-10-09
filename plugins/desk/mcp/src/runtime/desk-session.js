@@ -17,6 +17,7 @@ import * as path from "node:path"
 import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
 import { createAdmission, exceptionOutcome } from "./admission.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
+import { hostedRefusal } from "./hosted.js"
 import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
@@ -117,6 +118,7 @@ export function createDeskSession(deps) {
     launcher = null,
     hung: hungOptions = {},
     statusRunLimitMs = STATUS_RUN_LIMIT_MS,
+    env = process.env,
   } = deps
   const hungPolicy = {
     misses: HUNG_MISSES,
@@ -518,6 +520,9 @@ export function createDeskSession(deps) {
     if (!TOOL_NAMES.includes(name)) {
       return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true }
     }
+    // A hosted Desk refuses before anything runs, so a refused repair or tool never reaches an implementation.
+    const hostedRefused = hostedRefusal(name, input, env)
+    if (hostedRefused !== null) return { content: [{ type: "text", text: JSON.stringify(hostedRefused) }], isError: true }
     try {
       return await dispatch(name, input, signal)
     } catch (error) {

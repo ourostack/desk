@@ -6,6 +6,7 @@
 
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../tool-names.js"
 import { DOCTOR_REPAIRS, TOOL_INPUT_SCHEMAS } from "../tool-schemas.js"
+import { TOOL_ANNOTATIONS } from "./hosted.js"
 
 export { DOCTOR_REPAIRS }
 
@@ -14,11 +15,13 @@ export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.fr
   name,
   description: TOOL_DESCRIPTIONS[name],
   inputSchema: TOOL_INPUT_SCHEMAS[name],
+  annotations: TOOL_ANNOTATIONS[name],
 })))
 
 /**
  * Serve MCP on `input`/`output`. `callTool({ name, input, signal })` returns an MCP tool result (or a promise of one).
  * `onHandshake` fires once, after the first tools/list reply is written: hosts send tools/list after notifications/initialized, often as a separate write, and admission must not start before that list is answered.
+ * `instructions`, when a non-empty string, goes in the initialize result as the server's MCP instructions.
  * Returns `{ closed, notifyToolsChanged }`: `closed` resolves when input ends and every call in flight has answered.
  */
 export function startFrontDoor({
@@ -28,6 +31,7 @@ export function startFrontDoor({
   serverName = "desk-mcp",
   serverVersion = "0.0.0",
   onHandshake = () => {},
+  instructions,
 }) {
   const inFlight = new Map()
   const pending = new Set()
@@ -115,6 +119,7 @@ export function startFrontDoor({
           protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
           capabilities: { tools: { listChanged: true } },
           serverInfo: { name: serverName, version: serverVersion },
+          ...(typeof instructions === "string" && instructions.length > 0 ? { instructions } : {}),
         },
       })
       return
