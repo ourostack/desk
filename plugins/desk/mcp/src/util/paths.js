@@ -472,7 +472,7 @@ async function validateExistingTarget({
   segments,
 }) {
   let cursor = effectiveRoot
-  for (const segment of segments) {
+  for (const [index, segment] of segments.entries()) {
     cursor = path.join(cursor, segment)
     const stat = await lstatIfExists(cursor)
     if (stat === null) return
@@ -481,6 +481,14 @@ async function validateExistingTarget({
     if (!isPathContained(realEffectiveRoot, resolved)) {
       throw new Error(
         `desk-mcp: write target resolves outside effective write root: ${cursor}`,
+      )
+    }
+    // Something on the way to the last segment must be a folder. Windows reports a path under a file as missing and
+    // POSIX reports ENOTDIR, so the next lstat would differ by platform (and mkdir would fail with a raw error):
+    // stop at the file here, with the same refusal everywhere. A link is judged by what it leads to.
+    if (index < segments.length - 1 && !(stat.isSymbolicLink() ? await fs.stat(resolved) : stat).isDirectory()) {
+      throw new Error(
+        `desk-mcp: write target runs under a file, not a folder: ${cursor}`,
       )
     }
   }
