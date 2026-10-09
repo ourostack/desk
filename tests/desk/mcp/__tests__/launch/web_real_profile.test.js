@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
@@ -228,7 +228,7 @@ test("a database that fails to open or read still leaves no copy behind", async 
 
 function connectOptions(root, overrides = {}) {
   const installed = { dir: path.join(root, "install") }
-  return { declaration: { state: "declared", channel: "msedge", domain: "microsoft.com" }, installed, executable: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", launcherDir: path.join(root, "launchers"), platform: "darwin", env: {}, homeDir: path.join(root, "home"), unavailable, reconnectFix: fixAfter, tmpdir: path.join(root, "tmp"), ...overrides }
+  return { declaration: { state: "declared", channel: "msedge", domain: "microsoft.com" }, installed, executable: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", platform: "darwin", env: {}, homeDir: path.join(root, "home"), unavailable, reconnectFix: fixAfter, tmpdir: path.join(root, "tmp"), ...overrides }
 }
 
 test("connecting names the missing profile, the missing extension and an unreadable token, each in one line with its fix", async () => {
@@ -271,11 +271,12 @@ test("connecting passes the profile in the arguments and the token only in the e
     declaration: { state: "declared", channel: "chrome", domain: "microsoft.com" },
     requireModule: () => levelStub([[tokenKey(), latin(TOKEN)]]),
   }))
-  assert.deepEqual(answer.args, ["--extension", "--browser", "chrome", "--profile-dir-name", "Default", "--executable-path", path.join(root, "launchers", "chrome-new-window.sh")])
+  assert.deepEqual(answer.args, ["--extension", "--browser", "chrome", "--profile-dir-name", "Default"])
   assert.deepEqual(answer.env, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN })
   assert.deepEqual(answer.secrets, [TOKEN])
+  assert.equal(answer.executable, "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+  assert.equal(answer.profile, "Default")
   assert.doesNotMatch(answer.args.join(" "), new RegExp(TOKEN, "u"))
-  assert.match(readFileSync(answer.args.at(-1), "utf8"), /--new-window/u)
 })
 
 test("a browser that is not installed is one clear line before anything is read", async () => {
@@ -287,27 +288,47 @@ test("a browser that is not installed is one clear line before anything is read"
 
 // ---- the agent's own window ----
 
-test("the wrapper starts the real browser with --new-window first, quoting any path", () => {
-  assert.equal(real.launcherScript("darwin", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"), "#!/bin/sh\nexec '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' --new-window \"$@\"\n")
-  assert.equal(real.launcherScript("linux", "/opt/it's/edge"), "#!/bin/sh\nexec '/opt/it'\\''s/edge' --new-window \"$@\"\n")
-  assert.equal(real.launcherScript("win32", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"), "@echo off\r\n\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\" --new-window %*\r\n")
-  assert.match(real.launcherScript("win32", "C:\\100%\\edge.exe"), /100%%/u)
+function fakeBrowserProcess(events = []) {
+  const child = new EventEmitter()
+  child.unref = () => events.push("unref")
+  return child
+}
+
+test("the holding window is opened by starting the browser directly, with no token, and waited for", async () => {
+  const calls = []
+  const stderr = []
+  const started = Date.now()
+  await real.openWindow({
+    spawn: (file, argv, options) => { calls.push({ file, argv, options }); return fakeBrowserProcess(calls) },
+    executable: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", profile: "Profile 4", env: { PATH: "/usr/bin" }, stderr: { write: (text) => stderr.push(text) }, waitMs: 60,
+  })
+  assert.ok(Date.now() - started >= 50, "it waits for the window to exist")
+  const [{ file, argv, options }] = calls
+  assert.equal(file, "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe")
+  assert.deepEqual(argv.slice(0, 2), ["--new-window", "--profile-directory=Profile 4"])
+  assert.equal(argv.length, 3)
+  assert.match(argv[2], /^data:text\/html,/u)
+  const page = decodeURIComponent(argv[2].slice("data:text/html,".length))
+  assert.match(page, /<title>Agent window<\/title>/u)
+  assert.match(page, /visibilitychange/u)
+  assert.match(page, /document\.hidden\)window\.close\(\)/u)
+  assert.match(page, /setTimeout\(function\(\)\{window\.close\(\)\},30000\)/u)
+  assert.deepEqual(options, { detached: true, stdio: "ignore", shell: false, windowsHide: true, env: { PATH: "/usr/bin" } })
+  assert.equal(calls.at(-1), "unref", "the browser is left to run on its own")
+  assert.deepEqual(stderr, [])
 })
 
-test("the wrapper is written once, runnable, and only rewritten when the browser's path changes", async () => {
-  const root = await mkTempRoot("real-wrapper-")
-  const dir = path.join(root, "launchers")
-  const file = real.writeLauncher(dir, "darwin", "msedge", "/Applications/Edge")
-  assert.equal(file, path.join(dir, "msedge-new-window.sh"))
-  assert.equal(readFileSync(file, "utf8"), real.launcherScript("darwin", "/Applications/Edge"))
-  if (process.platform !== "win32") assert.ok((statSync(file).mode & 0o111) !== 0, "the wrapper can be run")
-  const stamp = statSync(file).mtimeMs
-  assert.equal(real.writeLauncher(dir, "darwin", "msedge", "/Applications/Edge"), file)
-  assert.equal(statSync(file).mtimeMs, stamp)
-  real.writeLauncher(dir, "darwin", "msedge", "/Applications/Other")
-  assert.match(readFileSync(file, "utf8"), /Other/u)
-  assert.deepEqual(readdirSync(dir), ["msedge-new-window.sh"])
-  assert.equal(real.writeLauncher(dir, "win32", "chrome", "C:\\chrome.exe"), path.join(dir, "chrome-new-window.cmd"))
+test("a browser that will not start is reported on stderr and the call goes on", async () => {
+  const stderr = []
+  const out = { write: (text) => stderr.push(text) }
+  await real.openWindow({ spawn: () => { throw new Error("EACCES") }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 1 })
+  const child = fakeBrowserProcess()
+  await real.openWindow({ spawn: () => { setImmediate(() => child.emit("error", new Error("ENOENT"))); return child }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 20 })
+  assert.match(stderr.join(""), /could not open a new browser window: EACCES/u)
+  assert.match(stderr.join(""), /could not open a new browser window: ENOENT/u)
+  const quick = Date.now()
+  await real.openWindow({ spawn: () => fakeBrowserProcess(), executable: "x", profile: "Default", env: {}, stderr: out })
+  assert.ok(Date.now() - quick >= 900, "the default wait is about a second")
 })
 
 // ---- the agent's own tabs ----
@@ -348,29 +369,43 @@ test("closing tabs stops at an error, a failed close or the limit, and never thr
   let closes = 0
   await real.closeOwnTabs(async (name, args) => { if (args.action === "close") closes += 1; return tabsText(500) })
   assert.equal(closes, 50)
+  const early = []
+  await real.closeOwnTabs(async (name, args) => { early.push(args.action); return args.action === "list" ? tabsText(3) : tabsText(0) })
+  assert.deepEqual(early, ["list", "close"], "a close that says no tab is open ends the cleanup")
   await real.closeOwnTabs(async () => { throw new Error("the browser ended") })
   await real.closeOwnTabs(async (name, args) => { if (args.action === "close") throw new Error("timed out"); return tabsText(1) })
 })
 
-test("the tabs hooks answer browser_close themselves, close tabs only for a used connection, and do nothing at the end after a close", posixOnly, async () => {
+test("the tabs hooks open the window once per connection, answer browser_close themselves, and mark a connection used only after a success", posixOnly, async () => {
   const calls = []
+  let opens = 0
   const api = { callTool: async (name, args) => { calls.push(args.action); return tabsText(0) } }
-  const tabs = real.ownTabs()
+  const tabs = real.ownTabs(async () => { opens += 1 })
   await tabs.cleanup(api)
   assert.deepEqual(calls, [], "a session that never called the browser has no tabs to close")
   const unused = await tabs.beforeCall({ name: "browser_close" }, api)
   assert.match(unused.content[0].text, /is closed/u, "browser_close is answered here, not passed on")
-  assert.deepEqual(calls, [])
+  assert.deepEqual([calls, opens], [[], 0], "closing an unused connection opens nothing and closes nothing")
   assert.equal(await tabs.beforeCall({ name: "browser_navigate" }, api), null)
+  assert.equal(await tabs.beforeCall({ name: "browser_snapshot" }, api), null)
+  assert.equal(opens, 1)
+  tabs.afterCall({ name: "browser_navigate" }, true)
+  await tabs.cleanup(api)
+  assert.deepEqual(calls, [], "a failed call does not make cleanup start a connection")
+  tabs.afterCall({ name: "browser_close" }, false)
+  await tabs.cleanup(api)
   assert.deepEqual(calls, [])
+  tabs.afterCall({ name: "browser_navigate" }, false)
   const closed = await tabs.beforeCall({ name: "browser_close" }, api)
   assert.equal(closed, unused)
-  assert.deepEqual(calls, ["list"], "browser_close closes the tabs first")
+  assert.deepEqual(calls, ["list"], "browser_close closes the tabs")
   await tabs.cleanup(api)
   assert.deepEqual(calls, ["list"], "the end of the session after a close does nothing more")
   assert.equal(await tabs.beforeCall({ name: "browser_snapshot" }, api), null)
+  assert.equal(opens, 2, "a call after a close opens a new window")
+  tabs.afterCall({ name: "browser_snapshot" }, false)
   await tabs.cleanup(api)
-  assert.deepEqual(calls, ["list", "list"], "a call after a close starts a new connection that is cleaned up again")
+  assert.deepEqual(calls, ["list", "list"])
 })
 
 // ---- the launcher in the real profile ----
@@ -389,6 +424,7 @@ function browserStub(events, options = {}) {
     child.pid = 90000 + spawns.length
     child.killed = []
     child.tabs = 0
+    child.recreated = 0
     child.kill = (signal) => {
       child.killed.push(signal)
       events.push(`child:killed ${signal}`)
@@ -418,11 +454,14 @@ function browserStub(events, options = {}) {
         if (options.mode === "silenttabs") return
         if (options.mode === "exittabs") { setImmediate(() => child.emit("exit", 9, null)); return }
         if (options.mode === "errortabs") { send({ error: { code: -32000, message: "tabs are unavailable" } }); return }
+        if (args.action === "close" && child.tabs === 0) { reply({ content: [{ type: "text", text: "### Open tabs\nNo open tabs." }] }); return }
         if (args.action === "close") child.tabs -= 1
+        if (args.action === "list" && child.tabs === 0) { child.tabs = 1; child.recreated += 1 }
         reply({ content: [{ type: "text", text: child.tabs === 0 ? "### Open tabs\nNo open tabs." : `### Open tabs\n${Array.from({ length: child.tabs }, (_, index) => `- ${index}: [Page](https://example.com/${index})`).join("\n")}` }] })
         return
       }
-      if (name !== "browser_close") child.tabs = Math.max(child.tabs, options.tabs ?? 1)
+      if (options.mode === "failcall") { reply({ isError: true, content: [{ type: "text", text: "navigation failed" }] }); return }
+      child.tabs = Math.max(child.tabs, options.tabs ?? 1)
       if (options.mode === "leak") {
         const token = spawnOptions.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN
         child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { data: `connect?token=${encodeURIComponent(token)}` } })}\n`)
@@ -464,6 +503,12 @@ async function realMachine(options = {}) {
   const dirs = declared === null ? [] : [pluginDir(root, "ms-desk", declared)]
   const events = options.events ?? []
   const stub = browserStub(events, options)
+  const opens = []
+  const openSpawn = (file, argv, spawnOptions) => {
+    opens.push({ file, argv, options: spawnOptions })
+    events.push("open:window")
+    return fakeBrowserProcess()
+  }
   const levelEntries = { entries: options.entries ?? [[tokenKey(), latin(TOKEN)]] }
   const launchOptions = {
     env: { PATH: "/usr/bin", DESK_BROWSER_STATE_DIR: state },
@@ -480,11 +525,13 @@ async function realMachine(options = {}) {
     requireModule: () => levelStub(levelEntries.entries),
     tmpdir: path.join(root, "tmp"),
     spawn: stub.spawn,
+    openSpawn,
+    openWaitMs: 5,
     tabCallMs: 200,
     cleanupMs: 2000,
     ...options.launch,
   }
-  return { root, state, events, stub, launchOptions, levelEntries, dirs }
+  return { root, state, events, stub, opens, launchOptions, levelEntries, dirs }
 }
 
 /** Run the launcher against a host over streams, recording stderr, exits and kills. */
@@ -561,14 +608,14 @@ async function direct(machine, extra = {}) {
   return spawns
 }
 
-test("with no declaration the browser is exactly what it was: headless, isolated, no wrapper and no token", posixOnly, async () => {
+test("with no declaration the browser is exactly what it was: headless, isolated, no window and no token", posixOnly, async () => {
   const machine = await realMachine({ declare: null })
   const [spawned] = await direct(machine)
   assert.deepEqual(spawned.argv.slice(1, 3), ["--headless", "--isolated"])
   assert.equal(spawned.argv.includes("--executable-path"), false)
   assert.equal(spawned.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
   assert.equal(spawned.options.stdio, "inherit")
-  assert.equal(existsSync(path.join(machine.state, "launchers")), false)
+  assert.equal(machine.opens.length, 0)
 })
 
 test("a caller's own connection option keeps the browser as the caller asked, without reading any declaration", posixOnly, async () => {
@@ -579,18 +626,30 @@ test("a caller's own connection option keeps the browser as the caller asked, wi
   assert.equal(spawned.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
 })
 
-test("a declaration attaches to the declared profile through the new-window wrapper, with the token in the environment only", posixOnly, async () => {
+test("a declaration attaches to the declared profile with the token in the environment only, and opens the holding window first", posixOnly, async () => {
   const machine = await realMachine()
   const host = session(machine)
   await host.handshake()
+  await host.ask(5, "tools/list", {})
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(machine.opens.length, 0, "nothing opens before a browser call")
   assert.equal(textOf(await host.call(2)), "ran browser_navigate")
+  await host.call(3, "browser_snapshot")
   await host.close()
+  assert.equal(machine.opens.length, 1, "one window per connection")
+  const [opened] = machine.opens
+  assert.equal(opened.file, EDGE)
+  assert.deepEqual(opened.argv.slice(0, 2), ["--new-window", "--profile-directory=Profile 4"])
+  assert.equal(JSON.stringify(opened).includes(TOKEN), false, "the token never reaches the window's browser start")
+  assert.equal(opened.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
+  assert.equal(opened.options.shell, false)
+  assert.ok(machine.events.indexOf("open:window") > machine.events.indexOf("child:initialize"))
+  assert.ok(machine.events.indexOf("open:window") < machine.events.indexOf("child:tools/call browser_navigate"))
   const [spawned] = machine.stub.spawns
-  const wrapper = path.join(machine.state, "launchers", "msedge-new-window.sh")
-  assert.deepEqual(spawned.argv.slice(3), ["--extension", "--browser", "msedge", "--profile-dir-name", "Profile 4", "--executable-path", wrapper])
+  assert.deepEqual(spawned.argv.slice(3), ["--extension", "--browser", "msedge", "--profile-dir-name", "Profile 4"])
   assert.deepEqual(spawned.argv.slice(1, 3), ["--output-dir", path.join(machine.state, "output")])
-  assert.equal(readFileSync(wrapper, "utf8"), real.launcherScript("darwin", EDGE))
   assert.equal(spawned.argv.includes("--headless"), false)
+  assert.equal(spawned.argv.includes("--executable-path"), false, "no wrapper")
   assert.equal(spawned.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, TOKEN)
   assert.deepEqual(spawned.stdio, ["pipe", "pipe", "pipe"])
   assert.equal(JSON.stringify([spawned.file, spawned.argv]).includes(TOKEN), false)
@@ -639,42 +698,60 @@ test("the token is replaced in a JSON-escaped form too", posixOnly, async () => 
   assert.equal(host.raw.join("").includes(odd), false)
 })
 
-test("browser_close closes every tab of the agent and is answered without reaching the browser", posixOnly, async () => {
+test("browser_close closes the agent's tabs with one list, is answered without reaching the browser, and ending afterwards does nothing more", posixOnly, async () => {
   const machine = await realMachine({ tabs: 2 })
   const host = session(machine)
   await host.handshake()
   await host.call(2)
   const answer = await host.call(3, "browser_close")
   assert.match(textOf(answer), /is closed/u)
-  assert.deepEqual(tabEvents(machine), [
-    "child:tools/call browser_tabs list",
-    "child:tools/call browser_tabs close",
-    "child:tools/call browser_tabs close",
-  ])
-  assert.equal(machine.stub.spawns[0].child.tabs, 0)
+  const expected = ["child:tools/call browser_tabs list", "child:tools/call browser_tabs close", "child:tools/call browser_tabs close"]
+  assert.deepEqual(tabEvents(machine), expected)
+  const child = machine.stub.spawns[0].child
+  assert.equal(child.tabs, 0)
+  assert.equal(child.recreated, 0, "no list after the last close, so the browser never creates a tab to list")
   await host.close()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
-  assert.deepEqual(tabEvents(machine), [
-    "child:tools/call browser_tabs list",
-    "child:tools/call browser_tabs close",
-    "child:tools/call browser_tabs close",
-    "child:stdin closed",
-  ], "ending after browser_close does nothing more to the browser, so no second connect page opens")
+  assert.deepEqual(tabEvents(machine), [...expected, "child:stdin closed"], "no second connect page can open")
+  assert.equal(child.recreated, 0)
   assert.equal(host.messages.filter((message) => message.id === 3).length, 1)
 })
 
-test("a browser call after browser_close connects again and its tabs are closed at the end", posixOnly, async () => {
+test("a browser call after browser_close opens a new window and connects again, and its tabs are closed at the end", posixOnly, async () => {
   const machine = await realMachine({ tabs: 1 })
   const host = session(machine)
   await host.handshake()
   await host.call(2)
   await host.call(3, "browser_close")
+  assert.equal(machine.opens.length, 1)
   assert.equal(textOf(await host.call(4)), "ran browser_navigate")
+  assert.equal(machine.opens.length, 2)
   host.stdin.end()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
   assert.equal(machine.events.filter((event) => event === "child:tools/call browser_navigate").length, 2)
   assert.equal(machine.events.filter((event) => event === "child:tools/call browser_close").length, 0)
   assert.equal(machine.stub.spawns[0].child.tabs, 0)
+})
+
+test("browser_close in a session that never used the browser opens and closes nothing", posixOnly, async () => {
+  const machine = await realMachine()
+  const host = session(machine)
+  await host.handshake()
+  assert.match(textOf(await host.call(2, "browser_close")), /is closed/u)
+  assert.equal(machine.opens.length, 0)
+  assert.equal(machine.events.some((event) => event.startsWith("child:tools/call")), false)
+  await host.close()
+})
+
+test("a first call that fails leaves nothing for the cleanup to connect to", posixOnly, async () => {
+  const machine = await realMachine({ mode: "failcall" })
+  const host = session(machine)
+  await host.handshake()
+  const answer = await host.call(2)
+  assert.equal(answer.result.isError, true)
+  host.stdin.end()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+  assert.deepEqual(tabEvents(machine), ["child:stdin closed"])
 })
 
 test("the host closing stdin closes the agent's tabs before the browser is told to stop", posixOnly, async () => {
@@ -823,26 +900,34 @@ test("a declaration that cannot be used degrades the whole server with a code th
   assert.equal(machine.stub.spawns.length, 0)
 })
 
-test("a Playwright MCP install without the token reader is installed again with it, and the reader is installed beside Playwright MCP in one npm call", posixOnly, async () => {
-  const machine = await realMachine({ reader: false })
-  const calls = []
-  const npmSpawn = (file, argv) => {
+/** A fake npm for installs: `install` writes Playwright MCP, and the reader too unless `readerFails`; with `allFail` nothing installs. */
+function installNpm(calls, options = {}) {
+  return (file, argv) => {
     calls.push(argv.slice(1))
     const child = new EventEmitter()
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
     setImmediate(() => {
-      if (argv[1] === "install") {
-        const prefix = argv[argv.indexOf("--prefix") + 1]
-        touch(path.join(prefix, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.82", bin: { "playwright-mcp": "cli.js" } }))
-        touch(path.join(prefix, "node_modules", "@playwright", "mcp", "cli.js"), "")
-        touch(path.join(prefix, "node_modules", "classic-level", "package.json"), "{}")
+      if (argv[1] !== "install") return child.emit("close", 0)
+      const withReader = argv.includes("classic-level@1.4.1")
+      if (options.allFail || (withReader && options.readerFails)) {
+        child.stderr.write("npm error code E404\nnpm error no prebuilt binary\n")
+        return child.emit("close", 1)
       }
+      const prefix = argv[argv.indexOf("--prefix") + 1]
+      touch(path.join(prefix, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.82", bin: { "playwright-mcp": "cli.js" } }))
+      touch(path.join(prefix, "node_modules", "@playwright", "mcp", "cli.js"), "")
+      if (withReader) touch(path.join(prefix, "node_modules", "classic-level", "package.json"), "{}")
       child.emit("close", 0)
     })
     return child
   }
-  const host = session(machine, { npmSpawn })
+}
+
+test("a declaration installs the token reader in the same npm call as Playwright MCP, replacing an install without it", posixOnly, async () => {
+  const machine = await realMachine({ reader: false })
+  const calls = []
+  const host = session(machine, { npmSpawn: installNpm(calls) })
   await host.handshake()
   assert.equal(textOf(await host.call(2)), "ran browser_navigate")
   await host.close()
@@ -850,6 +935,53 @@ test("a Playwright MCP install without the token reader is installed again with 
   assert.deepEqual(calls[0].slice(-2), ["@playwright/mcp@latest", "classic-level@1.4.1"])
   assert.match(machine.stub.spawns[0].argv[0], /installs\/.*\/node_modules\/@playwright\/mcp\/cli\.js$/u)
   assert.equal(JSON.stringify(calls).includes(TOKEN), false)
+})
+
+test("a reader that cannot be installed leaves the browser installed, marked, and the real-profile mode answers that the token cannot be read", posixOnly, async () => {
+  const machine = await realMachine({ reader: false, launch: { requireModule: undefined } })
+  const calls = []
+  const host = session(machine, { npmSpawn: installNpm(calls, { readerFails: true }) })
+  await host.handshake()
+  const payload = JSON.parse(textOf(await host.call(2)))
+  assert.equal(payload.code, "browser_token_unreadable")
+  assert.deepEqual(calls.map((call) => call.slice(-2).join(" ")), ["@playwright/mcp@latest classic-level@1.4.1", "--no-package-lock @playwright/mcp@latest"])
+  assert.equal(machine.opens.length, 0, "no window opens for a connection that cannot be made")
+  const installed = browser.readInstalled(machine.state)
+  assert.equal(installed.reader, true, "the marked install counts as having been tried")
+  assert.equal(existsSync(path.join(installed.dir, "reader-unavailable")), true)
+  await host.close()
+  const again = session(machine, { npmSpawn: installNpm(calls, { allFail: true }) })
+  await again.handshake()
+  assert.equal(JSON.parse(textOf(await again.call(2))).code, "browser_token_unreadable")
+  assert.equal(calls.length, 2, "a later launch does not install again")
+  await again.close()
+})
+
+test("an install that fails even without the reader is the usual install failure", posixOnly, async () => {
+  const machine = await realMachine({ reader: false })
+  const host = session(machine, { npmSpawn: installNpm([], { allFail: true }) })
+  await host.handshake()
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "install_failed")
+  await host.close()
+})
+
+test("a refresh keeps the token reader on an install that has one, and leaves it off otherwise", posixOnly, async () => {
+  for (const reader of [true, false]) {
+    const machine = await realMachine({ reader })
+    const calls = []
+    const result = await browser.refresh({ env: machine.launchOptions.env, platform: "linux", homeDir: machine.launchOptions.homeDir, node: machine.launchOptions.current.path, npmCli: path.join(machine.root, "node", "lib", "node_modules", "npm", "bin", "npm-cli.js"), spawn: (file, argv) => {
+      if (argv[1] === "view") {
+        const child = new EventEmitter()
+        child.stdout = new PassThrough()
+        child.stderr = new PassThrough()
+        setImmediate(() => { child.stdout.write("0.0.99\n"); child.emit("close", 0) })
+        return child
+      }
+      return installNpm(calls)(file, argv)
+    } })
+    assert.equal(result.changed, true)
+    assert.equal(calls[0].includes("classic-level@1.4.1"), reader)
+  }
 })
 
 test("the real-profile module uses only syntax that very old Node parses", () => {

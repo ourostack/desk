@@ -114,7 +114,7 @@ function describeDiff(diff) {
 // Serve the host on stdin/stdout until it closes stdin, or the child ends this process.
 //
 // options.ready resolves { launch: { node, indexFile, args, env } } when Playwright MCP can start, or { payload } (a degraded payload) when it cannot; it never rejects.
-// options.beforeCall(params, api), when given, runs before each tools/call goes to the browser and resolves null to pass the call on, or a tool result to answer the call with instead (the call then never reaches the browser); it never rejects. options.cleanup(api), when given, runs once the host is done (it closed stdin or sent a stop signal) and before the browser is told to stop; it never rejects and gets options.cleanupMs (default 8 seconds) to finish. `api.callTool(name, arguments, ms)` calls a browser tool on the proxy's own behalf and resolves its result, or rejects when it errors, times out or the browser ends. A launch's `secrets` (strings) are replaced with <redacted> in everything the proxy writes to the host or to stderr.
+// options.beforeCall(params, api), when given, runs before each tools/call goes to the browser and resolves null to pass the call on, or a tool result to answer the call with instead (the call then never reaches the browser); it never rejects. options.afterCall(params, failed), when given, runs after the browser's answer to a call has been sent to the host; `failed` is true for an error answer. options.cleanup(api), when given, runs once the host is done (it closed stdin or sent a stop signal) and before the browser is told to stop; it never rejects and gets options.cleanupMs (default 8 seconds) to finish. `api.callTool(name, arguments, ms)` calls a browser tool on the proxy's own behalf and resolves its result, or rejects when it errors, times out or the browser ends. A launch's `secrets` (strings) are replaced with <redacted> in everything the proxy writes to the host or to stderr.
 // options.catalog is the tools/list answer, and options.catalogVersion names the Playwright MCP release it was taken from. options.retry() starts the install again and returns a new ready promise, and options.abort() ends a running install; options.progressMs sets the progress interval. options.timeoutPayload, options.spawnPayload(error) and options.exitPayload(code, signal) build the degraded payloads for a call that waited too long, a child that would not start and a child that ended.
 function serve(options) {
   var stdin = options.stdin;
@@ -131,6 +131,7 @@ function serve(options) {
     var queue = [];
     var inflight = {};
     var own = {};
+    var calls = {};
     var cleaning = null;
     var forms = [];
     var errorText = "";
@@ -242,6 +243,7 @@ function serve(options) {
       nextId += 1;
       entry.childId = childId;
       inflight[childId] = entry.id;
+      calls[childId] = entry.params;
       toChild({ id: childId, method: "tools/call", params: entry.params });
     }
 
@@ -300,10 +302,13 @@ function serve(options) {
         var hostId = inflight[message.id];
         if (hostId === undefined) return;
         delete inflight[message.id];
+        var finished = calls[message.id];
+        delete calls[message.id];
         var reply = { id: hostId };
         if (message.error) reply.error = message.error;
         else reply.result = message.result;
         send(reply);
+        if (options.afterCall !== undefined) options.afterCall(finished, Boolean(message.error) || Boolean(message.result && message.result.isError));
         return;
       }
       if (message.id !== undefined) {
@@ -337,6 +342,7 @@ function serve(options) {
         send({ id: inflight[childId], result: callFailure(payload) });
       });
       inflight = {};
+      calls = {};
       Object.keys(own).forEach(function (id) {
         own[id]({ error: { message: "the browser ended" } });
       });

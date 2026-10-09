@@ -3,8 +3,8 @@
 // - The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }` in a plugin's `plugin.json`. It is found the way the factory store declaration is found (`src/factory/plugin-sources.cjs` lists the installed plugin folders). When several plugins declare one, the last folder listed wins, so the overlay loaded after Desk decides.
 // - The profile is the one in the browser's own `Local State` profile list whose `user_name` (the signed-in account's address) ends in `@<profileAccountDomain>`.
 // - The Playwright Extension keeps a connection token in the profile's local storage. The launcher reads it from a temporary copy of that folder (never from the live one, which the running browser locks), hands it to Playwright MCP in its environment and deletes the copy at once. The token is never printed, stored or put in a command line, and the proxy replaces it in everything it passes on (web-proxy.cjs).
-// - The agent works in a window of its own, on every platform and with no scripting of the browser. Playwright MCP opens the connect page by starting the browser executable with `--profile-directory=<profile> <connect url>`, which the running browser takes as a request for a tab in its own window. The launcher gives Playwright MCP a small wrapper as `--executable-path` that starts the real browser with `--new-window` first, so that request becomes a new window.
-// - Cleanup closes the agent's own tabs, never a window: `browser_tabs` lists only the tabs this connection controls, and the launcher closes them until none are left (closing a window's last tab closes the window). It does this before it passes `browser_close` on, and when the host closes stdin or stops the launcher. It never quits the browser and never touches a tab it did not open.
+// - The agent works in a window of its own, on every platform and with no scripting of the browser. Before the first browser call reaches Playwright MCP, the launcher starts the real browser executable itself with `--new-window --profile-directory=<profile>` and a holding page. The running browser opens that as a new, focused window. Playwright MCP then opens the extension's connect page, which the browser puts in the last active window (this one), and the holding tab closes itself when it is hidden (or after 30 seconds). The window ends up holding only the connect tab, which the extension turns into the agent's tab.
+// - Cleanup closes the agent's own tabs, never a window: it lists the tabs this connection controls once and closes that many (closing a window's last tab closes the window). It never lists again, because listing tabs makes Playwright MCP create one when none is left. `browser_close` runs that cleanup and is then answered here and not passed on, because Playwright MCP would open a new connect page, in a new window nobody owns, for a connection with no page left. The next call opens a new holding window and connects again. The cleanup also runs when the host closes stdin or stops the launcher, if the connection was used since the last close. It never quits the browser and never touches a tab it did not open.
 //
 // Like web.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins (plugin-sources.cjs is loaded only when this mode is on).
 
@@ -181,7 +181,7 @@ function readExtensionToken(profileDir, deps) {
 // ---- connecting ----
 
 // What to start Playwright MCP with for a declaration: { args, env } or { payload } (a degraded answer that says what is missing).
-// `o.declaration`, `o.installed` (the Playwright MCP install, whose folder also holds classic-level), `o.executable` (the browser's real executable, or null when it is not installed), `o.launcherDir` (where the new-window wrapper goes), `o.platform`, `o.env`, `o.homeDir`, `o.unavailable(code, summary, fix)` and `o.reconnectFix(action)`; `o.requireModule` and `o.tmpdir` are for tests.
+// `o.declaration`, `o.installed` (the Playwright MCP install, whose folder also holds classic-level), `o.executable` (the browser's real executable, or null when it is not installed), `o.platform`, `o.env`, `o.homeDir`, `o.unavailable(code, summary, fix)` and `o.reconnectFix(action)`; `o.requireModule` and `o.tmpdir` are for tests.
 function connect(o) {
   var declaration = o.declaration;
   var app = CHANNELS[declaration.channel];
@@ -216,8 +216,7 @@ function connect(o) {
     if (token === null || token === "") return missing();
     var env = {};
     env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token;
-    var launcher = writeLauncher(o.launcherDir, o.platform, declaration.channel, o.executable);
-    return { args: ["--extension", "--browser", declaration.channel, "--profile-dir-name", profile, "--executable-path", launcher], env: env, secrets: [token], profile: profile, app: app };
+    return { args: ["--extension", "--browser", declaration.channel, "--profile-dir-name", profile], env: env, secrets: [token], profile: profile, executable: o.executable, app: app };
   }, function (error) {
     return { payload: o.unavailable("browser_token_unreadable",
       "Desk could not read the Playwright Extension's connection token from the " + app + " profile " + profile + " (" + describe(error) + "), so the browser is unavailable",
@@ -227,29 +226,24 @@ function connect(o) {
 
 // ---- the agent's own window ----
 
-// The wrapper's text: it starts the real browser with `--new-window` before every other argument. Quoting keeps a path with spaces or quote marks in one piece.
-function launcherScript(platform, executable) {
-  if (platform === "win32") return "@echo off\r\n\"" + executable.replace(/%/g, "%%") + "\" --new-window %*\r\n";
-  return "#!/bin/sh\nexec '" + executable.replace(/'/g, "'\\''") + "' --new-window \"$@\"\n";
-}
+// The holding page: it closes itself when it is hidden (the connect page opening in the same window hides it) and after 30 seconds if nothing ever hides it.
+var HOLDING_PAGE = "<title>Agent window</title><p>An agent is using this window and will close it when its task is done.</p><script>document.addEventListener('visibilitychange',function(){if(document.hidden)window.close()});setTimeout(function(){window.close()},30000)</script>";
+var OPEN_WAIT_MS = 1000;
 
-// Writes the wrapper for a browser executable into `dir` (only when its text changed, so concurrent sessions never rewrite a file another is starting) and returns its path.
-function writeLauncher(dir, platform, channel, executable) {
-  var file = path.join(dir, channel + "-new-window" + (platform === "win32" ? ".cmd" : ".sh"));
-  var text = launcherScript(platform, executable);
-  var current = null;
-  try {
-    current = fs.readFileSync(file, "utf8");
-  } catch (error) {
-    // No wrapper yet.
-  }
-  if (current !== text) {
-    fs.mkdirSync(dir, { recursive: true });
-    var temp = file + "." + process.pid + ".tmp";
-    fs.writeFileSync(temp, text, { mode: 493 /* 0755 */ });
-    fs.renameSync(temp, file);
-  }
-  return file;
+// Opens a new, focused window in the running browser, with the declared profile, and resolves when it should exist. The browser is started directly (no shell) with the launcher's own environment, which holds no token, and is left to run on its own. `o.spawn`, `o.executable`, `o.profile`, `o.env`, `o.stderr`, `o.waitMs`.
+function openWindow(o) {
+  return new Promise(function (resolve) {
+    try {
+      var child = o.spawn(o.executable, ["--new-window", "--profile-directory=" + o.profile, "data:text/html," + encodeURIComponent(HOLDING_PAGE)], { detached: true, stdio: "ignore", shell: false, windowsHide: true, env: o.env });
+      child.on("error", function (error) {
+        o.stderr.write("[web] could not open a new browser window: " + describe(error) + "\n");
+      });
+      child.unref();
+    } catch (error) {
+      o.stderr.write("[web] could not open a new browser window: " + describe(error) + "\n");
+    }
+    setTimeout(resolve, either(o.waitMs, OPEN_WAIT_MS));
+  });
 }
 
 // ---- the agent's own tabs ----
@@ -263,13 +257,19 @@ function countTabs(result) {
   return lines === null ? 0 : lines.length;
 }
 
-// Closes every tab this connection controls and resolves when they are closed, a call fails or the limit is reached. It lists the tabs once and then closes that many from the first, with no list afterwards, because Playwright MCP opens a new connect page (a new window) when it is asked about a connection that has no page left. `call(name, arguments, ms)` resolves a tool's result; each call gets `callMs` (TAB_CALL_MS by default). Never rejects.
+function noTabs(result) {
+  return result.content.some(function (part) {
+    return typeof part.text === "string" && /No open tabs/.test(part.text);
+  });
+}
+
+// Closes every tab this connection controls and resolves when they are closed, a call fails or the limit is reached. It lists the tabs once and then closes that many from the first, and stops at once if a close says no tab is open. It never lists afterwards, because listing makes Playwright MCP create a tab when none is left. `call(name, arguments, ms)` resolves a tool's result; each call gets `callMs` (TAB_CALL_MS by default). Never rejects.
 function closeOwnTabs(call, callMs) {
   var ms = either(callMs, TAB_CALL_MS);
   function close(left) {
     if (left <= 0) return Promise.resolve();
     return call("browser_tabs", { action: "close", index: 0 }, ms).then(function (result) {
-      return result.isError ? null : close(left - 1);
+      return result.isError || noTabs(result) ? null : close(left - 1);
     });
   }
   return call("browser_tabs", { action: "list" }, ms).then(function (listed) {
@@ -279,12 +279,13 @@ function closeOwnTabs(call, callMs) {
   });
 }
 
-// What `browser_close` answers once the agent's window is closed. The call is not passed on: with no page left, Playwright MCP would open a new connect page, and with it a new window nobody owns. The next browser call connects again, in a new window.
+// What `browser_close` answers once the agent's window is closed. The call is not passed on (see the header).
 var CLOSED = { content: [{ type: "text", text: "The browser window this session opened is closed. The next browser call opens a new one." }] };
 
-// The hooks the proxy calls for the agent's tabs. Any call but `browser_close` marks the connection as used; `browser_close` closes the tabs and answers itself; the cleanup at the end of the session closes the tabs only if the connection was used since the last close, and so does nothing after a `browser_close`.
-function ownTabs(callMs) {
+// The hooks the proxy calls for the agent's window and tabs. `open()` opens the holding window. Before a call (other than `browser_close`) the window is opened once per connection; `afterCall` marks the connection as used only when a call succeeded, so cleanup never starts a connection. `browser_close` closes the tabs and answers itself, and the next call starts a new connection. The cleanup at the end of the session closes the tabs only if the connection was used since the last close.
+function ownTabs(open, callMs) {
   var used = false;
+  var opening = null;
   function cleanup(api) {
     if (!used) return Promise.resolve();
     used = false;
@@ -292,13 +293,19 @@ function ownTabs(callMs) {
   }
   return {
     beforeCall: function (params, api) {
-      if (params.name !== "browser_close") {
-        used = true;
-        return Promise.resolve(null);
+      if (params.name === "browser_close") {
+        return cleanup(api).then(function () {
+          opening = null;
+          return CLOSED;
+        });
       }
-      return cleanup(api).then(function () {
-        return CLOSED;
+      if (opening === null) opening = open();
+      return opening.then(function () {
+        return null;
       });
+    },
+    afterCall: function (params, failed) {
+      if (!failed && params.name !== "browser_close") used = true;
     },
     cleanup: cleanup
   };
@@ -312,11 +319,10 @@ module.exports = {
   connect: connect,
   countTabs: countTabs,
   findProfileDir: findProfileDir,
-  launcherScript: launcherScript,
+  openWindow: openWindow,
   ownTabs: ownTabs,
   pluginDirs: pluginDirs,
   readDeclaration: readDeclaration,
   readExtensionToken: readExtensionToken,
-  userDataDir: userDataDir,
-  writeLauncher: writeLauncher
+  userDataDir: userDataDir
 };

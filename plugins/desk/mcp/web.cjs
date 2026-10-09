@@ -23,8 +23,10 @@ var realProfile = require("./web-real-profile.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
-// Installed beside Playwright MCP, so a real-browser launch can read the Playwright Extension's token from the profile's LevelDB. It ships prebuilt N-API binaries, so one install serves every Node.
+// Installed beside Playwright MCP only when a plugin declares a real browser profile, so a real-browser launch can read the Playwright Extension's token from the profile's LevelDB. It ships prebuilt N-API binaries, so one install serves every Node.
 var LEVEL_PACKAGE = "classic-level@1.4.1";
+// Left in an install folder when the reader could not be installed (for example, no prebuilt binary for this platform), so the install is not repeated at every launch.
+var READER_UNAVAILABLE = "reader-unavailable";
 var DEFAULT_ARGS = ["--headless", "--isolated"];
 // Options that connect to a browser that already runs; with any of them Desk's headless and isolated defaults do not apply.
 var CONNECT = ["--cdp-endpoint", "--extension", "--endpoint"];
@@ -304,7 +306,7 @@ function readInstall(root, dir) {
   var cli = path.join(modules, "@playwright", "mcp", bin);
   if (!exists(cli)) return null;
   var core = readJson(path.join(modules, "playwright-core", "package.json"));
-  return { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")) };
+  return { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")) || exists(path.join(root, dir, READER_UNAVAILABLE)) };
 }
 
 // The install current.json points at, or null.
@@ -334,13 +336,24 @@ function prune(root, keep, clock) {
   });
 }
 
-// Install the channel's current release into a new folder, then point current.json at it. The caller holds the lock.
-function install(tools, root, timeoutMs) {
+// Install the channel's current release into a new folder, then point current.json at it. With `withReader` the token reader goes in the same npm call; if that fails the browser alone is installed and the folder is marked, so a machine without a reader still gets the browser and the real-profile mode answers that it cannot read the token. The caller holds the lock.
+function install(tools, root, timeoutMs, withReader) {
   var id = "installs/" + tools.clock() + "-" + process.pid + "-" + Math.random().toString(36).slice(2, 8);
   var dir = path.join(root, id);
   mkdirp(dir);
   fs.writeFileSync(path.join(dir, "package.json"), "{\"private\":true}\n");
-  return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock", PACKAGE, LEVEL_PACKAGE], timeoutMs).then(function (result) {
+  function run(packages) {
+    return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock"].concat(packages), timeoutMs);
+  }
+  var first = run(withReader ? [PACKAGE, LEVEL_PACKAGE] : [PACKAGE]);
+  var done = !withReader ? first : first.then(function (result) {
+    if (result.code === 0) return result;
+    return run([PACKAGE]).then(function (alone) {
+      if (alone.code === 0) fs.writeFileSync(path.join(dir, READER_UNAVAILABLE), "");
+      return alone;
+    });
+  });
+  return done.then(function (result) {
     var installed = result.code === 0 ? readInstall(root, id) : null;
     if (installed === null) {
       removeTree(dir);
@@ -421,7 +434,7 @@ function ensureInstalled(tools, root, deadline, reader) {
   var lock = path.join(root, "refresh.lock");
   if (takeLock(lock, tools.clock)) {
     return Promise.resolve().then(function () {
-      return install(tools, root, Math.max(deadline - tools.clock(), 1000));
+      return install(tools, root, Math.max(deadline - tools.clock(), 1000), reader);
     }).then(function (result) {
       releaseLock(lock);
       return result.ok ? { installed: result.installed, fresh: true } : { error: result.error };
@@ -466,7 +479,7 @@ function refresh(o) {
       if (!latest) return { ok: false, error: npmError(view, "npm view") };
       var installed = readInstalled(root);
       if (installed !== null && installed.version === latest) return { ok: true, version: latest, changed: false };
-      return install(tools, root, REFRESH_MS).then(function (result) {
+      return install(tools, root, REFRESH_MS, installed !== null && installed.reader).then(function (result) {
         return result.ok ? { ok: true, version: result.installed.version, changed: true } : result;
       });
     });
@@ -645,6 +658,7 @@ function start(o, io) {
     return fail(io, "browser_declaration_invalid", declaration.summary, reconnectFix("Fix the desk.browser setting in the plugin"));
   }
   var real = declaration.state === "declared";
+  var holding = null;
   var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
     return failure(io, "node_spawn_failed",
@@ -675,12 +689,13 @@ function start(o, io) {
     if (!real) return Promise.resolve(launching([], {}, []));
     var executable = firstExisting(browserPaths(declaration.channel, platform, env).concat(userBrowserPaths(declaration.channel, platform, env)), fileExists);
     return realProfile.connect({
-      declaration: declaration, installed: installed, executable: executable, launcherDir: path.join(root, "launchers"),
+      declaration: declaration, installed: installed, executable: executable,
       platform: platform, env: env, homeDir: homeDir,
       unavailable: degraded, reconnectFix: retryFix, requireModule: o.requireModule, tmpdir: o.tmpdir
     }).then(function (connection) {
       if (connection.payload) return { retry: true, payload: failure(io, connection.payload.code, connection.payload.summary, connection.payload.fix) };
       io.stderr.write("[web] driving the " + connection.app + " profile " + connection.profile + " through the Playwright Extension\n");
+      holding = { executable: connection.executable, profile: connection.profile };
       return launching(connection.args, connection.env, connection.secrets);
     });
   }
@@ -716,11 +731,16 @@ function start(o, io) {
       return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
     });
   }
-  // In the real profile the agent's own tabs are closed before browser_close goes on and when the session ends (web-real-profile.cjs).
-  var own = real ? realProfile.ownTabs(o.tabCallMs) : {};
+  // In the real profile the agent opens a holding window before its first call, and its own tabs are closed on browser_close and when the session ends (web-real-profile.cjs).
+  var own = real ? realProfile.ownTabs(function () {
+    var browserEnv = withNodeFirst(env, node, platform);
+    delete browserEnv.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
+    return realProfile.openWindow({ spawn: either(o.openSpawn, childProcess.spawn), executable: holding.executable, profile: holding.profile, env: browserEnv, stderr: io.stderr, waitMs: o.openWaitMs });
+  }, o.tabCallMs) : {};
   // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return proxy.serve({
     beforeCall: own.beforeCall,
+    afterCall: own.afterCall,
     cleanup: own.cleanup,
     cleanupMs: o.cleanupMs,
     stdin: io.stdin,
