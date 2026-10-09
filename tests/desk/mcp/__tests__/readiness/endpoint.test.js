@@ -204,6 +204,7 @@ for (const kind of ["file", "unidentified socket", "owned socket"]) {
       socket: kind === "unidentified socket" ? otherFile(stat) : { dev: stat.dev, ino: stat.ino },
       owner: { pid: child.pid, token: "old-token" },
     }))
+    // A regular file in the endpoint position is never reclaimed, so the election has no winner to wait for: a short wait keeps the test quick.
     const connecting = connectOrStartController({ root, stateHome, ephemeral: true })
     if (kind !== "file") {
       const client = await connecting
