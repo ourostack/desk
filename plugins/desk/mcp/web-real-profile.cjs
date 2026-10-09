@@ -45,16 +45,33 @@ function isObject(value) {
 
 // ---- the declaration ----
 
-// The folders of the installed plugins, in the host's order. Copilot lists the folders beside Desk's own; Claude Code reads its plugin registry. A host whose list cannot be read gives none, which leaves the browser as it was.
+function present(value) {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+// Whether a folder is inside Claude Code's plugin store, `<config dir>/plugins`, where it keeps every plugin it installs.
+function underClaudePlugins(folder, env, homeDir) {
+  var store = path.join(present(env.CLAUDE_CONFIG_DIR) || path.join(homeDir, ".claude"), "plugins") + path.sep;
+  return path.resolve(folder).indexOf(store) === 0;
+}
+
+// Which host launched this server and which folder is Desk's own. The main Desk server decides the same way (`factoryPluginScan` in src/tools/factory-context.js, with `pluginRootFor` in src/factory/end-hook.js): Claude Code sets CLAUDE_PLUGIN_ROOT, and a session without it is Copilot's. Copilot (and Agency, which runs Copilot) sets neither it nor, for MCP servers, COPILOT_PLUGIN_ROOT, so the absence of the Claude variable must mean Copilot, never Claude. A Desk inside Claude's own plugin store is Claude's even if the variable did not reach this process. end-hook.js is an ES module and cannot be loaded here, so the rule is repeated, not shared.
+function hostFor(env, homeDir, pluginRoot) {
+  if (present(env.COPILOT_PLUGIN_ROOT) !== null) return "copilot";
+  if (present(env.CLAUDE_PLUGIN_ROOT) !== null || underClaudePlugins(pluginRoot, env, homeDir)) return "claude";
+  return "copilot";
+}
+
+// The folders of the installed plugins, in the host's order. Copilot (and Agency) lists the folders beside Desk's own; Claude Code reads its plugin registry. A host whose list cannot be read gives none, which leaves the browser as it was.
 function pluginDirs(o) {
   var env = either(o.env, process.env);
-  var copilotRoot = env.COPILOT_PLUGIN_ROOT;
-  var pluginRoot = copilotRoot || env.DESK_PLUGIN_ROOT || path.join(__dirname, "..");
+  var homeDir = either(o.homeDir, os.homedir());
+  var pluginRoot = present(env.COPILOT_PLUGIN_ROOT) || present(env.DESK_PLUGIN_ROOT) || present(env.CLAUDE_PLUGIN_ROOT) || path.join(__dirname, "..");
   try {
     return require("./src/factory/plugin-sources.cjs").metadata({
-      host: copilotRoot ? "copilot" : "claude",
+      host: hostFor(env, homeDir, pluginRoot),
       pluginRoot: pluginRoot,
-      home: o.homeDir,
+      home: homeDir,
       env: env,
       readSmallText: function (file) {
         return fs.readFileSync(file, "utf8");
