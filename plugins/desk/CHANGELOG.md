@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.258 — 2026-10-09
+
+The waste evaluator no longer writes labels that claim more than they hold. A session derived before the derivers recorded stop facts (derive receipt below `binding_version` 7, or none) is now briefed under rubric 3 with no stop hints, so its labels never claim rubric 4's stop classification; once the session is derived again with stop facts, it is relabeled under rubric 4 as before. On 2026-10-09, five jobs on one still-running binding-6 session received rubric-4 labels this way. A session whose part for the job the store cannot place (a subagent-only binding, or one of several bindings without segments) is no longer briefed and needs no labels, so no empty labels file settles its job; evaluate-accept refuses such an answer as `share_unknown`, and refuses an answer with no stretches while the job's share holds work. The store build now leaves any labels file with no stretch inside the job's share unused as `outside_share`, so an empty file never reads as a job labeled with no waste. Preparing a job's briefs also removes every brief file it did not write in that pass, so a brief of an older rubric or plugin version is never left beside the current ones. The [factory evaluator skill](skills/factory-evaluator/SKILL.md) and [local capture doc](docs/factory-local-capture.md) state the new rules.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.257 — 2026-10-09
 
 Desk's path refusals now name the path relative to the desk root, with forward slashes on every platform, instead of an absolute filesystem path, so an agent on the hosted desk can pass it straight back to `desk_save` or a task tool; a path that leaves the desk through a symbolic link says "resolves outside the desk (via a symbolic link)" without printing where it leads, and a missing or unusable desk root is called "the desk root".
