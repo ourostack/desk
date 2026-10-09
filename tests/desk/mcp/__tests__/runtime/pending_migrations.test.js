@@ -166,7 +166,7 @@ test("runBlock without a usable bash (relay only, bash is null) is unavailable a
 })
 
 test("a relay failure on stderr or stdout makes the block unavailable, but only when it failed", async () => {
-  for (const [stream, text] of [["stderr", RELAY_ERROR], ["stdout", "Windows Subsystem for Linux has no installed distributions."]]) {
+  for (const [stream, text] of [["stderr", RELAY_ERROR], ["stdout", `Das Windows-Subsystem fuer Linux hat keine Distribution\n${RELAY_ERROR}`]]) {
     const run = await runBlock("x", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: relaySpawn(stream, text) })
     assert.equal(run.unavailable, true, stream)
     assert.equal(run.status, 1)
@@ -175,6 +175,13 @@ test("a relay failure on stderr or stdout makes the block unavailable, but only 
   assert.equal(fine.unavailable, false)
   const plain = await runBlock("x", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: relaySpawn("stdout", "no", 1) })
   assert.equal(plain.unavailable, false)
+})
+
+test("relay detection does not read the localized sentence: only the relay's debug line counts, so a Detect that exits 1 is still 'not needed'", async () => {
+  for (const text of ["Windows Subsystem for Linux has no installed distributions.", "Das Windows-Subsystem fuer Linux hat keine installierten Distributionen."]) {
+    const run = await runBlock("x", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: relaySpawn("stdout", text) })
+    assert.equal(run.unavailable, false)
+  }
 })
 
 test("a Detect that could not run is shown at startup by name, never read as not needed (hook path)", async () => {

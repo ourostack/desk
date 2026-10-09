@@ -14,10 +14,11 @@
 // boot), sends no credentials and says nothing on any error, timeout or offline machine. It stays off in a node:test run
 // (unless a test hands it its own fetch) and when DESK_BOOT_RELEASE_CHECK is 0.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 const RELEASE_REPO = "ourostack/desk"
 export const RELEASE_ISSUE_TITLE = "Desk release needs attention"
@@ -86,7 +87,7 @@ function writeCache(stateDir, file, found, now, env) {
     mkdirSync(stateDir, { recursive: true, mode: 0o700 })
     const temp = `${file}.${process.pid}.tmp`
     writeFileSync(temp, `${JSON.stringify({ schema_version: 2, checked_at: new Date(now()).toISOString(), alert: found.alert, problems: found.problems })}\n`, { mode: 0o600 })
-    renameSync(temp, file)
+    renameWithRetry(temp, file)
   } catch {
     // A cache that cannot be written only costs a second lookup.
   }

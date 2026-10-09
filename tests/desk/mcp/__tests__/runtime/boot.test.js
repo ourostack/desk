@@ -1603,6 +1603,15 @@ test("bootOnce: agent-work, unchecked and ran migrations become instructions whi
   assert.ok(result.instructions.some((line) => line.startsWith("05-done ran at startup")))
 })
 
+test("bootOnce: a migration bash could not check degrades boot and is named, so it never reads as ready", async () => {
+  const root = await mkDeskWorkspace()
+  const result = await healthyBoot(root, { migrationsFn: async () => [{ id: "09-x", state: "bash_unavailable" }] })
+  assert.equal(result.status, "degraded")
+  assert.ok(result.degraded.includes("migration 09-x: not checked, bash could not run (on Windows, install Git for Windows)"))
+  assert.deepEqual(result.migrations, [{ id: "09-x", state: "bash_unavailable" }])
+  assert.ok(result.instructions.some((line) => line.startsWith("09-x could not be checked at startup")))
+})
+
 test("bootOnce: a migration check that throws degrades only itself", async () => {
   const root = await mkDeskWorkspace()
   const result = await healthyBoot(root, { migrationsFn: async () => { throw new Error("registry down") } })

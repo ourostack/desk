@@ -9,11 +9,12 @@
 // The hook side never throws: a session must start whether or not the record could be written.
 
 import { createHash } from "node:crypto"
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 export const COPILOT_SESSION_DIR = "copilot-sessions"
 const COPILOT_SESSION_ENV = "COPILOT_AGENT_SESSION_ID"
@@ -67,7 +68,7 @@ export function recordCopilotSession({ sessionId, folder, activationConfig = nul
     const record = { version: RECORD_VERSION, folder, activation_config: hasText(activationConfig) ? activationConfig : null, recorded_at: new Date(now()).toISOString() }
     const temp = `${file}.${process.pid}.tmp`
     writeFileSync(temp, `${JSON.stringify(record)}\n`, { mode: 0o600 })
-    renameSync(temp, file)
+    renameWithRetry(temp, file)
     // A resumed session may be directed again: its first prompt's hook has already run (Copilot runs it before this one), so the next prompt carries the pointer. The claim is its own file, so clearing it never touches the record.
     if (source === "resume") clearBootClaim(stateDir, sessionId)
     pruneStale(path.dirname(file), now())

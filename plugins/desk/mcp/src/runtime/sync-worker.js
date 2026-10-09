@@ -57,6 +57,7 @@ import { formatDeskProblem } from "./index-drift.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -328,7 +329,7 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
     const next = { ...(readJsonIfPresent(file) ?? {}), ...patch }
     const temporary = `${file}.${randomUUID()}.tmp`
     writeFileSync(temporary, `${JSON.stringify(next)}\n`, { mode: 0o600 })
-    renameSync(temporary, file)
+    renameWithRetry(temporary, file)
     return next
   } finally {
     if (lock !== null) {

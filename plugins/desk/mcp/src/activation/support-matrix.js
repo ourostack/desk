@@ -1,10 +1,10 @@
 import {
-  renameSync,
   readFileSync,
   writeFileSync,
 } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 const SUPPORT_MATRIX_SCHEMA_VERSION = 1
 
@@ -181,7 +181,7 @@ function writeJsonArtifactAtomic(relativePath, value) {
   const outputPath = repoPath(relativePath)
   const tempPath = `${outputPath}.${process.pid}.tmp`
   writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8")
-  renameSync(tempPath, outputPath)
+  renameWithRetry(tempPath, outputPath)
 }
 
 function repoPath(relativePath) {

@@ -130,8 +130,10 @@ export function readMigrations(pluginRoot) {
  * Each stream stops growing once it reaches `outputChars`: the hooks keep a
  * bounded amount for one line, and the command line keeps everything.
  */
-// What the WSL relay prints when it cannot run bash, on its stderr or stdout.
-const RELAY_FAILURE = /execvpe\(.*\) failed|Windows Subsystem for Linux has no installed distributions/iu
+// What the WSL relay prints when it cannot run bash, on its stderr or stdout. This is its debug line, which no Windows language translates; the
+// friendly "no installed distributions" sentence is localized, and the relay's exit code and path cannot stand in for it, because a relay with a distro runs
+// the block for real and a Detect that exits 1 there means "not needed".
+const RELAY_FAILURE = /execvpe\(.*\) failed/iu
 
 export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }) }) {
   return new Promise((resolve) => {
