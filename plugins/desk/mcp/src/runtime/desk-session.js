@@ -772,6 +772,10 @@ export function createDeskSession(deps) {
   function recordException(kind, error) {
     const message = error instanceof Error ? error.message : String(error)
     context.exceptions = [...context.exceptions, { at: new Date().toISOString(), kind, message }].slice(-5)
+    if (disposed) {
+      log(`caught ${kind} during shutdown: ${message}`)
+      return
+    }
     log(`caught ${kind} after the handshake: ${message}; Desk keeps serving and re-admits`)
     forgetController()
     return admission.fail({

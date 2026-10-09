@@ -61,6 +61,7 @@ export {
 
 // Used only when package.json's engines.node cannot be read as a plain ">=" floor.
 const DEFAULT_NODE_FLOOR = [20, 0, 0]
+const SHUTDOWN_TIMEOUT_MS = 3000
 
 // The lowest Node that Desk supports, from engines.node in package.json (">=X[.Y[.Z]]").
 export function resolveNodeFloor({ mcpRoot, readFile = readFileSync } = {}) {
@@ -265,9 +266,23 @@ export async function main({
   const removeCrashHandlers = crashHandlers ? installCrashHandlers({ session, stderr }) : () => {}
   const closed = frontDoor.closed.then(async () => {
     clearTimeout(kickoff)
-    removeCrashHandlers()
-    await session.dispose()
-    onClosed()
+    let deadline
+    let timedOut = false
+    try {
+      await Promise.race([
+        session.dispose(),
+        new Promise((resolve) => {
+          deadline = setTimeout(() => { timedOut = true; resolve() }, SHUTDOWN_TIMEOUT_MS)
+        }),
+      ])
+    } finally {
+      clearTimeout(deadline)
+      removeCrashHandlers()
+    }
+    if (timedOut) {
+      stderr.write(`[desk-mcp] shutdown timed out after ${SHUTDOWN_TIMEOUT_MS} ms; controller close did not finish; exiting with failure\n`)
+    }
+    onClosed(timedOut ? 1 : 0)
   })
   return { frontDoor, session, admission: session.admission, closed }
 }
@@ -614,7 +629,7 @@ export function runIfEntrypoint({
   }
   try {
     // The host closing stdin ends the session: exit rather than linger on background admission, a controller socket or a watcher.
-    return Promise.resolve(launch({ onClosed: () => exit(0), crashHandlers: true })).catch(handleStartupException)
+    return Promise.resolve(launch({ onClosed: (code = 0) => exit(code), crashHandlers: true })).catch(handleStartupException)
   } catch (err) {
     return handleStartupException(err)
   }
