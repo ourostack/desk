@@ -113,7 +113,7 @@ function readOptional(read) {
   }
 }
 
-// How long the first desk_status waits, in total, for Desk to finish admitting the desk and loading its status detail, and how often it asks again.
+// How long a hosted desk_status waits, in total, for Desk to finish admitting the desk and loading its status detail, and how often it asks again.
 const STARTUP_DETAIL_WAIT_MS = 10_000
 const STARTUP_DETAIL_POLL_MS = 1_000
 
@@ -128,29 +128,24 @@ function startupPending(result) {
   }
 }
 
+/** The desk_status input that says this conversation already has Desk's instructions; the schema parity test holds tool-schemas.js to it. */
+export const HAS_INSTRUCTIONS = "has_instructions"
+
 /**
- * Wraps a hosted Desk's `callTool` so its first successful desk_status answer carries `instructions` as a second text item. A client such as claude.ai never shows the model a server's MCP instructions, but every client shows a tool's answer, and Desk's instructions tell the agent to call desk_status first.
- * That first answer also waits, up to ten seconds in all, while Desk is still admitting the desk or loading its status detail, so a hosted chat does not start from an answer with an empty root and sync.
+ * Wraps a hosted Desk's `callTool` so every successful desk_status answer carries `instructions` as a second text item, unless the call passes `has_instructions: true`. A client such as claude.ai never shows the model a server's MCP instructions, but every client shows a tool's answer, and Desk's instructions tell the agent to call desk_status first.
+ * The boundary is the conversation, which only the agent knows: claude.ai reuses one MCP session across chats, so "once per session" would leave every later chat without them.
+ * Each answer also waits, up to ten seconds in all, while Desk is still admitting the desk or loading its status detail, so a hosted chat does not start from an answer with an empty root and sync.
  */
 export function withHostedStartup({ callTool, instructions, waitMs = STARTUP_DETAIL_WAIT_MS, pollMs = STARTUP_DETAIL_POLL_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
-  // "claimed" while one desk_status call is preparing the instructions, so a second call at the same time answers plainly; "delivered" once they are sent.
-  let state = "pending"
   return async (call) => {
     let result = await callTool(call)
-    if (call?.name !== "desk_status" || state !== "pending" || result?.isError) return result
-    state = "claimed"
-    try {
-      for (let waited = 0; startupPending(result) && waited < waitMs && !call?.signal?.aborted; waited += pollMs) {
-        await sleep(pollMs)
-        result = await callTool(call)
-      }
-    } catch (error) {
-      state = "pending"
-      throw error
+    if (call?.name !== "desk_status" || result?.isError) return result
+    for (let waited = 0; startupPending(result) && waited < waitMs && !call?.signal?.aborted; waited += pollMs) {
+      await sleep(pollMs)
+      result = await callTool(call)
     }
-    state = result?.isError || call?.signal?.aborted ? "pending" : "delivered"
-    if (state !== "delivered") return result
-    const text = `# Desk instructions for this session\n\nThis client does not show Desk's server instructions, so they come here, once. Follow them for the rest of this conversation.\n\n${instructions}`
+    if (result?.isError || call?.signal?.aborted || call?.input?.[HAS_INSTRUCTIONS] === true) return result
+    const text = `# Desk instructions for this conversation\n\nThis client does not show Desk's server instructions, so they come with desk_status. Follow them for the rest of this conversation, and pass ${HAS_INSTRUCTIONS}: true on later desk_status calls in it so they are not repeated.\n\n${instructions}`
     return { ...result, content: [...(result?.content ?? []), { type: "text", text }] }
   }
 }

@@ -12,10 +12,11 @@ import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSy
 import { createStatusInspection } from "../runtime/status-inspection.js"
 
 
-// desk_status's one input, `detail`, is read where the answer is shaped for the caller (runtime/desk-session.js, which
-// compacts the payload built here unless `detail: true`); this function always builds the full payload. Listed here so
+// desk_status's inputs are read elsewhere: `detail` where the answer is shaped for the caller (runtime/desk-session.js, which
+// compacts the payload built here unless `detail: true`), and `has_instructions` by a hosted Desk's startup wrapper
+// (runtime/hosted.js); this function always builds the full payload. Listed here so
 // __tests__/tool_schema_parity.test.js checks the schema against it like every other tool.
-export const DESK_STATUS_FIELDS = ["detail"]
+export const DESK_STATUS_FIELDS = ["detail", "has_instructions"]
 
 /**
  * `desk_status`'s own read of sync state (spec §2's "desk_status surfaces

@@ -276,6 +276,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   desk_reindex: schema({ force: flag("Accepted for compatibility; it changes nothing. Reindex always joins the shared controller's convergence and never deletes a live index.") }),
   desk_status: schema({
     detail: flag("Pass true for the full payload (index, snapshots, vector packs, embedding spec, admission internals; tens of KB). Omit it for the compact answer: one `state` word, why it is not `ready`, what to do, and pointers."),
+    has_instructions: flag("Hosted Desk only (claude.ai, ChatGPT): pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions, so this answer leaves them out. A local Desk ignores it."),
   }),
   desk_skill: schema({
     name: text("The skill to read, such as task-lifecycle; omit it to list every skill."),
