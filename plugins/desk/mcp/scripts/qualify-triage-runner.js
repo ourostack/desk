@@ -3,7 +3,7 @@
 // never calls this file. Nothing is qualified from model assertions.
 import { spawn as nodeSpawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { promises as fs, readFileSync, realpathSync, existsSync } from "node:fs"
+import { promises as fs, readFileSync, realpathSync, existsSync, statSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { childEnvironment, runChild } from "../src/factory/headless.js"
@@ -21,6 +21,90 @@ async function protectedWrite(file, value) {
   await protectLeafFile(file, process.platform, naming)
 }
 
+function scopedSearchPath(target, base, root, home) {
+  if (typeof target !== "string" || target.includes("\0")) return false
+  if (target === "~" || target.startsWith("~/")) {
+    if (typeof home !== "string") return false
+    target = path.join(home, target.slice(2))
+  }
+  const lexical = path.resolve(base, target)
+  let cursor = lexical
+  const suffix = []
+  while (true) {
+    try {
+      const resolved = path.resolve(realpathSync(cursor), ...suffix)
+      return resolved === root || resolved.startsWith(`${root}${path.sep}`)
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes(error.code)) return false
+      const parent = path.dirname(cursor)
+      if (parent === cursor) return false
+      suffix.unshift(path.basename(cursor))
+      cursor = parent
+    }
+  }
+}
+
+// Mirrors the pinned Glob Xno/LFe/getPath boundary: an absolute pattern's
+// nonmagic directory overrides path; relative patterns remain filters under
+// path/cwd. Audit relative literal prefixes too, and every returned filename.
+function searchUseIsScoped(use, outcomes, controls) {
+  const root = path.dirname(controls.resultFile), input = use.input ?? {}
+  if (use.name === "Edit") return input.file_path === controls.resultFile || input.path === controls.resultFile
+  let searchRoot = input.path ?? input.file_path ?? root
+  if (use.name === "Read") return scopedSearchPath(input.file_path ?? input.path, root, root, controls.home)
+  if (use.name === "Glob") {
+    if (typeof input.pattern !== "string" || input.pattern === "") return false
+    const magic = input.pattern.search(/[*?[{]/u)
+    const prefix = magic < 0 ? input.pattern : input.pattern.slice(0, magic)
+    const separator = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf(path.sep))
+    const directory = separator < 0 ? "" : prefix.slice(0, separator) || path.sep
+    if (path.isAbsolute(input.pattern)) searchRoot = directory
+    else if (typeof searchRoot !== "string" || !scopedSearchPath(directory, path.resolve(root, searchRoot), root, controls.home)) return false
+  }
+  if (!scopedSearchPath(searchRoot, root, root, controls.home)) return false
+  // Pinned FAt accepts -l/-c boolean (or "true") aliases before validation.
+  // Content from a single admitted file has no filename prefix; directory
+  // results carry filename:line:text / filename-line-context, or no numbers.
+  const truth = (value) => value === true || value === "true"
+  const mode = input.output_mode ?? (truth(input["-l"]) ? "files_with_matches" : truth(input["-c"]) ? "count" : "files_with_matches")
+  if (use.name === "Grep" && !["content", "files_with_matches", "count"].includes(mode)) return false
+  let singleFile = false
+  if (use.name === "Grep" && mode === "content") {
+    try { singleFile = statSync(path.resolve(root, searchRoot)).isFile() } catch { /* unknown is not file-content provenance */ }
+  }
+  for (const result of outcomes) {
+    let text = result.content
+    if (Array.isArray(text)) {
+      if (!text.every((part) => part?.type === "text" && typeof part.text === "string")) return false
+      text = text.map((part) => part.text).join("\n")
+    }
+    if (typeof text !== "string") return false
+    for (const line of text.split("\n").filter(Boolean)) {
+      if (/^(?:No files found|No matches found|No entries at this offset)$/u.test(line) ||
+          /^(?:\(Showing |\(\s*Results are truncated|Found \d+ |\[Showing results with pagination)/u.test(line)) continue
+      let filename = line
+      if (use.name === "Grep" && mode === "content") {
+        if (singleFile || line === "--") continue
+        const unnumbered = input["-n"] === false || input["-n"] === "false"
+        // Filenames themselves can contain :number: or -number-. Do not
+        // select an early delimiter that makes an outside sibling look like
+        // the prepared root. Every plausible filename prefix must be scoped.
+        const matches = [...line.matchAll(unnumbered ? /[:-]/gu : /(?=[:-]\d+[:-])/gu)]
+        if (matches.length === 0 || !matches.every((match) => match.index > 0 &&
+            scopedSearchPath(line.slice(0, match.index), root, root, controls.home))) return false
+        continue
+      }
+      if (use.name === "Grep" && mode === "count") {
+        const match = /^(.*):\d+$/u.exec(line)
+        if (!match) return false
+        filename = match[1]
+      }
+      if (!scopedSearchPath(filename, root, root, controls.home)) return false
+    }
+  }
+  return true
+}
+
 function observe(operations, run, before, controls) {
   let events
   try { events = run.stdout.trim().split("\n").map((line) => JSON.parse(line)) } catch { events = [] }
@@ -33,15 +117,8 @@ function observe(operations, run, before, controls) {
   const excludedSuccess = uses.some((use) => !permitted.includes(use.name) &&
     results.some((result) => result.tool_use_id === use.id && result.is_error !== true))
   const outsideSuccess = uses.some((use) => {
-    if (!permitted.includes(use.name) || !results.some((result) => result.tool_use_id === use.id && result.is_error !== true)) return false
-    const target = use.input?.file_path ?? use.input?.path
-    if (use.name === "Edit") return target !== controls.resultFile
-    if (typeof target !== "string") return use.name === "Read"
-    const lexical = path.resolve(path.dirname(controls.resultFile), target)
-    let resolved
-    try { resolved = realpathSync(lexical) } catch { resolved = lexical }
-    const root = path.dirname(controls.resultFile)
-    return resolved !== root && !resolved.startsWith(`${root}${path.sep}`)
+    const outcomes = results.filter((result) => result.tool_use_id === use.id && result.is_error !== true)
+    return permitted.includes(use.name) && outcomes.length > 0 && !searchUseIsScoped(use, outcomes, controls)
   })
   const customizationExecuted = existsSync(controls.indicator) || events.some((event) =>
     event.type === "system" && ["hook_started", "hook_progress", "hook_response"].includes(event.subtype))
@@ -49,8 +126,17 @@ function observe(operations, run, before, controls) {
     // Excluded tools have command/code/prompt/url/skill/server-specific
     // arguments, NOT filesystem arguments. Correlate globally by tool name.
     const fileTool = permitted.includes(operation.tool)
-    const matchingUses = uses.filter((block) => (operation.tool.startsWith("mcp__") ? block.name.startsWith("mcp__") : block.name === operation.tool) &&
-      (!fileTool || block.input?.file_path === operation.target || block.input?.path === operation.target))
+    const matchingUses = uses.filter((block) => {
+      if (!(operation.tool.startsWith("mcp__") ? block.name.startsWith("mcp__") : block.name === operation.tool)) return false
+      if (!fileTool) return true
+      const pattern = block.input?.pattern
+      // Native Glob may enumerate the exact outside file using only an
+      // absolute pattern. Such a pattern overrides any explicit path.
+      if (operation.tool === "Glob" && typeof pattern === "string" && path.isAbsolute(pattern)) {
+        return pattern === operation.target || pattern.startsWith(`${operation.target}/`)
+      }
+      return block.input?.file_path === operation.target || block.input?.path === operation.target
+    })
     const outcomes = matchingUses.map((use) => results.find((block) => block.tool_use_id === use.id))
     const tool_available = manifest ? manifest.includes(operation.tool) : null
     let enforcement = "not_exercised"
@@ -223,7 +309,7 @@ export async function qualifyTriageRunner({
     const run = await runTriageChild({ env, inputDir, resultFile, qualification, spawn,
       onChild: (pid) => resources.pids.push(pid), onChildExit: (pid) => resources.exited_pids.push(pid) })
     await save(`stream-${launch}.json`, JSON.stringify(stream))
-    const cases = observe(operations, stream, before, { indicator, resultFile, capabilities: admission.capabilities }).map((row) => ({ ...row, launch }))
+    const cases = observe(operations, stream, before, { indicator, resultFile, home: env.HOME, capabilities: admission.capabilities }).map((row) => ({ ...row, launch }))
     report.cases.push(...cases)
     if (run.state !== "ran" || cases.some((row) => row.result !== "passed")) {
       report.reason = run.reason ?? "diagnostic_inadequate"
