@@ -283,7 +283,7 @@ export async function main({
     output,
     serverVersion,
     instructions: hostedInstructionsText,
-    callTool: hosted ? withHostedStartup({ callTool: (call) => session.callTool(call), instructions: hostedInstructionsText }) : (call) => session.callTool(call),
+    callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : (call) => session.callTool(call),
     onHandshake: () => {
       kick()
       startHostedSync()

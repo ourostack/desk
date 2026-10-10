@@ -135,3 +135,16 @@ test("the runtime server answers desk_skill itself", async () => {
   const result = await callTool({ deskRoot: "/nonexistent", name: "desk_skill", input: { name: "task-lifecycle" }, statusContext: {} })
   assert.match(result.content[0].text, /^# Desk skill: task-lifecycle/u)
 })
+
+test("desk_skill called with no arguments lists the plugin's skills from the running environment", () => {
+  assert.equal(parse(deskSkill()).status, "listed")
+})
+
+test("withHostedStartup's own sleep really waits between polls", async () => {
+  const replies = [answer({ detail_pending: true }), answer({ state: "ready" })]
+  const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", waitMs: 50, pollMs: 5 })
+  const started = Date.now()
+  const result = await callTool({ name: "desk_status" })
+  assert.ok(Date.now() - started >= 4)
+  assert.equal(result.content.length, 2)
+})
