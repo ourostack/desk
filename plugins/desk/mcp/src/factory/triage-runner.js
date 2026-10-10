@@ -554,13 +554,16 @@ export async function runTriageProbe({ session, spawn, onChild, onChildExit }) {
   const data = probeSessions.get(session)
   if (!data || data.invalidated || data.receipts.length >= 2) return { ...outcome("scope_unqualified"),
     stream: { stdout: "" }, cases: [], receipt: { passed: false, pids: [] } }
-  const pids = [], exits = []
+  const pids = [], exits = [], guardPids = [], guardExits = []
   let stream = { stdout: "" }
   const qualification = { ...data.config, ...data.identity, state: "probing", fingerprint: data.identity.probe_fingerprint,
     capture: (run) => { stream = run } }
   const run = await runTriageCore({ ...data.config, qualification, spawn,
     onChild: (pid) => { pids.push(pid); onChild?.(pid) },
-    onChildExit: (pid) => { exits.push(pid); onChildExit?.(pid) } }, data)
+    onChildExit: (pid) => { exits.push(pid); onChildExit?.(pid) } }, data, {
+    onChild: (pid) => { guardPids.push(pid); onChild?.(pid) },
+    onChildExit: (pid) => { guardExits.push(pid); onChildExit?.(pid) },
+  })
   // The same maintained verifier, resolved only here from a fixed source
   // module. No caller callback can provide passing observations/receipts.
   const { observeTriageProbe } = await import("../../scripts/qualify-triage-runner.js")
@@ -573,11 +576,13 @@ export async function runTriageProbe({ session, spawn, onChild, onChildExit }) {
   try { manifest = stream.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
     .find((event) => event.type === "system" && event.subtype === "init")?.tools } catch { /* invalid stream stays blocked */ }
   const manifestMatches = data.receipts.length === 0 || same(data.receipts[0].tool_manifest, manifest)
+  const ownedPid = (ids) => ids.length === 1 && Number.isSafeInteger(ids[0]) && ids[0] > 0
   const passed = run.state === "ran" && cases.every((row) => row.result === "passed") &&
-    pids.length === 1 && same(pids, exits) && manifestMatches
+    ownedPid(pids) && same(pids, exits) && ownedPid(guardPids) && same(guardPids, guardExits) && manifestMatches
   if (!manifestMatches) for (const row of cases) row.result = "failed"
   const receipt = { launch: data.receipts.length + 1, ...data.identity, run_state: run.state,
-    stream_sha256: fingerprint(stream), tool_manifest: manifest, cases, pids, exited_pids: exits, passed }
+    stream_sha256: fingerprint(stream), tool_manifest: manifest, cases, pids, exited_pids: exits,
+    guard_pids: guardPids, guard_exited_pids: guardExits, passed }
   receipt.post_probe_hashes = Object.fromEntries(Object.keys(data.before).map((file) => {
     try { return [file, digest(readFileSync(file))] } catch { return [file, null] }
   }))
@@ -675,6 +680,9 @@ export async function loadTriageQualification({ recordFile, ...config }) {
           receipt.trigger_payload_sha256 !== plan.trigger_payload_sha256 || receipt.final_result_sha256 !== plan.trigger_payload_sha256 ||
           !sameIdentity || !Array.isArray(receipt.pids) || receipt.pids.length !== 1 ||
           !Number.isSafeInteger(receipt.pids[0]) || receipt.pids[0] <= 0 || !same(receipt.pids, receipt.exited_pids) ||
+          !Array.isArray(receipt.guard_pids) || receipt.guard_pids.length !== 1 ||
+          !Number.isSafeInteger(receipt.guard_pids[0]) || receipt.guard_pids[0] <= 0 ||
+          !same(receipt.guard_pids, receipt.guard_exited_pids) ||
           !Array.isArray(receipt.cases) || !same(receipt.cases.map((row) => row.operation), caseNames) ||
           !receipt.cases.every((row) => row.result === "passed") ||
           !same(receipt.post_probe_hashes, baseline) ||
@@ -722,7 +730,7 @@ export async function runTriageChild(options) {
 async function runTriageCore({
   env, inputDir, resultFile, workDir, qualification, deadline = Date.now() + HEADLESS_TIMEOUT_MS,
   onChild, onChildExit, spawn = nodeSpawn, clock = Date.now,
-}, probeAuthority) {
+}, probeAuthority, guardCallbacks) {
   if (isHeadlessFactorySession(env)) return outcome("headless_session")
   if (billingVariableBlocks(env)) return outcome("disabled_would_bill")
   if (deadline <= clock()) return outcome("no_time_for_a_run")
@@ -770,7 +778,9 @@ async function runTriageCore({
   const identity = (value) => [value.fingerprint, value.envelope_fingerprint, value.admitted_sources_fingerprint]
   if (!same(identity(before), identity(qualification))) return changed()
   const signIn = await probeSignIn({ cli: before.chain.effective_argv[0], env,
-    spawn: qualification.probeSpawn ?? spawn, onChild, onChildExit })
+    spawn: qualification.probeSpawn ?? spawn,
+    onChild: guardCallbacks ? guardCallbacks.onChild : onChild,
+    onChildExit: guardCallbacks ? guardCallbacks.onChildExit : onChildExit })
   if (signIn.state !== "subscription") return outcome(signIn.state)
   const immediate = await snapshot()
   if (immediate.state !== "ready" || immediate.fingerprint !== before.fingerprint) return changed()
