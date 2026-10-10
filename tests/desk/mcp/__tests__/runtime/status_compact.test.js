@@ -191,7 +191,7 @@ test("the desk_status tool is compact by default and returns the full payload on
   assert.ok(JSON.stringify(compact).length < JSON.stringify(detailed).length)
 })
 
-test("desk_status declares its one optional input", () => {
-  assert.deepEqual(Object.keys(TOOL_INPUT_SCHEMAS.desk_status.properties), ["detail"])
+test("desk_status declares its two optional inputs: detail, and has_instructions for a hosted Desk", () => {
+  assert.deepEqual(Object.keys(TOOL_INPUT_SCHEMAS.desk_status.properties), ["detail", "has_instructions"])
   assert.deepEqual(TOOL_INPUT_SCHEMAS.desk_status.required, [])
 })

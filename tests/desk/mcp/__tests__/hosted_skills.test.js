@@ -1,13 +1,14 @@
 // A hosted chat such as claude.ai never shows the model a server's MCP instructions and cannot load Desk's skills as plugin skills.
-// desk_skill reads the skills through the server, and the first desk_status answer of a hosted session carries the instructions.
+// desk_skill reads the skills through the server, and a hosted desk_status answer carries the instructions unless the conversation already has them.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { deskSkill, SKILLS_ROOT } from "../../../../plugins/desk/mcp/src/runtime/skills.js"
-import { HOSTED_SHELL_SKILLS, withHostedStartup } from "../../../../plugins/desk/mcp/src/runtime/hosted.js"
+import { HAS_INSTRUCTIONS, HOSTED_SHELL_SKILLS, withHostedStartup } from "../../../../plugins/desk/mcp/src/runtime/hosted.js"
 import { mkTempDeskRoot } from "./tools/_helpers.js"
+import { DESK_STATUS_FIELDS } from "../../../../plugins/desk/mcp/src/tools/status.js"
 
 const HOSTED = { DESK_HOSTED: "1" }
 const parse = (result) => JSON.parse(result.content[0].text)
@@ -62,23 +63,34 @@ test("desk_skill on a missing or broken skills folder lists nothing and skips fo
 
 const answer = (payload, isError = false) => ({ content: [{ type: "text", text: JSON.stringify(payload) }], ...(isError ? { isError: true } : {}) })
 
-test("the first hosted desk_status answer carries the instructions once; other tools and later calls are untouched", async () => {
+test("every hosted desk_status answer carries the instructions, so a new chat on a reused MCP session gets them; other tools are untouched", async () => {
   const calls = []
   const callTool = withHostedStartup({ callTool: async (call) => { calls.push(call.name); return answer({ state: "ready" }) }, instructions: "RULES", sleep: async () => {} })
   assert.equal((await callTool({ name: "desk_search" })).content.length, 1)
-  const first = await callTool({ name: "desk_status" })
-  assert.equal(first.content.length, 2)
-  assert.match(first.content[1].text, /^# Desk instructions for this session\n[\s\S]*RULES$/u)
-  assert.equal((await callTool({ name: "desk_status" })).content.length, 1)
-  assert.deepEqual(calls, ["desk_search", "desk_status", "desk_status"])
+  for (const call of [{ name: "desk_status" }, { name: "desk_status", input: {} }, { name: "desk_status", input: { detail: true } }]) {
+    const result = await callTool(call)
+    assert.equal(result.content.length, 2)
+    assert.match(result.content[1].text, /^# Desk instructions for this conversation\n[\s\S]*has_instructions: true[\s\S]*RULES$/u)
+  }
+  assert.deepEqual(calls, ["desk_search", "desk_status", "desk_status", "desk_status"])
 })
 
-test("the first hosted desk_status waits for a pending detail, a bounded number of times", async () => {
+test("has_instructions: true leaves the instructions out; any other value keeps them", async () => {
+  assert.equal(HAS_INSTRUCTIONS, "has_instructions")
+  assert.ok(DESK_STATUS_FIELDS.includes(HAS_INSTRUCTIONS), "the schema parity test covers the input the wrapper reads")
+  const callTool = withHostedStartup({ callTool: async () => answer({ state: "ready" }), instructions: "RULES", sleep: async () => {} })
+  assert.equal((await callTool({ name: "desk_status", input: { has_instructions: true } })).content.length, 1)
+  assert.equal((await callTool({ name: "desk_status", input: { has_instructions: "true" } })).content.length, 2)
+  assert.equal((await callTool({ name: "desk_status", input: { has_instructions: false } })).content.length, 2)
+})
+
+test("a hosted desk_status waits for a pending detail, a bounded number of times, even when it leaves the instructions out", async () => {
   const replies = [answer({ state: "ready", detail_pending: true }), answer({ state: "ready", detail_pending: true }), answer({ state: "ready", root: { path: "/d" } })]
   const slept = []
   const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", waitMs: 5_000, pollMs: 1_000, sleep: async (ms) => { slept.push(ms) } })
-  const result = await callTool({ name: "desk_status" })
+  const result = await callTool({ name: "desk_status", input: { has_instructions: true } })
   assert.deepEqual(JSON.parse(result.content[0].text).root, { path: "/d" })
+  assert.equal(result.content.length, 1)
   assert.deepEqual(slept, [1_000, 1_000])
 
   let asked = 0
@@ -88,46 +100,38 @@ test("the first hosted desk_status waits for a pending detail, a bounded number 
   assert.equal(still.content.length, 2, "the instructions still arrive when the detail never loads")
 })
 
-test("an error answer or an unparseable one never carries the instructions, and the next desk_status still does", async () => {
+test("an error answer, first or after waiting, never carries the instructions; an unparseable one does", async () => {
   const replies = [answer({ code: "x" }, true), { content: [{ type: "text", text: "not json" }] }]
   const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", sleep: async () => {} })
   assert.equal((await callTool({ name: "desk_status" })).content.length, 1)
   assert.equal((await callTool({ name: "desk_status" })).content.length, 2)
 
-  const late = [answer({ detail_pending: true }), answer({ code: "y" }, true), answer({ state: "ready" })]
+  const late = [answer({ detail_pending: true }), answer({ code: "y" }, true)]
   const flaky = withHostedStartup({ callTool: async () => late.shift(), instructions: "RULES", sleep: async () => {} })
-  assert.equal((await flaky({ name: "desk_status" })).isError, true)
-  assert.equal((await flaky({ name: "desk_status" })).content.length, 2)
+  const failed = await flaky({ name: "desk_status" })
+  assert.equal(failed.isError, true)
+  assert.equal(failed.content.length, 1)
 })
 
-test("two first desk_status calls at the same time: only one carries the instructions", async () => {
-  let release
-  const gate = new Promise((resolve) => { release = resolve })
-  const replies = [answer({ detail_pending: true }), answer({ state: "ready" }), answer({ state: "ready" })]
-  const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", sleep: () => gate })
-  const first = callTool({ name: "desk_status" })
-  await new Promise((resolve) => setImmediate(resolve))
-  const second = await callTool({ name: "desk_status" })
-  release()
-  assert.equal(second.content.length, 1)
-  assert.equal((await first).content.length, 2)
-})
-
-test("a cancelled first desk_status stops waiting and leaves the instructions for the next call", async () => {
+test("a cancelled desk_status stops waiting and carries no instructions", async () => {
   const controller = new AbortController()
   let asked = 0
   const callTool = withHostedStartup({ callTool: async () => { asked += 1; return answer({ detail_pending: asked < 3 }) }, instructions: "RULES", sleep: async () => { controller.abort() } })
   const cancelled = await callTool({ name: "desk_status", signal: controller.signal })
   assert.equal(cancelled.content.length, 1)
   assert.equal(asked, 2)
-  assert.equal((await callTool({ name: "desk_status" })).content.length, 2)
+
+  const settled = new AbortController()
+  settled.abort()
+  const ready = withHostedStartup({ callTool: async () => answer({ state: "ready" }), instructions: "RULES", sleep: async () => {} })
+  assert.equal((await ready({ name: "desk_status", signal: settled.signal })).content.length, 1, "an aborted call that already has a ready answer still carries none")
+  assert.equal((await ready({ name: "desk_status", signal: settled.signal, input: { has_instructions: true } })).content.length, 1)
 })
 
-test("a desk_status that throws while waiting leaves the instructions for the next call", async () => {
-  const replies = [async () => answer({ detail_pending: true }), async () => { throw new Error("boom") }, async () => answer({ state: "ready" })]
+test("a desk_status that throws while waiting passes the error on", async () => {
+  const replies = [async () => answer({ detail_pending: true }), async () => { throw new Error("boom") }]
   const callTool = withHostedStartup({ callTool: () => replies.shift()(), instructions: "RULES", sleep: async () => {} })
   await assert.rejects(callTool({ name: "desk_status" }), /boom/u)
-  assert.equal((await callTool({ name: "desk_status" })).content.length, 2)
 })
 
 test("the runtime server answers desk_skill itself", async () => {
@@ -149,7 +153,7 @@ test("withHostedStartup's own sleep really waits between polls", async () => {
   assert.equal(result.content.length, 2)
 })
 
-test("the first hosted desk_status also waits while Desk is still admitting the desk", async () => {
+test("a hosted desk_status also waits while Desk is still admitting the desk", async () => {
   const replies = [answer({ state: "admitting", root: { path: null } }), answer({ state: "admitting" }), answer({ state: "ready", root: { path: "/d" } })]
   const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", sleep: async () => {} })
   const result = await callTool({ name: "desk_status" })
@@ -157,11 +161,11 @@ test("the first hosted desk_status also waits while Desk is still admitting the 
   assert.equal(result.content.length, 2)
 })
 
-test("a first desk_status answer with no content, or no answer at all, still carries the instructions", async () => {
+test("a desk_status answer with no content, or no answer at all, still carries the instructions", async () => {
   for (const reply of [{}, undefined]) {
     const callTool = withHostedStartup({ callTool: async () => reply, instructions: "RULES", sleep: async () => {} })
     const result = await callTool({ name: "desk_status" })
     assert.equal(result.content.length, 1)
-    assert.match(result.content[0].text, /# Desk instructions for this session[\s\S]*RULES/)
+    assert.match(result.content[0].text, /# Desk instructions for this conversation[\s\S]*RULES/)
   }
 })
