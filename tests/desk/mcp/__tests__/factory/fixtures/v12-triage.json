@@ -1,0 +1,35 @@
+{
+  "schema": "factory.v12-triage-fixture/1",
+  "public": {
+    "schema": "desk.factory.triage/1",
+    "batch": "0123456789abcdef",
+    "producer_version": "1.4.0",
+    "rubric_version": 1,
+    "coverage": {"generation":"0123456789abcdef0123456789abcdef","scan":"complete","reviewed":1,"unreviewed":0,"refused":0,"deferred":0,"more_unreviewed":false},
+    "runner": {"state":"ran","last_success_age":"recent"},
+    "rows": [
+      {"id":"abcdef0123456789abcdef0123456789","revision":1,"state":"reviewed","source":"evaluator","lifecycle":"open","ownership":"not_published","route":"human_decision","gate":"intent","evidence":[],"basis":{"generation":"0123456789abcdef0123456789abcdef","evidence_revisions":[]},"related_ids":[],"duplicate_ids":[],"age":"recent","producer_version":"1.4.0","rubric_version":1}
+    ]
+  },
+  "cases": [
+    {"name":"valid_review"},
+    {"name":"empty_never_reviewed","rows":[],"coverage":{"reviewed":0,"unreviewed":null,"refused":null,"deferred":null,"more_unreviewed":null},"runner":{"state":"no_agent_cli","last_success_age":"never"}},
+    {"name":"stale_source","row":{"state":"stale","age":"stale"}},
+    {"name":"withdrawal","row":{"revision":2,"state":"withdrawn","route":null,"gate":null}},
+    {"name":"late_older_revision","row":{"revision":1}},
+    {"name":"equal_revision_conflict","row":{"route":"investigate","gate":null}},
+    {"name":"different_ids_one_public_issue","row":{"id":"fedcba9876543210fedcba9876543210","evidence":[{"kind":"issue","ref":"https://github.com/example/project/issues/1","revision":1}]}},
+    {"name":"incomplete_scan","coverage":{"scan":"truncated","unreviewed":null,"more_unreviewed":null}},
+    {"name":"refused_output","rows":[],"coverage":{"reviewed":0,"refused":1}},
+    {"name":"agent_ready","row":{"route":"agent_ready","gate":null}},
+    {"name":"investigate","row":{"route":"investigate","gate":null}},
+    {"name":"human_decision"},
+    {"name":"unsupported_version","schema":"desk.factory.triage/2","valid":false},
+    {"name":"private_human_decision_without_public_issue"},
+    {"name":"verified_public_issue_context_no_decision_fields","row":{"evidence":[{"kind":"issue","ref":"https://github.com/example/project/issues/1","revision":1}],"basis":{"generation":"0123456789abcdef0123456789abcdef","evidence_revisions":[{"kind":"issue","ref":"https://github.com/example/project/issues/1","revision":1}]}},"publicEvidence":[{"kind":"issue","ref":"https://github.com/example/project/issues/1","revision":1,"visibility":"public","label":"Synthetic issue"}]},
+    {"name":"stale_private_decision","row":{"state":"stale","age":"stale"}},
+    {"name":"untrusted_first_assignment","trustedMaintainer":false},
+    {"name":"untrusted_higher_revision","trustedMaintainer":false,"row":{"revision":2}}
+  ],
+  "privacy_sentinels": ["friction_candidate:private-card","/Users/synthetic/private","synthetic@example.invalid","ghp_SYNTHETIC0123456789abcdefghijklmnopqrst","PRIVATE_SYNTHETIC_DECISION_PROSE"]
+}

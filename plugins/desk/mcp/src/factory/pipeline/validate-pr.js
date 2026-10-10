@@ -22,9 +22,13 @@
 // and a rename stays refused.
 // Every value arrives as bytes and is only parsed as JSON, never loaded or
 // run, and errors carry only stable codes and safe paths.
+// Triage is separate authenticated data: only immutable additions, with
+// actual API-derived maintainer authority, pass its contextual gate. The
+// generic legacy retraction rule below never applies to triage.
 import { CAPTURE_PATH, validateCaptureBytes } from "../capture-schema.js"
 import { checkLabelsAgainstFacts, evaluatorDowngrade, validateLabelsBytes } from "../label-schema.js"
 import { validatePublishedBytes } from "../published-schema.js"
+import { isTriagePath, validateTriageChange } from "../triage-schema.js"
 
 const FACT_HOSTS = Object.freeze(["claude-code", "copilot-cli", "codex-cli"])
 const SESSION_ID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
@@ -132,6 +136,10 @@ export function validatePr(input) {
     const match = typeof change.path === "string" ? FACT_PATH.exec(change.path) : null
     const labels = labelsPathParts(change.path)
     const capture = isCapturePath(change.path)
+    if (isTriagePath(change.path)) {
+      errors.push(...validateTriageChange({ ...change, trustedMaintainer: input.trustedMaintainer }).errors)
+      continue
+    }
     if (match === null && labels === null && !capture) {
       errors.push(error(change.status === "removed" ? "removal_path" : "path", `changes.${index}`))
       continue
