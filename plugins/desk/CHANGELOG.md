@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.280 — 2026-10-10
+
+Hosted Desk accepts MCP clients beyond claude.ai's registered connector, still for one user. Allowed redirects now come from `DESK_REDIRECTS` (default: Claude's two callbacks and VS Code's two), plus loopback on any port and ChatGPT's per-connector callback, and every client's redirects are checked again on each use, so removing one shuts out clients registered before. A client may use the https URL of its client metadata document as its id, which claude.ai's "Use Claude's published identity" does: the gateway fetches it only from public addresses, follows no redirects, stops after 5 seconds or 10 KB, requires a public client whose redirects `DESK_REDIRECTS` already allows, and caches it for 5 minutes to 24 hours. A `resource` a client sends must be the gateway's `/mcp` URL, and new tokens carry it as their audience; tokens issued before keep working until they expire. The OAuth metadata lists `offline_access`, so ChatGPT asks for refresh tokens, and `client_id_metadata_document_supported`. See [`hosted/README.md`](../../hosted/README.md).
+
+Hosted Desk's instructions now open with a short lead that fits in the first 512 characters: call `desk_status` first, keep memory in the desk through Desk's tools, never type a password or paste a secret. Clients that read only the start of the instructions still get the rules that matter most.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.279 — 2026-10-10
 
 A hosted Desk now sends its instructions with every `desk_status` answer, not only the first one in an MCP session. claude.ai reuses one MCP session across chats, so a second chat used to start with no instructions at all. An agent that already has them in its conversation passes the new `has_instructions: true` to [`desk_status`](mcp/src/tool-schemas.js) to leave them out; a local Desk ignores that input. While Desk is still admitting the desk or loading its status detail, every hosted `desk_status` call now waits up to ten seconds for it ([`runtime/hosted.js`](mcp/src/runtime/hosted.js)).
