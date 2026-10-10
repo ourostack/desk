@@ -11,7 +11,8 @@ import { keysStartupLine, readConfig } from "../src/main.js";
 import { createMemoryStore } from "../src/accounts/memory-store.js";
 import { hashToken } from "../src/accounts/invites.js";
 import { plan, run, parseFlags } from "../infra/provision-identity.mjs";
-import { addContainerApp, createFakeRunner, emptyCloud, TEST_TENANT } from "./fixtures/fake-cloud.mjs";
+import { addContainerApp, createFakeRunner, emptyCloud, OPERATOR, OPERATOR_TOKEN, TEST_TENANT, VAULT_ID } from "./fixtures/fake-cloud.mjs";
+import { defaultRunner } from "../infra/provision-identity.mjs";
 
 const shownFixture = JSON.parse(readFileSync(new URL("./fixtures/containerapp-shown.json", import.meta.url), "utf8"));
 const NOW = Date.parse("2026-11-01T00:00:00Z");
@@ -36,7 +37,26 @@ function setup(t, { env = "test", record = {}, cloud = emptyCloud() } = {}) {
   cloud.openerCommand = "opener";
   const fake = createFakeRunner(cloud);
   const logs = [];
-  const store = createMemoryStore();
+  // The accounts store refuses the operator (HTTP 403, as Table Storage does) until it holds Storage Table Data
+  // Contributor on the env's storage account; `storeRefusals` more calls after that are refused too (propagation).
+  const memory = createMemoryStore();
+  let storeRefusals = 0;
+  let wasGranted = false;
+  const store = new Proxy(memory, {
+    get(target, name) {
+      const method = target[name];
+      if (typeof method !== "function") return method;
+      return async (...args) => {
+        if (cloud.storeRbac) {
+          const granted = cloud.roles.some((role) => role.principalId === OPERATOR && role.role === "Storage Table Data Contributor" && /storageAccounts\/stouroa/.test(role.scope));
+          if (granted && !wasGranted) storeRefusals = cloud.storePropagation ?? 0;
+          wasGranted = granted;
+          if (!granted || storeRefusals-- > 0) throw new Error(`${String(name)} on table accounts (HTTP 403 AuthorizationPermissionMismatch)`);
+        }
+        return method.apply(target, args);
+      };
+    },
+  });
   const go = (flags = {}, options = {}) =>
     run({
       env,
@@ -256,14 +276,15 @@ test("--clear-app-secrets writes unset over all four desk-app secrets and nothin
   assert.equal(staging.secrets["desk-signing-key"], SIGNING);
 });
 
-test("the identity-checks identity gets exactly Key Vault Secrets Officer on the vault and Reader on both apps, and its federated subject is the identity environment", async (t) => {
+test("the identity-checks identity gets exactly Key Vault Secrets Officer on the vault and Reader on each env's app from that env's run, and its federated subject is the identity environment", async (t) => {
   const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
   addContainerApp(context.cloud, { name: "ouro-desk-hosted", shown: { ...shownFixture, id: "/apps/ouro-desk-hosted" }, secrets: {} });
   addContainerApp(context.cloud, { name: "ouro-desk-hosted-staging", shown: { ...shownFixture, id: "/apps/ouro-desk-hosted-staging" }, secrets: {} });
   await context.go();
   const checks = context.cloud.identities["id-ouro-identity-checks"];
   const roles = context.cloud.roles.filter(({ principalId }) => principalId === checks.principalId).map(({ role, scope }) => `${role} @ ${scope.split("/").at(-1)}`);
-  assert.deepEqual(roles.sort(), ["Key Vault Secrets Officer @ kv-ouro-identity-261e0b", "Reader @ ouro-desk-hosted", "Reader @ ouro-desk-hosted-staging"]);
+  // A test run touches only the staging app (review m2); a prod run gives Reader on production's app.
+  assert.deepEqual(roles.sort(), ["Key Vault Secrets Officer @ kv-ouro-identity-261e0b", "Reader @ ouro-desk-hosted-staging"]);
   assert.deepEqual(checks.federated.map(({ subject, issuer, audiences }) => [subject, issuer, audiences]), [
     ["repo:ourostack@265728804/desk@1386529300:environment:identity", "https://token.actions.githubusercontent.com", "api://AzureADTokenExchange"],
   ]);
@@ -271,10 +292,12 @@ test("the identity-checks identity gets exactly Key Vault Secrets Officer on the
   assert.deepEqual(automation.federated.map(({ subject }) => subject), ["repo:ourostack@265728804/desk@1386529300:environment:identity"]);
   const sp = context.cloud.graph.sps.find(({ appId }) => appId === automation.appId);
   assert.deepEqual(sp.appRoleAssignments, ["90db2b9a-d928-4d33-a4dd-8442ae3d41e4"]);
-  // The gateway identity reads only its own env's Entra secret and the accounts tables.
-  const gateway = context.cloud.identities["id-ouro-desk-hosted"];
+  // Staging's gateway has its own identity, with roles only on the test secret and the test accounts storage (I2).
+  assert.equal(context.cloud.identities["id-ouro-desk-hosted"], undefined);
+  const gateway = context.cloud.identities["id-ouro-desk-hosted-staging"];
   const gatewayRoles = context.cloud.roles.filter(({ principalId }) => principalId === gateway.principalId).map(({ role, scope }) => `${role} @ ${scope.split("/").at(-1)}`);
   assert.deepEqual(gatewayRoles.sort(), ["Key Vault Secrets User @ entra-client-secret-test", "Storage Table Data Contributor @ stouroacctstest261e0b"]);
+  assert.ok(!context.cloud.roles.some(({ scope }) => /entra-client-secret-prod|stouroaccounts261e0b|\/ouro-desk-hosted$/.test(scope)), "a test run grants nothing on production");
   // The GitHub environment deploys from main only.
   assert.deepEqual(context.cloud.gh.env.policy, { protected_branches: false, custom_branch_policies: true });
   assert.deepEqual(context.cloud.gh.env.branches, ["main"]);
@@ -301,7 +324,7 @@ test("--seed-ari records the accountId and issues no invite", async (t) => {
 });
 
 test("--invite-ari in prod writes a 0600 file, passes no token in argv and logs none; in test it may print the link", async (t) => {
-  const storage = { account: "stouroaccounts261e0b", endpoint: "https://stouroaccounts261e0b.table.core.windows.net" };
+  const storage = { account: "stouroaccounts261e0b", id: "/subscriptions/s/resourceGroups/rg-ouro-identity/providers/Microsoft.Storage/storageAccounts/stouroaccounts261e0b", endpoint: "https://stouroaccounts261e0b.table.core.windows.net" };
   const prod = setup(t, { env: "prod", record: { storage, ari: { accountId: "acct-ari", githubUserId: 16390116, githubLogin: "arimendelow" } } });
   await prod.store.ensureTables();
   await prod.store.putAccount({ accountId: "acct-ari", displayName: "Ari Mendelow", deskAccess: true });
@@ -534,4 +557,220 @@ test("the command line takes the plan's flags", () => {
   assert.throws(() => parseFlags(["--env", "test", "--rotate", "client-key"]), /--rotate signing-key/);
   assert.throws(() => parseFlags(["--env", "test", "--apple-key-file", "/k.p8"]), /--apple-key-slot/);
   assert.throws(() => parseFlags(["--env", "staging"]), /test or prod/);
+});
+
+// --- Review fix round 1 -----------------------------------------------------------------------------------------
+
+const KV_REF_SHOWN = () => {
+  const shown = structuredClone(shownFixture);
+  shown.properties.template.containers[0].env = shown.properties.template.containers[0].env.filter(({ name }) => !name.startsWith("DESK_SIGNING_KEY_PREVIOUS"));
+  shown.properties.configuration.secrets = shown.properties.configuration.secrets.filter(({ name }) => name !== "desk-signing-key-previous");
+  return shown;
+};
+
+test("I1: every app write is checked afterwards, and fails when az turned a Key Vault reference into a value (rotation, migration, copy, clear)", async (t) => {
+  const cases = [
+    ["rotate", { rotate: "signing-key" }, () => KV_REF_SHOWN(), { "desk-client-key": SIGNING }],
+    ["migrate", { migrate: "client-key" }, () => {
+      const shown = todaysShown();
+      shown.properties.configuration.secrets.push(structuredClone(shownFixture.properties.configuration.secrets.find(({ name }) => name === "entra-client-secret")));
+      return shown;
+    }, {}],
+    ["clear", { clearAppSecrets: true }, () => KV_REF_SHOWN(), { "desk-client-key": SIGNING }],
+  ];
+  for (const [label, flags, makeShown, extra] of cases) {
+    const context = setup(t);
+    context.cloud.resolveRefs = true;
+    addStaging(context.cloud, { shown: makeShown(), secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, ...extra } });
+    await assert.rejects(context.go(flags), /entra-client-secret is no longer a Key Vault reference/, label);
+  }
+  const copy = setup(t);
+  copy.cloud.resolveRefs = true;
+  addContainerApp(copy.cloud, { name: "ouro-desk-hosted", shown: { ...shownFixture, name: "ouro-desk-hosted" }, secrets: APP_SECRETS });
+  addStaging(copy.cloud, { shown: KV_REF_SHOWN(), secrets: { "desk-signing-key": SIGNING, "desk-client-key": SIGNING } });
+  await assert.rejects(copy.go({ copyAppSecrets: true }), /no longer a Key Vault reference/);
+});
+
+test("C1: a write that loses an identity fails its check", async (t) => {
+  const context = setup(t);
+  context.cloud.dropIdentitiesOnUpdate = true;
+  addStaging(context.cloud, { shown: KV_REF_SHOWN(), secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, "desk-client-key": SIGNING } });
+  await assert.rejects(context.go({ clearAppSecrets: true }), /is no longer attached/);
+});
+
+test("I3: the operator gets Key Vault Secrets Officer before any vault read, from the token's oid, and the run waits out propagation", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  cloud.propagation = 2;
+  const context = setup(t, { cloud });
+  await context.go();
+  const grant = context.fake.calls.findIndex(({ args }) => args.slice(0, 3).join(" ") === "role assignment create" && args.includes(OPERATOR));
+  const firstVaultRead = context.fake.calls.findIndex(({ args }) => args[0] === "keyvault" && args[1] === "secret");
+  assert.ok(grant !== -1 && grant < firstVaultRead);
+  assert.deepEqual(cloud.roles.filter(({ principalId }) => principalId === OPERATOR).map(({ role, scope, principalType }) => [role, scope, principalType]), [["Key Vault Secrets Officer", VAULT_ID, "User"]]);
+  assert.match(context.logs.join("\n"), /retrying/);
+  assertNoneOf(everythingShown(context), [OPERATOR_TOKEN]);
+});
+
+test("I3: --seed-ari grants the operator Storage Table Data Contributor on that env's accounts storage before seeding, and retries while it propagates", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  cloud.storeRbac = true;
+  cloud.storePropagation = 2;
+  const context = setup(t, { cloud });
+  await context.go({ seedAri: true });
+  const storageRole = cloud.roles.find(({ principalId, role }) => principalId === OPERATOR && role === "Storage Table Data Contributor");
+  assert.match(storageRole.scope, /storageAccounts\/stouroacctstest261e0b$/);
+  assert.equal(storageRole.principalType, "User");
+  assert.ok(context.readRecord().ari.accountId);
+});
+
+test("I3: --invite-ari also uses the operator's storage role", async (t) => {
+  const cloud = emptyCloud();
+  cloud.storeRbac = true;
+  const storage = { account: "stouroacctstest261e0b", id: "/subscriptions/s/resourceGroups/rg-ouro-identity/providers/Microsoft.Storage/storageAccounts/stouroacctstest261e0b", endpoint: "https://stouroacctstest261e0b.table.core.windows.net" };
+  const context = setup(t, { cloud, record: { storage, ari: { accountId: "acct-ari-test", githubUserId: 16390116, githubLogin: "arimendelow" } } });
+  cloud.roles.push({ principalId: OPERATOR, role: "Storage Table Data Contributor", scope: storage.id });
+  await context.store.ensureTables();
+  await context.store.putAccount({ accountId: "acct-ari-test", displayName: "Ari Mendelow", deskAccess: true });
+  await context.go({ inviteAri: true });
+  assert.match(context.logs.join("\n"), /\/invite\//);
+});
+
+test("I4: a first run and a dry run work before the GitHub environment exists, and list its variables only once it does", async (t) => {
+  const dry = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await dry.go({ dryRun: true });
+  assert.ok(!dry.fake.calls.some(({ cmd, args }) => cmd === "gh" && args[0] === "variable" && args[1] === "list"));
+  const real = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await real.go();
+  assert.ok(real.cloud.gh.env);
+});
+
+test("I5: a create that Graph doesn't show yet is waited for, never created twice", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  cloud.graphLag = 3;
+  const context = setup(t, { cloud });
+  await context.go();
+  assert.equal(cloud.graph.apps.filter(({ displayName }) => displayName === "ouro-desk-hosted").length, 1);
+  assert.equal(cloud.graph.apps.filter(({ displayName }) => displayName === "ouro-identity-automation").length, 1);
+  assert.equal(cloud.graph.flows.length, 1);
+  assert.equal(cloud.graph.sps.length, 2);
+
+  const stuck = withAppleKeyInVault(emptyCloud());
+  stuck.graphLag = 1000;
+  const second = setup(t, { cloud: stuck });
+  await assert.rejects(second.go(), /Graph doesn't show it yet/);
+  assert.equal(stuck.graph.apps.length, 1);
+});
+
+test("I5: two app registrations with the gateway's name stop the run instead of picking one", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await context.go();
+  context.cloud.graph.apps.push({ ...structuredClone(context.cloud.graph.apps[0]), appId: "dup", id: "dup" });
+  await assert.rejects(context.go(), /2 app registrations named ouro-desk-hosted/);
+});
+
+test("M1: the Apple provider is created with slot b when slot a is tagged revoked", async (t) => {
+  const cloud = emptyCloud();
+  const keyB = APPLE_KEY.replace("APPLEKEY", "BPPLEKEY");
+  cloud.vault.secrets["apple-siwa-key-a-test"] = { value: APPLE_KEY, tags: { revoked: "2026-10-30" } };
+  cloud.vault.secrets["apple-siwa-key-b-test"] = { value: keyB, tags: {} };
+  const context = setup(t, { cloud });
+  await context.go();
+  const provider = cloud.graph.providers[0];
+  assert.equal(provider.keyId, "KEYIDBBBBB");
+  assert.equal(provider.certificateData, keyB);
+});
+
+test("M2: --seed-ari leaves an existing account as it is, access off and binding included", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await context.go({ seedAri: true });
+  const { accountId } = context.readRecord().ari;
+  await context.store.putAccount({ accountId, displayName: "Ari Mendelow", deskAccess: false });
+  await context.store.putBinding(accountId, { kind: "github", repo: "arimendelow/other", author: { name: "Ari", email: "a@example.com" } });
+  await context.go({ seedAri: true });
+  assert.equal((await context.store.getAccount(accountId)).deskAccess, false);
+  assert.equal((await context.store.getBinding(accountId)).repo, "arimendelow/other");
+});
+
+test("M7: a dry run leaves identity-<env>.json untouched", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  const before = readFileSync(join(context.recordDir, "identity-test.json"), "utf8");
+  await context.go({ dryRun: true });
+  assert.equal(readFileSync(join(context.recordDir, "identity-test.json"), "utf8"), before);
+});
+
+test("M8: an import whose revoked tag survives the write fails and keeps the file", async (t) => {
+  const cloud = emptyCloud();
+  cloud.keepTagsOnSet = true;
+  cloud.vault.secrets["apple-siwa-key-a-test"] = { value: "old", tags: { revoked: "2026-10-30" } };
+  const context = setup(t, { cloud });
+  const file = appleFile(context.dir);
+  await assert.rejects(context.go({ appleKeyFile: file, appleKeySlot: "a" }), /still carries a revoked tag/);
+  assert.ok(existsSync(file));
+});
+
+test("M9: --copy-app-secrets refuses a production secret that is still unset, and writes nothing", async (t) => {
+  const context = setup(t);
+  addContainerApp(context.cloud, { name: "ouro-desk-hosted", shown: { ...shownFixture, name: "ouro-desk-hosted" }, secrets: { ...APP_SECRETS, "desk-app-key": "unset" } });
+  const staging = addStaging(context.cloud, { shown: shownFixture, secrets: { "desk-signing-key": SIGNING, "desk-client-key": SIGNING } });
+  await assert.rejects(context.go({ copyAppSecrets: true }), /desk-app-key is not set/);
+  assert.equal(staging.updates.length, 0);
+});
+
+const reconciledState = () => ({
+  tenant: { id: TEST_TENANT, name: "ourobottest" },
+  graph: true,
+  storage: { account: "stouroacctstest261e0b", id: "/st", endpoint: "https://x", sharedKey: false, tls: "TLS1_2" },
+  vaultId: VAULT_ID,
+  vaultSecrets: ["entra-client-secret-test"],
+  gatewayApp: { appId: "g", redirects: [], tokenVersion: 2, passwords: 1, servicePrincipalId: "sp" },
+});
+
+test("M10: the gateway secret is made again when either Key Vault or the app lacks it", () => {
+  const names = (state) => plan({ env: "test", state }).map(({ name }) => name);
+  assert.ok(!names(reconciledState()).includes("gateway client secret"));
+  assert.ok(names({ ...reconciledState(), vaultSecrets: [] }).includes("gateway client secret"));
+  assert.ok(names({ ...reconciledState(), gatewayApp: { ...reconciledState().gatewayApp, passwords: 0 } }).includes("gateway client secret"));
+});
+
+test("M13: storage that allows shared keys or old TLS is corrected", () => {
+  const names = (storage) => plan({ env: "test", state: { ...reconciledState(), storage: { ...reconciledState().storage, ...storage } } }).map(({ name }) => name);
+  assert.ok(!names({}).includes("storage account settings"));
+  assert.ok(names({ sharedKey: true }).includes("storage account settings"));
+  assert.ok(names({ tls: "TLS1_0" }).includes("storage account settings"));
+});
+
+test("M14: an existing user flow without Apple gets the Apple provider linked", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  cloud.graph.providers.push({ id: "Apple-Managed-OIDC", "@odata.type": "#microsoft.graph.appleManagedIdentityProvider" });
+  cloud.graph.flows.push({ id: "flow-1", displayName: "Ouro sign-in", idps: ["EmailOtpSignup-OAUTH"], apps: [] });
+  const context = setup(t, { cloud });
+  await context.go();
+  assert.deepEqual(cloud.graph.flows[0].idps, ["EmailOtpSignup-OAUTH", "Apple-Managed-OIDC"]);
+});
+
+test("m1: a gateway secret that Key Vault refuses is removed from the app again", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  const context = setup(t, { cloud });
+  const runner = context.fake.runner;
+  const failing = async (cmd, args, options) => {
+    if (args.includes("entra-client-secret-test") && args[2] === "set") throw Object.assign(new Error("az keyvault secret set failed"), { stderr: "ERROR: BadRequest" });
+    return runner(cmd, args, options);
+  };
+  await assert.rejects(context.go({}, { runner: failing }));
+  const app = cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted");
+  assert.deepEqual(app.passwordCredentials, []);
+});
+
+test("m3: one action at a time, and seeding still runs when the Apple step stops", async (t) => {
+  assert.throws(() => parseFlags(["--env", "test", "--seed-ari", "--invite-ari"]), /one action at a time/);
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()), record: { apple: { outcome: "B", serviceId: "bot.ouro.identity.test", keyIds: {} } } });
+  await assert.rejects(context.go({ seedAri: true }), /admin center/);
+  assert.ok(context.readRecord().ari.accountId);
+});
+
+test("m4: the default runner's error names the command's first words and stderr, never later arguments or stdin", async () => {
+  const error = await defaultRunner(process.execPath, ["-e", "process.stdin.resume(); process.stderr.write('ERROR: refused\\n'); process.exit(3)", "--", "SECRET-ARGUMENT"], { input: "SECRET-INPUT" }).catch((caught) => caught);
+  assert.match(error.message, /failed: ERROR: refused/);
+  assert.ok(!error.message.includes("SECRET-ARGUMENT") && !error.message.includes("SECRET-INPUT"));
+  assert.equal((await defaultRunner(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], { input: "piped" })).stdout, "piped");
 });
