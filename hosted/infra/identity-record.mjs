@@ -127,3 +127,10 @@ export function identitySettings(record) {
     missing: [],
   };
 }
+
+// The cutoff must be set within a day of the release (spec: 14 days after shipping); a forgotten one fails open.
+export function cutoffWarning(record, now = Date.now()) {
+  if (!record.releasedAt || record.legacyCutoff) return null;
+  if (now - Date.parse(record.releasedAt) <= 24 * 3600 * 1000) return null;
+  return `WARNING: identity-${record.env}.json records releasedAt ${record.releasedAt} but no legacyCutoff; legacy tokens never expire until it is set.`;
+}
