@@ -63,7 +63,13 @@ test("corrupt DB and malformed generation retain their different diagnostic path
   assert.throws(() => inspectStatusInputs({ deskRoot: root, phase: "index" }), { code: "SQLITE_NOTADB" })
   const directoryRoot = await mkTempRoot("status-inspect-directory-")
   mkdirSync(indexDbPath(directoryRoot), { recursive: true })
-  const unreadable = (error) => ["SQLITE_IOERR_READ", "SQLITE_CANTOPEN"].includes(error.code)
+  const unreadable = (error) => error.name === "SqliteError" &&
+    ["SQLITE_IOERR_READ", "SQLITE_CANTOPEN", "SQLITE_CANTOPEN_ISDIR"].includes(error.code)
+  const { default: Database } = await import("better-sqlite3")
+  assert.equal(unreadable(new Database.SqliteError("unable to open database file", "SQLITE_CANTOPEN_ISDIR")), true,
+    "SQLite's Windows VFS reports opening a directory with the extended CANTOPEN_ISDIR code")
+  assert.equal(unreadable(new Error("unable to open database file")), false)
+  assert.equal(unreadable(new Database.SqliteError("file is not a database", "SQLITE_NOTADB")), false)
   assert.throws(() => inspectStatusInputs({ deskRoot: directoryRoot }), unreadable)
   await assert.rejects(inspectStatusDb(directoryRoot), unreadable)
   assert.throws(() => inspectStatusInputs({ deskRoot: root, phase: "unsupported" }), /unknown status inspection phase/u)
