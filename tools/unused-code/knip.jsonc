@@ -82,6 +82,8 @@
         "web.cjs",
         "web-proxy.cjs",
         "scripts/*.{js,mjs}",
+        // Playwright loads this callback through --init-page, not a static import.
+        "scripts/real-profile-page.cjs",
         // Codex is a supported host and the adapter is its activation surface: the host manifests and tests drive it, and the files below are the parts of it that nothing in this package imports by a static path.
         "src/activation/adapters/codex.js",
         "src/activation/artifact-ledger.js",
