@@ -1,0 +1,1 @@
+Clarify real-profile browser recovery: incomplete cleanup retains the same connection for retry, failed window opening refuses forwarding, and connection-controlled tabs do not prove physical window ownership.
