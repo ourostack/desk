@@ -1504,7 +1504,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["using-superpowers-with-desk", /Never enter, request or recommend the host's Plan mode: work in the active execution mode/u],
     ["using-superpowers-with-desk", /treat it as a runtime or tooling fault and use another valid execution path/u],
     ["using-desk", /Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship/u],
-    ["using-desk", /spending their money, credentials or accounts only they can act in; an irreversible action/u],
+    ["using-desk", /money, credentials\/accounts only they can act in, irreversible action/u],
     ["using-desk", /Download CI output from the operator's own repositories without asking/u],
     ["using-desk", /run sign-in flows yourself rather than asking; never type a password or paste a secret/u],
     ["using-desk", /merge when confident wherever the repository lets you, and never report completion with the PR open/u],
