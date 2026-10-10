@@ -118,18 +118,18 @@ export function resolveBootRoot({
   readActivationConfig = (file) => readSmallText(file),
 } = {}) {
   const bindingPath = claudeBindingPath(env)
+  const hostProjectRoot = typeof env.CLAUDE_PROJECT_DIR === "string" && env.CLAUDE_PROJECT_DIR.trim().length > 0
+    ? env.CLAUDE_PROJECT_DIR
+    : undefined
   try {
     const resolved = resolveDeskRootWithSource({
       activationConfigPath: resolveActivationConfigPath({ env }),
       env,
       cwd,
       homeDir,
-      // A Bash-spawned boot script has no CLAUDE_PROJECT_DIR (Claude Code only
-      // sets it for the MCP server's own process); its cwd stands in, and like
-      // the host project it only counts when it is itself a desk workspace.
-      // Mirrors `desk/tidy.js`'s `resolveRoot`, which resolves the same way for
-      // the same reason.
-      hostProjectRoot: env.CLAUDE_PROJECT_DIR ?? cwd,
+      hostProjectRoot,
+      // A shell-spawned boot's cwd is a weak hint, not a saved desk association.
+      projectRootHint: hostProjectRoot === undefined ? cwd : undefined,
       readActivationConfig,
     })
     return { status: "ready", path: resolved.root, source: resolved.source, binding_path: bindingPath }

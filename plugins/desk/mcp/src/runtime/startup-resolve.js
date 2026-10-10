@@ -17,14 +17,17 @@ function hostProjectFolder(env) {
   return readCopilotSession({ env })?.folder ?? (hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : undefined)
 }
 
-export function resolveStartupDeskRoot({ args, env = process.env, homeDir } = {}) {
+export function resolveStartupDeskRoot({ args, env = process.env, homeDir, cwd } = {}) {
+  const hostProjectRoot = hostProjectFolder(env)
   return resolveDeskRootWithSource({
     activationConfigPath: resolveStartupActivationConfigPath({ args, env }),
+    cwd,
     env,
     explicitRoot: args?.root,
     homeDir,
-    hostProjectRoot: hostProjectFolder(env),
+    hostProjectRoot,
     hostSessionRoot: args?.hostSessionRoot,
+    projectRootHint: hostProjectRoot === undefined ? cwd : undefined,
   })
 }
 

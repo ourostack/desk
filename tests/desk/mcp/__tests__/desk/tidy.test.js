@@ -177,6 +177,83 @@ const noGh = () => {
   throw new Error("gh must not be called")
 }
 
+for (const association of ["activation", "DESK"]) {
+  for (const context of [undefined, "", "   "]) {
+    test(`launch association: tidy inspects saved ${association} desk rather than cwd with host context ${JSON.stringify(context)}`, () => {
+      const opened = soloDesk()
+      const associated = soloDesk()
+      write(associated, "associated-only.txt", "belongs to B\n")
+      const home = tempDir()
+      const env = { HOME: home }
+      if (context !== undefined) env.CLAUDE_PROJECT_DIR = context
+      if (association === "activation") {
+        const config = path.join(home, "activation.json")
+        writeFileSync(config, JSON.stringify({ schema_version: 1, desk: { root: associated } }))
+        env.DESK_ACTIVATION_CONFIG = config
+      } else {
+        env.DESK = associated
+      }
+      const options = { env, cwd: opened, homeDir: home, spawnGh: noGh }
+      const before = readFileSync(path.join(associated, "inbox/hi-please-fix-this/task.md"), "utf8")
+      const inspected = tidyStatus({ ...options, now: NOW })
+      assert.equal(inspected.root, associated)
+      assert.equal(inspected.resolved.root, associated)
+      assert.ok(inspected.findings.some((finding) => finding.path === "associated-only.txt"))
+      const report = cli(["--report", "--root", associated], options)
+      assert.equal(report.code, 0, report.stdout)
+      assert.ok(report.stdout.includes(`This session's own desk: ${associated}`))
+      assert.equal(readFileSync(path.join(associated, "inbox/hi-please-fix-this/task.md"), "utf8"), before, "report does not edit cards")
+      const refused = cli(["--report", "--root", opened], options)
+      assert.equal(refused.code, 1)
+      assert.match(refused.stdout, /the Desk tools use .*but the tidy found/u)
+      assert.ok(!refused.stdout.includes("Tidy claim:"), "a root mismatch must still refuse the report")
+    })
+  }
+}
+
+for (const association of ["unavailable activation", "unavailable DESK", "malformed activation"]) {
+  test(`launch association: tidy refuses ${association} despite a valid cwd desk`, () => {
+    const opened = soloDesk()
+    const home = tempDir()
+    const missing = path.join(home, "missing-desk")
+    const env = { HOME: home }
+    if (association === "unavailable DESK") env.DESK = missing
+    else {
+      const config = path.join(home, "activation.json")
+      writeFileSync(config, association === "malformed activation" ? "{" : JSON.stringify({ schema_version: 1, desk: { root: missing } }))
+      env.DESK_ACTIVATION_CONFIG = config
+    }
+    for (const context of [undefined, "", "   "]) {
+      const options = { env: { ...env, ...(context === undefined ? {} : { CLAUDE_PROJECT_DIR: context }) }, cwd: opened, homeDir: home, spawnGh: noGh }
+      const inspected = tidyStatus({ ...options, now: NOW })
+      assert.equal(inspected.root, null)
+      assert.equal(inspected.resolved.root, null)
+      const report = cli(["--report", "--root", opened], options)
+      assert.equal(report.code, 1)
+      assert.ok(!report.stdout.includes("Tidy claim:"))
+    }
+  })
+}
+
+test("launch association: tidy keeps actual host context authoritative and its mismatch guard intact", () => {
+  const opened = soloDesk()
+  const associated = soloDesk()
+  const options = { env: { CLAUDE_PROJECT_DIR: opened, DESK: associated }, cwd: associated, homeDir: tempDir(), spawnGh: noGh }
+  assert.equal(tidyStatus({ ...options, now: NOW }).root, opened)
+  assert.equal(cli(["--report", "--root", associated], options).code, 1)
+  const invalid = { ...options, env: { CLAUDE_PROJECT_DIR: opened, DESK: path.join(associated, "missing") } }
+  assert.equal(tidyStatus({ ...invalid, now: NOW }).root, opened)
+})
+
+test("launch association: tidy uses an unassociated cwd desk with absent or blank host context", () => {
+  const opened = soloDesk()
+  const home = tempDir()
+  for (const context of [undefined, "", "   "]) {
+    const env = { HOME: home, ...(context === undefined ? {} : { CLAUDE_PROJECT_DIR: context }) }
+    assert.equal(tidyStatus({ env, cwd: opened, homeDir: home, now: NOW, spawnGh: noGh }).root, opened)
+  }
+})
+
 // ── The Detect predicate ─────────────────────────────────────────────────
 
 test("tidy is needed on a messy Git desk with no organization record", () => {

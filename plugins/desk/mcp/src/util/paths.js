@@ -8,6 +8,8 @@
 //       (Claude Code passes CLAUDE_PROJECT_DIR; opening a desk binds to it)
 //   3. Activation config desk.root (the saved binding)
 //   4. $DESK env var
+//   4b. Generic project hint, only when it is itself a desk workspace
+//       (captured launch cwd is weaker than an established desk association)
 //   5. A loaded work overlay's home-folder desk: $HOME/ms-desk/, only while the
 //      ms-desk overlay is loaded in the same Agency session as this Desk
 //   6. $HOME/desk/
@@ -93,6 +95,7 @@ export function resolveDeskRootWithSource({
   homeDir = os.homedir(),
   hostProjectRoot,
   hostSessionRoot,
+  projectRootHint,
   readActivationConfig = readFileSync,
 } = {}) {
   const tried = []
@@ -160,6 +163,14 @@ export function resolveDeskRootWithSource({
       DESK_ROOT_UNAVAILABLE,
       { path: resolved, source: "env:DESK", problem, tried },
     )
+  }
+
+  // Launch-folder evidence is weaker than saved associations, including their
+  // refusal paths. It can replace only the home-folder guesses.
+  if (hasText(projectRootHint)) {
+    const resolved = resolveRootPath(projectRootHint, { cwd, homeDir })
+    tried.push({ source: "host-project", path: resolved })
+    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
   }
 
   // Home-folder fallbacks. A session that loads a work overlay tries only that

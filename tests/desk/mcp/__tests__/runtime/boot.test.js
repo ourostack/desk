@@ -39,6 +39,7 @@ import {
 import { setRuntimeResolver, setRuntimeResolverFailure } from "../../../../../plugins/desk/mcp/src/desk/runtime-resolver.js"
 import { REDACTED_SEGMENT } from "../../../../../plugins/desk/mcp/src/util/redact.js"
 import { osEnv } from "../_os_env.js"
+import { pendingMigrations } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
 
 // Every collaborator that reaches outside the process (migration Detect
 // blocks, `git fetch`, `gh pr list`) is faked unless a test says otherwise;
@@ -1491,6 +1492,48 @@ function healthyBoot(root, extra = {}) {
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
     ...extra,
   })
+}
+
+for (const association of ["activation", "DESK"]) {
+  for (const pendingAtAssociation of [false, true]) {
+    test(`launch association: boot migration detection follows ${association}, not cwd (associated pending=${pendingAtAssociation})`, async () => {
+      const opened = await mkDeskWorkspace()
+      const associated = await mkDeskWorkspace()
+      const home = await mkTempRoot("desk-boot-association-home-")
+      const fixturePlugin = await mkTempRoot("desk-boot-association-plugin-")
+      const sourcePlugin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk")
+      await fs.mkdir(path.join(fixturePlugin, "migrations"))
+      for (const name of ["02-tidy-desk.md", "03-normalize-task-status.md"]) {
+        await fs.copyFile(path.join(sourcePlugin, "migrations", name), path.join(fixturePlugin, "migrations", name))
+      }
+      await fs.symlink(path.join(sourcePlugin, "mcp"), path.join(fixturePlugin, "mcp"), "junction")
+      for (const [root, pending] of [[opened, !pendingAtAssociation], [associated, pendingAtAssociation]]) {
+        execFileSync("git", ["-C", root, "init", "-q"])
+        await writeCard(root, "work", "sample", VALID_CARD.replace("status: processing", `status: ${pending ? "active" : "processing"}`))
+        if (!pending) await fs.writeFile(path.join(root, "_meta", "organization.json"), '{"tidy_version":1}\n')
+      }
+      const coverageEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("NYC_") || key === "NODE_OPTIONS"))
+      const env = osEnv({ PATH: process.env.PATH, NODE_PATH: process.env.NODE_PATH, TMPDIR: process.env.TMPDIR, HOME: home, XDG_STATE_HOME: path.join(home, "state"), ...coverageEnv })
+      if (association === "activation") {
+        const config = path.join(home, "activation.json")
+        await fs.writeFile(config, JSON.stringify({ schema_version: 1, desk: { root: associated } }))
+        env.DESK_ACTIVATION_CONFIG = config
+      } else {
+        env.DESK = associated
+      }
+      const before = await fs.readFile(path.join(associated, "work/sample/task.md"), "utf8")
+      const result = await healthyBoot(associated, {
+        env, cwd: opened, homeDir: home, pluginRoot: fixturePlugin, migrationsFn: pendingMigrations,
+        cardGuardFn: () => ({ state: "skipped" }), staleDeskFn: () => null, releaseAlertFn: () => null,
+      })
+      assert.equal(result.root.path, associated)
+      assert.deepEqual(result.migrations, pendingAtAssociation ? [
+        { id: "02-tidy-desk", state: "agent_work" },
+        { id: "03-normalize-task-status", state: "agent_work" },
+      ] : [])
+      assert.equal(await fs.readFile(path.join(associated, "work/sample/task.md"), "utf8"), before, "migration detection and boot do not normalize cards")
+    })
+  }
 }
 
 test("bootOnce: the tool-loading line names the tools the host really exposes (Copilot: desk-<name>, Claude Code: mcp__plugin_desk_desk__<name>)", async () => {

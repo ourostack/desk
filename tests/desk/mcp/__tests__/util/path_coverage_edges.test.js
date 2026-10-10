@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { syncBuiltinESMExports } from "node:module"
-import { deskRelativePath, isPathContained, resolveDeskRootWithSource, resolveWriteTarget, toDeskPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { deskRelativePath, isPathContained, resolveDeskRootWithSource, resolveLocalPath, resolveWriteTarget, toDeskPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 async function temporaryRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-path-coverage-"))
@@ -34,6 +34,20 @@ test("root resolution with omitted options uses isolated home defaults without p
     syncBuiltinESMExports()
   }
   assert.deepEqual(await fs.readdir(home), ["desk"])
+})
+
+test("local paths with omitted options retain the current-folder base and isolated home expansion", async (t) => {
+  const home = await temporaryRoot(t)
+  t.mock.method(os, "homedir", () => home)
+  syncBuiltinESMExports()
+  try {
+    assert.equal(resolveLocalPath("repo"), path.join(process.cwd(), "repo"))
+    assert.equal(resolveLocalPath("~/repo"), path.join(home, "repo"))
+    assert.deepEqual(await fs.readdir(home), [], "path resolution does not provision a folder")
+  } finally {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
 })
 
 test("an omitted person resolves within the existing Desk root without creating the target", async (t) => {
