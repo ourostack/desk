@@ -16,3 +16,5 @@ Match pinned native tool-input whitespace, HOME, relative-path and NFC interpret
 Supply the fixed trusted positional request required by native print mode; keep untrusted candidate prose out of argv and include the request in the existing admission fingerprint.
 
 Separate two finite parent-selected production/qualification message pairs while retaining exact full identities and versioned two-value-slot enforcement equality. Bind a complete ordered synthetic catalog and single trigger Edit, require two matching actual receipts, and restore only authenticated protected records with raw-stream replay/current source checks. Unknown missions, probe-shaped records, sanitized non-attempts and mismatch “denials” stay blocked.
+
+Decouple direct qualifier CLI orchestration from module evaluation so first-receipt verification can complete. Require two distinct raw-stream-bound native sessions and event identities in live issuance and restoration; reject duplicated/relabelled proof, mutable returned receipt history and orphan tool results without forbidding legitimate OS PID reuse.
