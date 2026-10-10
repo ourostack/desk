@@ -1,6 +1,8 @@
 // Trusted-parent admission, not authority derived from model output. Diagnostic
 // readers/resolvers are parent-owned adapters, never child settings or prose.
-import { spawn as nodeSpawn } from "node:child_process"
+import childProcess, { spawn as nodeSpawn } from "node:child_process"
+import fsNative from "node:fs"
+import { userInfo } from "node:os"
 import { createHash } from "node:crypto"
 import { readFileSync, realpathSync, lstatSync, readdirSync } from "node:fs"
 import * as path from "node:path"
@@ -21,19 +23,76 @@ const outcome = (state, extra = {}) => {
   return { state: closedStates[state], ...extra }
 }
 
-// Native Mach-O is the only default chain we can completely inspect here.
-// Dyld shared-cache images that cannot be read remain unknown; their names or
-// otool version labels are NOT substitutes for runtime byte fingerprints.
-function nativeResolution(cli) {
+// Source semantics verified against this signed installed native revision.
+// A new revision is not admitted on a version label; re-inspect its policy
+// source before extending this finite compatibility set.
+const POLICY_ENGINE_SHA = "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+const SIGNED_ENGINE = '=identifier "com.anthropic.claude-code" and anchor apple generic and certificate leaf[subject.OU] = "Q6L2SF6YDW"'
+function osRead(command, args, env, input) {
+  return childProcess.execFileSync(command, args, { env: childEnvironment(env),
+    encoding: "utf8", timeout: 5000, maxBuffer: 2 * 1024 * 1024, input, stdio: ["pipe", "pipe", "pipe"] })
+}
+function plistJson(bytes, env) {
+  return JSON.parse(osRead("/usr/bin/plutil", ["-convert", "json", "-o", "-", "-"], env, bytes))
+}
+function verifyEngine(cli, env) {
+  osRead("/usr/bin/codesign", ["--verify", "--strict", "-R", SIGNED_ENGINE, cli], env)
+}
+
+// macOS shared-cache provenance is authenticated installed-platform evidence,
+// not fabricated individual dylib bytes. Trusted OS/controllers are within
+// the approved boundary. Record the sealed boot snapshot, SIP/auth-root,
+// build, actual cache UUID/header, root-owned subcache identities and map.
+function macRuntime(cli, env, dependencies) {
+  if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("unsupported platform provenance")
+  verifyEngine(cli, env)
+  osRead("/usr/bin/codesign", ["--verify", "--strict", "-R", "=anchor apple", "/usr/lib/dyld"], env)
+  const root = plistJson(osRead("/usr/sbin/diskutil", ["info", "-plist", "/"], env), env)
+  if (root.Sealed !== "Yes" || root.WritableVolume !== false || root.MountPoint !== "/" ||
+      !/^[A-F0-9]{8}-(?:[A-F0-9]{4}-){3}[A-F0-9]{12}$/u.test(root.APFSSnapshotUUID)) throw new Error("unsealed boot platform")
+  if (osRead("/usr/bin/csrutil", ["status"], env).trim() !== "System Integrity Protection status: enabled." ||
+      osRead("/usr/bin/csrutil", ["authenticated-root", "status"], env).trim() !== "Authenticated Root status: enabled") throw new Error("unsupported platform protection")
+  const build = osRead("/usr/bin/sw_vers", ["-buildVersion"], env).trim()
+  if (!/^[0-9A-Z]+$/u.test(build)) throw new Error("unknown OS build")
+  const dir = "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld"
+  const base = "dyld_shared_cache_arm64e"
+  const bytes = readFileSync(path.join(dir, base)), map = readFileSync(path.join(dir, `${base}.map`))
+  if (bytes.subarray(0, 16).toString().replace(/\0/gu, "") !== "dyld_v1  arm64e" ||
+      bytes.readBigUInt64LE(128) === 0n || !dependencies.every((name) =>
+        name.startsWith("/usr/lib/") && map.toString().split("\n").includes(name))) throw new Error("unknown cache image")
+  const names = readdirSync(dir).filter((name) => name === base || name.startsWith(`${base}.`)).sort()
+  if (names.length > 128) throw new Error("cache inventory too large")
+  const cache_files = names.map((name) => {
+    const file = path.join(dir, name), stat = lstatSync(file)
+    if (!stat.isFile() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) throw new Error("untrusted cache ownership")
+    const fd = fsNative.openSync(file, "r"), header = Buffer.alloc(128)
+    try { fsNative.readSync(fd, header, 0, header.length, 0) } finally { fsNative.closeSync(fd) }
+    return { path: file, dev: stat.dev, ino: stat.ino, size: stat.size, ctime: stat.ctimeMs, header_sha256: digest(header) }
+  })
+  return { kind: "macos-signed-runtime", sealed: true, snapshot: root.APFSSnapshotUUID, build,
+    cache_uuid: bytes.subarray(88, 104).toString("hex"), cache_sha256: digest(bytes), map_sha256: digest(map), cache_files, dependencies }
+}
+
+function nativeResolution(cli, env) {
   const cmd = realpathSync(cli), files = [], seen = new Set()
+  const cached = []
   const visit = (file) => {
-    const resolved = realpathSync(file)
+    let resolved
+    try { resolved = realpathSync(file) } catch (error) {
+      if (error.code !== "ENOENT" || !file.startsWith("/usr/lib/")) throw error
+      cached.push(file)
+      return
+    }
     if (seen.has(resolved)) return
     seen.add(resolved)
     if (seen.size > 64) throw new Error("runtime chain too large")
     const bytes = readFileSync(resolved)
+    if (file === "/usr/lib/dyld" && bytes.length >= 32 && bytes.readUInt32BE(0) === 0xcafebabe) {
+      files.push(resolved)
+      return
+    }
     if (bytes.length < 32 || bytes.readUInt32LE(0) !== 0xfeedfacf) throw new Error("unknown native format")
-    files.push(file)
+    files.push(resolved)
     let cursor = 32
     const commands = bytes.readUInt32LE(16)
     if (commands > 4096) throw new Error("invalid native header")
@@ -55,7 +114,9 @@ function nativeResolution(cli) {
   visit(cli)
   // The actual loader is part of the admitted chain too.
   visit("/usr/lib/dyld")
-  return { cmd, prefix: [], files, supported: true }
+  const dependencies = cached.filter((file) => file !== "/usr/lib/dyld")
+  const platform = cached.length ? macRuntime(cmd, env, dependencies) : null
+  return { cmd, prefix: [], files, supported: true, platform }
 }
 
 /** Complete parent-owned resolution is required; arbitrary shell scripts,
@@ -76,8 +137,9 @@ export function inspectLaunchChain({ cli, env, readFile = readFileSync, resolveE
       return { path: file, resolved: realpathSync(file), sha256: digest(readFile(file)) }
     })
     const effective_argv = [resolution.cmd, ...resolution.prefix]
-    return { state: "inspected", chain, effective_argv,
-      fingerprint: fingerprint({ chain, effective_argv, env: childEnvironment(env) }) }
+    const platform = resolution.platform ?? null
+    return { state: "inspected", chain, effective_argv, platform,
+      fingerprint: fingerprint({ chain, effective_argv, platform, env: childEnvironment(env) }) }
   } catch {
     return { ...held("launch_chain_unknown"), ...empty }
   }
@@ -106,9 +168,9 @@ function remoteDelivery(text) {
   if (!line) return "unknown"
   if (/checking|fetch in progress/iu.test(line)) return "pending"
   if (/requires an Enterprise or Team subscription/u.test(line)) return "not_applicable"
-  if (/no server-managed settings configured/u.test(line)) return "no_configuration"
+  if (/no server-managed settings configured|none configured for this organization/u.test(line)) return "no_configuration"
   if (/fetch failed/iu.test(line)) return "failed"
-  if (/delivered settings loaded/u.test(line)) return "delivered"
+  if (/delivered settings loaded|: loaded$/u.test(line)) return "delivered"
   return "unknown"
 }
 
@@ -118,15 +180,16 @@ function policyHazard(settings, argv) {
   if (settings.hooks && Object.keys(settings.hooks).length ||
       Object.keys(settings).some((key) => /helper|processWrapper|statusLine|fileSuggestion|authRefresh|credentialExport/iu.test(key))) return "active_hook_or_helper"
   if (settings.env && Object.keys(settings.env).length) return "billing_unresolved"
+  if (settings.mcpServers && Object.keys(settings.mcpServers).length) return "unsafe_permission_grant"
   const permissions = settings.permissions
   if (permissions && (Object.keys(permissions).some((key) => !["allow", "deny"].includes(key)) ||
       (permissions.allow ?? []).some((grant) => !selected?.permissions.allow.includes(grant)) ||
       (permissions.deny ?? []).some((rule) => /^Read/u.test(rule)))) return "unsafe_permission_grant"
-  if (Object.keys(settings).some((key) => !["permissions", "disableAllHooks", "hooks"].includes(key))) return "effective_policy_unknown"
+  if (Object.keys(settings).some((key) => !["permissions", "disableAllHooks", "hooks", "mcpServers"].includes(key))) return "effective_policy_unknown"
   return null
 }
 
-function localPolicySources({ env }) {
+function localPolicySources({ cli, env, argv, remote_delivery }) {
   const system = process.platform === "darwin" ? "/Library/Application Support/ClaudeCode" :
     process.platform === "win32" ? "C:\\Program Files\\ClaudeCode" : "/etc/claude-code"
   const files = [path.join(system, "managed-settings.json")]
@@ -145,10 +208,48 @@ function localPolicySources({ env }) {
       return { kind: "managed", path: file, revision: digest("absent"), settings: {} }
     }
   })
-  // These file snapshots cannot establish OS/MDM, remote cache applicability
-  // or managed MCP's effective grant merge. Mark incomplete rather than turn
-  // filesystem absence into an unmanaged-host attestation.
-  return { complete: false, controller_invariant: false, sources, validation_errors: [] }
+  // Doctor is not a restricted model session. Inspect command-bearing user
+  // auth/helper/env keys before that diagnostic; ordinary user permissions
+  // and customizations are excluded from the selected restricted invocation.
+  const userSettings = path.join(env.CLAUDE_CONFIG_DIR || path.join(env.HOME, ".claude"), "settings.json")
+  try {
+    const bytes = readFileSync(userSettings)
+    if (bytes.length > 2 * 1024 * 1024) throw new Error("oversize user diagnostic settings")
+    const parsed = JSON.parse(bytes)
+    const settings = Object.fromEntries(Object.entries(parsed).filter(([key]) =>
+      /helper|processWrapper|authRefresh|credentialExport|statusLine|fileSuggestion|^env$/iu.test(key)))
+    sources.push({ kind: "user", path: userSettings, revision: digest(bytes), settings })
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+    sources.push({ kind: "user", path: userSettings, revision: digest("absent"), settings: {} })
+  }
+  if (process.platform !== "darwin") return { complete: false, controller_invariant: false, sources, validation_errors: [] }
+  // These are the actual MDM paths read by pinned native Rxs() at byte
+  // 188330762, per-user before device-level. plutil is a parser, no helper.
+  const extra = [
+    ["/Library/Managed Preferences/" + userInfo().username + "/com.anthropic.claudecode.plist", "os"],
+    ["/Library/Managed Preferences/com.anthropic.claudecode.plist", "os"],
+    [path.join(system, "managed-mcp.json"), "managed"],
+    [path.join(env.CLAUDE_CONFIG_DIR || path.join(env.HOME, ".claude"), "remote-settings.json"), "remote"],
+  ]
+  for (const [file, kind] of extra) {
+    try {
+      const bytes = readFileSync(file)
+      if (bytes.length > 2 * 1024 * 1024) throw new Error("oversize policy source")
+      const settings = file.endsWith(".plist") ? plistJson(bytes, env) : JSON.parse(bytes)
+      sources.push({ kind, path: file, revision: digest(bytes), settings })
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+      sources.push({ kind, path: file, revision: digest("absent"), settings: {} })
+    }
+  }
+  const selected = argv.includes("--restricted") && argv.includes("--safe-mode") && argv.includes("--strict-mcp-config")
+  const known = digest(readFileSync(cli)) === POLICY_ENGINE_SHA
+  if (known) verifyEngine(cli, env)
+  const remoteResolved = ["not_applicable", "no_configuration"].includes(remote_delivery) &&
+    Object.keys(sources.at(-1).settings).length === 0
+  return { complete: Boolean(selected && known && remoteResolved), controller_invariant: true, sources, validation_errors: [],
+    capabilities: selected && known ? { customization_sources_disabled: true, result_is_data_only: true, engine_sha256: POLICY_ENGINE_SHA } : null }
 }
 
 /** Readers are authorized NONEXECUTING adapters of the trusted parent:
@@ -160,9 +261,10 @@ function localPolicySources({ env }) {
  * runDiagnostic is a bounded child adapter with the same runChild result. */
 export async function collectTriageAdmission({ cli, env, argv, runDiagnostic, policyReaders }) {
   let remote_delivery = "unknown"
-  const result = (state, reason, sources = [], validation_errors = []) => ({
+  const result = (state, reason, sources = [], validation_errors = [], capabilities = null) => ({
     state, ...(reason ? { reason } : {}), sources, remote_delivery, validation_errors,
-    fingerprint: state === "admitted" ? fingerprint({ sources, remote_delivery, argv, env: childEnvironment(env) }) : null,
+    capabilities,
+    fingerprint: state === "admitted" ? fingerprint({ sources, remote_delivery, argv, capabilities, env: childEnvironment(env) }) : null,
   })
   if (isHeadlessFactorySession(env)) return result("scope_unqualified", "policy_control_unsupported")
   if (billingVariableBlocks(env)) return result("scope_unqualified", "billing_unresolved")
@@ -173,13 +275,12 @@ export async function collectTriageAdmission({ cli, env, argv, runDiagnostic, po
     // A native diagnostic may initialize managed helpers. Reject known
     // command-bearing sources before allowing even that non-model command.
     for (const source of preflight?.sources ?? []) {
-      if (source.settings && policyHazard(source.settings, argv) === "active_hook_or_helper") {
-        return result("scope_unqualified", "active_hook_or_helper")
-      }
+      const hazard = source.settings && policyHazard(source.settings, argv)
+      if (["active_hook_or_helper", "billing_unresolved"].includes(hazard)) return result("scope_unqualified", hazard)
     }
     const diagnostic = runDiagnostic ?? ((request) => runChild({ ...request, spawn: nodeSpawn }))
     const observed = await diagnostic({ cmd: cli, args: ["doctor"],
-      opts: { env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] }, timeoutMs: 15000, maxBytes: 64 * 1024,
+      opts: { cwd: "/", env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] }, timeoutMs: 15000, maxBytes: 64 * 1024,
       onChild: policyReaders?.onChild, onChildExit: policyReaders?.onChildExit })
     await policyReaders?.captureDiagnostic?.(observed)
     if (observed.kind !== "closed" || observed.code !== 0 || observed.truncated || typeof observed.stdout !== "string") return result("scope_unqualified", "diagnostic_inadequate")
@@ -187,6 +288,7 @@ export async function collectTriageAdmission({ cli, env, argv, runDiagnostic, po
     if (remote_delivery === "pending") return result("scope_unqualified", "applicable_delivery_pending")
     if (remote_delivery === "unknown") return result("scope_unqualified", "diagnostic_inadequate")
     if (remote_delivery === "failed") return result("scope_unqualified", "effective_policy_unknown")
+    request.remote_delivery = remote_delivery
     const evidence = await reader(request)
     if (!evidence || !Array.isArray(evidence.sources) || !Array.isArray(evidence.validation_errors)) return result("scope_unqualified", "diagnostic_inadequate")
     const sources = []
@@ -200,20 +302,23 @@ export async function collectTriageAdmission({ cli, env, argv, runDiagnostic, po
     if (evidence.validation_errors.length) return result("scope_unqualified", "effective_policy_unknown", sources, ["invalid_effective_settings"])
     if (evidence.complete !== true) return result("scope_unqualified", "diagnostic_inadequate", sources)
     if (evidence.controller_invariant !== true) return result("scope_unqualified", "policy_control_unsupported", sources)
-    return result("admitted", null, sources)
+    return result("admitted", null, sources, [], evidence.capabilities ?? null)
   } catch {
     return result("scope_unqualified", "effective_policy_unknown")
   }
 }
 
-function preparedInputs(inputDir, resultFile) {
+function preparedInputs(inputDir, resultFile, checkResult = false) {
   const input = path.join(inputDir, "input.json")
   const directory = lstatSync(inputDir), output = lstatSync(resultFile), data = lstatSync(input)
   if (!directory.isDirectory() || realpathSync(inputDir) !== path.resolve(inputDir) ||
       !output.isFile() || output.nlink !== 1 ||
       !data.isFile() || data.nlink !== 1 || data.size > 328 * 1024 || output.size > 328 * 1024) throw new Error("unsafe prepared paths")
   const bytes = readFileSync(input)
-  return { brief: JSON.parse(bytes), fingerprint: digest(bytes) }
+  const identity = (stat) => [stat.dev, stat.ino, stat.mode, stat.nlink]
+  const inputBasis = { directory: identity(directory), input: identity(data), sha256: digest(bytes) }
+  return { brief: JSON.parse(bytes), fingerprint: fingerprint(inputBasis),
+    prepared_fingerprint: checkResult ? fingerprint({ ...inputBasis, result: identity(output), result_sha256: digest(readFileSync(resultFile)) }) : null }
 }
 
 /** qualification is protected trusted-parent state, never accepted from the
@@ -237,7 +342,7 @@ export async function runTriageChild({
   let inputs
   try {
     if (workDir !== undefined && workDir !== inputDir) return outcome("scope_unqualified")
-    inputs = preparedInputs(inputDir, resultFile)
+    inputs = preparedInputs(inputDir, resultFile, true)
   } catch {
     return outcome("scope_unqualified")
   }
@@ -263,6 +368,12 @@ export async function runTriageChild({
   const immediate = await snapshot()
   if (immediate.state !== "ready" || immediate.fingerprint !== before.fingerprint) return changed()
   if (deadline <= clock()) return outcome("no_time_for_a_run")
+  // Last awaited diagnostic/sign-in may have yielded to replacement of any
+  // prepared file or directory. Recheck bytes AND identities synchronously.
+  // No await or permission/probe operation occurs between this and spawn.
+  try {
+    if (preparedInputs(inputDir, resultFile, true).prepared_fingerprint !== inputs.prepared_fingerprint) return changed()
+  } catch { return changed() }
   const run = await runChild({ spawn, cmd: immediate.chain.effective_argv[0],
     args: [...immediate.chain.effective_argv.slice(1), ...policy.argv],
     opts: { cwd: inputDir, env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] },
