@@ -147,7 +147,8 @@ export function observeTriageProbe(operations, run, before, controls) {
   const incompleteCorrelation = new Set(uses.map((use) => use.id)).size !== uses.length ||
     uses.some((use) => typeof use.id !== "string" || use.id === "" ||
       results.filter((result) => result.tool_use_id === use.id).length !== 1) ||
-    results.some((result) => result.is_error !== undefined && typeof result.is_error !== "boolean")
+    results.some((result) => !uses.some((use) => use.id === result.tool_use_id) ||
+      (result.is_error !== undefined && typeof result.is_error !== "boolean"))
   const permitted = ["Read", "Grep", "Glob", "Edit"]
   const excludedSuccess = uses.some((use) => !permitted.includes(use.name) &&
     results.some((result) => result.tool_use_id === use.id && result.is_error !== true))
@@ -349,9 +350,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (args.length !== 4 || new Set([args[0], args[2]]).size !== 2 ||
         !["--out", "--cli"].includes(args[0]) || !["--out", "--cli"].includes(args[2])) throw new Error("invalid arguments")
     const options = Object.fromEntries([[args[0].slice(2), args[1]], [args[2].slice(2), args[3]]])
-    const result = await qualifyTriageRunner(options)
-    console.log(JSON.stringify({ state: result.state, fingerprint: result.fingerprint, reason: result.reason }))
-    process.exitCode = Number(result.state !== "qualified")
+    // Finish module evaluation before the runner imports this fixed verifier.
+    // Awaiting qualification at module scope would wait on our own evaluation
+    // during the first receipt. The promise still owns reporting/exit status.
+    qualifyTriageRunner(options).then((result) => {
+      console.log(JSON.stringify({ state: result.state, fingerprint: result.fingerprint, reason: result.reason }))
+      process.exitCode = Number(result.state !== "qualified")
+    }).catch(() => {
+      console.log(JSON.stringify({ state: "blocked", reason: "policy_control_unsupported" }))
+      process.exitCode = 1
+    })
   } catch {
     console.log(JSON.stringify({ state: "blocked", reason: "policy_control_unsupported" }))
     process.exitCode = 1
