@@ -299,16 +299,25 @@ test("readConfig refuses a previous signing key while DESK_CLIENT_KEY is unset, 
   );
 });
 
-test("the key startup line carries fingerprints and never a key", () => {
-  const line = keysStartupLine(readConfig({ ...FULL, DESK_SIGNING_KEY_PREVIOUS: "old-key", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, DESK_CLIENT_KEY: "client-key" }));
-  assert.equal(line, `keys: signing ${fingerprint("signing-key")} client ${fingerprint("client-key")} previous ${fingerprint("old-key")}`);
-  assert.equal(keysStartupLine(readConfig(FULL)), `keys: signing ${fingerprint("signing-key")} client ${fingerprint("signing-key")} previous none`);
+test("the key startup line carries fingerprints, where the client key came from, the previous key's until-time and the revision", () => {
+  const rotated = { ...FULL, DESK_SIGNING_KEY_PREVIOUS: "old-key", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, DESK_CLIENT_KEY: "client-key", CONTAINER_APP_REVISION: "ouro-desk-hosted--abc123" };
+  assert.equal(
+    keysStartupLine(readConfig(rotated)),
+    `keys: signing ${fingerprint("signing-key")} client ${fingerprint("client-key")} client-from DESK_CLIENT_KEY previous ${fingerprint("old-key")} until 2026-12-01T00:00:00.000Z revision ouro-desk-hosted--abc123`,
+  );
+  // Before a rotation, an explicit copy and the fallback have the same
+  // fingerprint, so only client-from tells them apart.
+  assert.equal(keysStartupLine(readConfig(FULL)), `keys: signing ${fingerprint("signing-key")} client ${fingerprint("signing-key")} client-from DESK_SIGNING_KEY previous none revision unknown`);
+  assert.equal(
+    keysStartupLine(readConfig({ ...FULL, DESK_CLIENT_KEY: "signing-key" })),
+    `keys: signing ${fingerprint("signing-key")} client ${fingerprint("signing-key")} client-from DESK_CLIENT_KEY previous none revision unknown`,
+  );
 });
 
 test("main logs fingerprints and never a key", async (t) => {
   const keys = { DESK_SIGNING_KEY: randomBytes(32).toString("hex"), DESK_SIGNING_KEY_PREVIOUS: randomBytes(32).toString("hex"), DESK_CLIENT_KEY: randomBytes(32).toString("hex") };
   const gateway = spawn(process.execPath, [fileURLToPath(new URL("../src/main.js", import.meta.url))], {
-    env: { PATH: process.env.PATH, PORT: "0", DESK_PUBLIC_URL: "http://127.0.0.1", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, ...keys },
+    env: { PATH: process.env.PATH, PORT: "0", DESK_PUBLIC_URL: "http://127.0.0.1", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, CONTAINER_APP_REVISION: "rev-1", ...keys },
     stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(() => gateway.kill("SIGKILL"));
@@ -322,7 +331,9 @@ test("main logs fingerprints and never a key", async (t) => {
   });
   assert.ok(started, output);
   assert.ok(
-    output.includes(`desk-hosted: keys: signing ${fingerprint(keys.DESK_SIGNING_KEY)} client ${fingerprint(keys.DESK_CLIENT_KEY)} previous ${fingerprint(keys.DESK_SIGNING_KEY_PREVIOUS)}\n`),
+    output.includes(
+      `desk-hosted: keys: signing ${fingerprint(keys.DESK_SIGNING_KEY)} client ${fingerprint(keys.DESK_CLIENT_KEY)} client-from DESK_CLIENT_KEY previous ${fingerprint(keys.DESK_SIGNING_KEY_PREVIOUS)} until 2026-12-01T00:00:00.000Z revision rev-1\n`,
+    ),
     output,
   );
   for (const [name, value] of Object.entries(keys)) assert.ok(!output.includes(value), `${name} appears in the gateway's output`);
