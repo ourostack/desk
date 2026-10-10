@@ -1477,6 +1477,151 @@ test("desk_status abandons a stuck computation after its age limit, and the aban
   assert.match(cached.status_detail, /^cached: /u)
 })
 
+test("a replacement status waits for its aborted owned reader to close, and shutdown waits too", async (t) => {
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  const runtime = fakeRuntime()
+  let calls = 0
+  let activeSignal
+  let releaseReader
+  const closed = new Promise((resolve) => { releaseReader = resolve })
+  runtime.callTool = ({ signal }) => {
+    calls += 1
+    activeSignal = signal
+    return calls === 1 ? new Promise(() => {}) :
+      Promise.resolve({ content: [{ type: "text", text: JSON.stringify({ status: "ok" }) }] })
+  }
+  runtime.waitForStatusInspection = () => closed
+  const { session } = await makeSession(t, { runtime, statusRunLimitMs: 0 })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  assert.equal(activeSignal.aborted, true, "the old reader must be cancelled")
+  assert.equal(calls, 1, "no second status may dispatch until the exact-owned reader closes")
+  let disposed = false
+  const shutdown = session.dispose().then(() => { disposed = true })
+  await flush()
+  assert.equal(disposed, false, "shutdown must await the retiring reader even after status replacement")
+  releaseReader()
+  await shutdown
+  assert.equal(calls, 1, "a replacement invalidated by shutdown must never start later")
+})
+
+test("nonexit of a retired reader refuses replacement and fails shutdown while closing the controller", async (t) => {
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  const runtime = fakeRuntime()
+  let calls = 0
+  let controllerClosed = false
+  runtime.callTool = () => { calls += 1; return new Promise(() => {}) }
+  runtime.connectOrStartController = async () => ({
+    accepted: true, async status() { return { state: "READY" } },
+    async close() { controllerClosed = true },
+  })
+  const error = Object.assign(new Error("reader did not exit"), { code: "status_reader_not_exited", pid: 123 })
+  runtime.waitForStatusInspection = () => Promise.reject(error)
+  const { session } = await makeSession(t, { runtime, statusRunLimitMs: 0 })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  const result = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.match(result.status_error, /reader did not exit/u)
+  assert.equal(calls, 1)
+  await assert.rejects(session.dispose(), { code: "status_reader_not_exited", pid: 123 })
+  assert.equal(controllerClosed, true, "a reader failure must not skip controller cleanup")
+  session.dispose = () => Promise.resolve()
+})
+
+test("natural status close failure retains ownership after the run settles, and verified exit permits recovery", async (t) => {
+  const runtime = fakeRuntime()
+  const error = Object.assign(new Error("naturally closed reader did not exit"), { code: "status_reader_not_exited", pid: 123 })
+  let exited = false
+  let calls = 0
+  let firstSignal
+  runtime.callTool = async ({ signal }) => {
+    calls += 1
+    if (calls === 1) { firstSignal = signal; throw error }
+    return { content: [{ type: "text", text: JSON.stringify({ status: "ok", recovered: true }) }] }
+  }
+  runtime.waitForStatusInspection = (signal) => signal === firstSignal && !exited
+    ? Promise.reject(error) : Promise.resolve()
+  const { session } = await makeSession(t, { runtime })
+  await session.admission.refresh()
+  const failed = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.match(failed.status_error, /naturally closed reader did not exit/u)
+  const blocked = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.match(blocked.status_error, /naturally closed reader did not exit/u)
+  assert.equal(calls, 1, "a settled natural-close failure must still block a second reader")
+  await assert.rejects(session.dispose(), { code: "status_reader_not_exited", pid: 123 })
+  exited = true
+  await session.dispose()
+})
+
+test("actual late reader exit releases a previously failed natural close without permanently poisoning status", async (t) => {
+  const runtime = fakeRuntime()
+  let firstSignal
+  let exited = false
+  let calls = 0
+  const error = Object.assign(new Error("reader did not exit"), { code: "status_reader_not_exited" })
+  runtime.callTool = async ({ signal }) => {
+    calls += 1
+    if (calls === 1) { firstSignal = signal; throw error }
+    return { content: [{ type: "text", text: JSON.stringify({ status: "ok", recovered: true }) }] }
+  }
+  runtime.waitForStatusInspection = (signal) => signal === firstSignal && !exited ? Promise.reject(error) : Promise.resolve()
+  const { session } = await makeSession(t, { runtime })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  assert.equal(calls, 1)
+  exited = true
+  const recovered = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(recovered.recovered, true)
+  assert.equal(calls, 2)
+  assert.equal(recovered.status_error, undefined)
+})
+
+for (const change of ["root", "policy", "person"]) {
+  test(`settled reader ownership survives ${change} invalidation until verified exit`, async (t) => {
+    const runtime = fakeRuntime()
+    const error = Object.assign(new Error("owned reader still alive"), { code: "status_reader_not_exited" })
+    let exited = false
+    let calls = 0
+    let firstSignal
+    let resolution
+    const args = { person: null }
+    runtime.callTool = async ({ signal }) => {
+      calls += 1
+      if (calls === 1) { firstSignal = signal; throw error }
+      return { content: [{ type: "text", text: JSON.stringify({ status: "ok" }) }] }
+    }
+    runtime.waitForStatusInspection = (signal) => signal === firstSignal && !exited ? Promise.reject(error) : Promise.resolve()
+    const { session, root, base } = await makeSession(t, {
+      runtime, args, resolveInputs: async () => resolution,
+    })
+    resolution = inputs({ root })
+    await session.admission.refresh()
+    await session.callTool({ name: "desk_status", input: { detail: true } })
+    if (change === "root") {
+      const nextRoot = path.join(base, "next")
+      mkdirSync(nextRoot)
+      resolution = inputs({ root: nextRoot })
+    } else if (change === "policy") {
+      resolution = inputs({ root, policy: { ...unsupported, semantic: "background" } })
+    } else {
+      mkdirSync(path.join(root, "desks", "ari"), { recursive: true })
+      args.person = "ari"
+      resolution = inputs({ root, policy: { ...unsupported, write_authority: "person" } })
+    }
+    await session.admission.refresh({ force: true })
+    const blocked = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+    assert.match(blocked.status_error, /owned reader still alive/u)
+    assert.equal(calls, 1)
+    await assert.rejects(session.dispose(), { code: "status_reader_not_exited" })
+    exited = true
+    await session.dispose()
+  })
+}
+
 test("desk_status answers while an admission attempt is still running", async (t) => {
   let release
   const { session } = await makeSession(t, { loadRuntime: () => new Promise((resolve) => { release = () => resolve({ runtimeServer: fakeRuntime(), runtimeStatus: {} }) }) })

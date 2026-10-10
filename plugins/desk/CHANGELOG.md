@@ -1,5 +1,21 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.274 — 2026-10-10
+
+- Move runtime status's root observation off the answering thread as well as SQLite. Bound exact-owned reader retirement with explicit disconnect exit and signal escalation; report failed termination attempts and retain any reader whose exit remains unverified rather than hanging shutdown or overlapping a replacement.
+
+- Retain exact status reader ownership when ordinary close fails after a run settles. Block replacement and fail disposal until that reader's actual exit is verified, then allow recovery; context invalidation no longer loses the unsettled reader.
+
+- Run runtime status's read-only SQLite inspections in one owned disposable child process so slow native DB work cannot stall MCP status, tools/list or ping. Preserve observation order, generation proof, same-context cache timestamps, Windows native safety and reader shutdown.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.273 — 2026-10-10
+
+Clarify real-profile browser recovery: incomplete cleanup retains the same connection for retry, failed window opening refuses forwarding, and connection-controlled tabs do not prove physical window ownership.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.272 — 2026-10-10
 
 ### Bounded triage intake contract (validator only)

@@ -50,6 +50,7 @@ import {
 import { desk_thread } from "./tools/thread.js"
 import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
+export { waitForStatusInspection } from "./runtime/status-inspection.js"
 import { doctorRuntime } from "./tools/doctor.js"
 import {
   configureRuntimeArtifacts,
