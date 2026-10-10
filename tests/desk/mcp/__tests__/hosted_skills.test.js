@@ -148,3 +148,11 @@ test("withHostedStartup's own sleep really waits between polls", async () => {
   assert.ok(Date.now() - started >= 4)
   assert.equal(result.content.length, 2)
 })
+
+test("the first hosted desk_status also waits while Desk is still admitting the desk", async () => {
+  const replies = [answer({ state: "admitting", root: { path: null } }), answer({ state: "admitting" }), answer({ state: "ready", root: { path: "/d" } })]
+  const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", sleep: async () => {} })
+  const result = await callTool({ name: "desk_status" })
+  assert.equal(JSON.parse(result.content[0].text).state, "ready")
+  assert.equal(result.content.length, 2)
+})

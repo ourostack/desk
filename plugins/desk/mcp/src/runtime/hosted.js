@@ -113,14 +113,16 @@ function readOptional(read) {
   }
 }
 
-// How long the first desk_status waits, in total, for a status detail that is still loading, and how often it asks again.
-const STARTUP_DETAIL_WAIT_MS = 6_000
+// How long the first desk_status waits, in total, for Desk to finish admitting the desk and loading its status detail, and how often it asks again.
+const STARTUP_DETAIL_WAIT_MS = 10_000
 const STARTUP_DETAIL_POLL_MS = 1_000
 
-function detailPending(result) {
+// Still starting: Desk is admitting the desk (a cold start takes a few seconds), or it is ready but its status detail has not loaded yet.
+function startupPending(result) {
   if (result?.isError) return false
   try {
-    return JSON.parse(result?.content?.[0]?.text ?? "null")?.detail_pending === true
+    const status = JSON.parse(result?.content?.[0]?.text ?? "null")
+    return status?.state === "admitting" || status?.detail_pending === true
   } catch {
     return false
   }
@@ -128,7 +130,7 @@ function detailPending(result) {
 
 /**
  * Wraps a hosted Desk's `callTool` so its first successful desk_status answer carries `instructions` as a second text item. A client such as claude.ai never shows the model a server's MCP instructions, but every client shows a tool's answer, and Desk's instructions tell the agent to call desk_status first.
- * That first answer also waits, up to six seconds in all, for a status detail that is still loading, so a hosted chat does not start from an answer with an empty root and sync.
+ * That first answer also waits, up to ten seconds in all, while Desk is still admitting the desk or loading its status detail, so a hosted chat does not start from an answer with an empty root and sync.
  */
 export function withHostedStartup({ callTool, instructions, waitMs = STARTUP_DETAIL_WAIT_MS, pollMs = STARTUP_DETAIL_POLL_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   // "claimed" while one desk_status call is preparing the instructions, so a second call at the same time answers plainly; "delivered" once they are sent.
@@ -138,7 +140,7 @@ export function withHostedStartup({ callTool, instructions, waitMs = STARTUP_DET
     if (call?.name !== "desk_status" || state !== "pending" || result?.isError) return result
     state = "claimed"
     try {
-      for (let waited = 0; detailPending(result) && waited < waitMs && !call?.signal?.aborted; waited += pollMs) {
+      for (let waited = 0; startupPending(result) && waited < waitMs && !call?.signal?.aborted; waited += pollMs) {
         await sleep(pollMs)
         result = await callTool(call)
       }
