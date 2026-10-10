@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.277 — 2026-10-10
+
+[The always-on foundation](skills/using-desk/SKILL.md#alignment-then-ownership) now explicitly forbids structured-question tools and forms: they disrupt conversation (HX) and obscure whether judgment, permission or execution is needed (AX). Routine implementation choices stay with the agent, which continues scoped work after corrections or apologies rather than seeking redundant permission. Avoid preventable host prompts through permitted noninteractive operations, never by evading safety controls or granting new authority. Human-only gates need a plain explanation, recommendation and concrete consequence before asking for irreducible input; stop requests, intentional conversation and authority boundaries remain intact.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.276 — 2026-10-10
 
 Allow read-only window-ID observation for explicit lease-owned browser targets. Missing, unowned and closed target IDs remain refused; window mutation and window-ID-only inspection remain denied.
