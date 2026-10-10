@@ -12,6 +12,8 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, symlinkSync, realpath
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { createHash } from "node:crypto"
+import cryptoNative from "node:crypto"
+import childProcess from "node:child_process"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 
@@ -24,7 +26,12 @@ const flags = ["--restricted", "--safe-mode", "--permission-mode", "--permission
 const metadata = { host: "claude-code", flags }
 const doctor = "Claude Code doctor\nManaged settings (remote): not fetched — requires an Enterprise or Team subscription\nOrganization policy: not applicable to Pro and Max accounts\n"
 const source = { kind: "managed", revision: "a".repeat(64), settings: {} }
-const readers = { read: () => ({ complete: true, controller_invariant: true, sources: [source], validation_errors: [] }) }
+const readers = { read: ({ cli } = {}) => {
+  const file = cli && path.join(path.dirname(cli), "managed-policy.json")
+  const current = file ? { ...source, path: file, settings: JSON.parse(readFileSync(file)), revision: hash(readFileSync(file)) } : source
+  return { complete: true, controller_invariant: true, sources: [current], validation_errors: [],
+    capabilities: { customization_sources_disabled: true, result_is_data_only: true, engine_sha256: "fixture-only-not-native-attestation" } }
+} }
 const diagnostic = async () => ({ kind: "closed", code: 0, stdout: doctor, truncated: false })
 const brief = { batch: "a".repeat(16), producer_version: "1.2.0", rubric_version: 1, cards: [] }
 const candidate = JSON.stringify({ schema: "desk.factory.triage-result/1", batch: brief.batch,
@@ -37,6 +44,7 @@ function fixture(t) {
   // No operator setup is accessed by these fixtures.
   writeFileSync(path.join(dir, "engine"), "engine revision one")
   writeFileSync(path.join(dir, "runtime"), "runtime revision one")
+  writeFileSync(path.join(dir, "managed-policy.json"), "{}")
   return import("node:fs").then(({ mkdirSync }) => {
     mkdirSync(inputDir)
     const resultFile = path.join(inputDir, ".triage-result.json")
@@ -270,7 +278,11 @@ test("qualifier_requires_observed_attempts_not_model_restraint", async (t) => {
 
 test("qualifier_is_a_production_policy_consumer_and_records_two_launches", async (t) => {
   const f = await fixture(t)
+  f.env.CLAUDE_CONFIG_DIR = path.join(f.dir, "user-profile")
+  fsNative.mkdirSync(f.env.CLAUDE_CONFIG_DIR)
+  writeFileSync(path.join(f.env.CLAUDE_CONFIG_DIR, "settings.json"), '{"profile":"must remain unchanged"}')
   assert.equal(typeof qualifier.qualifyTriageRunner, "function")
+  const frames = []
   const spawn = (_cmd, _args, opts) => {
     const child = new EventEmitter()
     child.stdout = new PassThrough()
@@ -278,6 +290,7 @@ test("qualifier_is_a_production_policy_consumer_and_records_two_launches", async
     child.kill = () => true
     queueMicrotask(() => {
       const input = JSON.parse(readFileSync(path.join(opts.cwd, "input.json")))
+      frames.push({ input, cwd: opts.cwd })
       if (readFileSync(path.join(opts.cwd, ".triage-result.json")).toString() !== "{}") {
         child.stdout.write(JSON.stringify({ type: "result", subtype: "stale_synthetic_result", is_error: true }) + "\n")
         child.emit("close", 1)
@@ -287,11 +300,11 @@ test("qualifier_is_a_production_policy_consumer_and_records_two_launches", async
       for (const [i, operation] of input.operations.entries()) {
         if (!["Read", "Grep", "Glob", "Edit"].includes(operation.tool)) continue
         events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: String(i),
-          name: operation.tool, input: { file_path: operation.target, path: operation.target } }] } })
+          name: operation.tool, input: { file_path: operation.target, path: operation.target, new_string: operation.new_string } }] } })
         events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: String(i),
           is_error: !operation.positive, content: operation.positive ? "runtime operation succeeded" : "Permission denied by restricted working directory" }] } })
       }
-      writeFileSync(path.join(opts.cwd, ".triage-result.json"), candidate)
+      writeFileSync(path.join(opts.cwd, ".triage-result.json"), JSON.stringify(input.qualification_result) + "\n")
       events.push({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.04 })
       child.stdout.write(events.map((event) => JSON.stringify(event)).join("\n") + "\n")
       child.emit("close", 0)
@@ -303,8 +316,21 @@ test("qualifier_is_a_production_policy_consumer_and_records_two_launches", async
     spawn, probeSpawn: authSpawn() })
   assert.equal(result.state, "qualified")
   assert.equal(result.resources.launches, 2)
+  assert.equal(readFileSync(path.join(f.env.CLAUDE_CONFIG_DIR, "settings.json")).toString(), '{"profile":"must remain unchanged"}')
   assert.equal(result.cases.every((row) => row.result === "passed"), true)
   assert.equal(result.cases.some((row) => row.enforcement === "tool_absent"), true)
+  assert.equal(frames.length, 2)
+  for (const frame of frames) {
+    assert.equal(frame.input.operations.find((op) => op.operation === "runtime_mutation").target, f.cli)
+    assert.equal(frame.input.operations.find((op) => op.operation === "policy_mutation").target, path.join(f.dir, "managed-policy.json"))
+    const settings = path.join(frame.cwd, ".claude", "settings.json")
+    assert.equal(frame.input.operations.find((op) => op.operation === "hook_install").target, settings)
+    assert.equal(frame.input.operations.find((op) => op.operation === "helper_install").target, settings)
+    assert.equal(JSON.parse(readFileSync(settings)).hooks.SessionStart[0].hooks[0].type, "command")
+    assert.ok(frame.input.qualification_result.results[0].problem.includes("TRIAGE_CUSTOMIZATION_TRIGGER"))
+  }
+  assert.equal(result.cases.filter((row) => row.operation === "customization_dispatch").every((row) =>
+    row.enforcement === "capability_absent" && row.attempted), true)
 })
 
 test("admission_missing_invalid_and_incompatible_evidence_never_becomes_none", async (t) => {
@@ -487,8 +513,10 @@ function observedSpawn(mode = "normal") {
       if (mode === "no_manifest") events.length = 0
       events.push({ type: "assistant" }, { type: "user" })
       for (const [i, operation] of input.operations.entries()) {
+        if (mode === "generic_outside_only" && operation.operation === "prepared_trigger_read") continue
         if (!["Read", "Grep", "Glob", "Edit"].includes(operation.tool)) continue
-        events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: String(i), name: operation.tool, input: { path: operation.target } }] } })
+        events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: String(i), name: operation.tool,
+          input: { path: operation.target, new_string: operation.new_string } }] } })
         events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: String(i),
           is_error: mode === "violation_succeeded" ? false : !operation.positive,
           content: operation.positive ? "tool succeeded" : mode === "unrelated_error" ? "file not found" : "Permission denied" }] } })
@@ -499,9 +527,42 @@ function observedSpawn(mode = "normal") {
           name: op.tool, input: { file_path: op.target } }] } })
         events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "extra", is_error: false, content: "succeeded" }] } })
       }
-      writeFileSync(path.join(opts.cwd, ".triage-result.json"), candidate)
+      if (mode === "real_shaped_excluded_success") {
+        for (const [name, input] of [
+          ["Bash", { command: "echo forbidden" }], ["PowerShell", { command: "Write-Host forbidden" }],
+          ["REPL", { code: "1+1" }], ["Agent", { prompt: "delegate outside", subagent_type: "general-purpose" }],
+          ["Task", { prompt: "delegate" }], ["Skill", { skill: "forbidden-skill" }],
+          ["WebFetch", { url: "https://example.invalid", prompt: "fetch" }],
+          ["WebSearch", { query: "forbidden" }], ["mcp__other__run", { query: "forbidden" }],
+        ]) {
+          events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: name, name, input }] } })
+          events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: name, is_error: false, content: "succeeded" }] } })
+        }
+      }
+      if (mode === "unexpected_outside_edit_success" || mode === "unexpected_outside_read_success") {
+        events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "outside-extra",
+          name: mode === "unexpected_outside_edit_success" ? "Edit" : "Read",
+          input: { file_path: path.join(path.dirname(opts.cwd), "unlisted-private-file") } }] } })
+        events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "outside-extra", is_error: false, content: "succeeded" }] } })
+      }
+      if (mode === "missing_read_argument_success" || mode === "implicit_search") {
+        const input = mode === "implicit_search" ? { pattern: "prepared" } : {}
+        const name = mode === "implicit_search" ? "Grep" : "Read"
+        events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "implicit", name, input }] } },
+          { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "implicit", is_error: false, content: "succeeded" }] } })
+      }
+      if (mode === "relative_read" || mode === "directory_search") {
+        const input = mode === "relative_read" ? { file_path: "./input.json" } : { path: opts.cwd, pattern: "prepared" }
+        const name = mode === "relative_read" ? "Read" : "Grep"
+        events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "scoped", name, input }] } },
+          { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "scoped", is_error: false, content: "succeeded" }] } })
+      }
+      writeFileSync(path.join(opts.cwd, ".triage-result.json"), JSON.stringify(input.qualification_result) + "\n")
       if (mode === "sentinel_changed") writeFileSync(input.operations.find((op) => op.operation === "sibling_edit").target, "changed")
       events.push({ type: "result", subtype: "success", is_error: false })
+      if (mode === "hook_triggered") events.push({ type: "system", subtype: "hook_started", hook_name: "SessionStart" },
+        { type: "result", subtype: "success", is_error: false })
+      if (mode === "helper_triggered") writeFileSync(path.join(path.dirname(opts.cwd), "customization-executed"), "executed")
       child.stdout.write(mode === "bad_stream" ? "malformed" : events.map((event) => JSON.stringify(event)).join("\n") + "\n")
       child.emit("close", 0)
     })
@@ -512,7 +573,8 @@ function observedSpawn(mode = "normal") {
 test("qualifier_never_accepts_widened_tools_successful_violation_or_unrelated_errors", async (t) => {
   const f = await fixture(t)
   for (const mode of ["invalid_manifest", "unexpected_tool", "no_manifest", "violation_succeeded", "unrelated_error", "sentinel_changed", "bad_stream",
-    "absence_contradicted", "later_violation_succeeded"]) {
+    "absence_contradicted", "later_violation_succeeded", "real_shaped_excluded_success", "hook_triggered", "helper_triggered",
+    "unexpected_outside_edit_success", "unexpected_outside_read_success", "missing_read_argument_success"]) {
     const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
       cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
       spawn: observedSpawn(mode), probeSpawn: authSpawn() })
@@ -520,6 +582,52 @@ test("qualifier_never_accepts_widened_tools_successful_violation_or_unrelated_er
     assert.equal(result.cases.some((row) => row.result === "failed"), true)
     assert.equal(result.resources.launches, 1)
   }
+})
+
+test("global_success_audit_allows_only_known_prepared_relative_and_default_search_scope", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["implicit_search", "relative_read", "directory_search"]) {
+    const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+      cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+      spawn: observedSpawn(mode), probeSpawn: authSpawn() })
+    assert.equal(result.state, "qualified", mode)
+  }
+})
+
+test("R6_3_sign_in_or_final_diagnostic_mutation_never_spends_a_model_launch", async (t) => {
+  for (const mutation of ["input_bytes", "input_inode", "result_inode", "directory_inode", "input_symlink", "result_bytes"]) {
+    const f = await fixture(t), q = await qualification(f), child = childSpawn(f)
+    const mutate = () => {
+      const inputFile = path.join(f.inputDir, "input.json")
+      if (mutation === "input_bytes") writeFileSync(inputFile, JSON.stringify({ ...brief, batch: "b".repeat(16) }))
+      if (mutation === "input_inode" || mutation === "result_inode") {
+        const file = mutation === "input_inode" ? inputFile : f.resultFile
+        const bytes = readFileSync(file); fsNative.renameSync(file, file + "-prior"); writeFileSync(file, bytes)
+      }
+      if (mutation === "directory_inode") {
+        fsNative.renameSync(f.inputDir, f.inputDir + "-prior")
+        fsNative.mkdirSync(f.inputDir)
+        writeFileSync(inputFile, JSON.stringify(brief)); writeFileSync(f.resultFile, "{}")
+      }
+      if (mutation === "input_symlink") { fsNative.renameSync(inputFile, inputFile + "-prior"); symlinkSync(inputFile + "-prior", inputFile) }
+      if (mutation === "result_bytes") writeFileSync(f.resultFile, '{"replaced":true}')
+    }
+    const auth = authSpawn()
+    q.probeSpawn = (...args) => { mutate(); return auth(...args) }
+    const result = await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn })
+    assert.equal(result.state, "scope_changed", mutation)
+    assert.equal(child.calls.length, 0, mutation + " must block before spending")
+    assert.equal(q.invalidated, true)
+  }
+  const f = await fixture(t), q = await qualification(f), child = childSpawn(f)
+  let calls = 0
+  q.runDiagnostic = async () => {
+    calls += 1
+    if (calls === 2) writeFileSync(path.join(f.inputDir, "input.json"), JSON.stringify({ ...brief, batch: "c".repeat(16) }))
+    return diagnostic()
+  }
+  assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn })).state, "scope_changed")
+  assert.equal(child.calls.length, 0)
 })
 
 test("qualifier_diagnostic_chain_and_protection_holds_are_explicit", async (t) => {
@@ -607,7 +715,7 @@ test("local_policy_reader_never_executes_command_bearing_settings", async (t) =>
     Object.defineProperty(process, "platform", { value: platform, configurable: true })
     const result = await runner.collectTriageAdmission({ ...f, argv: [], runDiagnostic: diagnostic })
     assert.equal(result.reason, "diagnostic_inadequate")
-    assert.equal(result.sources.length, 3)
+    assert.equal(result.sources.filter((source) => source.path.endsWith(".json") && source.kind === "managed").length >= 3, true)
   }
   for (const [next, reason] of [["hook", "active_hook_or_helper"], ["oversize", "effective_policy_unknown"], ["unreadable", "effective_policy_unknown"]]) {
     mode = next
@@ -654,7 +762,7 @@ test("bounded_diagnostic_PIDs_and_empty_compatible_permissions_are_recorded", as
   const f = await fixture(t)
   const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "diagnostic-resources"),
     cli: f.cli, env: f.env, cliMetadata: metadata, resolveExec: f.resolveExec,
-    policyReaders: { read: () => ({ ...readers.read(), sources: [{ ...source, settings: { permissions: {} } }] }) },
+    policyReaders: { read: (request) => ({ ...readers.read(request), sources: [{ ...readers.read(request).sources[0], settings: { permissions: {} } }] }) },
     runDiagnostic: async (request) => {
       request.onChild(894)
       request.onChildExit(894)
@@ -677,4 +785,208 @@ test("a_result_that_becomes_unreadable_after_exit_is_not_accepted", async (t) =>
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
   q.capture = () => { deny = true }
   assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: childSpawn(f).spawn })).state, "failed")
+})
+
+test("R6_1_default_platform_provenance_connects_signed_installed_runtime_without_engine_copy", () => {
+  // This is a non-model native/platform inspection, not an injected resolver.
+  // On unsupported platforms the production adapter must explicitly hold.
+  const cli = path.join(process.env.DESK_TEST_REAL_HOME, ".local", "share", "claude", "versions", "2.1.296")
+  const result = runner.inspectLaunchChain({ cli, env: process.env })
+  if (process.platform === "darwin" && fsNative.existsSync(cli)) {
+    assert.equal(result.state, "inspected")
+    assert.equal(result.platform.kind, "macos-signed-runtime")
+    assert.equal(result.platform.sealed, true)
+    assert.match(result.platform.cache_uuid, /^[a-f0-9]{32}$/)
+    assert.equal(result.platform.dependencies.includes("/usr/lib/libSystem.B.dylib"), true)
+  } else assert.equal(result.state, "scope_unqualified")
+})
+
+test("R6_4_generic_outside_refusals_are_not_customization_qualification", async (t) => {
+  const f = await fixture(t)
+  const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "generic-only"), cli: f.cli, env: f.env,
+    cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+    spawn: observedSpawn("generic_outside_only"), probeSpawn: authSpawn() })
+  assert.equal(result.state, "blocked")
+})
+
+test("R6_1_default_reader_rejects_user_helpers_before_any_diagnostic", async (t) => {
+  const f = await fixture(t)
+  const configDir = path.join(f.env.HOME, ".claude")
+  fsNative.mkdirSync(configDir)
+  writeFileSync(path.join(configDir, "settings.json"), JSON.stringify({ apiKeyHelper: "must never execute", permissions: { allow: ["Edit"] } }))
+  let diagnosticCalls = 0
+  const result = await runner.collectTriageAdmission({ ...f, argv: [],
+    runDiagnostic: async () => { diagnosticCalls += 1; return diagnostic() } })
+  assert.equal(result.reason, "active_hook_or_helper")
+  assert.equal(diagnosticCalls, 0)
+})
+
+test("R6_4_missing_authentic_policy_targets_or_capabilities_cannot_qualify", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["missing-target", "missing-capabilities", "capabilities-unproved"]) {
+    const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+      cliMetadata: metadata, resolveExec: f.resolveExec, runDiagnostic: diagnostic,
+      policyReaders: { read: (request) => {
+        const evidence = readers.read(request)
+        if (mode === "missing-target") delete evidence.sources[0].path
+        if (mode === "missing-capabilities") delete evidence.capabilities
+        if (mode === "capabilities-unproved") evidence.capabilities = {}
+        return evidence
+      } }, spawn: observedSpawn(), probeSpawn: authSpawn() })
+    assert.equal(result.state, "blocked")
+  }
+})
+
+test("R6_1_native_platform_adapter_rejects_each_unverified_platform_dimension", async (t) => {
+  const f = await fixture(t)
+  const realRead = fsNative.readFileSync, realPath = fsNative.realpathSync, realList = fsNative.readdirSync, realStat = fsNative.lstatSync, realOpen = fsNative.openSync
+  const platform = Object.getOwnPropertyDescriptor(process, "platform"), arch = Object.getOwnPropertyDescriptor(process, "arch")
+  let mode = "valid"
+  const binary = Buffer.alloc(192)
+  binary.writeUInt32LE(0xfeedfacf); binary.writeUInt32LE(1, 16)
+  binary.writeUInt32LE(0xc, 32); binary.writeUInt32LE(160, 36); binary.writeUInt32LE(24, 40); binary.write("/usr/lib/probe.dylib", 56)
+  const cache = Buffer.alloc(160); cache.write("dyld_v1  arm64e"); cache.fill(1, 88, 104); cache.writeBigUInt64LE(1n, 128)
+  const cacheFixture = path.join(f.dir, "cache"); writeFileSync(cacheFixture, cache)
+  t.mock.method(fsNative, "readFileSync", (file, ...args) => {
+    if (String(file) === f.cli) return binary
+    if (String(file).endsWith("dyld_shared_cache_arm64e")) {
+      const value = Buffer.from(cache)
+      if (mode === "bad_magic") value.write("invalid")
+      if (mode === "missing_loader") value.writeBigUInt64LE(0n, 128)
+      return value
+    }
+    if (String(file).endsWith("dyld_shared_cache_arm64e.map")) return Buffer.from(mode === "missing_dependency" ? "" : "/usr/lib/probe.dylib\n")
+    if (String(file) === "/usr/lib/dyld") { const value = Buffer.alloc(32); value.writeUInt32BE(0xcafebabe); return value }
+    return realRead(file, ...args)
+  })
+  t.mock.method(fsNative, "realpathSync", (file, ...args) => {
+    if (String(file) === "/usr/lib/probe.dylib") throw Object.assign(new Error("not on disk"), { code: mode === "unreadable_dependency" ? "EACCES" : "ENOENT" })
+    if (String(file) === "/usr/lib/dyld") return String(file)
+    return realPath(file, ...args)
+  })
+  t.mock.method(fsNative, "readdirSync", (file, ...args) => {
+    if (String(file).endsWith("/System/Library/dyld")) return mode === "oversize_inventory" ?
+      Array.from({ length: 129 }, (_, i) => `dyld_shared_cache_arm64e.${i}`) : ["dyld_shared_cache_arm64e", "dyld_shared_cache_arm64e.map"]
+    return realList(file, ...args)
+  })
+  t.mock.method(fsNative, "lstatSync", (file, ...args) => {
+    if (String(file).includes("/System/Library/dyld/")) return { isFile: () => mode !== "not_cache_file",
+      uid: mode === "wrong_owner" ? 501 : 0, mode: mode === "writable_cache" ? 0o777 : 0o755, dev: 1, ino: 2, size: 160, ctimeMs: 1 }
+    return realStat(file, ...args)
+  })
+  t.mock.method(fsNative, "openSync", (file, ...args) => realOpen(String(file).includes("/System/Library/dyld/") ? cacheFixture : file, ...args))
+  t.mock.method(childProcess, "execFileSync", (command, args, opts) => {
+    assert.equal(opts.timeout, 5000)
+    assert.equal(opts.env.DESK_FACTORY_HEADLESS, "1")
+    if (command.endsWith("codesign")) {
+      assert.equal(args[0], "--verify")
+      if (mode === "bad_signature") throw new Error("signature rejected")
+      return ""
+    }
+    if (command.endsWith("diskutil")) return "root-plist"
+    if (command.endsWith("plutil")) return JSON.stringify({ Sealed: mode === "unsealed" ? "No" : "Yes",
+      WritableVolume: mode === "writable_root", MountPoint: mode === "wrong_root" ? "/other" : "/",
+      APFSSnapshotUUID: mode === "unknown_snapshot" ? "" : "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" })
+    if (command.endsWith("csrutil")) {
+      if (args[0] === "status") return mode === "sip_disabled" ? "disabled" : "System Integrity Protection status: enabled."
+      return mode === "root_auth_disabled" ? "disabled" : "Authenticated Root status: enabled"
+    }
+    assert.equal(command, "/usr/bin/sw_vers")
+    return mode === "unknown_build" ? "unknown build with spaces" : "26A434"
+  })
+  syncBuiltinESMExports()
+  t.after(() => { Object.defineProperty(process, "platform", platform); Object.defineProperty(process, "arch", arch); t.mock.restoreAll(); syncBuiltinESMExports() })
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true })
+  Object.defineProperty(process, "arch", { value: "arm64", configurable: true })
+  assert.equal(runner.inspectLaunchChain({ ...f, resolveExec: undefined }).state, "inspected")
+  for (const next of ["bad_signature", "unsealed", "writable_root", "wrong_root", "unknown_snapshot", "sip_disabled",
+    "root_auth_disabled", "unknown_build", "bad_magic", "missing_loader", "missing_dependency", "oversize_inventory",
+    "not_cache_file", "wrong_owner", "writable_cache", "unreadable_dependency"]) {
+    mode = next
+    assert.equal(runner.inspectLaunchChain({ ...f, resolveExec: undefined }).state, "scope_unqualified", next)
+  }
+  mode = "valid"
+  Object.defineProperty(process, "platform", { value: "linux", configurable: true })
+  assert.equal(runner.inspectLaunchChain({ ...f, resolveExec: undefined }).state, "scope_unqualified")
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true })
+  Object.defineProperty(process, "arch", { value: "x64", configurable: true })
+  assert.equal(runner.inspectLaunchChain({ ...f, resolveExec: undefined }).state, "scope_unqualified")
+})
+
+test("R6_1_default_policy_adapter_connects_native_source_plists_mcp_and_resolved_delivery", async (t) => {
+  const f = await fixture(t), policy = runner.triagePolicy({ ...f, cliMetadata: metadata })
+  const realRead = fsNative.readFileSync, realHash = cryptoNative.createHash
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  let mode = "valid", converted = 0
+  // Controlled parser boundary only: simulate the pinned signed source bytes
+  // and OS plist converter here. The independent actual installed-host
+  // non-model assertion is retained outside Git; this is NOT native proof.
+  t.mock.method(cryptoNative, "createHash", (...args) => {
+    const hash = realHash(...args); let engine = false
+    return { update(value) { engine = Buffer.isBuffer(value) && value.toString() === "PINNED_ENGINE_FIXTURE"; hash.update(value); return this },
+      digest(format) { return engine ? "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937" : hash.digest(format) } }
+  })
+  t.mock.method(fsNative, "readFileSync", (file, ...args) => {
+    const name = String(file)
+    if (name === f.cli) return Buffer.from("PINNED_ENGINE_FIXTURE")
+    if (name.endsWith("com.anthropic.claudecode.plist")) return mode === "oversize_os_policy" ? Buffer.alloc(2 * 1024 * 1024 + 1) : Buffer.from("native-plist-fixture")
+    if (name.endsWith("remote-settings.json")) return Buffer.from(mode === "cache_unresolved" ? '{"unknownCache":true}' : "{}")
+    if (name.endsWith("managed-mcp.json")) return Buffer.from(mode === "mcp_widens" ? '{"mcpServers":{"outside":{"command":"never"}}}' : '{"mcpServers":{}}')
+    if (name === path.join(f.env.HOME, ".claude", "settings.json")) {
+      if (mode === "oversize_user") return Buffer.alloc(2 * 1024 * 1024 + 1)
+      if (mode === "invalid_user") return Buffer.from("invalid-json")
+      return Buffer.from(mode === "user_provider" ? '{"env":{"ANTHROPIC_API_KEY":"do-not-copy"}}' :
+        '{"hooks":{"ignored":"not executed"},"permissions":{"allow":["Edit"]},"theme":"ignored"}')
+    }
+    return realRead(file, ...args)
+  })
+  t.mock.method(childProcess, "execFileSync", (command, args, opts) => {
+    if (command.endsWith("codesign")) {
+      assert.ok(args.includes("--strict")); assert.ok(args.includes("-R"))
+      if (mode === "invalid_signature") throw new Error("unsigned")
+      return ""
+    }
+    assert.equal(command, "/usr/bin/plutil"); assert.equal(opts.input.toString(), "native-plist-fixture")
+    converted += 1
+    return mode === "os_helper" ? '{"policyHelpers":{"darwin":{"command":"never"}}}' : "{}"
+  })
+  syncBuiltinESMExports()
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true })
+  t.after(() => { Object.defineProperty(process, "platform", platform); t.mock.restoreAll(); syncBuiltinESMExports() })
+  const admitted = await runner.collectTriageAdmission({ ...f, argv: policy.argv, runDiagnostic: diagnostic })
+  assert.equal(admitted.state, "admitted")
+  assert.equal(admitted.capabilities.result_is_data_only, true)
+  assert.equal(admitted.sources.filter((source) => source.kind === "os").length, 2)
+  assert.ok(converted >= 4, "actual native-listed OS sources are inspected before and after doctor")
+  for (const [next, reason] of [["oversize_os_policy", "effective_policy_unknown"], ["oversize_user", "effective_policy_unknown"],
+    ["invalid_user", "effective_policy_unknown"], ["invalid_signature", "effective_policy_unknown"],
+    ["user_provider", "billing_unresolved"], ["os_helper", "active_hook_or_helper"],
+    ["mcp_widens", "unsafe_permission_grant"], ["cache_unresolved", "effective_policy_unknown"]]) {
+    mode = next
+    assert.equal((await runner.collectTriageAdmission({ ...f, argv: policy.argv, runDiagnostic: diagnostic })).reason, reason, next)
+  }
+  mode = "valid"
+  for (const flag of ["--restricted", "--safe-mode", "--strict-mcp-config"]) {
+    assert.equal((await runner.collectTriageAdmission({ ...f, argv: policy.argv.filter((value) => value !== flag), runDiagnostic: diagnostic })).state, "scope_unqualified")
+  }
+  assert.equal((await runner.collectTriageAdmission({ ...f, argv: policy.argv,
+    runDiagnostic: async () => ({ kind: "closed", code: 0, stdout: "Managed settings (remote): loaded" }) })).state, "scope_unqualified")
+  assert.equal((await runner.collectTriageAdmission({ ...f, argv: policy.argv,
+    runDiagnostic: async () => ({ kind: "closed", code: 0, stdout: "Managed settings (remote): none configured for this organization" }) })).state, "admitted")
+})
+
+test("R6_4_refusal_of_an_admitted_absent_policy_source_still_requires_real_triggers", async (t) => {
+  const f = await fixture(t)
+  const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "absent-policy"), cli: f.cli, env: f.env,
+    cliMetadata: metadata, resolveExec: f.resolveExec, runDiagnostic: diagnostic,
+    policyReaders: { read: (request) => {
+      const evidence = readers.read(request)
+      evidence.sources[0].path = path.join(f.dir, "not-installed-managed-policy.json")
+      evidence.sources[0].revision = hash("absent")
+      return evidence
+    } }, spawn: observedSpawn(), probeSpawn: authSpawn() })
+  assert.equal(result.state, "qualified")
+  assert.equal(result.cases.find((row) => row.operation === "policy_mutation").bytes_unchanged, null)
+  assert.equal(result.cases.filter((row) => row.operation === "customization_dispatch").every((row) =>
+    row.enforcement === "capability_absent" && row.attempted), true)
 })
