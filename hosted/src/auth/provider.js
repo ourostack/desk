@@ -14,27 +14,17 @@ import { CustomOAuthError, InvalidGrantError, InvalidTokenError } from "@modelco
 import { seal, unseal, derive, TTL } from "./seal.js";
 import { createGitHubSignIn } from "./github.js";
 import { consentPage, page, sendPage } from "./pages.js";
-
-const CLAUDE_CALLBACKS = new Set(["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"]);
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
-
-function isAllowedRedirect(uri) {
-  if (CLAUDE_CALLBACKS.has(uri)) return true;
-  let url;
-  try {
-    url = new URL(uri);
-  } catch {
-    return false;
-  }
-  return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname) && !url.username && !url.password;
-}
+import { createRedirectPolicy } from "./redirects.js";
 
 const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message}\n`);
 
 // `log` receives one line per refused sign-in or token request. Lines carry
 // the error code and client id only, never a token, code, secret or GitHub
 // response.
-export function createProvider({ key, issuer, github, allowedLogins, log = stderrLog }) {
+//
+// `redirects` is the redirect policy (see redirects.js); by default Claude's
+// callbacks and loopback.
+export function createProvider({ key, issuer, github, allowedLogins, redirects = createRedirectPolicy(), log = stderrLog }) {
   if (!key) throw new Error("createProvider needs a signing key");
   const signIn = createGitHubSignIn({
     key,
@@ -56,9 +46,9 @@ export function createProvider({ key, issuer, github, allowedLogins, log = stder
     // same metadata.
     registerClient(client) {
       const { redirect_uris: redirectUris, token_endpoint_auth_method, client_name } = client;
-      if (!redirectUris.length || !redirectUris.every(isAllowedRedirect)) {
+      if (!redirectUris.length || !redirectUris.every(redirects.allows)) {
         log("registration refused: invalid_redirect_uri");
-        throw new CustomOAuthError("invalid_redirect_uri", "Redirect URIs must be Claude's callback or a loopback address.");
+        throw new CustomOAuthError("invalid_redirect_uri", "Redirect URIs must be a configured callback, ChatGPT's connector callback or a loopback address.");
       }
       const clientId = seal("client", { redirect_uris: redirectUris, token_endpoint_auth_method, client_name, nonce: randomUUID() }, { key });
       const registered = { ...client, client_id: clientId };
@@ -72,9 +62,16 @@ export function createProvider({ key, issuer, github, allowedLogins, log = stder
       return registered;
     },
 
+    // A client id never expires, so its redirects are checked again on every
+    // use: removing one from DESK_REDIRECTS then also shuts out the clients
+    // that registered it before.
     getClient(clientId) {
       const registration = unseal("client", clientId, { key });
       if (!registration) return undefined;
+      if (!registration.redirect_uris?.length || !registration.redirect_uris.every(redirects.allows)) {
+        log("client refused: invalid_redirect_uri");
+        return undefined;
+      }
       const { nonce: _nonce, ...metadata } = registration;
       const client = { ...metadata, client_id: clientId };
       if (registration.token_endpoint_auth_method !== "none") {

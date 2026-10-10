@@ -47,6 +47,17 @@ test("readConfig treats a missing or 'unset' GitHub App setting as not set up", 
   assert.equal(readConfig(missing).appReady, false);
 });
 
+test("readConfig reads the redirect allowlist from DESK_REDIRECTS, defaulting to Claude's callbacks", () => {
+  const defaults = readConfig(FULL).redirects;
+  assert.equal(defaults.allows("https://claude.ai/api/mcp/auth_callback"), true);
+  assert.equal(defaults.allows("https://vscode.dev/redirect"), false);
+  const configured = readConfig({ ...FULL, DESK_REDIRECTS: "https://vscode.dev/redirect" }).redirects;
+  assert.equal(configured.allows("https://vscode.dev/redirect"), true);
+  assert.equal(configured.allows("https://claude.ai/api/mcp/auth_callback"), false);
+  assert.equal(readConfig({ ...FULL, DESK_REDIRECTS: "unset" }).redirects.allows("https://claude.ai/api/mcp/auth_callback"), true);
+  assert.throws(() => readConfig({ ...FULL, DESK_REDIRECTS: "nope" }), /DESK_REDIRECTS/);
+});
+
 test("readConfig refuses to start without a signing key", () => {
   const { DESK_SIGNING_KEY: _, ...env } = FULL;
   assert.throws(() => readConfig(env), /DESK_SIGNING_KEY/);

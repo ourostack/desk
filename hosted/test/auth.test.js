@@ -8,6 +8,7 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { seal, unseal } from "../src/auth/seal.js";
 import { createProvider, consentHandler } from "../src/auth/provider.js";
 import { githubCallbackHandler } from "../src/auth/github.js";
+import { createRedirectPolicy } from "../src/auth/redirects.js";
 
 const KEY = "test-key-0123456789abcdef0123456789abcdef";
 const ISSUER = "https://desk.ouro.bot";
@@ -46,13 +47,14 @@ function fakeGitHub(users = { "gh-code": { login: "arimendelow", id: 16390116, n
 const logs = [];
 const issued = new Set();
 
-function makeProvider(github = fakeGitHub()) {
+function makeProvider(github = fakeGitHub(), options = {}) {
   return createProvider({
     key: KEY,
     issuer: ISSUER,
     github: { ...GITHUB, fetch: github.fetch },
     allowedLogins: ["arimendelow"],
     log: (line) => logs.push(line),
+    ...options,
   });
 }
 
@@ -66,8 +68,8 @@ afterEach(() => {
 
 // Mounts the SDK's OAuth router with our provider, the GitHub callback and a
 // bearer-protected /mcp, the way the gateway will.
-async function start(t, github = fakeGitHub()) {
-  const provider = makeProvider(github);
+async function start(t, github = fakeGitHub(), options = {}) {
+  const provider = makeProvider(github, options);
   const app = express();
   app.use(
     mcpAuthRouter({
@@ -550,4 +552,50 @@ test("a code exchanged with another redirect, by another client or after expiry 
     assert.equal(reply.body.error, "invalid_grant", name);
   }
   assert.ok(logs.includes(`token refused: invalid_grant client ${client.client_id}`));
+});
+
+test("registration accepts ChatGPT's per-connector callback and a configured redirect", async (t) => {
+  const { base } = await start(t, fakeGitHub(), { redirects: createRedirectPolicy(`${CLAUDE_CALLBACK},https://vscode.dev/redirect`) });
+  for (const uri of ["https://chatgpt.com/connector/oauth/abc_DEF-123", "https://vscode.dev/redirect"]) {
+    const { status, body } = await register(base, { redirect_uris: [uri] });
+    assert.equal(status, 201, uri);
+    assert.deepEqual(body.redirect_uris, [uri]);
+  }
+  const removed = await register(base, { redirect_uris: ["https://claude.com/api/mcp/auth_callback"] });
+  assert.equal(removed.status, 400, "a default left out of DESK_REDIRECTS is refused");
+  assert.equal(removed.body.error, "invalid_redirect_uri");
+});
+
+test("a redirect removed from DESK_REDIRECTS stops working for a client registered before the removal", async (t) => {
+  // Registered while claude.ai's callback was allowed (the default), the way
+  // Ari's existing connector was.
+  const before = await start(t);
+  const { client, tokens } = await signInForTokens(before.base);
+  assert.ok(await before.provider.clientsStore.getClient(client.client_id));
+
+  // The same key, with claude.ai's callback no longer configured.
+  const after = await start(t, fakeGitHub(), { redirects: createRedirectPolicy("https://claude.com/api/mcp/auth_callback") });
+  logs.length = 0;
+  assert.equal(await after.provider.clientsStore.getClient(client.client_id), undefined);
+  assert.deepEqual(logs, ["client refused: invalid_redirect_uri"]);
+
+  const { response, html } = await consentPage(after.base, client);
+  assert.equal(response.status, 400);
+  assert.equal(JSON.parse(html).error, "invalid_client");
+
+  const refresh = await tokenRequest(after.base, {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    client_secret: client.client_secret,
+    refresh_token: tokens.refresh_token,
+  });
+  assert.equal(refresh.status, 400);
+  assert.equal(refresh.body.error, "invalid_client");
+});
+
+test("a client with several redirects is refused when any one of them is no longer allowed", async (t) => {
+  const { provider } = await start(t);
+  const both = provider.clientsStore.registerClient({ redirect_uris: [CLAUDE_CALLBACK, "https://claude.com/api/mcp/auth_callback"], token_endpoint_auth_method: "none" });
+  const narrowed = makeProvider(fakeGitHub(), { redirects: createRedirectPolicy(CLAUDE_CALLBACK) });
+  assert.equal(await narrowed.clientsStore.getClient(both.client_id), undefined);
 });

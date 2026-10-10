@@ -30,6 +30,7 @@ Some Desk tools, doctor repairs and skills need a shell, the host machine or a c
 | `DESK_APP_KEY_FILE` | Path to the GitHub App's private key (a mounted secret). |
 | `DESK_REPO` | The desk repository. Default `arimendelow/desk`. |
 | `DESK_ALLOWED_LOGINS` | Comma-separated GitHub logins allowed to sign in. Default `arimendelow`. |
+| `DESK_REDIRECTS` | Comma-separated exact redirect URLs a client may register or name. Default Claude's two callbacks, `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`; setting it replaces them, so list them too to keep claude.ai working. Loopback (`http://localhost` and `http://127.0.0.1` on any port) and ChatGPT's per-connector callback (`https://chatgpt.com/connector/oauth/<one segment of letters, digits, - and _>`) are always allowed. Every client's redirects are checked again on each use, so removing one shuts out clients that registered it before. |
 | `DESK_CLONE_DIR` | Where the desk is cloned. The image sets `/data/desk`. |
 | `DESK_PLUGIN_DIR` | Desk's plugin directory. The image sets `/app/plugins/desk`. |
 | `DESK_REAL_GH` | Optional path to the real `gh`. By default the shim uses the next `gh` on `PATH`; the image installs it at `/usr/bin/gh`. |

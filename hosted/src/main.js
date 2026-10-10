@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProvider } from "./auth/provider.js";
+import { createRedirectPolicy } from "./auth/redirects.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
 import { createRelay } from "./relay.js";
@@ -47,6 +48,8 @@ export function readConfig(env) {
       .split(",")
       .map((login) => login.trim())
       .filter(Boolean),
+    // Built here so a malformed DESK_REDIRECTS stops the gateway at start.
+    redirects: createRedirectPolicy(isSet(env.DESK_REDIRECTS) ? env.DESK_REDIRECTS : undefined),
     cloneDir: env.DESK_CLONE_DIR,
     pluginDir: env.DESK_PLUGIN_DIR,
   };
@@ -185,6 +188,7 @@ export async function main(env = process.env) {
     issuer: config.issuer,
     github: { clientId: config.appClientId ?? "unset", clientSecret: config.appClientSecret ?? "unset" },
     allowedLogins: config.allowedLogins,
+    redirects: config.redirects,
   });
   const app = createApp({
     provider,
