@@ -6,6 +6,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { resolveStartupStateBranch } from "../src/runtime/startup-resolve.js"
 import { redactCredentialLikeText } from "../src/util/redact.js"
+import { TOOL_COMMIT_ENV } from "../src/desk/card-commit-guard.js"
 
 const OPERATIONS = new Set(["task_update", "task_create", "task_archive", "desk_save"])
 const FLAGS = new Set(["--root", "--operation", "--input-file", "--person", "--activation-config", "--state-branch"])
@@ -204,7 +205,7 @@ export async function runRecovery({
       if (!statSync(root).isDirectory()) throw failure("root_unavailable")
     } catch { throw failure("root_unavailable") }
     report.requestedRoot = root
-    if (env.DESK_TOOL_COMMIT !== undefined) throw failure("commit_override_refused")
+    if (env[TOOL_COMMIT_ENV] !== undefined) throw failure("commit_override_refused")
     const serverArgs = ["--root", root]
     for (const flag of ["--person", "--activation-config", "--state-branch"]) {
       if (options[flag]) serverArgs.push(flag, options[flag])
