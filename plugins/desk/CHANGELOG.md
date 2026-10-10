@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.275 — 2026-10-10
+
+Define agent experience (AX) and human experience (HX, formerly UX) together in the shared foundation: handle deterministic work deterministically, make agent tools easy to understand and use, protect human attention and control, and never shift avoidable work between them.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.274 — 2026-10-10
 
 - Move runtime status's root observation off the answering thread as well as SQLite. Bound exact-owned reader retirement with explicit disconnect exit and signal escalation; report failed termination attempts and retain any reader whose exit remains unverified rather than hanging shutdown or overlapping a replacement.
