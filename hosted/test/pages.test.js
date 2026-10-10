@@ -14,8 +14,9 @@ const NOT_SET_UP = "Hosted Desk is not set up yet: its GitHub App is missing.";
 const PRIVACY = "https://ouroboros.bot/privacy/";
 const TERMS = "https://ouroboros.bot/terms/";
 const DESK_PAGE = "https://ouroboros.bot/desk/";
-// The Desk icon is copied byte for byte from the brand work, never redrawn.
-const ICON_SHA256 = "abc21db46f75faa36a38e3cc6369596d916ba5a177e2b90be405a87cdfccfc6e";
+// The Hosted Desk icon: the brand file with only its embedded metadata block
+// removed, never redrawn. Ari replaces it with his polished version.
+const ICON_SHA256 = "b2f6f1b61da3ebf340b0ba7df575f8ff2da6e076d0d7266253816c944813b4b2";
 
 async function start(t, { unavailable } = {}) {
   const provider = createProvider({
@@ -43,7 +44,7 @@ async function start(t, { unavailable } = {}) {
 function assertDeskLook(html) {
   assert.match(html, /<link rel="stylesheet" href="\/assets\/desk\.css">/);
   assert.match(html, /<link rel="icon" href="\/assets\/desk-icon\.svg" type="image\/svg\+xml">/);
-  assert.match(html, /<img src="\/assets\/desk-icon\.svg"[^>]* alt="Desk icon"/);
+  assert.match(html, /<img src="\/assets\/desk-icon\.svg"[^>]* alt="Hosted Desk icon"/);
   assert.ok(html.includes(`href="${PRIVACY}"`), "links to the privacy notice");
   assert.ok(html.includes(`href="${TERMS}"`), "links to the terms");
 }
@@ -52,13 +53,14 @@ function assertPageHeaders(response) {
   assert.match(response.headers.get("content-type"), /text\/html/);
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(
     response.headers.get("content-security-policy"),
     "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
   );
 }
 
-test("GET / is a front door that says what hosted Desk is, that it is not open yet and single-user today", async (t) => {
+test("GET / is a front door that says what Hosted Desk is, that it is not open yet and single-user today", async (t) => {
   const base = await start(t);
   const response = await fetch(`${base}/`);
   assert.equal(response.status, 200);
@@ -82,7 +84,7 @@ test("GET / answers the same while the gateway is not set up, and HEAD / works",
   assert.equal(head.status, 200);
 });
 
-test("the Desk icon is served byte for byte from the brand file", async (t) => {
+test("the Hosted Desk icon is served byte for byte, with no embedded metadata", async (t) => {
   const base = await start(t);
   const response = await fetch(`${base}/assets/desk-icon.svg`);
   assert.equal(response.status, 200);
@@ -93,6 +95,7 @@ test("the Desk icon is served byte for byte from the brand file", async (t) => {
   assert.equal(createHash("sha256").update(bytes).digest("hex"), ICON_SHA256);
   const file = readFileSync(new URL("../public/desk-icon.svg", import.meta.url));
   assert.equal(createHash("sha256").update(file).digest("hex"), ICON_SHA256);
+  assert.ok(!/<metadata|c2pa/i.test(file.toString("utf8")), "no embedded metadata");
 });
 
 test("the stylesheet is served as CSS", async (t) => {
@@ -124,13 +127,15 @@ test("the consent page lists what the client can and cannot do, from what the ga
   assert.match(html, /When you approve, you sign in with GitHub, and then Hosted Desk sends you back to <strong>claude\.ai<\/strong>\./);
   assert.match(html, /Claude will be able to:/);
   assert.match(html, /Read and search your desk: its tasks, tracks, notes and Desk&#39;s skills\./);
-  assert.match(html, /Create and update tasks and tracks, record friction and lessons, and save files to your desk\. Each change is committed and pushed to <code>arimendelow\/desk<\/code>\./);
+  assert.match(html, /Create and change anything in your desk, including archiving and moving tasks, renaming tracks, replacing files and running repairs\. Each change is committed and pushed to <code>arimendelow\/desk<\/code>\./);
   assert.match(html, /Claude will not be able to:/);
-  assert.match(html, /Reach any repository other than <code>arimendelow\/desk<\/code>\./);
+  assert.match(html, /Change any repository other than <code>arimendelow\/desk<\/code>\./);
+  assert.doesNotMatch(html, /Reach any repository/);
   assert.match(html, /Run commands or reach your computer\./);
-  assert.match(html, /Keep your GitHub sign-in\. Hosted Desk reads your GitHub username once to check it, then discards the GitHub token\./);
+  assert.match(html, /Keep your GitHub sign-in\. Hosted Desk keeps only your GitHub username, user id and name, and discards the GitHub token\./);
   assert.match(html, /<form method="post" action="\/oauth\/consent"><input type="hidden" name="consent" value="sealed"><button type="submit">Approve<\/button><\/form>/);
   assert.match(html, /To cancel, close this page\./);
+  assert.match(html, /You can disconnect at any time in Claude&#39;s settings, under Customize &gt; Connectors\./);
 });
 
 test("the consent page without a desk repository names it generically", () => {
@@ -138,8 +143,9 @@ test("the consent page without a desk repository names it generically", () => {
   assert.match(html, /<h1>Connect an app to your desk<\/h1>/);
   assert.match(html, /An app will be able to:/);
   assert.match(html, /committed and pushed to your desk repository\./);
-  assert.match(html, /Reach any repository other than your desk repository\./);
+  assert.match(html, /Change any repository other than your desk repository\./);
   assert.match(html, /sends you back to <strong>127\.0\.0\.1:33418<\/strong>\./);
+  assert.doesNotMatch(html, /Customize &gt; Connectors/, "the claude.ai disconnect line is only for claude.ai");
 });
 
 test("a sign-in error page shares the Desk look, escapes its message and links home", () => {
@@ -148,7 +154,7 @@ test("a sign-in error page shares the Desk look, escapes its message and links h
   assertDeskLook(html);
   assert.match(html, /<h1>Sign-in stopped<\/h1>/);
   assert.match(html, /This Desk is not open to &lt;b&gt;mallory&lt;\/b&gt;\./);
-  assert.match(html, /<a href="\/">About hosted Desk<\/a>/);
+  assert.match(html, /<a href="\/">About Hosted Desk<\/a>/);
 });
 
 test("the not-set-up page on /authorize is a styled 503", async (t) => {

@@ -298,7 +298,7 @@ test("the consent page escapes a hostile client name", async (t) => {
   const client = (await register(base, { client_name: hostile })).body;
   const { html } = await consentPage(base, client);
   assert.ok(!html.includes("<script>"), "no raw script tag");
-  assert.ok(!/<img(?! src="\/assets\/desk-icon\.svg")/.test(html), "no raw img tag other than the Desk icon");
+  assert.ok(!/<img(?! src="\/assets\/desk-icon\.svg")/.test(html), "no raw img tag other than the Hosted Desk icon");
   assert.match(html, /Connect &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;&lt;img src=x onerror=&#39;y&#39;&gt;&amp; to your desk/);
 });
 

@@ -12,13 +12,13 @@ export const PRIVACY_URL = "https://ouroboros.bot/privacy/";
 export const TERMS_URL = "https://ouroboros.bot/terms/";
 export const DESK_PAGE_URL = "https://ouroboros.bot/desk/";
 
-const ICON = '<img src="/assets/desk-icon.svg" class="icon" width="72" height="72" alt="Desk icon">';
+const ICON = '<img src="/assets/desk-icon.svg" class="icon" width="72" height="72" alt="Hosted Desk icon">';
 const legal = `<a href="${PRIVACY_URL}">Privacy</a><a href="${TERMS_URL}">Terms</a>`;
 
 const document = (title, body, { home = true } = {}) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
   `<title>${escapeHtml(title)}</title><link rel="stylesheet" href="/assets/desk.css"><link rel="icon" href="/assets/desk-icon.svg" type="image/svg+xml"></head>` +
-  `<body><main>${ICON}${body}<footer>${home ? '<a href="/">About hosted Desk</a>' : ""}${legal}</footer></main></body></html>`;
+  `<body><main>${ICON}${body}<footer>${home ? '<a href="/">About Hosted Desk</a>' : ""}${legal}</footer></main></body></html>`;
 
 // The front door at /: what hosted Desk is and that it is not open yet.
 export const frontDoor = () => ({
@@ -42,10 +42,13 @@ export const page = (status, message) => ({
 
 // Asks the person whether this client may sign in. Approve posts the sealed
 // request back to the gateway, which only then sends the browser to GitHub.
-// What the client can and cannot do follows what the gateway allows: Desk's
-// tools on one desk repository, through an installation token for that
-// repository only, with no shell, and a GitHub user token read once and
-// dropped (auth/github.js).
+// What the client can and cannot do follows what the gateway allows: every
+// Desk tool on one desk repository, including the destructive ones
+// (runtime/hosted.js), through an installation token that can write only to
+// that repository (it can still read public repositories), with no shell, and
+// a GitHub user token used once and dropped while the grant keeps the login,
+// user id and name (auth/github.js). The disconnect line is shown only to
+// claude.ai, where Claude's settings remove the connector.
 // `clientHost`, for a client known by its metadata document's URL, is that
 // URL's host, shown under the heading, above the name the document gives itself.
 export function consentPage({ clientName, clientHost, redirectUri, consent, deskRepo }) {
@@ -53,6 +56,7 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, desk
   const name = escapeHtml(named ? clientName : "an app");
   const Name = named ? name : "An app";
   const host = escapeHtml(new URL(redirectUri).host);
+  const fromClaude = new URL(redirectUri).host === "claude.ai";
   const repo = typeof deskRepo === "string" && deskRepo !== "" ? `<code>${escapeHtml(deskRepo)}</code>` : "your desk repository";
   return {
     status: 200,
@@ -64,14 +68,15 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, desk
         `<div class="scopes">` +
         `<h2>${Name} will be able to:</h2><ul class="can">` +
         `<li>${escapeHtml("Read and search your desk: its tasks, tracks, notes and Desk's skills.")}</li>` +
-        `<li>Create and update tasks and tracks, record friction and lessons, and save files to your desk. Each change is committed and pushed to ${repo}.</li>` +
+        `<li>Create and change anything in your desk, including archiving and moving tasks, renaming tracks, replacing files and running repairs. Each change is committed and pushed to ${repo}.</li>` +
         `</ul><h2>${Name} will not be able to:</h2><ul class="cannot">` +
-        `<li>Reach any repository other than ${repo}.</li>` +
+        `<li>Change any repository other than ${repo}.</li>` +
         `<li>Run commands or reach your computer.</li>` +
-        `<li>Keep your GitHub sign-in. Hosted Desk reads your GitHub username once to check it, then discards the GitHub token.</li>` +
+        `<li>Keep your GitHub sign-in. Hosted Desk keeps only your GitHub username, user id and name, and discards the GitHub token.</li>` +
         `</ul></div>` +
         `<form method="post" action="/oauth/consent"><input type="hidden" name="consent" value="${escapeHtml(consent)}"><button type="submit">Approve</button></form>` +
-        `<p class="note">To cancel, close this page.</p>`,
+        `<p class="note">To cancel, close this page.</p>` +
+        (fromClaude ? `<p class="note">${escapeHtml("You can disconnect at any time in Claude's settings, under Customize > Connectors.")}</p>` : ""),
     ),
   };
 }
@@ -85,6 +90,7 @@ export function sendPage(res, { status, html }) {
     .set({
       "cache-control": "no-store",
       "x-frame-options": "DENY",
+      "x-content-type-options": "nosniff",
       "content-security-policy": PAGE_POLICY,
     })
     .type("html")
