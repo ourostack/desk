@@ -1,0 +1,1 @@
+Define agent experience (AX) and human experience (HX, formerly UX) together in the shared foundation: handle deterministic work deterministically, make agent tools easy to understand and use, protect human attention and control, and never shift avoidable work between them.
