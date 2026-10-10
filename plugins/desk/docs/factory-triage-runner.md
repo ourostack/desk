@@ -91,11 +91,15 @@ Provider/billing variables still block before any launch.
 
 ## Production and qualifier
 
-`runTriageChild` consumes parent-only `qualification` state. Production state
-must be `qualified` with two launches and the matching fingerprint; `probing`
-is reserved to the explicit qualifier. Parent-provided resolver/diagnostic/
-policy-reader adapters must be authentic, not synthetic fixture results.
-They are neither model claims nor public status fields.
+`runTriageChild` always selects production. It accepts only a parent-issued or protected-restored qualified record with two complete passing receipts and current matching full production/envelope/source identities. A JSON object with `state:"qualified"` or `"probing"` is not authority. Parent resolver/diagnostic/policy-reader adapters must be authentic, not synthetic fixture results; they are neither model claims nor public status fields.
+
+The explicit qualifier uses `beginTriageQualification`, an opaque source-local capability, and `runTriageProbe`; normal production cannot enter that route by setting a mission/status/input/env/CLI field. `triagePolicy` has only two internal finite mission pairs: missing mission means production, unknown means hold. Both fixed qualification message layers consistently request the parent's synthetic descriptors as attempts under unchanged enforcement. Other prepared/source/candidate prose remains inert untrusted evidence. There is no arbitrary prompt override or public mission flag.
+
+The source constructs a complete ordered descriptor catalog from exact fixture bindings, not model/card instructions. It validates the exact prepared bytes, helper/config/symlink identities and manifest/input/trigger hashes immediately before each launch. One successful trigger-bearing result Edit against `{}` satisfies both positive write and customization-trigger observations. Runtime/policy Edit probes use verified nonmatching search strings and inert replacements; a file mismatch is not a permission denial.
+
+Full production and probe launch snapshots/fingerprints remain distinct. Versioned `enforcementEnvelope` validates the complete argv and explicit shape, replacing only the two fixed system/request value slots with named versioned slots for equality. Flags/count/positions/order, cwd/result/root, chain/runtime, lifecycle ceilings, all other argv/settings/tool/billing selectors, opaque allowlisted-environment fingerprint and actual admitted source revisions remain bound byte-for-byte. Each mission obtains its own actual admission. Source-code and message/catalog versions/hashes are retained; no preferred-security-flags hash or path-relocation normalization substitutes.
+
+`completeTriageQualification` issues a record only after two actual captured passing probe receipts with the same manifest/payload/envelope/current identities and owned PID exits. Default CLI output remains protected evidence. A subsequent parent can use `loadTriageQualification` on the exact owner-only, non-symlink, outside-Git `qualification.json` tree: it verifies versions, current source/full identities, two raw stream hashes and receipts, and replays the same verifier against the authenticated recorded post-probe hashes. It does not reinterpret current production input as historical probe bytes. Arbitrary parsed JSON, a transient probe token, public/symlink/hardlinked evidence, altered streams/identities or one receipt cannot restore authority. Unsupported protection/runtime/source conditions hold; no universal privileged-admin tamper-proof claim is made.
 
 The runner rechecks admission before sign-in, immediately before spawn, and
 after exit. Detected drift invalidates the record and rejects the candidate;
@@ -128,6 +132,8 @@ name and actual tool-use IDs, regardless of argument shape or target. An
 omitted tool in the manifest cannot excuse a successful actual invocation.
 Symlink probes exercise both directions against synthetic paths.
 Unknown effective hook/helper/grant policy holds before a consuming probe.
+
+Malformed/duplicate manifests, incomplete/noncanonical tool-use correlation, changed second-launch manifests and reordered required operations fail. Exact native Read/Edit `file_path` is required; the documented Grep `file_path` coercion remains separate. The retained actual attempt-2-shaped sanitized normal triage stream stays a failed/not-exercised fixture, never credited as runtime restraint. A model may still decline the fixed test mission; that remains failed qualification, not a reason to relax these gates.
 
 The global read/search audit checks effective paths and returned filenames, not just named probes. Glob's absolute pattern-derived directory overrides its explicit `path`; relative literal prefixes, parent traversal, default search paths, HOME abbreviations and symlink ancestors must remain in the prepared directory. Successful Glob and Grep results are checked in their native list, count and content formats, including Grep's numbered/context/unnumbered filename prefixes and accepted `-l`/`-c` aliases. Prose returned from a positively identified single admitted file is content, not a filename. Unknown result shapes fail closed. A later outside success invalidates all cases even after an earlier refused probe.
 
