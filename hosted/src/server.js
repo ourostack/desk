@@ -19,7 +19,8 @@ const PROBE_ACCOUNT = "healthz-probe";
 // The deep health check (GET /healthz/deep): whether the Ouro tenant's discovery document has loaded and still names
 // the expected issuer (`discovery`), whether the accounts store answers a read (`store`), and whether every account
 // the legacy mapping and GitHub fallback name exists (`legacy-account`). The deploy workflow polls it after each
-// deploy; it is never the Container App's startup or liveness probe (those stay on /healthz), so a store or
+// deploy; with no mapped account at all it fails `legacy-account` too, because an empty mapping would refuse Ari's
+// existing connector at deploy. It is never the Container App's startup or liveness probe (those stay on /healthz), so a store or
 // ciamlogin.com outage never restarts the gateway. Its result is cached for `ttlMs` and concurrent callers share one
 // run, so calling it can't drive store traffic. `check()` returns `{ ok, failing }`, `failing` being check names only.
 export function createDeepHealth({ discovery, store, accountIds = [], ttlMs = DEEP_HEALTH_TTL_MS, now = () => performance.now() }) {
@@ -41,7 +42,7 @@ export function createDeepHealth({ discovery, store, accountIds = [], ttlMs = DE
       }
     }
     if (storeFailed) failing.push("store");
-    else if (missing) failing.push("legacy-account");
+    else if (missing || accountIds.length === 0) failing.push("legacy-account");
     return { ok: failing.length === 0, failing };
   }
 

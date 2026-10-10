@@ -943,3 +943,14 @@ test("a GitHub sign-in that started before a rotation finishes after it", async 
   const code = new URL(outcome.redirectTo).searchParams.get("code");
   assert.ok(unseal("code", code, { key: NEW_KEY, now: ROTATED_AT }));
 });
+
+test("without accounts, a refresh or access token for a login outside DESK_ALLOWED_LOGINS is refused", async (t) => {
+  const { base, provider } = await start(t);
+  const client = (await register(base)).body;
+  const claims = { clientId: client.client_id, login: "mallory", userId: 1, name: "Mallory", scopes: [] };
+  const refresh_token = seal("refresh", claims, { key: KEY, ttlSec: 600 });
+  const reply = await tokenRequest(base, { grant_type: "refresh_token", client_id: client.client_id, client_secret: client.client_secret, refresh_token });
+  assert.equal(reply.status, 400);
+  assert.equal(reply.body.error, "invalid_grant");
+  await assert.rejects(provider.verifyAccessToken(seal("access", claims, { key: KEY, ttlSec: 600 })), { errorCode: "invalid_token" });
+});

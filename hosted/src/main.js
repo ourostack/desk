@@ -226,6 +226,7 @@ export function createAuthorLookup({ store, repo }) {
 // Reads each account the legacy mapping and the GitHub fallback name, once, and logs any that is missing: a typo or
 // another tenant's id would otherwise refuse Ari's old connector at deploy. /healthz/deep fails on the same condition.
 export async function checkLegacyAccounts({ store, accountIds, log: write = log }) {
+  if (accountIds.length === 0) write("LEGACY ACCOUNT MAPPING EMPTY: DESK_GITHUB_ACCOUNTS names no account, so legacy tokens and the GitHub fallback admit nobody");
   for (const accountId of accountIds) {
     try {
       if ((await store.getAccount(accountId)) === null) write(`LEGACY ACCOUNT MISSING ${accountId}`);
@@ -235,11 +236,14 @@ export async function checkLegacyAccounts({ store, accountIds, log: write = log 
   }
 }
 
+// How long the start waits for the tenant's discovery document: the same 10 s as one discovery fetch may take.
+export const START_DISCOVERY_BOUND_MS = DISCOVERY_TIMEOUT_MS;
+
 // Fetches the Ouro tenant's discovery document before the gateway listens, waiting at most `boundMs`: a document
 // naming another issuer stops the start (the returned promise rejects), and one that can't be fetched in time leaves
 // the document loading in the background while the legacy and GitHub paths serve. A mismatch found after the bound
 // is logged (and fails /healthz/deep), never an unhandled rejection.
-export async function startDiscovery(discovery, { boundMs = DISCOVERY_TIMEOUT_MS + 1_000, log: write = log } = {}) {
+export async function startDiscovery(discovery, { boundMs = START_DISCOVERY_BOUND_MS, log: write = log } = {}) {
   const started = discovery.start();
   started.catch((error) => write(error?.message ?? "Entra discovery failed"));
   let timer;
