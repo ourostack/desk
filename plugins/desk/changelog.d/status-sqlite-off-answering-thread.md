@@ -1,1 +1,0 @@
-- Run runtime status's read-only SQLite inspections in one owned disposable child process so slow native DB work cannot stall MCP status, tools/list or ping. Preserve observation order, generation proof, same-context cache timestamps, Windows native safety and reader shutdown.

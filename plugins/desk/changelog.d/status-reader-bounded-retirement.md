@@ -1,1 +1,0 @@
-- Move runtime status's root observation off the answering thread as well as SQLite. Bound exact-owned reader retirement with explicit disconnect exit and signal escalation; report failed termination attempts and retain any reader whose exit remains unverified rather than hanging shutdown or overlapping a replacement.

@@ -1,1 +1,0 @@
-- Retain exact status reader ownership when ordinary close fails after a run settles. Block replacement and fail disposal until that reader's actual exit is verified, then allow recovery; context invalidation no longer loses the unsettled reader.
