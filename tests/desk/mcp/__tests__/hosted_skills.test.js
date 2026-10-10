@@ -156,3 +156,12 @@ test("the first hosted desk_status also waits while Desk is still admitting the 
   assert.equal(JSON.parse(result.content[0].text).state, "ready")
   assert.equal(result.content.length, 2)
 })
+
+test("a first desk_status answer with no content, or no answer at all, still carries the instructions", async () => {
+  for (const reply of [{}, undefined]) {
+    const callTool = withHostedStartup({ callTool: async () => reply, instructions: "RULES", sleep: async () => {} })
+    const result = await callTool({ name: "desk_status" })
+    assert.equal(result.content.length, 1)
+    assert.match(result.content[0].text, /# Desk instructions for this session[\s\S]*RULES/)
+  }
+})
