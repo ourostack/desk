@@ -14,25 +14,33 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
 // segment, an encoded character, a default port) can slip through.
 const CHATGPT_CALLBACK = /^https:\/\/chatgpt\.com\/connector\/oauth\/[A-Za-z0-9_-]+$/;
 
+function isLoopback(uri) {
+  let url;
+  try {
+    url = new URL(uri);
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname) && !url.username && !url.password && !uri.includes("#");
+}
+
 export function createRedirectPolicy(configured) {
   const listed = (configured ?? "")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+  // Entries are matched as exact text, so each must already be in the form a
+  // URL parser writes (lower-case host, no default port), or it would never
+  // match. A redirect may not carry a fragment or user info (RFC 6749 3.1.2),
+  // and must be https unless it is loopback.
   for (const entry of listed) {
-    if (!URL.canParse(entry)) throw new Error(`DESK_REDIRECTS holds an entry that is not an absolute URL: ${entry}`);
+    const url = URL.canParse(entry) ? new URL(entry) : null;
+    const usable = url && url.href === entry && !entry.includes("#") && !url.username && !url.password && (url.protocol === "https:" || isLoopback(entry));
+    if (!usable) {
+      throw new Error(`DESK_REDIRECTS holds an entry that is not a canonical https or loopback URL without a fragment or user info: ${entry}`);
+    }
   }
   const exact = new Set(listed.length ? listed : DEFAULT_REDIRECTS);
-
-  function isLoopback(uri) {
-    let url;
-    try {
-      url = new URL(uri);
-    } catch {
-      return false;
-    }
-    return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname) && !url.username && !url.password;
-  }
 
   return {
     allows(uri) {

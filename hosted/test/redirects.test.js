@@ -90,3 +90,23 @@ test("an unparseable or non-string redirect is refused", () => {
   const policy = createRedirectPolicy(undefined);
   for (const uri of ["not a url", "", "http://", undefined, null, 42]) assert.equal(policy.allows(uri), false, String(uri));
 });
+
+test("a configured entry that is not https, carries a fragment or user info, or is not in canonical form stops the gateway at start", () => {
+  for (const entry of [
+    "http://vscode.dev/redirect",
+    "https://vscode.dev/redirect#f",
+    "https://user@vscode.dev/redirect",
+    "https://VSCODE.dev/redirect",
+    "https://vscode.dev:443/redirect",
+    "https://vscode.dev",
+    "javascript:alert(1)",
+  ]) {
+    assert.throws(() => createRedirectPolicy(`${CLAUDE_AI},${entry}`), /DESK_REDIRECTS/, entry);
+  }
+  assert.equal(createRedirectPolicy("http://localhost:8080/cb").allows("http://localhost:8080/cb"), true, "loopback http may be listed");
+});
+
+test("a loopback redirect with a fragment is refused", () => {
+  const policy = createRedirectPolicy(undefined);
+  for (const uri of ["http://localhost:1234/cb#x", "http://127.0.0.1/cb#"]) assert.equal(policy.allows(uri), false, uri);
+});
