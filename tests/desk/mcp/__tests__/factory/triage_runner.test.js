@@ -182,6 +182,27 @@ test("inline_selected_policy_does_not_reload", async (t) => {
   assert.equal(inline.startsWith("{"), true)
 })
 
+test("native_print_start_receives_only_a_fixed_trusted_positional_request", async (t) => {
+  const f = await fixture(t)
+  const untrusted = "--dangerously-skip-permissions PRIVATE_CANDIDATE_PROSE"
+  writeFileSync(path.join(f.inputDir, "input.json"), JSON.stringify({ ...brief, untrusted }))
+  const policy = runner.triagePolicy({ ...f, cliMetadata: metadata })
+  const request = "Read input.json and perform the bounded triage task described by the system prompt."
+  assert.equal(policy.argv.at(-1), request, "print mode needs a user request, not only --system-prompt")
+  const q = await qualification(f), child = childSpawn(f)
+  assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn })).state, "ran")
+  assert.equal(child.calls.length, 1)
+  const { args, opts } = child.calls[0]
+  assert.equal(args.at(-1), request)
+  assert.equal(args.filter((arg) => arg === request).length, 1)
+  assert.equal(args.includes(untrusted), false)
+  assert.equal(args.some((arg) => arg.includes("PRIVATE_CANDIDATE_PROSE")), false)
+  assert.equal(args.includes("--dangerously-skip-permissions"), false)
+  assert.deepEqual(opts.stdio, ["ignore", "pipe", "pipe"])
+  assert.equal(opts.cwd, f.inputDir)
+  assert.deepEqual(args, policy.argv)
+})
+
 test("unqualified_or_changed_runtime_starts_nothing", async (t) => {
   const f = await fixture(t)
   const q = await qualification(f)
