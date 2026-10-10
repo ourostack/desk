@@ -1,7 +1,4 @@
-import { existsSync } from "node:fs"
-import Database from "better-sqlite3"
-import * as sqliteVec from "sqlite-vec"
-import { indexDbPath } from "../db/init.js"
+import { openSnapshot } from "../db/status-read.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { directLexicalSearch, loadCurrentTombstoneLedger } from "./direct-lexical.js"
 import { expectedLexicalGenerationIdentity, matchesLexicalGenerationIdentity } from "./generations.js"
@@ -37,48 +34,6 @@ function sameCursor(a, b) {
     a.journal_id === b?.journal_id && a.sequence === b?.sequence
 }
 
-function openSnapshot(deskRoot) {
-  if (!deskRoot || !existsSync(indexDbPath(deskRoot))) return null
-  const db = new Database(indexDbPath(deskRoot), { readonly: true, fileMustExist: true })
-  try {
-    sqliteVec.load(db)
-    db.exec("BEGIN")
-    const generation = db.prepare(`
-      SELECT g.id, g.event_cursor, g.schema_version, g.chunker_id, g.normalization_id,
-             g.embedding_spec, g.tombstone_identity, g.policy_identity
-      FROM lexical_generations g
-      JOIN meta m ON m.key = 'active_lexical_generation' AND m.value = CAST(g.id AS TEXT)
-      JOIN readiness_operations o ON o.id = g.operation_id AND o.status = 'committed'
-    `).get()
-    const covered = db.prepare("SELECT value FROM meta WHERE key = 'covered_event_cursor'").get()
-    const activeEmbeddingSpecId = db.prepare("SELECT value FROM meta WHERE key = 'active_embedding_spec_id'").get()?.value ?? null
-    const vectorsIndexed = db.prepare(
-      `SELECT COUNT(*) AS n
-       FROM chunks c
-       JOIN chunk_vecs v ON v.chunk_id = c.id
-       WHERE c.embedding_spec_id = ?
-         AND c.chunker_id = ?
-         AND c.normalization_id = ?`,
-    ).get(
-      ACTIVE_EMBEDDING_SPEC.id,
-      ACTIVE_EMBEDDING_SPEC.chunker_id,
-      ACTIVE_EMBEDDING_SPEC.normalization_id,
-    ).n
-    const chunksTotal = db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n
-    const cursor = generation ? JSON.parse(generation.event_cursor) : null
-    return { db, generation: generation?.id ?? null, identities: generation, cursor,
-      covered: covered ? JSON.parse(covered.value) : null,
-      semantic: {
-        active_embedding_spec_id: activeEmbeddingSpecId,
-        chunks_total: chunksTotal,
-        vectors_indexed: vectorsIndexed,
-        missing_vectors: Math.max(0, chunksTotal - vectorsIndexed),
-      } }
-  } catch (error) {
-    db.close()
-    throw error
-  }
-}
 
 // Client cancellation stops waiting and dispatch, never controller-owned convergence.
 function cancellable(operation, signal) {
@@ -384,7 +339,7 @@ export function createQueryRouter({
     }
   }
 
-  async function snapshot(request = {}) {
+  async function snapshot(request = {}, { readIndex = openSnapshot } = {}) {
     const { signal } = request
     signal?.throwIfAborted()
     let observed
@@ -392,7 +347,7 @@ export function createQueryRouter({
     try {
       const identity = await currentIdentity(request)
       observed = controller ? await cancellable(() => controller.status(), signal) : { state: "not_checked" }
-      index = openSnapshot(request.deskRoot)
+      index = await readIndex(request.deskRoot)
       const currentCursor = observed.freshness?.cursor ?? null
       const certain = observed.freshness?.certain === true &&
         lastProof?.owner === observed.owner?.token &&
@@ -445,7 +400,7 @@ export function createQueryRouter({
         },
         diagnostic: { reason: error.code ?? "readiness_unavailable", message: String(error.message ?? error) },
       }
-    } finally { index?.db.close() }
+    } finally { index?.db?.close() }
   }
 
   return {

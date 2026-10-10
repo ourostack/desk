@@ -8,6 +8,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/server.js"
 import { startInProcess, statusContextOf } from "./_in_process_desk.js"
 import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { statusObservedSince } from "./_status_observation.js"
 
 function deferred() {
   let resolve
@@ -29,12 +30,15 @@ async function session(t, { semantic = "background", handler, statusDelayMs = 0 
     assert.equal(response.isError, false, JSON.stringify(response.payload))
     return response.payload
   }
-  // desk_status answers within a short budget (STATUS_BUDGET_MS in desk-session.js). On a loaded machine its runtime status computation can miss that budget, and the call then serves the last detail it has, marked `status_detail`. A test that asserts on `readiness.detail` reads until the detail is one this call computed, so it never judges a cached one.
+  // Qualify the runtime observation against this read's start. An old cached
+  // convergence state cannot pass; a later completed computation may remain
+  // explicitly cached when native inspection exceeds the response budget.
   const read = async () => {
+    const since = Date.now()
     const deadline = Date.now() + 15_000
     for (;;) {
       const payload = await readOnce()
-      if (isCurrentDetail(payload)) return payload
+      if (statusObservedSince(payload, { root, since })) return payload
       if (Date.now() > deadline) throw new Error(`desk_status never served a current detail; last: ${JSON.stringify(payload)}`)
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
@@ -162,8 +166,11 @@ test("required startup exposes a populated READY status on the first real MCP ca
     new Response(JSON.stringify({ embedding: Array(768).fill(0.1) })))
   await fixture.start()
   // desk_status answers at once; admission reaches ready only once required semantic coverage is proven, and then status is READY.
-  // READY is only promised by a detail computed after readiness (see isCurrentDetail): a ready status can carry no detail, or a cached one, when the runtime status misses its short budget.
-  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && isCurrentDetail(payload))
+  // A ready admission may carry pre-readiness cached detail. Require a
+  // computation started after this checkpoint, regardless of delivery latency.
+  const since = Date.now()
+  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" &&
+    statusObservedSince(payload, { root: fixture.root, since }))
   assert.equal(ready.readiness?.detail.controller_state, "READY")
   assert.equal(ready.readiness.state, "ready")
   assert.equal(ready.readiness.detail.convergence.status, "succeeded")
@@ -172,10 +179,7 @@ test("required startup exposes a populated READY status on the first real MCP ca
   assert.equal(fixture.state.context.startup, undefined)
 })
 
-// desk_status stamps `state` with admission as of the answer, but its `readiness.detail` is a separate runtime computation that can be older: when a computation misses the call's budget, the call serves the last detail it has and says so with `status_detail` ("cached: ...") and `status_detail_from`. A ready status therefore promises READY only when its detail carries no such marker.
-const isCurrentDetail = (payload) => payload.readiness?.detail !== undefined && payload.status_detail === undefined && payload.status_detail_from === undefined
-
-test("a ready status served with a cached detail from before readiness says so; the unmarked detail is READY", async (t) => {
+test("a ready status labels pre-readiness cached detail; a qualified post-readiness observation is READY", async (t) => {
   // The runtime status is read now and arrives 200 ms later, past the call's budget, while the probe holds convergence for 600 ms.
   const fixture = await session(t, { semantic: "required", statusDelayMs: 200 })
   t.mock.method(globalThis, "fetch", async () => {
@@ -188,7 +192,9 @@ test("a ready status served with a cached detail from before readiness says so; 
     assert.match(cached.status_detail, /^cached: /u, "a detail older than readiness is marked cached")
     assert.equal(typeof cached.status_detail_from, "string")
   }
-  const current = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && isCurrentDetail(payload))
+  const since = Date.now()
+  const current = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" &&
+    statusObservedSince(payload, { root: fixture.root, since }))
   assert.equal(current.readiness.detail.controller_state, "READY")
 })
 

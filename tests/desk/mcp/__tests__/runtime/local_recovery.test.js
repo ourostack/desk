@@ -9,6 +9,7 @@ import { realpathSync } from "node:fs"
 import { main } from "../../../../../plugins/desk/mcp/index.js"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 import { runAdmissionJob } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
+import { statusObservedSince } from "./_status_observation.js"
 
 const here = path.resolve(process.env.DESK_RECOVERY_FIXTURES ?? path.join(realpathSync(tmpdir()), `local-recovery-fixtures-${process.pid}`))
 let sequence = 0
@@ -350,7 +351,9 @@ for (const [operation, value, refused] of [
       }),
     })
     try {
-      await desk.statusUntil((state) => state.state === "ready" && !state.status_detail, { deadlineMs: 15000 })
+      const since = Date.now()
+      await desk.statusUntil((state) => state.state === "ready" &&
+        statusObservedSince(state, { root: mcpRoot, since }), { deadlineMs: 15000 })
       const direct = await desk.call(operation, value)
       const local = await recover(localRoot, value, [], launch, operation)
       assert.equal(direct.isError, refused)
@@ -382,6 +385,9 @@ for (const delayedResolution of [false, true]) test(`the spawned CLI updates a r
   writeFileSync(file, JSON.stringify(update))
   const preload = path.join(root, "delayed-worker.cjs")
   const statusEvidence = path.join(root, "pending-status.jsonl")
+  const delayMarker = path.join(root, "completed-status.marker")
+  const completedStatus = path.join(root, "completed-status.json")
+  const resolverEvidence = path.join(root, "resolver-delay.jsonl")
   const beforeCount = Number(git(root, "rev-list", "--count", "HEAD"))
   if (delayedResolution) {
     // Delay only delivery to the real resolver worker. Bootstrap, admission,
@@ -389,11 +395,14 @@ for (const delayedResolution of [false, true]) test(`the spawned CLI updates a r
     writeFileSync(preload, `
 const threads = require("node:worker_threads");
 const { syncBuiltinESMExports } = require("node:module");
-const { appendFileSync } = require("node:fs");
+const { appendFileSync, existsSync } = require("node:fs");
 const OriginalWorker = threads.Worker;
 threads.Worker = class extends OriginalWorker {
   postMessage(job, ...rest) {
-    if (job?.kind === "resolve") {
+    if (job?.kind === "resolve" && existsSync(${JSON.stringify(delayMarker)})) {
+      appendFileSync(${JSON.stringify(resolverEvidence)}, JSON.stringify({
+        observedCompletedStatus: true, injectedDelayMs: 150, at: new Date().toISOString(),
+      }) + "\\n");
       setTimeout(() => super.postMessage(job, ...rest), 150);
     } else {
       return super.postMessage(job, ...rest);
@@ -418,7 +427,9 @@ if (threads.isMainThread) {
 }
 `)
   }
-  const script = new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url)
+  const script = delayedResolution
+    ? new URL("./_prewarmed_recovery.js", import.meta.url)
+    : new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url)
   const { fileURLToPath } = await import("node:url")
   const { controllerRecords, waitForProcessesGone } = await import("./_controller_exit.js")
   try {
@@ -431,12 +442,19 @@ if (threads.isMainThread) {
         XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"),
         XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"),
         XDG_RUNTIME_DIR: path.join(home, "runtime"),
-        ...(delayedResolution ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(preload)}` } : {}),
+        ...(delayedResolution ? {
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(preload)}`,
+          DESK_FIXTURE_DELAY_MARKER: delayMarker, DESK_FIXTURE_COMPLETED_STATUS: completedStatus,
+        } : {}),
       },
     })
     assert.equal(result.status, 0, result.stdout)
     const report = JSON.parse(result.stdout)
     if (delayedResolution) {
+      const completed = JSON.parse(readFileSync(completedStatus, "utf8"))
+      assert.equal(completed.state, "ready")
+      assert.equal(completed.root, root)
+      assert.ok(completed.elapsedMs < 200, "observable completed status retains the unchanged cap")
       assert.equal(report.preflight.statusDetail, "cached_in_owned_session")
       assert.ok(Date.parse(report.preflight.statusDetailFrom) > 0)
       const observed = readFileSync(statusEvidence, "utf8").trim().split("\n").map(JSON.parse)
@@ -447,6 +465,11 @@ if (threads.isMainThread) {
       assert.equal(pending.root, root)
       assert.ok(Date.parse(pending.from) > 0)
       assert.equal(report.preflight.statusDetailFrom, pending.from)
+      if (completed.from) assert.ok(Date.parse(pending.from) >= Date.parse(completed.from), "pending detail never predates the observed completed cache")
+      const delayed = readFileSync(resolverEvidence, "utf8").trim().split("\n").map(JSON.parse)
+      assert.ok(delayed.length > 0)
+      assert.ok(delayed.every((job) => job.observedCompletedStatus && job.injectedDelayMs === 150 &&
+        Date.parse(job.at) >= Date.parse(completed.completedObservedAt)))
     }
     assert.equal(report.actualRoot, root)
     assert.equal(report.effects.commit, "observed")
