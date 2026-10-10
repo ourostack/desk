@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.271 — 2026-10-10
+
+Revalidate late workspace associations before data operations without repeating unchanged admission; serialize destination replacement with active operations, invalidate stale status ownership, retain fail-closed saved bindings, and clear task focus only when the intended root changes. Saved activation and DESK associations now outrank host folder hints, so a valid folder cannot mask an invalid saved destination. Lost association proof cannot replace an established root with a captured launch folder or another weaker source; stronger verified intent can still upgrade an initial guess. Pending same-context status retains its original computation timestamp for existing recovery consumers, without granting write authority or inventing cached proof. An operation arriving during another admission attempt samples destination inputs again after that attempt rather than reusing proof sampled before its request.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.270 — 2026-10-10
 
 Added a bounded local recovery client for confirmed desk transport mismatches. It uses the ordinary bootstrap and MCP pipeline, verifies its owned session's root/scope before dispatch, preserves authority and card refusals, and reports partial or unknown write/commit/push effects without resending mutations.
